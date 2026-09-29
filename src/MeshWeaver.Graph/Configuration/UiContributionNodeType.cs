@@ -293,9 +293,11 @@ public record UiContributionGates
     /// once the viewer holds it: a Store package is gated (an un-entitled viewer cannot read below
     /// its root), so "may read the embedded address" IS "has acquired the extension", and the answer
     /// follows the viewer's live effective permissions — acquiring the package shows the tab with no
-    /// reload, and a revoked grant hides it again. Consumed by the EMBEDDING contexts
-    /// (<see cref="UiContribution.PersonAppContext"/>); an entry without an Address has nothing to
-    /// probe and the gate is inert there.
+    /// reload, and a revoked grant hides it again. Consumed ONLY by
+    /// <see cref="UiContribution.PersonAppContext"/> today; on any other context — a
+    /// <see cref="UiContribution.ProfileContext"/> section included, although it embeds an Address too
+    /// — the gate is inert, and <c>UiContributionSeedValidation</c> reports that, as it reports the
+    /// gate on an entry without an Address (nothing to probe).
     ///
     /// <para>Narrowing only, like every gate here: a failed or pending permission read hides the
     /// entry (missing evidence ⇒ do not show), and the embedded area still runs its own access

@@ -263,11 +263,12 @@ public static class SettingsMenuItemsExtensions
     /// this lane on the viewer's own user root only. Fails closed for an anonymous or virtual viewer.
     ///
     /// <para><see cref="UiContributionGates.RequireAddressAccess"/> is applied HERE, live: for each
-    /// tab that demands it, the viewer's effective permissions on the embedded address are read
-    /// (<c>GetEffectivePermissions</c>, seeded <see cref="Permission.None"/> so a pending read hides
-    /// the tab rather than stalling the page) and the tab passes only while they include
-    /// <see cref="Permission.Read"/>. That is what makes an in-app extension's tab appear the moment
-    /// the viewer acquires it and disappear when the grant goes — the same stream, no reload.</para>
+    /// tab that demands it, the viewer's Read verdict on the embedded address is read
+    /// (<c>CheckPermissionOutcome</c>), folded by <see cref="ApplyAddressAccess"/> — seeded false so a
+    /// pending verdict hides the tab rather than stalling the page — and the tab passes only on a
+    /// GRANTED verdict. An undetermined verdict hides it too, and is logged as a degraded dependency
+    /// rather than read as "not held". That is what makes an in-app extension's tab appear the
+    /// moment the viewer acquires it and disappear when the grant goes — the same stream, no reload.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
         ContributedPersonAppTabs(LayoutAreaHost host)
@@ -331,8 +332,8 @@ public static class SettingsMenuItemsExtensions
                 : Observable.Defer(() => outcomeOf(address))
                     .Do(outcome =>
                     {
-                        if (outcome.IsUndetermined)
-                            onUndetermined?.Invoke(address, outcome.UndeterminedReason!);
+                        if (outcome is { UndeterminedReason: { } reason })
+                            onUndetermined?.Invoke(address, reason);
                     })
                     .Select(PassesAddressAccess)
                     .StartWith(false)

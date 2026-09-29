@@ -32,6 +32,7 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
 {
     private const string Person = "iae-person";
     private const string Space = "IaeSpace";
+    private const string OtherPerson = "iae-other";
     private const string Held = "IaeHeld";
     private const string NotHeld = "IaeNotHeld";
 
@@ -67,6 +68,15 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
                     Content = new User { FullName = "Extension Person", Email = $"{Person}@meshweaver.io" },
                 },
                 AssignmentNodeFactory.UserRole(Person, "Admin", Person),
+                new MeshNode(OtherPerson)
+                {
+                    NodeType = UserNodeType.NodeType,
+                    Name = "Other Person",
+                    State = MeshNodeState.Active,
+                    Content = new User { FullName = "Other Person", Email = $"{OtherPerson}@meshweaver.io" },
+                },
+                // The person may UPDATE the other person's root — yet its settings are not their person app.
+                AssignmentNodeFactory.UserRole(Person, "Admin", OtherPerson),
                 new MeshNode(Space) { Name = "Iae Space", NodeType = "Space" },
                 AssignmentNodeFactory.UserRole(Person, "Admin", Space),
                 // An extension the person HOLDS (a Viewer grant — what acquiring a package mints).
@@ -140,6 +150,23 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
 
         page.Should().NotContain(Tab("held extension"),
             "a person-app tab never appears on a Space's settings page");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task APersonAppContribution_IsNotOnAnotherPersonsSettings_EvenWithUpdateThere()
+    {
+        // IsPersonAppHub is owner-scoped: another user's root is not the viewer's person app, even
+        // when the viewer may change it — that page says whose settings they are and renders no
+        // tabs. The control is that sentence, so the absence below is a verdict, not an early frame.
+        var page = await Render(OtherPerson, Settings())
+            .Should().Within(Budget)
+            .Match(json => json.Contains("someone else"), "another person's settings say whose they are",
+                TestContext.Current.CancellationToken);
+
+        page.Should().NotContain(Tab("held extension"),
+            "the viewer's extension tabs belong to their OWN settings app only");
+        page.Should().NotContain(Tab("ungated control"),
+            "no person-app contribution renders on another person's root");
     }
 
     // ── the pure projection ────────────────────────────────────────────────────────────────
@@ -311,5 +338,19 @@ public class PersonAppContributionTest(ITestOutputHelper output) : MonolithMeshT
             },
         ]).Should().Contain(p => p.Contains("P/Tabs/Sharing") && p.Contains("collides"),
             "a contribution named like a built-in person-app tab is reported");
+
+        UiContributionSeedValidation.Validate(
+        [
+            new MeshNode("profileGate", "P/Tabs")
+            {
+                NodeType = UiContributionNodeType.NodeType,
+                Content = new UiContribution
+                {
+                    Context = UiContribution.ProfileContext, Address = "P", Area = "A",
+                    Gates = new UiContributionGates { RequireAddressAccess = true },
+                },
+            },
+        ]).Should().Contain(p => p.Contains("P/Tabs/profileGate") && p.Contains("inert"),
+            "the gate on a Profile section is inert and reported");
     }
 }

@@ -146,6 +146,8 @@ public static class UiContributionSeedValidation
             // and the gate the author meant to narrow with is inert.
             if (content.Gates?.RequireAddressAccess == true && content.Address is not { Length: > 0 })
                 problems.Add($"{path}: Gates.RequireAddressAccess without an Address — nothing to probe, so the gate is inert");
+            else if (content.Gates?.RequireAddressAccess == true && context != UiContribution.PersonAppContext)
+                problems.Add($"{path}: Gates.RequireAddressAccess on context '{context}' — only the PersonApp lane folds it, so the gate is inert here");
 
             if (content.Label is { Length: > 0 } && content.LabelKey is not { Length: > 0 })
                 problems.Add($"{path}: Label '{content.Label}' has no LabelKey — it ships English to every non-English viewer");
