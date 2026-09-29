@@ -289,8 +289,12 @@ What the storage layer then does for a node of that type:
 
 The decision is taken **in the storage layer**, with no hub and no routing: the definition of an
 in-mesh type is read off the storage the decorator wraps (a primary-key read of the NodeType row),
-a C#-registered one off the host's static nodes. **A definition that cannot be read keeps
-history** — the failure mode is a retained snapshot, never a destroyed one.
+a C#-registered one off the host's static nodes — **once per type**, then cached. The cached
+verdict is dropped when the definition changes: at once when this decorator writes or deletes it,
+and through the storage change feed when another replica does. A write that lands in the window
+before another replica's opt-out reaches the feed still gets a snapshot, and the node's next write
+or its delete purges it. **A definition that cannot be read keeps history** for that write — the
+failure mode is a retained snapshot, never a destroyed one — and is asked again on the next.
 
 🚨 **`PurgeVersions` answers a statement, never a guess.** `true` means the store holds no history
 for the path any more; `false` means the store cannot purge. The interface default answers `true`

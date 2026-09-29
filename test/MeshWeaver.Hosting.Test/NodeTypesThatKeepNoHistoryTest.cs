@@ -104,6 +104,33 @@ public sealed class NodeTypesThatKeepNoHistoryTest : IDisposable
         (await History(path)).Should().BeEmpty("a C#-registered definition's KeepsHistory:false is honoured the same way");
     }
 
+    /// <summary>
+    /// The lookup is paid once per TYPE, not once per write: MeshWeaver#5886 resolved the definition
+    /// on every write, and the platform bake's <c>Hosting/FleetConsole</c> gate (three sequential
+    /// writes inside a 10 s budget) went red on the first two sets carrying it.
+    /// </summary>
+    [Fact]
+    public async Task The_definition_is_resolved_once_per_type_not_per_write()
+    {
+        var lookups = 0;
+        var builtIn = new MeshNode("Counted") { NodeType = MeshNode.NodeTypePath, Content = new NodeTypeDefinition() };
+        var counting = new VersionWritingStorageAdapter(
+            store, versions,
+            staticNodeLookup: path =>
+            {
+                if (string.Equals(path, "Counted", StringComparison.OrdinalIgnoreCase))
+                    Interlocked.Increment(ref lookups);
+                return string.Equals(path, "Counted", StringComparison.OrdinalIgnoreCase) ? builtIn : null;
+            },
+            readOptions: () => Options);
+
+        for (var v = 1; v <= 5; v++)
+            await counting.Write(Instance("Governance/Counted/c1", "Counted", v, $"v{v}"), Options).Timeout(Budget).Await();
+
+        lookups.Should().Be(1, "five writes of one type must resolve its definition once");
+        (await History("Governance/Counted/c1")).Should().HaveCount(5, "and the type still keeps its history");
+    }
+
     [Fact]
     public async Task An_ordinary_type_still_records_every_version()
     {

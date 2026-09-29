@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -52,6 +53,28 @@ internal class VersionWritingStorageAdapter(
 
     private static readonly JsonSerializerOptions FallbackReadOptions = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>
+    /// The resolved <see cref="NodeTypeDefinition.KeepsHistory"/> verdict per node type (keyed by
+    /// type path), so a write pays the definition lookup once per type, not once per write.
+    /// Instance field on the mesh-scoped singleton — never static.
+    ///
+    /// <para>🚨 Invalidated, never expired: an entry goes when the DEFINITION changes — synchronously
+    /// when this decorator writes or deletes it, and through <see cref="IStorageAdapter.Changes"/>
+    /// (the cross-replica change feed on Postgres) when another replica does. Only DEFINITE answers
+    /// are cached; a timed-out or faulted read keeps history for that one write and is asked again
+    /// next time. A write in the window before another replica's opt-out reaches this feed still
+    /// gets a snapshot — and the next write or the delete of that node purges it, so nothing
+    /// outlives the window.</para>
+    ///
+    /// <para>Why: MeshWeaver#5886 looked the definition up on EVERY write (a static-node
+    /// enumeration or a routed storage read), and the platform bake's
+    /// <c>Hosting/FleetConsole</c> gate — three sequential <c>CreateOrUpdateNode</c>s inside a 10 s
+    /// budget — went red on the first two sets carrying it and on none before.</para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> verdicts = new(StringComparer.OrdinalIgnoreCase);
+
+    private int invalidationArmed;
+
     // 🚨 Decorator MUST forward Changes — without this it falls back to the
     // interface default Observable.Empty, and every synced query subscribed
     // to persistence.Changes on this decorator stops receiving notifications.
@@ -89,6 +112,7 @@ internal class VersionWritingStorageAdapter(
 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
     {
+        Invalidate(node.Path);
         var write = inner.Write(node, options);
         if (versionQuery is null)
             return write;
@@ -117,6 +141,7 @@ internal class VersionWritingStorageAdapter(
     public IObservable<bool?> WriteIfVersion(
         MeshNode node, long expectedVersion, JsonSerializerOptions options)
     {
+        Invalidate(node.Path);
         var write = inner.WriteIfVersion(node, expectedVersion, options);
         if (versionQuery is null)
             return write;
@@ -138,6 +163,7 @@ internal class VersionWritingStorageAdapter(
     /// its type keeps none.</remarks>
     public IObservable<string> Delete(string path)
     {
+        Invalidate(path);
         if (versionQuery is null)
             return inner.Delete(path);
         return PathsWithoutHistory([path])
@@ -148,6 +174,7 @@ internal class VersionWritingStorageAdapter(
     /// <inheritdoc />
     public IObservable<bool> DeleteIfExists(string path)
     {
+        Invalidate(path);
         if (versionQuery is null)
             return inner.DeleteIfExists(path);
         return PathsWithoutHistory([path])
@@ -158,6 +185,8 @@ internal class VersionWritingStorageAdapter(
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
     {
+        foreach (var path in paths)
+            Invalidate(path);
         if (versionQuery is null || paths.Count == 0)
             return inner.DeleteMany(paths);
         return PathsWithoutHistory(paths)
@@ -177,28 +206,37 @@ internal class VersionWritingStorageAdapter(
             || string.Equals(nodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
             return Observable.Return(true);
 
+        ArmInvalidation();
+        if (verdicts.TryGetValue(nodeType, out var cached))
+            return Observable.Return(cached);
+        return ResolveKeepsHistory(nodeType, options);
+    }
+
+    /// <summary>The uncached lookup behind <see cref="KeepsHistory"/>; caches a definite answer.</summary>
+    private IObservable<bool> ResolveKeepsHistory(string nodeType, JsonSerializerOptions options)
+    {
         // A slash-less type is never an in-mesh row (a definition always lives INSIDE a partition —
         // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it;
         // those are seed-first, so a built-in type is found at once.
         if (!nodeType.Contains('/'))
-            return Observable.Return(staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options));
+            return Observable.Return(Remember(nodeType,
+                staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options)));
 
         // A path-shaped type is read off the storage this decorator wraps FIRST — the common case
         // (an in-mesh type) is one primary-key read, and the full static-node enumeration is paid
-        // only for a type the store does not hold.
-        //
-        // 🚨 That read happens on EVERY write of an in-mesh-typed node, and it is the accepted cost,
-        // not an oversight: it is what makes an opt-out take effect on the very next write, on every
-        // replica. A per-type verdict cache would have to be invalidated when the DEFINITION changes
-        // — which this decorator only sees for writes on its own replica, never another replica's —
-        // and a stale "keeps history" is exactly the confidential snapshot the opt-out exists to
-        // prevent. One primary-key read per write is cheaper than that failure mode.
+        // only for a type the store does not hold. Once per type: see `verdicts`.
         return inner.Read(nodeType, options)
             .Take(1)
-            .Select(definition => (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found
-                                  || Declares(found, options))
+            .Select(definition => Remember(nodeType,
+                (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found || Declares(found, options)))
             .DefaultIfEmpty(true)
-            .Timeout(DefinitionReadTimeout, Observable.Return(true))
+            .Timeout(DefinitionReadTimeout, Observable.Defer(() =>
+            {
+                logger?.LogWarning(
+                    "Reading NodeType {NodeType} to decide whether it keeps version history did not answer within {Timeout} — keeping history for this write",
+                    nodeType, DefinitionReadTimeout);
+                return Observable.Return(true);
+            }))
             .Catch<bool, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -206,6 +244,34 @@ internal class VersionWritingStorageAdapter(
                     nodeType);
                 return Observable.Return(true);
             });
+    }
+
+    private bool Remember(string nodeType, bool keeps)
+    {
+        verdicts[nodeType] = keeps;
+        return keeps;
+    }
+
+    /// <summary>Drops the cached verdict for a definition that this decorator just wrote or deleted.</summary>
+    private void Invalidate(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && !verdicts.IsEmpty)
+            verdicts.TryRemove(path, out _);
+    }
+
+    /// <summary>
+    /// Subscribes ONCE to the wrapped store's change feed, dropping the cached verdict of any
+    /// definition another writer (another replica, or a write that bypassed this decorator)
+    /// changed. The subscription lives as long as the feed — the store's, i.e. the mesh's.
+    /// </summary>
+    private void ArmInvalidation()
+    {
+        if (Interlocked.Exchange(ref invalidationArmed, 1) == 1)
+            return;
+        inner.Changes.Subscribe(
+            change => Invalidate(change.Path),
+            ex => logger?.LogWarning(ex,
+                "The storage change feed faulted — cached keeps-history verdicts are no longer invalidated by other writers"));
     }
 
     /// <summary>
