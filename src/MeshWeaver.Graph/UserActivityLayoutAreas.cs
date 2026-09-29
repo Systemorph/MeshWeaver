@@ -565,7 +565,7 @@ public static class UserActivityLayoutAreas
             {
                 if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
                     homeLogger?.LogInformation(
-                        "[Home] server viewer={Viewer} +{ElapsedMs}ms catalog: config, shared, owner and screen combined",
+                        "[Home] server owner={Owner} +{ElapsedMs}ms catalog: config, shared, owner and screen combined",
                         ownerId, homeClock.ElapsedMilliseconds);
             });
     }
@@ -583,6 +583,7 @@ public static class UserActivityLayoutAreas
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null || string.IsNullOrEmpty(ownerId))
             return Observable.Return<IReadOnlyList<string>>([]);
+        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         return mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 // A share grant lives in the GRANTING partition — that is what makes it a share —
@@ -604,9 +605,8 @@ public static class UserActivityLayoutAreas
                     return map;
                 })
             .Select(map => SharedTargetPaths(map.Values, ownerId))
-            .Do(targets => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("MeshWeaver.Home")
-                .LogDebug("[Home] server viewer={Viewer} shared targets answered: {Count}", ownerId, targets.Count))
+            .Do(targets => homeLogger?.LogDebug(
+                "[Home] server owner={Owner} shared targets answered: {Count}", ownerId, targets.Count))
             .StartWith((IReadOnlyList<string>)[])
             // 🚨 Emit only when the LIST changes. Every Updated of any of the viewer's grants re-ran
             // the Scan and re-emitted an equal list, which rebuilt the whole home control; and the
@@ -1881,14 +1881,19 @@ public static class UserActivityLayoutAreas
         return withTitle ? search.WithTitle("Pinned") : search;
     }
 
-    /// <summary>Order-sensitive, case-insensitive equality of two shared-target lists.</summary>
+    /// <summary>
+    /// Order-sensitive, ORDINAL equality of two shared-target lists. Ordinal on purpose: a re-emission
+    /// of the same data is already ordinally identical, so ordinal suffices to stop the rebuild, and a
+    /// case-only change of a target still flows to the union query downstream rather than being
+    /// swallowed as "no change".
+    /// </summary>
     internal sealed class SharedTargetsComparer : IEqualityComparer<IReadOnlyList<string>>
     {
         public static readonly SharedTargetsComparer Instance = new();
 
         public bool Equals(IReadOnlyList<string>? x, IReadOnlyList<string>? y) =>
             ReferenceEquals(x, y)
-            || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.OrdinalIgnoreCase));
+            || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
 
         public int GetHashCode(IReadOnlyList<string> obj) => obj.Count;
     }
