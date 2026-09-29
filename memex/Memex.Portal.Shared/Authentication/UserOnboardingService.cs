@@ -56,6 +56,13 @@ public sealed class UserOnboardingService(
     public IObservable<MeshNode> CreateUser(UserOnboardingRequest request)
     {
         var username = request.Username;
+        // 🚨 The service-principal prefix is not a username. A person holding `svc-…` would share
+        // an object id space with the services (Doc/Architecture/ServiceIdentities), and the request
+        // middleware refuses such a session as anonymous — so the account would be unusable anyway.
+        if (ServiceIdentity.IsServiceObjectId(username))
+            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                $"'{username}' is reserved: usernames may not start with "
+                + $"'{ServiceIdentity.ObjectIdPrefix}', which names service principals."));
         var fullDisplayName = string.IsNullOrWhiteSpace(request.FullName) ? username : request.FullName!;
         var avatarIcon = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl!.Trim();
 
