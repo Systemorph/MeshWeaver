@@ -237,6 +237,90 @@ public class NotificationFeatureDeliveryTest(ITestOutputHelper output) : Monolit
         Assert.Contains(teams.Handed, m => m.Recipient == recipient + "_feature" && m.Feature == NotificationFeatures.Triage);
     }
 
+    private async Task InstallApp(string user, string appId, string plugin)
+    {
+        var path = AppNodeType.PathFor(user, appId);
+        using (Access.ImpersonateAsSystem())
+            await MeshService.CreateNode(new MeshNode(appId, $"{user}/{AppNodeType.UserNamespace}")
+            {
+                NodeType = AppNodeType.NodeType,
+                Name = appId,
+                Content = new App { Plugin = plugin, Source = "user" },
+            }).Should().Emit(cancellationToken: TestContext.Current.CancellationToken);
+        await WaitIndexed(path);
+    }
+
+    private static NotificationRequest AppMove(string recipient) => new()
+    {
+        Recipient = recipient,
+        MainNodePath = "Chess/Game/1",
+        Title = LocalizableText.Verbatim("Your move"),
+        Message = LocalizableText.Verbatim("Your opponent moved."),
+        Type = NotificationType.General,
+        Feature = "gameMove",
+    };
+
+    [Fact(Timeout = 90000)]
+    public async Task AnUnconfiguredApp_DeliversItsOwnNotificationsQuietly_ButNotThePlatformsApprovals()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string recipient = "teams_connected_app_quiet";
+        await CreateUser(recipient);
+        await InstallApp(recipient, "Chess", "Chess");
+
+        var move = await Raise(AppMove(recipient), ct);
+        var only = Assert.Single(move);
+        Assert.Equal(NotificationChannelKind.InApp, only.Channel);
+        Assert.DoesNotContain(teams.Handed, m => m.Recipient == recipient);
+
+        // A platform kind about something in the app is not provisional.
+        var approval = await Raise(Approval(recipient) with { MainNodePath = "Chess/Game/1", TargetNodePath = null }, ct);
+        Assert.Contains(approval, r => r.Channel == NotificationChannelKind.Teams);
+    }
+
+    [Fact(Timeout = 90000)]
+    public async Task AnAppConfiguredInSettings_IsGatedByItsSwitches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string recipient = "teams_connected_app_on";
+        await CreateUser(recipient);
+        await InstallApp(recipient, "Chess", "Chess");
+
+        var path = await NotificationAppPreferenceNodeType.EnsureExists(Mesh, recipient, "Chess")
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+        Assert.Equal(NotificationAppPreferencePaths.PathFor(recipient, "Chess"), path);
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with
+            {
+                Content = (n.ContentAs<NotificationAppPreference>(Json) ?? new NotificationAppPreference())
+                    with { DeliverQuietly = false }
+            })
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n.ContentAs<NotificationAppPreference>(Json) is { DeliverQuietly: false })
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+        await WaitIndexed(path);
+
+        var loud = await Raise(AppMove(recipient), ct);
+        Assert.Contains(loud, r => r.Channel == NotificationChannelKind.Teams);
+        Assert.Contains(teams.Handed, m => m.Recipient == recipient && m.Feature == "gameMove");
+
+        // The master switch off silences the app on every channel — the platform's approvals too.
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with
+            {
+                Content = (n.ContentAs<NotificationAppPreference>(Json) ?? new NotificationAppPreference())
+                    with { AllowNotifications = false }
+            })
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n.ContentAs<NotificationAppPreference>(Json) is { AllowNotifications: false })
+            .FirstAsync().Timeout(TestTimeouts.WriteConvergence).Await();
+
+        Assert.Empty(await Raise(AppMove(recipient), ct));
+        Assert.Empty(await Raise(Approval(recipient) with { MainNodePath = "Chess/Game/1", TargetNodePath = null }, ct));
+    }
+
     [Fact(Timeout = 60000)]
     public async Task APlatformNotification_ReachesOnlyTheOperatorsBell()
     {

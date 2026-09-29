@@ -1,7 +1,7 @@
 ---
 Name: Notifications — Satellites, the Bell, and Routing
 Category: Architecture
-Description: How notifications work end-to-end — addressed Notification nodes, the reactive bell, mark-as-read via stream.Update, per-feature channel preferences (bell, Teams, email) and rule-based routing.
+Description: How notifications work end-to-end — addressed Notification nodes, the reactive bell, mark-as-read via stream.Update, per-feature and per-app channel preferences (bell, Teams, email) and rule-based routing.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
 ---
 
@@ -100,9 +100,26 @@ Each person chooses, **per feature**, which channels reach them. The choice is a
 
 The **Notifications** settings tab shows one section per feature (the platform's `NotificationFeatures.BuiltIn` plus every `NotificationFeatureDescriptor` a module registers) and binds the standard node-content editor straight to that feature's node. The node is created on first view **seeded with the effective preference** — the legacy row read from its authoritative stream — so opening the tab changes no delivery; a legacy row that exists but cannot be read refuses the seed (the tab says so) rather than persisting a value nobody saw.
 
+### Per app — iOS *Settings → Notifications → {app}*
+
+Above the feature choice sits a second, per-**app** one, modelled on the phone. Every notification is **attributed** to the app it belongs to (`NotificationApps.Attribute`, pure): an explicit `NotificationRequest.App` wins; otherwise the recipient's installed app (their `InstalledApp` records, `{user}/_App/{appId}` — one single-partition query, the same one the home's Apps grid makes) whose plugin path is the longest prefix of the target path, then of the main node path, either as is (`Chess/Game/1`) or below the recipient's own partition, where an app's content is installed (`{user}/Parties/SampleDossier`). A path in no installed app is the **platform's own** (Memex), and no app preference touches it.
+
+| Node type | Lives at | Holds |
+|---|---|---|
+| `NotificationAppPreference` | `{user}/_Settings/Notifications/Apps/{appId}` | `allowNotifications` (master), `deliverQuietly`, `bell`, `teams`, `email` |
+
+`NotificationApps.Gate` is the one rule. It can only **take channels away**, never add one the feature switched off:
+
+- master switch **off** → nothing, on any channel, the platform's approvals about the app included;
+- otherwise the feature's channels ∩ the app's switches;
+- 🚨 **Deliver quietly** — iOS *provisional authorization*, and the **default for every app the person has not configured**: the app's **own** notifications (a feature it raises itself, not one of `NotificationFeatures.BuiltIn`) reach the **bell only** — no Teams message, no email — until the person switches it off. An app that never asked does not get to reach anyone's inbox or Teams in bulk. The platform's own kinds (an approval, an access grant) about something in the app are **not** provisional: they follow the feature preference unless the person restricts the app, so an approval nobody configured still arrives where it did before.
+- **Fail closed**, exactly like the feature read: when the installed apps or the app's preference cannot be read, the notification may belong to an app the person silenced — the bell only (and only if the feature allows the bell), logged at Warning.
+
+The settings tab lists one section per installed app below the kinds, each binding the standard node-content editor to that app's node, created on first view with the default the dispatcher already applies — so opening the tab changes no delivery. The app key is the installed-app record's id, one path segment (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, `NotificationApps.IsValidKey`), rejected rather than slugged; the `Apps` segment is PascalCase so it can never collide with a (camel-case) feature key.
+
 ### Delivery — `NotificationService.Raise`
 
-`Raise(hub, NotificationRequest)` is the feature-aware entry point; `Dispatch` / `DispatchLocalizable` forward to it with the feature their type implies. It resolves the recipient's preference for the feature and runs one independent leg per channel, reporting what each did (`NotificationChannelResult`):
+`Raise(hub, NotificationRequest)` is the feature-aware entry point; `Dispatch` / `DispatchLocalizable` forward to it with the feature their type implies. It resolves the recipient's preference for the feature, applies the app gate above, and runs one independent leg per channel, reporting what each did (`NotificationChannelResult`):
 
 - **Bell** (`InApp`) — the addressed row, stamped with the feature.
 - **Email** — the profile address, unchanged, including the deferral to triage for a person who authored routing rules.
