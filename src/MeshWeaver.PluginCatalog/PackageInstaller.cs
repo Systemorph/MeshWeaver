@@ -103,8 +103,14 @@ public static class PackageInstaller
         // Two gates, in order, both on the ACTION. Entitlement answers "may you" (#830); acceptance
         // answers "have you agreed to the terms" — different questions, neither substituting for
         // the other, and a licence that asks nothing costs a single null check.
+        //
+        // A third gate, on the PLATFORM (policy package-min-mesh-version): a FRESH install of a
+        // version whose declared minMeshVersion is above the running platform is refused, naming
+        // both versions — its source would compile against members this image does not have. An
+        // update is held upstream, before anything is fetched (CatalogLayoutAreas.InstallOrUpdate).
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
+            .SelectMany(_ => PackagePlatformFloorGate.RequireForFreshInstall(hub, manifest, logger))
             .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
                 hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
     }
@@ -3009,6 +3015,11 @@ public static class PackageInstaller
                     // alone, exactly as ManifestFiles' own doc promises (Copilot catch: a full
                     // install passes the catalog manifest through, so without this it leaked in).
                     ManifestFiles = null,
+                    // An install of the candidate is the end of any hold on it
+                    // (policy package-min-mesh-version).
+                    HeldUpdate = null,
+                    HeldUpdateDispatch = null,
+                    HeldUpdateDispatchedAt = null,
                     // The per-package policy (Auto / Notify / None) — seeded once, carried
                     // forward on every re-stamp; the legacy flag is kept consistent for readers
                     // that still branch on it.

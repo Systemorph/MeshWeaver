@@ -1,7 +1,7 @@
 ---
 Name: Module Adoption Policy
 Category: Architecture
-Description: The one rule for what an installation runs — keep the module you have until a newer one loads, load on what is measured rather than on what is declared, and switch the moment a new version ships. Set by the maintainer on 2026-09-07 after a day in which every production portal was held on a morning build by version strings, and the plan that implements it.
+Description: The one rule for what an installation runs — keep the version you have until a newer one can run here, use a package version only when the running platform satisfies its declared minMeshVersion (and install the newest such version), and switch the moment a new version ships. Why the floor was advisory after 2026-09-07, why it holds again after 2026-09-27, and the one comparator that keeps both incidents closed.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5"/><path d="M12 22V12"/></svg>
 ---
 
@@ -47,16 +47,116 @@ method call is compatible.
 | # | Rule | What it replaces |
 |---|---|---|
 | **R1 — continuity** | An installation always runs *some* version of every module it has installed: the newest one that **loads**. If nothing newer ships for the platform it runs, the version it has keeps running. Nothing removes a working module because a newer one exists but cannot load. | A landed generation that does not load leaves the module **absent** (only image-shipped modules had a baseline to fall back to); a shelved landing overwrote the only reference to the loadable generation. |
-| **R2 — measured, never declared** | Whether a module loads is decided by **measurement** — the type-level link probe against the running platform (`ModulePlatformLink`, core #3552/#3538) and the actual load — never by a version string. A declared `minMeshVersion`, or a dependency on another module's version, is **advisory**: logged, shown on the status row, decides nothing. | `minMeshVersion` compared with `NuGetVersionComparer` at eight decision points, each of which refused, held or skipped on a miss. Because that comparator ranks `ci < rc < clean`, an `rc` or `3.0.0` floor on an installed record could never be satisfied by any `ci` build — which is how every production portal was held on the morning build for all of 2026-09-07 while every candidate would have loaded. |
+| **R2 — declared floor, then measured** | A package version declares `minMeshVersion`. An installation **uses a version only when its running platform is at or above that floor**, and normally installs the newest such version (policy [`package-min-mesh-version`](../PolicyNotProse)). The floor is decided by ONE comparator (`PlatformFloor`, below); a floor that cannot be ordered against the running version proceeds as **advisory**. Whether a version that passes the floor LOADS is then **measured** — the type-level link probe (`ModulePlatformLink`, core #3552/#3538) and the actual load. | R2 as first written — *"measured, never declared"* — made the floor advisory everywhere after 2026-09-07. On 2026-09-27 that let packages built for a newer platform sync onto older ones — see *R2: the declared floor* below. |
 | **R3 — eager adoption** | The moment a new module version ships — a newer version on the registry, or the same version rebuilt for this platform's identity — the installation adopts it, if it loads. If it does not load, R1 applies and the row says so. | Adoption ran at boot and on catalog opens; a fallback generation was never re-examined when a loadable build for the same version appeared. |
 
-The rules compose into one sentence: **run the newest thing that loads, keep what you have until then, and never let a string decide.**
+The rules compose into one sentence: **run the newest version whose floor this platform meets and that loads, keep what you have until then, and never let an unorderable string decide.**
+
+## R2: the declared floor
+
+The rule (policy [`package-min-mesh-version`](../PolicyNotProse), which carries the maintainer's
+words and the date): *source must ask for which min version; any version above the minimum is used;
+normally we attempt to install latest.* It replaces R2's first wording, *"measured, never
+declared"*, for package and version selection. R1 and R3 are unchanged, and the link probe stays as
+a second measurement; it is no longer the only gate.
+
+### Why the floor holds again — 2026-09-27
+
+Store 1.16 used `IPaymentProvider` billing-portal members (core `deef2cfa15`) and Hosting used
+`DeploymentContent.AnnouncementKeySecret` (core `be5d157273`). Both synced onto instances running
+`3.0.0-ci.9412`/`9414`, images that predate those commits, and failed to compile: `CS0117`/`CS1061`,
+10 Store and 4 Hosting NodeTypes with no usable assembly. Both packages declared the platform they
+needed. Nothing read it:
+
+- the **source-content lane** (`PackageUpdateReconciler`, `CatalogLayoutAreas.InstallOrUpdate`,
+  `PackageInstaller.Install`) decided an update by the manifest hash alone;
+- the **compiled-module lane** (`ModuleUpdateDecision`) computed the floor and never branched on it;
+- the **link probe** measures a compiled module's assembly. It cannot see NodeType **source**, which
+  compiles in the mesh after it has landed. That was the failure.
+
+The tests that existed asserted the opposite. `ModuleFloorAdvisoryTest` pinned "advisory
+everywhere", and no test drove the content lane with a floor at all. A newer package landing on an
+older platform was the tested behaviour.
+
+### One comparator: `PlatformFloor`
+
+`MeshWeaver.Plugin.Packaging.PlatformFloor.Evaluate(floor, running)` is the only floor decision.
+Every consumer calls it: the module update decision, the content reconcile, the install
+orchestrator, the installer, the per-module GitSync decline and the prebuilt-adoption policy.
+`OneFloorComparatorGuard` fails when a `src/` file compares a declared floor with SemVer anywhere
+else. The running version has one reader, `PlatformBuildInfo.RunningPlatformVersion`: the image's
+`MESHWEAVER_PLATFORM_VERSION` with build metadata stripped. `ModulePlatformFloor.RunningVersion` and
+`PrebuiltAdoptionPolicy.RunningPlatformVersion` both delegate to it. (The module lane used to read
+MeshWeaver.Graph's assembly stamp, which carries no run number.)
+
+**Only a comparable floor strictly above the running version holds.** That rule is what keeps the
+2026-09-07 trap closed. SemVer ranks `ci < rc < clean`, so an `rc` or clean floor can never be met by
+a `ci` build.
+
+| Floor vs running | Verdict |
+|---|---|
+| no floor | none |
+| both carry a run number (`3.0.0-ci.N` vs `3.0.0-ci.M`) | **held iff N > M**. The version line is ignored, so a mislabelled line loses. |
+| either side is `-ci.0` (a local source build) | advisory: proceeds |
+| floor or running version unreadable (`latest`, `unknown`, blank) | advisory: proceeds |
+| otherwise, by numeric core | a higher core is **held**, a lower core is satisfied. An equal core with a clean floor (`3.0.0` vs `3.0.0-ci.N`) is satisfied. An equal core with a labelled floor (`3.0.0-rc8` vs `3.0.0-ci.N`) is unordered: advisory, proceeds. |
+
+`PlatformFloorTest.TheSeptember7Trap_NeverHolds` pins the second half of that table, and
+`TheSeptember27Shape_Holds` pins the first. `ModulePlatformFloor.DeclineReason` keeps its SemVer
+comparison for two jobs that decide nothing at runtime: the wording of the status-row advisory, and
+the pack-time lint's parity oracle.
+
+### Phase 1: the consumer holds (done)
+
+| Lane | On an unmet floor |
+|---|---|
+| Compiled module (`ModuleUpdateDecision`, via `PluginBundleClient.AdoptModule`) | `SkipPlatformBelowFloor`. The bundle is not even downloaded, and the landed generation keeps running. The floor applies to a `Land` answer only, so it never hides a more specific skip. |
+| Source content: an update (`PackageUpdateReconciler`, `CatalogLayoutAreas.InstallOrUpdate`) | Held before any file is fetched. The installed version keeps running. The install record carries `heldUpdate` (*"held: 1.16.0 needs platform ≥ 3.0.0-ci.9494, running 3.0.0-ci.9412 — updates when the platform rolls"*), and the update applies on the first reconcile after the platform rolls. A record already at the candidate's hash is not held: re-landing what is already there replaces nothing. |
+| Source content: a fresh install (`InstallOrUpdate`, `PackageInstaller.Install`) | Refused with `PackagePlatformFloorException`, which names both versions. Nothing is fetched or written. |
+| GitSync (`ModuleSyncDecision`) | That one module is declined through the same `PlatformFloor` decision. Its siblings still sync. |
+| Prebuilt adoption (`PrebuiltAdoptionPolicy`) | Declined through the same decision, and the content compiles instead. This path used to hold a private SemVer copy, which kept the 2026-09-07 trap live. |
+
+The self-update roll gate (`ReleaseAvailability`) is unchanged, and no roll waits on a floor.
+
+### Blocking tickets
+
+A hold is correct only while the working version keeps serving and the hold is visible. Nobody
+acts on a silent hold. When an update is held, the instance files **one blocking ticket** through
+the dispatch channel it already has: `IPackageHoldDispatch`. The portal registers
+`PackageHoldHandover`, which posts a signed `package-update-held` event with `severity: blocking`
+into the control inbox on the self-update announcement's own route (`Hosting:ControlInbox:Url` +
+`Hosting:ControlInbox:Secret`). The event carries the package, the held version, the floor, the
+running version, the version that keeps running, and what unblocks it.
+
+- **One ticket per held state.** The key is `heldUpdate`, which names the package, the version, the
+  floor and the running platform. A ticket is re-sent only when that state changes, once a day while
+  it lasts, or when the last attempt was not accepted (`heldUpdateDispatchedAt` stays unset). A
+  reconcile tick never sends one on its own.
+- **No route is a finding.** On an instance with no control inbox, or no dispatch registered, the
+  record says `heldUpdateDispatch: "NOT dispatched: …"`, naming what is missing, and the log says
+  it at Warning. Nothing crashes.
+- 🚨 **The control-plane half is owed by MeshWeaver.Plugins.** Until it lands, the control inbox
+  stores the event and the watcher drops it. `PlatformBuildInboxWatcher` admits only a self-update
+  announcement under a deployment's own key, and `TriageIntake.IsTriageKind` does not list
+  `package-update-held`. What Plugins must add:
+  1. admit `package-update-held` under the deployment key, as `SelfUpdateHandoff` does for
+     `self-update-*`;
+  2. route it to triage as a **blocking** `Hosting/TriageItem`, keyed on (deployment, package,
+     held version, floor), so that a re-send updates the same item.
+
+### Phase 2 (not done)
+
+- The **registry retains older versions with their floors**. Today it serves only the head and one
+  fallback.
+- Installers pick the **newest version whose floor is satisfied**, instead of holding the head.
+  That completes *"normally we attempt to install latest"*: latest *satisfiable*.
+- GitSync resolves the **newest satisfiable commit** of a module, instead of only declining the head.
 
 ## What "loads" means
 
 Two lanes, two measurements, one fallback:
 
-- **Compiled modules** (`modules/<name>@<gen>/`): `ModulePlatformLink.Check` links the entry assembly's type references against the running platform's surface before any load; the load itself is the second measurement. A refusal names the missing type. This gate exists since core #3552 and is unchanged by the policy — the policy makes it the *only* gate.
+- **Compiled modules** (`modules/<name>@<gen>/`): `ModulePlatformLink.Check` links the entry assembly's type references against the running platform's surface before any load; the load itself is the second measurement. A refusal names the missing type. This gate exists since core #3552 and is unchanged by the policy. It runs on a version that has passed the declared floor (R2).
 - **NodeType content** (`prebuilt-bundles/<identity>/<source>/`): a baked assembly is adopted only for the exact framework build identity it was baked against (`PrebuiltAssemblySeeder.DeclineReason`, ordinal equality). That is also unchanged — a mismatched bake would be worse than none. What changes is the consequence of *no* bake: **the content compiles in the mesh**, which is the same code path every pull request already proves green. A missing bake is a cost (boot time), not a reason to hold a roll. `Modules:RequirePrebuilt` remains the opt-in strict mode for installations that prefer a named park to a compile.
 - **Fallback**: when the newest generation of a module does not load, the previous generation that did is loaded instead, reported as such, and kept from garbage collection. When that one does not load either — or the installation holds none — and the **image ships a copy of the same module** (the `Modules:Assemblies` baseline entry the store generation displaced), the image's copy runs, reported as such ([#3735](https://github.com/Systemorph/MeshWeaver/issues/3735)). Only when *nothing* loads is the module absent — and that is the readiness probe's business (the rollout stalls on the pod, the previous pods keep serving), which is the last safety net and the one that has never failed.
 
@@ -135,13 +235,11 @@ it.
 | **Store-only** module (the image ships none) | Unchanged — the store copy wins | There is nothing to prefer it to. A declined module is an **absent** module, which is strictly worse than one whose identity does not match; this is the same trade "an unusable one must not override" already makes. |
 | Identity **matches** | Unchanged — the store copy wins | The ordinary upgrade path (#2548) and the whole point of installing a module. The discriminator decides on a *difference*, never on being a store copy. |
 
-**This is not the declared floor returning (#3648).** The floor is a string a module's author *wrote*
-about a platform they never saw, compared by a comparator that ranks `ci < rc < clean` — which is
-why it cannot gate, and why re-arming it held every production portal on its morning build for all
-of 2026-09-07. The identity is what the producing toolchain **measured** about the bytes it emitted,
-compared against what this process measures about itself. And the consequences differ in kind: the
-floor **removed** modules; this only chooses between two copies the deployment already holds, and
-never where there is just one.
+**This is not the declared floor.** The floor is a string a module's author *wrote*. Since policy
+`package-min-mesh-version` it holds a version only when it is comparable with the running platform
+and above it (R2). The identity is what the producing toolchain **measured** about the bytes it
+emitted, compared against what this process measures about itself. It only chooses between two
+copies the deployment already holds, and never where there is just one.
 
 **It is self-healing, and it cannot tear a replica set apart.** R3 lands a bundle whose served
 identity differs from the landed one at the same version (`ModuleUpdateDecision`), so the moment the
@@ -243,7 +341,7 @@ The rule is the consumer's "never roll back unattended", applied to the publish 
 
 ## What the platform roll gates on
 
-The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
+The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter the ROLL: they decide which package version an installation takes (R2), never whether the platform rolls. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
 
 The safety net after a roll is boot-time, in this order: the link probe refuses what cannot load; the fallback keeps the previous generation; a module with no loadable generation makes the pod unhealthy and the rollout stalls, with the previous pods serving. That is what "robust during deployments" buys: the worst outcome of a wrong roll is a **stalled rollout with a named module**, never a portal that serves nothing and never an installation stuck on a month-old build because a string said so.
 
@@ -267,8 +365,19 @@ All four steps are implemented: 1 is [#3661](https://github.com/Systemorph/MeshW
 - **Never roll back unattended**: an older served version is never adopted over a newer landed one (`SkipOlder`) — and on a registry, an older *published* version never displaces a newer landed head (#3996, the registry-shelf section above).
 - **Never swap a module in a running process**: a new generation loads at the next restart; the policy makes that restart happen (step 3), it does not make the swap live.
 - **Sources follow the seal** (Plugins#1430, core #3600): a module-bearing repository's sources advance only to the commit sealed for the instance's own identity.
-- **Pack-time floor lint** (`check-module-floors.py`, `check-module-platform-floor.py`): a module built against pin X that declares a floor above X is an authoring error and still fails the pack. The floor is documentation for humans; the runtime does not read it as a gate.
+- **Pack-time floor lint** (`check-module-floors.py`, `check-module-platform-floor.py`): a module built against pin X that declares a floor above X is an authoring error and still fails the pack. At runtime the floor holds a version (R2).
 
-## Why the version string was the wrong instrument
+## Why the version string was the wrong instrument (2026-09-07), and what changed
 
-A `minMeshVersion` is a claim written before the platform it names exists. It is authored, so it can be absent or wrong; it is coarse, so a `3.0.0` line cannot express "after commit X"; and it is compared by a total order (`ci < rc < clean`) that encodes a release *policy*, not compatibility. Every one of those properties produced an outage this year: rc7 floors deadlocking a registry against its own roll (2026-08-22), a `3.0.0-rc14` floor naming a platform that never existed, and the 2026-09-07 hold. The measured link probe has none of them: it reads the bytes, it answers per type, and it cannot be out of date because it is computed against the platform actually running. What the string was *for* — telling an operator which platform a module was built against — is served by the identity the bundle already records (`frameworkMvid`) and by the status row, not by a gate.
+A `minMeshVersion` is a claim written before the platform it names exists. It is authored, so it
+can be absent or wrong; it is coarse, so a `3.0.0` line cannot express "after commit X"; and it was
+compared by a total order (`ci < rc < clean`) that encodes a release *policy*, not compatibility.
+Every one of those properties produced an outage that year: rc7 floors deadlocking a registry
+against its own roll (2026-08-22), a `3.0.0-rc14` floor naming a platform that never existed, and
+the 2026-09-07 hold.
+
+Two things are different now. Floors are written by the producing build (`3.0.0-ci.N`, one shape,
+policy `version-shapes`), not typed by hand against an rc line. They are compared by `PlatformFloor`,
+which decides only what it can order and waves everything else through as advisory. The comparator
+was the wrong instrument; the claim was never wrong in kind. Without it, 2026-09-27 showed that the
+link probe alone lets source for a newer platform land on an older one.

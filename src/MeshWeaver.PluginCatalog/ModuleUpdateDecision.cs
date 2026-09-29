@@ -28,13 +28,15 @@ public enum ModuleUpdateAction
     SkipUpToDate,
 
     /// <summary>
-    /// 🚨 RETIRED by #3648 — nothing produces this any more. It meant "the bundle's declared
-    /// <c>minMeshVersion</c> floor exceeds the running platform, skipped", and on 2026-09-07 that
-    /// skip is what held every production portal on the morning build: the comparator ranks
-    /// <c>ci &lt; rc</c>, so an <c>rc</c> floor could never be satisfied by any <c>ci</c> build. The
-    /// floor is advisory now (<see cref="Land"/> carries the sentence in its reason) and the link
-    /// probe at landing decides. The member stays so a verdict serialized by an older build keeps
-    /// its ordinal and a caller compiled against it keeps compiling.
+    /// 🚨 The bundle's declared <c>minMeshVersion</c> floor is comparable with the running
+    /// platform and strictly ABOVE it (<see cref="PlatformFloor"/>; policy
+    /// <c>package-min-mesh-version</c>, rule R2 of <c>Doc/Architecture/ModuleAdoptionPolicy</c>):
+    /// nothing travels, the landed generation keeps running (R1), and the bundle lands once the
+    /// platform rolls to its floor. Retired by #3648 because the SemVer comparison it used ranked
+    /// <c>ci &lt; rc</c> — an <c>rc</c> floor could never be satisfied by any <c>ci</c> build, which
+    /// held every production portal on 2026-09-07 — and produced again through
+    /// <see cref="PlatformFloor"/>, under which an unordered floor proceeds as advisory. The
+    /// ordinal is unchanged, so a verdict serialized by an older build keeps its meaning.
     /// </summary>
     SkipPlatformBelowFloor,
 
@@ -76,15 +78,18 @@ public sealed record ModuleUpdateVerdict(ModuleUpdateAction Action, string? Reas
 /// so the reconciler's behaviour is pinnable without a registry, a filesystem, or a mesh
 /// (#1664 Slice C). Every input is a fact the caller already holds; nothing here fetches.
 ///
-/// <para>🚨 <b>No platform gate here at all (#3648).</b> This decision used to skip a bundle whose
-/// declared <c>minMeshVersion</c> floor exceeded the running platform. That string comparison held
-/// every production portal on 2026-09-07 (see <see cref="ModulePlatformFloor"/>), so the floor is
-/// ADVISORY: it is worded into the <see cref="ModuleUpdateAction.Land"/> reason and logged, and
-/// whether the bytes can load is MEASURED where the bytes are — the link probe in
-/// <see cref="ModuleLandingService"/> at placement, and <c>MeshBuilder.InstallAssemblies</c> at
-/// boot. MVID equality was never the gate either: modules are ordinary .NET assemblies binding by
-/// simple name, and a bundle built against an OLDER platform LANDS (the ex-post Store install
-/// across platform versions the lane exists for).</para>
+/// <para>🚨 <b>The declared floor HOLDS an update (policy <c>package-min-mesh-version</c>).</b>
+/// A bundle whose <c>minMeshVersion</c> is comparable with the running platform and strictly above
+/// it answers <see cref="ModuleUpdateAction.SkipPlatformBelowFloor"/> wherever it would otherwise
+/// have answered <see cref="ModuleUpdateAction.Land"/>, and the landed generation keeps running.
+/// The decision is the caller's <c>floorHold</c> — production passes
+/// <see cref="PackagePlatformFloorGate.HoldFor"/>, i.e. <see cref="PlatformFloor"/> — and never the
+/// <c>platformGate</c> wording, whose SemVer comparison held every production portal on
+/// 2026-09-07 (#3648). Whether bytes that pass the floor can LOAD is still measured where the
+/// bytes are — the link probe in <see cref="ModuleLandingService"/> at placement, and
+/// <c>MeshBuilder.InstallAssemblies</c> at boot. MVID equality was never the gate: modules are
+/// ordinary .NET assemblies binding by simple name, and a bundle built against an OLDER platform
+/// LANDS.</para>
 ///
 /// <para>🚨 <b>The framework identity decides whether there is anything NEW to land</b>
 /// (Plugins#931 consumer half). A module's published version encodes its CONTENT only, so a rebuild
@@ -119,21 +124,21 @@ public static class ModuleUpdateDecision
     /// this package has nothing to decide about), the uninstalled check before up-to-date (a
     /// disabled entry may still carry the served version, and "up to date" would misname the
     /// operator's choice), and the policy LAST — so a policy skip is only ever reported when an
-    /// update genuinely would have landed. There is no floor step (#3648): a bundle whose declared
-    /// floor exceeds the running platform proceeds to <see cref="ModuleUpdateAction.Land"/> with the
-    /// advisory in its reason, and the landing's link probe decides.</para>
+    /// update genuinely would have landed. The floor is applied to the ANSWER: every
+    /// <see cref="ModuleUpdateAction.Land"/> whose bundle floor <paramref name="floorHold"/> holds
+    /// becomes <see cref="ModuleUpdateAction.SkipPlatformBelowFloor"/>, so the floor never masks a
+    /// more specific skip (up to date, older, uninstalled, policy).</para>
     /// </summary>
     /// <param name="bundleVersion">The version the registry's bundle index serves for this package,
     /// or null when it lists no bundle.</param>
     /// <param name="bundleMinMeshVersion">The bundle's declared platform floor, as the index
-    /// surfaces it. Null = none declared. ADVISORY (#3648): it is worded into the verdict's reason
-    /// and never decides it.</param>
+    /// surfaces it. Null = none declared. Decides through <paramref name="floorHold"/>; worded
+    /// through <paramref name="platformGate"/>.</param>
     /// <param name="platformGate">Words the advisory — returns the sentence naming both versions
     /// when the declared floor exceeds the running platform, or null when it does not; production
     /// passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second
-    /// wording of the floor. 🚨 Its answer NEVER changes the action (#3648): the parameter stays
-    /// so callers compiled against the previous platform keep binding, and so the log line can say
-    /// "declares platform ≥ X; running Y" without a second comparison.</param>
+    /// wording of the floor. 🚨 Its answer NEVER changes the action (#3648): its SemVer comparison
+    /// is the 2026-09-07 trap. The HOLD is <paramref name="floorHold"/>.</param>
     /// <param name="landed">This deployment's activation entry for the module, or null when it was
     /// never landed (which includes "installed before the module lane existed" — those heal by
     /// landing).</param>
@@ -191,6 +196,15 @@ public static class ModuleUpdateDecision
     /// Plugins#931), not a fail-safe. Production passes it — <c>PluginBundleClient.AdoptModule</c>
     /// off <c>BundleRef.FrameworkMvid</c> — and any new caller must.</para>
     /// </param>
+    /// <param name="floorHold">
+    /// 🚨 The floor DECISION (policy <c>package-min-mesh-version</c>): returns the held sentence
+    /// when the bundle's declared floor is comparable with the running platform and strictly above
+    /// it, or null when the bundle may be used. Production passes
+    /// <see cref="PackagePlatformFloorGate.HoldFor"/> (<see cref="PlatformFloor"/> against
+    /// <c>PlatformBuildInfo.RunningPlatformVersion</c>); tests bind
+    /// <c>f =&gt; PlatformFloor.HoldReason(f, running)</c>. Null — the default — holds nothing,
+    /// which is the pre-policy shape, not a fail-safe: any production caller must pass it.
+    /// </param>
     public static ModuleUpdateVerdict Decide(
         string? bundleVersion,
         string? bundleMinMeshVersion,
@@ -198,17 +212,42 @@ public static class ModuleUpdateDecision
         ModuleActivationEntry? landed,
         string? policyDecline,
         Func<ModuleActivationEntry, bool> landedBytesPresent,
-        string? bundleFrameworkMvid = null)
+        string? bundleFrameworkMvid = null,
+        Func<string?, string?>? floorHold = null)
+    {
+        var verdict = DecideIgnoringFloor(bundleVersion, bundleMinMeshVersion, platformGate, landed,
+            policyDecline, landedBytesPresent, bundleFrameworkMvid);
+
+        // 🚨 policy package-min-mesh-version — the declared floor holds a LAND, and only a land:
+        // every skip above is more specific and stays what it says. The landed generation keeps
+        // running (R1); the bundle lands on the first reconcile after the platform rolls to it.
+        if (verdict.Action != ModuleUpdateAction.Land
+            || floorHold?.Invoke(bundleMinMeshVersion) is not { } held)
+            return verdict;
+
+        return new(ModuleUpdateAction.SkipPlatformBelowFloor,
+            $"version {bundleVersion} {held}"
+            + (landed is { Version.Length: > 0 }
+                ? $" (keeping {landed.Version})"
+                : " (never landed here, so nothing is replaced)"));
+    }
+
+    private static ModuleUpdateVerdict DecideIgnoringFloor(
+        string? bundleVersion,
+        string? bundleMinMeshVersion,
+        Func<string?, string?> platformGate,
+        ModuleActivationEntry? landed,
+        string? policyDecline,
+        Func<ModuleActivationEntry, bool> landedBytesPresent,
+        string? bundleFrameworkMvid)
     {
         if (string.IsNullOrWhiteSpace(bundleVersion))
             return new(ModuleUpdateAction.SkipNoBundle,
                 "the registry lists no bundle for this package");
 
-        // 🚨 #3648 — the floor is ADVISORY. A step here used to answer SkipPlatformBelowFloor when
-        // the declared floor exceeded the running platform; on 2026-09-07 that string comparison
-        // (ci < rc < clean) declined every candidate on every production portal for a day while
-        // the measured link probe would have loaded each of them. The sentence still rides the
-        // Land reason so the log says what the module claims; nothing branches on it.
+        // The SemVer WORDING of the floor (#3648) — it rides the Land reason so the log says what
+        // the module claims; nothing branches on it. The hold is applied by Decide, through
+        // PlatformFloor, whose comparison cannot repeat the 2026-09-07 trap (ci < rc < clean).
         var advisory = platformGate(bundleMinMeshVersion);
 
         if (landed is { Enabled: false })
