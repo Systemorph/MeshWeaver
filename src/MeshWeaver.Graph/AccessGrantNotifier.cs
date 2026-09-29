@@ -162,6 +162,16 @@ public sealed class AccessGrantNotifier(
         if (string.Equals(assignmentNode.CreatedBy, assignment.AccessObject, StringComparison.Ordinal))
             return false;
 
+        // 🚨 NEVER notify a SYSTEM-issued grant. A grant written as System is an entitlement — a
+        // free app, a plan unlock, a purchase, a redeemed coupon, a sweep — never a person sharing
+        // something: either the user caused it themselves or nobody asked for it. Measured on
+        // memex.meshweaver.cloud 2026-09-29: the free plugin Parties was published at 10:36 UTC and
+        // the Store's all-users sweep wrote 72 system-security grants 10:50–10:53, each one mailed,
+        // belled and Teams-messaged to its user. A new app being available is never a notification.
+        // A person granting through the UI is CreatedBy = that person and still notifies.
+        if (string.Equals(assignmentNode.CreatedBy, WellKnownUsers.System, StringComparison.Ordinal))
+            return false;
+
         var scope = ResolveGrantedNode(assignmentNode);
         if (string.IsNullOrEmpty(scope))
             return false;
