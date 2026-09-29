@@ -77,8 +77,11 @@ endpoint, which answers 404 for this repository.
 - **CI** — the platform resolver (`.github/scripts/resolve-platform.py`) takes the newest set whose
   platform trio is sealed (promote, verify, platform bake: every one of them runs ~5–30 minutes after
   a green core main commit and none waits for the fleet's gate), resolving a set that is promoted
-  but not yet ARMED by the portal's identity tag. A red core `main` publishes nothing, so the last
-  green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
+  but not yet ARMED by the portal's `<core7>-p<plugins7>` tag from that run's promotion-record
+  artifact. The run head can differ from the commit whose image the gate built, and the portal's
+  bare core tag can move when Plugins changes. The resolver checks the recorded pair and refuses
+  a missing pair instead of selecting the moving bare tag. A red core `main` publishes nothing, so
+  the last green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
   passed on by default; the label `platform:main-passed` asks for that ceiling.
 
 ### One promotion gate
