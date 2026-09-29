@@ -700,6 +700,19 @@ data:
   {{- if .Values.config.memex_portal.Hosting__Triage__Repositories }}
   Hosting__Triage__Repositories: "{{ .Values.config.memex_portal.Hosting__Triage__Repositories }}"
   {{- end }}
+  # The PR steward's SELF-HEAL SWEEP on the triage inbox (MeshWeaver.Plugins Hosting PullRequestSweep,
+  # EnabledKey). It arms wherever the triage inbox is, so a control instance that is the inbox but must
+  # not review its repositories' pull requests sets it "false". Rendered only when set.
+  {{- if hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled" }}
+  Hosting__Triage__PullRequestSweep__Enabled: "{{ index .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled" | toString | trim }}"
+  {{- end }}
+  # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
+  # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on
+  # Hosting/_Access, so the triage items and their threads are readable (a global admin has no data
+  # access by definition). Rendered only when set.
+  {{- if hasKey .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins" }}
+  Hosting__MirrorHostingReadFromAdmins: "{{ index .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins" | toString | trim }}"
+  {{- end }}
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
   # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
   # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
