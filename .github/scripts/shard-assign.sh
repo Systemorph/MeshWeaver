@@ -124,6 +124,7 @@ WEIGHTS=$(cat <<'EOF'
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
 64 MeshWeaver.Graph.Test
+50 MeshWeaver.FaultInjection.Test
 27 MeshWeaver.Hosting.Test
 26 MeshWeaver.Layout.Test
 25 Memex.Portal.Shared.Test
