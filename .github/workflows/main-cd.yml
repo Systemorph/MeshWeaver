@@ -2250,8 +2250,9 @@ jobs:
   # policy, so a version tag written at promotion would roll it to sets the fleet gate refused.
   # Runs in every main-cd run after `arm` (like `arm`, never waiting): it reads the newest ARMED
   # version and its pair tag off memex-portal-ai, and tags the accepted control image of that pair.
-  #   done    → nothing to write (idempotent; the ACR version tag is written LAST, so its presence
-  #             implies the fleet registry got the same tags);
+  #   done    → nothing to write (idempotent; control-arm writes the ACR version tag LAST, so for
+  #             its own writes presence on ACR implies the fleet registry got the same tags — a tag
+  #             written before control-arm existed was verified on cr by control-promote's mirror);
   #   tag     → version (+ line pointers unless a newer control version exists — never backwards);
   #   missing → no accepted control image for the armed pair: the control lane failed or has not
   #             finished for it. NOT red here — the control lane reports its own failure
