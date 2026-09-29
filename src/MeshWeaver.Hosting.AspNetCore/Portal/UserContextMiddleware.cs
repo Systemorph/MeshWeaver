@@ -127,7 +127,11 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         {
             // If this request already has a resolved context (same email), reuse it.
             var existing = userService.Context;
-            if (existing is not null && existing.Email == userContext.Email)
+            if (existing is not null && existing.Email == userContext.Email
+                // A service principal has no e-mail, and neither has an anonymous context — so for a
+                // service the reuse must match the PRINCIPAL, never merely the (empty) address.
+                && (!userContext.IsService
+                    || (existing.IsService && existing.ObjectId == userContext.ObjectId)))
             {
                 userService.SetContext(existing);
                 await next(context);
@@ -208,6 +212,22 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 }
             }
 
+            // 🚨 A SERVICE object id (`svc-…`) is reachable ONLY through a service token
+            // (Doc/Architecture/ServiceIdentities). Any other road to it — an e-mail whose local part
+            // reads `svc-…`, a dev login, a claims-provider quirk — would hand the caller that
+            // service's grants, so it is refused: anonymous, never the service.
+            if (ServiceIdentity.IsServiceObjectId(userContext.ObjectId)
+                && !userContext.IsService)
+            {
+                logger.LogWarning(
+                    "UserContextMiddleware: refusing service object id '{ObjectId}' for a session that was "
+                    + "not authenticated by that service's token (email {Email}). Treating as anonymous.",
+                    userContext.ObjectId, userContext.Email);
+                userService.SetContext(AnonymousContext with { Locale = requestLocale });
+                await next(context);
+                return;
+            }
+
             // Defence-in-depth: if anything upstream slipped an email-shaped
             // identifier through (claims provider quirks, Bearer-token path,
             // etc.), refuse to set it. Better anonymous than mis-partitioned.
@@ -250,7 +270,9 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // request, so an ungated call would re-resolve and re-run the platform's logon actions
             // per page load, per /api call, per SSE frame — the per-request storm the dedup exists
             // to prevent, on the authentication critical path.
-            if (TrackLogin(userContext, hub))
+            // A service principal has no person's session: no login record in a user partition it
+            // does not have, and no per-user logon actions.
+            if (!userContext.IsService && TrackLogin(userContext, hub))
                 RunLogonActions(userContext, hub);
         }
         else
@@ -498,6 +520,9 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         // Doc/Architecture/AccessControl → "API tokens and the Api capability".
                         Roles = response.Roles,
                         IsApiToken = true,
+                        // Set only when validation read the service's identity record and found it
+                        // live — never from anything the caller sent.
+                        IsService = response.IsService,
                     }, null)
                     // Definitive negative verdict (unknown/mismatch/revoked/expired) —
                     // fail closed to anonymous, as before.
@@ -701,9 +726,25 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name") ?? string.Empty,
             ObjectId = objectId,
             Email = email,
-            Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
+            Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList(),
+            IsService = IsServiceTokenIdentity(user),
         };
     }
+
+    /// <summary>
+    /// True when <paramref name="user"/> was authenticated by a SERVICE principal's API token: the
+    /// principal-kind claim is present AND the identity carrying it is the API-token scheme's. The
+    /// second half is what makes the claim unforgeable — a cookie or an external provider's identity
+    /// has another authentication type, so whatever claims it carries cannot make it a service.
+    /// </summary>
+    public static bool IsServiceTokenIdentity(ClaimsPrincipal user)
+        => user.Identities.Any(identity =>
+            identity.IsAuthenticated
+            && string.Equals(identity.AuthenticationType,
+                ServiceIdentity.TokenAuthenticationType, StringComparison.Ordinal)
+            && identity.HasClaim(
+                ServiceIdentity.PrincipalKindClaim,
+                ServiceIdentity.ServicePrincipalKind));
 
     /// <summary>
     /// Whether a candidate partition id is TAKEN: the mesh <c>User</c> node carrying that id belongs

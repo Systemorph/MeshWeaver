@@ -35,6 +35,14 @@ public record ApiToken
     public bool IsRevoked { get; init; }
 
     /// <summary>
+    /// Path of the <see cref="ServiceIdentity"/> record this token authenticates as, or <c>null</c>
+    /// for a person's token. When set, <see cref="UserId"/> is the service object id (<c>svc-…</c>),
+    /// and validation reads the record on every use and refuses the token when the identity is
+    /// absent or revoked — so revoking the identity revokes every token it holds, at once.
+    /// </summary>
+    public string? ServiceIdentityPath { get; init; }
+
+    /// <summary>
     /// Role IDs (e.g. "Admin", "Editor") captured at token-creation time from the creating user's
     /// <c>AccessContext.Roles</c>, returned in <see cref="ValidateTokenResponse.Roles"/> at
     /// validation and stamped onto the request's <c>AccessContext.Roles</c> by the auth middleware.
