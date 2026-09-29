@@ -71,14 +71,24 @@ internal class VersionWritingStorageAdapter(
     /// <c>Hosting/FleetConsole</c> gate — three sequential <c>CreateOrUpdateNode</c>s inside a 10 s
     /// budget — went red on the first two sets carrying it and on none before.</para>
     /// </summary>
-    private readonly ConcurrentDictionary<string, bool> verdicts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedVerdict> verdicts = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Per-type invalidation generation: <see cref="Invalidate"/> bumps it, and a verdict
-    /// resolved from a read that STARTED before the bump is discarded rather than installed — so an
-    /// invalidation that overtakes an in-flight read cannot be consumed by a stale verdict.</summary>
-    private readonly ConcurrentDictionary<string, long> generations = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>One type's cache entry: the invalidation <paramref name="Generation"/> and the verdict
+    /// resolved AT that generation (null = none). ONE entry replaced atomically, so an install and an
+    /// invalidation of the same type can never interleave: <see cref="Remember"/> installs only by
+    /// compare-and-swap against the exact entry its read started from, and <see cref="Invalidate"/>
+    /// always moves the generation on, which makes that swap fail.</summary>
+    private sealed record CachedVerdict(long Generation, bool? Keeps);
 
     private int invalidationArmed;
+
+    /// <summary>When the change feed last ended (fault or completion), in UTC ticks; 0 = never.
+    /// While it is recent the cache is bypassed rather than re-armed on every write — see
+    /// <see cref="ArmInvalidation"/>.</summary>
+    private long feedEndedAtTicks;
+
+    /// <summary>How long after the change feed ended before a re-subscription is attempted.</summary>
+    private static readonly TimeSpan FeedRearmInterval = TimeSpan.FromMinutes(1);
 
     // 🚨 Decorator MUST forward Changes — without this it falls back to the
     // interface default Observable.Empty, and every synced query subscribed
@@ -211,10 +221,13 @@ internal class VersionWritingStorageAdapter(
             || string.Equals(nodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
             return Observable.Return(true);
 
-        ArmInvalidation();
-        if (verdicts.TryGetValue(nodeType, out var cached))
+        if (!ArmInvalidation())
+            // No live feed can invalidate a cached verdict, so none is used or kept: every write
+            // resolves its type afresh until the feed is back.
+            return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options, cache: false);
+        if (verdicts.TryGetValue(nodeType, out var entry) && entry.Keeps is { } cached)
             return Observable.Return(cached);
-        return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options);
+        return ResolveKeepsHistory(nodeType, readOptions?.Invoke() ?? options, cache: true);
     }
 
     /// <summary>
@@ -222,18 +235,20 @@ internal class VersionWritingStorageAdapter(
     /// the adapter's OWN read options when it has them, so the cached verdict does not depend on
     /// whichever writer happened to ask first.
     /// </summary>
-    private IObservable<bool> ResolveKeepsHistory(string nodeType, JsonSerializerOptions options)
+    private IObservable<bool> ResolveKeepsHistory(string nodeType, JsonSerializerOptions options, bool cache)
     {
-        // Registering the type here (and only here) keeps `generations` bounded by the number of
-        // TYPES ever asked about, never by the number of paths written.
-        var generation = generations.GetOrAdd(nodeType, 0);
+        // Registering the type here (and only here) keeps the map bounded by the number of TYPES
+        // ever asked about, never by the number of paths written.
+        var started = cache ? verdicts.GetOrAdd(nodeType, new CachedVerdict(0, null)) : null;
 
         // A slash-less type is never an in-mesh row (a definition always lives INSIDE a partition —
         // the rule PartitionOwningTypes applies), so only the host's static nodes can declare it.
-        // Those are registered when the mesh is built and never change for its lifetime, so this
-        // verdict needs no invalidation.
+        // Those come from MeshBuilder.AddMeshNodes and the IStaticNodeProviders registered when the
+        // mesh is built (StaticNodeProviderExtensions.ResolveStaticNodes owns that resolution); a
+        // plugin installed at runtime brings in-mesh NodeTypes — storage rows, covered by both
+        // invalidation paths — never static ones. So this verdict needs no invalidation.
         if (!nodeType.Contains('/'))
-            return Observable.Return(Remember(nodeType, generation,
+            return Observable.Return(Remember(nodeType, started,
                 staticNodeLookup?.Invoke(nodeType) is not { } builtIn || Declares(builtIn, options)));
 
         // A path-shaped type is read off the storage this decorator wraps FIRST — the common case
@@ -242,7 +257,7 @@ internal class VersionWritingStorageAdapter(
         return inner.Read(nodeType, options)
             .Take(1)
             .DefaultIfEmpty(null)
-            .Select(definition => Remember(nodeType, generation,
+            .Select(definition => Remember(nodeType, started,
                 (definition ?? staticNodeLookup?.Invoke(nodeType)) is not { } found || Declares(found, options)))
             .Timeout(DefinitionReadTimeout, Observable.Defer(() =>
             {
@@ -260,45 +275,64 @@ internal class VersionWritingStorageAdapter(
             });
     }
 
-    /// <summary>Installs a verdict unless the type was invalidated after its read started.</summary>
-    private bool Remember(string nodeType, long generation, bool keeps)
+    /// <summary>Installs a verdict by compare-and-swap against the entry the read started from, so a
+    /// type invalidated at ANY point after that — before the check or between check and store — keeps
+    /// no verdict from it.</summary>
+    private bool Remember(string nodeType, CachedVerdict? started, bool keeps)
     {
-        if (generations.GetValueOrDefault(nodeType) == generation)
-            verdicts[nodeType] = keeps;
+        if (started is not null)
+            verdicts.TryUpdate(nodeType, started with { Keeps = keeps }, started);
         return keeps;
     }
 
-    /// <summary>Drops the cached verdict for a definition that this decorator just wrote or deleted.</summary>
+    /// <summary>Drops the cached verdict for a definition that was written or deleted, moving its
+    /// generation on so a verdict still being resolved from the old definition is not installed.</summary>
     private void Invalidate(string? path)
     {
         if (string.IsNullOrEmpty(path))
             return;
-        if (!generations.ContainsKey(path))
-            return;                         // not a type anyone resolved — nothing cached, nothing in flight
-        generations.AddOrUpdate(path, 1, (_, g) => g + 1);
-        verdicts.TryRemove(path, out _);
+        // Only a type someone resolved has an entry; a written path that is not one is ignored (no
+        // entry is created, so the map stays bounded by the number of types).
+        while (verdicts.TryGetValue(path, out var current)
+               && !verdicts.TryUpdate(path, new CachedVerdict(current.Generation + 1, null), current))
+        {
+        }
     }
 
     /// <summary>
-    /// Subscribes ONCE to the wrapped store's change feed, dropping the cached verdict of any
-    /// definition another writer (another replica, or a write that bypassed this decorator)
-    /// changed. The subscription lives as long as the feed — the store's, i.e. the mesh's.
+    /// Subscribes to the wrapped store's change feed (once while it lives), dropping the cached
+    /// verdict of any definition another writer — another replica, or a write that bypassed this
+    /// decorator — changed. Returns whether a live feed backs the cache.
+    ///
+    /// <para>If the feed ENDS (faults, or completes), every verdict is forgotten and the cache is
+    /// bypassed; a re-subscription is attempted at most once per <see cref="FeedRearmInterval"/>, so
+    /// a persistently broken feed degrades to "uncached, one warning a minute", never to a
+    /// clear/re-arm/warn loop per write.</para>
     /// </summary>
-    private void ArmInvalidation()
+    private bool ArmInvalidation()
     {
-        if (Interlocked.Exchange(ref invalidationArmed, 1) == 1)
-            return;
+        if (Volatile.Read(ref invalidationArmed) == 1)
+            return true;
+        var endedAt = Interlocked.Read(ref feedEndedAtTicks);
+        if (endedAt != 0 && DateTimeOffset.UtcNow.UtcTicks - endedAt < FeedRearmInterval.Ticks)
+            return false;
+        if (Interlocked.CompareExchange(ref invalidationArmed, 1, 0) != 0)
+            return true;
         inner.Changes.Subscribe(
             change => Invalidate(change.Path),
-            ex =>
-            {
-                // A faulted feed can no longer invalidate: forget every verdict and disarm, so the
-                // next write re-arms the subscription and re-resolves from the store.
-                logger?.LogWarning(ex,
-                    "The storage change feed faulted — dropping every cached keeps-history verdict and re-subscribing on the next write");
-                verdicts.Clear();
-                Interlocked.Exchange(ref invalidationArmed, 0);
-            });
+            ex => FeedEnded(ex, "faulted"),
+            () => FeedEnded(null, "completed"));
+        return Volatile.Read(ref invalidationArmed) == 1;
+    }
+
+    private void FeedEnded(Exception? ex, string how)
+    {
+        logger?.LogWarning(ex,
+            "The storage change feed {How} — dropping every cached keeps-history verdict; types are resolved per write until it is re-subscribed (at most once a minute)",
+            how);
+        Interlocked.Exchange(ref feedEndedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+        verdicts.Clear();
+        Interlocked.Exchange(ref invalidationArmed, 0);
     }
 
     /// <summary>
