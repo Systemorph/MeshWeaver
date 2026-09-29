@@ -397,6 +397,27 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
             + "would mean the gate is asking a different question than the assertion that armed it");
     }
 
+    /// <summary>
+    /// A patch that would change NOTHING skips the write, and the write is where the owner's Update
+    /// check runs — so the no-change answer must take the same pre-flight itself. A Viewer (Read, no
+    /// Update) re-sending the node's own name must be refused, never told <c>No change</c>, which would
+    /// answer a write question for a caller who may not write.
+    /// </summary>
+    [Fact]
+    public async Task ANoChangePatchWithoutUpdateIsRefusedNotReportedAsNoChange()
+    {
+        ActAsViewer();
+        var answer = await new MeshOperations(SessionHub()).Patch(PlainPath, """{"name":"Doc"}""")
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Patch({PlainPath}) → {answer}");
+
+        answer.Should().StartWith("Error:",
+            "the Viewer holds no Update, and an identical patch must not bypass the check a "
+            + "changing patch meets at the owner");
+        answer.Should().Contain("access denied");
+        answer.Should().NotContain("No change");
+    }
+
     private async Task<string> Compile(string path) =>
         await new MeshOperations(SessionHub()).Compile(path)
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);

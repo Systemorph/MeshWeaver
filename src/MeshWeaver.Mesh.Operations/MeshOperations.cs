@@ -2109,20 +2109,32 @@ public partial class MeshOperations
                 // aliases/domains/matchCaseSensitive: "Patched" twice, version unchanged, keys absent on
                 // read-back — because the running type was the one compiled BEFORE the fields existed.
                 if (callerDelta["content"] is JsonObject callerContent
-                    && UnknownContentMembers(callerContent, partial.Content, hub.JsonSerializerOptions)
+                    && partial.Content is { } typedContent
+                    && UnknownContentMembers(callerContent, typedContent, hub.JsonSerializerOptions)
                         is { Count: > 0 } unknownMembers)
                     return Observable.Return(UnknownContentMembersMessage(
-                        "patch", resolvedPath, existing.NodeType, partial.Content!.GetType(), unknownMembers));
+                        "patch", resolvedPath, existing.NodeType, typedContent.GetType(), unknownMembers));
 
                 // 🚨 A patch that changes NOTHING is not "Patched". Compare what would be stored with
                 // what is stored; equal ⇒ say so and write nothing, so a caller can tell "my value is
                 // already there" from "my value landed" (the version tells the second story).
+                // 🚨 AUTHORIZED FIRST: this answer skips mesh.UpdateNode, which is where the owner's
+                // Update check runs, so without its own check a caller holding Read but not Update
+                // would be told "No change" where every other patch of theirs is refused. Ask the
+                // SAME question the owner asks — the raw (path, Update) fold, re-decided through the
+                // node's INodeTypeAccessRule on a definitive denial — and fail closed otherwise.
                 if (JsonNode.DeepEquals(
                         JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions),
                         JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)))
-                    return Observable.Return(
-                        $"No change: {existing.Path} (v{existing.Version}) — every field in the patch already "
-                        + "holds that value, so nothing was written.");
+                    return CheckUpdateOutcome(resolvedPath, "Patch")
+                        .Select(outcome => outcome.IsGranted
+                            ? $"No change: {existing.Path} (v{existing.Version}) — every field in the patch "
+                                + "already holds that value, so nothing was written."
+                            : outcome.IsUndetermined
+                                ? $"Error: patching {resolvedPath}: the permission check did not complete "
+                                    + $"({outcome.UndeterminedReason}). Nothing was written; retry."
+                                : $"Error: patching {resolvedPath}: access denied — Update permission on this "
+                                    + "node is required. Nothing was written.");
 
                 // Validate merged content against the NodeType's schema when the
                 // caller touched content. Surface the schema in the error so an
@@ -3972,13 +3984,7 @@ public partial class MeshOperations
         // COMPLETES without emitting (#2742) sails past it. CheckPermissionOutcome classifies both
         // terminals, so "we could not find out" gets its own answer instead of borrowing the
         // denial's. Still fail-closed: nothing is recycled without a positive verdict.
-        return hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch((Exception ex) => Observable.Return(
-                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
-                    $"the permission check for Recycle on '{resolvedPath}' did not complete: "
-                    + $"{ex.GetType().Name}")))
+        return CheckUpdateOutcome(resolvedPath, "Recycle")
             // 🚨 THE PRE-FLIGHT MUST ASK THE QUESTION THE OWNER WILL ASK — issue #3121. The check
             // above is a RAW (path, Update) fold, and the owner's delivery gate stopped being that
             // in #3061/#3100: on a definitive denial it re-decides through the node's registered
@@ -3992,9 +3998,6 @@ public partial class MeshOperations
             // same two reasons: it costs nothing on the granted path (which never reads a node), and
             // it never turns an UNDETERMINED fold into a rule question — "we could not check" must
             // stay "we could not check".
-            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
-                ? Observable.Return(outcome)
-                : ReconsiderRecycleThroughNodeTypeRule(resolvedPath))
             .SelectMany(outcome =>
             {
                 // 🚨 THE LEASE GATE, AFTER THE PERMISSION VERDICT AND BEFORE THE FIRST WRITE
@@ -4040,7 +4043,29 @@ public partial class MeshOperations
     }
 
     /// <summary>
-    /// Re-decides a DENIED <see cref="Recycle(string)"/> pre-flight through the target node's own
+    /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
+    /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
+    /// DEFINITIVE denial re-decided through the node's <c>INodeTypeAccessRule</c> exactly as the owner's
+    /// delivery gate does (#3121). One implementation, so Recycle and Patch's no-change answer cannot
+    /// drift into asking different questions.
+    /// </summary>
+    /// <param name="resolvedPath">The target, already resolved.</param>
+    /// <param name="verb">The verb asking, for the log and the undetermined reason.</param>
+    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> CheckUpdateOutcome(
+        string resolvedPath, string verb) =>
+        hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) => Observable.Return(
+                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the permission check for {verb} on '{resolvedPath}' did not complete: "
+                    + $"{ex.GetType().Name}")))
+            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                ? Observable.Return(outcome)
+                : ReconsiderUpdateThroughNodeTypeRule(resolvedPath, verb));
+
+    /// <summary>
+    /// Re-decides a DENIED Update pre-flight (<see cref="Recycle(string)"/>, Patch's no-change answer) through the target node's own
     /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
     /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
     /// drift into asking different questions.
@@ -4051,9 +4076,10 @@ public partial class MeshOperations
     /// blip must not be reported as a refusal nobody established. Undetermined carries
     /// <c>IsGranted = false</c>, so the caller fails closed on every leg.</para>
     /// </summary>
-    /// <param name="resolvedPath">The recycle target, already resolved.</param>
-    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderRecycleThroughNodeTypeRule(
-        string resolvedPath)
+    /// <param name="resolvedPath">The target, already resolved.</param>
+    /// <param name="verb">The verb asking, for the log.</param>
+    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderUpdateThroughNodeTypeRule(
+        string resolvedPath, string verb)
     {
         // Update is in the CRUD set SubjectOperationFor maps, so this is never null in practice —
         // it is asked rather than assumed so that a change to that mapping cannot silently make
@@ -4077,17 +4103,17 @@ public partial class MeshOperations
                     AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                 };
                 logger.LogDebug(
-                    "Recycle: Update on {Path} was denied by the standard check — re-deciding "
+                    "{Verb}: Update on {Path} was denied by the standard check — re-deciding "
                     + "through the {NodeType} access rule, which governs this node type",
-                    resolvedPath, node.NodeType);
+                    verb, resolvedPath, node.NodeType);
                 return NodeTypeAccessRuleGate.Evaluate(rule, context, ResolveCallerUserId(), logger);
             })
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
-                    "Recycle: could not read the node at {Path} to apply its node-type access rule "
+                    "{Verb}: could not read the node at {Path} to apply its node-type access rule "
                     + "— reporting UNAVAILABLE rather than a denial nobody established",
-                    resolvedPath);
+                    verb, resolvedPath);
                 return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
                     $"the node at '{resolvedPath}' could not be read to apply its node-type access "
                     + $"rule ({ex.GetType().Name})"));
@@ -5019,7 +5045,7 @@ public partial class MeshOperations
         return callerContent
             .Select(pair => pair.Key)
             .Where(key => !key.StartsWith('$') && !known.Contains(key))
-            .ToList();
+            .ToImmutableList();
     }
 
     /// <summary>The refusal a write with undeclared content members answers — names the members, the
