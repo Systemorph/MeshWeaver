@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Fixture;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -261,6 +262,148 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
         result.Content.Should().BeOfType<ProbeMarkdownContent>(
             "content written without a $type has nothing to contradict the proposal with, so it is "
             + "admitted — the same rule IMeshContentTypeRegistry.TryRecoverForNodeType applies");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+    // 🚨 #5736 / #4597's surviving half: "As<MarkdownContent> for {path} could not recover value:
+    // JsonException". Measured through the REAL MarkdownContent (its one `required` member is what
+    // makes the bind THROW instead of defaulting), because that is the record production proposed.
+    // ─────────────────────────────────────────────────────────────────────────────────────────
+
+    private const string StoredMarkdownText = "# Konzeptpapier — private body";
+
+    /// <summary>
+    /// 🚨 #5736. Content stored WITHOUT a <c>$type</c> in a shape <c>MarkdownContent</c> cannot
+    /// bind — the legacy <c>{"markdown": …}</c> key (<c>MarkdownOverviewLayoutArea.ReadMarkdownContent</c>
+    /// calls it Unreadable, #4600) — makes no claim to BE a <c>MarkdownContent</c>. Its failure to
+    /// bind is therefore not a failed recovery, and the update that replaces it (the repair) must not
+    /// file an incident. Both JSON shapes, for the reason the class doc gives.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UndiscriminatedLegacyMarkdownKey_IsNotReportedAsAFailedRecovery(bool asDom)
+    {
+        var json = $$"""{"markdown":"{{StoredMarkdownText}}"}""";
+        object stored = asDom
+            ? JsonNode.Parse(json)!
+            : JsonDocument.Parse(json).RootElement.Clone();
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeSameAs(stored,
+            "bytes that do not bind are left exactly as they are — never replaced by a guess");
+        AssertReportedAsWarningNotError(logger, "a JSON object");
+    }
+
+    /// <summary>
+    /// 🚨 A bare JSON STRING is a SANCTIONED markdown shape — <c>WithMarkdownContent</c> keeps "a
+    /// plain string a string" and <c>ReadMarkdownContent</c> reads it as Present — so a markdown
+    /// writer saving over it is the most ordinary update there is. <c>MarkdownContent</c> is an
+    /// object, so the bind throws every time, and before the fix every such save logged Error.
+    /// </summary>
+    [Fact]
+    public void BareStringMarkdown_IsNotReportedAsAFailedRecovery()
+    {
+        var stored = JsonDocument.Parse($"\"{StoredMarkdownText}\"").RootElement.Clone();
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeOfType<JsonElement>();
+        ((JsonElement)result.Content!).GetRawText().Should().Be(stored.GetRawText());
+        AssertReportedAsWarningNotError(logger, "a JSON string");
+    }
+
+    /// <summary>
+    /// 🚨 THE COUNTERPARTY that keeps the fix from being a log-level band-aid. Content that NAMES
+    /// the proposed record and still will not bind is genuinely corrupt — the writer that stored it
+    /// is the defect (#4600/#4657) — and that stays at Error.
+    /// </summary>
+    [Fact]
+    public void DiscriminatedContentThatDoesNotBind_IsStillAnError()
+    {
+        var logger = new RecordingLogger();
+
+        NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(JsonDocument.Parse("""{"$type":"MarkdownContent","content":42}""").RootElement.Clone()),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        logger.Entries.Should().Contain(e => e.Level == LogLevel.Error,
+            "a payload that CLAIMS to be a MarkdownContent and is not one is real corruption");
+    }
+
+    /// <summary>
+    /// 🚨 COUNTERPARTY — undiscriminated bytes that DO bind are still typed by the proposal
+    /// (the #3056 cure), with the real record and its real stored value.
+    /// </summary>
+    [Fact]
+    public void UndiscriminatedMarkdownThatBinds_IsStillTyped()
+    {
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(JsonDocument.Parse($$"""{"content":"{{StoredMarkdownText}}"}""").RootElement.Clone()),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeOfType<MarkdownContent>()
+            .Which.Content.Should().Be(StoredMarkdownText);
+        logger.Entries.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// 🚨 #4597's titled shape through the REAL <c>MarkdownContent</c>: a plugin record (live, or
+    /// stored with its own <c>$type</c>) saved over by a markdown-shaped writer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PluginContentProposedAsMarkdown_IsNotReportedAsAFailedRecovery(bool asJson)
+    {
+        object stored = asJson
+            ? StoredEmailBytes("EmailContent")
+            : new ProbeEmailContent("counterparty@example.com", "Due diligence");
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        if (asJson)
+            ((JsonElement)result.Content!).GetRawText().Should().Be(((JsonElement)stored).GetRawText());
+        else
+            result.Content.Should().BeSameAs(stored);
+        logger.Entries.Where(e => e.Level >= LogLevel.Error).Should().BeEmpty(
+            "two content types, nothing to convert, nothing failed. Captured: {0}",
+            string.Join(" | ", logger.Entries.Select(e => $"{e.Level}: {e.Text}")));
+    }
+
+    private static void AssertReportedAsWarningNotError(RecordingLogger logger, string shape)
+    {
+        logger.Entries.Where(e => e.Level >= LogLevel.Error).Should().BeEmpty(
+            "the stored content never claimed to be a MarkdownContent, so its failure to bind is "
+            + "an answer to a question the seam asked, not a fault — #5736 / #4597 filed it as "
+            + "'As<MarkdownContent> for … could not recover value: JsonException'. Captured: {0}",
+            string.Join(" | ", logger.Entries.Select(e => $"{e.Level}: {e.Text}")));
+        var warning = logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Warning,
+            "the validators DO see an untyped snapshot, and that is worth one line").Subject;
+        warning.Text.Should().Contain(NodePath).And.Contain("MarkdownContent").And.Contain(shape);
+        warning.Text.Should().NotContain(StoredMarkdownText, "content never reaches a log");
     }
 
     /// <summary>
