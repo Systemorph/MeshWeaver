@@ -133,6 +133,75 @@ public class DisposalStallNamesThePumpTest : HubTestBase
     }
 
     /// <summary>
+    /// 🚨 <b>A PARENT's recursive snapshot must name a child's unstarted drain (#5820).</b>
+    ///
+    /// <para>#5820 is a parent parked at <c>DisposeHostedHubs</c> whose verdict says the stall is in
+    /// a hosted hub and that "the diagnostics below name it". The child line below it read
+    /// <c>Queue(buffer=2,deferred=0,drainsInFlight=0,openGates=1,draining=True)</c> — which is
+    /// EITHER a drain the pool accepted and never ran (M1, starvation) OR a latch with nothing
+    /// outstanding (M3), and the recursive snapshot did not print the one counter that separates
+    /// them. The investigation therefore chased the closed initialization gate instead of the
+    /// starved pool the same replica's heartbeat showed (113,021 pending work items).</para>
+    ///
+    /// <para>The state is built directly: a Started child whose scheduler stops delivering threads,
+    /// under a parent that is then disposed. The parent reaches <c>DisposeHostedHubs</c>, disposes the
+    /// child, the child's <c>ShutdownRequest</c> drain is accepted and held — and the parent's
+    /// snapshot must say so. <b>Fails on unfixed code</b>: the field is absent from the recursive
+    /// snapshot, so the wait below never sees it.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AParentsSnapshot_NamesAChildDrainTheSchedulerHasNotStarted()
+    {
+        var scheduler = new PausableTaskScheduler();
+        var parent = (MessageHub)Mesh.GetHostedHub(new Address("parent", "hosts-starved-child"), c => c
+            .WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        var child = (MessageHub)parent.GetHostedHub(new Address("sync", "starved-child"), c => c
+            .WithTaskScheduler(scheduler)
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<Ping>((h, d) =>
+            {
+                h.Post(new Pong(), o => o.ResponseFor(d));
+                return d.Processed();
+            }), HostedHubCreation.Always)!;
+
+        try
+        {
+            await child.Observe(new Ping(), o => o.WithTarget(child.Address))
+                .Should().Within(TestTimeouts.Quick)
+                .Emit("the child must answer once, on its own scheduler, before that scheduler is frozen",
+                    cancellationToken: TestContext.Current.CancellationToken);
+            child.RunLevel.Should().Be(MessageHubRunLevel.Started);
+
+            scheduler.Pause();
+            parent.Dispose();
+
+            var childLine = $"Hub {child.Address} ";
+            var snapshot = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Select(_ => parent.GetDisposalDiagnostics())
+                .Where(s => s.Split('\n').Any(l => l.Contains(childLine, StringComparison.Ordinal)
+                                                   && l.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal)))
+                .FirstAsync()
+                .Timeout(TestTimeouts.Convergence)
+                .Await(TestContext.Current.CancellationToken);
+            Output.WriteLine(snapshot);
+
+            parent.RunLevel.Should().Be(MessageHubRunLevel.DisposeHostedHubs,
+                "the parent is waiting on its child, which is the #5820 shape");
+            snapshot.Should().Contain($"Hub {parent.Address} RunLevel=DisposeHostedHubs");
+        }
+        finally
+        {
+            scheduler.Resume();
+        }
+
+        await parent.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken)
+            .WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+        parent.RunLevel.Should().Be(MessageHubRunLevel.Dead,
+            "once the child's scheduler delivers threads again the whole tree tears down normally — the "
+            + "stall was the scheduler's, which is what the snapshot now says");
+    }
+
+    /// <summary>
     /// 🚨 <b>A schedule that FAILS must release the drain latch (#3593).</b>
     ///
     /// <para><c>draining == true</c> is read by every disposal verdict as <i>"a drain is running or
