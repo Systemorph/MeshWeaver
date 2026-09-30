@@ -264,6 +264,8 @@ A `Denied` assignment only removes access and always passes; a person sharing th
 
 **Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
 
+**A newly listed package waits for a governed provision.** The boot default install no longer installs a package just because a whole-source pattern (`Plugins/*`) covers it once the instance has been seeded (`InstanceAutoRegistrationService.HoldsForGovernedProvision`); it lands through a `package.provision` activity or an entry that names it. "Newly listed" means *unknown to the default-install ledger* (`KnownToTheLedger`), not merely "never seeded": a package the ledger recorded as FAILED is re-attempted on the next pass (the retry the ledger exists for), and one it recorded as SKIPPED is re-classified, exactly as before the hold. A fresh instance (empty seeded list) still seeds everything its patterns cover.
+
 **Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
 
 ---
