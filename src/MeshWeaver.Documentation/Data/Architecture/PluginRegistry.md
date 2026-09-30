@@ -317,6 +317,16 @@ other replicas follow within the cache minute. `PluginBundlePlanTest` pins both 
 plan-less grant is capped at free, and a promoted instance pulls its pro package on the very next
 request.
 
+**Only a global administrator sets a plan, and the write runs as System.** An instance record lives
+in its registrant's partition (`{owner}/MeshWeaverInstance/{id}`), and a global administrator is a
+platform admin, not a data superuser — under the admin's own identity the read of another user's
+record is refused. `SetPlan` therefore checks `hub.IsGlobalAdmin()` first and then reads and writes
+the record as System, the same shape as `RevokeKey`; any other caller is refused with
+`UnauthorizedAccessException` before anything is read. `InstancePlanSetByGlobalAdminTest` pins both
+halves on a mesh without the default public admin grant: an admin whose only grant is `Admin` on the
+Admin partition promotes an instance another user registered, and a plain member is refused with the
+plan unchanged.
+
 **A registration key carries the plan.** Mint it for a plan (Instance grants ▸ Registration keys ▸
 Plan) and every install that registers with it lands ON that plan and is seeded one plan-less
 `<source>/*` entry per configured source, on top of `DefaultGrants` — "a key for Pro customers" is
