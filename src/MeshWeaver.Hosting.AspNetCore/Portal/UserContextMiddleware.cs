@@ -23,6 +23,11 @@ namespace MeshWeaver.Hosting.AspNetCore.Portal;
 /// <param name="logger">Logger for user resolution warnings and errors.</param>
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
+    // Positive verdicts only, per process, for a short TTL — see ValidatedTokenCache. The
+    // middleware instance lives for the application's lifetime (UseMiddleware builds it once), so
+    // this is per-replica state owned by an instance, never static.
+    private readonly ValidatedTokenCache validatedTokens = new();
+
     // Framework/build assets — no user context needed, and for /static none may EXIST.
     //
     // 🚨 /static is excluded again (issue #587). It was un-excluded for #666, when the route still
@@ -93,7 +98,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // 2026-08-30: "no ToTask ever"). Rx's bridge resumes this middleware INLINE on the
             // ApiToken hub's own action-block thread, and the whole remainder of the request
             // pipeline then runs there — the exact shape that wedges a partition hub.
-            var bearer = await ExtractFromBearerToken(context.Request, hub)
+            var bearer = await ExtractFromBearerToken(context.Request, hub, validatedTokens, logger)
                 .FirstOrDefaultAsync()
                 .ObserveCompletion(
                     ex => logger.LogWarning(ex,
@@ -459,7 +464,8 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         public static readonly BearerTokenResolution NoToken = new((AccessContext?)null, null);
     }
 
-    private static IObservable<BearerTokenResolution> ExtractFromBearerToken(HttpRequest request, IMessageHub hub)
+    private static IObservable<BearerTokenResolution> ExtractFromBearerToken(
+        HttpRequest request, IMessageHub hub, ValidatedTokenCache validatedTokens, ILogger logger)
     {
         var authHeader = request.Headers.Authorization.ToString();
         if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -469,7 +475,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix))
             return Observable.Return(BearerTokenResolution.NoToken);
 
-        return ValidateTokenViaHub(rawToken, hub)
+        return ValidateToken(rawToken, hub, validatedTokens, logger)
             .Select(response =>
             {
                 // UNAVAILABLE is a fault category, not a token verdict — surface it so
@@ -527,6 +533,60 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                     // Definitive negative verdict (unknown/mismatch/revoked/expired) —
                     // fail closed to anonymous, as before.
                     : new BearerTokenResolution(null, null);
+            });
+    }
+
+    /// <summary>
+    /// Authenticates a raw token WITHOUT depending on a hub hop being answered.
+    ///
+    /// <para>In order: a positive verdict this replica reached within
+    /// <see cref="ValidatedTokenCache.Ttl"/>; then the SHARED verdict (<see cref="ApiTokenVerdict"/>)
+    /// over a read straight from the authoritative store; then — only when that read did not
+    /// reach a SUCCESS — the <c>ApiToken/{hashPrefix}</c> hub (<see cref="ValidateTokenViaHub"/>),
+    /// exactly as before.</para>
+    ///
+    /// <para>🚨 Only a SUCCESS short-circuits. A negative or unavailable direct verdict is
+    /// re-asked of the hub, so this path can only ever ADD acceptances the hub would also give and
+    /// can never turn a valid token into a 401 — a store that cannot see a partition this
+    /// process's routing can see would otherwise sign people out, which is the defect being
+    /// fixed. Why the hub hop alone is not enough: on memex, 2026-09-30 05:23Z, a request routed to
+    /// <c>ApiToken/342abeed8e6d</c> on a replica Ready for 40 minutes was forwarded and never
+    /// handled, and every MCP call with that token answered 503 for five minutes
+    /// (Doc/Architecture/TokenValidationHotPath).</para>
+    /// </summary>
+    /// <param name="rawToken">The raw bearer token.</param>
+    /// <param name="hub">The portal (or mesh) hub whose services and serializer options apply.</param>
+    /// <param name="validatedTokens">This replica's positive-verdict cache.</param>
+    /// <param name="logger">Logger for the fast path's fall-throughs.</param>
+    /// <returns>The verdict; never an error.</returns>
+    public static IObservable<ValidateTokenResponse?> ValidateToken(
+        string rawToken, IMessageHub hub, ValidatedTokenCache validatedTokens, ILogger? logger = null)
+    {
+        var hash = ValidateTokenRequest.HashToken(rawToken);
+        if (validatedTokens.TryGet(hash, DateTimeOffset.UtcNow) is { } cached)
+            return Observable.Return<ValidateTokenResponse?>(cached);
+
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var direct = storage is null
+            ? Observable.Return<ValidateTokenResponse?>(null)
+            : ApiTokenVerdict.Decide(rawToken, path => storage.Read(path, hub.JsonSerializerOptions), hub.JsonSerializerOptions)
+                .Select(r => (ValidateTokenResponse?)r);
+
+        return direct
+            .SelectMany(verdict =>
+            {
+                if (verdict is { Success: true })
+                    return Observable.Return<ValidateTokenResponse?>(verdict);
+                if (verdict is not null)
+                    logger?.LogDebug(
+                        "Direct token verdict for {HashPrefix} was not a success ({Error}, unavailable={Unavailable}) — asking the ApiToken hub",
+                        hash[..ApiTokenVerdict.HashPrefixLength], verdict.Error, verdict.IsUnavailable);
+                return ValidateTokenViaHub(rawToken, hub);
+            })
+            .Do(verdict =>
+            {
+                if (verdict is { Success: true })
+                    validatedTokens.Put(hash, verdict, DateTimeOffset.UtcNow);
             });
     }
 
