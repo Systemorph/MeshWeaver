@@ -21,7 +21,11 @@ COPY --from=export /models/gliner /models/gliner
 COPY app /app
 WORKDIR /app
 # Offline tests of the service surface, in the image that ships (fake model, no network).
-RUN pip install httpx==0.28.1 && S1_NO_AUTOSTART=1 python test_server.py && pip uninstall -y httpx
+# httpx stays: huggingface_hub (via transformers) imports it when the model LOADS. Uninstalling it
+# after these tests shipped an image whose model never loaded (/readyz 503 forever).
+RUN S1_NO_AUTOSTART=1 python test_server.py
+# The REAL model through the server's REAL load path, offline, in the stage that ships.
+RUN S1_NO_AUTOSTART=1 S1_MODEL_DIR=/models/gliner HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python smoke_model.py
 RUN useradd --uid 10001 --no-create-home s1 && chown -R s1 /app
 USER 10001
 ENV S1_MODEL_DIR=/models/gliner HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=4
