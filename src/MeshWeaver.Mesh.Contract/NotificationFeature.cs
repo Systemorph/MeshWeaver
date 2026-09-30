@@ -429,6 +429,15 @@ public sealed record NotificationRequest
     /// <summary>Footer note for the email.</summary>
     public LocalizableText? EmailFooterNote { get; init; }
 
+    /// <summary>
+    /// Deliver to the recipient's BELL only — never email, Teams or any module channel, whatever
+    /// their preference says. A cap the RAISER imposes, applied after every preference and app
+    /// gate, so it can only remove channels. Set by the access-granted notifier once a granter's
+    /// mail budget is spent (<c>AccessGrantMailBudget</c>): a bulk grant must never become one
+    /// message in every recipient's mailbox.
+    /// </summary>
+    public bool BellOnly { get; init; }
+
     /// <summary>The feature this request is raised for — <see cref="Feature"/>, or the one <see cref="Type"/> implies.</summary>
     /// <returns>The feature key.</returns>
     public string EffectiveFeature()

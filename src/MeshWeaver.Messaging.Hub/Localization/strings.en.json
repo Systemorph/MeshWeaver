@@ -1688,6 +1688,8 @@
   "notification.accessGranted.bodyByGranter": "{granter} gave you {role} access to \"{name}\".",
   "notification.accessGranted.emailCta": "Open {name}",
   "notification.accessGranted.emailFooter": "New to Memex? Sign in with this email address to open it.",
+  "notification.accessGranted.quietTitle": "Further access grants were delivered quietly",
+  "notification.accessGranted.quietBody": "You gave more than {count} people access within {minutes} minutes. The others were told in Memex only — no email and no Teams message was sent to them.",
   "notification.startup.errors.title": "Startup completed with {count} error(s)",
   "notification.startup.errors.bodyTruncated": "{lines}\n… and {count} more error(s) — see the server log.",
   "notification.nodeType.fallbackPage.title": "Type '{nodeType}' is serving a fallback page",
