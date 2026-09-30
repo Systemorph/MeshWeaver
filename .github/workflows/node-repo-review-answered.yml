@@ -15,6 +15,14 @@ name: Node repo review answered (reusable)
 # reached five vintages (#1426). So the predicate is FETCHED here at `scripts-ref`, its identity
 # asserted, its self-test run on EVERY call, and it is never fallen back to a local copy.
 #
+# 🚨 THE REVIEWER-UNAVAILABLE DEGRADATION (MeshWeaver.Feedback#86) comes with the predicate: a
+# caller whose pinned sha includes it releases the review condition when the head carries the
+# internal reviewer App's neutral "Reviewer unavailable" `internal-review` check run. What does NOT
+# come with the lane is the re-evaluation when that check run completes — a `check_run` run lands
+# on the default branch, so it cannot publish this context; core's
+# review-answered-on-degradation.yml re-runs the gate instead, and a caller that needs the same adds
+# that listener naming its own caller workflow.
+#
 # 🚦 THE ROLLOUT ORDER IS NOT OPTIONAL, and this lane is only its first step:
 #   1. this lane lands in core (observe-only by construction — it changes no protection);
 #   2. a repository adds the thin caller below — OBSERVE-ONLY, i.e. NOT a required context yet —
