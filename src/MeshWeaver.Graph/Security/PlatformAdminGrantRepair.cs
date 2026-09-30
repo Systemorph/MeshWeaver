@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -63,7 +64,15 @@ public static class PlatformAdminGrantRepair
         if (string.IsNullOrEmpty(scope))
             return Observable.Return(false);
         var partition = AccessAssignmentGuard.PartitionOf(scope);
-        if (string.IsNullOrEmpty(partition))
+        if (string.IsNullOrEmpty(partition) || IsPlatformPartition(partition))
+            return Observable.Return(false);
+
+        // On a FLEET partition the repair issues an entitlement and nothing more — even where no
+        // one-way sync would already bound it (IsForbiddenOnSystemOwned only speaks for a
+        // system-owned partition). An ownerless `Ops` must not become somebody's by this road.
+        if (FleetPartitions.Contains(partition)
+            && AccessAssignmentGuard.ConfersWriteAccess(
+                context.Node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)))
             return Observable.Return(false);
 
         return hub.IsGlobalAdmin(userId)
@@ -76,4 +85,38 @@ public static class PlatformAdminGrantRepair
                 : Observable.Return(false))
             .Catch<bool, Exception>(_ => Observable.Return(false));
     }
+
+    /// <summary>
+    /// 🚨 The PLATFORM's own partitions — refused outright, whatever their state, the same set
+    /// the <c>DeleteSpace</c> break-glass action refuses as "the platform's system partitions"
+    /// (MeshWeaver.Plugins <c>DeleteSpaceRunner.ProtectedPartitions</c>): <c>Admin</c> (a grant
+    /// there IS platform administration), the auth-lookup mirrors (<see cref="WellKnownPartitions.Mirror"/>:
+    /// <c>User</c>, <c>Auth</c>), the pseudo-identities' and credential partitions, and every
+    /// <c>_</c>-prefixed framework namespace. None of them is ever a Space somebody lost; a grant
+    /// on one is never a repair. A constant lookup, never written at runtime.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> PlatformPartitions = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "Admin", "Auth", "User", "Portal", "Kernel", "ApiToken", WellKnownUsers.System,
+        WellKnownUsers.Anonymous);
+
+    /// <summary>
+    /// The FLEET's partitions — the rest of <c>DeleteSpaceRunner.ProtectedPartitions</c>. Unlike
+    /// the platform set these are exactly where the repair is needed (#5904 is <c>Deployments</c>),
+    /// so they are not refused; they are capped at an ENTITLEMENT (no Admin/Editor), whether or not
+    /// they are system-owned.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> FleetPartitions = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "Hosting", "Hosting.Instance", "Deployments", "Ops", "Store", "Plugins", "Governance",
+        "Doc", "Documentation", "Essentials", "Agent", "Skill", "Provider", "Providers", "Model", "AI",
+        "Approvals", "Feedback", "Home");
+
+    /// <summary>True for a partition the repair refuses outright — see <see cref="PlatformPartitions"/>.</summary>
+    /// <param name="partition">The top-level partition.</param>
+    /// <returns>Whether no platform-admin grant is ever issued there by this road.</returns>
+    public static bool IsPlatformPartition(string partition)
+        => partition.StartsWith('_')
+           || WellKnownPartitions.IsMirror(partition)
+           || PlatformPartitions.Contains(partition);
 }

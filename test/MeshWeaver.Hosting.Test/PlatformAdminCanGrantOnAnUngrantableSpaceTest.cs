@@ -68,9 +68,9 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
 
     private static AccessContext Identity(string userId) => new() { ObjectId = userId, Name = userId };
 
-    private async Task<string> CreateSpace(string prefix)
+    private async Task<string> CreateSpace(string prefix, bool exactName = false)
     {
-        var space = prefix + Guid.NewGuid().ToString("N")[..8];
+        var space = exactName ? prefix : prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
         {
             NodeType = "Space", Name = space, State = MeshNodeState.Active, Content = new Space(),
@@ -80,9 +80,11 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     }
 
     /// <summary>The issue's shape: a Space whose ONE-WAY <c>_GitSync</c> makes it system-owned.</summary>
-    private async Task<string> PrepareSystemOwnedSpace()
+    private async Task<string> PrepareSystemOwnedSpace(string? exactName = null)
     {
-        var space = await CreateSpace("Deployments");
+        var space = exactName is null
+            ? await CreateSpace("Deployments")
+            : await CreateSpace(exactName, exactName: true);
         var config = await Sync.SaveConfig(space, RepoUrl, "main", null, false, false,
                 direction: SyncDirection.ImportOnly, twoWay: false)
             .Should().Within(Budget).Emit("the one-way sync config must be written",
@@ -96,9 +98,11 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     /// The #638 residue: a Space whose every grant is gone from the store (its creator grant never
     /// landed). Removed straight from storage — the state is, by definition, one no API writes.
     /// </summary>
-    private async Task<string> PrepareOwnerlessSpace()
+    private async Task<string> PrepareOwnerlessSpace(string? exactName = null)
     {
-        var space = await CreateSpace("Ownerless");
+        var space = exactName is null
+            ? await CreateSpace("Ownerless")
+            : await CreateSpace(exactName, exactName: true);
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var grants = await storage.ListChildPaths($"{space}/_Access").Take(1)
             .Should().Within(Budget).Emit("the grant folder must list",
@@ -231,5 +235,75 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
         var refused = await Answer(GrantAs(PlatformAdmin, space, PlatformAdmin, "Viewer"), TestContext.Current.CancellationToken);
         Assert.False(refused.Success, "an owned Space's owner is the one who grants — not a platform admin");
         Assert.Contains("Access denied", refused.Error);
+    }
+
+    /// <summary>
+    /// The production shape of #5904: the platform admin grants the Viewer entitlement to a
+    /// DIFFERENT subject (the approver). Read follows for the GRANTEE — and still not for the
+    /// grantor, who issued a grant and received nothing.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task APlatformAdmin_GrantsViewerToAnotherSubject_TheGranteeReads_TheGrantorDoesNot()
+    {
+        const string approver = "approver-ann";
+        var space = await PrepareSystemOwnedSpace();
+        await AssertIsPlatformAdmin();
+        var record = $"{space}/partnerre-test";
+        await Mesh.GetEffectivePermissions(record, approver).Should().Within(Budget)
+            .Match(p => !p.HasFlag(Permission.Read), "the approver holds nothing before the grant",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var granted = await Answer(GrantAs(PlatformAdmin, space, approver, "Viewer"),
+            TestContext.Current.CancellationToken);
+        Assert.True(granted.Success, $"the platform admin's grant to the approver was refused: {granted.Error}");
+
+        await Mesh.GetEffectivePermissions(record, approver).Should().Within(Budget)
+            .Match(p => p.HasFlag(Permission.Read) && !p.HasFlag(Permission.Update),
+                "the GRANTEE reads, and only reads",
+                cancellationToken: TestContext.Current.CancellationToken);
+        await Mesh.GetEffectivePermissions(record, PlatformAdmin).Should().Within(Budget)
+            .Match(p => !p.HasFlag(Permission.Read),
+                "the GRANTOR received nothing — issuing a grant is not holding one",
+                cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// 🚨 The platform's OWN partitions are refused outright, even in exactly the state the repair
+    /// otherwise opens (system-owned, no grant): <c>PlatformAdminGrantRepair.IsPlatformPartition</c>.
+    /// The positive control is <see cref="APlatformAdmin_GrantsAViewerEntitlement_OnASystemOwnedSpace"/>
+    /// — the same shape under an ordinary name is granted.
+    /// </summary>
+    [Theory(Timeout = 240_000)]
+    [InlineData("system-security")]
+    [InlineData("Anonymous")]
+    public async Task APlatformAdmin_CannotGrant_OnAPlatformPartition(string platformPartition)
+    {
+        var space = await PrepareSystemOwnedSpace(platformPartition);
+        await AssertIsPlatformAdmin();
+
+        var refused = await Answer(GrantAs(PlatformAdmin, space, PlatformAdmin, "Viewer"),
+            TestContext.Current.CancellationToken);
+        Assert.False(refused.Success, $"a grant on the platform partition '{space}' must be refused");
+        Assert.Contains("Access denied", refused.Error);
+    }
+
+    /// <summary>
+    /// A FLEET partition (here an ownerless <c>Ops</c>, no sync) takes an entitlement from the
+    /// platform admin and NOTHING more — the cap holds where no system-owned guard would.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task APlatformAdmin_OnAnOwnerlessFleetPartition_GrantsViewerButNotAdmin()
+    {
+        var space = await PrepareOwnerlessSpace("Ops");
+        await AssertIsPlatformAdmin();
+
+        var admin = await Answer(GrantAs(PlatformAdmin, space, PlatformAdmin, "Admin"),
+            TestContext.Current.CancellationToken);
+        Assert.False(admin.Success, "an ownerless fleet partition must not become the platform admin's");
+        Assert.Contains("Access denied", admin.Error);
+
+        var viewer = await Answer(GrantAs(PlatformAdmin, space, PlatformAdmin, "Viewer"),
+            TestContext.Current.CancellationToken);
+        Assert.True(viewer.Success, $"the Viewer entitlement on the fleet partition was refused: {viewer.Error}");
     }
 }
