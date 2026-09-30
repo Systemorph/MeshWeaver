@@ -102,7 +102,11 @@ public static class AccessGrantMailBudget
         var sb = new StringBuilder(granter.Length);
         foreach (var c in granter.Trim())
             sb.Append(char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or '@' ? c : '_');
-        return sb.ToString();
+        var key = sb.ToString();
+        // "." and ".." are path navigation, not a name: they would make the namespace
+        // Admin/_GrantMail/. or Admin/_GrantMail/.. — ambiguous for the create and for the sweep's
+        // namespace query. A segment made only of dots becomes as many underscores.
+        return key.All(c => c == '.') ? new string('_', key.Length) : key;
     }
 
     /// <summary>The namespace holding one granter's slots: <c>Admin/_GrantMail/{granter}</c>. Pure.</summary>
@@ -132,7 +136,7 @@ public static class AccessGrantMailBudget
                     .Select(won => won ? AccessGrantMailVerdict.BellOnlyAndTellGranter : AccessGrantMailVerdict.BellOnly)
                 : TryCreate(mesh, ns, $"{window}-{n}", content)
                     .SelectMany(won => won
-                        ? (n == 1 ? SweepOldWindows(mesh, ns, window, logger) : Observable.Return(System.Reactive.Unit.Default))
+                        ? (n == 1 ? SweepOldWindows(mesh, ns, window, WindowKey(now - Window), logger) : Observable.Return(System.Reactive.Unit.Default))
                             .Select(_ => AccessGrantMailVerdict.Mail)
                         : ClaimSlot(n + 1));
 
@@ -165,15 +169,22 @@ public static class AccessGrantMailBudget
                 ? Observable.Return(false)
                 : Observable.Throw<bool>(ex));
 
-    // The first slot of a new window deletes the granter's earlier windows, so the namespace holds
-    // at most one window's slots (MailPerWindow + 1 nodes) per granter. Best-effort: a sweep that
-    // fails is logged and never withholds the verdict.
+    // The first slot of a new window deletes the granter's windows OLDER THAN THE PREVIOUS ONE, so
+    // the namespace holds at most two windows' slots (2 × (MailPerWindow + 1) nodes) per granter.
+    // 🚨 The previous window is KEPT: a claim dated in it can still be in flight when the new
+    // window's first slot is won (its create has not landed yet), and deleting that window's slots
+    // under it would let it re-win slot 1 and mail past the budget. A claim is bounded by
+    // ClaimTimeout, far shorter than one Window, so nothing older than the previous window can
+    // still be claiming. A sweep that fails never withholds the verdict — the slots it left are
+    // only storage, removed by the next window's sweep — but it is logged as a warning, since a
+    // sweep that keeps failing lets the namespace grow.
     private static IObservable<System.Reactive.Unit> SweepOldWindows(
-        IMeshService mesh, string ns, string window, ILogger? logger)
+        IMeshService mesh, string ns, string window, string previousWindow, ILogger? logger)
         => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{ns} nodeType:{NodeType} select:path,id"))
             .Take(1)
             .Select(change => change.Items
-                .Where(n => !n.Id.StartsWith(window + "-", StringComparison.Ordinal))
+                .Where(n => !n.Id.StartsWith(window + "-", StringComparison.Ordinal)
+                            && !n.Id.StartsWith(previousWindow + "-", StringComparison.Ordinal))
                 .Select(n => n.Path)
                 .ToList())
             .SelectMany(stale => stale.Count == 0
@@ -184,7 +195,7 @@ public static class AccessGrantMailBudget
             .Timeout(ClaimTimeout)
             .Catch((Exception ex) =>
             {
-                logger?.LogDebug(ex, "AccessGrantMailBudget: sweeping old windows under {Namespace} failed", ns);
+                logger?.LogWarning(ex, "AccessGrantMailBudget: sweeping old windows under {Namespace} failed", ns);
                 return Observable.Return(System.Reactive.Unit.Default);
             });
 

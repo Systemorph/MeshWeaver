@@ -135,8 +135,8 @@ public sealed class AccessGrantNotifier(
                             {
                                 var raise = NotificationService.Raise(hub, Capped(request, verdict))
                                     .Select(_ => Unit.Default);
-                                return TellsGranter(verdict, granterId)
-                                    ? raise.Concat(TellGranter(granterId!))
+                                return TellsGranter(verdict, granterId) && granterId is { } tellTo
+                                    ? raise.Concat(TellGranter(tellTo))
                                     : raise;
                             })
                             .LastOrDefaultAsync();
