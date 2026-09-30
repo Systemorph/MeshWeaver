@@ -136,6 +136,16 @@ public class BroadGrantGuardTest
         BroadGrantGuard.ClaimedActivity(unmarked, System with { GovernedBy = activity }, null).Should().BeNull();
     }
 
+    /// <summary>The claim survives a typed hop: the executor's back-reference is a real field on the grant.</summary>
+    [Fact]
+    public void ATypedGrantCarriesItsClaim()
+    {
+        const string activity = "Governance/Activities/grant-public-guide";
+        var (node, assignment) = Grant("Public");
+        var typed = node with { Content = assignment with { GovernedBy = activity } };
+        BroadGrantGuard.ClaimedActivity(typed, System with { GovernedBy = activity }, null).Should().Be(activity);
+    }
+
     public static IEnumerable<object[]> ActivityStates() =>
     [
         ["Executing", "Governance/Standards/access.grant-broad", true],

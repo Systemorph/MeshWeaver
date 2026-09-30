@@ -5567,12 +5567,7 @@ public static class MeshExtensions
         var allowed = BroadGrantGuard.GovernedStandards(configuration);
         var verified = claimed is null
             ? Observable.Return(false)
-            : (hub.ServiceProvider.GetService<IGovernedActivityVerifier>() is { } verifier
-                    ? verifier.IsExecuting(claimed, allowed)
-                    : DefaultGovernedActivityCheck(hub, claimed, allowed))
-                .Take(1)
-                .DefaultIfEmpty(false)
-                .Catch((Exception _) => Observable.Return(false));
+            : hub.IsGovernedActivityExecuting(claimed, allowed);
 
         return verified.Select(governed =>
         {
@@ -5589,6 +5584,22 @@ public static class MeshExtensions
             return mode == BroadGrantMode.Enforce ? BroadGrantGuard.Refusal(finding) : (LocalizableText?)null;
         });
     }
+
+    /// <summary>
+    /// Whether <paramref name="activityPath"/> names a governed activity that is EXECUTING one of
+    /// <paramref name="allowed"/> standards — the check <see cref="BroadGrantGuard"/> runs at the
+    /// write boundary, for a control plane that has to authorize a governed request itself (the
+    /// Store's provisioning, say). Uses the registered <see cref="IGovernedActivityVerifier"/> when
+    /// there is one. Cold; emits once; never throws (an unreadable activity is <c>false</c>).
+    /// </summary>
+    public static IObservable<bool> IsGovernedActivityExecuting(
+        this IMessageHub hub, string activityPath, IReadOnlySet<string> allowed) =>
+        (hub.ServiceProvider.GetService<IGovernedActivityVerifier>() is { } verifier
+                ? verifier.IsExecuting(activityPath, allowed)
+                : DefaultGovernedActivityCheck(hub, activityPath, allowed))
+            .Take(1)
+            .DefaultIfEmpty(false)
+            .Catch((Exception _) => Observable.Return(false));
 
     /// <summary>
     /// The default <see cref="IGovernedActivityVerifier"/>: reads the activity node authoritatively

@@ -140,13 +140,19 @@ public static class BroadGrantGuard
 
     /// <summary>
     /// The activity path the node itself names as its origin (<c>content.governedBy</c>, the
-    /// back-reference the governance executor writes), or null. Read shape-tolerantly over the
-    /// raw content because the typed <see cref="AccessAssignment"/> has no such field.
+    /// back-reference the governance executor writes), or null — from the typed
+    /// <see cref="AccessAssignment.GovernedBy"/> / <see cref="PartitionAccessPolicy.GovernedBy"/>, or
+    /// shape-tolerantly from raw content (any other node type the executor writes).
     /// </summary>
     public static string? GovernedByOf(MeshNode? node, System.Text.Json.JsonSerializerOptions? options)
     {
         if (node?.Content is not { } content)
             return null;
+        // Typed first: the content has usually been materialised by the time it reaches a boundary.
+        if (content is AccessAssignment { GovernedBy: { Length: > 0 } typedGrant })
+            return typedGrant;
+        if (content is PartitionAccessPolicy { GovernedBy: { Length: > 0 } typedPolicy })
+            return typedPolicy;
         try
         {
             var element = content is System.Text.Json.JsonElement je
