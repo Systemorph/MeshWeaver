@@ -314,6 +314,7 @@ pending callback at all.
 
 ## Related
 
+- [Live Query Re-query Cost](../LiveQueryRequeryCost) — the 2026-09-29 recurrence of both gate signatures (`install: Hosting — TimeoutException`, the Fleet Console's 10 s step): one write cost more the larger the mesh, because every write re-walked the security fold's permanent live queries.
 - [Action-Block Wedge Prevention](../ActionBlockWedgePrevention) — the invariants a single-threaded hub
   must satisfy so no input can saturate it.
 - [Bounds Must Be Ordered](../BoundsMustBeOrdered) — why an inner bound just under an outer one
