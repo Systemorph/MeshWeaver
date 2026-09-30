@@ -179,7 +179,7 @@ public class DisposalStallNamesThePumpTest : HubTestBase
             var snapshot = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Select(_ => parent.GetDisposalDiagnostics())
                 .Where(s => s.Split('\n').Any(l => l.Contains(childLine, StringComparison.Ordinal)
-                                                   && l.Contains("drainsAwaitingScheduler=1", StringComparison.Ordinal)))
+                                                   && l.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal)))
                 .FirstAsync()
                 .Timeout(TestTimeouts.Convergence)
                 .Await(TestContext.Current.CancellationToken);
