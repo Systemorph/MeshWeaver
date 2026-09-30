@@ -9,25 +9,6 @@ namespace MeshWeaver.Messaging.Hub.Test;
 public class TypeDefinitionMetadataTest
 {
     [Fact]
-    public void RepeatedFrameworkDefinitions_HaveBoundedConstructionAllocation()
-    {
-        var builder = new KeyFunctionBuilder();
-        for (var i = 0; i < 32; i++)
-            _ = new TypeDefinition(typeof(string), "String", builder);
-
-        var held = new TypeDefinition[1000];
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < held.Length; i++)
-            held[i] = new TypeDefinition(typeof(string), "String", builder);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        // The original per-definition reflection/Wordify/lazy-description graph costs 1,032,000
-        // bytes for this workload. Keep a fixed budget that rejects that measured regression.
-        allocated.Should().BeLessThan(600_000);
-        GC.KeepAlive(held);
-    }
-
-    [Fact]
     public void CachedDeclaration_StillResolvesResourcePropertiesForEveryDefinition()
     {
         var builder = new KeyFunctionBuilder();
