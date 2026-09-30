@@ -134,6 +134,34 @@ symbolic link in the landed generation's `wwwroot` — listed by the walk, unope
 write, no seam and no timing — must answer `503` with `Retry-After: 30`. With the operator removed
 from the route the same request throws the production `FileNotFoundException`.
 
+🚨 **…but on the share a listed-and-unopenable dll is NOT a race, and the `503` became permanent
+(#4528, 2026-09-30).** The `503` above is honest only if the NEXT read resolves something else. On
+`/data/assembly-cache` it did not: the same name failed request after request — `MyAi_Panel/v751-…`
+four times in 30 s, `SocialMedia_Profile/v1413-…` and `LinkedIn_TileMigration/v643-…` twice each
+(public instance, 2026-09-26 19:55–19:58Z) — and once #5769 turned the `500` into a `503`, the
+control instance's `plugin-registry-bundles` fetch exhausted four `503`s spaced by `Retry-After: 30`
+on every pass from 09-26 to 09-30 (`Admin/_LogIncident/613ea204988e9e23`, 29 occurrences, every
+sample `Attempt: 3`, 6.2–7.5 s per attempt — the download's authoritative activation read, then a
+fast failure at the open). The cause is the store's LOOKUP, not the route: `TryGetAssemblyPath`
+returned the newest name the directory LISTED. On the Azure Files share an evicted dll that another
+replica still holds open (an `AssemblyLoadContext` maps what it loaded for its whole life) is only
+delete-pending — it stays in every listing and every new open fails with ENOENT until the last
+handle closes. So the lookup said "hit" for bytes nobody could read, for as long as a pod elsewhere
+lived. `FileSystemAssemblyStore.NewestOpenable` now proves each candidate with an open before
+returning it: an unopenable name is skipped and logged, an openable sibling of the same version is
+taken, and none is a MISS — which the route already handles as designed (the type is counted as a
+miss, the consumer compiles it) and activation already recovers from (recompile). The same probe
+guards `Put`'s first-write-wins, which would otherwise have "won" with the dead name and made the
+version unrecoverable by any recompile. Pinned by three `FileSystemAssemblyStoreTest` cases on a
+dangling symlink (listed, unopenable), each red on the old lookup. Only ABSENCE is classified; any
+other open fault still surfaces. The route's `503` stays for what it is honest about — a file that
+vanishes between a proven lookup and the archive write.
+
+**Not established from here:** that delete-pending (rather than, say, a stale SMB directory cache)
+is the share-side mechanism — both present as "listed, ENOENT on open" and the fix covers both; and
+whether identical bytes re-published over a still-delete-pending name succeed (the atomic rename
+onto such a name is not exercised locally).
+
 🚨 **The bytes are served under the SEAL's spelling, never the request's.** The name match is
 case-insensitive and the share is not, so composing the requested name served `store.zip` out of a
 publication that sealed `Store.zip`: an open that fails on Linux for a permanent client mistake,
