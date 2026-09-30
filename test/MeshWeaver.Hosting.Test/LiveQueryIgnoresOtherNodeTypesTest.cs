@@ -237,7 +237,8 @@ public class LiveQueryIgnoresOtherNodeTypesTest
         Required($"path:{Base} scope:descendants nodeType:{Watched}", $"path:{Base} scope:children")
             .Should().BeNull("ONE unconstrained query of a request makes every change relevant");
         var union = Required($"path:{Base} scope:descendants nodeType:{Watched}", $"path:{Base} scope:children nodeType:Other2");
-        union.Should().NotBeNull("two constrained queries confine the request to the union of their types");
-        union!.Order(StringComparer.Ordinal).Should().Equal("Other2", Watched);
+        // Assert.NotNull flows non-nullability, so the line below needs no null-forgiving operator.
+        Assert.NotNull(union);
+        union.Order(StringComparer.Ordinal).Should().Equal("Other2", Watched);
     }
 }
