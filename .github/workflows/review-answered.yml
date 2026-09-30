@@ -65,11 +65,15 @@ on:
 # Reads only, and only what the predicate needs: the pull request, its reviews and review comments
 # (pull-requests), the label events that attribute a waiver (issues), and the checkout (contents).
 # The collaborator-permission read that verifies a waiver needs `metadata: read`, which every
-# GITHUB_TOKEN carries.
+# GITHUB_TOKEN carries. `checks: read` is for the reviewer-unavailable degradation (the head's
+# `internal-review` check runs, MeshWeaver.Feedback#86): measured on #5920 the listing also answers
+# without it, because this repository is PUBLIC — it is granted explicitly so the read does not rest
+# on that, and so the lane below carries the same grant into a private caller.
 permissions:
   contents: read
   pull-requests: read
   issues: read
+  checks: read
 
 # 🚨 The group is per PULL REQUEST for pull-request events and per QUEUE ENTRY for `merge_group`
 # (the queue head ref carries the entry's sha), because that is the granularity that matters: two
@@ -215,5 +219,6 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      checks: read
     with:
       scripts-ref: ${{ github.sha }}

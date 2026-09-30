@@ -51,6 +51,7 @@ name: Node repo review answered (reusable)
 #     contents: read
 #     pull-requests: read
 #     issues: read
+#     checks: read
 #   concurrency:
 #     group: review-answered-${{ github.event.pull_request.number }}-${{ github.event_name == 'pull_request_review_comment' && 'feedback' || 'gate' }}
 #     cancel-in-progress: false
@@ -61,6 +62,7 @@ name: Node repo review answered (reusable)
 #         contents: read
 #         pull-requests: read
 #         issues: read
+#         checks: read
 #       with:
 #         scripts-ref: <the SAME 40-char core sha>
 #
@@ -130,10 +132,13 @@ jobs:
     # tree is never read, so no file in the pull request's tree is what judges it. (The CALLER file
     # itself still comes from the pull request's merge ref on a `pull_request` event, as every
     # workflow does — which is why the context is made REQUIRED in step 3, not trusted to exist.)
+    # `checks: read` — the head's `internal-review` check runs, read for the reviewer-unavailable
+    # degradation on every evaluation (a PRIVATE caller's token cannot list them without it).
     permissions:
       contents: read
       pull-requests: read
       issues: read
+      checks: read
     steps:
       # The self-hosted scale set a private caller lands on does not promise a Python; every other
       # lane that runs a central guard pins one the same way.

@@ -327,7 +327,9 @@ The **newest** completed `internal-review` run from that App on the head decides
 round supersedes an earlier degradation (and runs from other Apps are never looked at). `--as-of`
 ignores a run completed after the instant; the merge-queue path reads the pull request's head, not
 the queue's merge commit. The check-run listing is read on every evaluation, and a failed or
-incomplete read is RED, like every other input.
+incomplete read is RED, like every other input. The gate and the fleet lane grant `checks: read` for
+it explicitly: measured on #5920 the listing answers without it, but only because core is public — a
+private caller's token would refuse it and hold every pull request.
 
 **Provenance, not presentation — the same principle as for the review itself.** A `neutral`
 `internal-review` from any other App, a run under any other name, or that title at any other
@@ -368,7 +370,9 @@ triggers fires when a check run completes. Measured and read, in order:
   that read before the degradation would otherwise publish a stale red), then re-runs the newest
   `pull_request` run of `review-answered.yml` unless it already reads success. A `pull_request` run
   is the one branch protection reads (#4649), and re-running it is the remedy this page already
-  names as legitimate. The listener decides nothing: the re-run applies the whole predicate,
+  names as legitimate. The listener is single-shot — the degradation completes once — so each of
+  its API calls gets three attempts before it goes RED, naming the head it could not re-evaluate.
+  The listener decides nothing: the re-run applies the whole predicate,
   provenance included, so a drift in its filter can cost or miss a re-run but never turn a gate
   green.
 - 🚨 **Not yet observed end to end.** A `check_run` workflow cannot run before its file is on

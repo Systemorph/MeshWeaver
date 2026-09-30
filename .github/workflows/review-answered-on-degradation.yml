@@ -73,20 +73,38 @@ jobs:
           echo "::notice::reviewer-unavailable degradation on ${HEAD_SHA:0:10}: check run $CHECK_RUN_ID — \"$TITLE\""
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the check_run event carried no head sha"; exit 1; }
 
+          # 🚨 This run is SINGLE-SHOT (#5920 review): the degradation's `completed` event comes once,
+          # and nothing re-fires this file if a read or the re-run request dies on a transient API
+          # error — the gate would then stay red on that head until a person pushed, the very
+          # dependence this lane removes. So every API call gets three attempts, 15 s then 30 s
+          # apart, and a failure that survives them is RED and named. Not a widened bound: the
+          # verdict is unchanged, only a transport blip is absorbed.
+          api() {
+            local out attempt
+            for attempt in 1 2 3; do
+              if out=$(gh api "$@"); then printf '%s\n' "$out"; return 0; fi
+              echo "  gh api $* failed (attempt $attempt of 3)" >&2
+              [ "$attempt" -lt 3 ] && sleep $((attempt * 15))
+            done
+            echo "::error::gh api $* failed three times — the gate for ${HEAD_SHA:0:10} was NOT re-evaluated; re-run this workflow run" >&2
+            return 1
+          }
           runs() {
-            gh api "repos/$REPO/actions/workflows/review-answered.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
+            api "repos/$REPO/actions/workflows/review-answered.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
               --jq '[.workflow_runs[] | {id, status, conclusion, created_at, run_attempt}] | sort_by(.created_at)'
           }
           # A gate run still in flight may have read BEFORE this check run completed, and would then
           # publish a red it took on stale input. Let it finish (it also re-reads the check runs on
           # every poll of its review wait, so it may go green by itself), then judge what it left.
           for _ in $(seq 1 40); do
-            pending=$(runs | jq '[.[] | select(.status != "completed")] | length')
+            listing=$(runs)
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$listing")
             [ "$pending" = "0" ] && break
             echo "  $pending gate run(s) for ${HEAD_SHA:0:10} still in flight — letting them finish first"
             sleep 30
           done
-          newest=$(runs | jq -c 'last // empty')
+          listing=$(runs)
+          newest=$(jq -c 'last // empty' <<<"$listing")
           [ -n "$newest" ] || { echo "::error::no \`pull_request\` run of review-answered.yml exists for ${HEAD_SHA:0:10} — there is no read-eligible gate run to re-evaluate; push to the pull request to start one"; exit 1; }
           id=$(jq -r .id <<<"$newest"); status=$(jq -r .status <<<"$newest"); conclusion=$(jq -r .conclusion <<<"$newest")
           if [ "$status" != "completed" ]; then
@@ -97,5 +115,5 @@ jobs:
             echo "gate run $id (pull_request, attempt $(jq -r .run_attempt <<<"$newest")) already reads success — nothing to re-run"
             exit 0
           fi
-          gh api -X POST "repos/$REPO/actions/runs/$id/rerun" >/dev/null
+          api -X POST "repos/$REPO/actions/runs/$id/rerun" >/dev/null
           echo "re-ran gate run $id (was $conclusion) so it judges the head with the degradation in view: https://github.com/$REPO/actions/runs/$id"
