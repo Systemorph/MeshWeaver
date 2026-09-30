@@ -246,6 +246,26 @@ A space whose owner is gone, or a stranded partition with no root at all, refuse
 
 > **Emergency / cross-partition data access** is out of scope for the standing grant — it will be a deliberate **elevation (break-glass)** flow (audited, time-boxed), not a permission a platform admin holds by default.
 
+### 🚨 Broad grants only through a governed activity (`BroadGrantGuard`)
+
+Access that reaches many people, or that the platform writes for someone else, is written **only** by an executing governed activity — never by a person's standing rights (a platform admin's included) and never by a platform sweep. Maintainer, 2026-09-30, after a new free plugin was granted to 72 users in three minutes by a System sweep, each grant mailed: *"i don't want to have this possibility in principle."*
+
+`BroadGrantGuard` sits at the create and upsert write boundaries, next to `AccessAssignmentGuard`, **ahead of the validators' System bypass**. It finds three shapes:
+
+| Shape | What it is | Passes when |
+|---|---|---|
+| `PublicSubject` | a non-denied grant to `Public` or `Anonymous` | an executing governed activity wrote it |
+| `SystemForOther` | a grant written as System whose subject is not `AccessContext.OnBehalfOf` | the user acquires it themselves (`OnBehalfOf` = subject: subscription, coupon, purchase), or a governed activity wrote it |
+| `AccessPolicy` | a `PartitionAccessPolicy` (`{scope}/_Policy`) | an executing governed activity wrote it |
+
+A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
+
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.remove`, `store.enroll`, `pr.steward.admin-access` (`Access:BroadGrantGuard:Standards` replaces it).
+
+**Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
+
+**Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
+
 ---
 
 # Public API — start here

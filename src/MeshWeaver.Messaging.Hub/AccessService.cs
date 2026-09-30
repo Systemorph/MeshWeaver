@@ -315,7 +315,17 @@ public class AccessService
     /// the user's <c>AccessContext</c> through the message-level
     /// <c>delivery.AccessContext</c>, not to bypass RLS.
     /// </remarks>
-    public IDisposable ImpersonateAsSystem()
+    public IDisposable ImpersonateAsSystem() => ImpersonateAsSystemFor(governedBy: null, onBehalfOf: null);
+
+    /// <summary>
+    /// <see cref="ImpersonateAsSystem"/>, stating WHY the platform writes: for ONE user acquiring
+    /// access for themselves (<paramref name="onBehalfOf"/> — the Store's per-user enrollment), or
+    /// as the executor of a governed activity (<paramref name="governedBy"/>). The broad-grant guard
+    /// (<c>BroadGrantGuard</c>) reads both off the delivery's context: a System grant for anybody
+    /// else, a grant to Public/Anonymous, and a partition policy pass only under an executing
+    /// governed activity.
+    /// </summary>
+    public IDisposable ImpersonateAsSystemFor(string? governedBy, string? onBehalfOf)
     {
         // The literal must match `MeshWeaver.Mesh.Security.WellKnownUsers.System`;
         // we don't reference that constant here because Messaging.Hub sits below
@@ -324,7 +334,9 @@ public class AccessService
         return new AccessContextScope(this, new AccessContext
         {
             ObjectId = SystemObjectId,
-            Name = SystemObjectId
+            Name = SystemObjectId,
+            GovernedBy = string.IsNullOrWhiteSpace(governedBy) ? null : governedBy,
+            OnBehalfOf = string.IsNullOrWhiteSpace(onBehalfOf) ? null : onBehalfOf,
         });
     }
 
