@@ -376,12 +376,17 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // work is inside; the change notification below runs outside it.
             MeshNode winner;
             var inserted = false;
+            // The row this write replaces — carried on the notification as its PRIOR STATE, so a
+            // live query can tell a change that cannot touch its result from one that can (see
+            // DataChangeNotification.PriorStateKnown). Assigned inside the Mutate section, where
+            // every writer of this dictionary serialises, so it is the row actually replaced.
+            MeshNode? previous = null;
             lock (_index.Mutate)
             {
                 winner = _nodes.AddOrUpdate(
                     Norm(node.Path),
-                    _ => { inserted = true; return node; },
-                    (_, existing) => existing.Version > node.Version ? existing : node);
+                    _ => { inserted = true; previous = null; return node; },
+                    (_, existing) => { previous = existing; return existing.Version > node.Version ? existing : node; });
                 if (ReferenceEquals(winner, node))
                     Added(Norm(node.Path), inserted);
             }
@@ -403,7 +408,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             // throw escaping here would be a bug in the feed itself, not a subscriber's fault to
             // swallow. The `catch { }` this replaces is precisely what made the dropped
             // notification invisible.
-            _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node));
+            _changes.OnNext(DataChangeNotification.Updated(Norm(node.Path), node).WithPriorState(previous));
             return Observable.Return<MeshNode?>(node);
         });
 
@@ -449,7 +454,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                         GetHashCode(), path);
                     return Observable.Return<bool?>(false);
                 }
-                _changes.OnNext(DataChangeNotification.Updated(path, node));
+                _changes.OnNext(DataChangeNotification.Updated(path, node).WithPriorState(null));
                 return Observable.Return<bool?>(true);
             }
 
@@ -465,7 +470,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             if (!_nodes.TryUpdate(path, node, existing))
                 return Observable.Return<bool?>(false);
 
-            _changes.OnNext(DataChangeNotification.Updated(path, node));
+            _changes.OnNext(DataChangeNotification.Updated(path, node).WithPriorState(existing));
             return Observable.Return<bool?>(true);
         });
 
@@ -510,7 +515,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                 if (_nodes.TryRemove(Norm(path), out removed))
                     Removed(Norm(path));
             }
-            _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
+            _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed).WithPriorState(removed));
             return Observable.Return(path);
         });
 
@@ -533,7 +538,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
                     Removed(Norm(path));
             }
             if (won)
-                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed));
+                _changes.OnNext(DataChangeNotification.Deleted(Norm(path), removed).WithPriorState(removed));
             return Observable.Return(won);
         });
 
