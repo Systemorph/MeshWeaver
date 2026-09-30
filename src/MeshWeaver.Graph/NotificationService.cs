@@ -475,7 +475,8 @@ public static class NotificationService
                 ReadAppGate(hub, request, feature, addressee, person, logger),
                 (preference, gate) => gate(preference.Channels())).SelectMany(gated =>
             {
-                var channels = person is null
+                // No person → no mailbox; a raiser-imposed BellOnly → none of the external legs.
+                var channels = person is null || request.BellOnly
                     ? gated.Intersect([NotificationChannelKind.InApp])
                     : gated;
                 var legs = channels

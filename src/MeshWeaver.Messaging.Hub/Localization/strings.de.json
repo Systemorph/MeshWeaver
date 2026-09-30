@@ -1687,6 +1687,8 @@
   "notification.accessGranted.bodyByGranter": "{granter} hat Ihnen {role}-Zugriff auf „{name}“ gegeben.",
   "notification.accessGranted.emailCta": "{name} öffnen",
   "notification.accessGranted.emailFooter": "Neu bei Memex? Melden Sie sich mit dieser E-Mail-Adresse an, um es zu öffnen.",
+  "notification.accessGranted.quietTitle": "Weitere Zugriffsfreigaben wurden still zugestellt",
+  "notification.accessGranted.quietBody": "Sie haben innerhalb von {minutes} Minuten mehr als {count} Personen Zugriff gegeben. Die übrigen wurden nur in Memex informiert — ihnen wurde weder eine E-Mail noch eine Teams-Nachricht gesendet.",
   "notification.startup.errors.title": "Start mit {count} Fehler(n) abgeschlossen",
   "notification.startup.errors.bodyTruncated": "{lines}\n… und {count} weitere Fehler — siehe Serverprotokoll.",
   "notification.nodeType.fallbackPage.title": "Typ '{nodeType}' liefert eine Ersatzseite aus",
