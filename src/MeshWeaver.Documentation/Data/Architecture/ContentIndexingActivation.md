@@ -122,6 +122,27 @@ nothing embedded.
 grouped **by partition** — one activity per partition, never one global call. A Space's collection
 path is `{spacePath}/content`.
 
+## What a delete removes
+
+Indexing is change-driven in BOTH directions. `ContentCollection.DeleteFile` — the surface every
+delete path ends in: the file browser, the `content:` unified-reference delete, staging, node-image
+replacement and import pruning — raises `IContentUploadObserver.OnDeleted(collectionPath, filePath)`
+after the provider delete succeeds; `DeleteFolder` lists the files below the folder first and raises
+it once per file. The path pair has the upload's shape (`{Address}/{Name}` via
+`ContentCollection.QualifiedPath`, root-relative file path with forward slashes), so a delete names
+the same index entry the upload created, and it is raised under the deleting user's identity.
+
+The indexing module's observer answers it by removing the file's chunks and hash row
+(`ReplaceFileChunks(…, [])`) and its `Document` node at `{collection}/_Documents/{slug}` — chunks
+first, because they are what search serves. Before this seam existed a deleted file's text stayed
+retrievable through `search_chunks` (MeshWeaver.Plugins#2605).
+
+🚨 Two limits remain. A file removed **outside** the platform (straight from disk or blob storage)
+raises nothing — the change monitor only ingests creations and edits. And files deleted before the
+seam shipped keep their stale index entries until they are removed by hand
+(`ReplaceFileChunks(collection, file, [])` plus deleting the `Document` node); re-index-all does not
+reconcile deletions.
+
 ## Why an inert index can also be a *delivery* problem
 
 Everything above assumes the portal can adopt what the registry publishes. When bundles are **not
