@@ -23,6 +23,16 @@ public record AccessAssignment
     /// <summary>Role assignments for this subject at this scope.</summary>
     [MeshNodeCollection("nodeType:Role namespace:\"\"", "nodeType:Role namespace:{node.namespace} scope:selfAndAncestors")]
     public IReadOnlyList<RoleAssignment> Roles { get; init; } = [];
+
+    /// <summary>
+    /// The governed activity that wrote this grant (<c>Governance/Activities/{id}</c>) — the
+    /// back-reference the governance executor writes. The broad-grant guard (<c>BroadGrantGuard</c>)
+    /// accepts a grant to Public/Anonymous or a grant written by System for somebody else only when
+    /// this and the write's <c>AccessContext.GovernedBy</c> name the same executing activity. A
+    /// typed property so it survives every typed hop between the executor and the write boundary.
+    /// </summary>
+    [Browsable(false)]
+    public string? GovernedBy { get; init; }
 }
 
 /// <summary>
@@ -48,6 +58,13 @@ public record RoleAssignment
 /// </summary>
 public record PartitionAccessPolicy
 {
+    /// <summary>
+    /// The governed activity that wrote this policy — see <see cref="AccessAssignment.GovernedBy"/>.
+    /// A partition policy is written only by a governed activity (<c>access.policy-change</c>).
+    /// </summary>
+    [Browsable(false)]
+    public string? GovernedBy { get; init; }
+
     /// <summary>false = deny Read at this scope and below. null = inherit (default: allowed).</summary>
     public bool? Read { get; init; }
 
