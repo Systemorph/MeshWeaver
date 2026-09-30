@@ -445,10 +445,51 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// </summary>
     public static readonly string FrameworkTag = FrameworkBuildIdentity.FrameworkVersion[..8];
 
+    /// <summary>
+    /// The name a fresh publication of <paramref name="bytes"/> lands under: the content hash — or,
+    /// when a dead name already holds that exact spelling, the first name of a deterministic
+    /// sequence that does not (#4528).
+    ///
+    /// <para>🚨 A deterministic recompile of the same version produces the SAME bytes and therefore
+    /// the same content-hash name. If that name is listed but unopenable (an evicted dll another
+    /// replica still holds open on the share — see <see cref="NewestOpenable"/>), publishing onto it
+    /// fails the way every open of it fails, and the miss → recompile → <see cref="Put"/> recovery
+    /// would land exactly where it started. So a dead spelling is stepped past: the next candidate
+    /// hashes the bytes with an ordinal appended, which keeps the name in the 12-hex shape
+    /// <see cref="AssemblyCacheFileName.Parse"/> attributes (so eviction still collects it). The
+    /// hash is a tie-breaker, never verified against content. The sequence ends at the first name
+    /// that is absent or openable — there are only finitely many dead names in a directory.</para>
+    /// </summary>
     private string GetDllPath(string nodeTypePath, long version, byte[] bytes)
     {
-        var hash = ContentHash(bytes);
-        return Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}-{FrameworkTag}-{hash}.dll");
+        var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
+        for (var ordinal = 0; ; ordinal++)
+        {
+            var hash = ordinal == 0 ? ContentHash(bytes) : ContentHash(bytes, ordinal);
+            var path = Path.Combine(dir, $"v{version}-{FrameworkTag}-{hash}.dll");
+            if (!IsListed(path) || CanOpen(path))
+                return path;
+            logger.LogWarning(
+                "Assembly cache: {DllPath} is listed but cannot be opened (evicted, still held open "
+                + "elsewhere on the share) — publishing these bytes under another name",
+                path);
+        }
+    }
+
+    /// <summary>Whether the directory LISTS <paramref name="path"/> — a dangling or delete-pending
+    /// name included. Asked of the listing, not of <see cref="File.Exists"/>: that follows the name
+    /// to what it opens, and a name that opens nothing is exactly the one this must see.</summary>
+    private static bool IsListed(string path) =>
+        Path.GetDirectoryName(path) is { } dir
+        && Directory.Exists(dir)
+        && Directory.EnumerateFileSystemEntries(dir, Path.GetFileName(path)).Any();
+
+    private static string ContentHash(byte[] bytes, int ordinal)
+    {
+        var salted = new byte[bytes.Length + sizeof(int)];
+        bytes.CopyTo(salted, 0);
+        BitConverter.GetBytes(ordinal).CopyTo(salted, bytes.Length);
+        return ContentHash(salted);
     }
 
     private static string ContentHash(byte[] bytes)

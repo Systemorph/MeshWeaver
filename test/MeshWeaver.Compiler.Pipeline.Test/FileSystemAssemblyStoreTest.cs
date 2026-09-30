@@ -323,10 +323,11 @@ public class FileSystemAssemblyStoreTest : IDisposable
     public async Task An_unopenable_newest_candidate_falls_through_to_an_openable_sibling()
     {
         var bytes = Encoding.UTF8.GetBytes("openable-bytes");
-        var real = (await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit())!;
+        var real = await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit() ?? "";
+        File.Exists(real).Should().BeTrue("the precondition: an openable file for v7");
         File.SetLastWriteTimeUtc(real, DateTime.UtcNow.AddHours(-1));
         File.CreateSymbolicLink(
-            Path.Combine(Path.GetDirectoryName(real)!, $"v7-{FileSystemAssemblyStore.FrameworkTag}-ffffffffffff.dll"),
+            Path.Combine(root, "Store_Plugin", $"v7-{FileSystemAssemblyStore.FrameworkTag}-ffffffffffff.dll"),
             Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
 
         var path = await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit();
@@ -346,9 +347,31 @@ public class FileSystemAssemblyStoreTest : IDisposable
             Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
         var bytes = Encoding.UTF8.GetBytes("fresh-compile");
 
-        var put = (await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit())!;
+        var put = await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit() ?? "";
 
         File.ReadAllBytes(put).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
+        (await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit()).Should().Be(put);
+    }
+
+    /// <summary>A deterministic recompile produces the SAME bytes, hence the SAME content-hash
+    /// name. When that exact name is the dead one, the publication must land under another name —
+    /// otherwise miss → recompile → Put ends where it started (#4528 review).</summary>
+    [Fact]
+    public async Task Put_of_identical_bytes_over_their_own_dead_name_publishes_elsewhere()
+    {
+        var bytes = Encoding.UTF8.GetBytes("deterministic-compile");
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)[..6]).ToLowerInvariant();
+        var typeDirectory = Path.Combine(root, "Store_Plugin");
+        Directory.CreateDirectory(typeDirectory);
+        var dead = Path.Combine(typeDirectory, $"v7-{FileSystemAssemblyStore.FrameworkTag}-{hash}.dll");
+        File.CreateSymbolicLink(dead, Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+
+        var put = await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit();
+
+        put.Should().NotBe(dead, "the dead spelling is stepped past");
+        File.ReadAllBytes(put ?? dead).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
+        AssemblyCacheFileName.Parse(Path.GetFileName(put ?? dead)).Should().NotBeNull(
+            "the alternate name keeps the attributable shape, so eviction still collects it");
         (await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit()).Should().Be(put);
     }
 }
