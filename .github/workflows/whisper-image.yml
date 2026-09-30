@@ -1,0 +1,130 @@
+name: whisper image
+
+# Builds deploy/whisper (whisper.cpp v1.7.4 server + the Apache-2.0 Flix-AI/flix-swissgerman-full model,
+# converted to GGML q8_0 inside the build from a pinned Hugging Face revision) and, on main, pushes it to
+# ACR — the ONE channel the cluster pulls it from. Before this workflow the only route to the registry was
+# a hand `az acr build`, which is how `whisper-swiss-german:1.7.4` came to be an image nobody could say was
+# built from which commit — and, measured 2026-09-30, one that carries NO model at all.
+#
+# 🚨 THE TAGS, and which one an overlay names.
+#   1.7.4-flix-large-v3-q8-<short sha>  immutable — what an estate's values file names. The chart values
+#                                       an approved ApplyChart binds carry this tag, so the approval binds
+#                                       the bytes that run (Systemorph/Memex docs/aks-ops.md → ApplyChart).
+#   1.7.4-flix-large-v3-q8              moving — the line, for a laptop `docker pull`. Never name it in an
+#                                       overlay: IfNotPresent + a moving tag is two nodes running two builds.
+# The line names the whisper.cpp release AND the model; a model swap is a new line.
+#
+# 🚨 No credential reaches the model: its inputs are public (Apache-2.0) and pinned by revision + sha256
+# in the Dockerfile. The CC BY-NC build (MODEL_SOURCE=context) is never built here.
+#
+# 🚨 NOT A GATE, so the path filter is correct here. The build downloads 3 GB and converts it; a PR that
+# does not touch deploy/whisper has nothing to build. The Dockerfile's model stage transcribes a sample
+# with the converted model, so a green build IS the test.
+#
+# Auth is the OIDC federated credential main-cd.yml and s1-extract-image.yml use, scoped to this
+# repository's main branch — which is the only ref the push job runs on.
+
+on:
+  pull_request:
+    paths:
+      - deploy/whisper/Dockerfile
+      - .github/workflows/whisper-image.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/whisper/Dockerfile
+      - .github/workflows/whisper-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR branch supersedes its build; a main run is never cancelled (each main push is
+# its own group, keyed on the commit — check-main-runs-not-cancelled.py).
+concurrency:
+  group: whisper-image-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  ACR: meshweaver.azurecr.io
+  REPO: whisper-swiss-german
+  LINE: 1.7.4-flix-large-v3-q8
+
+jobs:
+  # Pull requests: build only — the image build IS the test. Nothing from a PR reaches ACR, and this job
+  # holds no secret (check-pr-secret-preflight.py: a PR-reachable job consuming a secret needs a preflight).
+  build:
+    name: Build whisper (convert + quantize + smoke transcription in the image)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      # 3.1 GB safetensors + a 3.1 GB f16 intermediate + CPU torch do not fit the hosted runner's free
+      # disk as shipped; reclaim the preinstalled toolchains this job never uses.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          dotnet: true
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Build
+        run: docker build --progress=plain -t whisper:ci deploy/whisper
+
+  # main (push or dispatch): build the same way, push both tags, read them back.
+  publish:
+    name: Build and push whisper to ACR
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write   # OIDC to Azure (the federated credential is scoped to main)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          dotnet: true
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Build
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${short}" -t "$ACR/$REPO:${LINE}" deploy/whisper
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Push whisper-swiss-german:<line>-<sha> and :<line>
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker push "$ACR/$REPO:${LINE}-${short}"
+          docker push "$ACR/$REPO:${LINE}"
+      - name: Verify the tags exist in the registry (read back, never the green tick)
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          immutable=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv)
+          moving=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}" --query digest -o tsv)
+          [ -n "$immutable" ] && [ "$immutable" = "$moving" ] \
+            || { echo "::error::$REPO:${LINE}-${short} (${immutable:-absent}) and :${LINE} (${moving:-absent}) do not name one pushed manifest"; exit 1; }
+          echo "published $ACR/$REPO:${LINE}-${short} = ${immutable} (+ :${LINE})"
+          echo "### whisper published" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ACR/$REPO:${LINE}-${short}\` — \`${immutable}\`. An estate overlay names this immutable tag." >> "$GITHUB_STEP_SUMMARY"
