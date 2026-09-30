@@ -497,17 +497,18 @@ internal sealed class ChatCompletionOrchestrator(
     private IObservable<AutocompleteResponse?> SendAutocompleteRequest(
         string query, string? context, Address target)
     {
-        return Observable.Defer<AutocompleteResponse?>(() =>
-        {
-            var request = new AutocompleteRequest(query, context);
-            var delivery = hub.Post(request, o => o.WithTarget(target));
-            if (delivery == null)
-                return Observable.Return<AutocompleteResponse?>(null);
-
-            return hub.Observe((IMessageDelivery)delivery)
-                .Take(1)
-                .Select(d => d.Message as AutocompleteResponse);
-        })
+        // 🚨 ISSUED OFF THE ROUTER (#5900). The orchestrator is resolved from the root container in
+        // production, where the injected IMessageHub IS the mesh router: posting the request there
+        // stamped it `sender: mesh/{id}`, and the answering node hub then (correctly) addressed the
+        // AutocompleteResponse straight back at the router, putting a user's keystroke on the
+        // router's action block at both ends. A bounded one-shot read belongs on ReadIssuingHub() —
+        // the identity function for every hub that is not the router. The pre-registering
+        // Observe(request, …) shape also closes the Post-then-Observe(delivery) race: a warm node
+        // hub's sub-millisecond reply can no longer land before the response subject exists.
+        return hub.ReadIssuingHub()
+            .Observe(new AutocompleteRequest(query, context), o => o.WithTarget(target))
+            .Take(1)
+            .Select(d => d.Message as AutocompleteResponse)
         .Timeout(AutocompleteBounds.CallerBound)
         .Catch<AutocompleteResponse?, Exception>(ex =>
         {
