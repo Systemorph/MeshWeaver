@@ -5603,10 +5603,15 @@ public static class MeshExtensions
 
     /// <summary>
     /// The default <see cref="IGovernedActivityVerifier"/>: reads the activity node authoritatively
-    /// (as System — an activity is not the writer's to read) and checks, shape-tolerantly over its
-    /// raw content, that its <c>state</c> is <c>Executing</c> and its <c>standard</c> is on the
-    /// allowlist. Core does not reference the Governance package's types, so it reads the two
-    /// fields the package's <c>ActivityContent</c> serialises.
+    /// and checks, shape-tolerantly over its raw content, that its <c>state</c> is <c>Executing</c>
+    /// and its <c>standard</c> is on the allowlist. Core does not reference the Governance
+    /// package's types, so it reads the two fields the package's <c>ActivityContent</c> serialises.
+    ///
+    /// <para>No impersonation is needed and none is opened: <see cref="ReadNodeAuthoritative"/>
+    /// reads the <see cref="IStorageAdapter"/> directly, which no adapter filters by the ambient
+    /// <see cref="AccessContext"/> — the same identity-independent read the partition bootstrap's
+    /// grant and <c>_GitSync</c> probes use. An activity the WRITER cannot read is therefore still
+    /// seen, which is the point: the guard asks what the activity IS, not what the writer may see.</para>
     /// </summary>
     private static IObservable<bool> DefaultGovernedActivityCheck(
         IMessageHub hub, string activityPath, IReadOnlySet<string> allowed)
@@ -5614,18 +5619,14 @@ public static class MeshExtensions
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return Observable.Return(false);
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Defer(() =>
-            {
-                using (access?.ImpersonateAsSystem())
-                    return ReadNodeAuthoritative(hub, persistence, activityPath);
-            })
+        return ReadNodeAuthoritative(hub, persistence, activityPath)
             .Select(activity => GovernedActivityExecuting(activity, allowed, hub.JsonSerializerOptions));
     }
 
+
     /// <summary>
     /// Whether an activity node is EXECUTING an allowlisted standard — read from its raw content
-    /// (<c>state</c>: the enum name or its number 4; <c>standard</c>: a path or an id). Pure.
+    /// (<c>state</c>: the enum name or <see cref="BroadGrantGuard.GovernanceActivityStateExecuting"/>; <c>standard</c>: a path or an id). Pure.
     /// </summary>
     internal static bool GovernedActivityExecuting(
         MeshNode? activity, IReadOnlySet<string> allowed, System.Text.Json.JsonSerializerOptions? options)
@@ -5642,7 +5643,8 @@ public static class MeshExtensions
             var executing = element.TryGetProperty("state", out var state)
                             && (state.ValueKind == System.Text.Json.JsonValueKind.String
                                 ? string.Equals(state.GetString(), "Executing", StringComparison.OrdinalIgnoreCase)
-                                : state.ValueKind == System.Text.Json.JsonValueKind.Number && state.GetInt32() == 4);
+                                : state.ValueKind == System.Text.Json.JsonValueKind.Number
+                                  && state.TryGetInt32(out var number) && number == BroadGrantGuard.GovernanceActivityStateExecuting);
             if (!executing || !element.TryGetProperty("standard", out var standard)
                            || standard.ValueKind != System.Text.Json.JsonValueKind.String)
                 return false;

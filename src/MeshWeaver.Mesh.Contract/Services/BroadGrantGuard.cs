@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -60,6 +61,15 @@ public static class BroadGrantGuard
     /// <summary>The node type of a partition access policy.</summary>
     public const string AccessPolicyNodeType = "PartitionAccessPolicy";
 
+    /// <summary>
+    /// The NUMBER the Governance package's <c>ActivityState.Executing</c> serialises to when a
+    /// writer emits the enum as a number rather than its name. Core deliberately does not
+    /// reference that package, so the value is mirrored here in ONE place, and the Governance
+    /// package's <c>ActivityTests.ActivityState_ExecutingMatchesCoresBroadGrantGuard</c> pins its
+    /// enum to the same value: a renumbering there reds there instead of silently failing closed here.
+    /// </summary>
+    public const int GovernanceActivityStateExecuting = 4;
+
     /// <summary>The catalog key of the refusal.</summary>
     public const string RefusalKey = "activity.accessAssignment.broadGrant";
 
@@ -80,8 +90,8 @@ public static class BroadGrantGuard
     {
         var configured = configuration?.GetSection(StandardsKey).GetChildren()
             .Select(c => c.Value?.Trim())
-            .Where(v => !string.IsNullOrEmpty(v))
-            .Select(v => v!)
+            .OfType<string>()
+            .Where(v => v.Length > 0)
             .ToImmutableHashSet(StringComparer.Ordinal);
         return configured is { Count: > 0 } ? configured : DefaultGovernedStandards;
     }
@@ -112,13 +122,13 @@ public static class BroadGrantGuard
             || !GrantsAnything(assignment))
             return null;
 
-        var subject = assignment!.AccessObject?.Trim() ?? "";
+        var subject = assignment.AccessObject?.Trim() ?? "";
         if (IsBroadSubject(subject))
             return new BroadGrantFinding(BroadGrantKind.PublicSubject, node.Path, subject, Writer(writer));
 
         if (IsSystem(writer)
             && !string.Equals(subject, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(subject, writer!.OnBehalfOf?.Trim(), StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(subject, writer.OnBehalfOf?.Trim(), StringComparison.OrdinalIgnoreCase))
             return new BroadGrantFinding(BroadGrantKind.SystemForOther, node.Path, subject, Writer(writer));
 
         return null;
@@ -130,11 +140,11 @@ public static class BroadGrantGuard
         || string.Equals(subject, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The write runs as the platform's own identity. Pure.</summary>
-    public static bool IsSystem(AccessContext? writer) =>
+    public static bool IsSystem([NotNullWhen(true)] AccessContext? writer) =>
         string.Equals(writer?.ObjectId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>At least one non-denied role — a grant that ADDS access. Pure.</summary>
-    public static bool GrantsAnything(AccessAssignment? assignment) =>
+    public static bool GrantsAnything([NotNullWhen(true)] AccessAssignment? assignment) =>
         assignment?.Roles is { } roles
         && roles.Any(r => !r.Denied && !string.IsNullOrWhiteSpace(r.Role));
 
@@ -191,14 +201,13 @@ public static class BroadGrantGuard
         LocalizableText.Keyed(
             $"'{finding.Path}' is a broad grant ({finding.Kind}) written by '{finding.Writer}'. "
             + "Access for everyone, access the platform writes for someone else, and partition access "
-            + "policies are written only by a governed activity (Governance/Activities, standards "
-            + "access.grant-broad, access.revoke, access.policy-change, package.provision, package.remove). "
-            + "Propose one there.",
+            + "policies are written only by a governed activity (Governance/Activities) executing a "
+            + $"standard on the allowlist ({StandardsKey}). Propose one there.",
             RefusalKey,
             ("path", finding.Path), ("kind", finding.Kind.ToString()), ("writer", finding.Writer));
 
     private static string Writer(AccessContext? writer) =>
-        string.IsNullOrWhiteSpace(writer?.ObjectId) ? "(no identity)" : writer!.ObjectId;
+        writer?.ObjectId is { } id && !string.IsNullOrWhiteSpace(id) ? id : "(no identity)";
 }
 
 /// <summary>How the broad-grant guard acts on a finding.</summary>

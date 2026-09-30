@@ -46,8 +46,8 @@ public class BroadGrantGuardTest
     public void AGrantToEverybody_IsBroad_WhoeverWritesIt(string subject)
     {
         var (node, assignment) = Grant(subject);
-        BroadGrantGuard.Evaluate(node, assignment, Person)!.Kind.Should().Be(BroadGrantKind.PublicSubject);
-        BroadGrantGuard.Evaluate(node, assignment, System)!.Kind.Should().Be(BroadGrantKind.PublicSubject);
+        (BroadGrantGuard.Evaluate(node, assignment, Person)?.Kind).Should().Be(BroadGrantKind.PublicSubject);
+        (BroadGrantGuard.Evaluate(node, assignment, System)?.Kind).Should().Be(BroadGrantKind.PublicSubject);
     }
 
     /// <summary>A Denied assignment only removes access — the Store's gating — and always passes.</summary>
@@ -64,9 +64,8 @@ public class BroadGrantGuardTest
     {
         var (node, assignment) = Grant("jdoe");
         var finding = BroadGrantGuard.Evaluate(node, assignment, System);
-        finding!.Kind.Should().Be(BroadGrantKind.SystemForOther);
-        finding.Subject.Should().Be("jdoe");
-        finding.Writer.Should().Be(WellKnownUsers.System);
+        finding.Should().Be(new BroadGrantFinding(
+            BroadGrantKind.SystemForOther, node.Path, "jdoe", WellKnownUsers.System));
     }
 
     /// <summary>A user's own acquisition (subscription, coupon, purchase) stamps OnBehalfOf and passes.</summary>
@@ -81,8 +80,8 @@ public class BroadGrantGuardTest
     public void ASystemGrantOnBehalfOfSomebodyElse_IsBroad()
     {
         var (node, assignment) = Grant("jdoe");
-        BroadGrantGuard.Evaluate(node, assignment, System with { OnBehalfOf = "someone" })!
-            .Kind.Should().Be(BroadGrantKind.SystemForOther);
+        (BroadGrantGuard.Evaluate(node, assignment, System with { OnBehalfOf = "someone" })?.Kind)
+            .Should().Be(BroadGrantKind.SystemForOther);
     }
 
     /// <summary>A person sharing their space with a colleague is an ordinary write, not a broad one.</summary>
@@ -104,7 +103,7 @@ public class BroadGrantGuardTest
     public void APartitionAccessPolicy_IsBroad_WhoeverWritesIt()
     {
         var policy = new MeshNode("_Policy", "Parties") { NodeType = BroadGrantGuard.AccessPolicyNodeType };
-        BroadGrantGuard.Evaluate(policy, null, Person)!.Kind.Should().Be(BroadGrantKind.AccessPolicy);
+        (BroadGrantGuard.Evaluate(policy, null, Person)?.Kind).Should().Be(BroadGrantKind.AccessPolicy);
     }
 
     [Fact]
