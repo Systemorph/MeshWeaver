@@ -288,4 +288,67 @@ public class FileSystemAssemblyStoreTest : IDisposable
         (await scoped.TryGetAssemblyPath("Store/Plugin", 12).Should().Emit())
             .Should().NotBeNull("the version just written is never a candidate");
     }
+
+    /// <summary>
+    /// 🚨 A name the directory LISTS and the file system will not OPEN is not a cache hit
+    /// (MeshWeaver#4528, #3876). On the Azure Files share behind <c>/data/assembly-cache</c> an
+    /// evicted dll that another replica still holds open stays in the listing as delete-pending
+    /// and every open of it fails with ENOENT — for as long as that handle lives, not for the
+    /// moment of a race. Measured on memex-cloud 2026-09-26: the SAME file
+    /// (<c>MyAi_Panel/v751-…</c>) failed four bundle requests over 30 s, and the consumer's
+    /// fetch exhausted four 503s spaced by <c>Retry-After: 30</c> on every pass from 09-26 to
+    /// 09-30. A dangling symlink is the local stand-in: listed, unopenable.
+    /// </summary>
+    [Fact]
+    public async Task A_listed_but_unopenable_dll_is_a_miss_not_a_hit()
+    {
+        var typeDirectory = Path.Combine(root, "Store_Plugin");
+        Directory.CreateDirectory(typeDirectory);
+        var unopenable = Path.Combine(
+            typeDirectory, $"v7-{FileSystemAssemblyStore.FrameworkTag}-0123456789ab.dll");
+        File.CreateSymbolicLink(unopenable, Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+        Directory.GetFiles(typeDirectory).Should().Contain(unopenable, "the precondition: the name is LISTED");
+
+        var path = await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit();
+
+        path.Should().BeNull(
+            "a path nobody can open must never be handed out as a hit — the bundle route would "
+            + "answer 503 on it for as long as the entry lingers, and activation would fail to load it");
+    }
+
+    /// <summary>The same version may carry an older, openable sibling (two compiles of one version
+    /// with different bytes); the lookup falls through to it rather than stopping at the dead
+    /// newest name.</summary>
+    [Fact]
+    public async Task An_unopenable_newest_candidate_falls_through_to_an_openable_sibling()
+    {
+        var bytes = Encoding.UTF8.GetBytes("openable-bytes");
+        var real = (await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit())!;
+        File.SetLastWriteTimeUtc(real, DateTime.UtcNow.AddHours(-1));
+        File.CreateSymbolicLink(
+            Path.Combine(Path.GetDirectoryName(real)!, $"v7-{FileSystemAssemblyStore.FrameworkTag}-ffffffffffff.dll"),
+            Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+
+        var path = await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit();
+
+        path.Should().Be(real, "the newest LISTED name is dead; the openable one is the hit");
+    }
+
+    /// <summary>First-write-wins must not "win" with a name nobody can open: that would return
+    /// a dead path from the compile and leave the version unrecoverable by any recompile.</summary>
+    [Fact]
+    public async Task Put_over_an_unopenable_candidate_publishes_readable_bytes()
+    {
+        var typeDirectory = Path.Combine(root, "Store_Plugin");
+        Directory.CreateDirectory(typeDirectory);
+        File.CreateSymbolicLink(
+            Path.Combine(typeDirectory, $"v7-{FileSystemAssemblyStore.FrameworkTag}-ffffffffffff.dll"),
+            Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+        var bytes = Encoding.UTF8.GetBytes("fresh-compile");
+
+        var put = (await store.Put("Store/Plugin", version: 7, bytes, null).Should().Emit())!;
+
+        File.ReadAllBytes(put).Should().BeEquivalentTo(bytes, System.Text.Json.JsonSerializerOptions.Default);
+        (await store.TryGetAssemblyPath("Store/Plugin", version: 7).Should().Emit()).Should().Be(put);
+    }
 }
