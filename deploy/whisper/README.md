@@ -12,16 +12,19 @@ MAUI all reach one endpoint. The mesh side is `MeshWeaver.Speech` (`WhisperConta
 
 ```bash
 cd deploy/whisper
-# 1. Fetch the Swiss-German model (~547 MB) into ./models/ — a BUILD INPUT, baked into the image.
-mkdir -p models
-# Model on the PRIVATE MeshWeaver.Plugins repo (moved 2026-08-28) — requires gh auth.
-gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output models/model.bin
-# 2. Build + start the container (step 1 is not optional — the build fails naming the file without it):
+# 1. Build. The DEFAULT needs nothing in ./models/: the build downloads the Apache-2.0
+#    Flix-AI/flix-swissgerman-full model from a PINNED Hugging Face revision, converts it to GGML and
+#    quantizes it to q8_0 (~1.7 GB), then transcribes a sample with it. No credential, no SAS.
 docker compose up --build -d
-# 3. Smoke-test with any WAV (16 kHz mono is ideal):
+#    (CI does the same and pushes meshweaver.azurecr.io/whisper-swiss-german:1.7.4-flix-large-v3-q8-<sha>
+#     on every main change to this Dockerfile — .github/workflows/whisper-image.yml.)
+# 2. Smoke-test with any WAV (16 kHz mono is ideal):
 curl -F file=@sample.wav -F language=de -F response_format=json http://localhost:8080/inference
 #   → {"text":"..."}
 ```
+
+To bake a different GGML file instead — e.g. the NON-commercial Flurin17 derivative — put it at
+`models/model.bin` and build with `--build-arg MODEL_SOURCE=context` (see "Model licence" first).
 
 Then point the portal at it (appsettings or the portal's Speech settings):
 
@@ -31,19 +34,19 @@ Then point the portal at it (appsettings or the portal's Speech settings):
 
 ## Model licence
 
-The default model is a derivative of
-[Flurin17/whisper-large-v3-turbo-swiss-german](https://huggingface.co/Flurin17/whisper-large-v3-turbo-swiss-german)
-— **CC BY-NC 4.0, non-commercial use only**. (The base `openai/whisper-large-v3-turbo` is MIT, but a
-derivative cannot be more permissive than what it derives from, so NC is the binding term.) That is why the
-model is **never** republished for anonymous download and why the container gets it from an authenticated
-channel; see [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md).
+**Default: [Flix-AI/flix-swissgerman-full](https://huggingface.co/Flix-AI/flix-swissgerman-full) —
+Apache-2.0**, a whisper-large-v3 fine-tune (Swiss German transcribes to Standard German; plain German and
+English verified unregressed against the base, A/B 2026-08-20). It may be served commercially, and it is
+what memex-cloud runs. The build pins its Hugging Face revision and the sha256 of every input, and converts
+it with whisper.cpp's own `convert-h5-to-ggml.py` + `quantize … q8_0`.
 
-For a commercial deployment, point this container at a permissively licensed model instead — put e.g.
-`ggml-large-v3-turbo.bin` at `models/model.bin` and rebuild. You lose the Swiss-German dialect accuracy the
-fine-tune exists for, and nothing else changes: the `/inference` contract is identical.
-
-`clients/voice-gateway/README.md` has said the same thing since the gateway landed, and pointed here for the
-detail — this section is that detail, which was missing.
+**Opt-in, NON-commercial only: the Flurin17 derivative** (`ggml-swiss-german-turbo-q5_0.bin`, private
+Plugins release `voice-model-swiss-german`) — a derivative of
+[Flurin17/whisper-large-v3-turbo-swiss-german](https://huggingface.co/Flurin17/whisper-large-v3-turbo-swiss-german),
+**CC BY-NC 4.0**. (The base `openai/whisper-large-v3-turbo` is MIT, but a derivative cannot be more
+permissive than what it derives from, so NC is the binding term.) 🚨 **Never build it for a commercial
+estate.** It is built only with `MODEL_SOURCE=context`, never by CI, and is never republished for
+anonymous download; see [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md).
 
 ## Notes
 
@@ -52,15 +55,15 @@ detail — this section is that detail, which was missing.
   [#3906](https://github.com/Systemorph/MeshWeaver/issues/3906): the chart used to fetch the model with an
   anonymous `curl` from a GitHub release on the core repo,
   [#2593](https://github.com/Systemorph/MeshWeaver/issues/2593) moved that asset to the private
-  MeshWeaver.Plugins repo without moving the pin, and every pod then died in `Init:Error` on a 404. The
-  model is a **CC BY-NC-4.0** derivative, so republishing it for anonymous download is not available as a
-  fix — see [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md)
-  for that decision and the two rejected alternatives. Expected asset: 574,041,195 bytes,
-  `sha256 2d56e773724a247360067b527417842b81d25ff891fed014341a6844f15ea612` (the build prints what it baked).
+  MeshWeaver.Plugins repo without moving the pin, and every pod then died in `Init:Error` on a 404. For the
+  NC model, republishing it for anonymous download is not available as a fix — see
+  [Voice model distribution](../../src/MeshWeaver.Documentation/Data/Architecture/VoiceModelDistribution.md)
+  for that decision and the two rejected alternatives; the default Apache-2.0 model is baked the same way so
+  that one chart shape serves both. The build prints the size and sha256 of what it baked.
   🚨 Never bind-mount a volume over `/models` — an empty one shadows the baked model.
-- **Swapping the model** — put a different GGML file at `models/model.bin` and rebuild (`ggml-base.bin` /
-  `ggml-large-v3-turbo.bin` trade Swiss-German accuracy for size). The build asserts only that the file is
-  big enough to be a model at all, so a swap needs no code change; the image tag is yours to choose.
+- **Swapping the model** — either change the pinned revision + digests in the Dockerfile (a new image
+  LINE — rename `LINE` in `whisper-image.yml` with it), or put a GGML file at `models/model.bin` and build with
+  `MODEL_SOURCE=context`. The build asserts only that the file is big enough to be a model at all.
 - **Language `de`** transcribes Swiss German *out as Standard German* (the model was trained that way);
   `auto` detects mixed de/fr/it at some dialect-accuracy cost.
 - **GPU**: this Dockerfile is CPU (portable). For throughput, build whisper.cpp with CUDA/Vulkan and add the
