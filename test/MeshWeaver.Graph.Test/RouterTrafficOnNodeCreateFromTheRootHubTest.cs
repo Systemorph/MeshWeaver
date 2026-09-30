@@ -374,6 +374,46 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 <b>The RUNTIME pin for <see href="https://github.com/Systemorph/MeshWeaver/issues/5900">#5900</see>
+    /// — the chat input's <c>@</c> autocomplete.</b>
+    ///
+    /// <para>Production (memex-cloud, 2026-09-29) logged the pair
+    /// <c>ORIGIN: AutocompleteRequest was POSTED with the mesh hub as sender</c> from
+    /// <c>ChatCompletionOrchestrator.SendAutocompleteRequest</c>, and its echo
+    /// <c>AutocompleteResponse … target: mesh/{id}</c> from the innocent answering half. The
+    /// orchestrator is registered scoped and, resolved from the root container, holds the router as
+    /// its hub — which is exactly what resolving it from <c>Mesh.ServiceProvider</c> does here.</para>
+    ///
+    /// <para><b>The positive anchor.</b> The current-node producer issues its request only when a
+    /// namespace is given, so the call passes the seeded node's path; and the completion stream is
+    /// awaited to its end, so every producer — the request/response one included — has run.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnAutocompleteIssuedFromTheRootMeshHub_NeverPutsTheRouterOnEitherEnd()
+    {
+        var path = await SeedNode("RouterTrafficAutocompleteProbe");
+        var orchestrator = Mesh.ServiceProvider
+            .GetRequiredService<MeshWeaver.Data.Completion.IChatCompletionOrchestrator>();
+
+        await orchestrator.GetCompletions("@RouterTraffic", path)
+            .ToList()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        DumpReports();
+        Origins().Where(r => r.MessageType is "AutocompleteRequest" or "AutocompleteResponse")
+            .Should().BeEmpty(
+                "#5900: the orchestrator posted the AutocompleteRequest off the ROOT mesh hub, so "
+                + "the request left the router and the node hub's reply was addressed back at it. "
+                + "A bounded one-shot read belongs on ReadIssuingHub(), the identity function for "
+                + "every non-router caller");
+        Reports().Where(r => r.MessageType is "AutocompleteRequest" or "AutocompleteResponse"
+                             || (r.MessageType == "RawJson" && r.Target == path))
+            .Should().BeEmpty(
+                "and the receiving node hub must not see the router at an end of the exchange");
+    }
+
+    /// <summary>
     /// The subscription family, at the ORIGIN site — which always carries the real CLR type, so
     /// this filter is exact there. Narrow on purpose: this test pins ONE defect, and a blanket
     /// "no router traffic anywhere" assertion would red on any unrelated pre-existing line and
