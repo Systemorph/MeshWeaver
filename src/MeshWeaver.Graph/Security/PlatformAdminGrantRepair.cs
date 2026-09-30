@@ -53,6 +53,7 @@ public static class PlatformAdminGrantRepair
         if (context.Operation != NodeOperation.Create
             || !string.Equals(context.Node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
                 StringComparison.OrdinalIgnoreCase)
+            || userId is null
             || !WellKnownUsers.IsAuthenticated(userId))
             return Observable.Return(false);
 
@@ -65,7 +66,7 @@ public static class PlatformAdminGrantRepair
         if (string.IsNullOrEmpty(partition))
             return Observable.Return(false);
 
-        return hub.IsGlobalAdmin(userId!)
+        return hub.IsGlobalAdmin(userId)
             .Take(1)
             .DefaultIfEmpty(false)
             .SelectMany(isAdmin => isAdmin

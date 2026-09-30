@@ -348,14 +348,18 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         IMessageHub hub, string? nodePath, string? deniedUserId)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var partition = GetFirstSegment(nodePath);
+        if (GetFirstSegment(nodePath) is not { } partition)
+            return Observable.Return<string?>(null);
         return ProbeOwnership(hub, partition)
             .Select(state => state switch
             {
                 null => null,
+                // 🚨 The grants probe could not answer: say NOTHING. Neither "ownerless" nor "the
+                // store disagrees" is known — fail closed to no diagnosis, as this always did.
+                { GrantPaths: null } => null,
                 // Grants (or a policy) exist, so this is NOT the #638 residue. But if one of them is
                 // the refused principal's, the denial disagrees with the store.
-                { Ownerless: false } => Disagreement(partition!, deniedUserId, state.GrantPaths),
+                { Ownerless: false, GrantPaths: { } paths } => Disagreement(partition, deniedUserId, paths),
                 // 🚨 A SYSTEM-OWNED partition is not restored to its creator — the bootstrap's
                 // repair deliberately skips it (the repo owns it; retraction took the creator's Admin
                 // away on purpose), so telling the creator they "regain access on their next write"
@@ -393,8 +397,9 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// <summary>What <see cref="ProbeOwnership"/> saw on an EXISTING partition.</summary>
     /// <param name="Ownerless">No grant (durable or configured) and no <c>_Policy</c>.</param>
     /// <param name="SystemOwned">It has a ONE-WAY <c>_GitSync</c>.</param>
-    /// <param name="GrantPaths">The durable grant paths under <c>{partition}/_Access</c>.</param>
-    private sealed record OwnershipState(bool Ownerless, bool SystemOwned, IReadOnlyList<string> GrantPaths);
+    /// <param name="GrantPaths">The durable grant paths under <c>{partition}/_Access</c>, or <c>null</c>
+    /// when that listing could not be read (indeterminate — never "no grants").</param>
+    private sealed record OwnershipState(bool Ownerless, bool SystemOwned, IReadOnlyList<string>? GrantPaths);
 
     /// <summary>
     /// The shared probe behind <see cref="DescribeDeniedWrite"/> and <see cref="IsUngrantable"/>. Emits
@@ -456,7 +461,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                     (paths, policy, owned) => (OwnershipState?)new OwnershipState(
                         Ownerless: !configuredGrant && paths is { Count: 0 } && !policy,
                         SystemOwned: owned,
-                        GrantPaths: paths ?? [])));
+                        GrantPaths: paths)));
 
         IObservable<MeshNode?> ReadOrNull(string path) =>
             persistence.Read(path, hub.JsonSerializerOptions)
