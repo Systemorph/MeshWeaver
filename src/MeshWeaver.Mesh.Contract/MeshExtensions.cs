@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -1058,6 +1059,12 @@ public static class MeshExtensions
                     //     validators, and folded into the same rejection tuple so the failure is
                     //     posted by the one code path that already knows how.
                     .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
+                    // 1e. BROAD GRANTS only through a governed activity (BroadGrantGuard) — whoever
+                    //     writes, System included: this runs ahead of the validators' System bypass.
+                    //     Log-only until Access:BroadGrantGuard:Mode says Enforce.
+                    .SelectMany(systemOwned => systemOwned is not null
+                        ? Observable.Return<LocalizableText?>(systemOwned)
+                        : BroadGrantRejection(hub, node, request.AccessContext, "CreateNode", logger))
                     // 🚨 The key now travels the whole way (#4507). This used to hand on
                     // `grantRejection.English` and throw the key away at this frame, because
                     // CreateNodeResponse.Fail had no keyed surface to render into; it now carries
@@ -5530,6 +5537,128 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The broad-grant guard at a write boundary (<see cref="BroadGrantGuard"/>): emits the refusal
+    /// when the write is a broad grant that no executing governed activity accounts for AND the
+    /// guard enforces, else <c>null</c>. In <see cref="BroadGrantMode.LogOnly"/> (the default for
+    /// the first week) it only logs <c>[BroadGrantGuard] WOULD REFUSE</c> — one line per finding,
+    /// naming the seat, the shape, the subject and the writer, so the inventory of writers that
+    /// still need to stamp their context is a single grep.
+    ///
+    /// <para>The pure predicate runs first, so the hot path (an ordinary node, a user's own
+    /// grant) costs nothing; only a finding that CLAIMS a governed activity pays the one read of
+    /// the activity node.</para>
+    /// </summary>
+    private static IObservable<LocalizableText?> BroadGrantRejection(
+        IMessageHub hub, MeshNode node, AccessContext? writer, string seat, ILogger logger)
+    {
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        var mode = BroadGrantGuard.Mode(configuration);
+        if (mode == BroadGrantMode.Off)
+            return Observable.Return<LocalizableText?>(null);
+
+        var assignment = string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
+                StringComparison.OrdinalIgnoreCase)
+            ? node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)
+            : null;
+        if (BroadGrantGuard.Evaluate(node, assignment, writer) is not { } finding)
+            return Observable.Return<LocalizableText?>(null);
+
+        var claimed = BroadGrantGuard.ClaimedActivity(node, writer, hub.JsonSerializerOptions);
+        var allowed = BroadGrantGuard.GovernedStandards(configuration);
+        var verified = claimed is null
+            ? Observable.Return(false)
+            : hub.IsGovernedActivityExecuting(claimed, allowed);
+
+        return verified.Select(governed =>
+        {
+            if (governed)
+            {
+                logger.LogInformation(
+                    "[BroadGrantGuard] governed {Kind} {Path} subject={Subject} writer={Writer} seat={Seat} governedBy={Activity}",
+                    finding.Kind, finding.Path, finding.Subject, finding.Writer, seat, claimed);
+                return null;
+            }
+            logger.LogWarning(
+                "[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject={Subject} writer={Writer} onBehalfOf={OnBehalfOf} seat={Seat} governedBy={Activity} mode={Mode}",
+                finding.Kind, finding.Path, finding.Subject, finding.Writer, writer?.OnBehalfOf, seat, claimed, mode);
+            return mode == BroadGrantMode.Enforce ? BroadGrantGuard.Refusal(finding) : (LocalizableText?)null;
+        });
+    }
+
+    /// <summary>
+    /// Whether <paramref name="activityPath"/> names a governed activity that is EXECUTING one of
+    /// <paramref name="allowed"/> standards — the check <see cref="BroadGrantGuard"/> runs at the
+    /// write boundary, for a control plane that has to authorize a governed request itself (the
+    /// Store's provisioning, say). Uses the registered <see cref="IGovernedActivityVerifier"/> when
+    /// there is one. Cold; emits once; never throws (an unreadable activity is <c>false</c>).
+    /// </summary>
+    public static IObservable<bool> IsGovernedActivityExecuting(
+        this IMessageHub hub, string activityPath, IReadOnlySet<string> allowed) =>
+        (hub.ServiceProvider.GetService<IGovernedActivityVerifier>() is { } verifier
+                ? verifier.IsExecuting(activityPath, allowed)
+                : DefaultGovernedActivityCheck(hub, activityPath, allowed))
+            .Take(1)
+            .DefaultIfEmpty(false)
+            .Catch((Exception _) => Observable.Return(false));
+
+    /// <summary>
+    /// The default <see cref="IGovernedActivityVerifier"/>: reads the activity node authoritatively
+    /// and checks, shape-tolerantly over its raw content, that its <c>state</c> is <c>Executing</c>
+    /// and its <c>standard</c> is on the allowlist. Core does not reference the Governance
+    /// package's types, so it reads the two fields the package's <c>ActivityContent</c> serialises.
+    ///
+    /// <para>No impersonation is needed and none is opened: <see cref="ReadNodeAuthoritative"/>
+    /// reads the <see cref="IStorageAdapter"/> directly, which no adapter filters by the ambient
+    /// <see cref="AccessContext"/> — the same identity-independent read the partition bootstrap's
+    /// grant and <c>_GitSync</c> probes use. An activity the WRITER cannot read is therefore still
+    /// seen, which is the point: the guard asks what the activity IS, not what the writer may see.</para>
+    /// </summary>
+    private static IObservable<bool> DefaultGovernedActivityCheck(
+        IMessageHub hub, string activityPath, IReadOnlySet<string> allowed)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return(false);
+        return ReadNodeAuthoritative(hub, persistence, activityPath)
+            .Select(activity => GovernedActivityExecuting(activity, allowed, hub.JsonSerializerOptions));
+    }
+
+
+    /// <summary>
+    /// Whether an activity node is EXECUTING an allowlisted standard — read from its raw content
+    /// (<c>state</c>: the enum name or <see cref="BroadGrantGuard.GovernanceActivityStateExecuting"/>; <c>standard</c>: a path or an id). Pure.
+    /// </summary>
+    internal static bool GovernedActivityExecuting(
+        MeshNode? activity, IReadOnlySet<string> allowed, System.Text.Json.JsonSerializerOptions? options)
+    {
+        if (activity?.Content is not { } content)
+            return false;
+        try
+        {
+            var element = content is System.Text.Json.JsonElement je
+                ? je
+                : System.Text.Json.JsonSerializer.SerializeToElement(content, content.GetType(), options);
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return false;
+            var executing = element.TryGetProperty("state", out var state)
+                            && (state.ValueKind == System.Text.Json.JsonValueKind.String
+                                ? string.Equals(state.GetString(), "Executing", StringComparison.OrdinalIgnoreCase)
+                                : state.ValueKind == System.Text.Json.JsonValueKind.Number
+                                  && state.TryGetInt32(out var number) && number == BroadGrantGuard.GovernanceActivityStateExecuting);
+            if (!executing || !element.TryGetProperty("standard", out var standard)
+                           || standard.ValueKind != System.Text.Json.JsonValueKind.String)
+                return false;
+            var id = (standard.GetString() ?? "").Trim().Trim('/');
+            var slash = id.LastIndexOf('/');
+            return allowed.Contains(slash < 0 ? id : id[(slash + 1)..]);
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Sync-friendly observable variant of the creation-validator runner. Iterates
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
@@ -6222,11 +6351,16 @@ public static class MeshExtensions
         // Viewer grant could simply be upserted up to Admin, which is the identical ownership claim
         // with a version bump instead of a create. Both write paths, or neither.
         var gatedExisting = SystemOwnedGrantRejection(hub, node)
+            // Same broad-grant guard as the create path: an upsert that turns a grant into a Public
+            // grant, or writes a policy, is the same act with a version bump.
+            .SelectMany(systemOwned => systemOwned is not null
+                ? Observable.Return<LocalizableText?>(systemOwned)
+                : BroadGrantRejection(hub, node, inboundCtx, "UpsertNode", logger))
             .SelectMany(grantRejection =>
             {
                 if (grantRejection is null)
                     return existingObs;
-                logger.LogError("[UpsertNode] REFUSED privileged grant on system-owned partition {Path}: {Reason}",
+                logger.LogError("[UpsertNode] REFUSED grant {Path}: {Reason}",
                     node.Path, grantRejection.English);
                 PostFail(grantRejection, NodeUpsertRejectionReason.ValidationFailed);
                 return Observable.Empty<MeshNode?>();
