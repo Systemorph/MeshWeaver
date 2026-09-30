@@ -102,12 +102,14 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
         // (retryable) exactly where the existence check would have failed the create anyway.
         // Doc/Architecture/PartitionOwnershipResolution.
         if (!string.IsNullOrEmpty(context.Node.Namespace))
-            return PartitionOwningTypes.OwnsPartitionWithoutActivating(_hub, context.Node.NodeType)
-                .Select(owns => owns switch
+            // A FAULT is surfaced — logged with its exception and named in the refusal — never
+            // folded into a sentence that cannot say what happened (#5734).
+            return PartitionOwningTypes.ProbeWithoutActivating(_hub, context.Node.NodeType)
+                .Select(answer => answer.Owns switch
                 {
                     true => PartitionOwningTypes.NestedInstanceRefused(context),
                     false => NodeValidationResult.Valid(),
-                    null => PartitionOwningTypes.Undetermined(context),
+                    null => RefuseUnreadable(context, answer.Fault!),
                 });
 
         return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)
@@ -117,6 +119,19 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
                 false => Observable.Return(NodeValidationResult.Valid()),
                 null => Observable.Return(PartitionOwningTypes.Undetermined(context)),
             });
+    }
+
+    /// <summary>
+    /// The nested-create refusal when the definition's durable row could not be read. Logged at
+    /// Warning WITH the exception: the refusal is retryable, and the fault is the only evidence of
+    /// why the store did not answer.
+    /// </summary>
+    private NodeValidationResult RefuseUnreadable(NodeValidationContext context, Exception fault)
+    {
+        _logger.LogWarning(fault,
+            "Ownership of NodeType '{NodeType}' could not be read for the nested create of '{Path}' — refused as unavailable",
+            context.Node.NodeType, context.Node.Path);
+        return PartitionOwningTypes.UnreadableDefinition(context, fault);
     }
 
     /// <summary>
