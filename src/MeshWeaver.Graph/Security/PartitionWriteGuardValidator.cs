@@ -357,6 +357,10 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // 🚨 The grants probe could not answer: say NOTHING. Neither "ownerless" nor "the
                 // store disagrees" is known — fail closed to no diagnosis, as this always did.
                 { GrantPaths: null } => null,
+                // 🚨 A CONFIGURED (static) grant is a grant: the partition is owned, and its grant is
+                // not in the store, so the durable-vs-fold disagreement check has nothing to compare.
+                // Silent — exactly what the pre-#5904 early return answered.
+                { ConfiguredGrant: true } => null,
                 // Grants (or a policy) exist, so this is NOT the #638 residue. But if one of them is
                 // the refused principal's, the denial disagrees with the store.
                 { Ownerless: false, GrantPaths: { } paths } => Disagreement(partition, deniedUserId, paths),
@@ -397,9 +401,11 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// <summary>What <see cref="ProbeOwnership"/> saw on an EXISTING partition.</summary>
     /// <param name="Ownerless">No grant (durable or configured) and no <c>_Policy</c>.</param>
     /// <param name="SystemOwned">It has a ONE-WAY <c>_GitSync</c>.</param>
+    /// <param name="ConfiguredGrant">A static/config node supplies a grant under <c>{partition}/_Access</c>.</param>
     /// <param name="GrantPaths">The durable grant paths under <c>{partition}/_Access</c>, or <c>null</c>
     /// when that listing could not be read (indeterminate — never "no grants").</param>
-    private sealed record OwnershipState(bool Ownerless, bool SystemOwned, IReadOnlyList<string>? GrantPaths);
+    private sealed record OwnershipState(
+        bool Ownerless, bool SystemOwned, bool ConfiguredGrant, IReadOnlyList<string>? GrantPaths);
 
     /// <summary>
     /// The shared probe behind <see cref="DescribeDeniedWrite"/> and <see cref="IsUngrantable"/>. Emits
@@ -461,6 +467,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                     (paths, policy, owned) => (OwnershipState?)new OwnershipState(
                         Ownerless: !configuredGrant && paths is { Count: 0 } && !policy,
                         SystemOwned: owned,
+                        ConfiguredGrant: configuredGrant,
                         GrantPaths: paths)));
 
         IObservable<MeshNode?> ReadOrNull(string path) =>

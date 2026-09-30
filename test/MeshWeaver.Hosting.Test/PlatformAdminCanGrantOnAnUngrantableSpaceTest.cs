@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -46,6 +47,9 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     /// <summary>An ordinary user with a grant on their OWN partition only.</summary>
     private const string PlainUser = "plain-jane";
 
+    /// <summary>A partition whose only grant is a CONFIGURED (static) node.</summary>
+    private const string ConfiguredPartition = "ConfiguredOnly";
+
     private const string RepoUrl = "https://github.com/test/ungrantable";
 
     private static TimeSpan Budget => TestTimeouts.Convergence;
@@ -58,7 +62,11 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
                 new MeshNode(AdminPartition) { Name = "Admin", NodeType = "Markdown" },
                 new MeshNode(PlainUser) { Name = "Plain Jane", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", AdminPartition),
-                AssignmentNodeFactory.UserRole(PlainUser, "Admin", PlainUser))
+                AssignmentNodeFactory.UserRole(PlainUser, "Admin", PlainUser),
+                // A partition owned through CONFIGURATION only: its grant is a static node, never
+                // in the store.
+                new MeshNode(ConfiguredPartition) { Name = "Configured", NodeType = "Markdown" },
+                AssignmentNodeFactory.UserRole("configured-owner", "Admin", ConfiguredPartition))
             .AddGitHubSyncTypes()
             .ConfigureServices(services =>
             {
@@ -305,5 +313,82 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
         var viewer = await Answer(GrantAs(PlatformAdmin, space, PlatformAdmin, "Viewer"),
             TestContext.Current.CancellationToken);
         Assert.True(viewer.Success, $"the Viewer entitlement on the fleet partition was refused: {viewer.Error}");
+    }
+
+    /// <summary>
+    /// 🚨 The fleet cap fails CLOSED on content: a grant whose content does not read as an
+    /// AccessAssignment gets no repair. Driven through <c>PlatformAdminGrantRepair.MayIssue</c> itself
+    /// so no later validator can be the one that refuses; the Viewer grant on the same ownerless
+    /// fleet partition is the positive control.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheRepair_FailsClosed_OnAGrantWithoutReadableContent()
+    {
+        var space = await PrepareOwnerlessSpace("Feedback");
+        await AssertIsPlatformAdmin();
+
+        IObservable<bool> MayIssue(MeshNode grant) => PlatformAdminGrantRepair.MayIssue(Mesh,
+            new NodeValidationContext
+            {
+                Operation = NodeOperation.Create,
+                Node = grant,
+                AccessContext = Identity(PlatformAdmin),
+            },
+            PlatformAdmin);
+
+        var viewer = AssignmentNodeFactory.UserRole(PlatformAdmin, "Viewer", space);
+        await MayIssue(viewer).Should().Within(Budget).Match(ok => ok,
+            "positive control: a Viewer entitlement on an ownerless fleet partition is issuable",
+            cancellationToken: TestContext.Current.CancellationToken);
+        await MayIssue(viewer with { Content = null }).Should().Within(Budget).Match(ok => !ok,
+            "a grant without readable content must never be repaired through",
+            cancellationToken: TestContext.Current.CancellationToken);
+        await MayIssue(AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", space))
+            .Should().Within(Budget).Match(ok => !ok,
+                "an Admin grant on a fleet partition is capped",
+                cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A denied write into a partition owned only through CONFIGURATION says nothing beyond the
+    /// denial: it is neither ownerless nor a store/fold disagreement (its grant is not in the store).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ADenial_OnAConfiguredGrantPartition_CarriesNoDiagnosis()
+    {
+        var page = new MeshNode("page", ConfiguredPartition) { NodeType = "Markdown", Name = "page" };
+        var refused = await Answer(ObserveNodeOperation(
+                    new CreateNodeRequest(page) { CreatedBy = PlainUser },
+                    o => o.WithAccessContext(Identity(PlainUser)))
+                .Select(d => d.Message).Take(1),
+            TestContext.Current.CancellationToken);
+        Assert.False(refused.Success, "the plain user holds nothing on the configured partition");
+        Assert.Contains("Access denied", refused.Error);
+        Assert.DoesNotContain("NO access grants", refused.Error);
+        Assert.DoesNotContain("holds a node", refused.Error);
+    }
+
+    /// <summary>
+    /// 🚨 The two partition sets the repair keys on, pinned by FULL membership. They mirror MeshWeaver.Plugins
+    /// <c>Hosting/InstanceAction/Source/DeleteSpaceRunner.cs</c> <c>ProtectedPartitions</c> (Platform ∪
+    /// Fleet ∪ the `_` namespaces); a change to either list must change this fact and that one together.
+    /// </summary>
+    [Fact]
+    public void ThePlatformAndFleetSets_AreExactlyTheProtectedPartitions()
+    {
+        Assert.Equal(
+            new[] { "Admin", "Anonymous", "ApiToken", "Auth", "Kernel", "Portal", "User", "system-security" },
+            WellKnownPartitions.Platform.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            new[]
+            {
+                "AI", "Agent", "Approvals", "Deployments", "Doc", "Documentation", "Essentials", "Feedback",
+                "Governance", "Home", "Hosting", "Hosting.Instance", "Model", "Ops", "Plugins", "Provider",
+                "Providers", "Skill", "Store",
+            },
+            WellKnownPartitions.Fleet.OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.Empty(WellKnownPartitions.Platform.Intersect(WellKnownPartitions.Fleet));
+        Assert.All(WellKnownPartitions.Platform, p => Assert.True(PlatformAdminGrantRepair.IsPlatformPartition(p)));
+        Assert.All(WellKnownPartitions.Fleet, p => Assert.False(PlatformAdminGrantRepair.IsPlatformPartition(p)));
     }
 }
