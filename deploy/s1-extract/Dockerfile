@@ -25,7 +25,7 @@ WORKDIR /app
 # after these tests shipped an image whose model never loaded (/readyz 503 forever).
 RUN S1_NO_AUTOSTART=1 python test_server.py
 # The REAL model through the server's REAL load path, offline, in the stage that ships.
-RUN S1_NO_AUTOSTART=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python smoke_model.py
+RUN S1_NO_AUTOSTART=1 S1_MODEL_DIR=/models/gliner HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python smoke_model.py
 RUN useradd --uid 10001 --no-create-home s1 && chown -R s1 /app
 USER 10001
 ENV S1_MODEL_DIR=/models/gliner HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OMP_NUM_THREADS=4
