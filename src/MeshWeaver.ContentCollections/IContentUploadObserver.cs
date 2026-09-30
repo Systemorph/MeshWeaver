@@ -27,6 +27,21 @@ public interface IContentUploadObserver
     /// file's path relative to the collection root (e.g. <c>docs/notes.txt</c>).
     /// </summary>
     void OnUploaded(string collectionPath, string filePath);
+
+    /// <summary>
+    /// Called after a file has been deleted from a content collection — by
+    /// <see cref="ContentCollection.DeleteFile"/> directly, or once per contained file by
+    /// <see cref="ContentCollection.DeleteFolder"/>. The arguments have the same shape as
+    /// <see cref="OnUploaded"/>: the qualified collection path and the file's path relative to the
+    /// collection root, with forward slashes and no leading slash.
+    ///
+    /// <para>This is the counterpart that lets a reactor remove what it DERIVED from the file — the
+    /// content index's chunks, hash row and per-file <c>Document</c> node. Without it a deleted file's
+    /// text stayed searchable (MeshWeaver.Plugins#2605). Like <see cref="OnUploaded"/> it must return
+    /// immediately and do its work off-band. The default does nothing, so an observer that derives
+    /// nothing from a file needs no change.</para>
+    /// </summary>
+    void OnDeleted(string collectionPath, string filePath) { }
 }
 
 /// <summary>
@@ -61,6 +76,38 @@ public static class ContentUploadObserverExtensions
             {
                 logger?.LogWarning(ex,
                     "Content upload observer {Observer} threw for {Collection}/{File} (best-effort, ignored)",
+                    observer.GetType().Name, collectionPath, filePath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Notifies every registered <see cref="IContentUploadObserver"/> that a file was deleted
+    /// (<see cref="IContentUploadObserver.OnDeleted"/>). Raised by <see cref="ContentCollection"/>
+    /// itself after the provider delete succeeded, so every delete path — the file browser, the
+    /// unified-reference delete, staging, image replacement, import pruning — reaches the reactors.
+    /// A throwing observer is logged at Warning and does not stop the others; the delete itself has
+    /// already happened and is not undone.
+    /// </summary>
+    public static void RaiseContentDeleted(this IMessageHub hub, string collectionPath, string filePath)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        if (string.IsNullOrEmpty(collectionPath) || string.IsNullOrEmpty(filePath))
+            return;
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.ContentCollections.Upload");
+
+        foreach (var observer in hub.ServiceProvider.GetServices<IContentUploadObserver>())
+        {
+            try
+            {
+                observer.OnDeleted(collectionPath, filePath);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex,
+                    "Content observer {Observer} threw on the delete of {Collection}/{File}; its derived state for this file may remain",
                     observer.GetType().Name, collectionPath, filePath);
             }
         }

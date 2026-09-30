@@ -505,15 +505,84 @@ public class ContentCollection : IDisposable
     public IObservable<Unit> CreateFolder(string folderPath)
         => WriteOnPool(ct => provider.CreateFolderAsync(folderPath));
 
-    /// <summary>Deletes a folder (and its contents) from the backing store. Cold — runs on Subscribe, on <see cref="Pool"/>, under the caller's context snapshot.</summary>
+    /// <summary>
+    /// Deletes a folder (and its contents) from the backing store. Cold — runs on Subscribe, on
+    /// <see cref="Pool"/>, under the caller's context snapshot.
+    ///
+    /// <para>The files under the folder are enumerated BEFORE the delete, and after it succeeds
+    /// <see cref="ContentUploadObserverExtensions.RaiseContentDeleted"/> is raised once per file — a
+    /// folder delete removes files exactly as a file delete does, so whatever was derived from them
+    /// (the content index) must hear about each one. After the delete there is nothing left to list.</para>
+    /// </summary>
     /// <param name="folderPath">The folder path to delete within the collection.</param>
     public IObservable<Unit> DeleteFolder(string folderPath)
-        => WriteOnPool(ct => provider.DeleteFolderAsync(folderPath));
+    {
+        var caller = SnapshotCallerContext();
+        return Observable.Defer(() => FilesUnder(folderPath)
+            .ToList()
+            .SelectMany(files => WriteOnPool(ct => provider.DeleteFolderAsync(folderPath), caller)
+                .Do(_ =>
+                {
+                    foreach (var file in files)
+                        RaiseDeleted(file, caller);
+                })));
+    }
 
-    /// <summary>Deletes a single file from the backing store. Cold — runs on Subscribe, on <see cref="Pool"/>, under the caller's context snapshot.</summary>
+    /// <summary>
+    /// Deletes a single file from the backing store. Cold — runs on Subscribe, on <see cref="Pool"/>,
+    /// under the caller's context snapshot. After the delete succeeds,
+    /// <see cref="ContentUploadObserverExtensions.RaiseContentDeleted"/> is raised with this
+    /// collection's <see cref="QualifiedPath"/>, so every delete path reaches the reactors that
+    /// derived state from the file (MeshWeaver.Plugins#2605).
+    /// </summary>
     /// <param name="filePath">The file path to delete within the collection.</param>
     public IObservable<Unit> DeleteFile(string filePath)
-        => WriteOnPool(ct => provider.DeleteFileAsync(filePath));
+    {
+        var caller = SnapshotCallerContext();
+        return WriteOnPool(ct => provider.DeleteFileAsync(filePath), caller)
+            .Do(_ => RaiseDeleted(filePath, caller));
+    }
+
+    /// <summary>
+    /// The collection path the content index and the upload seam key this collection by:
+    /// <c>{Address}/{Name}</c>, or <see cref="Collection"/> itself when it has no address or is
+    /// already qualified by it. It is the same rule the file browser applies when it raises
+    /// <see cref="ContentUploadObserverExtensions.RaiseContentUploaded"/>, so an upload and a delete
+    /// of the same file name the same index entry.
+    /// </summary>
+    public string QualifiedPath
+    {
+        get
+        {
+            var address = Address?.ToString();
+            return string.IsNullOrEmpty(address)
+                   || Collection.StartsWith(address + "/", StringComparison.OrdinalIgnoreCase)
+                ? Collection
+                : $"{address}/{Collection}";
+        }
+    }
+
+    /// <summary>
+    /// Raises the delete notification for one file under the caller's identity, so a reactor's
+    /// clean-up is attributed to the user who deleted the file. The path is normalised to the
+    /// index's key shape: forward slashes, no leading slash.
+    /// </summary>
+    private void RaiseDeleted(string filePath, AccessContext? caller)
+    {
+        using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
+        Hub.RaiseContentDeleted(QualifiedPath, NormaliseFilePath(filePath));
+    }
+
+    private static string NormaliseFilePath(string filePath)
+        => filePath.Replace('\\', '/').TrimStart('/');
+
+    /// <summary>Every file below <paramref name="folderPath"/>, recursively, each walk step on <see cref="Pool"/>.</summary>
+    private IObservable<string> FilesUnder(string folderPath)
+        => GetFiles(folderPath)
+            .Select(file => file.Path)
+            .Concat(GetFolders(folderPath)
+                .Select(folder => FilesUnder(folder.Path))
+                .Concat());
 
     /// <summary>
     /// Runs a provider write leaf on <see cref="Pool"/> with the caller's
@@ -521,8 +590,10 @@ public class ContentCollection : IDisposable
     /// inside the leaf — the pool hop wipes the AsyncLocal otherwise.
     /// </summary>
     private IObservable<Unit> WriteOnPool(Func<CancellationToken, Task> write)
+        => WriteOnPool(write, SnapshotCallerContext());
+
+    private IObservable<Unit> WriteOnPool(Func<CancellationToken, Task> write, AccessContext? caller)
     {
-        var caller = SnapshotCallerContext();
         return Pool.Invoke(async ct =>
         {
             using var _ = AccessService?.SwitchAccessContext(caller);
