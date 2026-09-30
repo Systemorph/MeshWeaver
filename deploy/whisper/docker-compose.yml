@@ -2,16 +2,11 @@
 #   Speech:Endpoint = http://localhost:8080   (or http://whisper:8080 from another compose service)
 #   Speech:Enabled  = true
 #
-# 🚨 The ~547 MB model is a BUILD INPUT, not a runtime mount. Put it in ./models/model.bin BEFORE
-# `docker compose up --build`, or the build fails naming the file:
-#   mkdir -p models
-#   gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins \
-#     --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output models/model.bin
-#
-# That is a PRIVATE repo and needs `gh auth`. It used to be an anonymous curl from a release on the
-# core repo; #2593 moved the asset and left this comment behind, so the documented command 404'd
-# (#3906). It is not coming back: the model is a CC BY-NC-4.0 derivative, so it must not be
-# published for anonymous download. Full reasoning: /Doc/Architecture/VoiceModelDistribution.
+# 🚨 The model is BAKED at build time, not mounted. The DEFAULT build needs nothing in ./models/: it
+# fetches the Apache-2.0 Flix-AI/flix-swissgerman-full model from a pinned Hugging Face revision and
+# converts it to GGML q8_0 (see the Dockerfile). The NON-commercial Flurin17 model is opt-in —
+# put it at ./models/model.bin and set `args: { MODEL_SOURCE: context }` under `build:`.
+# Licence reasoning: /Doc/Architecture/VoiceModelDistribution.
 #
 # 🚨 And do NOT bind-mount ./models over /models — an empty or stale host directory SHADOWS the model
 # baked into the image, and whisper-server then starts with nothing to load.

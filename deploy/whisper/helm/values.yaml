@@ -7,29 +7,29 @@
 replicaCount: 1
 
 image:
-  # 🚨 The image CARRIES THE MODEL — put it in the build context BEFORE building, or the build fails
-  # naming the file (deploy/whisper/Dockerfile):
-  #   gh release download voice-model-swiss-german --repo Systemorph/MeshWeaver.Plugins \
-  #     --pattern 'ggml-swiss-german-turbo-q5_0.bin' --output deploy/whisper/models/model.bin
-  #   az acr build -r meshweaver -t whisper-swiss-german:1.7.4 deploy/whisper
-  # The tag names the whisper.cpp release the binary is built from (v1.7.4), not the model; a model
-  # swap is a rebuild under a tag of your choosing. An image built before 2026-09-10 has NO model in
-  # it and will start with nothing to load — rebuild before rolling this chart.
+  # 🚨 The image CARRIES THE MODEL, and CI builds it: .github/workflows/whisper-image.yml pushes
+  #   meshweaver.azurecr.io/whisper-swiss-german:1.7.4-flix-large-v3-q8-<short sha>
+  # on every main change to deploy/whisper/Dockerfile — whisper.cpp v1.7.4 (static, portable CPU build) +
+  # the APACHE-2.0 Flix-AI/flix-swissgerman-full large-v3 fine-tune, GGML q8_0, converted in the build from
+  # a pinned Hugging Face revision. That is the model a COMMERCIAL estate may serve.
+  # An estate overlay names the IMMUTABLE <line>-<sha> tag (an approved ApplyChart then binds the bytes).
+  # 🚨 `1.7.4` and `1.7.4-static` (hand-built 2026-08-18) contain NO model — measured 2026-09-30 — and a
+  # pod on either never gets Ready. Never name them. The CC BY-NC Flurin17 build (MODEL_SOURCE=context)
+  # is non-commercial only and never built by CI.
   repository: meshweaver.azurecr.io/whisper-swiss-german
-  tag: "1.7.4"
+  tag: ""   # REQUIRED — set the immutable 1.7.4-flix-large-v3-q8-<sha> tag in the estate overlay
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 
-# The ~547 MB whisper model IS baked into the image, at /models/model.bin.
+# The whisper model IS baked into the image, at /models/model.bin (~1.7 GB for the default q8_0).
 #
 # 🚨 There is no `model.url` any more, and that is the fix for #3906 — not an oversight. The key used
 # to point an initContainer at a GitHub release on THIS repo; #2593 moved that asset to the PRIVATE
 # MeshWeaver.Plugins repo and left the pin behind, so the URL 404'd and every pod died in Init:Error
-# before the server ever ran. There is nothing to repoint it AT: the model is a CC BY-NC-4.0
-# derivative that must not be published for anonymous download, and a cluster secret able to read the
-# private repo would buy one 547 MB blob with read access to the whole private fleet source. The
-# registry this pod already authenticates to for its image is the channel that costs nothing new.
+# before the server ever ran. Nothing is fetched at run time any more: the registry this pod already
+# authenticates to for its image is the channel that costs nothing new, for the Apache-2.0 default and
+# the NC model alike.
 # Why those two alternatives lost, in full: /Doc/Architecture/VoiceModelDistribution.
 model:
   # Whisper language hint. "de" transcribes Swiss German OUT as Standard German (best for strong
