@@ -592,6 +592,14 @@ nothing at all" on a **usage** wait, never on the thread/cell waits carrying the
 the same test methods. #2001's fix widened every budget from 10 s to 20 s and the same assertion
 failed at 20 s — widening a wait is not a repair for an unbounded lag.
 
+🚨 **A TOP-LEVEL path is the exception to "list its parent".** Its parent is the mesh root, and
+`path: scope:children` names no partition: on a partitioned store it is one `UNION ALL` over every
+partition schema — the lock-bomb shape the Postgres planner reports as `[FanOut] UNANCHORED` — run
+to find one row that lives in exactly one schema. Read the path itself instead: `path:{space}
+select:path` anchors to the partition its first segment names and is empty-on-absent just like the
+listing. `SpaceDeletion.ParentListingQuery` does this for the control lane's space-root and recycle
+reads (#5508).
+
 **Creating it anyway?** Then you need no existence check at all — use
 [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create),
 which reads persistence itself.
