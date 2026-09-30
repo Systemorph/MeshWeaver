@@ -72,6 +72,13 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
     /// — the promotion (or demotion) a global admin makes. The caller validates the id against the
     /// registry's own ladder (<see cref="PlanTierLadder"/>); an unknown plan stored here would
     /// license nothing (fail closed), which is why the admin tab refuses it before calling.
+    ///
+    /// <para>🚨 A GLOBAL ADMINISTRATOR's act (<c>hub.IsGlobalAdmin()</c>, read off the caller's own
+    /// identity), and the record is then read and written as System — the same shape as
+    /// <c>RevokeKey</c>. The record lives in its registrant's partition
+    /// (<c>{owner}/MeshWeaverInstance/{id}</c>), and a global administrator is a platform admin, not a
+    /// data superuser: under the caller's own identity the read is refused for every instance the
+    /// admin did not register. Anyone else is refused before anything is read.</para>
     /// </summary>
     /// <returns>The updated node. Cold — subscribe to write.</returns>
     public IObservable<MeshNode> SetPlan(string instancePath, string plan)
@@ -82,13 +89,19 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
         if (string.IsNullOrWhiteSpace(instancePath))
             return Observable.Throw<MeshNode>(new ArgumentException("An instance path is required.", nameof(instancePath)));
 
-        return hub.GetWorkspace().GetMeshNodeStream(instancePath)
-            .Update(current => current with
-            {
-                Content = current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions) is { } instance
-                    ? instance with { Plan = canonical }
-                    : current.Content,
-            })
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return hub.IsGlobalAdmin()
+            .Take(1)
+            .SelectMany(isAdmin => isAdmin
+                ? accessService.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(instancePath)
+                    .Update(current => current with
+                    {
+                        Content = current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions) is { } instance
+                            ? instance with { Plan = canonical }
+                            : current.Content,
+                    }))
+                : Observable.Throw<MeshNode>(new UnauthorizedAccessException(
+                    $"setting the plan of '{instancePath}' is a global administrator's act on the registry")))
             .Do(node =>
             {
                 var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions);
