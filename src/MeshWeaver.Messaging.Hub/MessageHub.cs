@@ -3427,6 +3427,14 @@ public sealed class MessageHub : IMessageHub
           .Append(",drainsInFlight=").Append(snapshot.DrainsInFlight)
           .Append(",openGates=").Append(snapshot.OpenGates)
           .Append(",draining=").Append(snapshot.Draining)
+          // 🚨 PRINTED, not just read (#5820). This is the recursive snapshot a parent's
+          // DisposeHostedHubs verdict (7313) appends while promising that "the diagnostics below
+          // name" the stalled child — and without this field they could not: a child reading
+          // `buffer=2,drainsInFlight=0,draining=True` is either a drain its scheduler accepted
+          // and never ran (M1 — a starved pool) or a latch with nothing outstanding (M3), and
+          // only drainsAwaitingScheduler tells them apart. #5820's child line lacked it, so a
+          // pool-starvation stall was investigated as a closed initialization gate.
+          .Append(",drainsAwaitingScheduler=").Append(snapshot.DrainsAwaitingScheduler)
           .Append(')');
         if (snapshot.CurrentMessage != null)
         {
