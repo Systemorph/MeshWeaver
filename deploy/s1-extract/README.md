@@ -24,7 +24,7 @@ then go to review. The service:
 POST /v1/extract   {"texts": ["…"], "labels": ["organization", "person"], "threshold": 0.5}
                  → {"model": "urchade/gliner_multi-v2.1", "results": [[{"start","end","label","score","text"}]]}
 GET  /healthz      process alive
-GET  /readyz       model loaded (the startup and readiness probes)
+GET  /readyz       model loaded (the readiness probe only — startup and liveness use /healthz)
 ```
 
 Limits: 256 texts per call and 2,000 characters per text (`limits.*`). A larger batch is split by
