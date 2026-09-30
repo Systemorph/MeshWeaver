@@ -85,6 +85,8 @@ A scalar flip is race-safe across mirrors (RFC 7396 merges object keys), so the 
 
 Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). 🚨 Open, but not free-form: the key is the node id of each person's preference, so it must be a camel-case identifier (`^[a-z][a-zA-Z0-9]*$`, `NotificationFeatures.IsValidKey`). A key outside that alphabet is **rejected** where it enters (`Raise` errors, `PathFor` throws, the settings tab gives it no row) — never slugged, because a lossy slug would make two features share one preference node. A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
 
+🚨 **`accessGranted` is raised only for a grant a PERSON made.** `AccessGrantNotifier` notifies the grantee when an `AccessAssignment` is created, and skips every grant whose `CreatedBy` is the system identity (`WellKnownUsers.System`, `system-security`): a free app, a plan unlock, a purchase, a coupon, or any other entitlement the platform issues (MeshWeaver#5901). The rule behind it: nobody is ever notified that an app became available — on 2026-09-29 a Store sweep granted a newly published plugin to 72 users and each of them received an access notification by bell, Teams and email.
+
 Each person chooses, **per feature**, which channels reach them. The choice is an ordinary node in their own partition:
 
 | Node type | Lives at | Holds |

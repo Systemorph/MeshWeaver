@@ -189,6 +189,28 @@ Full reference: [/pullrequest](.claude/skills/pullrequest/SKILL.md) · delivery,
 
 Full reference: [/mesh-data](.claude/skills/mesh-data/SKILL.md) · [PostgresSchemaArchitecture.md](src/MeshWeaver.Documentation/Data/Architecture/PostgresSchemaArchitecture.md).
 
+## 🚨 A merge to MeshWeaver.Plugins `main` PUBLISHES — and publishing grants nobody anything
+
+**Merging a package to MeshWeaver.Plugins `main` publishes it.** The plugin registry on the public
+instance lists every top-level folder whose `index.json` root is a `Space` or `Store/Plugin`
+(`NodeRepoPackageSource`), and every instance the registry serves installs a newly listed package
+on its next install-defaults pass (`InstanceAutoRegistrationService.InstallDefaults`). No flag
+holds a package back: Store `unlisted` hides only the catalog card. So a merged package is never
+"not yet published" or "still waiting to be installed on an instance" — never tell the owner it
+is. Measured 2026-09-29: Parties (MeshWeaver.Plugins#2555) was auto-merged at 10:03 UTC and was
+live at 10:23 on the company instance and at 10:36 on the public one.
+
+**Experimental or unapproved NodeTypes live in the author's own user home** (`{user}/…`) until the
+owner decides to publish. A NEW package enters MeshWeaver.Plugins only on the owner's explicit
+go, and the pull request quotes it.
+
+**Published means listed in the App Store, and nothing more: NO ONE gets access by default.** The
+cover and guide pages are the storefront. The content is reached ONLY through a subscription and
+its tier, the free tier included, and only once the user acquires it. Never grant a plugin to
+users in bulk, and never notify anyone that an app became available. Grants the system issues
+never notify (MeshWeaver#5901), and each person decides per app what reaches them (Settings →
+Notifications → Apps, MeshWeaver#5902). Maintainer directive, 2026-09-30.
+
 ## 🛡️ Global admin = admin on the Admin partition
 
 **"Global/platform admin" has ONE meaning: `Permission.All` at scope `Admin`** — an `AccessAssignment` granting the `Admin` role in the **`Admin/_Access`** namespace. This is a **platform admin, NOT a data superuser**: it does NOT grant access to spaces or user partitions, and emergency cross-partition data change requires explicit **elevation (break-glass)**, never standing access. A **root** `_Access` grant is the data-superuser shape and is deliberately NOT how platform admins are provisioned. **The one predicate is `hub.IsGlobalAdmin()` / `hub.IsGlobalAdmin(userId)`** — never an ad-hoc role-name or root-scope check — and **the grant lives in `Admin/_Access`, never root `_Access`**: a writer/reader split silently locks admins out of every admin tab.

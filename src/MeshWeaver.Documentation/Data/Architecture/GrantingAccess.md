@@ -193,6 +193,8 @@ mcp create --node '{
 >
 > The practical consequence for anyone editing a node repo: **a privileged `_Access/*.json` in a synced data tree is dead data that logs a `fail:` line on every sync.** That is exactly what shipped in `samples/Graph/Data` until #1245 — 75 refusals in 0.36 s per sync, and the import permanently `ImportedWithErrors`. `ShippedAccessGrantsTest` (`test/MeshWeaver.Graph.Test`) now fails the build if one is re-added. Platform admin belongs in `Auth:GlobalAdmins` (`GlobalAdminSeed` writes the `Admin/_Access` grant at startup); per-space write is granted on the live mesh.
 
+> 🚨 **A plugin's content is reached ONLY through a subscription and its tier.** A published package is listed in the App Store; its cover and guide are the storefront, and NO ONE holds access to its content by default. A `Viewer`/`Commenter` entitlement is minted for ONE person when THAT person acquires the package under a plan whose tier covers it — the free tier included. Never grant a plugin to users in bulk: on 2026-09-29 a Store sweep granted a newly published free plugin to 72 users in three minutes, none of whom had acquired it (MeshWeaver.Plugins#2572 removed the sweep). Grants the system issues never notify (MeshWeaver#5901). Maintainer directive, 2026-09-30.
+
 ---
 
 ## Recipe 3 — Grant another user access to your partition
