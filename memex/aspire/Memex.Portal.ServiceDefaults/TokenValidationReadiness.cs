@@ -63,9 +63,14 @@ public sealed class TokenValidationReadiness(IServiceProvider services, ILogger<
         // The FIRST sample is subscribed inside this call, so a host with nothing to measure (no
         // mesh store) records that synchronously and is never reported "not yet measured" to a
         // probe that arrives the instant the host has started. A real store read stays async.
+        // Measure() catches every fault into a failed Sample, so a terminal error here is a defect in
+        // the sampler itself — logged, then RESUBSCRIBED (a sampler whose whole job is continuous
+        // sampling must never freeze readiness at its last reading).
         sampling = Observable.Defer(Measure)
             .Concat(Observable.Interval(Period).Select(_ => Measure()).Concat())
-            .Subscribe(Record, ex => logger.LogError(ex, "Token-validation readiness sampler FAULTED — readiness will report the last sample only"));
+            .Do(_ => { }, ex => logger.LogError(ex, "Token-validation readiness sampler FAULTED — resubscribing"))
+            .Retry()
+            .Subscribe(Record);
         return Task.CompletedTask;
     }
 

@@ -46,7 +46,7 @@ public class TokenValidationHotPathTest(ITestOutputHelper output) : MonolithMesh
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the middleware's entry point must answer", cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(viaMiddleware);
-        Assert.True(viaMiddleware!.Success);
+        Assert.True(viaMiddleware.Success);
         Assert.NotNull(cache.TryGet(ValidateTokenRequest.HashToken(rawToken), DateTimeOffset.UtcNow));
     }
 
@@ -130,7 +130,9 @@ public class TokenVerdictAndCacheTest
     }
 
     private static async Task<ValidateTokenResponse> Decide(Func<string, IObservable<MeshNode?>> read)
-        => await ApiTokenVerdict.Decide(Raw, read, Options).Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        => await ApiTokenVerdict.Decide(Raw, read, Options)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the verdict always emits exactly one answer", cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>A live token: success with the owner's identity.</summary>
     [Fact]
