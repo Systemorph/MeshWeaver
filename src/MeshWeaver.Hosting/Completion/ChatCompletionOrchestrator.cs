@@ -505,10 +505,21 @@ internal sealed class ChatCompletionOrchestrator(
         // the identity function for every hub that is not the router. The pre-registering
         // Observe(request, …) shape also closes the Post-then-Observe(delivery) race: a warm node
         // hub's sub-millisecond reply can no longer land before the response subject exists.
-        return hub.ReadIssuingHub()
-            .Observe(new AutocompleteRequest(query, context), o => o.WithTarget(target))
-            .Take(1)
-            .Select(d => d.Message as AutocompleteResponse)
+        //
+        // Deferred because Observe(object, …) posts EAGERLY at call time — the request must still go
+        // out only on Subscribe, exactly as the Post it replaces did. The caller-supplied-id overload
+        // keeps the refused-post fast path: it answers null (subject already cleaned up) when the
+        // target could not be resolved, so an unroutable target resolves at once instead of waiting
+        // out CallerBound.
+        return Observable.Defer(() =>
+                hub.ReadIssuingHub()
+                    .Observe(
+                        new AutocompleteRequest(query, context),
+                        o => o.WithTarget(target),
+                        Guid.NewGuid().ToString("N"))
+                    ?.Take(1)
+                    .Select(d => d.Message as AutocompleteResponse)
+                ?? Observable.Return<AutocompleteResponse?>(null))
         .Timeout(AutocompleteBounds.CallerBound)
         .Catch<AutocompleteResponse?, Exception>(ex =>
         {
