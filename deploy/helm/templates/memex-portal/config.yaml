@@ -703,15 +703,17 @@ data:
   # The PR steward's SELF-HEAL SWEEP on the triage inbox (MeshWeaver.Plugins Hosting PullRequestSweep,
   # EnabledKey). It arms wherever the triage inbox is, so a control instance that is the inbox but must
   # not review its repositories' pull requests sets it "false". Rendered only when set.
-  {{- if hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled" }}
-  Hosting__Triage__PullRequestSweep__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__PullRequestSweep__Enabled | toString | trim }}"
+  {{- $prSweep := .Values.config.memex_portal.Hosting__Triage__PullRequestSweep__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled") (not (kindIs "invalid" $prSweep)) (ne ($prSweep | toString | trim) "") }}
+  Hosting__Triage__PullRequestSweep__Enabled: "{{ $prSweep | toString | trim }}"
   {{- end }}
   # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
   # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on
   # Hosting/_Access, so the triage items and their threads are readable (a global admin has no data
   # access by definition). Rendered only when set.
-  {{- if hasKey .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins" }}
-  Hosting__MirrorHostingReadFromAdmins: "{{ .Values.config.memex_portal.Hosting__MirrorHostingReadFromAdmins | toString | trim }}"
+  {{- $hostingMirror := .Values.config.memex_portal.Hosting__MirrorHostingReadFromAdmins }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins") (not (kindIs "invalid" $hostingMirror)) (ne ($hostingMirror | toString | trim) "") }}
+  Hosting__MirrorHostingReadFromAdmins: "{{ $hostingMirror | toString | trim }}"
   {{- end }}
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
   # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
