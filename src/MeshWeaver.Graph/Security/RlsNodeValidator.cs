@@ -407,23 +407,44 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             if (context.Operation is not (NodeOperation.Create or NodeOperation.Update))
                 return Observable.Return(NodeValidationResult.Unauthorized(denial));
 
-            // The principal is passed so the probe can name the ONE denial the durable store
-            // disagrees with (#4061 finding 2) — see DescribeDeniedWrite. It changes no verdict.
-            return PartitionWriteGuardValidator.DescribeDeniedWrite(
-                    _hub, context.Node.Path, effectiveUserId)
-                .Take(1)
-                .Select(diagnosis => NodeValidationResult.Unauthorized(
-                    diagnosis is null ? denial : $"{denial}. {diagnosis}"))
-                .Catch<NodeValidationResult, Exception>(ex =>
-                {
-                    // The diagnosis is a courtesy on top of a decision already taken — a failing
-                    // probe must never change the verdict, but it IS logged.
-                    _logger.LogDebug(ex,
-                        "RLS: ownerless-partition diagnosis failed for {Path} — reporting the plain denial",
-                        context.Node.Path);
-                    return Observable.Return(NodeValidationResult.Unauthorized(denial));
-                });
+            // 🚨 #5904 — the ONE widening on this denial path: a platform admin issuing a grant on a
+            // partition nobody else can grant on (ownerless, or system-owned). It answers false for
+            // everything else, so the diagnosis below is untouched for every other denial.
+            return PlatformAdminGrantRepair.MayIssue(_hub, context, effectiveUserId)
+                .SelectMany(mayIssue => mayIssue
+                    ? Observable.Return(GrantedAsPlatformRepair(context, effectiveUserId))
+                    : DiagnoseDenial(context, effectiveUserId, denial));
         });
+    }
+
+    private NodeValidationResult GrantedAsPlatformRepair(NodeValidationContext context, string userId)
+    {
+        _logger.LogWarning(
+            "RLS: platform admin {UserId} issues grant {Path} on a partition nobody else can grant on "
+            + "(ownerless or system-owned) — #5904",
+            userId, context.Node.Path);
+        return NodeValidationResult.Valid();
+    }
+
+    private IObservable<NodeValidationResult> DiagnoseDenial(
+        NodeValidationContext context, string effectiveUserId, string denial)
+    {
+        // The principal is passed so the probe can name the ONE denial the durable store
+        // disagrees with (#4061 finding 2) — see DescribeDeniedWrite. It changes no verdict.
+        return PartitionWriteGuardValidator.DescribeDeniedWrite(
+                _hub, context.Node.Path, effectiveUserId)
+            .Take(1)
+            .Select(diagnosis => NodeValidationResult.Unauthorized(
+                diagnosis is null ? denial : $"{denial}. {diagnosis}"))
+            .Catch<NodeValidationResult, Exception>(ex =>
+            {
+                // The diagnosis is a courtesy on top of a decision already taken — a failing
+                // probe must never change the verdict, but it IS logged.
+                _logger.LogDebug(ex,
+                    "RLS: ownerless-partition diagnosis failed for {Path} — reporting the plain denial",
+                    context.Node.Path);
+                return Observable.Return(NodeValidationResult.Unauthorized(denial));
+            });
     }
 
     /// <summary>

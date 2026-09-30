@@ -348,28 +348,100 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         IMessageHub hub, string? nodePath, string? deniedUserId)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var partition = GetFirstSegment(nodePath);
+        if (GetFirstSegment(nodePath) is not { } partition)
+            return Observable.Return<string?>(null);
+        return ProbeOwnership(hub, partition)
+            .Select(state => state switch
+            {
+                null => null,
+                // 🚨 The grants probe could not answer: say NOTHING. Neither "ownerless" nor "the
+                // store disagrees" is known — fail closed to no diagnosis, as this always did.
+                { GrantPaths: null } => null,
+                // 🚨 A CONFIGURED (static) grant is a grant: the partition is owned, and its grant is
+                // not in the store, so the durable-vs-fold disagreement check has nothing to compare.
+                // Silent — exactly what the pre-#5904 early return answered.
+                { ConfiguredGrant: true } => null,
+                // Grants (or a policy) exist, so this is NOT the #638 residue. But if one of them is
+                // the refused principal's, the denial disagrees with the store.
+                { Ownerless: false, GrantPaths: { } paths } => Disagreement(partition, deniedUserId, paths),
+                // 🚨 A SYSTEM-OWNED partition is not restored to its creator — the bootstrap's
+                // repair deliberately skips it (the repo owns it; retraction took the creator's Admin
+                // away on purpose), so telling the creator they "regain access on their next write"
+                // sent them round a loop that could never close (#5904). Name the door that is open.
+                { SystemOwned: true } =>
+                    $"'{partition}' exists but carries NO access grants at all — it is SYSTEM-OWNED (it has "
+                    + $"'{partition}/_GitSync'), so it is owned by its repository and nobody holds a grant on it "
+                    + "until one is issued; its creator is not restored. A platform admin grants a Viewer "
+                    + $"(or Commenter) entitlement under '{partition}/{AccessSegment}'.",
+                _ =>
+                    $"'{partition}' exists but carries NO access grants at all — its partition was provisioned while its "
+                    + "ownership was never recorded, so it denies everyone (a broken partition, not an ordinary permission "
+                    + "decision). Its original creator regains access automatically on their next write into it; anyone "
+                    + $"else needs a platform admin to grant access under '{partition}/{AccessSegment}'.",
+            });
+    }
+
+    /// <summary>
+    /// 🚨 True when <paramref name="partition"/> exists and carries NO access grants and no
+    /// <c>_Policy</c> — the OWNERLESS state <see cref="DescribeDeniedWrite"/> diagnoses — or when it is
+    /// SYSTEM-OWNED (a one-way <c>_GitSync</c>, <see cref="AccessAssignmentGuard.IsSystemOwned"/>). These
+    /// are the two partitions NOBODY can grant access on the ordinary way: an ownerless one denies
+    /// everyone, and a system-owned one grants write to nobody but the importer, so no person ever
+    /// holds the <see cref="Permission.Create"/> on <c>{partition}/_Access</c> that issuing a grant
+    /// demands. They are exactly where a platform admin's explicit grant is the sanctioned repair
+    /// (<see cref="PlatformAdminGrantRepair"/>, #5904). An indeterminate probe answers <c>false</c>.
+    /// </summary>
+    /// <param name="hub">The hub whose service provider resolves the storage adapter.</param>
+    /// <param name="partition">The top-level partition.</param>
+    /// <returns>Whether nobody but a platform admin can issue a grant there.</returns>
+    public static IObservable<bool> IsUngrantable(IMessageHub hub, string? partition)
+        => ProbeOwnership(hub, partition)
+            .Select(state => state is { Ownerless: true } or { SystemOwned: true });
+
+    /// <summary>What <see cref="ProbeOwnership"/> saw on an EXISTING partition.</summary>
+    /// <param name="Ownerless">No grant (durable or configured) and no <c>_Policy</c>.</param>
+    /// <param name="SystemOwned">It has a ONE-WAY <c>_GitSync</c>.</param>
+    /// <param name="ConfiguredGrant">A static/config node supplies a grant under <c>{partition}/_Access</c>.</param>
+    /// <param name="GrantPaths">The durable grant paths under <c>{partition}/_Access</c>, or <c>null</c>
+    /// when that listing could not be read (indeterminate — never "no grants").</param>
+    private sealed record OwnershipState(
+        bool Ownerless, bool SystemOwned, bool ConfiguredGrant, IReadOnlyList<string>? GrantPaths);
+
+    /// <summary>
+    /// The shared probe behind <see cref="DescribeDeniedWrite"/> and <see cref="IsUngrantable"/>. Emits
+    /// <c>null</c> when the partition is not diagnosable (absent, reserved, a satellite namespace, no
+    /// storage). Runs only on a denial path, so the happy path pays nothing.
+    ///
+    /// <para><b>Probes.</b> The partition ROOT must exist first — an absent partition is a different
+    /// state entirely, and the one this guard's "no partition, no write" rule already names. Then: the
+    /// children of <c>{partition}/_Access</c>, a <c>{partition}/_Policy</c>
+    /// <c>PartitionAccessPolicy</c> (a partition governed by a policy — the installed catalogs, Agent,
+    /// Doc, Store — legitimately has no grants and is not broken), and <c>{partition}/_GitSync</c>. An
+    /// indeterminate grants probe counts as "has grants": it says nothing rather than crying wolf.</para>
+    /// </summary>
+    private static IObservable<OwnershipState?> ProbeOwnership(IMessageHub hub, string? partition)
+    {
         if (string.IsNullOrEmpty(partition)
             || partition.StartsWith('_')
             || ReservedMirrorPartitions.Contains(partition))
-            return Observable.Return<string?>(null);
+            return Observable.Return<OwnershipState?>(null);
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
-            return Observable.Return<string?>(null);
+            return Observable.Return<OwnershipState?>(null);
 
         // A grant can also come from CONFIGURATION (a static node seeded by the host or a test
         // fixture). Those never appear in the store, so the durable probe below would call a
         // perfectly-owned partition ownerless.
-        if (hub.ServiceProvider.EnumerateStaticNodes()
-            .Any(n => n.Path.StartsWith($"{partition}/{AccessSegment}/", StringComparison.OrdinalIgnoreCase)))
-            return Observable.Return<string?>(null);
+        var configuredGrant = hub.ServiceProvider.EnumerateStaticNodes()
+            .Any(n => n.Path.StartsWith($"{partition}/{AccessSegment}/", StringComparison.OrdinalIgnoreCase));
 
-        var hasGrants = persistence.ListChildPaths($"{partition}/{AccessSegment}")
+        // 🚨 The grant PATHS, not merely whether there ARE any — the disagreement check needs to know
+        // WHOSE. Fail CLOSED on an indeterminate probe: null paths read as "has grants".
+        var grantPaths = persistence.ListChildPaths($"{partition}/{AccessSegment}")
             .Take(1)
-            .Select(children => children.NodePaths.Any())
-            // Fail CLOSED on an indeterminate probe: no diagnosis rather than a wrong one.
-            .Catch<bool, Exception>(_ => Observable.Return(true));
+            .Select(children => (IReadOnlyList<string>?)(children.NodePaths?.ToArray() ?? []))
+            .Catch<IReadOnlyList<string>?, Exception>(_ => Observable.Return<IReadOnlyList<string>?>(null));
 
         // 🚨 Same rule as the grants probe above: a `_Policy` can be shipped as a STATIC node by a
         // built-in catalog (Agent, Doc, … via IStaticNodeProvider) and never appear in the store, so
@@ -382,33 +454,21 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
             ? Observable.Return(true)
             : ReadOrNull($"{partition}/{PartitionPolicySegment}").Select(policy => policy is not null);
 
-        var diagnosis =
-            $"'{partition}' exists but carries NO access grants at all — its partition was provisioned while its "
-            + "ownership was never recorded, so it denies everyone (a broken partition, not an ordinary permission "
-            + "decision). Its original creator regains access automatically on their next write into it; anyone "
-            + $"else needs a platform admin to grant access under '{partition}/{AccessSegment}'.";
+        var systemOwned = ReadOrNull(AccessAssignmentGuard.SyncConfigPath(partition))
+            .Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions));
 
-        // The partition must actually BE there. An ABSENT partition is a different state — the one
-        // rule 2 ("no partition, no write") names — and telling a caller it "exists but carries no
-        // grants" would be plainly false. Probed first so the other two reads are never paid for a
+        // The partition must actually BE there. Probed first so the other reads are never paid for a
         // partition that isn't there.
-        // 🚨 The grant paths, not merely whether there ARE any — the disagreement check below needs
-        // to know WHOSE. Same read, same Catch-to-"indeterminate says nothing" rule.
-        var grantPaths = persistence.ListChildPaths($"{partition}/{AccessSegment}")
-            .Take(1)
-            .Select(children => (IReadOnlyList<string>)(children.NodePaths?.ToArray() ?? []))
-            .Catch<IReadOnlyList<string>, Exception>(_ => Observable.Return<IReadOnlyList<string>>([]));
-
         return ReadOrNull(partition)
             .Select(root => root ?? StaticRootAt(hub, partition))
             .SelectMany(root => root is null
-                ? Observable.Return<string?>(null)
-                : Observable.Zip(hasGrants, hasPolicy, grantPaths,
-                    (grants, policy, paths) => grants || policy
-                        // Grants (or a policy) exist, so this is NOT the #638 residue. But if one
-                        // of them is the refused principal's, the denial disagrees with the store.
-                        ? Disagreement(partition, deniedUserId, paths)
-                        : diagnosis));
+                ? Observable.Return<OwnershipState?>(null)
+                : Observable.Zip(grantPaths, hasPolicy, systemOwned,
+                    (paths, policy, owned) => (OwnershipState?)new OwnershipState(
+                        Ownerless: !configuredGrant && paths is { Count: 0 } && !policy,
+                        SystemOwned: owned,
+                        ConfiguredGrant: configuredGrant,
+                        GrantPaths: paths)));
 
         IObservable<MeshNode?> ReadOrNull(string path) =>
             persistence.Read(path, hub.JsonSerializerOptions)
