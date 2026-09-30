@@ -78,7 +78,7 @@ A hub that never moved at all still reports `-> Started`.
 
 ## What the snapshot actually measures
 
-`Queue(buffer=…,deferred=…,drainsInFlight=…,openGates=…,draining=…)` plus `Executing(type, ms)`:
+`Queue(buffer=…,deferred=…,drainsInFlight=…,openGates=…,draining=…,drainsAwaitingScheduler=…)` plus `Executing(type, ms)`:
 
 | Field | Source | Means | Does **not** mean |
 |---|---|---|---|
@@ -87,6 +87,7 @@ A hub that never moved at all still reports `-> Started`.
 | `drainsInFlight` | live `Interlocked` count | `DrainOne` bodies executing right now | that one is making progress |
 | `openGates` | `gates.Count` | initialization gates still **closed** (the name is historical) | that traffic is blocked — system messages and awaited replies pass |
 | `draining` | the `draining` flag | a drain is scheduled *or* running; the loop has not yet found the queue empty | that a thread is executing it — pair it with `drainsInFlight` |
+| `drainsAwaitingScheduler` | `drainsScheduled - drainsStarted` | drains the turn scheduler ACCEPTED and has not started — on a hosted hub, work sitting on the pool's global queue | that the hub is at fault — a value > 0 hands the stall to the scheduler (M1, below) |
 | `Executing(T, ms)` | `currentlyExecutingMessageType` | a **handler** is on the block, and for how long | that no turn is in flight — it is set by `RunHandler`, so a turn still in `NotifyAsync`'s pre-handler stages reads as absent |
 
 And two counters the verdicts read but do not print raw:
@@ -174,6 +175,25 @@ M2**, and the next occurrence prints which.
 guarantee — under Orleans it *is* the grain's activation scheduler — so running a turn elsewhere
 would break the actor model to keep a queue moving. Releasing the latch is the honest recovery: the
 next post tries again and reports again, instead of the pump going dark.
+
+### A parent's snapshot names its children's M1 (#5820)
+
+A parent parked at `DisposeHostedHubs` (7313) appends the recursive snapshot of every hosted hub
+and says the stall is *"in a hosted hub or a join it is waiting on — the diagnostics below name
+it"*. Until #5820 those child lines did **not** print `drainsAwaitingScheduler`, so a child reading
+`buffer=2,drainsInFlight=0,draining=True` could not be told apart from M3 — and #5820's child, which
+was also still `Starting` (`openGates=1`), was investigated as a closed initialization gate. A
+private control then showed a closed gate alone does not stall a parent: lifecycle frames bypass it.
+The same replica's heartbeat three seconds earlier read **113,021 pending pool work items**, the
+M1-by-starvation shape of #5799 — so the child line now carries the counter, and a parent verdict
+over a starved child reads `drainsAwaitingScheduler=1` directly. Pinned by
+`DisposalStallNamesThePumpTest.AParentsSnapshot_NamesAChildDrainTheSchedulerHasNotStarted`.
+
+That makes the verdict honest; it does not end the stall. The owner of M1-by-starvation is whatever
+floods the pool, and in #5799/#5820 the `[HEAPSTEP]` lines of the same minute name per-hub
+construction metadata as the heaviest allocation (`Entry[System.String][]`,
+`Func<JsonDerivedType,bool>`, Autofac `IResolvePipelineBuilder` handlers) — the per-hub metadata
+multiplication tracked on #5555.
 
 ### What Orleans makes of M1
 
