@@ -132,21 +132,36 @@ five starting hubs and no disposed hubs, so this specimen does not reproduce the
 retention above. It does reproduce metadata multiplication: 3,662,876 type definitions describe
 378 CLR types, with 3,652,612 separate deferred XML-description graphs.
 
-`TypeDefinition` shares the type's display declaration, culture-independent wordified fallback
-name and deferred XML description through a `ConditionalWeakTable<Type, …>`. The weak key permits
-collectible types to leave with their assemblies. XML lookup stays on first description access
-and still goes through `XmlDocs.Summary`; constructing a definition must not parse XML docs.
+**Why every hub had its own graph.** Every hub builds its own `TypeRegistry`
+(`MessageHubConfiguration` chains it to the parent's, up to the mesh-level registry `MeshBuilder`
+registers), and every `WithType` / `GetOrAddType` constructed a fresh `TypeDefinition` that
+re-derived, from the CLR type alone, its display declaration, wordified name, icon and a deferred
+XML-description closure. Nothing about that part depends on the hub — yet it was rebuilt once per
+hub per type. On top of that every registry re-seeded the 27 basic types (`String`, `Int32`,
+`Address`, `DeliveryFailure`, …) into its own map although its parent already resolved them.
 
-Resource-backed display names and groups are resolved for each definition, rather than caching
-their translated values. Key-function builders, collection names, owning addresses and explicit
-description overrides remain definition-specific. Icon construction also remains independent.
-The registry and Autofac scopes retain their existing ownership boundaries.
+**What is shared, and where it lives.** The hub-independent part is a `TypeDisplayMetadata` (display
+declaration, fallback name, icon, lazy XML summary). The store of them, `TypeDisplayMetadataCache`, is an
+INSTANCE created by the ROOT registry of a chain — the mesh-level one — and handed down to every
+child registry through the parent chain, so there is one description per CLR type per MESH. It is
+never `static` ([No Static State](../NoStaticState)): two independent meshes do not share
+descriptions, and nothing outlives the mesh. The table is a `ConditionalWeakTable<Type, …>` so a
+collectible NodeType's types still leave with their load context. A registry whose parent is a
+`TypeRegistry` no longer seeds the basic types; it resolves them through the parent.
 
-A warmed construction probe retaining 1,000 definitions of `System.String` allocated
-1,032,000 bytes before this change and 400,000 afterward, with description graphs decreasing
-from 1,000 to one. This is constructor-allocation evidence, not a measured production heap
-reduction or a closure of the queue-starvation/OOM investigation. The regression budget and
-resource/override/key-isolation tests live in `TypeDefinitionMetadataTest`.
+**What stays per hub.** Each hub still owns its `TypeDefinition` for every type it registers:
+collection name, key-function builder, owning address and explicit description overrides are
+per-registry registration state and are untouched. Resource-backed display names and groups are
+resolved per definition, never cached as translated values. XML lookup stays on first description
+access; constructing a definition must not parse XML docs.
+
+`TypeDisplayMetadataSharedAcrossHubsTest` pins it: 32 hosted hubs registering the same type own 32
+definitions over ONE description (a per-registry store measured 32); two independent meshes must NOT
+share one (a process-wide static store fails that negative control); key functions and collection
+names stay per registry; a hub-level registry resolves `String` to the mesh registry's own
+definition. Resource/override/key-isolation tests for standalone definitions live in
+`TypeDefinitionMetadataTest`. This is a measured reduction of per-hub metadata, not a closure of
+the queue-starvation/OOM investigation (#5555, #1186).
 
 ## Why the LIVE ones are never released
 

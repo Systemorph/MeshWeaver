@@ -6,8 +6,20 @@ using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
-internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
+internal class TypeRegistry : ITypeRegistry
 {
+    private readonly ITypeRegistry? parent;
+
+    public TypeRegistry(ITypeRegistry? parent)
+    {
+        this.parent = parent;
+        descriptions = (parent as TypeRegistry)?.descriptions ?? new TypeDisplayMetadataCache();
+        var seeded = parent is TypeRegistry ? [] : BasicTypes;
+        typeByName = new(seeded.Select(t =>
+            new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t, t.Name, keyFunctionBuilder, descriptions.For(t)))));
+        nameByType = new(seeded.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
+    }
+
     private static readonly Type[] BasicTypes =
     [
         typeof(string),
@@ -65,10 +77,20 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
                 yield return new KeyValuePair<string, ITypeDefinition>(name, definition);
     }
 
-    private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
-        new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t, t.Name, null!))));
-    private readonly ConcurrentDictionary<Type, string> nameByType =
-        new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
+    // ── Sharing with the mesh ───────────────────────────────────────────────────────────────
+    // Every hub owns a registry that chains to its parent's, up to the mesh-level registry that
+    // MeshBuilder registers as a singleton. What a CLR type DECLARES about itself (display attribute,
+    // wordified name, icon, XML description) is the same for all of them, so the description store
+    // is created ONCE by the root of the chain and handed down: one TypeDisplayMetadata per CLR type per
+    // mesh, never one per hub (3,652,612 description graphs for 378 types in the retained-hub heap
+    // census — Doc/Architecture/PortalHeapIsHubs). An instance, never static (NoStaticState).
+    private readonly TypeDisplayMetadataCache descriptions;
+
+    // The basic types are seeded ONLY at the root of a chain. A registry whose parent is a
+    // TypeRegistry resolves them through that parent (every lookup below falls through to it), so
+    // re-seeding 27 definitions into every hub's own map duplicated them once per hub.
+    private readonly ConcurrentDictionary<string, TypeDefinition> typeByName;
+    private readonly ConcurrentDictionary<Type, string> nameByType;
     // Resolution-only aliases (full namespace-qualified names) → definition. Consulted by TryGetType so
     // a full-name $type discriminator still resolves on the way IN, but deliberately NOT part of the
     // canonical `typeByName` map that the polymorphic resolver enumerates (PolymorphicTypeInfoResolver
@@ -132,7 +154,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     public ITypeRegistry WithType(Type type, string typeName)
     {
         typeName ??= type.FullName!;
-        var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder, descriptions.For(type));
         // A type whose context has already BEGUN unloading registers into the weak shadow:
         // its Unloading event will never fire again, so a strong entry could never be
         // evicted — a permanent root on a superseded assembly.
@@ -376,7 +398,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
             if (TryGetType(underlyingName, out var underlyingDef) && underlyingDef != null)
             {
                 var nullableType = typeof(Nullable<>).MakeGenericType(underlyingDef.Type);
-                typeDefinition = new TypeDefinition(nullableType, name, keyFunctionBuilder);
+                typeDefinition = new TypeDefinition(nullableType, name, keyFunctionBuilder, descriptions.For(nullableType));
                 return true;
             }
             return false;
@@ -435,7 +457,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
                 typeDefinition = typeByName[typeName];
                 return true;
             }
-            typeDefinition = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
+            typeDefinition = new TypeDefinition(type, FormatType(type), keyFunctionBuilder, descriptions.For(type));
             return true;
         }
         return parent?.TryGetType(name, out typeDefinition)
@@ -503,7 +525,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
             return parentTypeName;
 
         typeName = defaultName ?? FormatType(type);
-        var definition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        var definition = new TypeDefinition(type, typeName, keyFunctionBuilder, descriptions.For(type));
         // A late registration from an already-unloading context goes to the weak shadow —
         // a strong entry could never be evicted again (see WithType).
         if (IsUnloadingContext(type))
@@ -537,7 +559,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (create)
         {
             typeName ??= FormatType(type);
-            var created = new TypeDefinition(type, typeName, keyFunctionBuilder);
+            var created = new TypeDefinition(type, typeName, keyFunctionBuilder, descriptions.For(type));
             // A late registration from an already-unloading context goes to the weak shadow —
             // a strong entry could never be evicted again (see WithType).
             if (IsUnloadingContext(type))
