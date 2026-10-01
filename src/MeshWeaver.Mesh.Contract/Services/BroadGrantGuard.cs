@@ -196,6 +196,49 @@ public static class BroadGrantGuard
         return string.Equals(fromContext, fromNode, StringComparison.Ordinal) ? fromContext : null;
     }
 
+    /// <summary>
+    /// The governed activity this write NEWLY claims on its node — <c>content.governedBy</c> when
+    /// it is set and differs from what <paramref name="existing"/> already carried — or null.
+    ///
+    /// <para>🚨 <b>A back-reference is a claim, and a claim is checked where it is made.</b> A
+    /// downstream reader (the Store's provision control plane, say) treats <c>governedBy</c> as
+    /// "this node was written by that signed activity". Until this check, any writer allowed to
+    /// create the node could type that field: a standing admin creating
+    /// <c>Admin/Provision/{package}</c> with <c>governedBy</c> naming some activity that happened
+    /// to be executing read as governed. A claim the node merely KEEPS (the owner's own
+    /// bookkeeping rewriting the node) was checked when it was introduced, so it is not a new
+    /// claim. Pure.</para>
+    /// </summary>
+    public static string? IntroducedClaim(MeshNode? node, MeshNode? existing, System.Text.Json.JsonSerializerOptions? options)
+    {
+        var claim = GovernedByOf(node, options)?.Trim();
+        if (string.IsNullOrEmpty(claim))
+            return null;
+        var kept = GovernedByOf(existing, options)?.Trim();
+        return string.Equals(claim, kept, StringComparison.Ordinal) ? null : claim;
+    }
+
+    /// <summary>
+    /// Whether the writer IS the activity the node claims — its context carries the same
+    /// <see cref="AccessContext.GovernedBy"/>. Only the governance executor opens such a context
+    /// (<c>ImpersonateAsSystemFor</c>); a person's session never carries one. The caller then asks
+    /// the verifier whether that activity is executing. Pure.
+    /// </summary>
+    public static bool WriterIsClaimedActivity(string claim, AccessContext? writer) =>
+        string.Equals(writer?.GovernedBy?.Trim(), claim, StringComparison.Ordinal);
+
+    /// <summary>The refusal for a node claiming a governed activity its writer is not executing. Pure.</summary>
+    public static LocalizableText ClaimRefusal(string path, string claim, AccessContext? writer) =>
+        LocalizableText.Keyed(
+            $"'{path}' claims to be written by the governed activity '{claim}', but '{Writer(writer)}' "
+            + "is not that activity executing. Only the governance executor writes a governedBy "
+            + "back-reference; propose the change in Governance/Activities instead.",
+            ClaimRefusalKey,
+            ("path", path), ("claim", claim), ("writer", Writer(writer)));
+
+    /// <summary>The catalog key of <see cref="ClaimRefusal"/>.</summary>
+    public const string ClaimRefusalKey = "activity.node.governedClaim";
+
     /// <summary>The refusal a write boundary returns when the mode is <see cref="BroadGrantMode.Enforce"/>. Pure.</summary>
     public static LocalizableText Refusal(BroadGrantFinding finding) =>
         LocalizableText.Keyed(
@@ -242,6 +285,118 @@ public enum BroadGrantKind
 /// <param name="Subject">The grant's subject, when it is a grant.</param>
 /// <param name="Writer">The writing identity.</param>
 public sealed record BroadGrantFinding(BroadGrantKind Kind, string Path, string? Subject, string Writer);
+
+/// <summary>
+/// What a governed activity IS, read from its node: the standard it runs, its state and the inputs
+/// two people signed. Core does not reference the Governance package, so the fields are read
+/// shape-tolerantly from raw content (<see cref="Read"/>).
+///
+/// <para>🚨 <b>Two different questions, two different predicates.</b> At the write boundary the
+/// executor's own write happens WHILE the activity executes, so <see cref="IsExecuting"/> is the
+/// exact test. A control plane that acts on that write LATER (the Store's provision watcher runs
+/// after the executor's create returned) must not ask "is it still executing" — the activity may
+/// already be <c>Done</c>, and the answer would depend on which of the two writes was seen first.
+/// <see cref="HasStarted"/> is monotone: once the executor started, the signatures were consumed
+/// and the state never returns to before it, so the verdict cannot race the activity's
+/// completion.</para>
+/// </summary>
+/// <param name="Path">The activity's node path.</param>
+/// <param name="Standard">The standard as written — a path or an id.</param>
+/// <param name="State">The state's name (<c>Executing</c>, <c>Done</c>, …), normalised from a number when the writer emitted one.</param>
+/// <param name="Inputs">The inputs, as signed.</param>
+public sealed record GovernedActivityFacts(
+    string Path, string Standard, string State, ImmutableDictionary<string, string> Inputs)
+{
+    /// <summary>The state name of an executing activity.</summary>
+    public const string Executing = "Executing";
+
+    /// <summary>The state name of an activity whose executor completed.</summary>
+    public const string Done = "Done";
+
+    /// <summary>The state name of an activity whose executor failed.</summary>
+    public const string Failed = "Failed";
+
+    /// <summary>
+    /// The numbers the Governance package's <c>ActivityState</c> serialises to, mirrored in ONE place
+    /// (see <see cref="BroadGrantGuard.GovernanceActivityStateExecuting"/>): <c>Executing = 4</c>,
+    /// <c>Done = 5</c>, <c>Failed = 6</c>.
+    /// </summary>
+    public static readonly ImmutableDictionary<int, string> StateNumbers = ImmutableDictionary.CreateRange(
+        new[]
+        {
+            KeyValuePair.Create(BroadGrantGuard.GovernanceActivityStateExecuting, Executing),
+            KeyValuePair.Create(BroadGrantGuard.GovernanceActivityStateExecuting + 1, Done),
+            KeyValuePair.Create(BroadGrantGuard.GovernanceActivityStateExecuting + 2, Failed),
+        });
+
+    /// <summary>The standard's id — the last segment of <see cref="Standard"/>.</summary>
+    public string StandardId
+    {
+        get
+        {
+            var id = Standard.Trim().Trim('/');
+            var slash = id.LastIndexOf('/');
+            return slash < 0 ? id : id[(slash + 1)..];
+        }
+    }
+
+    /// <summary>The executor is running now.</summary>
+    public bool IsExecuting => string.Equals(State, Executing, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The executor has started — <c>Executing</c>, <c>Done</c> or <c>Failed</c>. Reachable only
+    /// after every gate, signatures included, was green, and never left again: the monotone fact a
+    /// later reader may decide on.
+    /// </summary>
+    public bool HasStarted => IsExecuting
+                              || string.Equals(State, Done, StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(State, Failed, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The signed input <paramref name="name"/>, trimmed, or null.</summary>
+    public string? Input(string name) =>
+        Inputs.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
+
+    /// <summary>
+    /// Reads an activity node's facts from its raw content, or null when it carries none (no node,
+    /// no content, no standard). Pure; never throws.
+    /// </summary>
+    public static GovernedActivityFacts? Read(MeshNode? activity, System.Text.Json.JsonSerializerOptions? options)
+    {
+        if (activity?.Content is not { } content)
+            return null;
+        try
+        {
+            var element = content is System.Text.Json.JsonElement je
+                ? je
+                : System.Text.Json.JsonSerializer.SerializeToElement(content, content.GetType(), options);
+            if (element.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !element.TryGetProperty("standard", out var standard)
+                || standard.ValueKind != System.Text.Json.JsonValueKind.String
+                || standard.GetString() is not { } standardText
+                || string.IsNullOrWhiteSpace(standardText))
+                return null;
+            var state = element.TryGetProperty("state", out var s)
+                ? s.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.String => s.GetString() ?? "",
+                    System.Text.Json.JsonValueKind.Number when s.TryGetInt32(out var n) =>
+                        StateNumbers.TryGetValue(n, out var name) ? name : n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    _ => "",
+                }
+                : "";
+            var inputs = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+            if (element.TryGetProperty("inputs", out var i) && i.ValueKind == System.Text.Json.JsonValueKind.Object)
+                inputs = inputs.AddRange(i.EnumerateObject()
+                    .Where(p => p.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+                    .Select(p => KeyValuePair.Create(p.Name, p.Value.GetString() ?? "")));
+            return new GovernedActivityFacts(activity.Path, standardText, state, inputs);
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+}
 
 /// <summary>
 /// Answers whether a governed activity is EXECUTING one of the allowlisted standards — the only
