@@ -94,7 +94,7 @@ public class AFailedPackageNamesItsCauseTest(ITestOutputHelper output) : Monolit
 
         // PASS 1 — Flaky's fetch stalls.
         var first = await installer.Completed
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"pass 1: {first}");
 
         first.Failures.Should().Equal("Flaky");
@@ -115,7 +115,7 @@ public class AFailedPackageNamesItsCauseTest(ITestOutputHelper output) : Monolit
         // ledger, so the governed-provision hold does not take it) and lands; its cause goes.
         flakyFails = false;
         var second = await installer.RunDefaultInstall()
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"pass 2: {second}");
 
         second.Delivered.Should().Contain("Flaky", "the next pass is the retry, and this time it delivers");
@@ -156,7 +156,7 @@ public class AFailedPackageNamesItsCauseTest(ITestOutputHelper output) : Monolit
             .Where(ledger => ledger is not null && condition(ledger))
             .Select(ledger => ledger!)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
     }
 }
