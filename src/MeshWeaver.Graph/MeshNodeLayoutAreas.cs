@@ -130,6 +130,12 @@ public static class MeshNodeLayoutAreas
             .WithView(Controls.LayoutArea(host.Hub.Address, CommentsArea).WithShowProgress(false));
     /// <summary>Area name for the node Search layout area.</summary>
     public const string SearchArea = "Search";
+    /// <summary>
+    /// Area name for the slot a NodeType definition's <see cref="SearchArea"/> renders its instance
+    /// list in (<see cref="NodeTypeInstances"/>) — the one part of that page computed from the
+    /// definition; the page around it renders at once.
+    /// </summary>
+    public const string NodeTypeInstancesArea = "NodeTypeInstances";
     /// <summary>Area name for the node Files layout area.</summary>
     public const string FilesArea = "Files";
     /// <summary>Area name for the NodeTypes layout area.</summary>
@@ -248,6 +254,7 @@ public static class MeshNodeLayoutAreas
             .WithView(ThumbnailArea, Thumbnail)
             .WithView(SettingsArea, SettingsLayoutArea.Settings)
             .WithView(SearchArea, Search)
+            .WithView(NodeTypeInstancesArea, NodeTypeInstances)
             .WithView(FilesArea, Files)
             .WithView(ThreadsArea, Threads)
             .WithView(ChatArea, Chat)
@@ -1468,12 +1475,13 @@ public static class MeshNodeLayoutAreas
         // node (Doc/GUI/DataBinding → "Templates first, data later"). NodeType catalog mode is
         // used when either (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
         // (b) the node is a NodeType DEFINITION — this hub then applies the "NodeType" type's own
-        // configuration, which the activation funnel records as NodeTypePathHolder. Every
-        // ordinary node's catalog — the hot path — is therefore a template emitted at once; only
-        // a definition's catalog reads its node, because its query is built from the definition.
+        // configuration, which the activation funnel records as NodeTypePathHolder. Both branches
+        // are templates emitted at once: a definition's instance list — whose query is computed
+        // from the definition — renders into its own skeleton slot (NodeTypeInstances).
         if (!IsNodeTypeCatalog(host.Hub.Configuration))
             return Observable.Return<UiControl?>(InstanceCatalog(host, hubPath));
-        return NodeTypeCatalog(host, hubPath);
+        return Observable.Return<UiControl?>(
+            NodeTypeCatalogTemplate(host.Hub.Address, hubPath, host.Reference.Id?.ToString()));
     }
 
     /// <summary>
@@ -1498,78 +1506,113 @@ public static class MeshNodeLayoutAreas
             hubPath);
 
     /// <summary>
-    /// A NodeType definition's catalog of its instances. Its hidden query and create link are built
-    /// from the DEFINITION (<see cref="NodeTypeDefinition.DefaultNamespace"/>,
-    /// <see cref="NodeTypeDefinition.RestrictedToNamespaces"/>), which only the node carries — the
-    /// one branch of <see cref="Search"/> that reads data to decide its structure.
+    /// A NodeType definition's catalog page — a TEMPLATE that reads nothing: the breadcrumb trail
+    /// and a <see cref="NodeTypeInstancesArea"/> slot with the skeleton loading shape. The slot
+    /// carries the page's own query string (<c>?groupBy</c>, <c>?q</c>, …), so every catalog knob
+    /// still reaches the list.
     /// </summary>
-    private static IObservable<UiControl?> NodeTypeCatalog(LayoutAreaHost host, string hubPath)
+    /// <param name="address">The node hub's address — the slot renders on the same hub.</param>
+    /// <param name="hubPath">The definition's path (the breadcrumb trail).</param>
+    /// <param name="queryString">The Search area's reference id: its query string, forwarded.</param>
+    internal static UiControl NodeTypeCatalogTemplate(object address, string hubPath, string? queryString)
+        => WithBreadcrumbs(
+            Controls.LayoutArea(address, NodeTypeInstancesArea, queryString)
+                .WithSpinnerType(SpinnerType.Skeleton),
+            hubPath);
+
+    /// <summary>
+    /// The <see cref="NodeTypeInstancesArea"/> slot: a NodeType definition's list of its instances.
+    /// Its hidden query and create link are built from the DEFINITION
+    /// (<see cref="NodeTypeDefinition.DefaultNamespace"/>,
+    /// <see cref="NodeTypeDefinition.RestrictedToNamespaces"/>), which only the node carries — a
+    /// STRUCTURE read, deferred to this slot alone (Doc/GUI/DataBinding → the toolkit's last row).
+    /// The list itself is still run by the GUI, and the slot re-renders only when the query or the
+    /// create link changes.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>The instance list, or the ordinary catalog while no definition is readable.</returns>
+    [Browsable(false)]
+    public static IObservable<UiControl?> NodeTypeInstances(LayoutAreaHost host, RenderingContext _)
     {
-        return host.Workspace.GetMeshNodeStream().Select(node =>
-        {
-            // For NodeType mode, query instances under this NodeType's namespace.
-            // Uses the node's own path as namespace to correctly scope to local instances.
-            // E.g., FutuRe/EuropeRe/LineOfBusiness → finds children under that namespace,
-            // regardless of whether they reference the local or parent nodeType path.
-            if (node != null)
-            {
-                var nodeTypePath = node.Path;
-                var nodeTypeDefinition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
-
-                // Build query. If DefaultNamespace is set, scope to that namespace
-                // and filter by this NodeType (canonical group case — instances
-                // declare nodeType = path).
-                //
-                // Otherwise scope by namespace + descendants. The nodeType filter is
-                // dropped here because LOCAL NodeType nodes (e.g.
-                // FutuRe/EuropeRe/LineOfBusiness inside the FutuRe/LineOfBusiness root
-                // type) reuse the GROUP-level nodeType on their instances — filtering
-                // by the local NodeType node's own path matches zero instances.
-                //
-                // `is:main` drops satellites that carry an explicit MainNode pointer —
-                // _Activity compile-activity nodes (NodeType="Activity", MainNode=<owner>)
-                // are the case the old `-nodeType:Code` enumeration missed when
-                // compile-activity landed, surfacing a "Compile {path}" row. It does NOT
-                // catch Source/Code files: the file-system loader leaves their MainNode
-                // null, so they read as main nodes — hence `-nodeType:Code` stays.
-                // `-nodeType:NodeType -nodeType:Markdown` also stay: definition nodes
-                // are main nodes too.
-                var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
-                    ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
-                    : $"namespace:{nodeTypePath} scope:subtree is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
-                var defaultNs = nodeTypeDefinition?.DefaultNamespace;
-                var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
-
-                var createQs = $"type={Uri.EscapeDataString(nodeTypePath)}";
-                if (!string.IsNullOrEmpty(defaultNs))
-                    createQs += $"&namespace={Uri.EscapeDataString(defaultNs)}";
-                if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
-                    createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
-
-                var createHref = $"/create?{createQs}";
-
+        var hubPath = host.Hub.Address.ToString();
+        var options = host.Hub.JsonSerializerOptions;
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => node is null
+                ? null
+                : NodeTypeCatalogQuery.From(node.Path, node.ContentAs<NodeTypeDefinition>(options)))
+            .DistinctUntilChanged()
+            .Select(query => (UiControl?)(query is null
+                // No definition to read (yet): the ordinary catalog, as before.
+                ? BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator))
                 // Instances of a NodeType default to a hierarchical list; every knob is still
                 // ?param-overridable (?groupBy ?searchBar ?maxColumns ?emptyMessage ?title …).
-                var typeOpts = ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical);
-                var typeSearch = Controls.MeshSearch
-                    .WithHiddenQuery(hiddenQuery)
-                    .WithVisibleQuery(typeOpts.SearchTerm ?? "")
-                    .WithNamespace(hubPath)
-                    .WithPlaceholder(typeOpts.Placeholder)
-                    .WithRenderMode(typeOpts.Mode)
-                    .WithShowSearchBox(typeOpts.ShowSearchBox)
-                    .WithShowEmptyMessage(typeOpts.ShowEmptyMessage)
-                    .WithMaxColumns(typeOpts.MaxColumns)
-                    .WithCreateHref(createHref);
-                if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
-                    typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
-                // Prepend the breadcrumb trail (ancestors → default pages, current node bold).
-                return (UiControl?)WithBreadcrumbs(typeSearch, hubPath);
-            }
+                : BuildNodeTypeSearch(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.Hierarchical), query)));
+    }
 
-            // No definition to read (yet): the ordinary catalog, as before.
-            return InstanceCatalog(host, hubPath);
-        });
+    /// <summary>
+    /// What a NodeType definition decides about its instance list: the hidden query and the create
+    /// link. Pure — <see cref="From"/> is the whole decision.
+    /// </summary>
+    /// <param name="HiddenQuery">The query listing the type's instances.</param>
+    /// <param name="CreateHref">The create link, pre-filled with the type and its namespaces.</param>
+    internal sealed record NodeTypeCatalogQuery(string HiddenQuery, string CreateHref)
+    {
+        /// <summary>The query and create link for the definition at <paramref name="nodeTypePath"/>.</summary>
+        /// <param name="nodeTypePath">The definition node's path.</param>
+        /// <param name="definition">The definition, or null when the content is not one.</param>
+        /// <returns>The decision.</returns>
+        public static NodeTypeCatalogQuery From(string nodeTypePath, NodeTypeDefinition? definition)
+        {
+            // If DefaultNamespace is set, scope to that namespace and filter by this NodeType
+            // (canonical group case — instances declare nodeType = path).
+            //
+            // Otherwise scope by namespace + descendants. The nodeType filter is dropped here
+            // because LOCAL NodeType nodes (e.g. FutuRe/EuropeRe/LineOfBusiness inside the
+            // FutuRe/LineOfBusiness root type) reuse the GROUP-level nodeType on their instances —
+            // filtering by the local NodeType node's own path matches zero instances.
+            //
+            // `is:main` drops satellites that carry an explicit MainNode pointer — _Activity
+            // compile-activity nodes (NodeType="Activity", MainNode=<owner>) are the case the old
+            // `-nodeType:Code` enumeration missed when compile-activity landed, surfacing a
+            // "Compile {path}" row. It does NOT catch Source/Code files: the file-system loader
+            // leaves their MainNode null, so they read as main nodes — hence `-nodeType:Code`
+            // stays. `-nodeType:NodeType -nodeType:Markdown` also stay: definition nodes are main
+            // nodes too.
+            var defaultNs = definition?.DefaultNamespace;
+            var hiddenQuery = defaultNs != null
+                ? $"nodeType:{nodeTypePath} namespace:{defaultNs}"
+                : $"namespace:{nodeTypePath} scope:subtree is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown";
+
+            var createQs = $"type={Uri.EscapeDataString(nodeTypePath)}";
+            if (!string.IsNullOrEmpty(defaultNs))
+                createQs += $"&namespace={Uri.EscapeDataString(defaultNs)}";
+            if (definition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
+                createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+            return new NodeTypeCatalogQuery(hiddenQuery, $"/create?{createQs}");
+        }
+    }
+
+    /// <summary>The instance list of a NodeType — a query the GUI runs. Pure.</summary>
+    /// <param name="hubPath">The definition's hub path (the search's namespace).</param>
+    /// <param name="typeOpts">The catalog knobs read from the page's query string.</param>
+    /// <param name="query">The definition's query and create link.</param>
+    /// <returns>The search control.</returns>
+    internal static MeshSearchControl BuildNodeTypeSearch(string hubPath, CatalogOptions typeOpts, NodeTypeCatalogQuery query)
+    {
+        var typeSearch = Controls.MeshSearch
+            .WithHiddenQuery(query.HiddenQuery)
+            .WithVisibleQuery(typeOpts.SearchTerm ?? "")
+            .WithNamespace(hubPath)
+            .WithPlaceholder(typeOpts.Placeholder)
+            .WithRenderMode(typeOpts.Mode)
+            .WithShowSearchBox(typeOpts.ShowSearchBox)
+            .WithShowEmptyMessage(typeOpts.ShowEmptyMessage)
+            .WithMaxColumns(typeOpts.MaxColumns)
+            .WithCreateHref(query.CreateHref);
+        if (!string.IsNullOrEmpty(typeOpts.GroupByProperty))
+            typeSearch = typeSearch.WithGroupBy(typeOpts.GroupByProperty);
+        return typeSearch;
     }
 
     /// <summary>Best-effort truthy parse for boolean query params (<c>true/1/yes/on</c>).</summary>
