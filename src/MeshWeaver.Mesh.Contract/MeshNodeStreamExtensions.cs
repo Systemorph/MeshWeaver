@@ -1067,13 +1067,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 return;
             }
 
-            _lateRetype.Disposable = contentTypeRegistry.Registrations
-                // 🚨 String compares only, BEFORE any deserialization. A boot registers every
-                // content type in the mesh, and without this each one would re-deserialize this
-                // node's whole JsonElement in every degraded subscription — N×M for nothing. The
-                // predicate mirrors exactly the two routes TryRecoverForNodeType can take, so a
-                // registration it drops is one that provably could not have resolved this node.
-                .Where(r => CouldResolve(r, raw, discriminator))
+            _lateRetype.Disposable = contentTypeRegistry
+                // 🚨 String compares only, BEFORE any deserialization — and BEFORE THE HOP (#5555).
+                // Every per-node hub activation of a runtime-compiled NodeType registers here, so
+                // a filter applied after the registry's hop cost a scheduled drain in EVERY armed
+                // wait for EVERY activation in the mesh: waits × activations, nearly all of it for
+                // types this node cannot use. RegistrationsMatching evaluates the predicate on the
+                // registering thread and hops only what passes. The predicate mirrors exactly the
+                // two routes TryRecoverForNodeType can take, so a registration it drops is one
+                // that provably could not have resolved this node.
+                .RegistrationsMatching(r => CouldResolve(r, raw, discriminator))
                 .Select(_ => System.Reactive.Unit.Default)
                 // 🚨 StartWith closes the gap between the conversion above and this Subscribe: a
                 // registration landing in that window would otherwise be missed, and the wait
