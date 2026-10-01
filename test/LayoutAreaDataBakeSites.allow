@@ -20,7 +20,6 @@ samples/Graph/Data/Northwind/Product/Source/ProductNodeLayoutAreas.cs	2
 samples/Graph/Data/Northwind/ReportsCatalog/Source/ReportsCatalogLayoutAreas.cs	1
 samples/Graph/Data/Northwind/Supplier/Source/SupplierNodeLayoutAreas.cs	2
 samples/Graph/Data/PythonDemo/PrimeReport/Source/PrimeReportLayoutAreas.cs	1
-samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	7
 src/MeshWeaver.ContentCollections/ContentLayoutArea.cs	1
 src/MeshWeaver.Documentation/Data/DataMesh/SocialMedia/Post/Source/SocialMediaPostLayoutAreas.cs	1
 src/MeshWeaver.Documentation/Data/DataMesh/SocialMedia/Profile/Source/SocialMediaProfileLayoutAreas.cs	1
