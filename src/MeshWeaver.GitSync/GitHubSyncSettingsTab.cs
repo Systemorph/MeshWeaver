@@ -180,7 +180,7 @@ public static class GitHubSyncSettingsTab
         // Messages stream live, the terminal Status shows the outcome, and Cancel flips
         // RequestedStatus = Cancelled (Activity Control Plane). Empty until an op starts.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ActivityPathId)
-            .Select(path => (UiControl?)BuildActivityPanel(h, path))
+            .Select(path => (UiControl?)BuildActivityPanel(path))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // Last-synced status (live — re-renders after each sync via the authoritative cache stream).
@@ -444,54 +444,26 @@ public static class GitHubSyncSettingsTab
     // ── Activity progress panel (binds to the running operation's activity node) ──
 
     /// <summary>
-    /// Builds the live progress panel for the running operation at <paramref name="activityPath"/>:
-    /// streams the activity's <see cref="MeshWeaver.Data.LogMessage"/> lines and terminal
-    /// <see cref="MeshWeaver.Data.ActivityStatus"/>, with a Cancel button that flips
-    /// <c>RequestedStatus = Cancelled</c> (Activity Control Plane). Empty until an op starts.
+    /// Builds the live progress panel for the running operation at <paramref name="activityPath"/>.
+    /// A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): it embeds the activity
+    /// node's OWN <see cref="ActivityLayoutAreas.ProgressArea"/> — the platform's progress view,
+    /// rendered by the activity's hub: its <see cref="MeshWeaver.Data.LogMessage"/> lines in the
+    /// viewer's language, the terminal <see cref="MeshWeaver.Data.ActivityStatus"/>, and the Cancel
+    /// button that flips <c>RequestedStatus = Cancelled</c> (Activity Control Plane) while it runs.
+    /// Nothing is read here; the slot shows a skeleton until the activity's first frame arrives.
+    /// Empty until an op starts.
     /// </summary>
-    private static UiControl BuildActivityPanel(LayoutAreaHost host, string? activityPath)
+    internal static UiControl BuildActivityPanel(string? activityPath)
     {
         var stack = Controls.Stack.WithWidth("100%");
         if (string.IsNullOrEmpty(activityPath))
             return stack;
 
-        // Live Messages + Status, bound to the activity node (re-renders on every progress tick).
-        // 🚨 The transcript renders in the VIEWER's language (#3236): the locale is read here, on the
-        // render path where LayoutAreaHost has restored the subscriber's AccessContext — never at the
-        // write site, which has no viewer, and never from an ambient CultureInfo.
-        var locale = host.ViewerLocale();
-        stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => (UiControl?)Controls.Html(ActivityHtml(node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions), locale)))
-            .StartWith((UiControl?)Controls.Html("")));
-
-        // Cancel — flips RequestedStatus = Cancelled; the runner's watcher trips the command's token.
-        stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => node.ContentAs<MeshWeaver.Data.ActivityLog>(host.Hub.JsonSerializerOptions)?.Status)
-            .Select(status => (UiControl?)(status == MeshWeaver.Data.ActivityStatus.Running
-                ? Controls.Button(host.Localize("common.cancel"))
-                    .WithAppearance(Appearance.Outline)
-                    .WithClickAction(ctx => { ctx.Host.Hub.CancelActivity(activityPath); return Task.CompletedTask; })
-                : Controls.Stack))
-            .StartWith((UiControl?)Controls.Stack));
-        return stack;
-    }
-
-    private static string ActivityHtml(MeshWeaver.Data.ActivityLog? log, string? locale)
-    {
-        if (log is null) return "";
-        var colour = log.Status switch
-        {
-            MeshWeaver.Data.ActivityStatus.Running => "var(--neutral-foreground-hint)",
-            MeshWeaver.Data.ActivityStatus.Succeeded => "#4ade80",
-            MeshWeaver.Data.ActivityStatus.Failed => "#f87171",
-            MeshWeaver.Data.ActivityStatus.Cancelled => "#fbbf24",
-            _ => "var(--neutral-foreground-hint)",
-        };
-        var lines = string.Join("", log.Messages.TakeLast(8).Select(m =>
-            $"<div style=\"font-family:monospace;font-size:0.8rem;\">{Esc(m.Localize(locale))}</div>"));
-        return $"<div style=\"padding:8px 12px;background:var(--neutral-layer-2);border-radius:6px;\">" +
-               $"<div style=\"font-weight:600;color:{colour};margin-bottom:4px;\">{Esc(log.Status.ToString())}</div>" +
-               $"{lines}</div>";
+        return stack.WithView(new LayoutAreaControl(
+                new Address(activityPath),
+                new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
+            .WithSpinnerType(SpinnerType.Skeleton)
+            .WithStyle("padding: 8px 12px; background: var(--neutral-layer-2); border-radius: 6px; min-height: 48px;"));
     }
 
     // ── Pull-request editor (the draft node IS the binding anchor) ──────────────

@@ -1943,5 +1943,10 @@
   "serviceIdentities.noTokens": "Keine Tokens ausgestellt.",
   "serviceIdentities.rotate": "Erneuern",
   "serviceIdentities.status.active": "Aktiv",
-  "serviceIdentities.status.revoked": "Widerrufen"
+  "serviceIdentities.status.revoked": "Widerrufen",
+  "data.noDefaultReference": "_Keine Standard-Datenreferenz konfiguriert._",
+  "data.streamUnavailable": "_Für `{0}` ist kein Datenstrom verfügbar._",
+  "data.none": "_Keine Daten._",
+  "data.loadAll": "Alles laden ({0} Zeilen)",
+  "data.failed": "_Die Daten konnten nicht gelesen werden: {0}_"
 }

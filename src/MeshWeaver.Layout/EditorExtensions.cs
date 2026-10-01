@@ -1124,7 +1124,21 @@ public static class EditorExtensions
         }
 
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
+        FeedDimensionDisplayName(host, propName, dataId, collectionName, displayLabelId);
 
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    /// <summary>
+    /// The data half of <see cref="BuildDimensionReadOnlyLabel"/>: resolves the bound key against
+    /// the dimension collection and writes its display name into <c>/data/{displayLabelId}</c>,
+    /// which the label is bound to. Builds no control — the label renders at once and follows
+    /// every change of the key or the collection.
+    /// </summary>
+    private static void FeedDimensionDisplayName(
+        LayoutAreaHost host, string propName, string dataId, string collectionName, string displayLabelId)
+    {
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
         var collectionStream = host.Workspace.GetStream(new CollectionReference(collectionName));
 
@@ -1174,9 +1188,6 @@ public static class EditorExtensions
         {
             host.UpdateData(displayLabelId, "");
         }
-
-        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
-            .WithStyle("padding: 8px; min-height: 32px;");
     }
 
     private static UiControl BuildOptionsReadOnlyLabel(
@@ -1602,12 +1613,7 @@ public static class EditorExtensions
 
         var registrationKey = $"dimensionOptions_{dataId}_{jsonPointer.Pointer}";
         var optionsId = $"dimOpts_{dataId}_{jsonPointer.Pointer}"; // Use stable ID instead of Guid
-        // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
-        host.ReplaceDisposable(registrationKey,
-            host.Workspace.GetStream(new CollectionReference(collectionName))!
-                .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
-                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
-                .Subscribe(opts => host.UpdateData(optionsId, opts)));
+        FeedDimensionOptions(host, collectionName, dimensionAttr, registrationKey, optionsId);
 
         var ctrl = new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
@@ -1617,6 +1623,21 @@ public static class EditorExtensions
             ? ctrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
             : ctrl;
     }
+
+    /// <summary>
+    /// The data half of <see cref="CreateDimensionSelectControl"/>: projects the dimension
+    /// collection into select options at <c>/data/{optionsId}</c>, which the select is bound to.
+    /// Builds no control. <c>ReplaceDisposable</c> keeps one subscription per key when the
+    /// control is rebuilt.
+    /// </summary>
+    private static void FeedDimensionOptions(
+        LayoutAreaHost host, string collectionName, DimensionAttribute dimensionAttr,
+        string registrationKey, string optionsId)
+        => host.ReplaceDisposable(registrationKey,
+            host.Workspace.GetStream(new CollectionReference(collectionName))!
+                .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
+                .Subscribe(opts => host.UpdateData(optionsId, opts)));
 
     /// <summary>
     /// Builds a full-width section for a collection property marked with [MeshNodeCollection].
