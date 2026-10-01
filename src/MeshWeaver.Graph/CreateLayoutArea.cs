@@ -113,6 +113,20 @@ public static class CreateLayoutArea
             (UiControl?)BuildCreateNewForm(host, nodes, currentPath));
     }
 
+    /// <summary>
+    /// A form-patch read that faulted on a click's continuation — after the click itself has been
+    /// answered, so there is no refusal left to carry it. Reported with the form, area and hub, and
+    /// shown to the person in the dialog area; never rethrown on the producer's thread.
+    /// </summary>
+    private static void ReportFormPatchFault(UiActionContext ctx, string formId, Exception ex)
+    {
+        ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(CreateLayoutArea).FullName!)
+            .LogWarning(ex, "Create form {FormId} on area {Area} of {Hub} could not be patched",
+                formId, ctx.Area, ctx.Host.Hub.Address);
+        ShowErrorDialog(ctx, ctx.Host.Localize("error.title"), ex.Message);
+    }
+
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
     {
         var errorDialog = Controls.Dialog(
@@ -163,7 +177,7 @@ public static class CreateLayoutArea
                 var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
                 mutate(next);
                 actx.Host.UpdateData(formId, next);
-            });
+            }, ex => ReportFormPatchFault(actx, formId, ex));
 
         // Single reactive chain (no nested Subscribe): read the form → generate → write back.
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
@@ -225,7 +239,7 @@ public static class CreateLayoutArea
                 var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
                 mutate(next);
                 actx.Host.UpdateData(formId, next);
-            });
+            }, ex => ReportFormPatchFault(actx, formId, ex));
 
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Take(1)
@@ -636,12 +650,13 @@ public static class CreateLayoutArea
 
         buttonRow = buttonRow.WithView(Controls.Button(host.Localize("menu.create"))
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(actx =>
+            .WithReactiveClickAction(actx =>
             {
                 // Reactive click — read form, CreateNode (completes after the create response),
                 // then navigate to the new node's Edit area. No await on the click path
-                // (AsynchronousCalls.md).
-                actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                // (AsynchronousCalls.md). The read is RETURNED to the click, so a fault reading the
+                // form reaches the person as the click's refusal instead of rethrowing unobserved.
+                return actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
                     // 🚨 WAITS for the offered set's ownership answer rather than reading a
                     // placeholder: a click that beats the provider must not place an in-mesh owning
@@ -652,7 +667,7 @@ public static class CreateLayoutArea
                             .Take(1)
                             .Timeout(OfferedTypesBudget, Observable.Return(Array.Empty<string>())),
                         (form, owning) => (Form: form, Owning: owning))
-                    .Subscribe(submitted =>
+                    .Do(submitted =>
                     {
                         var formValues = submitted.Form;
                         var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
@@ -742,8 +757,7 @@ public static class CreateLayoutArea
                                         ex.RefusalText()?.Localize(locale) ?? ex.Message);
                                 ShowErrorDialog(actx, actx.Host.Localize("dialog.creationFailed"), errorMsg);
                             });
-                    });
-                return Task.CompletedTask;
+                    }).Select(_ => System.Reactive.Unit.Default);
             }));
 
         stack = stack.WithView(buttonRow);

@@ -60,6 +60,34 @@ nothing parks the owner's turn; a still-running `Task` only registers a continua
 is a response (`ResponseFor`), so it carries the clicker's `AccessContext` whichever thread completes
 the action.
 
+## A one-off read in a click handler is RETURNED, never subscribed
+
+The commonest click handler reads its form once and acts on it. Written as
+`ctx.Host.Stream.GetDataStream<T>(formId).Take(1).Subscribe(data => …)` followed by
+`return Task.CompletedTask`, it is broken twice over: the click is answered as done before the read
+has emitted, and a fault in the read — or in the body that handles it — has **no observer**, so Rx
+rethrows it on whatever thread produced it, the log names no area, and the person sees a button that
+did nothing. Return the read instead:
+
+```csharp
+Controls.Button(host.Localize("ui.invite"))
+    .WithReactiveClickAction(ctx =>
+        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Take(1)                                  // a one-off read for the click — not a live binding
+            .Do(form => Submit(ctx, spacePath, form))
+            .Select(_ => Unit.Default));
+```
+
+The host then owns the subscription: completion answers the click, and an error is logged with the
+area and hub (`LayoutAreaHost.FailClick`) and refused to the client, whose button leaves its pending
+state showing the reason. A helper the handler calls returns the observable too
+(`ctx => RemoveCollectionItem(ctx.Host, …)`). Work that deliberately continues AFTER the click is
+answered (an agent round, a background write) keeps its own `.Subscribe(onNext, onError)` whose error
+arm reports and shows the fault — never a one-argument `Subscribe`.
+
+`ClickActionSubscribeHasErrorArmGuard` (MeshWeaver.Documentation.Test) holds `src/` at zero
+one-argument `Subscribe` calls inside a `WithClickAction` / `WithReactiveClickAction` lambda.
+
 # Navigate-on-accepted
 
 `ButtonControl.WithNavigateOnAccepted(href)` sets `NavigateOnAccepted`. On the owner's acceptance the
