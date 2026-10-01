@@ -50,7 +50,7 @@ public static class EmployeeViewTests
         var bindings = Bindings(template);
         Expect(bindings.Any(b => b.Pointer == "name" && b.Context == LayoutAreaReference.GetMeshNodeDataContext(NodePath, bindContent: false)),
             "the heading binds the node's own name");
-        foreach (var pointer in new[] { "employeeId", "firstName", "lastName", "title", "titleOfCourtesy" })
+        foreach (var pointer in new[] { "employeeId", "firstName", "lastName", "city", "region", "country", "title", "titleOfCourtesy" })
             Expect(bindings.Any(b => b.Pointer == pointer && b.Context == LayoutAreaReference.GetMeshNodeDataContext(NodePath)),
                 $"the overview binds '{pointer}' in the content");
     }
@@ -60,9 +60,9 @@ public static class EmployeeViewTests
     {
         var template = EmployeeNodeLayoutAreas.EmploymentTemplate(Observable.Never<string>());
         ExpectTemplate(template, "Employment");
-        var body = LayoutTemplate.Descendants(template).OfType<MarkdownControl>().SingleOrDefault();
-        Expect(body is not null, "the details are a markdown control declared up front");
-        Expect(body!.DataContext == LayoutAreaReference.GetDataPointer(EmployeeNodeLayoutAreas.EmploymentDataId),
+        if (LayoutTemplate.Descendants(template).OfType<MarkdownControl>().SingleOrDefault() is not { } body)
+            throw new InvalidOperationException("the details are a markdown control declared up front");
+        Expect(body.DataContext == LayoutAreaReference.GetDataPointer(EmployeeNodeLayoutAreas.EmploymentDataId),
             $"the details are bound to /data/{EmployeeNodeLayoutAreas.EmploymentDataId}, got {body.DataContext}");
     }
 

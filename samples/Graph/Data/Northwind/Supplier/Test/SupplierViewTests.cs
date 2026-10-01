@@ -49,7 +49,7 @@ public static class SupplierViewTests
         var bindings = Bindings(template);
         Expect(bindings.All(b => b.Context == LayoutAreaReference.GetMeshNodeDataContext(NodePath)),
             "every bound value resolves against the supplier's content");
-        foreach (var pointer in new[] { "companyName", "supplierId", "contactName", "contactTitle", "city", "country" })
+        foreach (var pointer in new[] { "companyName", "supplierId", "contactName", "contactTitle", "city", "region", "country" })
             Expect(bindings.Any(b => b.Pointer == pointer), $"the overview binds '{pointer}'");
     }
 

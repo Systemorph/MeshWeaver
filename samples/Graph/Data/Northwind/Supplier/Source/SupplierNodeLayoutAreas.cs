@@ -55,6 +55,7 @@ public static class SupplierNodeLayoutAreas
                         ("Supplier ID", nameof(SupplierContent.SupplierId)),
                         ("Company Name", nameof(SupplierContent.CompanyName)),
                         ("City", nameof(SupplierContent.City)),
+                        ("Region", nameof(SupplierContent.Region)),
                         ("Country", nameof(SupplierContent.Country))),
                     skin => skin.WithXs(12).WithMd(6))
                 .WithView(Card("Primary Contact", content,

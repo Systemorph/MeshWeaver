@@ -51,8 +51,9 @@ public static class LayoutTemplate
         Descendants(root)
             .OfType<IDeclaresViews>()
             .SelectMany(container => container.DeclaredViews
-                .Select((view, index) => (Container: container, View: view, Index: index)))
-            .Where(x => x.View is not null and not UiControl)
-            .Select(x => $"{x.Container.GetType().Name}[{x.Index}]: {x.View!.GetType().Name}")
+                .Select((view, index) => view is { } deferred and not UiControl
+                    ? $"{container.GetType().Name}[{index}]: {deferred.GetType().Name}"
+                    : null))
+            .OfType<string>()
             .ToImmutableList();
 }
