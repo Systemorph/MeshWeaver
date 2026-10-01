@@ -512,6 +512,52 @@ sequenceDiagram
 
 ---
 
+# Row-scoped actions
+
+A bound row template is declared ONCE and rendered by the client once per row: `BindMany` (an `ItemTemplateControl`) and a data grid's `TemplateColumnControl`. On the owner the template's controls exist once, at the template's area, so a button in it cannot say which row it is by its area. The click carries the row instead: the client stamps the row it rendered on the `ClickedEvent` (`ClickedEvent.Row`, a `RowContext`), and the action reads it from `UiActionContext.Row`.
+
+```csharp
+// A list — one Archive button per row, one action for all of them.
+mail.BindMany("mail", m => Controls.Stack
+    .WithView(Controls.Label(m.Subject))
+    .WithView(Controls.Button("🗃️").WithClickAction(ctx => Archive(ctx))));
+
+static Task Archive(UiActionContext ctx)
+{
+    var row = ctx.RowAs<MailRow>();   // the row as the client rendered it (MeshWeaver.Mesh)
+    var path = ctx.RowPath();         // its node path, for a node row (a `path` property)
+    // … write as the clicking user; the write's own access check is the guard …
+    return Task.CompletedTask;
+}
+
+// A grid (any bound DataGridControl) — the template column's button acts on its row.
+grid.WithColumn(new PropertyColumnControl<string> { Property = "code" })
+    .WithColumn(new TemplateColumnControl(
+        Controls.Button("➡️").WithClickAction(ctx => Open(ctx))));
+```
+
+What `RowContext` holds:
+
+| Field | Meaning |
+|---|---|
+| `Value` | The row's value as the client rendered it — JSON. Read it with `ctx.RowAs<T>()`, never a cast. |
+| `NodePath()` / `ctx.RowPath()` | `Path` when the client set it, else the value's own `path` property. Null for a row that is not a node. |
+| `Pointer` | The row's data context (`/data/"mail"/3`) for a `BindMany` row; null for a grid row, which the client sorts and pages. |
+| `Index` | The row's position when it was rendered. Diagnostic only. |
+
+The rules:
+
+- 🚨 **The row is the one the person CLICKED, never a position re-read at click time.** A list that changed between the render and the click (a row added above, one removed) would hand an index-based action whatever row moved into that slot — the wrong mail archived, the wrong token revoked. `Value` is what the person saw, so it is the identity; never re-resolve the row through `Pointer` or `Index`.
+- 🚨 **The row is USER INPUT**, like any click payload. The action writes as the clicking user and the write's own access check decides whether the user may act on that row; a field of the row is never proof of anything.
+- **Inside a `BindMany` expression a click action is an expression-bodied lambda or a method group** (`ctx => Archive(ctx)`), because the template is an expression tree; put the body in a method.
+- **A grid template column's template is rendered into its own sub-area** (`DataGridControl.TemplateColumnArea(i)`, i.e. `{grid}/Column{i}`), which is where its controls — and their click actions — are found. Do not also give the grid a row-click action (`DataGridCellClick`) for the same cells: a click on the button is a click on its cell too.
+- **`MeshSearch` rows need none of this.** Each result renders through the node's OWN item area (`WithItemArea(…)`), so a button there lives on that node's hub, which already knows its path.
+- A `BlurEvent` carries the row the same way; inputs in a row need nothing extra, since they are bound by pointer to the row they edit.
+
+Where it is wired: core `MeshWeaver.Layout` (`RowContext`, `ClickedEvent.Row`, `UiActionContext.Row`, `DataGridControl.RenderSelf`) and `MeshWeaver.Mesh.Contract` (`RowAs<T>`); the Blazor views in MeshWeaver.Plugins cascade the row (`ItemTemplate`, `DataGridView`) and `BlazorView` stamps it on every click and blur. Pinned by `test/MeshWeaver.Layout.Test/RowScopedClickActionTest` (N rows, row k acts on row k; a no-row negative control; the list changing between render and click; a grid template column) and, for the client half, Plugins' `RowScopedActionsFromViewsTest`.
+
+---
+
 # Two-Way Sync Details
 
 Changes travel as JSON Patch (RFC 6902) for efficient delta updates:
