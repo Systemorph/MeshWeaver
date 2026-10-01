@@ -200,6 +200,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Granting Access](GrantingAccess)
 - [AccessContext Propagation](AccessContextPropagation)
 - [Query Identity](QueryIdentity) — an unstamped read answers as Anonymous, which reads as absence
+- [Participant Ingress](ParticipantIngress) — SignalR and gRPC forward any delivery to any address with a client-written envelope; mesh infrastructure is `[InfrastructureOnly]`, every ingress delivery is stamped, and the receiving hub refuses a stamped infrastructure message (`SaveMeshNodeRequest`, partition storage, compile triggers) before any handler runs
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Settings by Owner — the Instance, Person and Node Apps](AdminApp) — every settings tab lives in the app of the thing it changes: `/Admin` (the instance, titled with its name, platform admins only), `/{user}/Settings` (the person, titled with their name, the owner only) and a node's ⋯ → Settings…; the mapping of every tab, the module API, the redirects that keep old links working, and the Inbox app every user gets

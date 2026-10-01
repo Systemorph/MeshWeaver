@@ -234,7 +234,10 @@ public static class MeshDataSourceExtensions
                 .AddSingleton<OwnNodeCache>()
                 // A MeshNode leaving this hub's workspace through a DataChangeRequest is a delete,
                 // so it answers to the delete-validator chain too — not to RLS alone.
-                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeDeletionDataValidator>())
+                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeDeletionDataValidator>()
+                // …and a MeshNode ENTERING it is a create (a raw storage write), so it answers to the
+                // create-validator chain — not to RLS alone.
+                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeCreationDataValidator>())
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
@@ -298,6 +301,19 @@ public static class MeshDataSourceExtensions
     private static IMessageDelivery HandleSaveMeshNode(
         IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
     {
+        // 🚨 ONLY THE HUB'S OWN POST IS A RAW WRITE. The persistence sampler and the deferred
+        // re-post below post this to their own hub, and what they persist is state an already-
+        // checked write produced. Any other sender — another hub, in-mesh code, a client whose
+        // delivery an ingress forwarded — is asking for a node write, and gets the checked one.
+        // This handler used to write whatever any sender named: no permission check, no
+        // validator, and SignalR/gRPC forward any delivery to any address, so an anonymous
+        // connection could overwrite any node. (A participant cannot pose as the self-post by
+        // writing this hub's address as the sender: its delivery carries the ingress stamp, and the
+        // type is [InfrastructureOnly], so the hub refuses it before this handler runs. The stamp
+        // is checked here too, so the two layers do not lean on each other.)
+        if (!IsOwnPersistencePost(hub, request))
+            return ForwardSaveToCheckedWrite(hub, request);
+
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return request.Processed();
@@ -403,6 +419,62 @@ public static class MeshDataSourceExtensions
             return request.Processed();
         }
         WriteSampledNode(persistence, hub, node, logger);
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="request"/> is this hub's own persistence post — sent by this hub
+    /// (host part ignored, as the router does) and not injected by a participant ingress.
+    /// </summary>
+    private static bool IsOwnPersistencePost(IMessageHub hub, IMessageDelivery request)
+        => !request.IsFromParticipant()
+           && request.Sender is { } sender
+           && (sender with { Host = null }).Equals(hub.Address with { Host = null });
+
+    /// <summary>
+    /// A <see cref="SaveMeshNodeRequest"/> from anyone but the hub itself is a request to write a
+    /// node, so it takes the checked write: a <see cref="CreateOrUpdateNodeRequest"/> under the
+    /// delivery's own access context — Create or Update permission by existence, and every node
+    /// validator. A delivery without an identity has nobody to check for and is refused. Mirrors
+    /// the <see cref="DeleteMeshNodeRequest"/> forwarder.
+    /// </summary>
+    private static IMessageDelivery ForwardSaveToCheckedWrite(
+        IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
+        var node = request.Message.Node;
+        var caller = request.AccessContext;
+        if (node is null || string.IsNullOrEmpty(node.Path))
+        {
+            logger?.LogWarning(
+                "[SaveMeshNode] refused a save from {Sender} on {Address}: it names no node — nothing was written",
+                request.Sender, hub.Address);
+            return request.Processed();
+        }
+        if (caller is null || string.IsNullOrEmpty(caller.ObjectId))
+        {
+            logger?.LogWarning(
+                "[SaveMeshNode] refused a save of {Path} from {Sender}: it is not this hub's own persistence "
+                + "post and carries no access context, so there is nobody to check the write for — nothing "
+                + "was written", node.Path, request.Sender);
+            return request.Processed();
+        }
+
+        var upsert = new CreateOrUpdateNodeRequest(node) { RequestedBy = caller.ObjectId };
+        hub.NodeOperationIssuingHub()
+            .Observe(upsert, o => o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(caller))
+            .Subscribe(
+                d =>
+                {
+                    if (!d.Message.Success)
+                        logger?.LogWarning(
+                            "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} was "
+                            + "refused: {Error}", node.Path, caller.ObjectId, request.Sender, d.Message.Error);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} failed",
+                    node.Path, caller.ObjectId, request.Sender));
         return request.Processed();
     }
 

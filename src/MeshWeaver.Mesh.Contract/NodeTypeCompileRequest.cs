@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging.Security;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -9,6 +11,7 @@ namespace MeshWeaver.Mesh;
 /// returns <see cref="CreateReleaseResponse.AlreadyUpToDate"/>. Otherwise
 /// it flips <c>CompilationStatus = Pending</c> so the CompileWatcher starts Roslyn.
 /// </summary>
+[RequiresPermission(Permission.Update)]
 public record CreateReleaseRequest(bool Force = false) : IRequest<CreateReleaseResponse>;
 
 /// <summary>
@@ -29,6 +32,7 @@ public record CreateReleaseResponse(bool Success, bool AlreadyUpToDate = false, 
 /// <c>Test/</c> folder. Returns the list of activity paths created so the
 /// caller can subscribe to each for live progress.
 /// </summary>
+[RequiresPermission(Permission.Execute)]
 public record RunTestsRequest : IRequest<RunTestsResponse>;
 
 /// <summary>

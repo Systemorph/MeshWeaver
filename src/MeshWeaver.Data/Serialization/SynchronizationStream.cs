@@ -2581,6 +2581,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// "committed" uses it instead of scheduling a second turn, so reporting costs no extra message
     /// and can never observe the pre-change state.</param>
     [PreventLogging]
+    [InfrastructureOnly]
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, ChangeItem<TStream>?> Update, [property: JsonIgnore] Action<Exception> ExceptionCallback, [property: JsonIgnore] Action? Applied = null);
 
     /// <summary>
@@ -2595,6 +2596,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// </summary>
     [PreventLogging]
     [SystemMessage]
+    [InfrastructureOnly]
     public record SetCurrentRequest(ChangeItem<TStream> Value);
 
 }

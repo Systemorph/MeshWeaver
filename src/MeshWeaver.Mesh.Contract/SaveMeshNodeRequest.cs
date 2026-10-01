@@ -3,16 +3,27 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// Fire-and-forget request to persist a MeshNode to the storage layer. Handled
-/// by a handler on the per-node hub that calls
-/// <see cref="MeshWeaver.Mesh.Services.IStorageAdapter.Write"/>. Used by
-/// MeshNodeTypeSource to schedule saves through the actor inbox instead of
-/// writing to disk directly from the workspace's update pipeline.
+/// The per-node hub's own PERSISTENCE STEP: write <see cref="Node"/> to the storage layer. Posted
+/// by the hub to itself — the persistence sampler on every own-node change, and the deferred
+/// re-post behind an unresolved post-commit flush claim — and handled on that hub's inbox so the
+/// writes for one node are serialised.
 ///
-/// <para>Marked <see cref="SystemMessageAttribute"/> — this is hub-internal
-/// persistence infrastructure (a per-node hub posting to itself to flush its
-/// own data to storage). Not an end-user write; no AccessControl needed.</para>
+/// <para>🚨 <b>Only a self-post is a raw write.</b> The handler writes through
+/// <see cref="MeshWeaver.Mesh.Services.IStorageAdapter.Write"/> only when the delivery's sender IS
+/// the receiving hub and it did not enter through a participant ingress. Any other sender gets
+/// the checked write: the save is forwarded as a <see cref="CreateOrUpdateNodeRequest"/> under the
+/// delivery's own access context, so Create/Update permission and every node validator decide it,
+/// and a delivery with no identity is refused. It used to write whatever any sender named, and
+/// every ingress (SignalR, gRPC) forwards any delivery to any address — an anonymous connection
+/// could overwrite any node.</para>
+///
+/// <para>Marked <see cref="InfrastructureOnlyAttribute"/>: a participant connection's delivery of
+/// it is refused before the handler runs, whatever sender it claims. Marked
+/// <see cref="SystemMessageAttribute"/> because the self-post carries no user identity — it is the
+/// hub persisting state an earlier, already-checked write produced.</para>
 /// </summary>
+/// <param name="Node">The node state to persist — the hub's own node, for the self-post.</param>
+[InfrastructureOnly]
 [SystemMessage]
 public record SaveMeshNodeRequest(MeshNode Node);
 
