@@ -650,8 +650,14 @@ public record LayoutAreaHost : IDisposable
         IObservable<System.Reactive.Unit> completion;
         try
         {
+            // Row: the row a row-scoped control was clicked in, AS THE CLIENT RENDERED IT — never
+            // re-resolved here by index, which a list changed since the render would answer with
+            // another row (Doc/GUI/DataBinding → "Row-scoped actions").
             completion = control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                {
+                    Row = request.Message.Row
+                }
             ) ?? Observable.Return(System.Reactive.Unit.Default);
         }
         catch (Exception ex)
@@ -708,6 +714,9 @@ public record LayoutAreaHost : IDisposable
             {
                 blurAction.Invoke(
                     new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                    {
+                        Row = request.Message.Row
+                    }
                 );
             }
             catch (Exception ex)
