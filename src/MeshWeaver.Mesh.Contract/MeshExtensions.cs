@@ -848,10 +848,19 @@ public static class MeshExtensions
             request.AccessContext?.Name ?? "(null)",
             request.AccessContext?.IsVirtual);
 
-        // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
-        if (string.IsNullOrEmpty(createRequest.CreatedBy)
-            && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createRequest = createRequest with { CreatedBy = senderId };
+        // Identity resolution (RequestIdentity): an authenticated non-platform sender IS the
+        // requester, whatever CreatedBy the message body names; only the platform may post on
+        // somebody else's behalf. With no explicit CreatedBy, the sender's identity is used.
+        if (RequestIdentity.Resolve(createRequest.CreatedBy, request.AccessContext) is { Length: > 0 } requester
+            && !string.Equals(requester, createRequest.CreatedBy, StringComparison.Ordinal))
+        {
+            if (!string.IsNullOrEmpty(createRequest.CreatedBy))
+                logger.LogWarning(
+                    "[CreateNode] {Path}: the message names CreatedBy={Claimed} but the delivery is {Sender} — "
+                    + "authorising and recording it as the sender (a client cannot choose its own identity)",
+                    createRequest.Node.Path, createRequest.CreatedBy, requester);
+            createRequest = createRequest with { CreatedBy = requester };
+        }
 
         var capturedRequest = createRequest;
         var node = createRequest.Node;
@@ -1140,11 +1149,13 @@ public static class MeshExtensions
                                 CreatedDate = node.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(node.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
+                                // A person or service never records somebody else as the author;
+                                // only the platform (an import, a repair) preserves a carried stamp.
+                                CreatedBy = RequestIdentity.Author(node.CreatedBy, identity),
                                 LastModified = node.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(node.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
+                                LastModifiedBy = RequestIdentity.Author(node.LastModifiedBy, identity),
                                 // Stamp an initial Version of 1 so the post-save JSON includes the
                                 // field (the hub's JsonSerializerOptions has
                                 // DefaultIgnoreCondition=WhenWritingDefault → Version=0 is omitted
@@ -1962,9 +1973,9 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        var createdBy = request.Message.CreatedBy;
-        if (string.IsNullOrEmpty(createdBy) && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createdBy = senderId;
+        // Same identity rule as the singular create (RequestIdentity): an authenticated
+        // non-platform sender is the requester, whatever the message body names.
+        var createdBy = RequestIdentity.Resolve(request.Message.CreatedBy, request.AccessContext);
 
         var nodes = request.Message.Nodes ?? ImmutableList<MeshNode>.Empty;
         if (nodes.Count == 0)
@@ -2152,11 +2163,11 @@ public static class MeshExtensions
                                 CreatedDate = n.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(n.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
+                                CreatedBy = RequestIdentity.Author(n.CreatedBy, capturedBy),
                                 LastModified = n.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(n.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
+                                LastModifiedBy = RequestIdentity.Author(n.LastModifiedBy, capturedBy),
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
 
@@ -3329,6 +3340,17 @@ public static class MeshExtensions
             && !string.IsNullOrEmpty(senderUserId)
             && senderUserId != WellKnownUsers.Anonymous)
             deleteRequest = deleteRequest with { DeletedBy = senderUserId };
+        // A DeletedBy in the message body never outranks an authenticated non-platform sender
+        // (RequestIdentity) — RLS authorises the delete as DeletedBy.
+        else if (RequestIdentity.Resolve(deleteRequest.DeletedBy, request.AccessContext) is { Length: > 0 } deleter
+                 && !string.Equals(deleter, deleteRequest.DeletedBy, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "[DeleteNode] {Path}: the message names DeletedBy={Claimed} but the delivery is {Sender} — "
+                + "authorising it as the sender (a client cannot choose its own identity)",
+                deleteRequest.Path, deleteRequest.DeletedBy, deleter);
+            deleteRequest = deleteRequest with { DeletedBy = deleter };
+        }
 
         var capturedRequest = deleteRequest;
         var path = capturedRequest.Path;
@@ -6285,10 +6307,11 @@ public static class MeshExtensions
         var inboundRequest = request.Message;
         var node = inboundRequest.Node;
 
-        var requestedBy = inboundRequest.RequestedBy
-            ?? request.AccessContext?.ObjectId;
+        // RequestIdentity: an authenticated non-platform sender is the requester, whatever
+        // RequestedBy the message body names.
+        var requestedBy = RequestIdentity.Resolve(inboundRequest.RequestedBy, request.AccessContext);
         if (!string.IsNullOrEmpty(requestedBy)
-            && string.IsNullOrEmpty(inboundRequest.RequestedBy))
+            && !string.Equals(requestedBy, inboundRequest.RequestedBy, StringComparison.Ordinal))
             inboundRequest = inboundRequest with { RequestedBy = requestedBy };
 
         var baseActivity = new ActivityLog("NodeUpsert")
