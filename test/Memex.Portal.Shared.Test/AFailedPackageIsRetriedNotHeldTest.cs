@@ -115,4 +115,23 @@ public class AFailedPackageIsRetriedNotHeldTest(ITestOutputHelper output) : Mono
         known.Should().Contain("Paid");
         known.Should().NotContain("Fresh", "a package the ledger never recorded is the one the hold is for");
     }
+
+    /// <summary>
+    /// A persisted ledger can carry an explicit <c>null</c> for any of its lists (an older
+    /// record, or a writer that serialised a null). The hold runs inside the boot install, so a
+    /// null list must read as empty — never throw and abort the pass. Pure.
+    /// </summary>
+    [Fact]
+    public void ALedgerWithNullLists_ReadsAsEmpty()
+    {
+        var ledger = System.Text.Json.JsonSerializer.Deserialize<DefaultInstallLedger>(
+            """{"seeded":null,"failed":null,"skipped":null}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))
+            ?? throw new InvalidOperationException("the ledger JSON deserialised to null");
+        ledger.Failed.Should().BeNull("the precondition: the record really carries a null list");
+
+        var known = InstanceAutoRegistrationService.KnownToTheLedger(ledger);
+
+        known.Should().BeEmpty("a null list is an empty list, not a fault in the boot install");
+    }
 }

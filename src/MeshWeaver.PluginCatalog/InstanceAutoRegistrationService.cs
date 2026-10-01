@@ -932,18 +932,19 @@ public sealed class InstanceAutoRegistrationService(
     /// FAILED (kept off the seeded list so the next pass retries it — #2254), or SKIPPED with a
     /// standing reason that is re-derived each pass. The governed-provision hold is for a package
     /// the instance has never seen; one on this set is not "newly listed", and holding it would
-    /// swallow the ledger's retry. Pure.
+    /// swallow the ledger's retry. A persisted list that reads back <c>null</c> (an explicit
+    /// JSON <c>null</c>) is empty, for every list alike — this runs inside the boot install. Pure.
     /// </summary>
     internal static ImmutableHashSet<string> KnownToTheLedger(DefaultInstallLedger ledger) =>
-        ledger.Seeded
-            .Concat(ledger.Failed)
+        (ledger.Seeded ?? ImmutableList<string>.Empty)
+            .Concat(ledger.Failed ?? ImmutableList<string>.Empty)
             .Concat((ledger.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty).Select(s => s.Package))
             .ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>The hold's decision (<see cref="HeldForGovernedProvision"/>), over its four facts. Pure.</summary>
     internal static bool HoldsForGovernedProvision(
-        bool wildcardOnly, bool reconciled, bool seededBefore, bool freshInstance) =>
-        wildcardOnly && !reconciled && !seededBefore && !freshInstance;
+        bool wildcardOnly, bool reconciled, bool recordedInLedger, bool freshInstance) =>
+        wildcardOnly && !reconciled && !recordedInLedger && !freshInstance;
 
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
