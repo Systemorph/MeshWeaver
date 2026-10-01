@@ -67,9 +67,10 @@ public sealed class GitHubPackageSource : IPackageSource
     /// listing transfers only the <c>package.json</c> manifests it parses instead of the whole
     /// repository (#4222).
     ///
-    /// <para>🚨 Only the LISTING uses it: <see cref="FetchPackageFiles"/> needs a package's whole
-    /// folder, so narrowing that one would install an empty package. Absent ⇒ the plain fetch,
-    /// i.e. exactly the behaviour before this existed.</para>
+    /// <para>🚨 The LISTING narrows to the manifests; <see cref="FetchPackageFiles"/> narrows to the
+    /// package's whole folder (MeshWeaver#5826) — never to the listing's predicate, which would
+    /// install an empty package. Absent ⇒ the plain fetch, i.e. exactly the behaviour before this
+    /// existed.</para>
     /// </summary>
     public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
         NarrowFetch { get; init; }
@@ -105,9 +106,14 @@ public sealed class GitHubPackageSource : IPackageSource
             });
 
     /// <inheritdoc />
+    /// <remarks>🚨 Through the narrow fetch when this source has one (MeshWeaver#5826): the folder is
+    /// the subdirectory, and a keep-everything predicate under it moves that folder's blobs and no
+    /// others — the plain fetch transferred the whole repository and read the folder out of it.
+    /// The answer is identical either way.</remarks>
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
-        tokenProvider().SelectMany(token =>
-                fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token))
+        tokenProvider().SelectMany(token => NarrowFetch is { } narrow
+                ? narrow(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token, static _ => true)
+                : fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token))
             // Carry `Binary` too — a non-UTF-8 blob's `Content` is EMPTY by design (the bytes live
             // on `RepoFile.Binary`), so projecting only `Content` publishes an empty file. See
             // PackageFile / issue #848.

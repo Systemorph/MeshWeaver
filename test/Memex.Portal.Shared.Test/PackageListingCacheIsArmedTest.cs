@@ -70,17 +70,24 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// 🚨 The LISTING asks for the narrow transfer, and the INSTALL still asks for the whole
-    /// package folder — the two halves of #4222's second fix, asserted against the real factory.
+    /// 🚨 The LISTING asks for the narrow transfer, and so does the INSTALL — each with its own
+    /// predicate. Asserted against the real factory.
     ///
     /// <para>A listing that quietly reverted to the unfiltered <c>Fetch</c> would still answer
     /// correctly and still be cached, so nothing else in this suite could see it: the only symptom
     /// is that the registry goes back to moving the whole repository (47.8 MB / 13 s against
-    /// MeshWeaver.Plugins) for the manifests it parses. Narrowing the INSTALL would be the opposite
-    /// and much louder failure — an empty package — which is why the second half is pinned too.</para>
+    /// MeshWeaver.Plugins) for the manifests it parses.</para>
+    ///
+    /// <para>🚨 The INSTALL used to be pinned UNFILTERED here, on the reasoning that narrowing it
+    /// would install an empty package. That is true of the listing's predicate, and false of one that
+    /// keeps the package's folder — and leaving it whole made every <c>/api/plugins/files</c> answer
+    /// cost the registry the whole repository before its first byte, which is how a booting instance's
+    /// 30 s attempts for <c>Anthropic</c> and <c>AppleIntelligence</c> all expired waiting for headers
+    /// (MeshWeaver#5826). The empty-package failure is guarded by asserting the files the install
+    /// actually returns: the whole folder, binary blob included, and nothing outside it.</para>
     /// </summary>
     [Fact]
-    public async Task TheListingAsksForTheNarrowFetch_AndTheInstallStillReadsTheWholeFolder()
+    public async Task TheListingAndTheInstall_BothAskForTheNarrowFetch_AndTheInstallGetsTheWholeFolder()
     {
         await Request();
 
@@ -89,15 +96,42 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
 
         var source = PackageSources.FromRepo(Mesh, Repo, sourceSubdir: null, logger: null, nodeRepo: true);
         Assert.NotNull(source);
-        await source.FetchPackageFiles(new PackageManifest { Id = "Widget", SourceFolder = "Widget" }, Ref)
+        var files = await source.FetchPackageFiles(new PackageManifest { Id = "Widget", SourceFolder = "Widget" }, Ref)
             .Should().Within(TestTimeouts.Quick)
             .Emit("an install must read the package's files",
                 cancellationToken: TestContext.Current.CancellationToken);
 
         // The install read the repository again (file fetches are deliberately NOT cached) and it
-        // did so UNFILTERED — the filtered count did not move.
+        // did so NARROWED — the filtered count moved with it.
         Assert.Equal(2, repoClient.Fetches);
+        Assert.Equal(2, repoClient.FilteredFetches);
+
+        // …and narrowed to the WHOLE folder: every file under `Widget/`, the binary one included,
+        // and none of the neighbours a prefix match could confuse with it (`WidgetX/`).
+        Assert.Equal(
+            ["Widget/Source/Widget.cs", "Widget/content/poster.png", "Widget/index.json"],
+            files.Select(f => f.RelativePath).OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.NotNull(files.Single(f => f.RelativePath == "Widget/content/poster.png").Binary);
+    }
+
+    /// <summary>
+    /// The manifest-diff fast path (an install that names the paths it wants) is narrowed to exactly
+    /// those paths — and never reaches outside the package's folder even when asked to.
+    /// </summary>
+    [Fact]
+    public async Task ThePathsSubset_MovesOnlyThosePaths_InsideThePackage()
+    {
+        var source = PackageSources.FromRepo(Mesh, Repo, sourceSubdir: null, logger: null, nodeRepo: true);
+        Assert.NotNull(source);
+        var files = await source.FetchPackageFiles(
+                new PackageManifest { Id = "Widget", SourceFolder = "Widget" }, Ref,
+                ["Widget/Source/Widget.cs", "Other/index.json"])
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("an incremental install must read the paths it names",
+                cancellationToken: TestContext.Current.CancellationToken);
+
         Assert.Equal(1, repoClient.FilteredFetches);
+        Assert.Equal(["Widget/Source/Widget.cs"], files.Select(f => f.RelativePath).ToArray());
     }
 
     /// <summary>
@@ -189,20 +223,37 @@ public class PackageListingCacheIsArmedTest(ITestOutputHelper output) : Monolith
         /// </summary>
         public int FilteredFetches => filteredFetches;
 
+        /// <summary>The repository both reads serve: a package, a neighbour whose name shares its
+        /// prefix, an unrelated package and a file at the root.</summary>
+        private static readonly RepoFile[] Files =
+        [
+            new("Widget/index.json",
+                """{"$type":"MeshNode","id":"Widget","namespace":"","path":"Widget","mainNode":"Widget","name":"Widget","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"A widget."}}"""),
+            new("Widget/Source/Widget.cs", "public sealed class Widget;"),
+            new("Widget/content/poster.png", "", [137, 80, 78, 71]),
+            new("WidgetX/index.json",
+                """{"$type":"MeshNode","id":"WidgetX","namespace":"","path":"WidgetX","mainNode":"WidgetX","name":"WidgetX","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Not the widget."}}"""),
+            new("Other/index.json",
+                """{"$type":"MeshNode","id":"Other","namespace":"","path":"Other","mainNode":"Other","name":"Other","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Another."}}"""),
+            new("README.md", "# plugins"),
+        ];
+
+        /// <summary>The plain read: the whole repository, as the real client transfers it.</summary>
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
         {
             System.Threading.Interlocked.Increment(ref fetches);
-            return Observable.Return(new RepoSnapshot("sha-1", []));
+            return Observable.Return(new RepoSnapshot("sha-1", Files));
         }
 
+        /// <summary>The narrow read: only what the predicate keeps — what the real client moves.</summary>
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken,
             Func<string, bool> pathFilter)
         {
             System.Threading.Interlocked.Increment(ref fetches);
             System.Threading.Interlocked.Increment(ref filteredFetches);
-            return Observable.Return(new RepoSnapshot("sha-1", []));
+            return Observable.Return(new RepoSnapshot("sha-1", Files.Where(f => pathFilter(f.Path)).ToArray()));
         }
 
         // Everything below the listing path. NotSupported rather than a canned answer: the catalog
