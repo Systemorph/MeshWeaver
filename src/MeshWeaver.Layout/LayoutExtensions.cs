@@ -194,6 +194,7 @@ public static class LayoutExtensions
                 typeof(LayoutAreasResponse),
                 typeof(UserActionAccepted),
                 typeof(DataGridCellClick),
+                typeof(RowContext), // carried on ClickedEvent / BlurEvent, not a StreamMessage itself
                 // Non-IUiControl content/config records serialised INSIDE control state (so the reflection
                 // sweep above misses them) — they came back untyped on sync hubs and churned the layout:
                 typeof(MeshWeaver.Layout.LayoutAreaDefinition),
