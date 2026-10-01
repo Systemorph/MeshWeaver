@@ -381,6 +381,22 @@ per-message edit / resubmit / delete actions are all hidden. The new-thread comp
 (no `threadPath`) and the user's own threads stay fully editable. This is a UI
 affordance on top of server-side access control — not a replacement for it.
 
+**A logged-out visitor is offered no composer (#5372).** An anonymous circuit has no home
+partition: it has no per-user `ThreadComposer` and owns no thread, and anonymous grants are
+`Viewer` at most ([Access Control](/Doc/Architecture/AccessControl) → "Anonymous and Public
+access"). `CircuitUser.ResolveUserId` therefore answers `null` for it, and the chat view treats
+every thread as read-only for the visitor. A sign-in prompt (linking to `/login` with a return URL)
+replaces the composer. Before this, the visitor got a box whose load
+(`Anonymous/_Thread/ThreadComposer`) and send were both refused. Making anonymous chat a supported
+entry flow would be a product decision; the grant is deliberately not widened.
+
+**The composer's context chip follows the viewer's READ.** A thread shared with a person keeps its
+subject, and that subject may be a node the person holds no grant on. The chip asks the mesh hub's
+permission fold first. It opens the subject's stream only while the viewer may read it, and shows
+no chip otherwise. Opening the stream anyway faulted with `UnauthorizedAccessException`, which was
+logged as an Error and ended the chip's pipeline for the rest of the view. Pinned by
+`ComposerAccessTest` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Chat.Test`).
+
 ## Thread identity — the owner is the standing access context
 
 Everything the thread hub does with no live caller (the submission watcher's claim write, the
