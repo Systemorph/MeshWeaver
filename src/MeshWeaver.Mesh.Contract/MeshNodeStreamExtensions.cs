@@ -3074,8 +3074,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             updated = updated with { LastModified = DateTimeOffset.UtcNow };
             stamped = true;
         }
-        if (updated.LastModifiedBy == current.LastModifiedBy
-            && !string.IsNullOrEmpty(ctx?.ObjectId))
+        // A person or service is always the author of their own write — a lambda that sets
+        // LastModifiedBy to somebody else (or System) does not get to choose (RequestIdentity).
+        // Only the platform's own writers may carry a different stamp (imports, repairs).
+        if (!string.IsNullOrEmpty(ctx?.ObjectId)
+            && !string.Equals(updated.LastModifiedBy, ctx.ObjectId, StringComparison.Ordinal)
+            && (updated.LastModifiedBy == current.LastModifiedBy
+                || !Security.RequestIdentity.IsPlatform(ctx.ObjectId)))
         {
             updated = updated with { LastModifiedBy = ctx.ObjectId };
             stamped = true;
