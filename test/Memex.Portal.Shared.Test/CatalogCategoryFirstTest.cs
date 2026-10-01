@@ -42,6 +42,7 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
     private static TimeSpan RenderBudget => TestTimeouts.Convergence;
 
+
     /// <summary>
     /// 🚨 <b>Assert on ASCII-only fragments of a rendered label</b> — the frame travels as JSON, and
     /// <c>System.Text.Json</c> escapes non-ASCII, so the card's <c>✓ Installed v1.0.0</c> appears in
@@ -52,9 +53,6 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
     /// fragment "that reads identically in the rendered HTML and in the JSON the store travels as".)
     /// </summary>
     private const string InstalledFragment = "Installed v1.0.0";
-
-    /// <summary>The ASCII half of <c>ui.catalogBackToCategories</c> — see <see cref="InstalledFragment"/>.</summary>
-    private const string BackFragment = "All categories";
 
     private readonly StubSource source = new();
 
@@ -188,24 +186,22 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
         // card to flip to "Installed"; the tiles must render without ever asking.
         await Install(source.Packages[2]);
 
-        var frame = await Render(null)
-            .Where(f => Leaves(f).Contains("categories"))
-            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
+        var stream = Render(null);
+        var tiles = await Data(stream, CatalogLayoutAreas.TilesDataId, t => t.GetArrayLength() == 4, TestContext.Current.CancellationToken);
+        var page = await Data(stream, CatalogLayoutAreas.PageDataId, p => Str(p, "tilesStyle") != CatalogLayoutAreas.Hidden, TestContext.Current.CancellationToken);
 
-        var leaves = Leaves(frame);
-        leaves.Should().Contain(["cat-1", "cat-2", "cat-3", "all"]);
-        leaves.Where(l => l.StartsWith("pkg-", StringComparison.Ordinal))
-            .Should().BeEmpty("the landing renders tiles, never a package card");
-        leaves.Where(l => l.StartsWith("orphan-", StringComparison.Ordinal)).Should().BeEmpty();
+        tiles.EnumerateArray().Select(t => Str(t, "label")).Should().Equal(
+            "Education", "Insurance", LocalizationCatalog.Get("ui.catalogUncategorized", "en"),
+            LocalizationCatalog.Get("ui.catalogAllPackages", "en"));
+        tiles.EnumerateArray().Select(t => Str(t, "count")).Should().Equal(
+            LocalizationCatalog.Plural("plural.package", 2, "en"), LocalizationCatalog.Plural("plural.package", 1, "en"),
+            LocalizationCatalog.Plural("plural.package", 1, "en"), LocalizationCatalog.Plural("plural.package", 4, "en"));
+        Str(page, "sourceLine").Should().Contain(LocalizationCatalog.Plural("plural.package", 4, "en"));
+        Str(page, "backStyle").Should().Be(CatalogLayoutAreas.Hidden, "the landing has no way back — it IS the way in");
 
-        var json = frame.Value.ToString();
-        json.Should().Contain("Education").And.Contain("Insurance")
-            .And.Contain(LocalizationCatalog.Get("ui.catalogUncategorized", "en"))
-            .And.Contain(LocalizationCatalog.Get("ui.catalogAllPackages", "en"));
-        json.Should().Contain(LocalizationCatalog.Plural("plural.package", 2, "en"), "Education holds two")
-            .And.Contain(LocalizationCatalog.Plural("plural.package", 4, "en"), "the all-packages tile and the source line");
-        json.Should().NotContain("Gamma Cover", "no card, so no package name on the landing")
-            .And.NotContain(LocalizationCatalog.Get("ui.catalogInstall", "en"));
+        var cards = await Data(stream, CatalogLayoutAreas.CardsDataId, _ => true, TestContext.Current.CancellationToken);
+        cards.GetArrayLength().Should().Be(0, "the landing renders tiles, never a package card");
+        cards.ToString().Should().NotContain("Gamma Cover", "no card, so no package name on the landing");
 
         source.Listings.Should().BeGreaterThan(0, "the landing IS built from the source's listing");
         source.Fetches.Should().Be(0, "nothing is fetched until somebody clicks Install");
@@ -224,24 +220,24 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
 
         // Lower-case on purpose: the request is matched to the source's own spelling.
         var insurance = Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=insurance");
-        var frame = await insurance
-            .Where(f => f.Value.ToString().Contains(InstalledFragment, StringComparison.Ordinal))
-            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
+        var cards = await Data(insurance, CatalogLayoutAreas.CardsDataId,
+            c => c.ToString().Contains(InstalledFragment, StringComparison.Ordinal), TestContext.Current.CancellationToken);
+        cards.EnumerateArray().Select(c => Str(c, "id")).Should().Equal(["CfGamma"], "the category's sole card");
+        Str(cards[0], "name").Should().Be("Gamma Cover");
+        Str(cards[0], "installStyle").Should().Be(CatalogLayoutAreas.Hidden, "an up-to-date package offers no Install");
+        var page = await Data(insurance, CatalogLayoutAreas.PageDataId, p => Str(p, "heading") == "Insurance", TestContext.Current.CancellationToken);
+        Str(page, "backStyle").Should().NotBe(CatalogLayoutAreas.Hidden);
+        Str(page, "tilesStyle").Should().Be(CatalogLayoutAreas.Hidden, "a category page shows cards, not tiles");
 
-        Cards(frame).Should().Equal(["pkg-Q2ZHYW1tYQ"], "the sole card retains the identity of CfGamma");
-        var json = frame.Value.ToString();
-        json.Should().Contain("Gamma Cover")
-            .And.NotContain("Alpha Course").And.NotContain("Beta Course")
-            .And.Contain(BackFragment);
-        Leaves(frame).Should().NotContain("categories", "a category page shows cards, not tiles");
-
-        var education = await Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=Education")
-            .Where(f => Cards(f).Count == 2)
-            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
-        var educationJson = education.Value.ToString();
-        educationJson.Should().Contain("Alpha Course").And.Contain("Beta Course")
-            .And.NotContain("Gamma Cover", "the other category's card never renders here")
-            .And.Contain(LocalizationCatalog.Get("ui.catalogInstall", "en"), "neither course is installed")
+        var education = Render($"{CatalogLayoutAreas.CatalogArea}?{CatalogLayoutAreas.CategoryParam}=Education");
+        var educationCards = await Data(education, CatalogLayoutAreas.CardsDataId, c => c.GetArrayLength() == 2, TestContext.Current.CancellationToken);
+        educationCards.EnumerateArray().Select(c => Str(c, "name")).Should().Equal("Alpha Course", "Beta Course");
+        educationCards.EnumerateArray().Should().AllSatisfy(c =>
+        {
+            Str(c, "installLabel").Should().Be(LocalizationCatalog.Get("ui.catalogInstall", "en"), "neither course is installed");
+            Str(c, "installStyle").Should().NotBe(CatalogLayoutAreas.Hidden);
+        });
+        educationCards.ToString().Should().NotContain("Gamma Cover", "the other category's card never renders here")
             .And.NotContain(InstalledFragment, "neither course has an install record");
     }
 
@@ -249,15 +245,12 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
     public async Task EmptyCatalog_RendersTheLocalizedEmptyState()
     {
         source.Packages = [];
-        var expected = LocalizationCatalog.Get("ui.mdNoPackages", "en");
-        expected.Should().NotBe("ui.mdNoPackages");
+        LocalizationCatalog.Get("ui.mdNoPackages", "en").Should().NotBe("ui.mdNoPackages");
 
-        var frame = await Render(null)
-            .Where(f => Leaves(f).Contains("empty"))
-            .FirstAsync().Timeout(RenderBudget).Await(TestContext.Current.CancellationToken);
-
-        frame.Value.ToString().Should().Contain(expected);
-        Leaves(frame).Should().NotContain("categories").And.NotContain("all");
+        var stream = Render(null);
+        var page = await Data(stream, CatalogLayoutAreas.PageDataId, p => Str(p, "emptyStyle") != CatalogLayoutAreas.Hidden, TestContext.Current.CancellationToken);
+        Str(page, "tilesStyle").Should().Be(CatalogLayoutAreas.Hidden);
+        Str(page, "loadingStyle").Should().Be(CatalogLayoutAreas.Hidden, "an empty answer is an answer, not a page that loads forever");
     }
 
     // ————————————————————————————————————————————— helpers
@@ -286,44 +279,22 @@ public class CatalogCategoryFirstTest(ITestOutputHelper output) : MonolithMeshTe
             .Timeout(RenderBudget)
             .Await(TestContext.Current.CancellationToken);
 
-    private IObservable<ChangeItem<JsonElement>> Render(string? id) =>
+    private ISynchronizationStream<JsonElement> Render(string? id) =>
         GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(CatalogNode),
             new LayoutAreaReference(CatalogLayoutAreas.CatalogArea) { Id = id });
 
-    /// <summary>
-    /// The area names in a frame, reduced to their own last segment, so the assertions read like
-    /// the code that named them.
-    ///
-    /// <para>🚨 <b>An <c>InstanceCollection</c> key rides JSON-ENCODED on the wire</b> — the area
-    /// <c>Catalog/categories</c> arrives as the property <c>"\"Catalog/categories\""</c>
-    /// (<c>LayoutAreaReference.Encode</c> is <c>JsonSerializer.Serialize</c>; the same note is on
-    /// <c>MeshOperations.IsAreaMaterialized</c>). Comparing the raw property name to a plain area
-    /// name never matches, and the failure shape is a TIMEOUT rather than an assertion — the
-    /// predicate simply never becomes true — which reads exactly like a view that does not render.
-    /// It cost three timed-out tests here before the encoding was the suspect.</para>
-    /// </summary>
-    private static IReadOnlyList<string> Leaves(ChangeItem<JsonElement> frame)
-    {
-        if (frame.Value.ValueKind != JsonValueKind.Object
-            || !frame.Value.TryGetProperty(LayoutAreaReference.Areas, out var areas)
-            || areas.ValueKind != JsonValueKind.Object)
-            return [];
-        return [.. areas.EnumerateObject().Select(p => WireName(p.Name).Split('/').Last())];
-    }
+    /// <summary>The template's bound data <paramref name="id"/> as the client mirror holds it, once
+    /// <paramref name="predicate"/> holds — the page is a template, so what it shows is its DATA.</summary>
+    private static async Task<JsonElement> Data(
+        ISynchronizationStream<JsonElement> stream, string id, Func<JsonElement, bool> predicate, CancellationToken ct)
+        => (await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+            .Where(v => v.ValueKind is JsonValueKind.Object or JsonValueKind.Array && predicate(v))
+            .Select(v => v.Clone())
+            .FirstAsync().Timeout(RenderBudget).Await(ct));
 
-    // The wire property name decoded back to the area name it stands for; left as-is if it is not
-    // the JSON-encoded form, so a shape change surfaces as a readable mismatch rather than a throw.
-    private static string WireName(string property)
-    {
-        if (!property.StartsWith('"'))
-            return property;
-        try { return JsonSerializer.Deserialize<string>(property) ?? property; }
-        catch (JsonException) { return property; }
-    }
-
-    private static IReadOnlyList<string> Cards(ChangeItem<JsonElement> frame) =>
-        [.. Leaves(frame).Where(l => l.StartsWith("pkg-", StringComparison.Ordinal)).OrderBy(l => l, StringComparer.Ordinal)];
+    private static string? Str(JsonElement e, string property)
+        => e.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     /// <summary>A package source that lists exactly what it is told to and counts what is asked
     /// of it — standing in for the registry's catalog read.</summary>

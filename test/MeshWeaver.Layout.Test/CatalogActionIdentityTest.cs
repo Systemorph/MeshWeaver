@@ -1,15 +1,10 @@
 using System.Collections.Immutable;
-using System.Reflection;
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
-using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,176 +13,213 @@ using Xunit;
 namespace MeshWeaver.Layout.Test;
 
 /// <summary>
-/// Actual catalog projection and owner ClickedEvent dispatch, with
-/// file fetch intercepted before the real installer can receive any payload or write any node.
+/// The plugin catalog is a TEMPLATE whose per-card Install / Update button is a ROW-SCOPED action
+/// (Doc/GUI/DataBinding → "Templates first, data later" and "Row-scoped actions"): the cards are one
+/// bound row template, the button is declared ONCE in it, and the click carries the card it was
+/// clicked in. Driven through the real catalog render (<see cref="CatalogLayoutAreas.RenderFromSource"/>)
+/// and the owner's real click dispatch; the package source records what the installer was asked to
+/// fetch and hands it nothing, so no install ever writes a node.
 /// </summary>
 public class CatalogActionIdentityTest : HubTestBase
 {
-    private const string Area = "CatalogActions";
-    private readonly AsyncSubject<LayoutAreaHost> owner = new();
+    private const string Area = CatalogLayoutAreas.CatalogArea;
+    private const string Category = "Fixtures";
+
+    private static string InstallArea => $"{Area}/cards/{ItemTemplateControl.ViewArea}/install";
+
+    private static string CardsPointer => LayoutAreaReference.GetDataPointer(CatalogLayoutAreas.CardsDataId);
+
+    private readonly BehaviorSubject<IReadOnlyList<PackageManifest>> listing = new(Initial);
+    private readonly ReplaySubject<string> fetched = new();
+    private readonly RecordingSource source;
+
+    /// <summary>A source whose listing never answers — the template must not wait for it.</summary>
+    private readonly SilentSource silent = new();
 
     public CatalogActionIdentityTest(ITestOutputHelper output) : base(output)
-        => Services.AddSingleton<AccessService>();
+    {
+        Services.AddSingleton<AccessService>();
+        source = new RecordingSource(listing, fetched);
+    }
 
+    private static PackageManifest Package(string id) => new()
+    {
+        Id = id, Name = $"Package {id}", Version = "2.0.0", Kind = PackageKind.Content,
+        Category = Category, TargetPartition = "Fixture" + id,
+    };
+
+    private static readonly ImmutableList<PackageManifest> Initial = [Package("a"), Package("b"), Package("c")];
+
+    /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-        => base.ConfigureHost(configuration).AddLayout(layout => layout.WithView(Area, (host, _) =>
-        {
-            owner.OnNext(host);
-            owner.OnCompleted();
-            return Controls.Stack;
-        }));
+        => base.ConfigureHost(configuration)
+            .WithTypes(typeof(PackageManifest), typeof(CatalogPageView), typeof(CatalogTileRow),
+                typeof(CatalogCardRow), typeof(CatalogOrphanRow))
+            .AddLayout(layout => layout
+                .WithView(Area, (host, _) => CatalogLayoutAreas.RenderFromSource(host, source, "HEAD", null, "fixture"))
+                .WithView("Silent", (host, _) => CatalogLayoutAreas.RenderFromSource(host, silent, "HEAD", null, "silent")));
 
+    /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
-    private static PackageManifest Package(string id, string name) => new()
+    /// <summary>The page renders AT ONCE — its first control is the whole template, with the loading
+    /// line showing — while the source has not answered and never will.</summary>
+    [HubFact]
+    public async Task TheCatalogIsATemplate_ItsFirstRenderWaitsOnNoData()
     {
-        Id = id, Name = name, Version = "2.0.0", Kind = PackageKind.Content,
-        Category = "Fixtures", TargetPartition = "Fixture" + id,
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference("Silent"));
+        var root = await stream.GetControlStream("Silent").Should().Within(10.Seconds()).Match(
+            c => c is StackControl, "the template is returned at once, before any listing",
+            TestContext.Current.CancellationToken);
+        ((StackControl)root!).Areas.Select(a => a.Id?.ToString()).Should().Contain(
+            ["title", "loading", "categories", "cards", "orphans"], "every section is declared up front");
+        (await stream.GetControlStream($"Silent/cards").Should().Within(10.Seconds()).Match(
+                c => c is ItemTemplateControl, "the cards are one bound row template",
+                TestContext.Current.CancellationToken))
+            .Should().NotBeNull();
+        silent.Listings.Should().BeGreaterThanOrEqualTo(1, "the listing was asked for — and the page did not wait for it");
+    }
+
+    /// <summary>N cards, ONE Install button: clicking it in row k installs package k, for every k.</summary>
+    [HubFact]
+    public async Task TheInstallButtonInRowKInstallsPackageK()
+    {
+        var stream = await OpenCategory();
+        var rendered = await RenderedCards(stream, Initial.Count);
+
+        for (var k = 0; k < Initial.Count; k++)
+        {
+            var id = await ClickAndReadFetch(stream, AsTheClientRendersIt(rendered, k));
+            id.Should().Be(Initial[k].Id, $"the Install button in row {k} was clicked");
+        }
+    }
+
+    /// <summary>The listing changes between the render and the click — a package inserted above, one
+    /// removed — and the click still installs the package that was clicked, not the one that moved
+    /// into its slot.</summary>
+    [HubFact]
+    public async Task AfterTheListChanged_TheClickStillInstallsTheClickedPackage()
+    {
+        var stream = await OpenCategory();
+        var clicked = AsTheClientRendersIt(await RenderedCards(stream, Initial.Count), 1); // "b"
+
+        listing.OnNext([Package("0"), Package("a"), Package("b"), Package("c")]); // "b" moves to slot 2
+        var after = await RenderedCards(stream, 4);
+        after[1].GetProperty("id").GetString().Should().Be("a", "premise: another package now sits in slot 1");
+
+        (await ClickAndReadFetch(stream, clicked)).Should().Be("b");
+    }
+
+    /// <summary>A card whose package has LEFT the listing since the render installs nothing — the row
+    /// names the package, and the server's current page decides whether it is on offer.</summary>
+    [HubFact]
+    public async Task APackageThatLeftTheListingInstallsNothing()
+    {
+        var stream = await OpenCategory();
+        var clicked = AsTheClientRendersIt(await RenderedCards(stream, Initial.Count), 1); // "b"
+
+        listing.OnNext([Package("a"), Package("c")]);
+        await RenderedCards(stream, 2);
+
+        Submit(stream, clicked);
+        await fetched.Should().NotEmit(500.Milliseconds(),
+            "the clicked package is no longer offered, and no other package may take its place",
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>NEGATIVE CONTROL: the same button clicked with no row installs nothing — the package
+    /// comes from the row on the click and from nothing else.</summary>
+    [HubFact]
+    public async Task AClickWithNoRowInstallsNothing()
+    {
+        var stream = await OpenCategory();
+        await RenderedCards(stream, Initial.Count);
+
+        Submit(stream, row: null);
+        await fetched.Should().NotEmit(500.Milliseconds(),
+            "with no row the action cannot know which package, and must not guess",
+            TestContext.Current.CancellationToken);
+    }
+
+    // ── Harness ─────────────────────────────────────────────────────────────────────────────────
+
+    private async Task<ISynchronizationStream<JsonElement>> OpenCategory()
+    {
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            new LayoutAreaReference(Area) { Id = $"{Area}?{CatalogLayoutAreas.CategoryParam}={Category}" });
+        await stream.GetControlStream(InstallArea).Should().Within(10.Seconds()).Match(
+            c => c is ButtonControl, "the card template's Install button is rendered once, in the template",
+            TestContext.Current.CancellationToken);
+        return stream;
+    }
+
+    private static async Task<ImmutableArray<JsonElement>> RenderedCards(
+        ISynchronizationStream<JsonElement> stream, int count)
+    {
+        var cards = await stream.GetDataStream<JsonElement>(new JsonPointerReference(CardsPointer))
+            .Should().Within(10.Seconds()).Match(
+                c => c.ValueKind == JsonValueKind.Array && c.GetArrayLength() == count,
+                $"the client mirror holds the {count} cards it renders",
+                TestContext.Current.CancellationToken);
+        return [.. cards.EnumerateArray().Select(c => c.Clone())];
+    }
+
+    /// <summary>What the Blazor <c>ItemTemplate</c> cascades for row k: its pointer, index and the value it rendered.</summary>
+    private static RowContext AsTheClientRendersIt(ImmutableArray<JsonElement> cards, int k) => new()
+    {
+        Pointer = $"{CardsPointer}/{k}",
+        Index = k,
+        Value = cards[k].Clone(),
     };
 
-    private static UiControl Project(LayoutAreaHost host, IPackageSource source,
-        IReadOnlyList<PackageManifest> packages, IReadOnlyList<MeshNode> installed)
-        => Assert.IsAssignableFrom<UiControl>(typeof(CatalogLayoutAreas)
-            .GetMethod("BuildPackages", BindingFlags.NonPublic | BindingFlags.Static)!
-            .Invoke(null, [host, source, "HEAD", null, "Fixture source",
-                CatalogLayoutAreas.Plan("Fixtures", null, packages), installed,
-                ImmutableHashSet<string>.Empty, false, new ModuleActivationReport([])]));
+    private static void Submit(ISynchronizationStream<JsonElement> stream, RowContext? row)
+        => stream.SubmitUserAction(new ClickedEvent(InstallArea, stream.StreamId) { Row = row },
+            actingUser: null, onRefused: null, onAccepted: null);
 
-    private static IObservable<T> ReadOwner<T>(LayoutAreaHost host, Func<T> read)
-        => Observable.Create<T>(observer =>
-        {
-            host.Update(LayoutAreaReference.Data, data =>
-            {
-                try { observer.OnNext(read()); observer.OnCompleted(); }
-                catch (Exception error) { observer.OnError(error); }
-                return data;
-            });
-            return Disposable.Empty;
-        });
-
-    private static IEnumerable<(string Path, object? Control)> Children(LayoutAreaHost host, string path)
-        => ((StackControl)host.GetControl(path)!).Areas.Select(child =>
-        {
-            var childPath = path + "/" + child.Id;
-            return (childPath, host.GetControl(childPath));
-        });
-
-    private static (string Card, string Action, string Label) FindAction(LayoutAreaHost host, string name)
+    private async Task<string> ClickAndReadFetch(ISynchronizationStream<JsonElement> stream, RowContext row)
     {
-        var card = Children(host, Area).Single(child => child.Control is StackControl
-            && Children(host, child.Path).Any(grandchild =>
-                grandchild.Control is LabelControl label && Equals(label.Data, name))).Path;
-        var action = Children(host, card).Single(child => child.Control is ButtonControl { IsClickable: true });
-        return (card, action.Path, ((ButtonControl)action.Control!).Data.ToString()!);
+        var next = new ReplaySubject<string>(1);
+        using var _ = fetched.Skip(Fetches).Subscribe(next);
+        Submit(stream, row);
+        var id = await next.Should().Within(10.Seconds()).Emit(
+            "the Install click asks the source for the package's files", TestContext.Current.CancellationToken);
+        Fetches++;
+        return id!;
     }
 
-    [Theory]
-    [InlineData(false, "same")]
-    [InlineData(false, "insert")]
-    [InlineData(false, "rename")]
-    [InlineData(false, "description")]
-    [InlineData(false, "slash")]
-    [InlineData(true, "same")]
-    [InlineData(true, "insert")]
-    [InlineData(true, "rename")]
-    [InlineData(true, "description")]
-    [InlineData(true, "slash")]
-    public async Task RetainedInstallOrUpdateClick_MustKeepItsPackage(bool update, string change)
+    private int Fetches { get; set; }
+
+    private sealed class RecordingSource(
+        IObservable<IReadOnlyList<PackageManifest>> listing, IObserver<string> fetched) : IPackageSource
     {
-        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            CreateHostAddress(), new LayoutAreaReference(Area));
-        await stream.GetControlStream(Area).Where(c => c is StackControl)
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        var host = await owner.Should().Within(TestTimeouts.Convergence).Emit();
-        using var fetched = new ReplaySubject<string>();
-        var first = Package(change == "slash" ? "Plugins-Store" : "package-a", "Package A");
-        var intended = Package(change == "slash" ? "Plugins/Store" : "package-b", "Package B");
-        var last = Package(change == "slash" ? "Plugins" : "package-c", "Package C");
-        var source = new RecordingSource(fetched);
-        IReadOnlyList<MeshNode> installed = update
-            ? [new MeshNode(intended.Id, PackageInstaller.InstalledPartition)
-                { Content = intended with { Version = "1.0.0" } }]
-            : [];
-
-        host.UpdateArea(Area, Project(host, source, [intended, last], installed));
-        var retained = await ReadOwner(host, () => FindAction(host, intended.Name!))
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        retained.Label.Should().Contain(update ? "Update" : "Install");
-
-        var revised = change switch
-        {
-            "rename" => intended with { Name = "Package Z" },
-            "description" => intended with { Description = "New description shifts optional content" },
-            _ => intended
-        };
-        if (change == "rename")
-        {
-            Assert.Equal([intended.Id, last.Id], CatalogLayoutAreas.InCategory([intended, last], "Fixtures").Select(p => p.Id));
-            Assert.Equal([last.Id, intended.Id], CatalogLayoutAreas.InCategory([revised, last], "Fixtures").Select(p => p.Id));
-        }
-        host.UpdateArea(Area, Project(host, source,
-            change is "insert" or "slash" ? [first, revised, last] : [revised, last], installed));
-        var current = await ReadOwner(host, () => FindAction(host, revised.Name!))
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        Output.WriteLine("Retained {0} ({1}); current intended {2}; change={3}",
-            retained.Action, retained.Label, current.Action, change);
-        Assert.Equal(retained.Action, current.Action);
-        if (change == "slash")
-            Assert.Equal(3, retained.Action.Split('/').Length); // Area / encoded card / install.
-
-        // The actual owner dispatch resolves the retained event.Area against its CURRENT controls.
-        // No action delegate is invoked directly by this test.
-        var streamHub = host.Stream.Hub;
-        streamHub.Post(new ClickedEvent(retained.Action, host.Stream.ClientId),
-            options => options.WithTarget(streamHub.Address));
-        var requested = await fetched.Take(1).Should().Within(TestTimeouts.Convergence).Emit();
-        Output.WriteLine("Actual source FetchPackageFiles target: {0}; intended: {1}", requested, intended.Id);
-        Assert.Equal(intended.Id, requested);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_removed_or_now_installed_package_has_no_retained_install_target(bool nowInstalled)
-    {
-        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
-            CreateHostAddress(), new LayoutAreaReference(Area));
-        await stream.GetControlStream(Area).Where(c => c is StackControl)
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        var host = await owner.Should().Within(TestTimeouts.Convergence).Emit();
-        using var fetched = new ReplaySubject<string>();
-        var intended = Package("package-b", "Package B");
-        var other = Package("package-c", "Package C");
-        var source = new RecordingSource(fetched);
-        host.UpdateArea(Area, Project(host, source, [intended, other], []));
-        var retained = await ReadOwner(host, () => FindAction(host, intended.Name!))
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        host.UpdateArea(Area, Project(host, source, nowInstalled ? [intended, other] : [other],
-            nowInstalled ? [new MeshNode(intended.Id, PackageInstaller.InstalledPartition) { Content = intended }] : []));
-        // This is the exact current-control lookup OnClick uses. A missing action must not be
-        // reoccupied by the neighboring package or a different command on the same card.
-        Assert.True(await ReadOwner(host, () => host.GetControl(retained.Action) is null)
-            .Should().Within(TestTimeouts.Convergence).Emit());
-        var next = await ReadOwner(host, () => FindAction(host, other.Name!))
-            .Should().Within(TestTimeouts.Convergence).Emit();
-        var streamHub=host.Stream.Hub;
-        streamHub.Post(new ClickedEvent(retained.Action,host.Stream.ClientId),o=>o.WithTarget(streamHub.Address));
-        streamHub.Post(new ClickedEvent(next.Action,host.Stream.ClientId),o=>o.WithTarget(streamHub.Address));
-        Assert.Equal(other.Id,await fetched.Take(1).Should().Within(TestTimeouts.Convergence).Emit());
-    }
-
-    private sealed class RecordingSource(IObserver<string> fetched) : IPackageSource
-    {
-        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef)
-            => Observable.Return<IReadOnlyList<PackageManifest>>([]);
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) => listing;
 
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef)
             => Observable.Defer(() =>
             {
                 fetched.OnNext(package.Id);
-                // Not even an empty payload is emitted: SelectMany cannot invoke PackageInstaller.
+                // Not even an empty payload: the installer never runs, so nothing is written.
                 return Observable.Empty<IReadOnlyList<PackageFile>>();
             });
+    }
+
+    private sealed class SilentSource : IPackageSource
+    {
+        private int listings;
+
+        public int Listings => Volatile.Read(ref listings);
+
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef)
+            => Observable.Defer(() =>
+            {
+                Interlocked.Increment(ref listings);
+                return Observable.Never<IReadOnlyList<PackageManifest>>();
+            });
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef)
+            => Observable.Empty<IReadOnlyList<PackageFile>>();
     }
 }
