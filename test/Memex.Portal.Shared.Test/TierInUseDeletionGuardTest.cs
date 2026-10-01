@@ -68,7 +68,7 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
                 Content = new TierNode { Rank = rank, AllAccess = allAccess },
             }))
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
     private Task Register(string instanceId, string tier, CancellationToken ct) =>
@@ -79,7 +79,7 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
                 new ConfigurationBuilder().Build())
             .Register(Owner, "Owner", "owner@test.com", instanceId, instanceId, tier: tier)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
     /// <summary>The delete's fault, or null when it went through. Run as System: the guard does not
@@ -90,7 +90,7 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
             .Catch((Exception ex) => Observable.Return<Exception?>(ex))
             .DefaultIfEmpty(null)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(60))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
     private Task<MeshNode?> Read(string path, CancellationToken ct) =>

@@ -32,7 +32,7 @@ namespace Memex.Portal.Shared.Test;
 /// never answers fails with the QUERY's terminal (<see cref="QueryProviderStalledException"/>, which
 /// names the provider), not with an anonymous local timeout.</para>
 ///
-/// <para>The ladder is set explicitly so the margin is the subject, not a coincidence of defaults.</para>
+/// <para>The ladder is set explicitly so the margin is the subject, not a coincidence of the test base.</para>
 /// </summary>
 public class InstanceLookupHasNoBoundOfItsOwnTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -40,8 +40,9 @@ public class InstanceLookupHasNoBoundOfItsOwnTest(ITestOutputHelper output) : Mo
     private const string StalledInstance = "stalled-instance";
     private const string Owner = "slow-owner";
 
-    /// <summary>30 s at the top contracts to a 15 s fan-in budget — today's production default.</summary>
-    private static readonly MeshOperationOptions Ladder = new() { Timeout = TimeSpan.FromSeconds(30) };
+    /// <summary>The production default ladder (its fan-in budget is 15 s today), configured explicitly
+    /// so a change of the test base's ladder cannot move the margin under test.</summary>
+    private static readonly MeshOperationOptions Ladder = new();
 
     /// <summary>When the slow provider answers: well past the old local 10 s, still inside the budget.</summary>
     private static TimeSpan SlowAnswer => Ladder.QueryInitialBudget - TimeSpan.FromSeconds(3);
@@ -59,7 +60,7 @@ public class InstanceLookupHasNoBoundOfItsOwnTest(ITestOutputHelper output) : Mo
 
         var path = await Mesh.ServiceProvider.GetRequiredService<InstancePlanService>()
             .FindInstancePath(SlowInstance)
-            .Timeout(TimeSpan.FromSeconds(120))
+            .Timeout(TestTimeouts.Convergence + Ladder.QueryInitialBudget)
             .Await(TestContext.Current.CancellationToken);
 
         path.Should().Be($"{Owner}/{MeshWeaverInstanceNodeType.NodeType}/{SlowInstance}",
@@ -74,7 +75,7 @@ public class InstanceLookupHasNoBoundOfItsOwnTest(ITestOutputHelper output) : Mo
         {
             await Mesh.ServiceProvider.GetRequiredService<InstancePlanService>()
                 .FindInstancePath(StalledInstance)
-                .Timeout(TimeSpan.FromSeconds(120))
+                .Timeout(TestTimeouts.Convergence + Ladder.QueryInitialBudget)
                 .Await(TestContext.Current.CancellationToken);
         }
         catch (Exception ex)
