@@ -122,6 +122,21 @@ The editor view resolves the pointer through `MeshNodeBindingExtensions.Bind` (`
 - **A deferred slot** already has one: `NamedAreaView` draws the `SpinnerType` of its `LayoutAreaControl` / `NamedAreaControl` until the slot's first control arrives — `SpinnerType.Skeleton` is the ghost-box shape, and it is what a template's data-dependent sub-area should ask for.
 - **A bound field** draws EMPTY until its value arrives (`MeshNodeBindingExtensions.Bind` emits `null` for "absent / not yet"), and the per-control shape is not yet a skeleton. 🚨 That gap is a PLATFORM gap, to be closed once in `BlazorView` (render the skeleton, and keep an editable control read-only, until the first bound emission) — never per view. An editor bound by pointer accepts input before its first value has arrived; the window is short (the cache replays a held node at once) but it is real, and closing it in the base view closes it for every bound control at the same time.
 
+### A decision over several fields: publish a projection, bind the template to it
+
+Some of what a page shows is not a FIELD of a node but a DECISION over several — a compile panel whose chip, colour and button label depend on status × build presence × dirty flag, in the viewer's language. A field binding cannot express that, and computing it in a `GetMeshNodeStream().Select(…)` that builds controls is the bake. The shape the NodeType pages use:
+
+1. A **pure record** of the decided values (`NodeTypeStatusView` — title, status lines, panel style, button label, links), made by a pure `From(node, definition, path, locale)` that tests pin without a renderer.
+2. A **projection** — the ONE read of the node — `GetMeshNodeStream().Select(NodeTypeStatusView.From…)`, a function that builds no control.
+3. A **template** whose controls carry `DataContext = LayoutAreaReference.GetDataPointer(id)` and pointers into the record (`Controls.Body(pointer)`, `Style = pointer`, a button's `Disabled = pointer`), with the projection attached by `control.PublishingTo(id, projection)` (`MeshWeaver.Graph.LayoutProjection`): a buildup that publishes to `/data/{id}` for as long as the AREA lives and is disposed with it.
+
+The template is emitted at once and the values fill in; nothing is ever interpolated into a control. Lists go further and leave the hub entirely: the NodeType release history, the Settings Groups tab and the Admin Data Sources tab are `Controls.MeshSearch.WithHiddenQuery(…)`, run by the viewer's client.
+
+Two known gaps a template cannot close from the server side — both are view-side fixes in the Blazor layer:
+
+- **`CodeEditorView` resolves its `Value` pointer only against the layout stream**, never a node-bound DataContext (`MeshNodeBindingExtensions` is used by `BlazorView.DataBind` and the markdown editor, not by the code editor). A code editor therefore binds to a `/data` projection, as the NodeType configuration preview does; editing a node's code field in place needs the view fixed first.
+- **`NodeExportView` reads `NodeName` / `AvailableSatelliteTypes` straight off the view model**, so the Export area still loads them on the hub; the conversion is the view resolving both from `SourcePath` itself.
+
 ### The ratchet
 
 `test/MeshWeaver.Documentation.Test/LayoutAreaDataBakeRatchetGuard` counts, per file under `src/`, `memex/` and `samples/`, the layout-area units (methods, local functions, lambdas taking a `LayoutAreaHost`) that both READ data and BUILD controls. The seeded inventory is `test/LayoutAreaDataBakeSites.allow`; it may only shrink. Converting an area means lowering its line (and `TotalBudget`) in the same change. It is a text heuristic, and it says so: a load reached through another file's helper is missed, and an area that reads data only to choose its STRUCTURE (a permission gate) is counted — so the file is an inventory to work down, not a verdict on every line.
