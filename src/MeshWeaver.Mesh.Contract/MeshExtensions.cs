@@ -1079,6 +1079,12 @@ public static class MeshExtensions
                     .SelectMany(systemOwned => systemOwned is not null
                         ? Observable.Return<LocalizableText?>(systemOwned)
                         : BroadGrantRejection(hub, node, request.AccessContext, "CreateNode", logger))
+                    // 1f. A governedBy BACK-REFERENCE is a claim, checked where it is made: only
+                    //     the activity it names, while executing, may write it (any node type —
+                    //     an Admin/Provision request is the case that motivated it).
+                    .SelectMany(broad => broad is not null
+                        ? Observable.Return<LocalizableText?>(broad)
+                        : GovernedClaimRejection(hub, node, existing: null, request.AccessContext, "CreateNode", logger))
                     // 🚨 The key now travels the whole way (#4507). This used to hand on
                     // `grantRejection.English` and throw the key away at this frame, because
                     // CreateNodeResponse.Fail had no keyed surface to render into; it now carries
@@ -5618,6 +5624,63 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The governed-claim check at a write boundary: emits the refusal when the write INTRODUCES a
+    /// <c>governedBy</c> back-reference (<see cref="BroadGrantGuard.IntroducedClaim"/>) that its
+    /// writer does not account for — the writer's context is not that activity, or the activity is
+    /// not executing an allowlisted standard — AND the guard enforces, else <c>null</c>. In
+    /// <see cref="BroadGrantMode.LogOnly"/> it logs <c>[BroadGrantGuard] WOULD REFUSE GovernedClaim</c>.
+    ///
+    /// <para>Any node type. The broad-grant guard sees grants and policies; a node a control plane
+    /// ACTS on because it names an activity (<c>Admin/Provision/{package}</c>) is the same claim,
+    /// and without this check its <c>governedBy</c> was whatever its creator typed.</para>
+    /// </summary>
+    private static IObservable<LocalizableText?> GovernedClaimRejection(
+        IMessageHub hub, MeshNode node, MeshNode? existing, AccessContext? writer, string seat, ILogger logger)
+    {
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        var mode = BroadGrantGuard.Mode(configuration);
+        if (mode == BroadGrantMode.Off
+            || BroadGrantGuard.IntroducedClaim(node, existing, hub.JsonSerializerOptions) is not { } claim)
+            return Observable.Return<LocalizableText?>(null);
+
+        var verified = BroadGrantGuard.WriterIsClaimedActivity(claim, writer)
+            ? hub.IsGovernedActivityExecuting(claim, BroadGrantGuard.GovernedStandards(configuration))
+            : Observable.Return(false);
+
+        return verified.Select(governed =>
+        {
+            if (governed)
+                return null;
+            logger.LogWarning(
+                "[BroadGrantGuard] WOULD REFUSE GovernedClaim {Path} nodeType={NodeType} claims={Activity} writer={Writer} writerGovernedBy={WriterActivity} seat={Seat} mode={Mode}",
+                node.Path, node.NodeType, claim, writer?.ObjectId, writer?.GovernedBy, seat, mode);
+            return mode == BroadGrantMode.Enforce ? BroadGrantGuard.ClaimRefusal(node.Path, claim, writer) : (LocalizableText?)null;
+        });
+    }
+
+    /// <summary>
+    /// What the governed activity at <paramref name="activityPath"/> IS — standard, state, signed
+    /// inputs (<see cref="GovernedActivityFacts"/>) — read authoritatively from storage, the same
+    /// identity-independent read the write boundary's verifier uses. Emits null when there is no
+    /// such activity or it cannot be read. Cold; emits once; never throws.
+    ///
+    /// <para>For a control plane that acts on a governed node AFTER it was written: decide on
+    /// <see cref="GovernedActivityFacts.HasStarted"/> and on the signed inputs, never on
+    /// <see cref="GovernedActivityFacts.IsExecuting"/> — the activity may have finished in between.</para>
+    /// </summary>
+    public static IObservable<GovernedActivityFacts?> ReadGovernedActivity(this IMessageHub hub, string activityPath)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null || string.IsNullOrWhiteSpace(activityPath))
+            return Observable.Return<GovernedActivityFacts?>(null);
+        return ReadNodeAuthoritative(hub, persistence, activityPath.Trim())
+            .Select(activity => GovernedActivityFacts.Read(activity, hub.JsonSerializerOptions))
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Catch((Exception _) => Observable.Return<GovernedActivityFacts?>(null));
+    }
+
+    /// <summary>
     /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> with its authorship: Delete on
     /// its namespace, which is what <see cref="MoveNodePermissionAttribute"/> requires of a mover.
     /// ONE function, so the copy handler's <c>PreserveAuthorship</c> gate and the create handler's
@@ -5701,34 +5764,9 @@ public static class MeshExtensions
     /// (<c>state</c>: the enum name or <see cref="BroadGrantGuard.GovernanceActivityStateExecuting"/>; <c>standard</c>: a path or an id). Pure.
     /// </summary>
     internal static bool GovernedActivityExecuting(
-        MeshNode? activity, IReadOnlySet<string> allowed, System.Text.Json.JsonSerializerOptions? options)
-    {
-        if (activity?.Content is not { } content)
-            return false;
-        try
-        {
-            var element = content is System.Text.Json.JsonElement je
-                ? je
-                : System.Text.Json.JsonSerializer.SerializeToElement(content, content.GetType(), options);
-            if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
-                return false;
-            var executing = element.TryGetProperty("state", out var state)
-                            && (state.ValueKind == System.Text.Json.JsonValueKind.String
-                                ? string.Equals(state.GetString(), "Executing", StringComparison.OrdinalIgnoreCase)
-                                : state.ValueKind == System.Text.Json.JsonValueKind.Number
-                                  && state.TryGetInt32(out var number) && number == BroadGrantGuard.GovernanceActivityStateExecuting);
-            if (!executing || !element.TryGetProperty("standard", out var standard)
-                           || standard.ValueKind != System.Text.Json.JsonValueKind.String)
-                return false;
-            var id = (standard.GetString() ?? "").Trim().Trim('/');
-            var slash = id.LastIndexOf('/');
-            return allowed.Contains(slash < 0 ? id : id[(slash + 1)..]);
-        }
-        catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
-        {
-            return false;
-        }
-    }
+        MeshNode? activity, IReadOnlySet<string> allowed, System.Text.Json.JsonSerializerOptions? options) =>
+        GovernedActivityFacts.Read(activity, options) is { IsExecuting: true } facts
+        && allowed.Contains(facts.StandardId);
 
     /// <summary>
     /// Sync-friendly observable variant of the creation-validator runner. Iterates
@@ -6429,6 +6467,15 @@ public static class MeshExtensions
             .SelectMany(systemOwned => systemOwned is not null
                 ? Observable.Return<LocalizableText?>(systemOwned)
                 : BroadGrantRejection(hub, node, inboundCtx, "UpsertNode", logger))
+            // Same governed-claim check as the create path. An upsert that KEEPS the claim the
+            // stored node already carries introduces nothing; one that adds or changes it is
+            // checked — so the existing node is read only when the incoming one claims anything.
+            .SelectMany(broad => broad is not null
+                ? Observable.Return<LocalizableText?>(broad)
+                : BroadGrantGuard.GovernedByOf(node, hub.JsonSerializerOptions) is null
+                    ? Observable.Return<LocalizableText?>(null)
+                    : existingObs.Take(1).DefaultIfEmpty(null)
+                        .SelectMany(existing => GovernedClaimRejection(hub, node, existing, inboundCtx, "UpsertNode", logger)))
             .SelectMany(grantRejection =>
             {
                 if (grantRejection is null)
