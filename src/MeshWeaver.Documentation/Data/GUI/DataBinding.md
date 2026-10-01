@@ -130,9 +130,9 @@ The editor view resolves the pointer through `MeshNodeBindingExtensions.Bind` (`
 - **Another node's live state — embed THAT node's own area.** The GitHub-sync tab's activity panel used to subscribe the activity node twice and rebuild hand-made HTML plus a Cancel button on every progress tick. It now embeds `new LayoutAreaControl(new Address(activityPath), new LayoutAreaReference(ActivityLayoutAreas.ProgressArea)).WithSpinnerType(SpinnerType.Skeleton)`: the activity's hub renders its log, status and Cancel, and the tab reads nothing.
 - `LayoutTemplateAssertions.EveryViewIsStatic` / `Descendants` (`MeshWeaver.Hosting.Monolith.TestBase`) is the shared form of the reference test's check.
 
-- **A list with a per-row action (archive, revoke, rotate)** — a fed grid plus SELECTION: `WithClickAction` on the grid reads the clicked row from `DataGridCellClick` with `.As<TRow>(…)` and writes it to a `/data` slot (seeded with a "nothing selected" row whose label is the hint); a bound label shows the selection and the action buttons below the grid act on it, refusing — and saying so — when nothing actionable is selected. The settings tabs Inbox, Invitations and Service identities use it. Keep the feed in its own function (it takes the host, builds no control) and the action in its own function, so the template function reads nothing.
+- **A list with a per-row action (archive, revoke, rotate, open)** — a fed grid with a ROW-SCOPED button in a template column (see "Row-scoped actions" below): the button is declared once, and its click carries the row it was clicked in. The coupon admin list is the reference (`CouponAdminSettingsTab.CouponGrid`, pinned by `CouponListOpensTheClickedCouponTest`). The older shape, written before row-scoped actions existed, is a fed grid plus SELECTION: `WithClickAction` on the grid reads the clicked row from `DataGridCellClick` with `.As<TRow>(…)` and writes it to a `/data` slot (seeded with a "nothing selected" row whose label is the hint); a bound label shows the selection and the action buttons below the grid act on it, refusing — and saying so — when nothing actionable is selected. The settings tabs Inbox, Invitations and Service identities use it. Keep the feed in its own function (it takes the host, builds no control) and the action in its own function, so the template function reads nothing.
 
-**Not convertible at the helper:** `LayoutHelperExtensions.StreamView<T>` hands the caller's `viewFactory` the loaded items, so its contract IS the bake; it retires when its callers (`MeshNodeLayoutAreas.Thumbnail`/`Metadata` here, three `MeshWeaver.Graph.Views` areas in MeshWeaver.Plugins) are templates. **A platform gap:** a button inside a bound row (`ItemTemplateControl`, `TemplateColumnControl`) posts a `ClickedEvent` with no row, so a list with a per-row action (revoke, archive, rotate) cannot yet be a bound list with the same behaviour; `DataGridControl.WithClickAction` + `DataGridCellClick` (the row arrives as the payload — `GitHistoryTab`) is the bound shape that exists today. The plugin catalog's card pages (`CatalogLayoutAreas.Catalog`: install / update / remove per card, an update-policy select per card, activation notes) are the largest area waiting on that gap; the coupon and instance-grant admin lists, which navigate or act on a row, are fed grids already.
+**Not convertible at the helper:** `LayoutHelperExtensions.StreamView<T>` hands the caller's `viewFactory` the loaded items, so its contract IS the bake; it retires when its callers (`MeshNodeLayoutAreas.Thumbnail`/`Metadata` here, three `MeshWeaver.Graph.Views` areas in MeshWeaver.Plugins) are templates. **The per-row button gap is closed:** a button inside a bound row (`ItemTemplateControl`, `TemplateColumnControl`) now carries its row on the click (see "Row-scoped actions" below), so a list with a per-row action can be a bound list with the same behaviour. The areas that were downgraded to "click the row, then act", or left unconverted, for want of it are listed for conversion in the platform pull request; the plugin catalog's card pages (`CatalogLayoutAreas.Catalog`: install / update / remove per card, an update-policy select per card) are the largest.
 
 ### The ratchet
 
@@ -521,6 +521,52 @@ sequenceDiagram
     Server->>Client: Return Markdown("Result: 5")
     Client->>User: Display "Result: 5"
 ```
+
+---
+
+# Row-scoped actions
+
+A bound row template is declared ONCE and rendered by the client once per row: `BindMany` (an `ItemTemplateControl`) and a data grid's `TemplateColumnControl`. On the owner the template's controls exist once, at the template's area, so a button in it cannot say which row it is by its area. The click carries the row instead: the client stamps the row it rendered on the `ClickedEvent` (`ClickedEvent.Row`, a `RowContext`), and the action reads it from `UiActionContext.Row`.
+
+```csharp
+// A list — one Archive button per row, one action for all of them.
+mail.BindMany("mail", m => Controls.Stack
+    .WithView(Controls.Label(m.Subject))
+    .WithView(Controls.Button("🗃️").WithClickAction(ctx => Archive(ctx))));
+
+static Task Archive(UiActionContext ctx)
+{
+    var row = ctx.RowAs<MailRow>();   // the row as the client rendered it (MeshWeaver.Mesh)
+    var path = ctx.RowPath();         // its node path, for a node row (a `path` property)
+    // … write as the clicking user; the write's own access check is the guard …
+    return Task.CompletedTask;
+}
+
+// A grid (any bound DataGridControl) — the template column's button acts on its row.
+grid.WithColumn(new PropertyColumnControl<string> { Property = "code" })
+    .WithColumn(new TemplateColumnControl(
+        Controls.Button("➡️").WithClickAction(ctx => Open(ctx))));
+```
+
+What `RowContext` holds:
+
+| Field | Meaning |
+|---|---|
+| `Value` | The row's value as the client rendered it — JSON. Read it with `ctx.RowAs<T>()`, never a cast. |
+| `NodePath()` / `ctx.RowPath()` | `Path` when the client set it, else the value's own `path` property. Null for a row that is not a node. |
+| `Pointer` | The row's data context (`/data/"mail"/3`) for a `BindMany` row; null for a grid row, which the client sorts and pages. |
+| `Index` | The row's position when it was rendered. Diagnostic only. |
+
+The rules:
+
+- 🚨 **The row is the one the person CLICKED, never a position re-read at click time.** A list that changed between the render and the click (a row added above, one removed) would hand an index-based action whatever row moved into that slot — the wrong mail archived, the wrong token revoked. `Value` is what the person saw, so it is the identity; never re-resolve the row through `Pointer` or `Index`.
+- 🚨 **The row is USER INPUT**, like any click payload. The action writes as the clicking user and the write's own access check decides whether the user may act on that row; a field of the row is never proof of anything.
+- **Inside a `BindMany` expression a click action is an expression-bodied lambda or a method group** (`ctx => Archive(ctx)`), because the template is an expression tree; put the body in a method.
+- **A grid template column's template is rendered into its own sub-area** (`DataGridControl.TemplateColumnArea(i)`, i.e. `{grid}/Column{i}`), which is where its controls — and their click actions — are found. Do not also give the grid a row-click action (`DataGridCellClick`) for the same cells: a click on the button is a click on its cell too.
+- **`MeshSearch` rows need none of this.** Each result renders through the node's OWN item area (`WithItemArea(…)`), so a button there lives on that node's hub, which already knows its path.
+- A `BlurEvent` carries the row the same way; inputs in a row need nothing extra, since they are bound by pointer to the row they edit.
+
+Where it is wired: core `MeshWeaver.Layout` (`RowContext`, `ClickedEvent.Row`, `UiActionContext.Row`, `DataGridControl.RenderSelf`) and `MeshWeaver.Mesh.Contract` (`RowAs<T>`); the Blazor views in MeshWeaver.Plugins cascade the row (`ItemTemplate`, `DataGridView`) and `BlazorView` stamps it on every click and blur. Pinned by `test/MeshWeaver.Layout.Test/RowScopedClickActionTest` (N rows, row k acts on row k; a no-row negative control; the list changing between render and click; a grid template column) and, for the client half, Plugins' `RowScopedActionsFromViewsTest`.
 
 ---
 
