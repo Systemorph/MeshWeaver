@@ -286,7 +286,7 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
     {
         var json = $$"""{"markdown":"{{StoredMarkdownText}}"}""";
         object stored = asDom
-            ? JsonNode.Parse(json)!
+            ? JsonNode.Parse(json) ?? throw new InvalidOperationException("a JSON object literal parses to a node")
             : JsonDocument.Parse(json).RootElement.Clone();
         var logger = new RecordingLogger();
 
@@ -319,8 +319,8 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
             GetHost().JsonSerializerOptions,
             logger);
 
-        result.Content.Should().BeOfType<JsonElement>();
-        ((JsonElement)result.Content!).GetRawText().Should().Be(stored.GetRawText());
+        result.Content.Should().BeOfType<JsonElement>()
+            .Which.GetRawText().Should().Be(stored.GetRawText());
         AssertReportedAsWarningNotError(logger, "a JSON string");
     }
 
@@ -385,7 +385,8 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
             logger);
 
         if (asJson)
-            ((JsonElement)result.Content!).GetRawText().Should().Be(((JsonElement)stored).GetRawText());
+            result.Content.Should().BeOfType<JsonElement>()
+                .Which.GetRawText().Should().Be(((JsonElement)stored).GetRawText());
         else
             result.Content.Should().BeSameAs(stored);
         logger.Entries.Where(e => e.Level >= LogLevel.Error).Should().BeEmpty(
