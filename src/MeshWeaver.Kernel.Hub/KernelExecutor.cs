@@ -14,6 +14,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Compiler;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
@@ -451,7 +452,19 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         name => cellSurfaceBindings?.GetValueOrDefault(name));
                     var options = scriptOptions;
                     return cpuLane
-                        .InvokeBlocking(t => current.Compile(cleaned, options, typeof(MeshScriptGlobals), t))
+                        .InvokeBlocking(t =>
+                        {
+                            var submission = current.Compile(cleaned, options, typeof(MeshScriptGlobals), t);
+                            // Option C (Doc/Architecture/InMeshImpersonation): judge the submission's
+                            // references to impersonation APIs BEFORE any of it runs. A script session is
+                            // never trusted; LogOnly logs, Enforce refuses the cell.
+                            if (publicHub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard is
+                                { Mode: not InMeshImpersonationMode.Off } guard)
+                                guard.CheckCompiled(ScriptSession.LoadContextName, publicHub.Address.ToString(),
+                                    InMeshImpersonationReferences.Find(submission.Compilation, t)
+                                        .Select(r => r.ToString()).ToList());
+                            return submission;
+                        })
                         .SelectMany(compiled => compilePool.Invoke(t =>
                         {
                             // The scope is held only while the submission STARTS: its first await

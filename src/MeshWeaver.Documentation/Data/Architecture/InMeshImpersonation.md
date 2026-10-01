@@ -111,6 +111,59 @@ Every in-mesh Plugins NodeType group that impersonates, from the sweep:
 
 Separately, four satellite sites still use raw `Observable.Using(() => access.ImpersonateAsSystem(), …)`. That is the #1790 latch, which leaves System on the subscribing thread. The four sites are Reinsurance ×2, SocialMedia and Crm. Plugins' `check-impersonation.py` runs only in Plugins CI, which is how these four got in.
 
+### Compile-time check (option C, core)
+
+When the portal compiles in-mesh code, `InMeshImpersonationReferences.Find` reports every **symbol reference** in the authored source to an API that lets code act as someone else. The same guard then judges the compile with `CheckCompiled`, under the same mode and trust list as the runtime check.
+
+**Where it runs:**
+
+| What is compiled | Load context the code runs in |
+|---|---|
+| A NodeType (`MeshNodeCompilationService`, before source generators, so platform-generated code is not attributed to the author) | `DynamicNode_{node}` |
+| A C# Code cell or script (`KernelExecutor`) | `kernel-script-session`, never trusted |
+| A NodeType configuration script (`ScriptCompilationService`) | `node-config-script:{path}`, never trusted |
+
+**What it reports:**
+
+- **Every impersonation surface.**
+- **APIs that install an identity without going through a surface:** `IMessageDelivery.SetAccessContext`, `IMessageHub.DeliverMessage`, `MeshQueryRequest.AsSystem` and `ForViewer`, a **write** to `MeshQueryRequest.UserId`, and a write to `AccessContext.IsHub`.
+- **The System identity's names:** `WellKnownUsers.System` and `SystemContext`, `AccessService.SystemObjectId`, and the literal `"system-security"`.
+
+It reports a reference, not a call. That is why it closes three things the runtime guard cannot see:
+
+- the **tail call**, because the reference is in the source however the JIT later emits the call;
+- the **delegate hand-back**, because a method group is a reference;
+- the **hand-built context**.
+
+`SwitchAccessContext` is deliberately not reported. In-mesh code switches back to a captured viewer legitimately, and switching to System needs one of the names above.
+
+**What it does in each mode:**
+
+| Mode | Effect |
+|---|---|
+| `LogOnly` | Logs `[InMeshImpersonation] COMPILE WOULD REFUSE {owner} ({path}) references {Symbol at file(line)}` |
+| `Enforce` | Refuses the compile. A NodeType parks at `compilationStatus: Error` with the refusal as its message; a cell fails to run. Either way, nothing runs |
+
+What it still cannot see is **reflection by name** (`GetMethod("ImpersonateAsSystem")`). Only option D closes that.
+
+### Gate passthrough bound to the request it answers (option E, Plugins)
+
+Under the same `Grpc:GateIdentityMode` switch, the trusted port records each request it forwards to a gate under an ordinary user: the request id and that user. A carried user on a gate delivery is **bound**, and passes through, in two cases:
+
+- the delivery is the response to an in-flight request of that same user, which also retires the request;
+- the delivery arrives while a request of that user is still in flight. This covers a Code run's activity-log patches, which the worker posts as the requester with no request id.
+
+Every other carried user is **unbound**:
+
+| Mode | An unbound carried user |
+|---|---|
+| `LogOnly` | keeps the passthrough and logs `[GatePrincipal] WOULD REFUSE passthrough …` |
+| `Enforce` | runs as the gate principal |
+
+The record keeps at most 256 requests per connection and is dropped on answer and on disconnect.
+
+The residual: while a request for user U is in flight, the gate can write anything as U, not only that run's output. Closing it needs the gate protocol to carry the request id on follow-ups.
+
 ## What the runtime guard cannot see
 
 These limits were measured, not reasoned. They are why `Enforce` on the runtime guard alone is **defence in depth, not a boundary**:
@@ -129,9 +182,9 @@ These limits were measured, not reasoned. They are why `Enforce` on the runtime 
 |---|---|---|---|
 | **A** | Status quo: keep the broad-grant guard only | Broad grants only | Nothing breaks. In-mesh code keeps every other power System has |
 | **B** | **Runtime guard + gate principal (these drafts) → `Enforce`**, with `TrustedCode` = the package roots that need it (`Store`, `Hosting`, `Governance`, `Feedback`, `Essentials`, …) | Direct impersonation by user-authored NodeTypes and scripts in user partitions and Spaces; gate deliveries without a user | Low once the trust list matches the `LogOnly` inventory. Leaves limits 1–4 open, so it is a measurement and a speed bump, not a boundary |
-| **C** | **B + a compile-time check**: when the portal compiles in-mesh code, refuse (under Enforce) any **symbol reference** to an impersonation surface, `WellKnownUsers.System`/`SystemContext`, `IMessageDelivery.SetAccessContext` or `MeshQueryRequest.AsSystem`, unless the NodeType is trusted | Limits 1–3 for compiled code: the compiler sees the reference however the JIT emits the call. Reflection by name stays open unless `System.Reflection` is also banned there | Medium. It must report through `compilationStatus` and the warning ratchet, **never** through a `GeneralDiagnosticOption` in `EmitPipeline` (that would park types and stall a roll; see [In-Mesh Warning Standard](/Doc/Architecture/InMeshWarningStandard)). It needs the same trust list |
+| **C** | **B + a compile-time check** (built, `LogOnly`; see above): when the portal compiles in-mesh code, refuse (under Enforce) any **symbol reference** to an impersonation surface, `WellKnownUsers.System`/`SystemContext`, `IMessageDelivery.SetAccessContext` or `MeshQueryRequest.AsSystem`, unless the NodeType is trusted | Limits 1–3 for compiled code: the compiler sees the reference however the JIT emits the call. Reflection by name stays open unless `System.Reflection` is also banned there | Medium. It must report through `compilationStatus` and the warning ratchet, **never** through a `GeneralDiagnosticOption` in `EmitPipeline` (that would park types and stall a roll; see [In-Mesh Warning Standard](/Doc/Architecture/InMeshWarningStandard)). It needs the same trust list |
 | **D** | **Sealed platform principal**: System and hub contexts carry an unforgeable seal (an object only platform assemblies can mint); `SecurityService` treats an unsealed `system-security` as an ordinary, grant-less id; transports re-seal on ingress | Every forgery path, by construction, including hand-built contexts and reflection | High. Every serialization hop (the Orleans silo boundary, packaging) must re-seal; it touches the identity model fleet-wide |
-| **E** | Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 4 | Medium, and confined to Plugins' gRPC registry |
+| **E** | (built, `LogOnly`; see above) Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 4 | Medium, and confined to Plugins' gRPC registry |
 
 **Decision: B now, in `LogOnly`, then C and E.** The order is binding:
 

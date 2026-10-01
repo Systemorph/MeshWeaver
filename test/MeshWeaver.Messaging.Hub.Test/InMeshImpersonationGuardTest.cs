@@ -228,6 +228,54 @@ public sealed class InMeshImpersonationGuardTest : IDisposable
         logs.Lines.Should().NotContain(l => l.Contains(InMeshImpersonationGuard.LogPrefix));
     }
 
+    // ── Option C: the compile-time verdict ─────────────────────────────────────────────────────
+
+    private static readonly string[] CompiledReference =
+        ["MeshWeaver.Messaging.AccessService.ImpersonateAsSystem at Probe.cs(3)"];
+
+    [Fact]
+    public void Compile_Enforce_UntrustedNodeType_IsRefused()
+    {
+        var access = Access(InMeshImpersonationMode.Enforce, null, "Governance");
+
+        ((Action)(() => access.ImpersonationGuard.CheckCompiled(UserNodeType, "rbuergi/Evil", CompiledReference)))
+            .Should().Throw<InMeshImpersonationRefusedException>()
+            .Which.Caller.CodeOwner.Should().Be(UserNodeType);
+    }
+
+    [Fact]
+    public void Compile_Enforce_TrustedNodeType_AndNoReferences_Pass()
+    {
+        var access = Access(InMeshImpersonationMode.Enforce, null, "Governance");
+
+        access.ImpersonationGuard.CheckCompiled(TrustedNodeType, "Governance/Activity", CompiledReference);
+        access.ImpersonationGuard.CheckCompiled(UserNodeType, "rbuergi/Clean", []);
+    }
+
+    [Fact]
+    public void Compile_Enforce_AScriptOrConfigScript_IsNeverTrusted()
+    {
+        var access = Access(InMeshImpersonationMode.Enforce, null, "kernel-script-session", "node-config-script:Governance");
+
+        ((Action)(() => access.ImpersonationGuard.CheckCompiled("kernel-script-session", "kernel", CompiledReference)))
+            .Should().Throw<InMeshImpersonationRefusedException>();
+        ((Action)(() => access.ImpersonationGuard.CheckCompiled("node-config-script:Governance/Activity", "Governance/Activity", CompiledReference)))
+            .Should().Throw<InMeshImpersonationRefusedException>();
+    }
+
+    [Fact]
+    public void Compile_LogOnly_IsAllowedAndNamed()
+    {
+        var logs = new CapturingLoggerFactory();
+        var access = Access(InMeshImpersonationMode.LogOnly, logs);
+
+        access.ImpersonationGuard.CheckCompiled(UserNodeType, "rbuergi/Evil", CompiledReference);
+
+        logs.Lines.Should().ContainSingle(l => l.Contains(InMeshImpersonationGuard.LogPrefix))
+            .Which.Should().Contain("COMPILE WOULD REFUSE").And.Contain(UserNodeType)
+            .And.Contain("rbuergi/Evil").And.Contain("ImpersonateAsSystem at Probe.cs(3)");
+    }
+
     [Fact]
     public void Default_IsLogOnly()
     {
