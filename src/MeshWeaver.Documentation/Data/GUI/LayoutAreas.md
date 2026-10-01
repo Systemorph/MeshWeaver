@@ -70,22 +70,26 @@ public static MessageHubConfiguration AddCodeViews(this MessageHubConfiguration 
 
 ## View Function Signatures
 
-A view function receives a `LayoutAreaHost` and `RenderingContext`. Return a static control for a one-time render, or an `IObservable<UiControl?>` for a live-updating view:
+A view function receives a `LayoutAreaHost` and `RenderingContext` and returns a control — or an `IObservable<UiControl?>` when the control tree itself must change shape. **A view that shows data is still a static control: a TEMPLATE that binds the data by path** ([Data Binding → Templates first, data later](../DataBinding)). It is on screen at the first render, shows a skeleton where a value has not arrived, and follows every later edit — the GUI resolves the bindings, the hub reads nothing:
 
 ```csharp
-// Static view — renders once
-public static UiControl Edit(LayoutAreaHost host, RenderingContext ctx)
-{
-    return Controls.Stack.WithView(Controls.H1("Editor"));
-}
+// A view of the hosting node — a template, bound by PATH. No read on the hub.
+public static UiControl Overview(LayoutAreaHost host, RenderingContext ctx)
+    => OverviewTemplate(host.Hub.Address.ToString());
 
-// Reactive view — re-renders whenever data changes
-public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext ctx)
-{
-    return host.Workspace.GetStream<MeshNode>()
-        .Select(nodes => (UiControl?)BuildContent(nodes));
-}
+public static UiControl OverviewTemplate(string nodePath) =>
+    Controls.Stack
+        .WithView(Controls.H2(new JsonPointerReference("companyName")) with
+        {
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath)   // the node's content
+        })
+        .WithView(Controls.Body(new JsonPointerReference("city")) with
+        {
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath)
+        });
 ```
+
+🚨 **Do not** return `host.Workspace.GetMeshNodeStream().Select(node => Controls…)` (or `GetStream<MeshNode>()`, or a query) for a view that only SHOWS data: the page waits for the slowest read, then shows a snapshot built on the hub. The worked samples are `samples/Graph/Data/Northwind/{Customer,Supplier,Employee,Product}` — each with a `Test/` folder whose cases assert the template with `LayoutTemplate.DeferredViews`.
 
 ## Reading the Hosting Node's Own Content
 
@@ -111,21 +115,37 @@ CS1929: 'LayoutAreaHost' does not contain a definition for 'GetData' and the bes
 which reads as *"you passed the wrong receiver"* and sends the reader hunting for an `EntityStore` to
 pass. There isn't one to find; the method was never the right one.
 
-**The read is the node stream, and the no-argument overload means "this hub's own node":**
+**To SHOW a field, do not read the node at all — bind it** (the template above): a
+`JsonPointerReference` with `DataContext = LayoutAreaReference.GetMeshNodeDataContext(path)` is
+resolved by the GUI through the same node stream, live.
+
+**To COMPUTE something from it, the read is the node stream, and the no-argument overload means
+"this hub's own node".** Keep that read in a FEED — a function that builds no control — and bind
+its output into a control declared up front with `Template.Bind`, which writes each value to
+`/data/{id}`:
 
 ```csharp
-public static IObservable<UiControl?> Detail(LayoutAreaHost host, RenderingContext _)
+public static UiControl Employment(LayoutAreaHost host, RenderingContext _)
+    => Controls.Stack
+        .WithView(Controls.H2("Employment"))
+        .WithView(EmploymentFeed(host).Bind(markdown => Controls.Markdown(markdown), "employment"));
+
+// The FEED: reads, computes, builds no control. Errors are logged and shown, never swallowed.
+public static IObservable<string> EmploymentFeed(LayoutAreaHost host)
     => host.Workspace.GetMeshNodeStream()                       // no argument = the hosting node
         .Select(node => node.ContentAs<MyContent>(host.Hub.JsonSerializerOptions))
-        .Select(content => (UiControl?)Controls.Stack
-            .WithView(Controls.H2(content?.Name ?? ""))
-            .WithView(Controls.Markdown(content?.Description ?? "")));
+        .Select(content => content is null ? "*No data.*" : Render(content))
+        .Catch<string, Exception>(ex => { /* log */ return Observable.Return("*Could not be read.*"); });
 ```
 
-`host.Workspace.GetMeshNodeStream()` is the shipped idiom — `ExportLayoutArea`,
-`MarkdownOverviewLayoutArea`, `MeshNodeLayoutAreas` and `UserActivityLayoutAreas` all open with it —
-and `GetMeshNodeStream(path)` reads any *other* node through the same process-wide
-`IMeshNodeStreamCache`.
+`samples/Graph/Data/Northwind/Employee` and `samples/Graph/Data/PythonDemo/PrimeReport` are the
+worked examples.
+
+`host.Workspace.GetMeshNodeStream()` is the read, and `GetMeshNodeStream(path)` reads any *other*
+node through the same process-wide `IMeshNodeStreamCache`. Several framework areas still read it
+and build their controls out of the values (`ExportLayoutArea`, `MarkdownOverviewLayoutArea`,
+`MeshNodeLayoutAreas`, …); they are on the shrink-only inventory `test/LayoutAreaDataBakeSites.allow`
+and are being converted — copy the samples, not them.
 
 Three rules travel with it:
 
@@ -136,7 +156,7 @@ Three rules travel with it:
   exception and nothing to grep. Use `ContentAs<T>(hub.JsonSerializerOptions)`. The shipped
   `SocialMediaProfileLayoutAreas` sample predates this and hand-digs a `JsonElement` through a
   `GetProp` helper — that helper *is* the symptom, not a pattern to copy.
-- 🚨 **Never `.Take(1)`** on the stream feeding the returned view — it freezes the binding at the
+- 🚨 **Never `.Take(1)`** on the stream feeding a view or a feed — it freezes the binding at the
   first emission and the area stops tracking the node.
 - **Writing back** is `GetMeshNodeStream(path).Update(current => current with { … })`, the only
   mutation API — and it returns a **cold** observable, so the write does not happen until you
