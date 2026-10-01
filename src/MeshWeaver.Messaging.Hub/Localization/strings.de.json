@@ -151,6 +151,8 @@
   "node.meta.updated": "Aktualisiert:",
   "node.meta.lastActivity": "Letzte Aktivität:",
   "node.meta.by": "von {0}",
+  "node.types.ownType": "Typ dieses Knotens",
+  "node.types.inNamespace": "Typen in {0}",
   "menu.edit": "Bearbeiten",
   "menu.pin": "Anheften",
   "menu.move": "Verschieben",

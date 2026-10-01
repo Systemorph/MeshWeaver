@@ -112,10 +112,27 @@ The editor view resolves the pointer through `MeshNodeBindingExtensions.Bind` (`
 |---|---|---|
 | A field of a node (title, description, a content property) | Any form/display control with a `JsonPointerReference` and `DataContext = LayoutAreaReference.GetMeshNodeDataContext(path[, bindContent: false])` | GUI, `MeshNodeBindingExtensions.Bind` |
 | A node's markdown body | `MarkdownEditorControl { Value = pointer, DataContext = nodeCtx }` (edit) · `CollaborativeMarkdownControl { NodePath }` (read) | GUI |
-| A node as a card | `new MeshNodeThumbnailControl(path, …)` / `MeshNodeCardControl` with the PATH — never `FromNode(loadedNode)` | GUI, per-node cache |
+| A node as a card | `MeshNodeThumbnailControl.ForPath(path)` / `MeshNodeCardControl` with the PATH — never `FromNode(loadedNode)` | GUI, per-node cache |
 | A list of nodes | `Controls.MeshSearch.WithHiddenQuery(…)` · `MeshNodeCollectionControl.WithQueries(…)` — the GUI runs the query | GUI |
 | Rows computed on the hub (a projection, an aggregate) | `stream.BindMany(id, row => template)` / `stream.Bind(x => template, id)` (`Template` in `MeshWeaver.Layout`) — the control is returned AT ONCE and the stream feeds `/data/{id}` | hub → `/data`, bound by pointer |
+| One text computed on the hub (a serialization, a rendered fragment) | `textStream.BoundMarkdown(id)` / `htmlStream.BoundHtml(id)` (`BoundProjections` in `MeshWeaver.Layout`) — the `Template.Bind` row above for the common single-text case | hub → `/data`, bound by pointer |
+| Something that decides the page's STRUCTURE (which catalog, which type) | Read it from the hub's CONFIGURATION, never the node: `NodeTypePathHolder` (the type the hub was bound to), `MeshDataSource.ContentType`, the hub's own markers (`NodeTypeCatalogMode`) | hub configuration — no wait |
 | A whole sub-page that genuinely must compute | A nested `LayoutAreaControl` with `.WithSpinnerType(SpinnerType.Skeleton)` — the parent page renders, the slot shows the skeleton | hub, deferred to the slot only |
+
+### The default node page's secondary areas (converted)
+
+These areas of every node hub are templates; each pins its shape in `test/MeshWeaver.Graph.Test/NodePageAreasAreTemplatesTest`:
+
+| Area | Template |
+|---|---|
+| `Thumbnail` (default and Markdown) | `MeshNodeThumbnailControl.ForPath(hubPath)` — the card's view binds title and image from the node. |
+| `NodeTypes` | Own type from `NodeTypePathHolder` as a card by path; the types at this level as a `MeshSearch` the GUI runs. It used to take a one-shot query snapshot that never showed a type added later. |
+| `Search` | The ordinary catalog is emitted at once; whether to show a NodeType's instance catalog is read from configuration. Only a NodeType DEFINITION's catalog still reads its node, because its query is built from the definition's `DefaultNamespace`. |
+| `Notebook` (Markdown) | Header with the name bound by pointer; the cells — parsed from the markdown — render in the `NotebookCells` slot with a skeleton. |
+| `$Schema` (self) | The content type the hub's `MeshDataSource` was configured with; no read. |
+| `$Data`, `$Content` (self) | A markdown/HTML control bound to a projection of the node, following later edits. On a node hub the layout's `DataPathViews` renderer also matches `$Data` and, running after the named renderer, overwrites it — a client sees that one there. |
+
+Still to convert on the default page: `Overview` and `Data` (`BuildDetailsContent` → header, property overview, markdown body), the provenance strip `WithNodePage` composes, and `Edit`. Their markdown body is consumed by the document export (`AreaMarkupRenderer`, MeshWeaver.Plugins), which reads `MarkdownControl.Markdown` as text — a pointer-bound body needs that renderer to resolve node-bound pointers first.
 
 ### The loading shape
 
