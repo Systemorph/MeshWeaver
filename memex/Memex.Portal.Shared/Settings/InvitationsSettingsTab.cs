@@ -34,7 +34,6 @@ public static class InvitationsSettingsTab
     private const string ResultDataId = "invitationResult";
     private const string FormDataId = "invitationForm";
     private const string ListDataId = "invitationList";
-    private const string SelectedDataId = "invitationSelected";
 
     internal static UiControl BuildInvitationsContent(
         LayoutAreaHost host, StackControl stack)
@@ -119,10 +118,26 @@ public static class InvitationsSettingsTab
             "<h3 style=\"margin: 24px 0 12px 0; font-size: 1rem;\">Invitations</h3>"));
 
         // The invitations — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the
-        // grid is declared at once and fed by the synced Admin/Invitation query; an invitation is
-        // revoked by SELECTING its row, then Revoke below the grid.
-        host.UpdateData(SelectedDataId, InvitationRow.None(host.Localize("invitations.selectInvitation")));
-        stack = stack.WithView(InvitationRowsFeed(host)
+        // grid is declared at once and fed by the synced Admin/Invitation query; each row carries its
+        // own Revoke button, a ROW-SCOPED action ("Row-scoped actions") — the click says which
+        // invitation it is.
+        stack = stack.WithView(InvitationGrid(host, InvitationRowsFeed(host),
+            (ctx, row) => Revoke(ctx, host, row, invitationService)));
+
+        return stack;
+    }
+
+    /// <summary>The column of <see cref="InvitationGrid"/> that holds each row's Revoke button.</summary>
+    internal const int RevokeColumn = 8;
+
+    /// <summary>
+    /// The invitation grid over <paramref name="rows"/> — the template half, separate from the feed so
+    /// its row-scoped action is testable. The Revoke column's ONE button hands the row it was clicked
+    /// in to <paramref name="revoke"/>; a click that carries no row does nothing.
+    /// </summary>
+    internal static DataGridControl InvitationGrid(
+        LayoutAreaHost host, IObservable<IEnumerable<InvitationRow>> rows, Action<UiActionContext, InvitationRow> revoke)
+        => rows
             .BindGrid(ListDataId, host.Localize("invitations.none"), message => host.Localize("invitations.listFailed", message))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(InvitationRow.Email).ToCamelCase() }
                 .WithTitle(host.Localize("invitations.column.email")))
@@ -140,50 +155,35 @@ public static class InvitationsSettingsTab
                 .WithTitle(host.Localize("invitations.column.space")))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(InvitationRow.Note).ToCamelCase() }
                 .WithTitle(host.Localize("invitations.column.note")))
-            .WithClickAction(ctx =>
-            {
-                if (ctx.Payload is DataGridCellClick { Item: { } item }
-                    && item.As<InvitationRow>(ctx.Hub.JsonSerializerOptions, what: "invitation row") is { } row)
-                    ctx.Host.UpdateData(SelectedDataId, row);
-                return Task.CompletedTask;
-            }));
+            .WithColumn(new TemplateColumnControl(Controls.Button(host.Localize("ui.revoke"))
+                    .WithAppearance(Appearance.Outline)
+                    .WithClickAction(ctx =>
+                    {
+                        if (ctx.RowAs<InvitationRow>() is { } row)
+                            revoke(ctx, row);
+                        return Task.CompletedTask;
+                    }))
+                .WithTitle(host.Localize("ui.revoke")));
 
-        stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: center; margin-top: 8px;")
-            .WithView(new LabelControl(new JsonPointerReference(
-                    LayoutAreaReference.GetDataPointer(SelectedDataId, nameof(InvitationRow.Display).ToCamelCase())))
-                .WithStyle("flex: 1;"))
-            .WithView(Controls.Button(host.Localize("ui.revoke"))
-                .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
-                {
-                    RevokeSelected(ctx, host, invitationService);
-                    return Task.CompletedTask;
-                })));
-
-        return stack;
-    }
-
-    /// <summary>Revokes the PENDING invitation selected in the grid, or says that one has to be
-    /// selected first.</summary>
-    private static void RevokeSelected(UiActionContext ctx, LayoutAreaHost host, InvitationService invitationService)
-        => ctx.Host.Stream.GetDataStream<InvitationRow>(SelectedDataId).Take(1).Subscribe(row =>
+    /// <summary>Revokes the clicked row's invitation — the row as the person saw it — or says that
+    /// only a pending invitation can be revoked.</summary>
+    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, InvitationRow row, InvitationService invitationService)
+    {
+        if (string.IsNullOrEmpty(row.Path) || !row.IsPending)
         {
-            if (row is null || string.IsNullOrEmpty(row.Path) || !row.IsPending)
-            {
-                ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.selectInvitation"))));
-                return;
-            }
-            ctx.Host.UpdateData(ResultDataId, PendingHtml($"Revoking {Esc(row.Email)}…"));
-            // The node itself, read once for the write (it exists: the row came from it).
-            ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
-                .SelectMany(node => InvitationService.TryGetInvitation(node, ctx.Hub.JsonSerializerOptions) is { } inv
-                    ? invitationService.Revoke(node, inv)
-                    : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no invitation.")))
-                .Subscribe(
-                    _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
-                    ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
-        }, ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+            ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.notPending"))));
+            return;
+        }
+        ctx.Host.UpdateData(ResultDataId, PendingHtml($"Revoking {Esc(row.Email)}…"));
+        // The node itself, read once for the write (it exists: the row came from it).
+        ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
+            .SelectMany(node => InvitationService.TryGetInvitation(node, ctx.Hub.JsonSerializerOptions) is { } inv
+                ? invitationService.Revoke(node, inv)
+                : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no invitation.")))
+            .Subscribe(
+                _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
+                ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+    }
 
     /// <summary>
     /// The feed half: every invitation as a row, newest first, re-emitted by the synced query on
@@ -210,9 +210,8 @@ public static class InvitationsSettingsTab
     /// <summary>One row of the invitation grid — display text plus what Revoke needs.</summary>
     internal record InvitationRow(
         string Email, string Status, string Invited, string InvitedBy, string Emailed, string Accepted,
-        string Space, string Note, string Path, bool IsPending, string Display)
+        string Space, string Note, string Path, bool IsPending)
     {
-        internal static InvitationRow None(string hint) => new("", "", "", "", "", "", "", "", "", false, hint);
 
         internal static InvitationRow Of(MeshNode node, Invitation inv, string status) => new(
             inv.Email,
@@ -224,8 +223,7 @@ public static class InvitationsSettingsTab
             inv.SpacePath ?? "",
             inv.Note ?? "",
             node.Path ?? "",
-            inv.Status == InvitationStatus.Pending,
-            $"{inv.Email} · {status}");
+            inv.Status == InvitationStatus.Pending);
     }
 
     private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
