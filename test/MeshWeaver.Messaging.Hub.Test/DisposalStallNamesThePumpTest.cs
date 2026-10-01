@@ -263,6 +263,13 @@ public class DisposalStallNamesThePumpTest : HubTestBase
         parent.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "once the child's scheduler delivers threads again the whole tree tears down normally — the "
             + "stall was the scheduler's, which is what the snapshot now says");
+
+        // The responder is this test's own hub at mesh scope; it leaves with the test, not with
+        // whatever the fixture tears down later.
+        responder.Dispose();
+        await responder.DisposalCompleted.FirstOrDefaultAsync().Await(ct)
+            .WaitAsync(TestTimeouts.Convergence, ct);
+        responder.RunLevel.Should().Be(MessageHubRunLevel.Dead);
     }
 
     /// <summary>
