@@ -833,6 +833,8 @@
   "ui.fieldWriteRefused": "Nicht gespeichert: Sie dürfen diese Seite lesen, aber nicht ändern.",
   "ui.accessDeniedAdminsOnly": "Zugriff verweigert — nur für Plattform-Administratoren.",
   "ui.autoSaved": "Änderungen werden automatisch gespeichert",
+  "ui.markdownTitlePlaceholder": "Ohne Titel",
+  "ui.markdownBodyPlaceholder": "Beginnen Sie mit Ihrem Markdown-Inhalt …",
   "ui.connectRepoFirst": "Zuerst im Tab **GitHub Sync** ein GitHub-Repository verbinden.",
   "ui.gitHistoryInSpace": "Der Git-Verlauf ist innerhalb eines Space verfügbar.",
   "ui.loginWithSubscription": "Mit dem eigenen Abonnement anmelden — kein Schlüssel, keine Modellliste.",
@@ -1941,5 +1943,10 @@
   "serviceIdentities.noTokens": "Keine Tokens ausgestellt.",
   "serviceIdentities.rotate": "Erneuern",
   "serviceIdentities.status.active": "Aktiv",
-  "serviceIdentities.status.revoked": "Widerrufen"
+  "serviceIdentities.status.revoked": "Widerrufen",
+  "data.noDefaultReference": "_Keine Standard-Datenreferenz konfiguriert._",
+  "data.streamUnavailable": "_Für `{0}` ist kein Datenstrom verfügbar._",
+  "data.none": "_Keine Daten._",
+  "data.loadAll": "Alles laden ({0} Zeilen)",
+  "data.failed": "_Die Daten konnten nicht gelesen werden: {0}_"
 }

@@ -833,6 +833,8 @@
   "ui.fieldWriteRefused": "Not saved: you can read this page, but you may not change it.",
   "ui.accessDeniedAdminsOnly": "Access denied — platform admins only.",
   "ui.autoSaved": "Changes are saved automatically",
+  "ui.markdownTitlePlaceholder": "Untitled",
+  "ui.markdownBodyPlaceholder": "Start writing your markdown content...",
   "ui.connectRepoFirst": "Connect a GitHub repository in the **GitHub Sync** tab first.",
   "ui.gitHistoryInSpace": "Git history is available inside a Space.",
   "ui.loginWithSubscription": "Log in with your subscription — no key, no model list.",
@@ -1941,5 +1943,10 @@
   "serviceIdentities.noTokens": "No tokens issued.",
   "serviceIdentities.rotate": "Rotate",
   "serviceIdentities.status.active": "Active",
-  "serviceIdentities.status.revoked": "Revoked"
+  "serviceIdentities.status.revoked": "Revoked",
+  "data.noDefaultReference": "_No default data reference configured._",
+  "data.streamUnavailable": "_Unable to get a data stream for `{0}`._",
+  "data.none": "_No data._",
+  "data.loadAll": "Load all ({0} lines)",
+  "data.failed": "_Could not read the data: {0}_"
 }
