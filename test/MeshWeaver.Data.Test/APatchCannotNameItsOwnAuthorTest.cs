@@ -32,14 +32,27 @@ public class APatchCannotNameItsOwnAuthorTest
         return live;
     }
 
+    private static string? Read(JsonObject node, string key) =>
+        node.TryGetPropertyValue(key, out var value) && value is JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>Re-asserting the live author is a no-op, not a claim: it stays a no-op.</summary>
+    [Fact]
+    public void ReAssertingTheLiveAuthor_IsLeftAlone()
+    {
+        var live = Apply(new JsonObject { ["LastModifiedBy"] = "alice", ["CreatedBy"] = "alice" }, Mallory);
+
+        Read(live, "LastModifiedBy").Should().Be("alice", "the patch claims nothing the node does not already say");
+        Read(live, "CreatedBy").Should().Be("alice");
+    }
+
     [Fact]
     public void AClientNamingSystemAsTheAuthor_IsRecordedAsItself()
     {
         var live = Apply(new JsonObject { ["Name"] = "after", ["LastModifiedBy"] = "system-security" }, Mallory);
 
-        live["LastModifiedBy"]!.GetValue<string>().Should().Be("mallory",
+        Read(live, "LastModifiedBy").Should().Be("mallory",
             "the author of a write is the delivery's principal, never a value in the patch");
-        live["Name"]!.GetValue<string>().Should().Be("after", "the content change itself still lands");
+        Read(live, "Name").Should().Be("after", "the content change itself still lands");
     }
 
     [Fact]
@@ -47,7 +60,7 @@ public class APatchCannotNameItsOwnAuthorTest
     {
         var live = Apply(new JsonObject { ["CreatedBy"] = "system-security" }, Mallory);
 
-        live["CreatedBy"]!.GetValue<string>().Should().Be("alice", "who created a node is not rewritten by a patch");
+        Read(live, "CreatedBy").Should().Be("alice", "who created a node is not rewritten by a patch");
     }
 
     [Fact]
@@ -55,7 +68,7 @@ public class APatchCannotNameItsOwnAuthorTest
     {
         var live = Apply(new JsonObject { ["Name"] = "after" }, Mallory);
 
-        live["LastModifiedBy"]!.GetValue<string>().Should().Be("alice",
+        Read(live, "LastModifiedBy").Should().Be("alice",
             "the stamp is only corrected where the patch claims one, so a no-op stays a no-op");
     }
 
@@ -64,7 +77,7 @@ public class APatchCannotNameItsOwnAuthorTest
     {
         var live = Apply(new JsonObject { ["LastModifiedBy"] = "bob", ["CreatedBy"] = "bob" }, System);
 
-        live["LastModifiedBy"]!.GetValue<string>().Should().Be("bob", "an import or a repair preserves authorship");
-        live["CreatedBy"]!.GetValue<string>().Should().Be("bob");
+        Read(live, "LastModifiedBy").Should().Be("bob", "an import or a repair preserves authorship");
+        Read(live, "CreatedBy").Should().Be("bob");
     }
 }

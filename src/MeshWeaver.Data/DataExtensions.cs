@@ -1919,7 +1919,7 @@ public static class DataExtensions
     {
         if (isMeshNode)
         {
-            StampAuthorFromSender(patchNode, sender, jsonOpts, logger, hubPath);
+            StampAuthorFromSender(currentNode, patchNode, sender, jsonOpts, logger, hubPath);
             var baseText = message.BaseValues?.Content;
             if (!string.IsNullOrEmpty(baseText)
                 && System.Text.Json.Nodes.JsonNode.Parse(baseText)
@@ -2108,6 +2108,7 @@ public static class DataExtensions
     /// (System, a hub) still writes the stamp it carries: imports and repairs preserve authorship.
     /// </summary>
     internal static void StampAuthorFromSender(
+        System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
         AccessContext? sender,
         System.Text.Json.JsonSerializerOptions jsonOpts,
@@ -2115,15 +2116,16 @@ public static class DataExtensions
         string hubPath)
     {
         var who = sender?.ObjectId;
-        if (string.IsNullOrEmpty(who)
-            || string.Equals(who, "system-security", StringComparison.OrdinalIgnoreCase)
-            || AccessService.LooksLikeHubPrincipal(who))
+        if (string.IsNullOrEmpty(who) || AccessService.IsPlatformPrincipal(who))
             return;
         var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
         var creatorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("CreatedBy") ?? "CreatedBy";
+        // A patch that RE-ASSERTS the live author changes nothing and claims nothing, so it is left
+        // alone: rewriting it would turn a no-op into a version bump attributed to the sender.
         if (patchNode.TryGetPropertyValue(authorKey, out var author)
-            && !string.Equals(author?.GetValueKind() == System.Text.Json.JsonValueKind.String ? author.GetValue<string>() : null,
-                who, StringComparison.Ordinal))
+            && !string.Equals(StringOf(author), who, StringComparison.Ordinal)
+            && !(currentNode.TryGetPropertyValue(authorKey, out var live)
+                 && string.Equals(StringOf(author), StringOf(live), StringComparison.Ordinal)))
         {
             logger?.LogWarning(
                 "[MergeGuard] {HubPath}: the patch names lastModifiedBy={Claimed} but the sender is {Sender} — "
@@ -2131,13 +2133,18 @@ public static class DataExtensions
                 hubPath, author?.ToJsonString(), who);
             patchNode[authorKey] = who;
         }
-        if (patchNode.ContainsKey(creatorKey))
+        if (patchNode.TryGetPropertyValue(creatorKey, out var creator)
+            && !(currentNode.TryGetPropertyValue(creatorKey, out var liveCreator)
+                 && string.Equals(StringOf(creator), StringOf(liveCreator), StringComparison.Ordinal)))
         {
             logger?.LogWarning(
                 "[MergeGuard] {HubPath}: dropping createdBy from a patch sent by {Sender} — who created a node is not rewritten",
                 hubPath, who);
             patchNode.Remove(creatorKey);
         }
+
+        static string? StringOf(System.Text.Json.Nodes.JsonNode? value) =>
+            value is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
     }
 
     internal static void RebaseAuditStamp(

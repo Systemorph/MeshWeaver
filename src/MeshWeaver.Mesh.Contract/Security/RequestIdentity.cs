@@ -28,9 +28,7 @@ public static class RequestIdentity
     /// <c>node/…</c>, …). Only these may post a message whose identity field names somebody else.
     /// Pure.
     /// </summary>
-    public static bool IsPlatform(string? objectId) =>
-        string.Equals(objectId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
-        || AccessService.LooksLikeHubPrincipal(objectId);
+    public static bool IsPlatform(string? objectId) => AccessService.IsPlatformPrincipal(objectId);
 
     /// <summary>
     /// An id no sign-in may adopt: the System identity, the two audience pseudo-users
