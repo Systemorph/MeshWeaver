@@ -118,6 +118,33 @@ public class ARequestCannotNameItsOwnAuthorTest(ITestOutputHelper output) : Mono
         (response.Node?.LastModifiedBy).Should().Be("mallory");
     }
 
+    /// <summary>
+    /// A move carries authorship by naming its stored source (<c>AuthorshipFrom</c>); a caller who
+    /// could not move that source gets nothing from naming it — the stamps are its own.
+    /// </summary>
+    [Fact]
+    public async Task NamingASourceTheCallerCannotMove_CarriesNoAuthorship()
+    {
+        await SeedVictim();
+        await SeedMalloryHome();
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(Child("secret", "victim-owner")))
+            .Should().Within(TestTimeouts.Convergence).Emit("the platform seeds a node Mallory cannot move");
+
+        var response = await CreateAsMallory(new CreateNodeRequest(new MeshNode("borrowed", "mallory")
+        {
+            Name = "borrowed",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            CreatedBy = "victim-owner",
+            LastModifiedBy = "victim-owner",
+        })
+        { AuthorshipFrom = $"{Victim}/secret" });
+
+        response.Success.Should().BeTrue($"Mallory may create in her own home — {response.Error}");
+        (response.Node?.CreatedBy).Should().Be("mallory",
+            "naming a source she holds no Delete on carries none of its authorship");
+    }
+
     /// <summary>The update path: a lambda that sets LastModifiedBy to System does not get to choose either.</summary>
     [Fact]
     public async Task AnUpdateNamingAnotherAuthor_IsRecordedUnderTheCaller()
