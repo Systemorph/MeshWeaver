@@ -105,11 +105,14 @@ public sealed class OwnsPartitionProvisioningValidator : INodeValidator
             // A FAULT is surfaced — logged with its exception and named in the refusal — never
             // folded into a sentence that cannot say what happened (#5734).
             return PartitionOwningTypes.ProbeWithoutActivating(_hub, context.Node.NodeType)
-                .Select(answer => answer.Owns switch
+                .Select(answer => answer switch
                 {
-                    true => PartitionOwningTypes.NestedInstanceRefused(context),
-                    false => NodeValidationResult.Valid(),
-                    null => RefuseUnreadable(context, answer.Fault!),
+                    { Owns: true } => PartitionOwningTypes.NestedInstanceRefused(context),
+                    { Owns: false } => NodeValidationResult.Valid(),
+                    { Fault: { } fault } => RefuseUnreadable(context, fault),
+                    // Unreachable by construction (Unreadable requires the fault) — answered
+                    // with the generic undetermined refusal rather than asserted away.
+                    _ => PartitionOwningTypes.Undetermined(context),
                 });
 
         return PartitionOwningTypes.OwnsPartitionOnce(_hub, context)

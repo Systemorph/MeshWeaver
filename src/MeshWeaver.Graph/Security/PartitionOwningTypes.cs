@@ -195,13 +195,6 @@ public static class PartitionOwningTypes
     /// <returns>The tri-state: owns / does not own / could not be established.</returns>
     public static IObservable<bool?> OwnsPartitionWithoutActivating(IMessageHub hub, string? nodeType)
     {
-        // 🚨 ReadMany, NOT Read — the seam that carries no repair (review on #4589). Where partition
-        // storage hubs are configured, IStorageAdapter is RoutingProxyAdapter and its `Read` is
-        // wrapped in LegacyUserPartitionRepair: an absent row at a partition-root-shaped path
-        // triggers a legacy-twin probe and can durably WRITE a repaired root. An ownership CHECK may
-        // not write anything. Both that proxy and PersistenceService override `ReadMany` for exactly
-        // that reason ("the repair is for a bare partition-ROOT point read"), so this asks the store
-        // the same question with no side effect; a path the store does not hold is simply absent.
         return ProbeWithoutActivating(hub, nodeType).Select(answer => answer.Owns);
     }
 
@@ -230,6 +223,13 @@ public static class PartitionOwningTypes
         if (storage is null)
             return Observable.Return(PartitionOwnershipAnswer.DoesNotOwn);
 
+        // 🚨 ReadMany, NOT Read — the seam that carries no repair (review on #4589). Where partition
+        // storage hubs are configured, IStorageAdapter is RoutingProxyAdapter and its `Read` is
+        // wrapped in LegacyUserPartitionRepair: an absent row at a partition-root-shaped path
+        // triggers a legacy-twin probe and can durably WRITE a repaired root. An ownership CHECK may
+        // not write anything. Both that proxy and PersistenceService override `ReadMany` for exactly
+        // that reason ("the repair is for a bare partition-ROOT point read"), so this asks the store
+        // the same question with no side effect; a path the store does not hold is simply absent.
         return Observable.Defer(() => storage.ReadMany([nodeType], options))
             .Take(1)
             .Select(row => DeclaresOwnership(row, options)
@@ -310,11 +310,25 @@ public static class PartitionOwningTypes
 /// What the nested-create ownership read found: <see cref="Owns"/> is <c>true</c> / <c>false</c> when
 /// the store answered, <c>null</c> when the read FAULTED — and then <see cref="Fault"/> is that
 /// fault, so the refusal can say what happened instead of guessing between a fault and a budget.
+///
+/// <para>The constructor is private and the only way to build an undetermined answer is
+/// <see cref="Unreadable"/>, which requires the fault — so "could not be read, for no reason" is
+/// not a value this type can hold (review on #5930).</para>
 /// </summary>
-/// <param name="Owns">The tri-state verdict.</param>
-/// <param name="Fault">The read's exception when <paramref name="Owns"/> is <c>null</c>; otherwise <c>null</c>.</param>
-public sealed record PartitionOwnershipAnswer(bool? Owns, Exception? Fault)
+public sealed record PartitionOwnershipAnswer
 {
+    private PartitionOwnershipAnswer(bool? owns, Exception? fault)
+    {
+        Owns = owns;
+        Fault = fault;
+    }
+
+    /// <summary>The tri-state verdict: owns / does not own / could not be read.</summary>
+    public bool? Owns { get; }
+
+    /// <summary>The read's exception when <see cref="Owns"/> is <c>null</c>; otherwise <c>null</c>.</summary>
+    public Exception? Fault { get; }
+
     /// <summary>The definition declares <c>ownsPartition: true</c>.</summary>
     public static PartitionOwnershipAnswer OwnsIt { get; } = new(true, null);
 
@@ -322,7 +336,11 @@ public sealed record PartitionOwnershipAnswer(bool? Owns, Exception? Fault)
     public static PartitionOwnershipAnswer DoesNotOwn { get; } = new(false, null);
 
     /// <summary>The durable read faulted with <paramref name="fault"/>.</summary>
-    /// <param name="fault">The read's exception.</param>
+    /// <param name="fault">The read's exception — required.</param>
     /// <returns>The undetermined answer carrying its cause.</returns>
-    public static PartitionOwnershipAnswer Unreadable(Exception fault) => new(null, fault);
+    public static PartitionOwnershipAnswer Unreadable(Exception fault)
+    {
+        ArgumentNullException.ThrowIfNull(fault);
+        return new(null, fault);
+    }
 }
