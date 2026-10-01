@@ -63,13 +63,25 @@ public class APatchCannotNameItsOwnAuthorTest
         Read(live, "CreatedBy").Should().Be("alice", "who created a node is not rewritten by a patch");
     }
 
+    /// <summary>
+    /// A raw client patch that changes content but omits the author still records the SENDER:
+    /// otherwise the change would be credited to whoever wrote the node last.
+    /// </summary>
     [Fact]
-    public void APatchThatDoesNotTouchTheAuthor_IsLeftAlone()
+    public void AContentChangeWithoutAnAuthor_RecordsTheSender()
     {
         var live = Apply(new JsonObject { ["Name"] = "after" }, Mallory);
 
-        Read(live, "LastModifiedBy").Should().Be("alice",
-            "the stamp is only corrected where the patch claims one, so a no-op stays a no-op");
+        Read(live, "LastModifiedBy").Should().Be("mallory", "the sender made this change, not the previous author");
+    }
+
+    /// <summary>A patch that changes nothing stays a no-op: no author is recorded for it.</summary>
+    [Fact]
+    public void APatchThatChangesNothing_IsLeftAlone()
+    {
+        var live = Apply(new JsonObject { ["Name"] = "before" }, Mallory);
+
+        Read(live, "LastModifiedBy").Should().Be("alice", "a no-op must stay a no-op for the owner's no-change backstop");
     }
 
     [Fact]

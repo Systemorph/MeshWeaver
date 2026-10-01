@@ -1920,6 +1920,59 @@ public static class DataExtensions
         if (isMeshNode)
         {
             StampAuthorFromSender(currentNode, patchNode, sender, jsonOpts, logger, hubPath);
+            var refusedKeys = ApplyMeshNodeMergeCore(currentNode, patchNode, message, jsonOpts, logger, hubPath, out var changed);
+            if (changed)
+                RecordSenderAsAuthor(currentNode, patchNode, sender, jsonOpts);
+            return refusedKeys;
+        }
+        MergePatchRecursive(currentNode, patchNode);
+        return 0;
+    }
+
+    /// <summary>
+    /// After a merge that CHANGED the node: when the sender is a person or service and the patch
+    /// named no author, the sender is recorded as the author. A raw client patch that omits
+    /// <c>lastModifiedBy</c> would otherwise credit the change to the PREVIOUS author. Applied only
+    /// on an actual change, so a pure re-assert stays a no-op for the owner's no-change backstop.
+    /// </summary>
+    internal static void RecordSenderAsAuthor(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        AccessContext? sender,
+        System.Text.Json.JsonSerializerOptions jsonOpts)
+    {
+        var who = sender?.ObjectId;
+        if (string.IsNullOrEmpty(who) || AccessService.IsPlatformPrincipal(who))
+            return;
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+        if (!patchNode.ContainsKey(authorKey))
+            currentNode[authorKey] = who;
+    }
+
+    private static int ApplyMeshNodeMergeCore(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath,
+        out bool changed)
+    {
+        var before = currentNode.DeepClone();
+        var refused = ApplyMeshNodeMergeBody(currentNode, patchNode, message, jsonOpts, logger, hubPath);
+        changed = !System.Text.Json.Nodes.JsonNode.DeepEquals(before, currentNode);
+        return refused;
+    }
+
+    private static int ApplyMeshNodeMergeBody(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        {
             var baseText = message.BaseValues?.Content;
             if (!string.IsNullOrEmpty(baseText)
                 && System.Text.Json.Nodes.JsonNode.Parse(baseText)

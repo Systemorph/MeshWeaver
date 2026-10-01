@@ -5618,6 +5618,15 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> with its authorship: Delete on
+    /// its namespace, which is what <see cref="MoveNodePermissionAttribute"/> requires of a mover.
+    /// ONE function, so the copy handler's <c>PreserveAuthorship</c> gate and the create handler's
+    /// <c>AuthorshipFrom</c> gate cannot drift apart. Cold.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> MoveEntitlement(IMessageHub hub, string sourcePath) =>
+        hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete);
+
+    /// <summary>
     /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
     /// or null. Null when the request names none, or when the requester is the platform (whose
     /// carried stamps are kept anyway). Otherwise the requester must hold Delete on the source's
@@ -5632,7 +5641,7 @@ public static class MeshExtensions
         var from = request.AuthorshipFrom?.Trim();
         if (string.IsNullOrEmpty(from) || persistence is null || RequestIdentity.IsPlatform(request.CreatedBy))
             return Observable.Return<MeshNode?>(null);
-        return hub.CheckPermissionOutcome(NamespaceOf(from), Permission.Delete)
+        return MoveEntitlement(hub, from)
             .Take(1)
             .SelectMany(outcome =>
             {
@@ -7686,7 +7695,7 @@ public static class MeshExtensions
         IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
                 ? Observable.Return<(string, bool)?>(null)
-                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                : MoveEntitlement(hub, sourcePath)
                     .Select(outcome => outcome.IsGranted
                         ? ((string, bool)?)null
                         : outcome.IsUndetermined
