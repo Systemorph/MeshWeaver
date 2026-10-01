@@ -282,9 +282,7 @@ public static class MeshDataSourceExtensions
             // and keeps the data source pure — no debounce buffer, no FlushOnDispose,
             // no IStorageAdapter dependency in the type source itself.
             .WithHandler<SaveMeshNodeRequest>(HandleSaveMeshNode)
-#pragma warning disable CS0618 // forwarded to the validated delete — see HandleDeleteMeshNode
             .WithHandler<DeleteMeshNodeRequest>(HandleDeleteMeshNode)
-#pragma warning restore CS0618
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
             .AddDeliveryPipeline(AddReadValidatorPipeline)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
@@ -497,7 +495,7 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Per-node hub handler for the obsolete <see cref="DeleteMeshNodeRequest"/>: FORWARDS it to the
+    /// Per-node hub handler for the legacy <see cref="DeleteMeshNodeRequest"/>: FORWARDS it to the
     /// validated delete — a <see cref="DeleteNodeRequest"/> issued under the DELIVERY's own
     /// <see cref="AccessContext"/> — and never touches storage itself.
     ///
@@ -515,10 +513,8 @@ public static class MeshDataSourceExtensions
     /// than forwarded — never run as the hub or as System. Pinned by
     /// <c>DeleteMeshNodeRequestIsAValidatedDeleteTest</c>.</para>
     /// </summary>
-#pragma warning disable CS0618 // the obsolete request is handled ONLY to forward it to the validated delete
     private static IMessageDelivery HandleDeleteMeshNode(
         IMessageHub hub, IMessageDelivery<DeleteMeshNodeRequest> request)
-#pragma warning restore CS0618
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");

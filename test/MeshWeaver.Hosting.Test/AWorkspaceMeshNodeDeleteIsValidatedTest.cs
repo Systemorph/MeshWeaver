@@ -105,11 +105,6 @@ public class AWorkspaceMeshNodeDeleteIsValidatedTest(ITestOutputHelper output) :
             .Select(_ => true)
             .Take(1);
 
-    private Task<MeshNode?> StoredAt(string path) =>
-        Storage.Read(path, Mesh.JsonSerializerOptions)
-            .DefaultIfEmpty(null)
-            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
-
     private async Task<string> CreateNode(string path)
     {
         await NodeFactory.CreateNode(MeshNode.FromPath(path) with

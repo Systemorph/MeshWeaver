@@ -17,7 +17,7 @@ namespace MeshWeaver.Mesh;
 public record SaveMeshNodeRequest(MeshNode Node);
 
 /// <summary>
-/// OBSOLETE request to delete a MeshNode. Use <see cref="MeshWeaver.Mesh.Services.IMeshService.DeleteNode"/> (or a
+/// LEGACY request to delete a MeshNode — do not post it in new code; use <see cref="MeshWeaver.Mesh.Services.IMeshService.DeleteNode"/> (or a
 /// <see cref="DeleteNodeRequest"/>) — the one delete surface.
 ///
 /// <para>🚨 The per-node hub's handler no longer deletes from storage: it forwards the request to
@@ -30,9 +30,10 @@ public record SaveMeshNodeRequest(MeshNode Node);
 /// identity must be failed by the post pipeline rather than waved through.</para>
 ///
 /// <para>Kept, as a forwarder, only because in-mesh source compiled at runtime may name it;
-/// nothing in the platform posts it.</para>
+/// nothing in the platform posts it. Not marked <c>[Obsolete]</c>: the forwarder, not the
+/// attribute, is what closes the hole, and the attribute would need warning suppressions at the
+/// handler that must keep referencing it.</para>
 /// </summary>
 /// <param name="Path">The node to delete.</param>
 /// <param name="Recursive">Also delete descendants — forwarded as <see cref="DeleteNodeRequest.Recursive"/>.</param>
-[Obsolete("Use IMeshService.DeleteNode or DeleteNodeRequest. This request is forwarded to the validated delete.")]
 public record DeleteMeshNodeRequest(string Path, bool Recursive = false);

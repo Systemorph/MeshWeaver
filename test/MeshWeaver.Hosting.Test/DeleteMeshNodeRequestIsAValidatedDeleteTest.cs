@@ -12,8 +12,6 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
 
-#pragma warning disable CS0618 // DeleteMeshNodeRequest is obsolete — posting it is the subject under test
-
 /// <summary>
 /// 🚨 <see cref="DeleteMeshNodeRequest"/> is not a back door around the delete checks.
 ///
