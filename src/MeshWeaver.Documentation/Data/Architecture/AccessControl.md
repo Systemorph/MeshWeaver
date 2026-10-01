@@ -268,6 +268,8 @@ A `Denied` assignment only removes access and always passes; a person sharing th
 
 **A reader that acts LATER decides on monotone facts.** The write boundary may ask "is the activity executing" because the executor's write happens while it executes. A watcher that runs after that write must not: the activity may have moved on to `Done`, and the answer would depend on which write it saw first. `hub.ReadGovernedActivity(path)` returns the activity's `GovernedActivityFacts` — standard, state, signed inputs — and `HasStarted` (`Executing`, `Done` or `Failed`, reachable only after the signatures were consumed, never left again) is the predicate such a reader uses, together with the signed inputs naming what it is about to do.
 
+**A newly listed package waits for a governed provision.** The boot default install no longer installs a package just because a whole-source pattern (`Plugins/*`) covers it once the instance has been seeded (`InstanceAutoRegistrationService.HoldsForGovernedProvision`); it lands through a `package.provision` activity or an entry that names it. "Newly listed" means *unknown to the default-install ledger* (`KnownToTheLedger`), not merely "never seeded": a package the ledger recorded as FAILED is re-attempted on the next pass (the retry the ledger exists for), and one it recorded as SKIPPED is re-classified, exactly as before the hold. A fresh instance (empty seeded list) still seeds everything its patterns cover.
+
 **Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
 
 ---
