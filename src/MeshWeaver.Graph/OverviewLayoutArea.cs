@@ -7,6 +7,7 @@ using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,46 +72,124 @@ public static class OverviewLayoutArea
         var dataId = EditLayoutArea.GetDataId(node.Path);
         var boundContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
 
+        return PropertyOverview(host, node.Path, contentType, canEdit);
+    }
+
+    /// <summary>
+    /// The property overview as a TEMPLATE for the hub's own node: the form of
+    /// <paramref name="contentType"/> — STRUCTURE, which the caller reads from the hub's
+    /// configuration — with every field bound to the node. Nothing here waits on the node.
+    /// </summary>
+    /// <param name="host">The node hub's layout host.</param>
+    /// <param name="contentType">The content type the hub is configured with.</param>
+    /// <param name="canEdit">Whether the fields are click-to-edit.</param>
+    public static UiControl BuildPropertyOverviewTemplate(LayoutAreaHost host, Type contentType, bool canEdit)
+        => PropertyOverview(host, host.Hub.Address.ToString(), contentType, canEdit);
+
+    private static UiControl PropertyOverview(LayoutAreaHost host, string nodePath, Type contentType, bool canEdit)
+    {
+        // The property form is bound DIRECTLY to the node's Content (node-bound DataContext): every
+        // field reads from and writes straight back to the node stream (IMeshNodeStreamCache). ONE
+        // source of truth — no /data replica of the node content, no SetupAutoSave save subscription.
+        // See Doc/GUI/DataBinding "edit node content by binding to the node stream".
+        var dataId = EditLayoutArea.GetDataId(nodePath);
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
+
+        // Build using unified content view - Overview mode: toggleable=true, no footer actions.
         // A few read-only display controls (dimension / options / formatted-date labels) derive their
-        // text from the LAYOUT-AREA /data stream rather than a value pointer, so they can't read the
-        // node directly from the Layout layer. Keep /data/{dataId} as a ONE-WAY live projection of the
-        // node's Content (node → /data, NEVER /data → node) so those labels stay correct. This is a
-        // pure read mirror — there is no save loop and no drift: it follows the node, and all WRITES
-        // still go straight to the node via the node-bound DataContext above.
-        // 🚨 ReplaceDisposable, NEVER RegisterForDisposal (issue #606). This method runs INSIDE the
-        // area's render — once per emission of the node/permission stream — so an APPENDING
-        // registration adds one more live node-stream subscription per re-render, under a synthetic
-        // key that no area teardown reaps (DisposeExistingAreas / DisposeChildAreas only remove keys
-        // that StartsWith(context.Area), and "overview-content-projection_…" never does). Every
-        // accumulated projection stays live: it fires ANOTHER UpdateData on every subsequent node
-        // emission, and it pins a MeshNodeStreamCache entry so that path's upstream sync stream can
-        // never be idle-released. Nothing frees any of it until the whole host dies.
-        // ReplaceDisposable disposes the previous projection for this key first, so exactly ONE is
-        // ever live regardless of render count.
-        host.ReplaceDisposable($"overview-content-projection_{dataId}",
-            host.Workspace.GetMeshNodeStream(node.Path)
-                .Select(n => n?.Content)
-                .Where(c => c is not null)
-                .Subscribe(content => host.UpdateData(dataId, content!)));
-
-        var container = Controls.Stack.WithWidth("100%");
-
-        // Build using unified content view - Overview mode: toggleable=true, no footer actions
-        container = container.WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions
-        {
-            DataId = dataId,
-            ContentType = contentType,
-            CanEdit = canEdit,
-            IsToggleable = true,  // Overview: click-to-edit, blur back to read-only
-            BoundDataContext = canEdit ? boundContext : null
-        }));
-
+        // text from the LAYOUT-AREA /data stream rather than a value pointer, so /data/{dataId} is
+        // kept a ONE-WAY live mirror of the node's Content for as long as this control's area lives
+        // (NodePageProjections.MirrorContent — registered in the buildup, disposed with the area,
+        // so it opens once per rendered area and never accumulates per render, #606). All WRITES
+        // still go straight to the node via the node-bound DataContext.
+        //
         // The markdown body (from index.md / a Markdown node's content) is intentionally
-        // NOT rendered here — BuildDetailsContent hoists it to a direct child of the
-        // outer stack via BuildMarkdownBody so callers (and tests) can locate it without
-        // walking through nested property-overview stacks.
+        // NOT rendered here — the node page hoists it to a direct child of the outer stack
+        // (BuildMarkdownBody / BuildMarkdownBodyTemplate) so callers (and tests) can locate it
+        // without walking through nested property-overview stacks.
+        return Controls.Stack.WithWidth("100%")
+            .WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions
+            {
+                DataId = dataId,
+                ContentType = contentType,
+                CanEdit = canEdit,
+                IsToggleable = true,  // Overview: click-to-edit, blur back to read-only
+                BoundDataContext = canEdit ? boundContext : null
+            }))
+            .MirrorContent(nodePath, dataId);
+    }
 
-        return container;
+    /// <summary>
+    /// The property form's fallback slot: the area a node page renders its form in when the hub's
+    /// configuration names no content type (<see cref="MeshNodeLayoutAreas.ConfiguredContentType(LayoutAreaHost)"/>
+    /// is null). Its id is the mode — <see cref="ContentFormOverview"/> or <see cref="ContentFormEdit"/>.
+    /// </summary>
+    public const string ContentFormArea = "NodeContentForm";
+
+    /// <summary><see cref="ContentFormArea"/> mode: the node page's click-to-edit overview.</summary>
+    public const string ContentFormOverview = "overview";
+
+    /// <summary><see cref="ContentFormArea"/> mode: the Edit page's form in pure edit mode.</summary>
+    public const string ContentFormEdit = "edit";
+
+    /// <summary>
+    /// The <see cref="ContentFormArea"/> slot as a nested area with the skeleton loading shape —
+    /// the page around it renders at once; only the slot waits.
+    /// </summary>
+    internal static UiControl ContentFormSlot(LayoutAreaHost host, string mode)
+        => Controls.LayoutArea(host.Hub.Address, ContentFormArea, mode)
+            .WithSpinnerType(SpinnerType.Skeleton);
+
+    /// <summary>
+    /// Renders the <see cref="ContentFormArea"/>: the property form of a hub whose configuration
+    /// names no content type, so the form's SHAPE can only come from the node's own content
+    /// (its <c>$type</c>). This is a STRUCTURE read and the one place the default node page still
+    /// reads the node on the hub; the fields themselves stay bound to the node. Re-renders only when
+    /// the shape can change — the content type, or the viewer's edit right.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    public static IObservable<UiControl?> ContentForm(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var edit = string.Equals(host.Reference.Id?.ToString(), ContentFormEdit, StringComparison.Ordinal);
+        return host.Workspace.GetMeshNodeStream()
+            .CombineLatest(host.Hub.GetEffectivePermissions(hubPath),
+                (node, permissions) => (Node: node, CanEdit: permissions.HasFlag(Permission.Update)))
+            .DistinctUntilChanged(t => (ShapeOf(t.Node), t.CanEdit))
+            .Select(t => t.Node is null
+                ? (UiControl?)Controls.Markdown(host.Localize("ui.mdNodeNotFound"))
+                : edit
+                    ? (t.CanEdit ? EditForm(host, t.Node) : null)
+                    : BuildPropertyOverview(host, t.Node, t.CanEdit));
+    }
+
+    /// <summary>What decides the form's shape: the content's CLR type, or its JSON discriminator.</summary>
+    private static string ShapeOf(MeshNode? node) => node?.Content switch
+    {
+        null => "",
+        JsonElement { ValueKind: JsonValueKind.Object } je when je.TryGetProperty("$type", out var t)
+            => "json:" + t.ToString(),
+        JsonElement je => "json-" + je.ValueKind,
+        { } content => content.GetType().AssemblyQualifiedName ?? content.GetType().Name,
+    };
+
+    /// <summary>The Edit page's form for a node whose content type comes from its content.</summary>
+    private static UiControl EditForm(LayoutAreaHost host, MeshNode node)
+    {
+        var instance = node.Content;
+        if (instance is JsonElement je && je.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            instance = host.Hub.ServiceProvider.GetService<IMeshContentTypeRegistry>()
+                           ?.TryRecoverForNodeType(node.NodeType, je, host.Hub.JsonSerializerOptions)
+                       ?? JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions);
+        if (instance is null or JsonElement)
+            return Controls.Markdown(host.Localize("ui.mdNoContentType"))
+                .WithStyle("color: var(--neutral-foreground-hint);");
+
+        var dataId = EditLayoutArea.GetDataId(node.Path);
+        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
+        return EditLayoutArea.BuildPropertyForm(
+                host, instance.GetType(), dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext)
+            .MirrorContent(node.Path, dataId);
     }
 
     /// <summary>
@@ -173,6 +252,40 @@ public static class OverviewLayoutArea
     /// through serialization without losing the @@() references.</para>
     /// </summary>
     public static UiControl? BuildMarkdownBody(LayoutAreaHost host, MeshNode? node)
+        => MarkdownBodyText(node) is { } body
+            ? new MarkdownControl(body.Markdown ?? "") { Html = body.Html, NodePath = node!.Path }
+                .WithStyle(MarkdownBodyStyle)
+            : null;
+
+    private const string MarkdownBodyStyle = "padding: 0 0 48px 0;";
+
+    /// <summary>The <c>/data</c> id the node page's markdown body projection is published under.</summary>
+    internal const string BodyDataId = "nodeBody";
+
+    /// <summary>
+    /// The node page's markdown body as a TEMPLATE for the hub's own node: a
+    /// <see cref="MarkdownControl"/> whose markdown and pre-rendered HTML are BOUND to a projection
+    /// of the node (<see cref="BuildMarkdownBody"/>'s text, computed on the hub), hidden while the
+    /// node has none. It follows every later edit.
+    /// </summary>
+    /// <param name="host">The node hub's layout host.</param>
+    public static UiControl BuildMarkdownBodyTemplate(LayoutAreaHost host)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        return NodePageProjections.Body(host, MarkdownBodyStyle)
+            .Bind(p => BodyTemplate(p.Markdown, p.Html, p.Style, nodePath), BodyDataId);
+    }
+
+    /// <summary>The markdown body with its bound values as POINTERS.</summary>
+    internal static MarkdownControl BodyTemplate(object markdown, object? html, object style, string nodePath)
+        => new(markdown) { Html = html, NodePath = nodePath, Style = style };
+
+    /// <summary>
+    /// The text <see cref="BuildMarkdownBody"/> shows — the raw markdown and the pre-rendered HTML,
+    /// a leading heading that repeats the node's name stripped from both — or null when the node
+    /// carries no markdown body. Pure.
+    /// </summary>
+    internal static (string? Markdown, string? Html)? MarkdownBodyText(MeshNode? node)
     {
         if (node is null)
             return null;
@@ -206,8 +319,7 @@ public static class OverviewLayoutArea
         var hasRaw = !string.IsNullOrWhiteSpace(rawMarkdown);
         if (!hasHtml && !hasRaw)
             return null;
-        return new MarkdownControl(rawMarkdown ?? "") { Html = html, NodePath = node.Path }
-            .WithStyle("padding: 0 0 48px 0;");
+        return (rawMarkdown, html);
     }
 
     /// <summary>Removes a leading <c># {name}</c> ATX heading from markdown when it duplicates the node
@@ -266,6 +378,43 @@ public static class OverviewLayoutArea
                         isEditing && canEdit
                             ? BuildTitleEditView(h, node.Path, editStateId)
                             : BuildTitleReadView(h, node, dataId, editStateId, canEdit)));
+    }
+
+    /// <summary>
+    /// <see cref="BuildTitle"/> as a TEMPLATE of the node at <paramref name="nodePath"/>: the read
+    /// view's name and icon are BOUND to the node's own fields, and the edit view writes the content's
+    /// <c>title</c> straight back to it. Only the click-to-edit toggle lives in <c>/data</c>.
+    /// </summary>
+    public static UiControl BuildTitleTemplate(LayoutAreaHost host, string nodePath, string dataId, bool canEdit)
+    {
+        var editStateId = $"editState_{dataId}_title";
+        var editStateStream = host.Stream.GetDataStream<bool>(editStateId);
+        var fields = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false);
+
+        var heading = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("align-items: center; gap: 12px;")
+            .WithView(new IconControl(new JsonPointerReference(nameof(MeshNode.Icon))) { Width = "32px", DataContext = fields })
+            .WithView(Controls.H1(new JsonPointerReference(nameof(MeshNode.Name))) with { DataContext = fields });
+
+        var readView = Controls.Stack
+            .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
+            .WithView(heading);
+        if (canEdit)
+            readView = readView.WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(editStateId, true);
+                return Task.CompletedTask;
+            });
+
+        return Controls.Stack
+            .WithView((h, ctx) =>
+                editStateStream
+                    .StartWith(false)
+                    .DistinctUntilChanged()
+                    .Select(isEditing => isEditing && canEdit
+                        ? BuildTitleEditView(h, nodePath, editStateId)
+                        : readView));
     }
 
     private static UiControl BuildTitleReadView(
