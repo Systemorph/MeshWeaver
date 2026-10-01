@@ -84,30 +84,29 @@ public static class WhatsNewSettingsTab
     /// </summary>
     public const string FixCategory = "Fix";
 
+    private const string ListDataId = "whatsNewList";
+
     // The menu entry is a seeded UiContribution node (PlatformSettingsTabAreas) — the tab's
     // registration surface is the SettingsWhatsNew layout area, not a compiled provider.
+
+    /// <summary>
+    /// The feed half: the rendered feed for every emission of the synced listing. Builds no control.
+    /// </summary>
+    internal static IObservable<string> WhatsNewFeed(LayoutAreaHost host)
+        => host.Hub.GetQuery("whatsnew:list", ListingQueries).Select(nodes => Render(nodes, host));
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
         stack = stack.WithView(Controls.H2(host.Localize("settings.whatsNew")).WithStyle("margin: 0 0 8px 0;"));
         stack = stack.WithView(Controls.Markdown(host.Localize("ui.mdWhatsNewIntro")));
 
-        // Live list of entry nodes under Doc/WhatsNew. Listing children is a valid query use; the
-        // entry content is rendered by the doc view when the link is opened (never read from the
-        // lagging query index).
-        stack = stack.WithView((h, _) =>
-            h.Hub.GetQuery("whatsnew:list", ListingQueries)
-            .Select(nodes => (UiControl?)Controls.Markdown(Render(nodes, h)))
-            // Generic message to the (ungated, any-user) UI — never surface the raw exception; log it
-            // server-side instead so an internal detail can't leak into the page.
-            .Catch<UiControl?, Exception>(ex =>
-            {
-                h.Hub.ServiceProvider.GetService<ILoggerFactory>()?
-                    .CreateLogger(nameof(WhatsNewSettingsTab))
-                    .LogWarning(ex, "What's New listing failed for {Namespace}", WhatsNewNamespace);
-                return Observable.Return((UiControl?)Controls.Markdown(host.Localize("ui.mdWhatsNewFailed")));
-            })
-            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoading"))));
+        // Live list of entry nodes under Doc/WhatsNew — a TEMPLATE (Doc/GUI/DataBinding → "Templates
+        // first, data later"): the markdown is declared at once and fed by WhatsNewFeed. Listing
+        // children is a valid query use; the entry content is rendered by the doc view when the link
+        // is opened (never read from the lagging query index). A failure shows a generic message to
+        // this ungated, any-user page — never the raw exception; BindMarkdown logs it server-side.
+        stack = stack.WithView(WhatsNewFeed(host)
+            .BindMarkdown(ListDataId, host.Localize("ui.mdLoading"), _ => host.Localize("ui.mdWhatsNewFailed")));
 
         return stack;
     }

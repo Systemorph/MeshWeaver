@@ -156,21 +156,39 @@ public static class InstancesSettingsTab
                     $"{host.Localize("instances.error.registerFailed")} {ex.Message}"));
     }
 
+    /// <summary>
+    /// The instance list — a TEMPLATE: the grid is declared at once and bound to
+    /// <c>/data/instanceList</c>; <see cref="InstanceRows"/> feeds it (Doc/GUI/DataBinding →
+    /// "Templates first, data later").
+    /// </summary>
     private static UiControl InstanceList(LayoutAreaHost host, string userId)
+        => Controls.Stack
+            .WithView(Controls.Title(host.Localize("instances.yourInstances"), 3))
+            .WithView(InstanceRows(host, userId)
+                .BindGrid(ListDataId, host.Localize("instances.none"),
+                    message => host.Localize("instances.error.listFailed", message))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(InstanceRow.InstanceId).ToCamelCase() }
+                    .WithTitle(host.Localize("instances.column.id")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(InstanceRow.DisplayName).ToCamelCase() }
+                    .WithTitle(host.Localize("instances.column.name")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(InstanceRow.Path).ToCamelCase() }
+                    .WithTitle(host.Localize("instances.column.path"))));
+
+    /// <summary>
+    /// The feed half: the viewer's registered instances as rows. A live query, not a one-shot
+    /// read — a registration made above commits a node, the query re-emits, and the grid picks it
+    /// up without any refresh trigger. Builds no control.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<InstanceRow>> InstanceRows(LayoutAreaHost host, string userId)
     {
-        // A live query, not a one-shot read: a registration made above commits a node, the query
-        // re-emits, and the list picks it up without any refresh trigger.
         var query = $"nodeType:{MeshWeaver.Graph.Configuration.MeshWeaverInstanceNodeType.NodeType} "
                     + $"namespace:{userId}/{MeshWeaverInstanceService.InstanceNamespace}";
-
-        return Controls.Stack
-            .WithView(Controls.Title(host.Localize("instances.yourInstances"), 3))
-            .WithView(host.Hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>()
-                .Query(new MeshWeaver.Mesh.Services.MeshQueryRequest { Query = query, UserId = userId })
-                .Select(Rows)
-                .Select(rows => rows.Count == 0
-                    ? (UiControl)Controls.Markdown(host.Localize("instances.none"))
-                    : Grid(host, rows)));
+        return host.Hub.ServiceProvider.GetRequiredService<MeshWeaver.Mesh.Services.IMeshService>()
+            .Query(new MeshWeaver.Mesh.Services.MeshQueryRequest { Query = query, UserId = userId })
+            .Select(Rows);
     }
 
     private static IReadOnlyList<InstanceRow> Rows(IReadOnlyCollection<QueryResult> results) =>
@@ -180,21 +198,6 @@ public static class InstancesSettingsTab
                 r.Path))
             .OrderBy(r => r.InstanceId, StringComparer.Ordinal)
             .ToList();
-
-    private static UiControl Grid(LayoutAreaHost host, IReadOnlyList<InstanceRow> rows)
-    {
-        host.UpdateData(ListDataId, rows);
-        return new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ListDataId)))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(InstanceRow.InstanceId).ToCamelCase() }
-                .WithTitle(host.Localize("instances.column.id")))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(InstanceRow.DisplayName).ToCamelCase() }
-                .WithTitle(host.Localize("instances.column.name")))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(InstanceRow.Path).ToCamelCase() }
-                .WithTitle(host.Localize("instances.column.path")));
-    }
 
     /// <summary>One row of the instance grid — a plain record so the grid binds it directly.</summary>
     internal record InstanceRow(string InstanceId, string DisplayName, string Path);
