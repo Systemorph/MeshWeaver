@@ -133,7 +133,16 @@ These limits were measured, not reasoned. They are why `Enforce` on the runtime 
 | **D** | **Sealed platform principal**: System and hub contexts carry an unforgeable seal (an object only platform assemblies can mint); `SecurityService` treats an unsealed `system-security` as an ordinary, grant-less id; transports re-seal on ingress | Every forgery path, by construction, including hand-built contexts and reflection | High. Every serialization hop (the Orleans silo boundary, packaging) must re-seal; it touches the identity model fleet-wide |
 | **E** | Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 4 | Medium, and confined to Plugins' gRPC registry |
 
-**Recommendation:** run **B** in `LogOnly` for one week and size `TrustedCode` from the `[InMeshImpersonation]` and `[GatePrincipal]` lines. Before flipping, fix the escalation-shaped sites: Publish/Slide, ClaimsReviewArea, the self-provisioning group, and the user scripts above. Then flip **B** to `Enforce` and schedule **C** as the boundary, with **E** for the gate. **D** is the end state if forged contexts are ever measured in practice.
+**Decision: B now, in `LogOnly`, then C and E.** The order is binding:
+
+1. **B ships `LogOnly`.** Both switches stay at their defaults: `Access:InMeshImpersonation:Mode` and `Grpc:GateIdentityMode` are both `LogOnly`.
+2. **C** (the compile-time check) and **E** (gate passthrough bound to the request it answers) follow as their own changes. Each also ships `LogOnly` first, behind the same switch.
+3. **The `Enforce` flip waits on two things, and nothing else releases it:**
+   - **at least one week of `LogOnly` data** from production (`[InMeshImpersonation]` and `[GatePrincipal]` lines);
+   - **a `TrustedCode` list approved by the maintainer**, sized from that data.
+
+   Nobody flips either switch, or sets a trust list, on their own judgement. That includes an agent that finds the data looks clean.
+4. **The escalation sites found by the sweep go to bug triage**, where their owners fix them before the flip: Publish/Slide, Reinsurance ClaimsReviewArea, and the three user scripts above. They are not trusted around.
 
 ## Verifying the guards
 
