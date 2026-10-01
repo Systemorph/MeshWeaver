@@ -27,8 +27,15 @@ namespace MeshWeaver.PluginCatalog;
 /// baseline (<see cref="PlanTierRanks.BaselinePlan"/>), so it uses the <c>free</c> node. A node that
 /// carries a RETIRED id (<see cref="PlanTierRanks.RetiredPlans"/>) is used by nobody — the retired id
 /// resolves to its successor, whose own node ranks it — and stays deletable. Deleting the container
-/// <c>Admin/Tiers</c> itself (a recursive delete is validated on its ROOT only) is refused while any
-/// instance is registered at all, because it would delete every tier at once.</para>
+/// <c>Admin/Tiers</c> itself is refused while any instance is registered at all, because it would
+/// delete every tier at once. A recursive delete rooted ABOVE the container (e.g. <c>Admin</c>) is
+/// covered too: its pre-flight posts a <c>ValidateDeleteRequest</c> to every descendant, and each
+/// tier node's own delete chain — this guard included — answers it.</para>
+///
+/// <para><b>Not covered: a MOVE.</b> <c>HandleMoveNodeRequest</c> is copy-then-<c>DeleteMany</c>
+/// straight on storage and runs no <see cref="INodeValidator"/> for its source, so moving a tier node
+/// out of <c>Admin/Tiers</c> drops it from the ladder unguarded — a framework gap shared by every
+/// delete validator, not one this class can close by widening <see cref="SupportedOperations"/>.</para>
 ///
 /// <para><b>System is NOT exempt.</b> The harm is the same whoever deletes the node, and the ladder
 /// has no infrastructure path that deletes a tier node.</para>
@@ -45,7 +52,8 @@ public sealed class TierInUseDeletionGuard(IMessageHub hub, ILogger<TierInUseDel
     /// <summary>How many using instances a refusal names before it summarises the rest.</summary>
     private const int MaxNamed = 10;
 
-    /// <summary>Delete only — a tier node may be created, read, re-ranked and moved freely.</summary>
+    /// <summary>Delete only — a tier node may be created, read and re-ranked freely. (A move runs no
+    /// validator at all today; see the class remarks.)</summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
     /// <summary>Refuses the delete of a tier node (or of the tier container) that instances still use.</summary>
@@ -119,8 +127,9 @@ public sealed class TierInUseDeletionGuard(IMessageHub hub, ILogger<TierInUseDel
                 // The key-hash index rows share the NodeType; they are routing hints, not instances.
                 .Where(n => !n.Path.StartsWith(MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
                 .Select(n => n.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions))
-                .Where(instance => instance is not null && (tierId is null || StandsOn(instance, tierId)))
-                .Select(instance => instance!.InstanceId)
+                .OfType<MeshWeaverInstance>()
+                .Where(instance => tierId is null || StandsOn(instance, tierId))
+                .Select(instance => instance.InstanceId)
                 .Order(StringComparer.Ordinal)
                 .ToImmutableList());
     }

@@ -300,9 +300,11 @@ no copy of the Store's `PlanTiers` to drift. The rules at the edges are delibera
   cannot license MORE. A registry with no tier nodes at all (a local self-registry, the e2e stub)
   therefore serves its free and untiered packages to every instance and refuses every paid tier —
   `free` ranks at the baseline by definition, ladder or not;
-  Deciding at the baseline is **never silent** (#5894): the registry logs a warning naming the
-  instance, the stored plan and the plans it does know on every resolution of that instance, and a
-  plan-tier refusal reports the STORED id as `instancePlan` — "this instance is on gold", never
+  On a registry that HAS a ladder, deciding at the baseline is **never silent** (#5894): the registry
+  logs a warning naming the instance, the stored plan and the plans it does know on every resolution
+  of that instance (a registry with no tier nodes at all is not reported — every plan is unknown
+  there by construction, and the ladder read says so once), and a plan-tier refusal reports the
+  STORED id, in canonical form (trimmed, lower-cased), as `instancePlan` — "this instance is on gold", never
   "this instance is on free" for a record that says something else. (An unknown **cap** on a grant
   entry is still reported as the baseline: it is neither the instance's plan nor an upgrade target.)
   Measured on the public registry: a dedicated client instance stored `sme`, a plan renamed to

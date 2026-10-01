@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Linq;
 using System.Reactive.Linq;
@@ -109,7 +107,7 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
 
         var refused = await TryDelete(TierPath("pro"), ct);
         refused.Should().NotBeNull("an instance stands on 'pro'; deleting its tier node would make its plan unknown");
-        refused!.Message.Should().Contain("pro-client", "the refusal names the instance that has to be moved first");
+        refused?.Message.Should().Contain("pro-client", "the refusal names the instance that has to be moved first");
         (await Read(TierPath("pro"), ct)).Should().NotBeNull("the refused delete must leave the tier node in place");
 
         // The control: nothing stands on `personal`, so the guard must not refuse everything.
@@ -125,7 +123,7 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
 
         var refused = await TryDelete(TierPath("free"), ct);
         refused.Should().NotBeNull("an instance stands on the baseline plan");
-        refused!.Message.Should().Contain("free-client");
+        refused?.Message.Should().Contain("free-client");
     }
 
     [Fact(Timeout = 300_000)]
@@ -141,6 +139,6 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
             "'sme' is retired — it resolves to 'dedicated', so nothing stands on its own node");
         var refused = await TryDelete(TierPath("dedicated"), ct);
         refused.Should().NotBeNull("the instance registered on 'sme' stands on its successor 'dedicated'");
-        refused!.Message.Should().Contain("dedicated-client");
+        refused?.Message.Should().Contain("dedicated-client");
     }
 }

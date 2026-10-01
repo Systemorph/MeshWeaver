@@ -136,7 +136,9 @@ public record PluginGrant
             // 🚨 An unknown INSTANCE plan is the opposite case and is NAMED (#5894): the record
             // really does store it, and reporting it as "free" is what hid a dedicated instance
             // whose stored plan the ladder no longer knew behind 18 refusals that all read "this
-            // instance is on free". Unknown stays unknown — the consumer sees the stored id.
+            // instance is on free". Unknown stays unknown — the consumer sees the stored id in its
+            // canonical form (trimmed, lower-cased, a retired id as its successor), the same form
+            // every rank lookup uses, so the sentence and the decision cannot disagree.
             var canonical = PlanTierRanks.Canonical(ranks.Narrower(instancePlan, entry.Tier));
             var plan = canonical.Length > 0 && (ranks.RankOf(canonical) is not null || ranks.IsAllAccess(canonical))
                 ? canonical
