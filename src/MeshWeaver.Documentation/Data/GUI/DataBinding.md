@@ -57,6 +57,77 @@ The backend layout-area method **must not** be `async Task<UiControl>`. Return `
 
 ---
 
+## Templates first, data later
+
+> **A layout area is a TEMPLATE. It emits its whole control tree on the first render, shows a loading shape where data has not arrived, and BINDS its data — it never loads the data on the hub and bakes the values into controls.**
+
+The wrong shape, and why it is slow: the area subscribes to the node (or a query) on the hub, waits for the answer, and only then builds controls out of the values. The page shows nothing but the area's spinner until the slowest read has answered — the owning hub activating, a cold NodeType compile, a partition fan-out — and what finally renders is a snapshot that an edit made elsewhere never reaches. The tells:
+
+- the area returns `GetMeshNodeStream(...)` / `GetQuery(...)` / `Query(...)` / `Workspace.GetStream<T>()` `.Select(x => Controls…)`, interpolating values into `Markdown` / `Html` / labels / grid rows;
+- a `WithView((h, c) => stream.Select(…))` child that is the only thing in the container, so the first render is empty;
+- `.Take(1)` / `FirstAsync` on data inside an area, then `WithValue(snapshot)`;
+- a `DataGrid` built from a materialized list.
+
+### The reference conversion: the Markdown Edit page
+
+**Before** — the page waited for the node, then froze its markdown into the editor:
+
+```csharp
+private static UiControl BuildArea(LayoutAreaHost host, bool trackChanges)
+    => Controls.Stack
+        .WithView((h, ctx) => host.Workspace.GetMeshNodeStream().Take(1).Select(node =>
+            BuildEditContent(host, node, hubPath, hubAddress,
+                MarkdownOverviewLayoutArea.GetMarkdownContent(node),   // ← value baked in on the hub
+                trackChanges)));
+// … inside BuildEditContent:
+new MarkdownEditorControl().WithValue(initialContent).WithAutoSave(hubPath, hubPath);
+```
+
+**After** — every control is declared up front and bound by PATH; nothing on the hub reads the node (`MarkdownEditLayoutArea.BuildTemplate`):
+
+```csharp
+public static UiControl BuildTemplate(string nodePath, bool trackChanges, string? locale)
+{
+    // Title: the node's Name, read and written by the GUI through the node stream.
+    var title = new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
+    {
+        DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false)
+    };
+    // Body: a POINTER into the node's MarkdownContent, not the text.
+    var editor = new MarkdownEditorControl
+        {
+            Value = new JsonPointerReference("content"),
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath)
+        }
+        .WithAutoSave(nodePath, nodePath);
+    return Controls.Stack.WithView(/* header with title */).WithView(editor);   // all STATIC views
+}
+```
+
+The editor view resolves the pointer through `MeshNodeBindingExtensions.Bind` (`IMeshNodeStreamCache` underneath) and stays subscribed, so the page renders at once and follows the node live. `test/MeshWeaver.Graph.Test/MarkdownEditIsATemplateTest` pins both halves: every view in the template is a control (no deferred view the first render leaves empty), and the template's pointer reads the node's markdown and then follows a later edit.
+
+### The toolkit — use these, never a new one
+
+| You need to show | Declare | Resolved |
+|---|---|---|
+| A field of a node (title, description, a content property) | Any form/display control with a `JsonPointerReference` and `DataContext = LayoutAreaReference.GetMeshNodeDataContext(path[, bindContent: false])` | GUI, `MeshNodeBindingExtensions.Bind` |
+| A node's markdown body | `MarkdownEditorControl { Value = pointer, DataContext = nodeCtx }` (edit) · `CollaborativeMarkdownControl { NodePath }` (read) | GUI |
+| A node as a card | `new MeshNodeThumbnailControl(path, …)` / `MeshNodeCardControl` with the PATH — never `FromNode(loadedNode)` | GUI, per-node cache |
+| A list of nodes | `Controls.MeshSearch.WithHiddenQuery(…)` · `MeshNodeCollectionControl.WithQueries(…)` — the GUI runs the query | GUI |
+| Rows computed on the hub (a projection, an aggregate) | `stream.BindMany(id, row => template)` / `stream.Bind(x => template, id)` (`Template` in `MeshWeaver.Layout`) — the control is returned AT ONCE and the stream feeds `/data/{id}` | hub → `/data`, bound by pointer |
+| A whole sub-page that genuinely must compute | A nested `LayoutAreaControl` with `.WithSpinnerType(SpinnerType.Skeleton)` — the parent page renders, the slot shows the skeleton | hub, deferred to the slot only |
+
+### The loading shape
+
+- **A deferred slot** already has one: `NamedAreaView` draws the `SpinnerType` of its `LayoutAreaControl` / `NamedAreaControl` until the slot's first control arrives — `SpinnerType.Skeleton` is the ghost-box shape, and it is what a template's data-dependent sub-area should ask for.
+- **A bound field** draws EMPTY until its value arrives (`MeshNodeBindingExtensions.Bind` emits `null` for "absent / not yet"), and the per-control shape is not yet a skeleton. 🚨 That gap is a PLATFORM gap, to be closed once in `BlazorView` (render the skeleton, and keep an editable control read-only, until the first bound emission) — never per view. An editor bound by pointer accepts input before its first value has arrived; the window is short (the cache replays a held node at once) but it is real, and closing it in the base view closes it for every bound control at the same time.
+
+### The ratchet
+
+`test/MeshWeaver.Documentation.Test/LayoutAreaDataBakeRatchetGuard` counts, per file under `src/`, `memex/` and `samples/`, the layout-area units (methods, local functions, lambdas taking a `LayoutAreaHost`) that both READ data and BUILD controls. The seeded inventory is `test/LayoutAreaDataBakeSites.allow`; it may only shrink. Converting an area means lowering its line (and `TotalBudget`) in the same change. It is a text heuristic, and it says so: a load reached through another file's helper is missed, and an area that reads data only to choose its STRUCTURE (a permission gate) is counted — so the file is an inventory to work down, not a verdict on every line.
+
+---
+
 ## GUI: subscribe via the cache, re-render on emission
 
 The canonical Blazor view template. Reads and writes both go through `Hub.GetMeshNodeStream(path)`, which returns a `MeshNodeStreamHandle` backed by the process-wide `IMeshNodeStreamCache`. Multiple views on the same path share **one** upstream subscription; writes through the handle's `.Update(...)` are visible to every reader.
