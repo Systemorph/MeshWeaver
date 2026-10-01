@@ -226,6 +226,8 @@ public static class CouponAdminSettingsTab
 
     // ── Tab content ────────────────────────────────────────────────────────────
 
+    private const string CouponListDataId = "couponList";
+
     private static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         stack = stack
@@ -236,29 +238,71 @@ public static class CouponAdminSettingsTab
             .WithView(Controls.Button(host.Localize("ui.newCoupon"))
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref("/Store/Coupon/Create?type=Store%2FCoupon"), "NewCoupon")
-            .WithView((h, _) => LiveCouponList(h), "CouponList");
+            .WithView(CouponList(host), "CouponList");
         return stack;
     }
 
     /// <summary>
-    /// The LIVE coupon list: accumulates the chunked query over <see cref="CouponsNamespace"/>
-    /// (creates, edits and deletes all land) and re-renders the grid per snapshot. The viewer is
-    /// a confirmed global admin, so the query runs under their own identity — no impersonation.
+    /// The coupon list — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid
+    /// is declared at once and fed by <see cref="CouponRowsFeed"/>. A click on a coupon's row opens
+    /// its node page, where the Store/Coupon type's own Edit / Delete actions live.
     /// </summary>
-    private static IObservable<UiControl?> LiveCouponList(LayoutAreaHost host)
+    private static UiControl CouponList(LayoutAreaHost host)
+        => Controls.Stack
+            .WithView(CouponRowsFeed(host)
+                .BindGrid(CouponListDataId, host.Localize("coupons.none"),
+                    message => host.Localize("coupons.listFailed", message))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnCode")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemableOn")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnPrice")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnValid")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemed")))
+                .WithColumn(new PropertyColumnControl<string>
+                    { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
+                .Resizable()
+                .WithClickAction(ctx =>
+                {
+                    if (ctx.Payload is DataGridCellClick { Item: { } item }
+                        && item.As<CouponRow>(ctx.Hub.JsonSerializerOptions, what: "coupon row") is { Code.Length: > 0 } row)
+                        ctx.NavigateTo($"/{CouponsNamespace}/{row.Code}");
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Body(host.Localize("coupons.openHint"))
+                .WithStyle("color: var(--neutral-foreground-hint); margin-top: 8px;"));
+
+    /// <summary>
+    /// The feed half of the LIVE coupon list: accumulates the chunked query over
+    /// <see cref="CouponsNamespace"/> (creates, edits and deletes all land) into rows, one set per
+    /// settled snapshot. The viewer is a confirmed global admin, so the query runs under their own
+    /// identity — no impersonation. Builds no control.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<CouponRow>> CouponRowsFeed(LayoutAreaHost host)
     {
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdMeshUnavailable")));
+            return Observable.Throw<IReadOnlyList<CouponRow>>(
+                new InvalidOperationException(host.Localize("ui.mdMeshUnavailable")));
         var options = host.Hub.JsonSerializerOptions;
+        // One delegate for the whole feed, not one per row: this projection re-runs on every
+        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
+        var localize = (Func<string, string>)(key => host.Localize(key));
 
         return meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{CouponsNamespace} scope:children"))
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, Accumulate)
-            // Let the chunked first snapshot settle instead of re-rendering per chunk.
+            // Let the chunked first snapshot settle instead of re-emitting per chunk.
             .Throttle(TimeSpan.FromMilliseconds(300))
-            .StartWith(ImmutableDictionary<string, MeshNode>.Empty)
-            .Select(map => (UiControl?)BuildGrid(host, map, options));
+            .Select(map => (IReadOnlyList<CouponRow>)map.Values
+                .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(n => ToRow(n, options, localize))
+                .ToImmutableArray());
     }
 
     /// <summary>One accumulation step over the chunked query — pure: Reset restarts, Removed
@@ -273,55 +317,5 @@ public static class CouponAdminSettingsTab
                 ? map.Remove(item.Path)
                 : map.SetItem(item.Path, item);
         return map;
-    }
-
-    private static UiControl BuildGrid(
-        LayoutAreaHost host, ImmutableDictionary<string, MeshNode> coupons, JsonSerializerOptions options)
-    {
-        if (coupons.IsEmpty)
-            return Controls.Markdown(host.Localize("ui.mdNoCoupons"));
-
-        // One delegate for the whole grid, not one per row: this projection re-runs on every
-        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
-        var localize = (Func<string, string>)(key => host.Localize(key));
-        var rows = coupons.Values
-            .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(n => ToRow(n, options, localize))
-            .ToImmutableArray();
-
-        // Rows bind INLINE — a per-render UpdateData under a fresh id would accumulate orphaned
-        // data entries for the host's lifetime (each snapshot re-renders this grid).
-        var grid = Controls.DataGrid(rows)
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnCode")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemableOn")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnPrice")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnValid")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemed")))
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
-            .Resizable();
-
-        // DataGrid has no row-click — one Open button per coupon navigates to its node page,
-        // where the Store/Coupon type's own Edit / Delete actions live.
-        var openRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(8)
-            .WithStyle("flex-wrap: wrap; margin-top: 8px;");
-        foreach (var row in rows)
-            openRow = openRow.WithView(Controls.Button(row.Code)
-                .WithAppearance(Appearance.Outline)
-                .WithNavigateToHref($"/{CouponsNamespace}/{row.Code}"));
-
-        return Controls.Stack
-            .WithView(grid)
-            .WithView(Controls.Markdown(host.Localize("ui.openCoupon")))
-            .WithView(openRow);
     }
 }
