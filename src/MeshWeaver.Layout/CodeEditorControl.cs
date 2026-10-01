@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Layout;
+using MeshWeaver.Data;
+
+namespace MeshWeaver.Layout;
 
 /// <summary>
 /// A control that wraps the Monaco code editor.
@@ -145,6 +147,31 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// <param name="nodePath">Path of the Code MeshNode this editor edits in place.</param>
     /// <returns>A new instance with the updated AutoSaveAddress.</returns>
     public CodeEditorControl WithAutoSave(string nodePath) => this with { AutoSaveAddress = nodePath };
+
+    /// <summary>
+    /// Returns a copy whose text is BOUND to one field of the node at <paramref name="nodePath"/> —
+    /// the code-editor counterpart of the node-bound form controls (Doc/GUI/DataBinding → "Binding a
+    /// rich control to a node field"). <see cref="Value"/> becomes the relative pointer
+    /// <paramref name="field"/> and the control's DataContext the node-bound context
+    /// (<see cref="LayoutAreaReference.GetMeshNodeDataContext"/>): the renderer reads the field live
+    /// off the node stream and writes every edit straight back to that ONE field. The producing area
+    /// renders the editor at once and never loads the node — no <c>/data</c> copy, no Save button,
+    /// no save subscription.
+    /// </summary>
+    /// <param name="nodePath">Path of the node whose field the editor edits.</param>
+    /// <param name="field">The field to bind, relative to the node's <c>Content</c> (or to the whole
+    /// node when <paramref name="bindContent"/> is <c>false</c>), e.g. <c>"instructions"</c>.
+    /// Resolved case-insensitively.</param>
+    /// <param name="bindContent"><c>true</c> (default) resolves <paramref name="field"/> against the
+    /// node's <c>Content</c>; <c>false</c> against the node's top-level fields
+    /// (<c>Description</c>, <c>Name</c>, …).</param>
+    /// <returns>A new instance bound to the node field.</returns>
+    public CodeEditorControl BindToNode(string nodePath, string field, bool bindContent = true) =>
+        this with
+        {
+            Value = new JsonPointerReference(field),
+            DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent),
+        };
 }
 
 /// <summary>
