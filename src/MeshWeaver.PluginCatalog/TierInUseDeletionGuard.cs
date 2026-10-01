@@ -32,10 +32,10 @@ namespace MeshWeaver.PluginCatalog;
 /// covered too: its pre-flight posts a <c>ValidateDeleteRequest</c> to every descendant, and each
 /// tier node's own delete chain — this guard included — answers it.</para>
 ///
-/// <para><b>Not covered: a MOVE.</b> <c>HandleMoveNodeRequest</c> is copy-then-<c>DeleteMany</c>
-/// straight on storage and runs no <see cref="INodeValidator"/> for its source, so moving a tier node
-/// out of <c>Admin/Tiers</c> drops it from the ladder unguarded — a framework gap shared by every
-/// delete validator, not one this class can close by widening <see cref="SupportedOperations"/>.</para>
+/// <para><b>A MOVE is covered too.</b> Moving a tier node out of <c>Admin/Tiers</c> drops it from the
+/// ladder exactly as deleting it would, and <c>HandleMoveNodeRequest</c> puts its source subtree through
+/// the same <c>ValidateDeleteRequest</c> pre-flight a recursive delete runs, root included, before the
+/// copy writes anything — so this Delete-only guard refuses the move with no Move-specific code.</para>
 ///
 /// <para><b>System is NOT exempt.</b> The harm is the same whoever deletes the node, and the ladder
 /// has no infrastructure path that deletes a tier node.</para>
@@ -52,8 +52,8 @@ public sealed class TierInUseDeletionGuard(IMessageHub hub, ILogger<TierInUseDel
     /// <summary>How many using instances a refusal names before it summarises the rest.</summary>
     private const int MaxNamed = 10;
 
-    /// <summary>Delete only — a tier node may be created, read and re-ranked freely. (A move runs no
-    /// validator at all today; see the class remarks.)</summary>
+    /// <summary>Delete only — a tier node may be created, read and re-ranked freely. A move of it is
+    /// validated as a delete of its source; see the class remarks.</summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Delete];
 
     /// <summary>Refuses the delete of a tier node (or of the tier container) that instances still use.</summary>
