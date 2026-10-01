@@ -434,9 +434,38 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                             .SelectMany(result => result.Instance is null
                                 ? Observable.Return(result)
                                 : Ladder().Select(ranks =>
-                                    InstanceAuthResult.Resolved(result.Instance with { Ranks = ranks })));
+                                {
+                                    ReportPlanStanding(result.Instance.Instance, ranks);
+                                    return InstanceAuthResult.Resolved(result.Instance with { Ranks = ranks });
+                                }));
                     });
             }));
+    }
+
+    /// <summary>
+    /// 🚨 Names a plan the registry is about to decide with WITHOUT knowing it (#5894). An unknown
+    /// stored plan is decided at the baseline (<see cref="PlanTierRanks.CoversInstance"/>, fail
+    /// closed) and a RETIRED one as its successor (<see cref="PlanTierRanks.RetiredPlans"/>); both
+    /// are facts an operator has to act on — re-set the plan on the Instance grants tab — and
+    /// neither may pass silently. Once per resolution, which the caller caches, so this is at most
+    /// one line per instance per cache window. A registry with NO ladder at all is not reported:
+    /// every plan is unknown there by construction, and <see cref="PlanTierLadder"/> already says so.
+    /// </summary>
+    private void ReportPlanStanding(MeshWeaverInstance instance, PlanTierRanks ranks)
+    {
+        if (ranks.Ranks.Count == 0)
+            return;
+        if (PlanTierRanks.SuccessorOf(instance.Plan) is { } successor)
+            logger.LogWarning(
+                "Instance {InstanceId} stores the RETIRED plan id '{StoredPlan}' — decided as its successor "
+                + "'{Successor}'. Set the plan to '{Successor}' on Settings ▸ Instance grants to retire the old id.",
+                instance.InstanceId, instance.Plan, successor, successor);
+        else if (ranks.IsUnknownPlan(instance.Plan))
+            logger.LogWarning(
+                "Instance {InstanceId} stores the plan '{StoredPlan}', which this registry's plan ladder does not "
+                + "know (known: {KnownPlans}) — deciding at the baseline '{Baseline}' (fail closed). Set a known "
+                + "plan on Settings ▸ Instance grants.",
+                instance.InstanceId, instance.Plan, string.Join(", ", ranks.Ids), PlanTierRanks.BaselinePlan);
     }
 
     /// <summary>The registry's plan ladder, or <see cref="PlanTierRanks.Empty"/> on a host that
