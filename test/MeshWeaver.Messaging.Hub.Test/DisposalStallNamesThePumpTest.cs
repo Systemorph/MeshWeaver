@@ -140,62 +140,126 @@ public class DisposalStallNamesThePumpTest : HubTestBase
     /// <c>Queue(buffer=2,deferred=0,drainsInFlight=0,openGates=1,draining=True)</c> — which is
     /// EITHER a drain the pool accepted and never ran (M1, starvation) OR a latch with nothing
     /// outstanding (M3), and the recursive snapshot did not print the one counter that separates
-    /// them. The investigation therefore chased the closed initialization gate instead of the
-    /// starved pool the same replica's heartbeat showed (113,021 pending work items).</para>
+    /// them. <b>Fails on code without the field</b>: the child line never carries it.</para>
     ///
-    /// <para>The state is built directly: a Started child whose scheduler stops delivering threads,
-    /// under a parent that is then disposed. The parent reaches <c>DisposeHostedHubs</c>, disposes the
-    /// child, the child's <c>ShutdownRequest</c> drain is accepted and held — and the parent's
-    /// snapshot must say so. <b>Fails on unfixed code</b>: the field is absent from the recursive
-    /// snapshot, so the wait below never sees it.</para>
+    /// <para>🚨 <b>Ordered by the CONDITION, never by a reading that can precede it</b>
+    /// (rbuergi/Feedback/disposal-stall-snapshot-test-races-runlevel). The first cut waited for the
+    /// counter alone and then asserted the parent's level — but a frozen child can hold a drain
+    /// before its parent is ever disposed (any delivery reaching it after the pause), so that wait
+    /// returned while the parent was still <c>Quiescing</c>, and core #5943's shard went red on one
+    /// run and green on the next. Here that state is PRODUCED: the child holds a drain before the
+    /// parent is disposed, and a responder on its own paused scheduler holds the parent in
+    /// <c>Quiescing</c> on an unanswered request. The test asserts the trap is armed (the counter is
+    /// already visible at <c>Quiescing</c>), releases the responder, and only then waits — through
+    /// <c>RunLevelChanged</c> — for <c>DisposeHostedHubs</c> and for the child's disposal.
+    /// Negative control: the counter-only wait fails here on every run, reading
+    /// <c>RunLevel=Quiescing</c>.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task AParentsSnapshot_NamesAChildDrainTheSchedulerHasNotStarted()
     {
-        var scheduler = new PausableTaskScheduler();
+        var childScheduler = new PausableTaskScheduler();
+        var responderScheduler = new PausableTaskScheduler();
+        var ct = TestContext.Current.CancellationToken;
         var parent = (MessageHub)Mesh.GetHostedHub(new Address("parent", "hosts-starved-child"), c => c
             .WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
         var child = (MessageHub)parent.GetHostedHub(new Address("sync", "starved-child"), c => c
-            .WithTaskScheduler(scheduler)
+            .WithTaskScheduler(childScheduler)
             .WithPostingIdentity(PostingIdentity.System)
             .WithHandler<Ping>((h, d) =>
             {
                 h.Post(new Pong(), o => o.ResponseFor(d));
                 return d.Processed();
             }), HostedHubCreation.Always)!;
+        var responder = (MessageHub)Mesh.GetHostedHub(new Address("responder", "holds-parent-quiescing"), c => c
+            .WithTaskScheduler(responderScheduler)
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithHandler<Ping>((h, d) =>
+            {
+                h.Post(new Pong(), o => o.ResponseFor(d));
+                return d.Processed();
+            }), HostedHubCreation.Always)!;
+        IDisposable? heldRequest = null;
 
         try
         {
             await child.Observe(new Ping(), o => o.WithTarget(child.Address))
                 .Should().Within(TestTimeouts.Quick)
                 .Emit("the child must answer once, on its own scheduler, before that scheduler is frozen",
-                    cancellationToken: TestContext.Current.CancellationToken);
+                    cancellationToken: ct);
+            await responder.Observe(new Ping(), o => o.WithTarget(responder.Address))
+                .Should().Within(TestTimeouts.Quick)
+                .Emit("the responder must be Started before its scheduler is frozen", cancellationToken: ct);
             child.RunLevel.Should().Be(MessageHubRunLevel.Started);
 
-            scheduler.Pause();
-            parent.Dispose();
-
+            // The child holds a drain BEFORE its parent is disposed — the state the counter-only
+            // wait returned early on.
+            childScheduler.Pause();
+            child.Post(new Ping(), o => o.WithTarget(child.Address));
             var childLine = $"Hub {child.Address} ";
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .Select(_ => child.GetDisposalDiagnostics())
+                .Should().Within(TestTimeouts.Convergence)
+                .Match(s => s.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal),
+                    "PRECONDITION: the frozen child already holds an unstarted drain", ct);
+
+            // The parent owes itself a reply the frozen responder cannot give yet, so its Quiescing
+            // phase waits on that callback instead of passing in a millisecond.
+            responderScheduler.Pause();
+            heldRequest = parent.Observe(new Ping(), o => o.WithTarget(responder.Address))
+                .Subscribe(_ => { }, _ => { });
+
+            parent.Dispose();
+            await parent.RunLevelChanged
+                .Should().Within(TestTimeouts.Convergence)
+                .Match(level => level == MessageHubRunLevel.Quiescing,
+                    "PRECONDITION: the parent is held in Quiescing on its unanswered request", ct);
+
+            // The trap is armed: at Quiescing the parent's snapshot ALREADY names the child's drain,
+            // so a wait keyed on that counter cannot tell this phase from the one under test.
+            var atQuiescing = parent.GetDisposalDiagnostics();
+            atQuiescing.Should().Contain($"Hub {parent.Address} RunLevel=Quiescing");
+            atQuiescing.Split('\n').Should().Contain(l => l.Contains(childLine, StringComparison.Ordinal)
+                                                        && l.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal),
+                "PRECONDITION: the counter is visible before the parent reaches DisposeHostedHubs — "
+                + "otherwise this test cannot tell an ordered wait from a lucky one");
+
+            responderScheduler.Resume();
+
+            // Wait on the CONDITION: the parent has entered the phase whose verdict appends this
+            // snapshot …
+            await parent.RunLevelChanged
+                .Should().Within(TestTimeouts.Convergence)
+                .Match(level => level == MessageHubRunLevel.DisposeHostedHubs,
+                    "the parent must reach DisposeHostedHubs — the #5820 shape is a parent waiting "
+                    + "there on its child", ct);
+
+            // … and has disposed the child (DisposeHostedHubs sets the level, THEN disposes the
+            // children in the same turn, so the level alone can still precede Disposal=Pending).
             var snapshot = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
                 .Select(_ => parent.GetDisposalDiagnostics())
-                .Where(s => s.Split('\n').Any(l => l.Contains(childLine, StringComparison.Ordinal)
-                                                   && l.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal)))
-                .FirstAsync()
-                .Timeout(TestTimeouts.Convergence)
-                .Await(TestContext.Current.CancellationToken);
+                .Should().Within(TestTimeouts.Convergence)
+                .Match(s => s.Split('\n').Any(l => l.Contains(childLine, StringComparison.Ordinal)
+                                                   && l.Contains("Disposal=Pending", StringComparison.Ordinal)),
+                    "the parent's DisposeHostedHubs turn disposes its hosted child", ct);
             Output.WriteLine(snapshot);
 
-            parent.RunLevel.Should().Be(MessageHubRunLevel.DisposeHostedHubs,
-                "the parent is waiting on its child, which is the #5820 shape");
-            snapshot.Should().Contain($"Hub {parent.Address} RunLevel=DisposeHostedHubs");
+            snapshot.Should().Contain($"Hub {parent.Address} RunLevel=DisposeHostedHubs",
+                "the parent cannot leave DisposeHostedHubs while its child's drain is held");
+            snapshot.Split('\n').Should().Contain(l => l.Contains(childLine, StringComparison.Ordinal)
+                                                     && l.Contains("drainsAwaitingScheduler=1)", StringComparison.Ordinal),
+                "the parent's snapshot must name the child's drain the scheduler accepted and has "
+                + "not started — the counter #5820's child line lacked");
         }
         finally
         {
-            scheduler.Resume();
+            responderScheduler.Resume();
+            childScheduler.Resume();
+            heldRequest?.Dispose();
         }
 
-        await parent.DisposalCompleted.FirstOrDefaultAsync().Await(TestContext.Current.CancellationToken)
-            .WaitAsync(TestTimeouts.Convergence, TestContext.Current.CancellationToken);
+        await parent.DisposalCompleted.FirstOrDefaultAsync().Await(ct)
+            .WaitAsync(TestTimeouts.Convergence, ct);
         parent.RunLevel.Should().Be(MessageHubRunLevel.Dead,
             "once the child's scheduler delivers threads again the whole tree tears down normally — the "
             + "stall was the scheduler's, which is what the snapshot now says");
