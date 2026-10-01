@@ -834,6 +834,8 @@
   "ui.fieldWriteRefused": "Not saved: you can read this page, but you may not change it.",
   "ui.accessDeniedAdminsOnly": "Access denied — platform admins only.",
   "ui.autoSaved": "Changes are saved automatically",
+  "ui.markdownTitlePlaceholder": "Untitled",
+  "ui.markdownBodyPlaceholder": "Start writing your markdown content...",
   "ui.connectRepoFirst": "Connect a GitHub repository in the **GitHub Sync** tab first.",
   "ui.gitHistoryInSpace": "Git history is available inside a Space.",
   "ui.loginWithSubscription": "Log in with your subscription — no key, no model list.",
