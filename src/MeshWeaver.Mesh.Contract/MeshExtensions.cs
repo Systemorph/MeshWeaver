@@ -4940,7 +4940,8 @@ public static class MeshExtensions
     /// <paramref name="legTimeout"/>, derived by <c>MeshOperationOptions.Nest</c> at the call site:
     /// the read runs INSIDE the leg's <c>.Catch</c>, which the leg's own bound no longer covers.</param>
     /// <param name="logger">Where a per-leaf refusal is reported.</param>
-    /// <param name="includeRoot">Ask the ROOT too. A delete validates its root in-process before
+    /// <param name="includeRoot">Ask the ROOT too — <paramref name="rootPath"/> is added to the set
+    /// whether or not <paramref name="allPaths"/> already carries it. A delete validates its root in-process before
     /// this fan-out, so it leaves this false; a MOVE has no such earlier stage — the source root is
     /// as much "going away" as every descendant — so it asks the root's own hub the same question,
     /// which is also what runs the root's <c>[RequiresPermission(Delete)]</c> gate on the NODE rather
@@ -4957,7 +4958,7 @@ public static class MeshExtensions
         ILogger logger,
         bool includeRoot = false)
     {
-        var descendants = allPaths
+        var descendants = (includeRoot ? allPaths.Add(rootPath) : allPaths)
             .Where(p => includeRoot || !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (descendants.Length == 0)
@@ -7566,13 +7567,14 @@ public static class MeshExtensions
                     NodeMoveRejectionReason.ValidationFailed))
                 : storage.ListDescendantPaths(sourcePath)
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Timeout(budget, Observable.Defer(() => Observable.Throw<IReadOnlyCollection<string>>(new TimeoutException(
+                        $"[MoveNode] storage did not enumerate the subtree of '{sourcePath}' within "
+                        + $"{budget.TotalSeconds:0}s"))))
                     .SelectMany(descendants => PreValidateDescendantsObs(
                         issuingHub,
                         sourcePath,
                         descendants
                             .Where(p => !string.IsNullOrEmpty(p))
-                            .Append(sourcePath)
                             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
                         callerContext,
                         budget,
@@ -7590,7 +7592,13 @@ public static class MeshExtensions
                                 NodeDeletionRejectionReason.Unavailable => NodeMoveRejectionReason.Unavailable,
                                 _ => NodeMoveRejectionReason.ValidationFailed,
                             }))
-                        : Observable.Return(System.Reactive.Unit.Default)));
+                        : Observable.Return(System.Reactive.Unit.Default)))
+            // A probe or enumeration that ran out of time DECIDED nothing: refused (fail-closed),
+            // but reported as Unavailable — the same vocabulary the delete uses — never as a verdict.
+            .Catch((TimeoutException ex) => Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                $"Cannot move '{sourcePath}' now: whether it may be deleted from where it is could not be "
+                + $"established ({ex.Message}). Nothing was moved; the move may be retried.",
+                NodeMoveRejectionReason.Unavailable)));
 
         // Move = delete pre-flight of the source → Copy (with satellites + descendants) →
         // reactive delete of every source path.
