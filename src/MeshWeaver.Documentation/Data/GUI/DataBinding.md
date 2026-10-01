@@ -354,6 +354,27 @@ host.UpdateData("person", new Person { Name = "Bob", Age = 25 });
 
 This updates `/data/person`, and every control bound to that path reflects the change immediately.
 
+## When a fed stream faults
+
+A stream feeding a binding — `stream.Bind(template, id)`, `stream.BindMany(id, template)`,
+`host.SubscribeToDataStream(id, stream)` — can fault: a query stall, a projection that throws on an
+empty cube, a denied read. The framework subscribes every such feed WITH an error arm
+(`LayoutAreaHost.FeedData`), so a fault never escapes to Rx's default `OnError`, which rethrows on the
+producer's thread and, off the thread pool, kills the process (the #5650 crash shape). Instead:
+
+- the fault is logged with the area and the data id — at Error for an engineering fault, at Warning
+  for a denial or a missing node, at Debug for a hub-disposal race;
+- the bound control is replaced by the standard localized error frame carrying the cause (the same
+  frame a faulting view renders); siblings keep rendering;
+- the area recovers by being rendered again (a parent re-emission or the client's resubscribe), which
+  re-subscribes the feed. There is no automatic retry — re-subscribing a stream that just stalled is
+  the storm shape.
+
+So do not wrap a fed stream in `.Catch(...)` to "protect" the view, and do not subscribe a feed by
+hand with `stream.Subscribe(x => host.UpdateData(id, x))`: that bare `Subscribe` is exactly the
+missing error arm. Inside `MeshWeaver.Layout`, use `host.FeedData(area, id, stream)`; everywhere else,
+`Bind`/`BindMany`/`SubscribeToDataStream`. Pinned by `BindFeedFaultTest`.
+
 ---
 
 # The Edit Macro
