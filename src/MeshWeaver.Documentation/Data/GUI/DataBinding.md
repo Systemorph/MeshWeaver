@@ -506,6 +506,40 @@ public record MyForm
 
 ---
 
+## Node cards: a bindable title and description
+
+`MeshNodeThumbnailControl` and `MeshNodeCardControl` take their caption from data without the area loading anything. `NodePath` still names the node the card shows (its avatar, its click target); `TitleBinding` / `DescriptionBinding` caption it from a pointer:
+
+```csharp
+// ✅ An access-assignment row: the SUBJECT's card, captioned from the ASSIGNMENT — live.
+new MeshNodeThumbnailControl(subjectPath, subjectId)
+    .BindToNode(assignmentPath, titleField: "displayName", descriptionField: "note");
+
+// ✅ A card whose subtitle follows its own node's top-level Description.
+new MeshNodeCardControl(path).BindToNode(path, titleField: null, descriptionField: "Description", bindContent: false);
+
+// ✅ Or any pointer, e.g. into a fed /data entry.
+new MeshNodeCardControl(path).BindTitle(new JsonPointerReference(LayoutAreaReference.GetDataPointer("caption")));
+```
+
+A bound value that resolves non-empty wins over the literal `Title`/`Description` and over the node's own name; while it has no value the card falls back to them, so the literal is the loading shape. `FromNode(node, …)` remains the shape for a node the caller ALREADY holds (a row of a query result) — never load a node in order to call it. Pinned by `NodeBoundCardControlsTest` (MeshWeaver.Graph.Test).
+
+## Charts: series and labels are already bindable
+
+`ChartControl.Series` and `ChartControl.Labels` are `object?` slots that both renderers resolve through the generic binding (Blazor `RadzenChartView` via `DataBind`, React `chart.tsx` via `useResolve`) — so a chart area is a template today. Declare the chart with pointers, and feed the data entry from a stream:
+
+```csharp
+// ✅ The chart renders at once; the series follow the feed.
+stream.Select(rows => BuildSeries(rows)).Subscribe(series => host.UpdateData("economics", series));
+return new ChartControl
+{
+    Series = new JsonPointerReference(LayoutAreaReference.GetDataPointer("economics")),
+    Labels = new JsonPointerReference(LayoutAreaReference.GetDataPointer("economicsLabels")),
+}.WithTitle(host.Localize("<your title key>"));
+```
+
+The bound value must be the WHOLE series list (`ImmutableList<ChartSeries>`), and its series types must be registered on the hub that receives them — an unregistered `BarSeries` drops to its base and draws empty. Pinned by `BoundChartSeriesTest` (MeshWeaver.Layout.Test): the series render from the feed, follow a change to it, and a pointer to a different entry does not move.
+
 # Best Practices
 
 1. **Use records.** Immutable records with `init` properties work best for data binding.
