@@ -21,6 +21,17 @@ namespace MeshWeaver.Data;
 /// </summary>
 public sealed record DataContext : IDisposable
 {
+    /// <summary>
+    /// Where the initialization gate's settle runs: the task pool, one work item per hub. 🚨 Rx's
+    /// <see cref="TaskPoolScheduler.Default"/> advertises <see cref="ISchedulerLongRunning"/>, and
+    /// <c>ObserveOn</c> then starts a DEDICATED thread per subscription — one thread creation per
+    /// hub activation, thousands in a mass activation (#5555). Withholding the capability keeps the
+    /// hop the single pool work item the original <c>ContinueWith(TaskScheduler.Default)</c> was.
+    /// Immutable; holds only a scheduler.
+    /// </summary>
+    internal static readonly IScheduler InitializationSettleScheduler =
+        TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning));
+
     /// <summary>Name of the message-hub gate that stays closed until the data context has finished initializing.</summary>
     public const string InitializationGateName = "DataContextInit";
 
@@ -497,7 +508,7 @@ public sealed record DataContext : IDisposable
         var timeBox = Observable.Timer(EffectiveInitializationTimeout).Select(_ => Unit.Default);
         Observable.Amb(initSettled, timeBox, watchdogDisarm)
             .Take(1)
-            .ObserveOn(TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning)))
+            .ObserveOn(InitializationSettleScheduler)
             .Subscribe(
                 _ => SettleInitializationGate(allInit),
                 ex =>

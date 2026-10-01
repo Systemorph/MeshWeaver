@@ -116,19 +116,29 @@ public interface IMeshContentTypeRegistry
 
     /// <summary>
     /// <see cref="Registrations"/>, narrowed to the announcements <paramref name="couldMatter"/>
-    /// accepts — with the predicate evaluated ON THE REGISTERING THREAD, before the hop, so a
+    /// accepts — in <see cref="MeshContentTypeRegistry"/> with the predicate evaluated ON THE
+    /// REGISTERING THREAD, before the hop (see the last paragraph for other implementers), so a
     /// registration the subscriber provably cannot use costs one predicate call and nothing else.
     ///
-    /// <para>🚨 <b>This is the overload a long-lived waiter must use</b> (#5555). Filtering
+    /// <para>🚨 <b>This is the member a long-lived waiter must use</b> (#5555). Filtering
     /// <see cref="Registrations"/> AFTER the hop makes every registration in the mesh — and every
     /// per-node hub activation of a runtime-compiled NodeType is one — cost a scheduled drain for
     /// EVERY armed waiter: armed waiters × activations of dispatch, almost all of it for types the
     /// waiter discards. A mass activation is exactly when both factors are large at once.</para>
     ///
     /// <para><paramref name="couldMatter"/> runs inside <see cref="Register"/>'s caller — a hub
-    /// configuration build — so it must be a pure, cheap test of the announcement (a string
-    /// compare), never a read, a conversion or anything that can block. What it lets through is
-    /// still delivered off the registering thread, exactly as <see cref="Registrations"/> is.</para>
+    /// configuration build — and inside the registry's announcement gate, so it must be a pure,
+    /// cheap test of the announcement (a string compare), never a read, a conversion, a call back
+    /// into this registry or anything that can block. 🚨 The blast radius of getting that wrong is
+    /// the whole mesh: the gate serialises every concurrent <see cref="Register"/>, so one blocking
+    /// predicate stalls every per-node hub activation that registers a type. What it lets through
+    /// is still delivered off the registering thread, exactly as <see cref="Registrations"/> is.</para>
+    ///
+    /// <para>The pre-hop evaluation is a property of <see cref="MeshContentTypeRegistry"/>, which
+    /// overrides this member. The DEFAULT implementation exists only so other implementers keep
+    /// compiling: it filters <see cref="Registrations"/> after its hop — functionally the same
+    /// answers, but without the cost guarantee. An implementer that serves many waiters overrides
+    /// it.</para>
     /// </summary>
     /// <param name="couldMatter">Pure predicate: could this announcement possibly matter to the
     /// subscriber? It must stay a superset of what could — a wrongly dropped registration is never

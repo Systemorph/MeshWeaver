@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -11,6 +9,7 @@ using System.Reflection.Emit;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -52,7 +51,7 @@ public class ContentTypeRegistrationFanOutTest
     /// instant it had run zero times on the registering thread and was still owed
     /// <c>Waiters × UnrelatedRegistrations</c> off-thread dispatches.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void AnUnrelatedRegistration_CostsTheWaitersNothingButAPredicate()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
@@ -92,7 +91,7 @@ public class ContentTypeRegistrationFanOutTest
     /// starts a raw thread per subscription that never returns until the subscription is disposed.
     /// The waits here are exactly the long-lived, numerous subscriptions that makes ruinous.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task ADelivery_RunsOnThePool_NeverOnAThreadOfItsOwn()
     {
         var registry = new MeshContentTypeRegistry();
@@ -109,7 +108,7 @@ public class ContentTypeRegistrationFanOutTest
         var onPool = await deliveries
             .Take(Waiters)
             .Aggregate(ImmutableList<bool>.Empty, (acc, x) => acc.Add(x))
-            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
         onPool.Count(x => !x).Should().Be(0,
             because: "a delivery must be an ordinary pool work item; a dedicated thread per waiter is a " +
@@ -119,7 +118,7 @@ public class ContentTypeRegistrationFanOutTest
     /// <summary>The waited type is still delivered — off the registering thread (the registry's
     /// contract: <c>Register</c> runs inside a hub configuration build) and exactly once per
     /// registration.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task TheWaitedType_IsStillDelivered_OffTheRegisteringThread()
     {
         var registry = new MeshContentTypeRegistry();
@@ -135,7 +134,7 @@ public class ContentTypeRegistrationFanOutTest
         registry.Register(EmitType("FanOut_Other", "Other"), "Other/Type");
         registry.Register(waited, "Waited/Type2");
 
-        var (contentType, thread) = await delivery.Should().Within(TimeSpan.FromSeconds(10))
+        var (contentType, thread) = await delivery.Should().Within(TestTimeouts.Convergence)
             .Emit(cancellationToken: TestContext.Current.CancellationToken);
         contentType.Should().BeSameAs(waited);
         thread.Should().NotBe(registeringThread,
