@@ -70,6 +70,29 @@ public abstract class BroadGrantGuardAtTheWriteBoundaryTestBase(ITestOutputHelpe
             .Should().Emit();
 
     /// <summary>
+    /// A node a control plane ACTS on because it names an activity — the shape of
+    /// <c>Admin/Provision/{package}</c> — with <c>governedBy</c> set to <paramref name="claim"/>.
+    /// Not a grant, so the broad-grant shapes never see it: only the governed-claim check can.
+    /// </summary>
+    protected static MeshNode ClaimingNode(string scope, string id, string? claim) =>
+        new(id, scope)
+        {
+            Name = $"request {id}",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            Content = claim is null
+                ? new JsonObject { ["packageId"] = id }
+                : new JsonObject { ["packageId"] = id, ["governedBy"] = claim },
+        };
+
+    /// <summary>Upserts <paramref name="node"/> as <paramref name="writer"/>; the response either way.</summary>
+    protected Task<CreateOrUpdateNodeResponse> Upsert(MeshNode node, AccessContext writer) =>
+        Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAs(writer, () => ObserveNodeOperation(new CreateOrUpdateNodeRequest(node)))
+            .Select(d => d.Message)
+            .Should().Within(TestTimeouts.Convergence).Emit($"the upsert of {node.Path} must settle either way");
+
+    /// <summary>
     /// Creates <paramref name="node"/> as <paramref name="writer"/> and returns the failure, or null
     /// when the create succeeded. Both outcomes are an emission, so a hang is a failure, not a pass.
     /// </summary>
@@ -158,6 +181,66 @@ public class BroadGrantGuardEnforcedAtTheWriteBoundaryTest(ITestOutputHelper out
         (failure?.RefusalText()?.MessageKey).Should().Be(BroadGrantGuard.RefusalKey);
     }
 
+    /// <summary>
+    /// The finding this pins (Plugins#2601 review): a writer with standing rights creates a node that
+    /// merely CLAIMS a governed activity. The activity really is executing — signed for something
+    /// else — so a reader that checks only "is the named activity executing" is fooled. The write
+    /// boundary refuses it because the writer is not that activity.
+    /// </summary>
+    [Fact]
+    public async Task ANodeClaimingAnActivityItsWriterIsNotExecuting_IsRefused()
+    {
+        await WriteActivity("Executing", "Governance/Standards/package.provision");
+
+        var failure = await Create(ClaimingNode("governedclaimspoof", "Parties", ActivityPath), System);
+
+        failure.Should().NotBeNull("a governedBy back-reference is written only by the activity it names");
+        (failure?.RefusalText()?.MessageKey).Should().Be(BroadGrantGuard.ClaimRefusalKey,
+            "every writer here is System, so no validator after the guard can have refused it");
+    }
+
+    /// <summary>The executor's own write: context and node name one executing activity.</summary>
+    [Fact]
+    public async Task ANodeWrittenByTheActivityItClaims_Passes()
+    {
+        await WriteActivity("Executing", "Governance/Standards/package.provision");
+
+        var failure = await Create(ClaimingNode("governedclaimexecutor", "Reporting", ActivityPath), Executor);
+
+        failure.Should().BeNull("the governance executor writing its own back-reference is the claim made true");
+    }
+
+    /// <summary>Negative control: the writer IS the activity, but the activity is not executing.</summary>
+    [Fact]
+    public async Task ANodeClaimingAnActivityThatIsNotExecuting_IsRefused()
+    {
+        await WriteActivity("Ready", "Governance/Standards/package.provision");
+
+        var failure = await Create(ClaimingNode("governedclaimready", "Reporting", ActivityPath), Executor);
+
+        (failure?.RefusalText()?.MessageKey).Should().Be(BroadGrantGuard.ClaimRefusalKey,
+            "an activity that is not executing authorises nothing");
+    }
+
+    /// <summary>
+    /// The owner's own bookkeeping rewrites the node with the claim it already carries (the provision
+    /// watcher's state stamps): that introduces nothing and must pass, or the check would refuse
+    /// every governed request's progress. Changing the claim on the same node is checked again.
+    /// </summary>
+    [Fact]
+    public async Task AnUpsertThatKeepsTheStoredClaim_Passes_AndOneThatChangesIt_IsRefused()
+    {
+        await WriteActivity("Executing", "Governance/Standards/package.provision");
+        (await Create(ClaimingNode("governedclaimkeep", "Reporting", ActivityPath), Executor))
+            .Should().BeNull("the executor creates the governed request");
+
+        var kept = await Upsert(ClaimingNode("governedclaimkeep", "Reporting", ActivityPath) with { Name = "running" }, System);
+        kept.Success.Should().BeTrue($"keeping the stored claim introduces nothing — {kept.Error}");
+
+        var changed = await Upsert(ClaimingNode("governedclaimkeep", "Reporting", "Governance/Activities/another"), System);
+        changed.Success.Should().BeFalse("a changed claim is a new claim, checked like a create");
+    }
+
     /// <summary>A user's own acquisition stamps OnBehalfOf: Enforce must not refuse every System grant.</summary>
     [Fact]
     public async Task ASystemGrantOnBehalfOfItsOwnSubject_Passes()
@@ -185,5 +268,16 @@ public class BroadGrantGuardLogOnlyAtTheWriteBoundaryTest(ITestOutputHelper outp
         var failure = await Create(Grant("broadgrantlogonly", WellKnownUsers.Public), System);
 
         failure.Should().BeNull("LogOnly logs WOULD REFUSE and refuses nothing");
+    }
+
+    /// <summary>The claim check follows the same mode: in LogOnly a spoofed claim is logged, not refused.</summary>
+    [Fact]
+    public async Task ANodeClaimingAnActivityItsWriterIsNotExecuting_IsWritten()
+    {
+        await WriteActivity("Executing", "Governance/Standards/package.provision");
+
+        var failure = await Create(ClaimingNode("governedclaimlogonly", "Parties", ActivityPath), System);
+
+        failure.Should().BeNull("LogOnly logs WOULD REFUSE GovernedClaim and refuses nothing");
     }
 }
