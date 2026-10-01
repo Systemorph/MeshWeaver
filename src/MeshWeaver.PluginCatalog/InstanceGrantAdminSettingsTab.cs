@@ -362,34 +362,14 @@ public static class InstanceGrantAdminSettingsTab
                     $"{host.Localize("registrationKeys.error.failed")} {ex.Message}"));
     }
 
+    /// <summary>
+    /// The registration-key list — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data
+    /// later"): the grid is declared at once and fed by <see cref="KeyRowsFeed"/>.
+    /// </summary>
     private static UiControl KeyList(LayoutAreaHost host)
-    {
-        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return Controls.Stack
-            .WithView(meshService
-                .Query(new MeshQueryRequest
-                {
-                    // Keys live under their owners; the admin view lists them all (#3202 — fan-out
-                    // is opt-in, so the mesh-wide read says so).
-                    Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.RegistrationKeyNodeType),
-                })
-                .Select(results => results
-                    // The node type covers keys AND their routing-index rows; the index rows live
-                    // under the top-level instance-credential namespace and are not keys.
-                    .Where(r => !r.Path.StartsWith(
-                        MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
-                    .Select(r => new KeyRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
-                    .OrderBy(r => r.KeyId, StringComparer.Ordinal)
-                    .ToList())
-                .Select(rows => rows.Count == 0
-                    ? (UiControl)Controls.Markdown(host.Localize("registrationKeys.none"))
-                    : KeyGrid(host, rows)));
-    }
-
-    private static UiControl KeyGrid(LayoutAreaHost host, IReadOnlyList<KeyRow> rows)
-    {
-        host.UpdateData(KeyListDataId, rows);
-        return new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(KeyListDataId)))
+        => KeyRowsFeed(host)
+            .BindGrid(KeyListDataId, host.Localize("registrationKeys.none"),
+                message => $"{host.Localize("registrationKeys.error.failed")} {message}")
             .WithColumn(new PropertyColumnControl<string>
             { Property = nameof(KeyRow.KeyId).ToCamelCase() }
                 .WithTitle(host.Localize("registrationKeys.column.id")))
@@ -399,7 +379,25 @@ public static class InstanceGrantAdminSettingsTab
             .WithColumn(new PropertyColumnControl<string>
             { Property = nameof(KeyRow.Path).ToCamelCase() }
                 .WithTitle(host.Localize("registrationKeys.column.owner")));
-    }
+
+    /// <summary>The feed half of the key list: every registration key as a row, live. Builds no
+    /// control.</summary>
+    internal static IObservable<IReadOnlyList<KeyRow>> KeyRowsFeed(LayoutAreaHost host)
+        => host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query(new MeshQueryRequest
+            {
+                // Keys live under their owners; the admin view lists them all (#3202 — fan-out
+                // is opt-in, so the mesh-wide read says so).
+                Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.RegistrationKeyNodeType),
+            })
+            .Select(results => (IReadOnlyList<KeyRow>)results
+                // The node type covers keys AND their routing-index rows; the index rows live
+                // under the top-level instance-credential namespace and are not keys.
+                .Where(r => !r.Path.StartsWith(
+                    MeshWeaverInstanceNodeType.IndexNamespace + "/", StringComparison.Ordinal))
+                .Select(r => new KeyRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
+                .OrderBy(r => r.KeyId, StringComparer.Ordinal)
+                .ToList());
 
     /// <summary>Plain row record bound into the registration-key <see cref="DataGridControl"/>.</summary>
     internal record KeyRow(string KeyId, string Description, string Path);
@@ -573,40 +571,39 @@ public static class InstanceGrantAdminSettingsTab
                     $"{host.Localize("instanceGrants.error.failed")} {ex.Message}"));
     }
 
+    /// <summary>
+    /// The registered-instance list — a TEMPLATE: the grid is declared at once and fed by
+    /// <see cref="GrantRowsFeed"/>.
+    /// </summary>
     private static UiControl GrantList(LayoutAreaHost host)
-    {
-        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return Controls.Stack
+        => Controls.Stack
             .WithView(Controls.Title(host.Localize("instanceGrants.registered"), 3))
-            .WithView(meshService
-                .Query(new MeshQueryRequest
-                {
-                    // Instances live under whichever user registered them (#3202 — see above).
-                    Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.NodeType),
-                })
-                .Select(results => results
-                    .Select(r => new GrantRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
-                    .OrderBy(r => r.InstanceId, StringComparer.Ordinal)
-                    .ToList())
-                .Select(rows => rows.Count == 0
-                    ? (UiControl)Controls.Markdown(host.Localize("instanceGrants.noInstances"))
-                    : Grid(host, rows)));
-    }
+            .WithView(GrantRowsFeed(host)
+                .BindGrid(ListDataId, host.Localize("instanceGrants.noInstances"),
+                    message => $"{host.Localize("instanceGrants.error.failed")} {message}")
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.InstanceId).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.instance")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.DisplayName).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.name")))
+                .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(GrantRow.Path).ToCamelCase() }
+                    .WithTitle(host.Localize("instanceGrants.column.owner"))));
 
-    private static UiControl Grid(LayoutAreaHost host, IReadOnlyList<GrantRow> rows)
-    {
-        host.UpdateData(ListDataId, rows);
-        return new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ListDataId)))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(GrantRow.InstanceId).ToCamelCase() }
-                .WithTitle(host.Localize("instanceGrants.column.instance")))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(GrantRow.DisplayName).ToCamelCase() }
-                .WithTitle(host.Localize("instanceGrants.column.name")))
-            .WithColumn(new PropertyColumnControl<string>
-            { Property = nameof(GrantRow.Path).ToCamelCase() }
-                .WithTitle(host.Localize("instanceGrants.column.owner")));
-    }
+    /// <summary>The feed half of the instance list: every registered instance as a row, live.
+    /// Builds no control.</summary>
+    internal static IObservable<IReadOnlyList<GrantRow>> GrantRowsFeed(LayoutAreaHost host)
+        => host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query(new MeshQueryRequest
+            {
+                // Instances live under whichever user registered them (#3202 — see above).
+                Query = MeshWideQuery.OfType(MeshWeaverInstanceNodeType.NodeType),
+            })
+            .Select(results => (IReadOnlyList<GrantRow>)results
+                .Select(r => new GrantRow(r.Id ?? r.Path.Split('/').Last(), r.Name ?? "", r.Path))
+                .OrderBy(r => r.InstanceId, StringComparer.Ordinal)
+                .ToList());
 
     /// <summary>Plain row record bound into the instance <see cref="DataGridControl"/>.</summary>
     internal record GrantRow(string InstanceId, string DisplayName, string Path);

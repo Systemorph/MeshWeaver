@@ -1980,5 +1980,8 @@
   "invitations.status.revoked": "Widerrufen",
   "privacy.loadFailed": "_Die Datenschutzerklärung konnte nicht geladen werden: {0}_",
   "privacy.placeholder": "Schreiben Sie die Datenschutzerklärung in Markdown…",
-  "ui.updateStatusUnavailable": "_Der Update-Status konnte nicht gelesen werden: {0}_"
+  "ui.updateStatusUnavailable": "_Der Update-Status konnte nicht gelesen werden: {0}_",
+  "coupons.none": "Noch keine Gutscheine — erstellen Sie oben den ersten.",
+  "coupons.listFailed": "Die Gutscheine konnten nicht gelesen werden: {0}",
+  "coupons.openHint": "Klicken Sie auf einen Gutschein, um ihn zu öffnen."
 }
