@@ -1914,10 +1914,12 @@ public static class DataExtensions
         PatchDataRequest message,
         System.Text.Json.JsonSerializerOptions jsonOpts,
         ILogger? logger,
-        string hubPath)
+        string hubPath,
+        AccessContext? sender = null)
     {
         if (isMeshNode)
         {
+            StampAuthorFromSender(patchNode, sender, jsonOpts, logger, hubPath);
             var baseText = message.BaseValues?.Content;
             if (!string.IsNullOrEmpty(baseText)
                 && System.Text.Json.Nodes.JsonNode.Parse(baseText)
@@ -2093,6 +2095,51 @@ public static class DataExtensions
     /// with whichever stamp wins — an author without its instant is meaningless — so it is dropped or
     /// rebased in lockstep and likewise never refused.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>The author of a write is the delivery's principal, never a value in the patch.</b> A
+    /// MeshNode merge patch can carry <c>lastModifiedBy</c> and <c>createdBy</c> like any other
+    /// field, and they were applied verbatim: a client sending <c>{"lastModifiedBy":
+    /// "system-security"}</c> recorded System as the author. The Store's control planes read that
+    /// stamp as "who asked" (<c>InvokerOf</c>), and the Governance package admits a signature only
+    /// when it equals the stamp. When the sender is an authenticated principal that is not the
+    /// platform, a <c>lastModifiedBy</c> in the patch is replaced by the sender and a
+    /// <c>createdBy</c> is dropped, because nobody rewrites who created a node. A patch that does
+    /// not touch the author is left alone, so the no-change backstop is unaffected. The platform
+    /// (System, a hub) still writes the stamp it carries: imports and repairs preserve authorship.
+    /// </summary>
+    internal static void StampAuthorFromSender(
+        System.Text.Json.Nodes.JsonObject patchNode,
+        AccessContext? sender,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var who = sender?.ObjectId;
+        if (string.IsNullOrEmpty(who)
+            || string.Equals(who, "system-security", StringComparison.OrdinalIgnoreCase)
+            || AccessService.LooksLikeHubPrincipal(who))
+            return;
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+        var creatorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("CreatedBy") ?? "CreatedBy";
+        if (patchNode.TryGetPropertyValue(authorKey, out var author)
+            && !string.Equals(author?.GetValueKind() == System.Text.Json.JsonValueKind.String ? author.GetValue<string>() : null,
+                who, StringComparison.Ordinal))
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: the patch names lastModifiedBy={Claimed} but the sender is {Sender} — "
+                + "recording the sender (a client cannot choose its own author)",
+                hubPath, author?.ToJsonString(), who);
+            patchNode[authorKey] = who;
+        }
+        if (patchNode.ContainsKey(creatorKey))
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: dropping createdBy from a patch sent by {Sender} — who created a node is not rewritten",
+                hubPath, who);
+            patchNode.Remove(creatorKey);
+        }
+    }
+
     internal static void RebaseAuditStamp(
         System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
@@ -2288,7 +2335,7 @@ public static class DataExtensions
                         request.Message, jsonOpts,
                         hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
-                        hubPath);
+                        hubPath, request.AccessContext);
 
                     // 🚨 No-change backstop (same rule as ApplyMeshNodePatchInTurn): a patch whose
                     // every value already matches the live state must NOT bump the version or
@@ -2751,7 +2798,7 @@ public static class DataExtensions
                     // monotonic-trigger guard + last-write-wins when no base is carried.
                     var preMergeNode = currentNode.DeepClone().AsObject();
                     var refusedKeys = ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
-                        request.Message, jsonOpts, mergeGuardLogger, hubPath);
+                        request.Message, jsonOpts, mergeGuardLogger, hubPath, request.AccessContext);
                     // 🚨 Owner-side no-change backstop: a patch whose every value already matches
                     // the live node (an MCP patch re-asserting current state, an importer
                     // re-writing unchanged content) must NOT bump the Version, persist a history

@@ -233,6 +233,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 return;
             }
 
+            // 🚨 A RESERVED id (System, Anonymous, Public, a hub principal) is never a person's.
+            // The id is the local part of a provider's claim, and sign-in is multi-tenant, so an
+            // account `system-security@<any tenant>` would otherwise BE the System identity —
+            // every permission on every partition. Refused like a service id: anonymous.
+            if (RequestIdentity.IsReservedPrincipal(userContext.ObjectId))
+            {
+                logger.LogWarning(
+                    "UserContextMiddleware: refusing reserved object id '{ObjectId}' derived from the sign-in "
+                    + "claims of {Email} — a reserved identity is never a person's. Treating as anonymous.",
+                    userContext.ObjectId, userContext.Email);
+                userService.SetContext(AnonymousContext with { Locale = requestLocale });
+                await next(context);
+                return;
+            }
+
             // Defence-in-depth: if anything upstream slipped an email-shaped
             // identifier through (claims provider quirks, Bearer-token path,
             // etc.), refuse to set it. Better anonymous than mis-partitioned.
@@ -717,6 +732,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                     return AnonymousContext;
                 }
             }
+            // The same two identity refusals as the middleware path: a reserved id (System,
+            // Anonymous, Public, a hub principal) and a service id reached by anything but that
+            // service's own token are never a sign-in's.
+            if (RequestIdentity.IsReservedPrincipal(ctx.ObjectId)
+                || (ServiceIdentity.IsServiceObjectId(ctx.ObjectId) && !ctx.IsService))
+            {
+                logger?.LogWarning(
+                    "ResolveHttpCaller: refusing reserved or service ObjectId {ObjectId} derived from the sign-in claims; treating as anonymous.",
+                    ctx.ObjectId);
+                return AnonymousContext;
+            }
             if (LooksLikeEmail(ctx.ObjectId))
             {
                 logger?.LogWarning(
@@ -756,7 +782,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
     }
 
-    private static AccessContext? ExtractUserContext(ClaimsPrincipal user)
+    /// <summary>
+    /// The access context the claims of <paramref name="user"/> yield BEFORE the middleware's
+    /// refusals (a collision, a service id, a reserved id, an email shape). Pure, so the derivation
+    /// is pinned without a request.
+    /// </summary>
+    public static AccessContext? ExtractUserContext(ClaimsPrincipal user)
     {
         if (user?.Identity?.IsAuthenticated != true)
             return null;
