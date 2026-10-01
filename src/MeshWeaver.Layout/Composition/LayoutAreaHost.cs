@@ -1224,7 +1224,21 @@ public record LayoutAreaHost : IDisposable
     {
         var ownScopeDisposed = Hub.IsServiceScopeDisposed();
         LogFeedFault(ex, area, dataId, ownScopeDisposed);
-        SurfaceRenderError(ex, area, ownScopeDisposed);
+        // 🚨 This runs INSIDE the feed's OnError, on the producer's thread: anything thrown while
+        // building or posting the error frame (a teardown racing past the scope probe, the frame's
+        // localisation faulting) would rethrow at the producer — the very crash this arm removes.
+        // The fault itself is already reported above; a failure to DRAW it is reported here, at
+        // Error, the same way RenderRenderingError guards its placeholder.
+        try
+        {
+            SurfaceRenderError(ex, area, ownScopeDisposed);
+        }
+        catch (Exception surfaceEx)
+        {
+            logger.LogError(surfaceEx,
+                "Could not surface the fault of data feed {DataId} on area {Area} on {Hub}",
+                dataId, area ?? "(default)", (object?)Stream.TryGetHub()?.Address ?? "(stream torn down)");
+        }
     }
 
     private void LogFeedFault(Exception ex, string? area, string dataId, bool ownScopeDisposed)

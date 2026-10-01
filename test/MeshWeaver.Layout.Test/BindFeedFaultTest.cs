@@ -38,6 +38,8 @@ public class BindFeedFaultTest : HubTestBase
     private const string HealthyBind = nameof(HealthyBind);
     private const string HostFeedView = nameof(HostFeedView);
     private const string HostFeedData = "hostFeedData";
+    private const string ImmediateHostFeedView = nameof(ImmediateHostFeedView);
+    private const string ImmediateHostFeedData = "immediateHostFeedData";
     private const string Bound = nameof(Bound);
     private const string Sibling = nameof(Sibling);
 
@@ -80,6 +82,15 @@ public class BindFeedFaultTest : HubTestBase
                 {
                     host.SubscribeToDataStream(HostFeedData, hostFeed);
                     return Observable.Return<UiControl?>(Controls.Html("fed by the host"));
+                })
+                .WithView(ImmediateHostFeedView, (LayoutAreaHost host, RenderingContext _) =>
+                {
+                    // The shape EditLayoutArea relies on: a projection that throws as soon as the
+                    // feed is subscribed, from inside a view builder.
+                    host.SubscribeToDataStream(ImmediateHostFeedData,
+                        Observable.Return(new FeedRow("x"))
+                            .Select<FeedRow, FeedRow>(_ => throw new InvalidOperationException(ImmediateMessage)));
+                    return Observable.Return<UiControl?>(Controls.Html("never shown"));
                 })
                 .WithView(HealthyBind, Controls.Stack
                     .WithView(Observable.Return(new FeedRow("healthy"))
@@ -165,6 +176,21 @@ public class BindFeedFaultTest : HubTestBase
         Text(error).Should().Contain(StallMessage);
         capture.Records.Should().ContainSingle(r => r.DataId == HostFeedData)
             .Which.Level.Should().Be(LogLevel.Error);
+    }
+
+    /// <summary>
+    /// <c>FeedData</c>'s other arm: a feed that faults while a VIEW BUILDER subscribes it is
+    /// rethrown into that builder, so the existing area-error path renders it — the view's own
+    /// control never replaces the error.
+    /// </summary>
+    [HubFact]
+    public async Task AHostFeedThatFaultsWhileBeingSubscribed_FailsTheViewThroughTheAreaErrorPath()
+    {
+        var stream = Subscribe(ImmediateHostFeedView);
+
+        var error = await stream.GetControlStream(ImmediateHostFeedView)
+            .Should().Within(10.Seconds()).Match(x => x is MarkdownControl);
+        Text(error).Should().Contain(ImmediateMessage);
     }
 
     /// <summary>
