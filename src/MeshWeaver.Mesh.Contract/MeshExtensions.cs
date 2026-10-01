@@ -7502,11 +7502,15 @@ public static class MeshExtensions
     /// <see cref="CreateNodeRequest"/>, which runs the create permission and the create-validator
     /// chain per node.</para>
     ///
-    /// <para><b>Known window.</b> The pre-flight validates the subtree as storage lists it when the
-    /// move starts; the delete leg re-enumerates after the copy. A node created under the source
-    /// in between is carried by the copy (it is <c>RequireComplete</c>) and removed by the delete
-    /// leg without having been asked. Same planning window the recursive delete closes with its
-    /// subtree write scope; not closed here.</para>
+    /// <para><b>The planning window is closed by the delete's own subtree write scope.</b> The
+    /// pre-flight validates the subtree as storage lists it when the move starts; the delete leg
+    /// re-enumerates after the copy. A node created under the source in between would be carried by
+    /// the copy (it is <c>RequireComplete</c>) and removed by the delete leg without having been
+    /// asked. So the move holds <see cref="RecentlyDeletedRegistry.BeginSubtreeDeletion"/> on the
+    /// source from BEFORE the pre-flight enumerates to the end of the delete leg — exactly the scope
+    /// <c>HandleDeleteNodeRequest</c> holds from planning to commit — and the storage write guard
+    /// refuses every in-process write at or under the source meanwhile. The scope is released
+    /// BEFORE the response is posted, so a caller acting on the answer never meets it.</para>
     /// </summary>
     private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
@@ -7606,52 +7610,19 @@ public static class MeshExtensions
         // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
         // never the eventually-consistent catalog query — the same stale-plan defect that
         // left recursive-delete survivors (issue #839) would leave source rows behind here.
-        sourceMayBeDeleted
-            .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
-            {
-                o = o.WithTarget(hub.NodeOperationTarget());
-                return callerContext != null ? o.WithAccessContext(callerContext) : o;
-            }))
-            .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
-                ? Observable.Return(copiedRoot)
-                : Observable.Throw<MeshNode>(
-                    new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
-            .SelectMany(copied =>
-                storage.ListDescendantPaths(sourcePath)
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .SelectMany(descendants =>
-                    {
-                        var paths = descendants
-                            .Where(p => !string.IsNullOrEmpty(p))
-                            .Append(sourcePath)
-                            .ToImmutableList();
-
-                        if (paths.IsEmpty)
-                            return Observable.Return(copied);
-
-                        // Bottom-up delete (longest path first) so parent storage entries
-                        // are removed only after their descendants. Each delete is its own
-                        // observable; Merge runs them concurrently, ToList awaits all.
-                        //
-                        // Commit-then-publish: DeleteAndPublish chains the
-                        // MeshChangeEvent.Deleted into the storage observable, so the
-                        // event for each path fires only after that path's storage
-                        // commit completes. The storage adapter's Changes feed
-                        // fires the Deleted notification from inside its Delete.
-                        // Children before parents, then ONE batch: the path set is already
-                        // authoritative and already committed to, so there is nothing to gain
-                        // from paying a round-trip per row (IStorageAdapter.DeleteMany).
-                        var ordered = paths.OrderByDescending(p => p.Length).ToList();
-                        return storage.DeleteMany(ordered)
-                            .Take(1)
-                            .Do(deleted =>
-                            {
-                                foreach (var p in deleted)
-                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                            })
-                            .Select(_ => copied);
-                    }))
+        //
+        // 🚨 The whole sequence runs inside the source's SUBTREE-DELETION SCOPE — the same
+        // RecentlyDeletedRegistry.BeginSubtreeDeletion the recursive delete holds from planning
+        // to commit. It opens on Subscribe, BEFORE the pre-flight enumerates, so no in-process
+        // writer can create a node under the source that the pre-flight never validated and the
+        // delete leg would then remove. WithinSubtreeDeletion releases it BEFORE the result
+        // reaches the subscriber that posts the response — a caller acting on "moved" (or on
+        // the refusal) must never meet the scope still held, which Observable.Using alone
+        // cannot guarantee.
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        (recentlyDeleted is null
+                ? MoveWithinScope()
+                : recentlyDeleted.WithinSubtreeDeletion(sourcePath, MoveWithinScope))
             .Subscribe(
                 movedNode =>
                 {
@@ -7681,6 +7652,54 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+
+        IObservable<MeshNode> MoveWithinScope() =>
+            sourceMayBeDeleted
+                .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+                {
+                    o = o.WithTarget(hub.NodeOperationTarget());
+                    return callerContext != null ? o.WithAccessContext(callerContext) : o;
+                }))
+                .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
+                    ? Observable.Return(copiedRoot)
+                    : Observable.Throw<MeshNode>(
+                        new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
+                .SelectMany(copied =>
+                    storage.ListDescendantPaths(sourcePath)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(15))
+                        .SelectMany(descendants =>
+                        {
+                            var paths = descendants
+                                .Where(p => !string.IsNullOrEmpty(p))
+                                .Append(sourcePath)
+                                .ToImmutableList();
+
+                            if (paths.IsEmpty)
+                                return Observable.Return(copied);
+
+                            // Bottom-up delete (longest path first) so parent storage entries
+                            // are removed only after their descendants. Each delete is its own
+                            // observable; Merge runs them concurrently, ToList awaits all.
+                            //
+                            // Commit-then-publish: DeleteAndPublish chains the
+                            // MeshChangeEvent.Deleted into the storage observable, so the
+                            // event for each path fires only after that path's storage
+                            // commit completes. The storage adapter's Changes feed
+                            // fires the Deleted notification from inside its Delete.
+                            // Children before parents, then ONE batch: the path set is already
+                            // authoritative and already committed to, so there is nothing to gain
+                            // from paying a round-trip per row (IStorageAdapter.DeleteMany).
+                            var ordered = paths.OrderByDescending(p => p.Length).ToList();
+                            return storage.DeleteMany(ordered)
+                                .Take(1)
+                                .Do(deleted =>
+                                {
+                                    foreach (var p in deleted)
+                                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                })
+                                .Select(_ => copied);
+                        }));
     }
 
     /// <summary>

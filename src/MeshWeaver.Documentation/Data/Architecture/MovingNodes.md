@@ -164,10 +164,23 @@ and nothing is removed. The TARGET half needs nothing extra: the copy leg create
 `CreateNodeRequest`, which runs the create permission and create validators per node. A delete-only
 validator therefore covers moves with no move-specific code.
 
-**Known window.** The pre-flight validates the subtree as storage lists it when the move starts; the
-delete leg re-enumerates after the copy, so a node created under the source in between is removed
-without having been asked. The recursive delete closes the same window with its subtree write scope;
-the move does not yet.
+**The planning window is closed with the delete's own subtree write scope.** The pre-flight
+validates the subtree as storage lists it when the move starts; the delete leg re-enumerates after the
+copy, so a node created under the source in between would be carried by the copy and removed without
+having been asked. The move therefore holds `RecentlyDeletedRegistry.BeginSubtreeDeletion(source)` —
+the scope the recursive delete holds from planning to commit — from BEFORE the pre-flight enumerates
+until the delete leg has committed, through `RecentlyDeletedRegistry.WithinSubtreeDeletion`. While it
+is held, `SubtreeDeletionGuardStorageAdapter` refuses every in-process write at or under the source
+(*"the subtree '…' is currently being deleted"*). The scope is released BEFORE the response is posted,
+so a caller acting on the answer — writing under the old path again — is never refused by it.
+
+One consequence worth knowing: an edit to a node of the source while it is being moved is refused
+rather than silently lost with the delete leg. What the scope does not cover is the same thing the recursive delete's scope does not cover: a writer in
+ANOTHER process. The delete answers that with its storage-verified drain; the move has no drain, so a
+cross-process write landing in the window is still carried and removed without a validator having been
+asked. Pinned by `MoveHoldsTheSubtreeDeletionScopeTest`, which writes under the source from inside the
+source root's own delete validator — after the pre-flight's enumeration, deterministically inside the
+window — and fails without the scope (the late write lands and is removed unvalidated).
 
 **Other lifecycle paths** (swept with this change): a recursive delete pre-validates every
 descendant; GitSync prune, `StaticRepoImporter` orphan removal, installer clean-up and registry
