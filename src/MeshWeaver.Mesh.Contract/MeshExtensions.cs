@@ -848,10 +848,19 @@ public static class MeshExtensions
             request.AccessContext?.Name ?? "(null)",
             request.AccessContext?.IsVirtual);
 
-        // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
-        if (string.IsNullOrEmpty(createRequest.CreatedBy)
-            && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createRequest = createRequest with { CreatedBy = senderId };
+        // Identity resolution (RequestIdentity): an authenticated non-platform sender IS the
+        // requester, whatever CreatedBy the message body names; only the platform may post on
+        // somebody else's behalf. With no explicit CreatedBy, the sender's identity is used.
+        if (RequestIdentity.Resolve(createRequest.CreatedBy, request.AccessContext) is { Length: > 0 } requester
+            && !string.Equals(requester, createRequest.CreatedBy, StringComparison.Ordinal))
+        {
+            if (!string.IsNullOrEmpty(createRequest.CreatedBy))
+                logger.LogWarning(
+                    "[CreateNode] {Path}: the message names CreatedBy={Claimed} but the delivery is {Sender} — "
+                    + "authorising and recording it as the sender (a client cannot choose its own identity)",
+                    createRequest.Node.Path, createRequest.CreatedBy, requester);
+            createRequest = createRequest with { CreatedBy = requester };
+        }
 
         var capturedRequest = createRequest;
         var node = createRequest.Node;
@@ -926,9 +935,14 @@ public static class MeshExtensions
         // 1. Read existing — persistence first (catalog.GetNode auto-creates from templates),
         //    then fall back to the in-memory config. persistence.GetNode is already
         //    IObservable so we don't need to wrap it in Observable.FromAsync.
-        var existingObs = persistence != null
-            ? persistence.Read(node.Path, hub.JsonSerializerOptions)
-            : Observable.Return<MeshNode?>(null);
+        // A relocation's create carries authorship by naming its stored source (AuthorshipFrom):
+        // granted only with the move entitlement, and read from storage, never from the message.
+        MeshNode? authorshipSource = null;
+        var existingObs = AuthorshipSourceFor(hub, capturedRequest, persistence, logger)
+            .Do(source => authorshipSource = source)
+            .SelectMany(_ => persistence != null
+                ? persistence.Read(node.Path, hub.JsonSerializerOptions)
+                : Observable.Return<MeshNode?>(null));
 
         // Handler-side trail (#981). This handler returns Processed() immediately and owes its
         // reply from the DETACHED chain below, so the pipeline's own HANDLER_EXIT stage proves
@@ -1146,11 +1160,18 @@ public static class MeshExtensions
                                 CreatedDate = node.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(node.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
+                                // A person or service never records somebody else as the author;
+                                // only the platform (an import, a repair) preserves a carried stamp,
+                                // and a relocation carries its STORED source's (AuthorshipFrom).
+                                CreatedBy = authorshipSource is { } fromC
+                                    ? fromC.CreatedBy
+                                    : RequestIdentity.Author(node.CreatedBy, identity),
                                 LastModified = node.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(node.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
+                                LastModifiedBy = authorshipSource is { } fromM
+                                    ? fromM.LastModifiedBy
+                                    : RequestIdentity.Author(node.LastModifiedBy, identity),
                                 // Stamp an initial Version of 1 so the post-save JSON includes the
                                 // field (the hub's JsonSerializerOptions has
                                 // DefaultIgnoreCondition=WhenWritingDefault → Version=0 is omitted
@@ -1968,9 +1989,9 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        var createdBy = request.Message.CreatedBy;
-        if (string.IsNullOrEmpty(createdBy) && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createdBy = senderId;
+        // Same identity rule as the singular create (RequestIdentity): an authenticated
+        // non-platform sender is the requester, whatever the message body names.
+        var createdBy = RequestIdentity.Resolve(request.Message.CreatedBy, request.AccessContext);
 
         var nodes = request.Message.Nodes ?? ImmutableList<MeshNode>.Empty;
         if (nodes.Count == 0)
@@ -2158,11 +2179,11 @@ public static class MeshExtensions
                                 CreatedDate = n.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(n.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
+                                CreatedBy = RequestIdentity.Author(n.CreatedBy, capturedBy),
                                 LastModified = n.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(n.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
+                                LastModifiedBy = RequestIdentity.Author(n.LastModifiedBy, capturedBy),
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
 
@@ -3335,6 +3356,17 @@ public static class MeshExtensions
             && !string.IsNullOrEmpty(senderUserId)
             && senderUserId != WellKnownUsers.Anonymous)
             deleteRequest = deleteRequest with { DeletedBy = senderUserId };
+        // A DeletedBy in the message body never outranks an authenticated non-platform sender
+        // (RequestIdentity) — RLS authorises the delete as DeletedBy.
+        else if (RequestIdentity.Resolve(deleteRequest.DeletedBy, request.AccessContext) is { Length: > 0 } deleter
+                 && !string.Equals(deleter, deleteRequest.DeletedBy, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "[DeleteNode] {Path}: the message names DeletedBy={Claimed} but the delivery is {Sender} — "
+                + "authorising it as the sender (a client cannot choose its own identity)",
+                deleteRequest.Path, deleteRequest.DeletedBy, deleter);
+            deleteRequest = deleteRequest with { DeletedBy = deleter };
+        }
 
         var capturedRequest = deleteRequest;
         var path = capturedRequest.Path;
@@ -5649,6 +5681,46 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> with its authorship: Delete on
+    /// its namespace, which is what <see cref="MoveNodePermissionAttribute"/> requires of a mover.
+    /// ONE function, so the copy handler's <c>PreserveAuthorship</c> gate and the create handler's
+    /// <c>AuthorshipFrom</c> gate cannot drift apart. Cold.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> MoveEntitlement(IMessageHub hub, string sourcePath) =>
+        hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete);
+
+    /// <summary>
+    /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
+    /// or null. Null when the request names none, or when the requester is the platform (whose
+    /// carried stamps are kept anyway). Otherwise the requester must hold Delete on the source's
+    /// namespace — the entitlement a move of it requires, the same gate
+    /// <see cref="CopyNodeRequest.PreserveAuthorship"/> applies — and the node is read from storage.
+    /// A refusal or an unreadable source logs and yields null, so the create records the
+    /// requester: authorship is never taken from the message. Cold; emits once.
+    /// </summary>
+    private static IObservable<MeshNode?> AuthorshipSourceFor(
+        IMessageHub hub, CreateNodeRequest request, IStorageAdapter? persistence, ILogger logger)
+    {
+        var from = request.AuthorshipFrom?.Trim();
+        if (string.IsNullOrEmpty(from) || persistence is null || RequestIdentity.IsPlatform(request.CreatedBy))
+            return Observable.Return<MeshNode?>(null);
+        return MoveEntitlement(hub, from)
+            .Take(1)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return ReadNodeAuthoritative(hub, persistence, from);
+                logger.LogWarning(
+                    "[CreateNode] {Path}: not carrying authorship from {From} — {Requester} lacks the move entitlement "
+                    + "(Delete on its namespace{Undetermined}); recording the requester",
+                    request.Node.Path, from, request.CreatedBy,
+                    outcome.IsUndetermined ? $", undetermined: {outcome.UndeterminedReason}" : "");
+                return Observable.Return<MeshNode?>(null);
+            })
+            .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
     /// Whether <paramref name="activityPath"/> names a governed activity that is EXECUTING one of
     /// <paramref name="allowed"/> standards — the check <see cref="BroadGrantGuard"/> runs at the
     /// write boundary, for a control plane that has to authorize a governed request itself (the
@@ -6323,10 +6395,11 @@ public static class MeshExtensions
         var inboundRequest = request.Message;
         var node = inboundRequest.Node;
 
-        var requestedBy = inboundRequest.RequestedBy
-            ?? request.AccessContext?.ObjectId;
+        // RequestIdentity: an authenticated non-platform sender is the requester, whatever
+        // RequestedBy the message body names.
+        var requestedBy = RequestIdentity.Resolve(inboundRequest.RequestedBy, request.AccessContext);
         if (!string.IsNullOrEmpty(requestedBy)
-            && string.IsNullOrEmpty(inboundRequest.RequestedBy))
+            && !string.Equals(requestedBy, inboundRequest.RequestedBy, StringComparison.Ordinal))
             inboundRequest = inboundRequest with { RequestedBy = requestedBy };
 
         var baseActivity = new ActivityLog("NodeUpsert")
@@ -7555,6 +7628,28 @@ public static class MeshExtensions
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
             accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
 
+        // A PRESERVING copy carries authorship by naming the stored source (CreateNodeRequest.
+        // AuthorshipFrom): the create handler re-checks the move entitlement and reads the stamps
+        // from storage, because a requester never chooses its own author stamps.
+        IObservable<MeshNode> CreatePreservingAuthorship(MeshNode node, string fromPath) =>
+            Observable.Defer(() => hub.NodeOperationIssuingHub()
+                .Observe(new CreateNodeRequest(node)
+                    {
+                        CreatedBy = callerAccessContext?.ObjectId,
+                        AuthorshipFrom = fromPath,
+                    },
+                    o => callerAccessContext is null
+                        ? o.WithTarget(hub.NodeOperationTarget())
+                        : o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(callerAccessContext))
+                .SelectMany(d => d.Message is { Success: true, Node: { } created }
+                    ? Observable.Return(created)
+                    : Observable.Throw<MeshNode>(d.Message.ToException(node.Path))));
+
+        IObservable<MeshNode> CreateRetargeted(MeshNode stored) =>
+            copyRequest.PreserveAuthorship
+                ? CreatePreservingAuthorship(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: true), stored.Path)
+                : CreateUnderCaller(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: false));
+
         // The storage inventory below emits on its own scheduler on a persistent store. Query is
         // constructed AFTER that emission, so MeshService cannot recover the request's AsyncLocal
         // identity there. Pin the viewer captured from this delivery on both the main and satellite
@@ -7647,7 +7742,7 @@ public static class MeshExtensions
         IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
                 ? Observable.Return<(string, bool)?>(null)
-                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                : MoveEntitlement(hub, sourcePath)
                     .Select(outcome => outcome.IsGranted
                         ? ((string, bool)?)null
                         : outcome.IsUndetermined
@@ -7848,16 +7943,14 @@ public static class MeshExtensions
                         // found arrived through the same query surface, so they go through the same
                         // storage read.
                         return Authoritative(sourceNode)
-                            .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                            .SelectMany(CreateUnderCaller)
+                            .SelectMany(CreateRetargeted)
                             .SelectMany(rootCreated =>
                             {
                                 if (toCopy.Count == 0)
                                     return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
                                 return toCopy.ToObservable()
                                     .SelectMany(Authoritative)
-                                    .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                                    .SelectMany(retargeted => CreateUnderCaller(retargeted))
+                                    .SelectMany(CreateRetargeted)
                                     .ToList()
                                     .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
                             });
