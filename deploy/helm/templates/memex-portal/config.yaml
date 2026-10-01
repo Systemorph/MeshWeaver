@@ -732,6 +732,13 @@ data:
   {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interval" }}
   Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
   {{- end }}
+  # ---- The bug-fix pool (MeshWeaver.Plugins Hosting/BugFix, Essentials/BugTriage) ----------------
+  # Enabled=false stops an instance's pool entirely (no re-drive sweep, no new bug thread; bugs wait
+  # QUEUED with that reason — Plugins #2635). It moves to the control instance: memex sets false,
+  # control true. Rendered whenever PRESENT (hasKey), so an explicit `false` reaches the container.
+  {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
+  Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
+  {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
   {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
