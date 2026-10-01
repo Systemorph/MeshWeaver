@@ -58,13 +58,15 @@ public static class AreaStreamReopen
     /// hand back a stream that has already faulted — that is the defect this exists to avoid.</param>
     /// <param name="isDeadlineMiss">Selects the errors that re-open. Defaults to
     /// <see cref="AreaErrorClassifier.IsDeadlineMiss"/>.</param>
-    /// <param name="minInterval">Minimum gap between two opens. Defaults to
+    /// <param name="minInterval">Minimum gap between two opens; must be positive. Defaults to
     /// <see cref="DefaultMinReopenInterval"/>.</param>
     /// <param name="scheduler">Clock and timer for the pacing (inject a <c>TestScheduler</c> in
     /// tests). Defaults to <see cref="DefaultScheduler.Instance"/>.</param>
     /// <param name="onReopen">Called with the deadline miss and the wait before the re-open, so a
     /// caller can log it. Optional.</param>
     /// <returns>The values of the current stream; errors only for a non-deadline failure.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="minInterval"/> is zero or
+    /// negative — the interval is the only bound on the re-open rate.</exception>
     public static IObservable<T> ReopenOnDeadlineMiss<T>(
         Func<IObservable<T>> open,
         Func<Exception, bool>? isDeadlineMiss = null,
@@ -75,6 +77,10 @@ public static class AreaStreamReopen
         ArgumentNullException.ThrowIfNull(open);
         var reopens = isDeadlineMiss ?? AreaErrorClassifier.IsDeadlineMiss;
         var interval = minInterval ?? DefaultMinReopenInterval;
+        // The interval IS the storm bound: with a non-positive one, an open() whose stream replays
+        // its fault on subscribe would re-open synchronously inside its own error notification —
+        // an unbounded open→fault→open loop. Refuse it at the entry, never clamp it.
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero, nameof(minInterval));
         var sched = scheduler ?? DefaultScheduler.Instance;
 
         return Observable.Defer(() =>
