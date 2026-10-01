@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -35,28 +37,36 @@ public static class PrivacySettingsTab
             "starts from a generic statement drafted for EU (GDPR) and Swiss (revFADP) law; edit it " +
             "below to match your deployment. Changes are saved automatically."));
 
-        // Editor bound DIRECTLY to Admin/Privacy. EnsureExists (create-on-absent as System,
-        // prefilled with the default statement) before binding so the editor binds to an existing
-        // node; the current statement is read once off the live node stream (the admin viewer has
-        // Admin-partition read by the IsPlatformAdmin gate above), then edits flow back through
-        // the auto-save — the same shape as MarkdownEditLayoutArea.
+        // Editor bound DIRECTLY to Admin/Privacy (the reference shape, MarkdownEditLayoutArea): its
+        // Value is a POINTER into the node's MarkdownContent, resolved and kept live on the GUI side
+        // through IMeshNodeStreamCache — never the statement read once on this hub and baked in.
+        // The one thing the slot waits for is EnsureExists (create-on-absent as System, prefilled
+        // with the default statement): a write PRECONDITION, so the editor never binds to a node
+        // that is not there yet (a point read of an absent node trips the storm breaker). It reads
+        // no value of the node.
         stack = stack.WithView((h, _) => PrivacyStatementNode
             .EnsureExists(h.Hub, h.Hub.ServiceProvider.GetService<AccessService>())
-            .SelectMany(_ => h.Workspace.GetMeshNodeStream(PrivacyStatementNode.NodePath)
-                .Where(node => node is not null)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10)))
-            .Select(node => (UiControl?)new MarkdownEditorControl()
-                .WithDocumentId(PrivacyStatementNode.NodePath)
-                .WithValue(PrivacyStatementNode.ParseStatement(node!.Content, h.Hub.JsonSerializerOptions))
-                .WithHeight("calc(100vh - 320px)")
-                .WithMaxHeight("none")
-                .WithPlaceholder("Write the privacy statement in markdown…")
-                .WithAutoSave(h.Hub.Address.ToString(), PrivacyStatementNode.NodePath))
+            .Select(_ => (UiControl?)BuildEditor(h.Hub.Address.ToString(), h.ViewerLocale()))
             .Catch<UiControl?, Exception>(ex =>
-                Observable.Return((UiControl?)Controls.Markdown($"_Could not load the privacy statement: {ex.Message}_")))
+                Observable.Return((UiControl?)Controls.Markdown(host.Localize("privacy.loadFailed", ex.Message))))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingPrivacy"))));
 
         return stack;
     }
+
+    /// <summary>
+    /// The privacy-statement editor, bound by pointer to <c>Admin/Privacy</c>'s markdown and
+    /// auto-saving through the node stream. Reads nothing.
+    /// </summary>
+    internal static MarkdownEditorControl BuildEditor(string hubAddress, string? locale)
+        => new MarkdownEditorControl
+            {
+                Value = new JsonPointerReference(MarkdownEditLayoutArea.MarkdownBodyPointer),
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(PrivacyStatementNode.NodePath),
+            }
+            .WithDocumentId(PrivacyStatementNode.NodePath)
+            .WithHeight("calc(100vh - 320px)")
+            .WithMaxHeight("none")
+            .WithPlaceholder(LocalizationCatalog.Get("privacy.placeholder", locale))
+            .WithAutoSave(hubAddress, PrivacyStatementNode.NodePath);
 }

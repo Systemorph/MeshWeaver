@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Application.Styles;
@@ -6,10 +7,12 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Portal.Shared.Settings;
@@ -27,6 +30,8 @@ public static class InboxSettingsTab
 {
     public const string TabId = "Inbox";
     private const string ResultDataId = "inboxResult";
+    private const string ListDataId = "inboxList";
+    private const string SelectedDataId = "inboxSelected";
 
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)
     {
@@ -43,72 +48,117 @@ public static class InboxSettingsTab
                     : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
                 .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
-        stack = stack.WithView((h, _) =>
-        {
-            var ws = h.Hub.GetWorkspace();
-            var jsonOptions = ws.Hub.JsonSerializerOptions;
-            var meshService = h.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var accessService = h.Hub.ServiceProvider.GetService<AccessService>();
-            return ws.GetQuery("inbox:list",
-                    $"namespace:{EmailNodeType.AdminInboxNamespace} nodeType:{EmailNodeType.NodeType}")
-                .Select(nodes => (UiControl?)BuildList(nodes.ToList(), meshService, accessService, jsonOptions, locale: host.ViewerLocale()));
-        });
+        // The inbox — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid is
+        // declared at once and fed by the synced Admin/Inbox query; a mail is archived by SELECTING
+        // its row, then Archive below the grid.
+        host.UpdateData(SelectedDataId, MailRow.None(host.Localize("inbox.selectMail")));
+        var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+
+        stack = stack.WithView(InboxRowsFeed(host)
+            .BindGrid(ListDataId, host.Localize("inbox.empty"), message => host.Localize("inbox.listFailed", message))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.From).ToCamelCase() }
+                .WithTitle(host.Localize("inbox.column.from")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Subject).ToCamelCase() }
+                .WithTitle(host.Localize("inbox.column.subject")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Received).ToCamelCase() }
+                .WithTitle(host.Localize("inbox.column.received")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Status).ToCamelCase() }
+                .WithTitle(host.Localize("inbox.column.status")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Preview).ToCamelCase() }
+                .WithTitle(host.Localize("inbox.column.preview")))
+            .WithClickAction(ctx =>
+            {
+                if (ctx.Payload is DataGridCellClick { Item: { } item }
+                    && item.As<MailRow>(ctx.Hub.JsonSerializerOptions, what: "inbox row") is { } row)
+                    ctx.Host.UpdateData(SelectedDataId, row);
+                return Task.CompletedTask;
+            }));
+
+        stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 12px; align-items: center; margin-top: 8px;")
+            .WithView(new LabelControl(new JsonPointerReference(
+                    LayoutAreaReference.GetDataPointer(SelectedDataId, nameof(MailRow.Display).ToCamelCase())))
+                .WithStyle("flex: 1;"))
+            .WithView(Controls.Button(host.Localize("ui.archive"))
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    ArchiveSelected(ctx, host, meshService, accessService);
+                    return Task.CompletedTask;
+                })));
 
         return stack;
     }
 
-    private static UiControl BuildList(
-        IReadOnlyList<MeshNode> nodes, IMeshService meshService, AccessService? accessService,
-        JsonSerializerOptions? jsonOptions, string? locale = null)
-    {
-        var rows = nodes
-            .Select(n => (node: n, email: EmailOf(n, jsonOptions)))
-            .Where(x => x.email is { Direction: EmailDirection.Inbound })
-            .OrderByDescending(x => x.email!.ReceivedAt)
-            .ToList();
-
-        if (rows.Count == 0)
-            return Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Inbox is empty.</p>");
-
-        var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        foreach (var (node, email) in rows)
+    /// <summary>Archives the mail selected in the grid, or says that one has to be selected first.</summary>
+    private static void ArchiveSelected(
+        UiActionContext ctx, LayoutAreaHost host, IMeshService meshService, AccessService? accessService)
+        => ctx.Host.Stream.GetDataStream<MailRow>(SelectedDataId).Take(1).Subscribe(row =>
         {
-            var body = email!.Body ?? "";
-            var preview = body.Length > 140 ? body[..140] + "…" : body;
-            var row = Controls.Stack.WithOrientation(Orientation.Horizontal)
-                .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); " +
-                           "border-radius: 6px; align-items: center; gap: 16px;");
-            row = row.WithView(Controls.Html(
-                $"<div style=\"flex: 1;\"><strong>{Esc(email.FromName ?? email.From)}</strong> " +
-                $"&lt;{Esc(email.From)}&gt; {StatusBadge(email.Status)}" +
-                $"<div style=\"font-size:0.85rem;\">{Esc(email.Subject)}</div>" +
-                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">" +
-                $"{email.ReceivedAt:yyyy-MM-dd HH:mm} · {Esc(preview)}</div></div>"));
-
-            if (email.Status != EmailStatus.Archived)
+            if (row is null || string.IsNullOrEmpty(row.Path) || row.IsArchived)
             {
-                var capturedNode = node;
-                var capturedEmail = email;
-                row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.archive", locale))
-                    .WithAppearance(Appearance.Outline)
-                    .WithClickAction(ctx =>
-                    {
-                        ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(capturedEmail.From)}…"));
-                        Observable.Using(
-                                () => accessService!.ImpersonateAsSystem(),
-                                _ => meshService.UpdateNode(capturedNode with
-                                {
-                                    Content = capturedEmail with { Status = EmailStatus.Archived }
-                                }))
-                            .Subscribe(
-                                _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(capturedEmail.From)}.")),
-                                ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
-                        return Task.CompletedTask;
-                    }));
+                ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.selectMail"))));
+                return;
             }
-            container = container.WithView(row);
+            ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
+            // The node itself, read once for the write (it exists: the row came from it).
+            ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
+                .SelectMany(node => Observable.Using(
+                    () => accessService!.ImpersonateAsSystem(),
+                    _ => meshService.UpdateNode(node with
+                    {
+                        Content = EmailOf(node, ctx.Hub.JsonSerializerOptions)! with { Status = EmailStatus.Archived }
+                    })))
+                .Subscribe(
+                    _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+
+    /// <summary>
+    /// The feed half: the inbound mail in <c>Admin/Inbox</c> as rows, newest first, re-emitted by
+    /// the synced query on every change. Display values are resolved for the viewer when the feed is
+    /// built. Builds no control.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<MailRow>> InboxRowsFeed(LayoutAreaHost host)
+    {
+        var options = host.Hub.JsonSerializerOptions;
+        var statusText = ImmutableDictionary<EmailStatus, string>.Empty
+            .Add(EmailStatus.New, host.Localize("inbox.status.new"))
+            .Add(EmailStatus.Read, host.Localize("inbox.status.read"))
+            .Add(EmailStatus.Archived, host.Localize("inbox.status.archived"));
+        return host.Hub.GetWorkspace()
+            .GetQuery("inbox:list", $"namespace:{EmailNodeType.AdminInboxNamespace} nodeType:{EmailNodeType.NodeType}")
+            .Select(nodes => (IReadOnlyList<MailRow>)nodes
+                .Select(n => (node: n, email: EmailOf(n, options)))
+                .Where(x => x.email is { Direction: EmailDirection.Inbound })
+                .OrderByDescending(x => x.email!.ReceivedAt)
+                .Select(x => MailRow.Of(x.node, x.email!, statusText.GetValueOrDefault(x.email!.Status, x.email!.Status.ToString())))
+                .ToList());
+    }
+
+    /// <summary>One row of the inbox grid — display text plus what Archive needs.</summary>
+    internal record MailRow(
+        string From, string Subject, string Received, string Status, string Preview,
+        string Path, string FromAddress, bool IsArchived, string Display)
+    {
+        internal static MailRow None(string hint) => new("", "", "", "", "", "", "", false, hint);
+
+        internal static MailRow Of(MeshNode node, MeshWeaver.Mesh.Email email, string status)
+        {
+            var body = email.Body ?? "";
+            var from = $"{email.FromName ?? email.From} <{email.From}>";
+            return new(
+                from,
+                email.Subject,
+                email.ReceivedAt.ToString("yyyy-MM-dd HH:mm"),
+                status,
+                body.Length > 140 ? body[..140] + "…" : body,
+                node.Path ?? "",
+                email.From,
+                email.Status == EmailStatus.Archived,
+                $"{from} · {email.Subject}");
         }
-        return container;
     }
 
     private static MeshWeaver.Mesh.Email? EmailOf(MeshNode n, JsonSerializerOptions? options) => n.Content switch
@@ -122,19 +172,6 @@ public static class InboxSettingsTab
     {
         try { return JsonSerializer.Deserialize<MeshWeaver.Mesh.Email>(je.GetRawText(), options); }
         catch { return null; }
-    }
-
-    private static string StatusBadge(EmailStatus status)
-    {
-        var (color, text) = status switch
-        {
-            EmailStatus.New => ("#f59e0b", "New"),
-            EmailStatus.Read => ("#9ca3af", "Read"),
-            EmailStatus.Archived => ("#9ca3af", "Archived"),
-            _ => ("#9ca3af", status.ToString())
-        };
-        return $"<span style=\"font-size:0.7rem; padding:1px 6px; border-radius:4px; " +
-               $"background:var(--neutral-layer-3); color:{color};\">{text}</span>";
     }
 
     private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
