@@ -628,18 +628,19 @@ public static class NodeTypeLayoutAreas
     {
         var hubAddress = host.Hub.Address;
         var hubPath = hubAddress.ToString();
+        var locale = host.ViewerLocale();
 
-        // Seeded with empty so the overview renders immediately and fills in the
-        // releases section when the query result lands (subscribe-all-upfront).
-        var releasesStream = QueryNodesStream(host,
-                $"namespace:{hubPath}/Release nodeType:{ReleaseNodeType.NodeType}")
-            .StartWith((IReadOnlyList<MeshNode>)[]);
+        // Templates: the compile panel binds to the status projection it publishes, and the latest
+        // releases are listed by the GUI — neither waits on this stream. What still renders from the
+        // node below is the header (MeshNodeLayoutAreas.BuildHeader takes the node) and the summary
+        // sections derived from the definition.
+        var compilePanel = BuildCompileStatusPanel(hubPath)
+            .PublishingTo(NodeTypeStatusView.DataId, StatusProjection(host));
+        var latestReleases = BuildLatestReleasesSection(hubPath, locale);
 
         return GetNodeStream(host)
-            .CombineLatest(releasesStream)
-            .Select(tuple =>
+            .Select(node =>
             {
-                var (node, releases) = tuple;
                 if (node == null)
                     return RenderLoading("Loading...");
                 var typeDef = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
@@ -649,15 +650,15 @@ public static class NodeTypeLayoutAreas
                         + " padding-top: 8px; padding-bottom: 32px; gap: 8px;");
                 content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
-                // Compile-state banner + Compile button — the "ability to compile"
-                // affordance on the landing page. Bound to IsDirty / CompilationStatus.
-                content = content.WithView(BuildCompileStatusPanel(host, typeDef));
+                // Compile-state banner + Compile button — the "ability to compile" affordance on
+                // the landing page.
+                content = content.WithView(compilePanel);
 
                 // Markdown description from the mesh node's NodeTypeDefinition.
                 if (!string.IsNullOrEmpty(typeDef?.Description))
                     content = content.WithView(Controls.Markdown(typeDef.Description));
 
-                content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef, locale: host.ViewerLocale()));
+                content = content.WithView(BuildConfigurationSection(hubAddress, node, typeDef, locale: locale));
                 content = content.WithView(NodeTypeDataModelAreas.BuildOverviewSection(host));
                 content = content.WithView(BuildQueriesSection("Source queries",
                     CodeQueryResolver.GroupAll(typeDef?.Sources, CodeQueryResolver.DefaultSources,
@@ -665,7 +666,7 @@ public static class NodeTypeLayoutAreas
                 content = content.WithView(BuildQueriesSection("Test queries",
                     CodeQueryResolver.GroupAll(typeDef?.Tests, CodeQueryResolver.DefaultTests,
                         node.Path, CodeQueryResolver.DefaultTestGroupName)));
-                content = content.WithView(BuildLatestReleasesSection(hubAddress, releases, host.Hub.JsonSerializerOptions));
+                content = content.WithView(latestReleases);
 
                 return (UiControl?)content;
             });
@@ -743,41 +744,42 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// The latest three releases (newest first) with a link to the full Releases area.
+    /// The latest three releases (newest first) with a link to the full Releases area — listed by
+    /// the GUI (<see cref="ReleasesList"/>), never loaded here.
     /// </summary>
-    private static UiControl BuildLatestReleasesSection(object hubAddress, IReadOnlyList<MeshNode> releaseNodes, System.Text.Json.JsonSerializerOptions options)
-    {
-        var releasesHref = new LayoutAreaReference(ReleasesArea).ToHref(hubAddress);
-        var section = Controls.Stack.WithWidth("100%")
-            .WithView(BuildSectionHeader("Latest releases", releasesHref, "All releases"));
-
-        var latest = releaseNodes
-            .Select(n => (Node: n, Release: n.ContentAs<NodeTypeRelease>(options)))
-            .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
-            .Take(3)
-            .ToList();
-
-        if (latest.Count == 0)
-        {
-            return section.WithView(Controls.Body(
-                    "No releases yet — use the Compile button above to create the first one.")
-                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic; padding: 8px 0;"));
-        }
-
-        foreach (var (releaseNode, release) in latest)
-            section = section.WithView(BuildReleaseRow(releaseNode, release));
-        return section;
-    }
+    private static UiControl BuildLatestReleasesSection(string nodeTypePath, string? locale)
+        => Controls.Stack.WithWidth("100%")
+            .WithView(BuildSectionHeader(
+                LocalizationCatalog.Get("ui.latestReleases", locale),
+                new LayoutAreaReference(ReleasesArea).ToHref(nodeTypePath),
+                LocalizationCatalog.Get("ui.allReleases", locale)))
+            .WithView(ReleasesList(nodeTypePath, limit: 3));
 
     /// <summary>
-    /// Renders the Configuration area for a NodeType: the shared <see cref="Shell"/>
-    /// with the editable settings form (<see cref="BuildConfigurationPane"/>) as content.
+    /// Renders the Configuration area for a NodeType: the shared <see cref="Shell"/> with the
+    /// settings TEMPLATE (<see cref="BuildConfigurationTemplate"/>) as content. The template is
+    /// emitted at once; its fields bind to the node and its status lines to the
+    /// <see cref="NodeTypeStatusView"/> projection.
     /// </summary>
     public static UiControl Configuration(LayoutAreaHost host, RenderingContext ctx)
-        => Shell(host, (h, c) => GetNodeStream(host)
-            .Select(definition => definition == null
-                ? RenderLoading("Loading...")
-                : BuildConfigurationPane(host, host.Hub.Address, definition)));
+        => Shell(host, (h, c) => Observable.Return<UiControl?>(
+            BuildConfigurationTemplate(host.Hub.Address.ToString(), host.ViewerLocale())
+                .PublishingTo(NodeTypeStatusView.DataId, StatusProjection(host))));
+
+    /// <summary>
+    /// The NodeType's compile state as data for the templates (<see cref="NodeTypeStatusView"/>) —
+    /// the ONE read of the node behind the Configuration, Releases, HubConfig and Overview status
+    /// lines. A projection, not a control: the templates bind to it by pointer and never wait for it.
+    /// </summary>
+    private static IObservable<NodeTypeStatusView> StatusProjection(LayoutAreaHost host)
+    {
+        var nodeTypePath = host.Hub.Address.ToString();
+        var locale = host.ViewerLocale();
+        var options = host.Hub.JsonSerializerOptions;
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => NodeTypeStatusView.From(
+                node, node?.ContentAs<NodeTypeDefinition>(options), nodeTypePath, locale));
+    }
 
     /// <summary>
     /// Renders the instance search for this NodeType inside the shared <see cref="Shell"/> —
@@ -1180,237 +1182,123 @@ public static class NodeTypeLayoutAreas
         => Shell(host, ReleasesContent);
 
     private static IObservable<UiControl?> ReleasesContent(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Return<UiControl?>(
+            BuildReleasesTemplate(host.Hub.Address.ToString(), host.ViewerLocale())
+                .PublishingTo(NodeTypeStatusView.DataId, StatusProjection(host)));
+
+    /// <summary>
+    /// The Releases pane as a TEMPLATE: header with the live status line and the Create Release
+    /// trigger, the pending release notes, and the release history listed by the GUI
+    /// (<see cref="ReleasesList"/>) — newest first, each linking to its Release page where the
+    /// sources/tests as of that version are navigable. Nothing here reads the node; the status lines
+    /// bind to <see cref="NodeTypeStatusView"/>.
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's path (the hub's own).</param>
+    /// <param name="locale">The viewer's locale, for the chrome's strings.</param>
+    internal static UiControl BuildReleasesTemplate(string nodeTypePath, string? locale)
     {
-        var hubPath = host.Hub.Address.ToString();
-        var releasesStream = QueryNodesStream(host,
-                $"namespace:{hubPath}/Release nodeType:{ReleaseNodeType.NodeType}")
-            .StartWith((IReadOnlyList<MeshNode>)[]);
-
-        return GetNodeStream(host)
-            .CombineLatest(releasesStream)
-            .Select(tuple =>
-            {
-                var (node, releases) = tuple;
-                if (node == null)
-                    return RenderLoading("Loading…");
-                return BuildReleasesPane(host, node, releases);
-            });
-    }
-
-    private static UiControl BuildReleasesPane(LayoutAreaHost host, MeshNode node, IReadOnlyList<MeshNode> releaseNodes)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var def = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
-
-        var stack = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px; gap: 12px;");
-
-        // Header row: title + Create Release (the compile trigger) + live status badge.
+        var status = NodeTypeStatusView.DataContext;
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
-            .WithView(Controls.H2(host.Localize("ui.releases")).WithStyle("margin: 0;"));
+            .WithView(Controls.H2(LocalizationCatalog.Get("ui.releases", locale)).WithStyle("margin: 0;"))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 12px; align-items: center;")
+                .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.ReleasesStatusBadge)))
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;") with { DataContext = status })
+                .WithView(CreateReleaseButton(nodeTypePath, locale)));
 
-        var statusStream = host.Workspace.GetMeshNodeStream()
-            .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)?.CompilationStatus)
-            .DistinctUntilChanged();
-        var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
-            (UiControl)Controls.Body(status switch
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; gap: 12px;")
+            .WithView(headerRow)
+            .WithView(Controls.Body(LocalizationCatalog.Get("ui.releasesIntro", locale))
+                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"))
+            .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PendingReleaseNotes))) with
             {
-                CompilationStatus.Pending => "Compiling…",
-                CompilationStatus.Compiling => "Compiling…",
-                CompilationStatus.Error => "Last compile: Error",
-                CompilationStatus.Unavailable => host.Localize("ui.compileStateUnknown"),
-                _ => ""
-            }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PendingReleaseNotesStyle)),
+                DataContext = status
+            })
+            .WithView(ReleasesList(nodeTypePath));
+    }
 
-        var createReleaseButton = Controls.Button(host.Localize("ui.createRelease"))
+    /// <summary>
+    /// The release history of a NodeType, listed by the GUI — newest first. A query control, so the
+    /// hub never loads the releases: the viewer's client runs <c>namespace:{type}/Release</c> and
+    /// keeps the list live as the compile watcher writes new Release nodes.
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's path.</param>
+    /// <param name="limit">How many releases to show, or <c>null</c> for all.</param>
+    internal static MeshSearchControl ReleasesList(string nodeTypePath, int? limit = null)
+    {
+        var list = Controls.MeshSearch
+            .WithHiddenQuery(
+                $"namespace:{nodeTypePath}/{ReleaseNodeType.ReleaseSegment} nodeType:{ReleaseNodeType.NodeType} sort:CreatedAt-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.List)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithReactiveMode(true);
+        return limit is { } n ? list.WithItemLimit(n).WithMaxRows(n) : list;
+    }
+
+    /// <summary>
+    /// The "Create Release" trigger, shared by the Releases and Configuration panes. Routes through
+    /// the canonical, permission-checked entry point <see cref="NodeTypeReleaseExtensions.RequestNodeTypeRelease(MeshWeaver.Messaging.IMessageHub,string,bool,string?,System.Action{string}?)"/>:
+    /// it verifies the caller holds <c>Permission.Compile</c> and refuses cleanly otherwise;
+    /// on success it flips <see cref="NodeTypeDefinition.RequestedReleaseAt"/> (forced) through the
+    /// node stream and the per-NodeType hub's release watcher compiles. No bespoke request type.
+    /// </summary>
+    private static ButtonControl CreateReleaseButton(string nodeTypePath, string? locale)
+        => Controls.Button(LocalizationCatalog.Get("ui.createRelease", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Play())
-            .WithClickAction(clickCtx =>
+            .WithClickAction(ctx =>
             {
-                // Canonical request-via-stream-update trigger (see
-                // Doc/Architecture/RequestViaStreamUpdate.md): flip RequestedReleaseAt;
-                // the per-NodeType hub's InstallReleaseRequestWatcher reacts and the
-                // CompileWatcher runs Roslyn + writes the Release node.
-                clickCtx.Host.Workspace.GetMeshNodeStream(hubPath).Update(curr =>
-                {
-                    if (curr?.Content is not NodeTypeDefinition cd) return curr!;
-                    return curr with
-                    {
-                        Content = cd with
-                        {
-                            RequestedReleaseAt = DateTimeOffset.UtcNow,
-                            RequestedReleaseForce = true
-                        }
-                    };
-                }).Subscribe(
-                    _ => { },
-                    ex => clickCtx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                        .LogWarning(ex, "Release-request write failed for {Path}", hubPath));
+                RequestRelease(ctx.Host.Hub, nodeTypePath);
                 return Task.CompletedTask;
             });
 
-        headerRow = headerRow.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: center;")
-            .WithView(statusBadge, "ReleasesStatusBadge")
-            .WithView(createReleaseButton));
-        stack = stack.WithView(headerRow);
+    /// <summary>
+    /// Requests a FORCED release of <paramref name="nodeTypePath"/> as the clicking user — the
+    /// compile buttons' one write. Forced, so "Recompile" on an up-to-date type still compiles; on a
+    /// type with changed sources forcing changes nothing.
+    /// </summary>
+    private static void RequestRelease(IMessageHub hub, string nodeTypePath)
+        => hub.RequestNodeTypeRelease(
+            nodeTypePath,
+            force: true,
+            onError: reason => hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(NodeTypeLayoutAreas))
+                .LogWarning("Release request for {Path} refused: {Reason}", nodeTypePath, reason));
 
-        stack = stack.WithView(Controls.Body(
-                "Every successful compile publishes an immutable release here. Open a " +
-                "release to see its notes, the compile log, and the exact source and " +
-                "test versions that went into it.")
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
 
-        if (!string.IsNullOrWhiteSpace(def?.ReleaseNotes))
-            stack = stack.WithView(Controls.Body($"Pending release notes: {def!.ReleaseNotes}")
-                .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.9rem; font-style: italic;"));
-
-        var ordered = releaseNodes
-            .Select(n => (Node: n, Release: n.ContentAs<NodeTypeRelease>(host.Hub.JsonSerializerOptions)))
-            .OrderByDescending(t => t.Release?.CreatedAt ?? t.Node.CreatedDate)
-            .ToList();
-
-        if (ordered.Count == 0)
-        {
-            stack = stack.WithView(Controls.Body(
-                    "No releases yet. Click 'Create Release' to compile this NodeType — " +
-                    "the release will appear here.")
-                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
-            return stack;
-        }
-
-        foreach (var (releaseNode, release) in ordered)
-            stack = stack.WithView(BuildReleaseRow(releaseNode, release));
-
-        return stack;
-    }
 
     /// <summary>
-    /// One release as a clickable card: status badge, version, timestamp,
-    /// source/test counts, and notes excerpt. Links to the Release node's own page
-    /// where the per-version sources/tests are navigable. Shared between the
-    /// Overview's "Latest releases" section and the Releases area.
+    /// The Configuration pane as a TEMPLATE: an editable settings form for the NodeType (Name,
+    /// Icon, ChildrenQuery, DefaultNamespace, PageMaxWidth, Description, ReleaseNotes) bound
+    /// DIRECTLY to the node, the live compile status and compile log, and a read-only preview of the
+    /// Configuration lambda with an Edit button that opens the dedicated editor.
+    ///
+    /// <para>🚨 <b>Nothing here reads the node.</b> The pane used to be built only once the node
+    /// had arrived — title, configuration preview and status lines interpolated from it, the
+    /// preview copied into a <c>/data</c> slot per render, and a sources query issued per render to
+    /// colour the release button. Now the form fields bind to the node (resolved on the GUI side
+    /// through <c>IMeshNodeStreamCache</c>) and every derived line binds to the
+    /// <see cref="NodeTypeStatusView"/> projection (Doc/GUI/DataBinding → "Templates first, data
+    /// later").</para>
     /// </summary>
-    private static UiControl BuildReleaseRow(MeshNode releaseNode, NodeTypeRelease? release)
+    /// <param name="nodeTypePath">The NodeType's path (the hub's own).</param>
+    /// <param name="locale">The viewer's locale, for the chrome's strings.</param>
+    internal static UiControl BuildConfigurationTemplate(string nodeTypePath, string? locale)
     {
-        var failed = string.Equals(release?.Status, "Failed", StringComparison.OrdinalIgnoreCase);
-        var statusLabel = failed ? "Failed" : "Succeeded";
-        var statusColor = failed ? "var(--error)" : "var(--accent-fill-rest)";
-        var versionLabel = release?.Version ?? releaseNode.Name ?? releaseNode.Id;
-        var createdAt = release?.CreatedAt ?? releaseNode.CreatedDate;
+        string L(string key) => LocalizationCatalog.Get(key, locale);
+        var status = NodeTypeStatusView.DataContext;
+        var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(nodeTypePath);
 
-        var counts = "";
-        if (release?.SourceVersions is { Count: > 0 } srcs)
-            counts = $"{srcs.Count} source{(srcs.Count == 1 ? "" : "s")}";
-        if (release?.TestVersions is { Count: > 0 } tsts)
-            counts += $"{(counts.Length > 0 ? ", " : "")}{tsts.Count} test{(tsts.Count == 1 ? "" : "s")}";
-
-        var notesExcerpt = release?.Notes?.Content;
-        if (!string.IsNullOrWhiteSpace(notesExcerpt))
-        {
-            notesExcerpt = notesExcerpt!.Trim();
-            var firstBreak = notesExcerpt.IndexOf('\n');
-            if (firstBreak > 0) notesExcerpt = notesExcerpt[..firstBreak];
-            if (notesExcerpt.Length > 200) notesExcerpt = notesExcerpt[..200] + "…";
-        }
-
-        var releaseHref = $"/{releaseNode.Path}";
-        var rowHtml = $"<a href=\"{System.Net.WebUtility.HtmlEncode(releaseHref)}\" " +
-            $"style=\"display: block; padding: 12px 16px; margin-bottom: 8px; " +
-            $"background: var(--neutral-layer-2); border-radius: 4px; " +
-            $"text-decoration: none; color: inherit; border-left: 3px solid {statusColor};\">" +
-            $"<div style=\"display: flex; align-items: center; gap: 12px;\">" +
-            $"<span style=\"font-weight: 600; padding: 2px 10px; border-radius: 12px; " +
-            $"background: {statusColor}20; color: {statusColor}; font-size: 0.85rem;\">" +
-            $"{System.Net.WebUtility.HtmlEncode(statusLabel)}</span>" +
-            $"<span style=\"flex: 1; font-weight: 600;\">{System.Net.WebUtility.HtmlEncode(versionLabel)}</span>" +
-            (counts.Length > 0
-                ? $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
-                  $"{System.Net.WebUtility.HtmlEncode(counts)}</span>"
-                : "") +
-            $"<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">" +
-            $"{createdAt:g}</span>" +
-            $"</div>";
-
-        if (!string.IsNullOrWhiteSpace(notesExcerpt))
-        {
-            rowHtml += $"<div style=\"margin-top: 6px; color: var(--neutral-foreground); " +
-                $"font-size: 0.9rem; line-height: 1.4;\">" +
-                $"{System.Net.WebUtility.HtmlEncode(notesExcerpt)}</div>";
-        }
-
-        rowHtml += "</a>";
-        return Controls.Html(rowHtml);
-    }
-
-    /// <summary>
-    /// Builds the main Configuration pane: an editable settings form for the NodeType
-    /// (Name, Description, Icon, ChildrenQuery, DefaultNamespace, PageMaxWidth) with
-    /// auto-save, plus a read-only preview of the Configuration lambda with an Edit
-    /// button that opens the dedicated Monaco editor.
-    /// </summary>
-    private static UiControl BuildConfigurationPane(LayoutAreaHost host, object hubAddress, MeshNode node)
-    {
-        var definition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
-        var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
-        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
-
-        var stack = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 24px; gap: 20px;");
-
-        // Header row: title + Create Release + Run Tests actions.
-        var headerRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
-            .WithView(Controls.H2(node.Name ?? nodeId ?? "Unknown").WithStyle("margin: 0;"));
-
-        // IsUpToDate: combines own-node stream (CompiledSources) with live sources query.
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        var nodeTypePath = host.Hub.Address.Path;
-        var sourcesObs = meshService?.Query<MeshNode>(
-            MeshQueryRequest.FromQuery($"namespace:{nodeTypePath}/Source nodeType:Code"))
-            ?? Observable.Return(new QueryResultChange<MeshNode>());
-        var isUpToDate = host.Workspace.GetMeshNodeStream()
-            .CombineLatest(sourcesObs, (ownNode, sources) =>
-                NodeTypeBuildState.IsSourcesUpToDate(ownNode.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions), sources.Items))
-            .DistinctUntilChanged();
-
-        var releaseButton = (LayoutAreaHost h, RenderingContext rc) => isUpToDate
-            .Select(upToDate => (UiControl)Controls.Button(host.Localize("ui.createRelease"))
-                // Appearance still signals the up-to-date state (Neutral = nothing changed
-                // since the last release; Accent = actionable) without renaming the button —
-                // it is THE "Create Release" entry point regardless of dirty state.
-                .WithAppearance(upToDate ? Appearance.Neutral : Appearance.Accent)
-                .WithIconStart(FluentIcons.Play())
-                .WithClickAction(ctx =>
-                {
-                    // Creating a release is a privileged USER action gated by
-                    // Permission.Compile. Route through the canonical, permission-checked
-                    // entry point: hub.RequestNodeTypeRelease verifies the caller holds
-                    // Compile on the target and refuses cleanly (status message, no release)
-                    // when they don't. On success it flips RequestedReleaseAt +
-                    // RequestedReleaseBy via stream.Update; the per-NodeType hub's
-                    // InstallReleaseRequestWatcher promotes that to CompilationStatus=Pending
-                    // and InstallCompileWatcher runs Roslyn UNDER SYSTEM (the pure compilation
-                    // fills the cache; the resulting Release node is stamped to the caller).
-                    // No bespoke CreateReleaseRequest. See RequestViaStreamUpdate.md +
-                    // NodeTypeReleaseExtensions.
-                    ctx.Host.Hub.RequestNodeTypeRelease(
-                        nodeTypePath,
-                        force: upToDate,
-                        onError: msg => ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                            .LogWarning("Create Release refused for {Path}: {Reason}", nodeTypePath, msg));
-                    return Task.CompletedTask;
-                }));
-
-        var runTestsButton = Controls.Button(host.Localize("ui.runTests"))
+        var runTestsButton = Controls.Button(L("ui.runTests"))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.Play())
             .WithClickAction(ctx =>
@@ -1425,225 +1313,189 @@ public static class NodeTypeLayoutAreas
                 return Task.CompletedTask;
             });
 
-        // Inline status badge so the user sees their click landed and where the
-        // compile is in its lifecycle. Live observable — re-emits on every
-        // status transition the watcher writes back.
-        var statusStream = host.Workspace.GetMeshNodeStream()
-            .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions)?.CompilationStatus)
-            .DistinctUntilChanged();
-        var statusBadge = (LayoutAreaHost h, RenderingContext rc) => statusStream.Select(status =>
-            (UiControl)Controls.Body(status switch
-            {
-                CompilationStatus.Pending => "Compiling…",
-                CompilationStatus.Compiling => "Compiling…",
-                CompilationStatus.Ok => "Last compile: Ok",
-                CompilationStatus.Error => "Last compile: Error",
-                CompilationStatus.Unavailable => host.Localize("ui.compileStateUnknown"),
-                _ => ""
-            }).WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;"));
-
-        var actions = Controls.Stack
+        // Header row: the type's name + the live status line + Create Release + Run Tests.
+        var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: center;")
-            .WithView(statusBadge, "CompileStatusBadge")
-            .WithView(releaseButton, "CreateReleaseButton")
-            .WithView(runTestsButton);
+            .WithStyle("justify-content: space-between; align-items: center; gap: 16px;")
+            .WithView(Controls.H2(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.Title)))
+                .WithStyle("margin: 0;") with { DataContext = status })
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("gap: 12px; align-items: center;")
+                .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.StatusBadge)))
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 13px;") with { DataContext = status })
+                .WithView(CreateReleaseButton(nodeTypePath, locale))
+                .WithView(runTestsButton));
 
-        headerRow = headerRow.WithView(actions);
-        stack = stack.WithView(headerRow);
-
-        // Live compile-activity panel: streams the messages from the most
-        // recent compile activity (LastCompilationActivityPath) below the
-        // header. Re-emits when the NodeType's own MeshNode ticks (status
-        // changes, activity path updates). Empty when no compile has happened
-        // yet. On success, also surface a "Latest release" link to the
-        // freshly-created Release MeshNode at LatestReleasePath. Shape per
-        // Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md → "Live
-        // progress" UI requirement.
-        var compileLogPanel = (LayoutAreaHost h, RenderingContext rc) =>
-            host.Workspace.GetMeshNodeStream()
-                .Select(n => n.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions))
-                .Where(d => d is not null)
-                .Select(d => BuildCompileLogPanel(d!, locale: host.ViewerLocale()));
-        stack = stack.WithView(compileLogPanel, "CompileLogPanel");
+        var stack = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px; gap: 20px;")
+            .WithView(headerRow)
+            .WithView(BuildCompileLogTemplate());
 
         // Editable settings form — bound DIRECTLY to the node stream (IMeshNodeStreamCache), ONE
         // source of truth. Display Name / Icon are node TOP-LEVEL fields (fields-mode DataContext);
         // the NodeTypeDefinition settings live in node.Content (content-mode DataContext). Each
         // control's edit writes straight back to the matching field on the node — no /data replica,
-        // no debounced save subscription. See Doc/GUI/DataBinding "edit node content by binding to
-        // the node stream". (Pointer resolution against the node is case-insensitive, so the
-        // camelCase node/Content JSON binds from these PascalCase pointers.)
-        var nodeFieldsContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
-        var contentContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
+        // no debounced save subscription. (Pointer resolution against the node is case-insensitive,
+        // so the camelCase node/Content JSON binds from these PascalCase pointers.)
+        var nodeFieldsContext = LayoutAreaReference.GetMeshNodeDataContext(nodeTypePath, bindContent: false);
+        var contentContext = LayoutAreaReference.GetMeshNodeDataContext(nodeTypePath, bindContent: true);
 
         var formGrid = Controls.Stack
-            .WithStyle("display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;");
-
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
-        {
-            Label = "Display Name",
-            Immediate = true,
-            DataContext = nodeFieldsContext
-        });
-
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
-        {
-            Label = "Icon",
-            Placeholder = "content:icon.svg, <svg>…</svg>, or URL",
-            Immediate = true,
-            DataContext = nodeFieldsContext
-        });
-
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.ChildrenQuery)))
-        {
-            Label = "Children Query",
-            Placeholder = "e.g. nodeType:Person scope:descendants",
-            Immediate = true,
-            DataContext = contentContext
-        });
-
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.DefaultNamespace)))
-        {
-            Label = "Default Namespace",
-            Placeholder = "Pre-selected namespace in Create form",
-            Immediate = true,
-            DataContext = contentContext
-        });
-
-        formGrid = formGrid.WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.PageMaxWidth)))
-        {
-            Label = "Page Max Width",
-            Placeholder = "e.g. 1200px or 100%",
-            Immediate = true,
-            DataContext = contentContext
-        });
-
-        stack = stack.WithView(formGrid);
-
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.Description)))
-        {
-            Label = "Description",
-            Placeholder = "Long-form description shown in the Overview and Create dialog.",
-            Immediate = true,
-            DataContext = contentContext
-        }.WithRows(4));
-
-        // Release notes — what changed in the next compile. Bound straight to
-        // NodeTypeDefinition.ReleaseNotes on the node (content-mode); the Create Release click reads
-        // no data — it just flips CompilationStatus to Pending. Pure stream wiring, no Take(1).
-        stack = stack.WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.ReleaseNotes)))
-        {
-            Label = "Release notes",
-            Placeholder = "What changed in the next compile? Shown on each row in the Releases pane.",
-            Immediate = true,
-            DataContext = contentContext
-        }.WithRows(3));
-
-        // Configuration lambda — read-only preview, with button to open the dedicated editor.
-        var configHeader = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("justify-content: space-between; align-items: center; margin-top: 8px;")
-            .WithView(Controls.H3(host.Localize("ui.configurationLambda")).WithStyle("margin: 0;"))
-            .WithView(Controls.Button(host.Localize("common.edit"))
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.Edit())
-                .WithNavigateToHref(editHref));
-
-        stack = stack.WithView(configHeader);
-
-        var configCode = definition?.Configuration ?? "";
-        if (!string.IsNullOrEmpty(configCode))
-        {
-            var configDataId = Guid.NewGuid().AsString();
-            host.UpdateData(configDataId, configCode);
-
-            var configEditor = new CodeEditorControl()
-                .WithLanguage("csharp")
-                .WithHeight("280px")
-                .WithLineNumbers(true)
-                .WithMinimap(false)
-                .WithWordWrap(true)
-                .WithReadonly(true);
-
-            configEditor = configEditor with
+            .WithStyle("display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;")
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
             {
-                DataContext = LayoutAreaReference.GetDataPointer(configDataId),
-                Value = new JsonPointerReference("")
-            };
+                Label = "Display Name",
+                Immediate = true,
+                DataContext = nodeFieldsContext
+            })
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
+            {
+                Label = "Icon",
+                Placeholder = "content:icon.svg, <svg>…</svg>, or URL",
+                Immediate = true,
+                DataContext = nodeFieldsContext
+            })
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.ChildrenQuery)))
+            {
+                Label = "Children Query",
+                Placeholder = "e.g. nodeType:Person scope:descendants",
+                Immediate = true,
+                DataContext = contentContext
+            })
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.DefaultNamespace)))
+            {
+                Label = "Default Namespace",
+                Placeholder = "Pre-selected namespace in Create form",
+                Immediate = true,
+                DataContext = contentContext
+            })
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.PageMaxWidth)))
+            {
+                Label = "Page Max Width",
+                Placeholder = "e.g. 1200px or 100%",
+                Immediate = true,
+                DataContext = contentContext
+            });
 
-            stack = stack.WithView(configEditor);
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Body(host.Localize("ui.noConfigLambda"))
-                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
-        }
+        stack = stack
+            .WithView(formGrid)
+            .WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.Description)))
+            {
+                Label = "Description",
+                Placeholder = "Long-form description shown in the Overview and Create dialog.",
+                Immediate = true,
+                DataContext = contentContext
+            }.WithRows(4))
+            // Release notes — what changed in the next compile, bound straight to
+            // NodeTypeDefinition.ReleaseNotes; the release trigger reads them off the node.
+            .WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.ReleaseNotes)))
+            {
+                Label = "Release notes",
+                Placeholder = "What changed in the next compile? Shown on each row in the Releases pane.",
+                Immediate = true,
+                DataContext = contentContext
+            }.WithRows(3));
+
+        // Configuration lambda — read-only preview, with a button to open the dedicated editor.
+        stack = stack
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: space-between; align-items: center; margin-top: 8px;")
+                .WithView(Controls.H3(L("ui.configurationLambda")).WithStyle("margin: 0;"))
+                .WithView(Controls.Button(L("common.edit"))
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithNavigateToHref(editHref)))
+            .WithView(ConfigurationPreview("280px", L("ui.noConfigLambda")));
 
         return stack;
     }
 
     /// <summary>
-    /// Renders the view for Configuration.
-    /// Returns static structure with data-bound content.
+    /// The Configuration lambda, read-only, bound to <see cref="NodeTypeStatusView.ConfigurationCode"/>.
+    /// An empty lambda shows <paramref name="placeholder"/>.
+    /// </summary>
+    private static CodeEditorControl ConfigurationPreview(string height, string placeholder)
+        => new CodeEditorControl()
+            .WithLanguage("csharp")
+            .WithHeight(height)
+            .WithLineNumbers(true)
+            .WithMinimap(false)
+            .WithWordWrap(true)
+            .WithReadonly(true)
+            .WithPlaceholder(placeholder) with
+        {
+            DataContext = NodeTypeStatusView.DataContext,
+            Value = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.ConfigurationCode))
+        };
+
+    /// <summary>
+    /// The compile-log panel beneath the Configuration header, bound to the
+    /// <see cref="NodeTypeStatusView"/> projection: hidden until a compile has been requested or
+    /// recorded; then the running / failed / undetermined / published headline, the error text, and
+    /// links to the latest release and the compile activity log
+    /// (Doc/Architecture/Postmortems/NodeTypeReleaseRedesign.md → "Live progress").
+    /// </summary>
+    private static UiControl BuildCompileLogTemplate()
+    {
+        var status = NodeTypeStatusView.DataContext;
+        return (Controls.Stack with
+            {
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogStyle)),
+                DataContext = status
+            })
+            .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogHeadline))) with
+            {
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogHeadlineStyle)),
+                DataContext = status
+            })
+            .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogDetail))) with
+            {
+                DataContext = status
+            })
+            .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LogLinks)))
+                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint);") with { DataContext = status });
+    }
+
+    /// <summary>
+    /// Renders the HubConfiguration view: a TEMPLATE whose read-only lambda preview binds to the
+    /// <see cref="NodeTypeStatusView"/> projection — the page is drawn at once and the code fills in.
     /// </summary>
     [Browsable(false)]
     public static UiControl HubConfigView(LayoutAreaHost host, RenderingContext ctx)
-    {
-        // Subscribe to data stream
-        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
+        => BuildHubConfigViewTemplate(host.Hub.Address.ToString(), host.ViewerLocale())
+            .PublishingTo(NodeTypeStatusView.DataId, StatusProjection(host));
 
-        // Return structure with nested observable view
+    /// <summary>
+    /// The HubConfiguration view's template: title, the lambda read-only (an empty lambda shows
+    /// "No Configuration defined."), Edit, and Back to the Configuration area.
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's path (the hub's own).</param>
+    /// <param name="locale">The viewer's locale, for the chrome's strings.</param>
+    internal static UiControl BuildHubConfigViewTemplate(string nodeTypePath, string? locale)
+    {
+        string L(string key) => LocalizationCatalog.Get(key, locale);
         return Controls.Stack
             .WithWidth("100%")
-            .WithView(
-                (h, c) => h.GetDataStream<MeshNode>(DefinitionDataId)
-                    .Select(node => node == null
-                        ? RenderLoading("Loading...")
-                        : BuildHubConfigViewContent(host, node)),
-                "Content"
-            );
+            .WithStyle("padding: 24px;")
+            .WithView(Controls.H2(L("ui.configuration")).WithStyle("margin-bottom: 16px;"))
+            .WithView(Controls.Body("Lambda expression: Func<MessageHubConfiguration, MessageHubConfiguration>")
+                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"))
+            .WithView(ConfigurationPreview("400px", L("ui.noConfiguration")))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("margin-top: 16px; gap: 8px;")
+                .WithView(Controls.Button(L("common.edit"))
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Edit())
+                    .WithNavigateToHref(new LayoutAreaReference(HubConfigEditArea).ToHref(nodeTypePath)))
+                .WithView(Controls.Button(L("common.back"))
+                    .WithAppearance(Appearance.Neutral)
+                    .WithNavigateToHref(new LayoutAreaReference(ConfigurationArea).ToHref(nodeTypePath))));
     }
 
-    private static UiControl BuildHubConfigViewContent(LayoutAreaHost host, MeshNode node)
-    {
-        var content = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
-        var hubAddress = host.Hub.Address;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        stack = stack.WithView(Controls.H2(host.Localize("ui.configuration")).WithStyle("margin-bottom: 16px;"));
-        stack = stack.WithView(Controls.Body("Lambda expression: Func<MessageHubConfiguration, MessageHubConfiguration>").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
-
-        if (!string.IsNullOrEmpty(content?.Configuration))
-        {
-            stack = stack.WithView(Controls.Markdown($"```csharp\n{content.Configuration}\n```").WithStyle("max-height: 400px; overflow: auto;"));
-
-            // Edit button
-            var editHref = new LayoutAreaReference(HubConfigEditArea).ToHref(hubAddress);
-            stack = stack.WithView(
-                Controls.Stack
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithStyle("margin-top: 16px;")
-                    .WithView(Controls.Button(host.Localize("common.edit"))
-                        .WithAppearance(Appearance.Accent)
-                        .WithIconStart(FluentIcons.Edit())
-                        .WithNavigateToHref(editHref))
-            );
-        }
-        else
-        {
-            stack = stack.WithView(Controls.Body(host.Localize("ui.noConfiguration")).WithStyle("color: var(--neutral-foreground-hint);"));
-        }
-
-        // Back button
-        var configBackHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-        stack = stack.WithView(Controls.Button(host.Localize("common.back"))
-            .WithAppearance(Appearance.Neutral)
-            .WithStyle("margin-top: 24px;")
-            .WithNavigateToHref(configBackHref));
-
-        return stack;
-    }
 
     /// <summary>
     /// Renders the Monaco editor for editing Configuration.
@@ -1905,161 +1757,40 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
-    /// Compile-state panel rendered at the top of <see cref="Overview"/>.
-    /// One panel; three visual states driven by the NodeType's persisted
-    /// fields (<see cref="NodeTypeDefinition.IsDirty"/>,
-    /// <see cref="NodeTypeDefinition.CompilationStatus"/>,
-    /// <see cref="NodeTypeDefinition.CompilationError"/>):
-    /// <list type="bullet">
-    ///   <item><b>Dirty</b>: amber chip + "Compile" button that flips
-    ///     <see cref="NodeTypeDefinition.RequestedReleaseAt"/> via
-    ///     <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the
-    ///     per-NodeType hub's <c>InstallReleaseRequestWatcher</c> picks
-    ///     up the trigger and runs Roslyn.</item>
-    ///   <item><b>Compiling</b>: spinner with link to the live activity
-    ///     log (<see cref="NodeTypeDefinition.LastCompilationActivityPath"/>).</item>
-    ///   <item><b>Error</b>: red banner with the formatted diagnostics +
-    ///     "Compile" button so the user can retry once they've edited.</item>
-    ///   <item><b>Ok &amp; not dirty</b>: subtle "Up to date" chip with the
-    ///     release path (<see cref="NodeTypeDefinition.LatestReleasePath"/>).</item>
-    /// </list>
-    /// <para>Empty (no panel) when the NodeType has no source code yet — a
-    /// NodeType with neither <see cref="NodeTypeDefinition.Configuration"/>
-    /// nor <see cref="NodeTypeDefinition.HubConfiguration"/> nor
-    /// <see cref="NodeTypeDefinition.Sources"/> never participates in
-    /// compilation; a panel would be noise.</para>
+    /// Compile-state panel rendered at the top of <see cref="Overview"/>, as a TEMPLATE bound to the
+    /// <see cref="NodeTypeStatusView"/> projection: the state chip (compiling / failed / undetermined
+    /// / never compiled / source changed / up to date), the compile button — disabled while a compile
+    /// runs — and a link to the latest release. Hidden for a NodeType with no code, which never
+    /// participates in compilation. The decisions live in <see cref="NodeTypeStatusView.From"/>.
+    /// The button routes through the permission-checked release request (<see cref="RequestRelease"/>).
     /// </summary>
-    private static UiControl BuildCompileStatusPanel(LayoutAreaHost host, NodeTypeDefinition? def)
+    /// <param name="nodeTypePath">The NodeType's path.</param>
+    internal static UiControl BuildCompileStatusPanel(string nodeTypePath)
     {
-        if (def is null) return Controls.Stack;
-
-        var hasCode = !string.IsNullOrWhiteSpace(def.Configuration)
-            || !string.IsNullOrWhiteSpace(def.HubConfiguration)
-            || (def.CurrentSourceVersions?.Count ?? 0) > 0;
-        if (!hasCode) return Controls.Stack;
-
-        var hubAddress = host.Hub.Address;
-        var hubPath = hubAddress.ToString();
-        var status = def.CompilationStatus;
-        var isDirty = def.IsDirty;
-        // 🚨 2026-05-21 — kickoff was deleted, so a never-compiled NodeType
-        // no longer auto-compiles on activation. The Compile button is the
-        // sole entry point; render the "Never compiled" state so the user
-        // has a visible affordance to trigger the first build. "Never
-        // compiled" = no assembly metadata persisted (no AssemblyPath /
-        // AssemblyCollection). We deliberately do NOT compare framework
-        // versions at the layout layer (that's HasUsableBuild's concern in
-        // NodeTypeCompilationHelpers); if a build exists at all, treat the
-        // state as "Up to date" until status flips Dirty/Error/Compiling.
-        var hasBuild =
-            !string.IsNullOrEmpty(def.LatestAssemblyCollection)
-            && !string.IsNullOrEmpty(def.LatestAssemblyPath);
-        var neverCompiled = !hasBuild
-            && status != CompilationStatus.Compiling
-            && status != CompilationStatus.Error
-            // "Could not determine" is not "never compiled" — claiming the latter
-            // hides the real (retryable) cause behind a wrong first build.
-            && status != CompilationStatus.Unavailable;
-
-        var panel = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 12px; padding: 12px 16px; margin: 16px 0; border-radius: 6px; border: 1px solid var(--neutral-stroke-rest);");
-
-        UiControl chip;
-        var compileButtonEnabled = true;
-        string compileButtonLabel;
-        string panelStyleSuffix;
-
-        if (status == CompilationStatus.Compiling)
-        {
-            chip = Controls.Body(host.Localize("ui.compiling")).WithStyle("font-weight: 600;");
-            compileButtonLabel = "Compile";
-            compileButtonEnabled = false;
-            panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
-        }
-        else if (status == CompilationStatus.Error)
-        {
-            chip = Controls.Body(host.Localize("ui.compilationFailed")).WithStyle("font-weight: 600; color: var(--error-foreground);");
-            compileButtonLabel = "Retry compile";
-            panelStyleSuffix = "background: var(--error-fill-rest); border-color: var(--error-stroke-rest);";
-        }
-        else if (status == CompilationStatus.Unavailable)
-        {
-            // Undetermined, not failed: warning tint (something needs attention) rather
-            // than the error tint that reads as "your code is broken".
-            chip = Controls.Body(host.Localize("ui.compileStateUnknown"))
-                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
-            compileButtonLabel = "Retry compile";
-            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
-        }
-        else if (neverCompiled)
-        {
-            chip = Controls.Body(host.Localize("ui.neverCompiled"))
-                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
-            compileButtonLabel = "Compile";
-            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
-        }
-        else if (isDirty)
-        {
-            chip = Controls.Body(host.Localize("ui.sourceChanged"))
-                .WithStyle("font-weight: 600; color: var(--warning-foreground);");
-            compileButtonLabel = "Compile";
-            panelStyleSuffix = "background: var(--warning-fill-rest); border-color: var(--warning-stroke-rest);";
-        }
-        else
-        {
-            chip = Controls.Body(host.Localize("ui.upToDate")).WithStyle("font-weight: 600;");
-            compileButtonLabel = "Recompile";
-            panelStyleSuffix = "background: var(--neutral-fill-stealth-rest);";
-        }
-
-        panel = panel.WithStyle("align-items: center; gap: 12px; padding: 12px 16px; margin: 16px 0; border-radius: 6px; border: 1px solid var(--neutral-stroke-rest); " + panelStyleSuffix);
-        panel = panel.WithView(chip);
-
-        // "Compile" button — flips RequestedReleaseAt to trigger the watcher.
-        // RequestedReleaseForce=true bypasses the "no source changes since last
-        // compile" short-circuit so the button always at least retries.
-        var compileButton = Controls.Button(compileButtonLabel)
-            .WithAppearance(compileButtonEnabled ? Appearance.Accent : Appearance.Stealth)
-            .WithClickAction(clickCtx =>
+        var status = NodeTypeStatusView.DataContext;
+        return (Controls.Stack.WithOrientation(Orientation.Horizontal) with
             {
-                if (!compileButtonEnabled) return Task.CompletedTask;
-                var triggerAt = DateTimeOffset.UtcNow;
-                host.Hub.GetWorkspace()
-                    .GetMeshNodeStream(hubPath)
-                    .Update(curr =>
-                    {
-                        if (curr?.Content is not NodeTypeDefinition cd) return curr!;
-                        return curr with
-                        {
-                            Content = cd with
-                            {
-                                RequestedReleaseAt = triggerAt,
-                                RequestedReleaseForce = true
-                            }
-                        };
-                    })
-                    .Subscribe(
-                        _ => { },
-                        ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger(typeof(NodeTypeLayoutAreas))
-                            .LogWarning(ex, "Compile-trigger write failed for {Path}", hubPath));
-                return Task.CompletedTask;
-            });
-        panel = panel.WithView(compileButton);
-
-        // Optional: a "View latest release" link when one exists. Helps the
-        // user follow Release ↔ Activity for full build-detail traceability
-        // without leaving the Overview.
-        if (!string.IsNullOrEmpty(def.LatestReleasePath))
-        {
-            var releaseSegment = def.LatestReleasePath!.Split('/').LastOrDefault() ?? "latest";
-            panel = panel.WithView(
-                Controls.Markdown($"[{releaseSegment}](/{def.LatestReleasePath!})")
-                    .WithStyle("margin-left: auto; font-size: 12px;"));
-        }
-
-        return panel;
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PanelStyle)),
+                DataContext = status
+            })
+            .WithView(Controls.Body(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PanelChip))) with
+            {
+                Style = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.PanelChipStyle)),
+                DataContext = status
+            })
+            .WithView(new ButtonControl(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.CompileLabel)))
+                {
+                    Disabled = NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.CompileDisabled)),
+                    DataContext = status
+                }
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    RequestRelease(ctx.Host.Hub, nodeTypePath);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LatestReleaseLink)))
+                .WithStyle("margin-left: auto; font-size: 12px;") with { DataContext = status });
     }
 
     private static UiControl RenderLoading(string message)
@@ -2067,83 +1798,6 @@ public static class NodeTypeLayoutAreas
             .WithStyle("padding: 24px; display: flex; align-items: center; justify-content: center;")
             .WithView(Controls.Progress(message, 0));
 
-    /// <summary>
-    /// Compile-log panel beneath the Create-Release header. Shows:
-    /// <list type="bullet">
-    ///   <item>While compiling: a "Compiling…" banner.</item>
-    ///   <item>After failure: the formatted diagnostics from
-    ///     <see cref="NodeTypeDefinition.CompilationError"/>.</item>
-    ///   <item>After success: a link to the freshly-created
-    ///     <c>Release</c> MeshNode at <see cref="NodeTypeDefinition.LatestReleasePath"/>.</item>
-    ///   <item>A clickable link to the most recent compile activity log
-    ///     (<see cref="NodeTypeDefinition.LastCompilationActivityPath"/>) for full
-    ///     Roslyn output / executed-source-queries trace.</item>
-    /// </list>
-    /// Empty when nothing has happened yet.
-    /// </summary>
-    private static UiControl BuildCompileLogPanel(NodeTypeDefinition def, string? locale = null)
-    {
-        // Nothing meaningful to show until at least one compile has been
-        // requested or recorded. Return an empty stack so the layout area
-        // doesn't reserve space for an unused panel.
-        var hasState = def.CompilationStatus is not null
-            || !string.IsNullOrEmpty(def.LastCompilationActivityPath)
-            || !string.IsNullOrEmpty(def.LatestReleasePath);
-        if (!hasState) return Controls.Stack;
-
-        var panel = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("padding: 12px 16px; background: var(--neutral-layer-2); border-radius: 4px; gap: 8px; margin-bottom: 8px;");
-
-        if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
-        {
-            panel = panel.WithView(Controls.Body(LocalizationCatalog.Get("ui.compiling", locale))
-                .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"));
-        }
-        else if (def.CompilationStatus == CompilationStatus.Error
-                 && !string.IsNullOrEmpty(def.CompilationError))
-        {
-            panel = panel
-                .WithView(Controls.Body(LocalizationCatalog.Get("ui.compileFailed", locale))
-                    .WithStyle("color: var(--error); font-weight: 600;"))
-                .WithView(Controls.Html(
-                    $"<pre style=\"white-space: pre-wrap; font-family: monospace; font-size: 12px; color: var(--error); margin: 0;\">{System.Net.WebUtility.HtmlEncode(def.CompilationError)}</pre>"));
-        }
-        else if (def.CompilationStatus == CompilationStatus.Unavailable)
-        {
-            // Availability problem, not a compile failure — hint colour, and the text is
-            // the "could not determine" message, never Roslyn diagnostics.
-            panel = panel
-                .WithView(Controls.Body(LocalizationCatalog.Get("ui.compileStateUnknown", locale))
-                    .WithStyle("color: var(--warning-foreground); font-weight: 600;"));
-            if (!string.IsNullOrEmpty(def.CompilationError))
-                panel = panel.WithView(Controls.Body(def.CompilationError!)
-                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px;"));
-        }
-        else if (def.CompilationStatus == CompilationStatus.Ok
-                 && !string.IsNullOrEmpty(def.LatestReleasePath))
-        {
-            var releaseHref = "/" + def.LatestReleasePath;
-            panel = panel
-                .WithView(Controls.Body(LocalizationCatalog.Get("ui.releasePublished", locale))
-                    .WithStyle("color: var(--accent-fill-rest); font-weight: 600;"))
-                .WithView(Controls.Html(
-                    $"<a href=\"{System.Net.WebUtility.HtmlEncode(releaseHref)}\" style=\"text-decoration: none; color: var(--accent-fill-rest);\">→ {System.Net.WebUtility.HtmlEncode(def.LatestReleasePath!)}</a>"));
-        }
-
-        if (!string.IsNullOrEmpty(def.LastCompilationActivityPath))
-        {
-            // 🚨 A LINK is a control, not a string of HTML. Hand-built markup is banned
-            // (AGENTS.md: never emit HTML strings — use the framework's controls), and it also
-            // forced manual HtmlEncode of both the href and the label. Markdown renders the same
-            // anchor, escapes for us, and keeps the styling on the control.
-            panel = panel.WithView(Controls
-                .Markdown($"[{LocalizationCatalog.Get("ui.viewCompileLog", locale)}](/{def.LastCompilationActivityPath})")
-                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint);"));
-        }
-
-        return panel;
-    }
 }
 
 /// <summary>
