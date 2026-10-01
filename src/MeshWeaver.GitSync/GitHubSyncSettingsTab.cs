@@ -388,9 +388,9 @@ public static class GitHubSyncSettingsTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.addSyncSource", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId).Take(1).Subscribe(d =>
+                return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId).Take(1).Do(d =>
                 {
                     var name = Str(d, "name");
                     if (string.IsNullOrEmpty(name))
@@ -402,8 +402,7 @@ public static class GitHubSyncSettingsTab
                         node => ctx.Host.UpdateData(ResultId,
                             Ok($"Sync source '{name}' added — configure its repository and direction above.")),
                         ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }
@@ -421,9 +420,9 @@ public static class GitHubSyncSettingsTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.reimportAtCommit", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(CommitFormId).Take(1).Subscribe(d =>
+                return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(CommitFormId).Take(1).Do(d =>
                 {
                     var commit = Str(d, "commit");
                     if (string.IsNullOrEmpty(commit))
@@ -435,8 +434,7 @@ public static class GitHubSyncSettingsTab
                     ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
                             onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
                         .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }

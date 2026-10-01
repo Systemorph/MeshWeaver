@@ -91,7 +91,7 @@ public static class NodeIconPickerDialog
                 }.WithStyle("flex: 1;"))
                 .WithView(Controls.Button(host.Localize("ui.useAsIcon"))
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(ctx => ApplyFileAsIcon(ctx, formDataId))));
+                    .WithReactiveClickAction(ctx => ApplyFileAsIcon(ctx, formDataId))));
         }
 
         // Bottom button row — Save writes via stream.Update, Cancel just dismisses the dialog.
@@ -108,7 +108,7 @@ public static class NodeIconPickerDialog
             .WithView(Controls.Button(host.Localize("common.save"))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Save())
-                .WithClickAction(ctx => SaveIcon(ctx, formDataId, node))));
+                .WithReactiveClickAction(ctx => SaveIcon(ctx, formDataId, node))));
 
         return Controls.Dialog(stack, $"Icon — {node.Name ?? node.Id}")
             .WithSize("M")
@@ -139,11 +139,11 @@ public static class NodeIconPickerDialog
         return Controls.Html($"<div style=\"{tile} font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(raw)}</div>");
     }
 
-    private static Task ApplyFileAsIcon(UiActionContext ctx, string formDataId)
+    private static IObservable<System.Reactive.Unit> ApplyFileAsIcon(UiActionContext ctx, string formDataId)
     {
-        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
+        return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
             .Take(1)
-            .Subscribe(data =>
+            .Do(data =>
             {
                 var fileName = data?.GetValueOrDefault("fileName")?.ToString()?.Trim()?.TrimStart('/') ?? "";
                 if (string.IsNullOrEmpty(fileName)) return;
@@ -152,15 +152,14 @@ public static class NodeIconPickerDialog
                     ["icon"] = $"content:{fileName}"
                 };
                 ctx.Host.UpdateData(formDataId, next);
-            });
-        return Task.CompletedTask;
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
-    private static Task SaveIcon(UiActionContext ctx, string formDataId, MeshNode node)
+    private static IObservable<System.Reactive.Unit> SaveIcon(UiActionContext ctx, string formDataId, MeshNode node)
     {
-        ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
+        return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
             .Take(1)
-            .Subscribe(data =>
+            .Do(data =>
             {
                 var newIcon = data?.GetValueOrDefault("icon")?.ToString() ?? "";
                 if (node.Path is { Length: > 0 } iconPath)
@@ -176,7 +175,6 @@ public static class NodeIconPickerDialog
                                 .LogWarning(ex, "Icon save failed for {Path}", iconPath));
                 }
                 ctx.Host.UpdateArea(DialogControl.DialogArea, null);
-            });
-        return Task.CompletedTask;
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 }

@@ -241,9 +241,9 @@ public static class WorkingTreeTab
         stack = stack.WithView(Controls.Button(LocalizationCatalog.Get("ui.commitAndPush", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Subscribe(content =>
+                return ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Do(content =>
                 {
                     ctx.Host.UpdateData(ResultId, Pending($"Committing {path}…"));
                     wt.WriteFile(userId, repoSlug, path, content ?? "")
@@ -257,8 +257,7 @@ public static class WorkingTreeTab
                                 ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                             },
                             ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
 
         return stack;
