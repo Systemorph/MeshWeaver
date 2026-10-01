@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Services;
 using System.Collections.Immutable;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,6 +104,11 @@ public static class PluginCatalogConfigurationExtensions
                 // read once per minute, on the caller, by the authenticator above. Mesh-scoped so
                 // the cache dies with the mesh.
                 .AddSingleton<PlanTierLadder>()
+                // …and the guard that keeps the ladder from losing a plan instances still stand on:
+                // deleting Admin/Tiers/{id} under them makes their plan unknown, which licenses only
+                // the free tier (#5894). Scoped, like every INodeValidator — it runs on the owning
+                // per-node hub where the delete root is validated.
+                .AddScoped<INodeValidator, TierInUseDeletionGuard>()
                 // The plan on the instance record — promoted by a global admin, read by every
                 // registry decision (#2804).
                 .AddSingleton<InstancePlanService>()

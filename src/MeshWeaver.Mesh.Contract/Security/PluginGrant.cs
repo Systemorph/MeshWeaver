@@ -130,13 +130,19 @@ public record PluginGrant
             if (!entry.Matches(sourceName, packageId) || !entry.IsValidAt(now))
                 continue;
             // The plan the entry DECIDED with, in the ladder's own words: Narrower reads an
-            // unknown plan or cap as the baseline, and so must the sentence — "this instance is
-            // on gold" for a cap the ladder does not know would name a plan that is neither the
-            // instance's nor an upgrade target.
+            // unknown CAP as the baseline, and so must the sentence — "this instance is on gold"
+            // for a cap the ladder does not know would name a plan that is neither the instance's
+            // nor an upgrade target.
+            // 🚨 An unknown INSTANCE plan is the opposite case and is NAMED (#5894): the record
+            // really does store it, and reporting it as "free" is what hid a dedicated instance
+            // whose stored plan the ladder no longer knew behind 18 refusals that all read "this
+            // instance is on free". Unknown stays unknown — the consumer sees the stored id.
             var canonical = PlanTierRanks.Canonical(ranks.Narrower(instancePlan, entry.Tier));
             var plan = canonical.Length > 0 && (ranks.RankOf(canonical) is not null || ranks.IsAllAccess(canonical))
                 ? canonical
-                : PlanTierRanks.BaselinePlan;
+                : canonical.Length > 0 && canonical == PlanTierRanks.Canonical(instancePlan) && ranks.IsUnknownPlan(instancePlan)
+                    ? canonical
+                    : PlanTierRanks.BaselinePlan;
             if (widest is null || (ranks.RankOf(plan) ?? PlanTierRanks.BaselineRank) > (ranks.RankOf(widest) ?? PlanTierRanks.BaselineRank))
                 widest = plan;
         }

@@ -80,6 +80,11 @@
 #      the numerator instead — PluginCatalog's two parts run ~174 s each, ~36% of
 #      the cap — and it costs nothing, because the parts land on different runners.
 #
+#      Memex.Portal.Shared.Test was the next one: listed at 25 s, it measured 431 s solo on
+#      run 36816633012 (90% of the cap) and was killed at 480 s exit=124 on run 36817124160,
+#      still progressing through its classes, once #5894 added ~28 s of deliberate waits. It
+#      runs in two parts since.
+#
 # 🚨 The two triggers must BOTH be checked when re-measuring. A project that grows
 # past 288 s (60% of 480) needs splitting even while the LPT loop still reports
 # six balanced shards, which is precisely why the balance rule alone missed this.
@@ -119,6 +124,7 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
+431 Memex.Portal.Shared.Test 2
 269 MeshWeaver.Hosting.Orleans.Test
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
@@ -127,7 +133,6 @@ WEIGHTS=$(cat <<'EOF'
 50 MeshWeaver.FaultInjection.Test
 27 MeshWeaver.Hosting.Test
 26 MeshWeaver.Layout.Test
-25 Memex.Portal.Shared.Test
 7 MeshWeaver.ContentCollections.Test
 6 MeshWeaver.Documentation.Test
 5 MeshWeaver.Compiler.Pipeline.Test
