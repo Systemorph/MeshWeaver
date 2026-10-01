@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.Configuration;
@@ -112,6 +113,60 @@ public class TierInUseDeletionGuardTest(ITestOutputHelper output) : MonolithMesh
 
         // The control: nothing stands on `personal`, so the guard must not refuse everything.
         (await TryDelete(TierPath("personal"), ct)).Should().BeNull("no instance stands on 'personal'");
+    }
+
+    /// <summary>What STORAGE holds at <paramref name="path"/> — the authoritative absence check, which
+    /// activates no per-node hub at an address that has no node.</summary>
+    private Task<MeshNode?> Stored(string path, CancellationToken ct) =>
+        Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read(path, Mesh.JsonSerializerOptions)
+            .DefaultIfEmpty(null)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+    /// <summary>The move's response, issued as System for the same reason <see cref="TryDelete"/> runs
+    /// as System: the guard does not exempt it, and it takes RLS out of the measurement.</summary>
+    private Task<MoveNodeResponse> Move(string source, string target, CancellationToken ct) =>
+        ObserveNodeOperation(new MoveNodeRequest(source, target), o => o.WithAccessContext(new AccessContext
+            {
+                ObjectId = WellKnownUsers.System,
+                Name = WellKnownUsers.System,
+            }))
+            .Select(d => d.Message)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+    /// <summary>
+    /// 🚨 A MOVE removes the tier from where the ladder reads it exactly as a delete does, so it is
+    /// refused for the same reason. Before the move ran the source's delete pre-flight, this move
+    /// SUCCEEDED and the in-use tier left the ladder unguarded. The second move is the negative
+    /// control: an unused tier moves freely, so the refusal is the guard's and not a broken move.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task MovingATierAnInstanceStandsOn_IsRefused_AndMovingAnUnusedOneIsNot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTier("free", 0, false, ct);
+        await SeedTier("pro", 20, false, ct);
+        await SeedTier("personal", 10, false, ct);
+        await Register("pro-client", "pro", ct);
+        const string archive = "Admin/TierArchive";
+
+        var refused = await Move(TierPath("pro"), $"{archive}/pro", ct);
+        Output.WriteLine($"move pro: success={refused.Success} reason={refused.RejectionReason} error={refused.Error}");
+        refused.Success.Should().BeFalse("moving the tier out of the ladder makes the instance's plan unknown, exactly like deleting it");
+        refused.RejectionReason.Should().Be(NodeMoveRejectionReason.ValidationFailed);
+        refused.Error.Should().Contain("pro-client", "the refusal carries the guard's own reason, naming the instance");
+        (await Read(TierPath("pro"), ct)).Should().NotBeNull("the refused move must leave the tier where it was");
+        (await Stored($"{archive}/pro", ct)).Should().BeNull("the refusal comes before the copy creates anything");
+
+        var moved = await Move(TierPath("personal"), $"{archive}/personal", ct);
+        Output.WriteLine($"move personal: success={moved.Success} reason={moved.RejectionReason} error={moved.Error}");
+        moved.Success.Should().BeTrue(moved.Error ?? "nothing stands on 'personal', so the guard has no objection");
+        (await Read($"{archive}/personal", ct)).Should().NotBeNull("a legitimate move lands at the target");
+        (await Stored(TierPath("personal"), ct)).Should().BeNull("and leaves nothing at the source");
     }
 
     [Fact(Timeout = 300_000)]

@@ -136,13 +136,57 @@ never sets the flag: it deletes nothing, so carrying less than everything loses 
 The trade-off is deliberate and worth stating plainly: a move that used to "succeed" destructively can
 now fail. A refusal is recoverable and legible; the alternative was not.
 
+## A move is answerable to everything a delete is
+
+The delete leg removes the source straight from storage (`IStorageAdapter.DeleteMany`) — by then the
+copy has re-created the subtree, so a cascade of `DeleteNodeRequest`s that could still refuse half-way
+would be the wrong tool. But until the move validated its source, that leg was the ONLY removal of
+the source, and it consulted no `INodeValidator` at all. Every delete guard was bypassable by moving
+the node instead: moving `Admin/Tiers/pro` out of the ladder dropped an in-use plan tier past
+`TierInUseDeletionGuard` (#5938), and the same held for the last-admin invariant, the partition-root
+guard and a node-level Delete denial — `MoveNodePermissionAttribute` checks Delete only on the source's
+NAMESPACE.
+
+`HandleMoveNodeRequest` now runs the source through the **same pre-flight a recursive delete runs**,
+before the copy writes anything:
+
+1. the read-only-provider probe a delete runs on its root (`FindDeleteBlockingProvider`);
+2. one `ValidateDeleteRequest(path, rootPath: source)` per stored path of the source subtree —
+   **root included** (`PreValidateDescendantsObs(..., includeRoot: true)`) — answered by that node's
+   own hub under the mover's identity. That runs the `[RequiresPermission(Delete)]` gate on the NODE
+   and the node's whole delete-validator chain, with the move's source as the cascade root (so a
+   validator that exempts "the whole subtree is going away" behaves exactly as it does for a delete
+   of the source).
+
+Any refusal answers `MoveNodeResponse.Fail(..., ValidationFailed)` (or `Unavailable` when a check
+could not be established) naming the blocking path and the validator's own reason; nothing is copied
+and nothing is removed. The TARGET half needs nothing extra: the copy leg creates every node through
+`CreateNodeRequest`, which runs the create permission and create validators per node. A delete-only
+validator therefore covers moves with no move-specific code.
+
+**Known window.** The pre-flight validates the subtree as storage lists it when the move starts; the
+delete leg re-enumerates after the copy, so a node created under the source in between is removed
+without having been asked. The recursive delete closes the same window with its subtree write scope;
+the move does not yet.
+
+**Other lifecycle paths** (swept with this change): a recursive delete pre-validates every
+descendant; GitSync prune, `StaticRepoImporter` orphan removal, installer clean-up and registry
+reconcile all delete through `IMeshService.DeleteNode` and are validated. `PartitionTeardown` drops a
+whole partition store directly — deliberately, system-only, behind a governed `DeleteSpace`. Two
+paths still remove a node without the delete-validator chain and are filed separately: the
+`DeleteMeshNodeRequest` handler on every per-node hub (raw `IStorageAdapter.Delete`, no permission
+attribute, no poster in core), and a `MeshNode` deletion arriving through a workspace data change
+(`MeshNodeTypeSource` → `DeleteAndPublish`, permission-checked by `RlsDataValidator` but not by the
+node validators).
+
 ## What this means for callers
 
 - **Moving a node moves its comments, threads, approvals and grants.** A satellite's `MainNode` is
   retargeted with it (`RetargetNode`), so its permissions keep delegating to the node it belongs to
   and its grants keep projecting at the right prefix.
 - **A move can now be refused.** Handle `MoveNodeResponse.Success == false` with
-  `NodeMoveRejectionReason.ValidationFailed`; the message names the paths.
+  `NodeMoveRejectionReason.ValidationFailed`; the message names the paths. That includes every
+  refusal a DELETE of the source would get — if you may not delete it, you may not move it.
 - **`CopyNodeRequest.IncludeSatellites` costs an enumeration, not a filter.** It is not free, and it
   is not a flag over a set the query already returned.
 
