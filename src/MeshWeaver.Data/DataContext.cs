@@ -488,12 +488,16 @@ public sealed record DataContext : IDisposable
         // this context and the subscription need not be stored. ObserveOn: the settle
         // body must not run inline on the last data source's completing thread (arm 1)
         // nor on Dispose()'s teardown stack (arm 3) — the same hop the previous
-        // ContinueWith(TaskScheduler.Default) gave it.
+        // ContinueWith(TaskScheduler.Default) gave it. 🚨 And it must stay THAT hop — one pool
+        // work item — which a bare ObserveOn(TaskPoolScheduler.Default) is not: Rx's task pool
+        // advertises ISchedulerLongRunning, so ObserveOn started a dedicated OS thread for every
+        // hub's settle, i.e. one thread creation per hub activation, thousands in a mass
+        // activation (#5555; ContentTypeRegistration.md → "What one registration COSTS").
         var initSettled = allInit.ToObservable().Materialize().Take(1).Select(_ => Unit.Default);
         var timeBox = Observable.Timer(EffectiveInitializationTimeout).Select(_ => Unit.Default);
         Observable.Amb(initSettled, timeBox, watchdogDisarm)
             .Take(1)
-            .ObserveOn(TaskPoolScheduler.Default)
+            .ObserveOn(TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning)))
             .Subscribe(
                 _ => SettleInitializationGate(allInit),
                 ex =>
