@@ -230,7 +230,11 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
-            .WithServices(services => services.AddSingleton<OwnNodeCache>())
+            .WithServices(services => services
+                .AddSingleton<OwnNodeCache>()
+                // A MeshNode leaving this hub's workspace through a DataChangeRequest is a delete,
+                // so it answers to the delete-validator chain too — not to RLS alone.
+                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeDeletionDataValidator>())
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
@@ -278,7 +282,9 @@ public static class MeshDataSourceExtensions
             // and keeps the data source pure — no debounce buffer, no FlushOnDispose,
             // no IStorageAdapter dependency in the type source itself.
             .WithHandler<SaveMeshNodeRequest>(HandleSaveMeshNode)
+#pragma warning disable CS0618 // forwarded to the validated delete — see HandleDeleteMeshNode
             .WithHandler<DeleteMeshNodeRequest>(HandleDeleteMeshNode)
+#pragma warning restore CS0618
             // Post-load INodeValidator-Read hook for MeshNodeReference reads.
             .AddDeliveryPipeline(AddReadValidatorPipeline)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
@@ -491,28 +497,61 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Per-node hub handler for <see cref="DeleteMeshNodeRequest"/>: removes the
-    /// node at the supplied path through <see cref="IStorageAdapter.Delete"/>.
-    /// Fire-and-forget; failures log and drop.
+    /// Per-node hub handler for the obsolete <see cref="DeleteMeshNodeRequest"/>: FORWARDS it to the
+    /// validated delete — a <see cref="DeleteNodeRequest"/> issued under the DELIVERY's own
+    /// <see cref="AccessContext"/> — and never touches storage itself.
+    ///
+    /// <para>🚨 It used to call <see cref="IStorageAdapter.Delete"/> on whatever path the message
+    /// named, with no permission check and no <see cref="INodeValidator"/>. Nothing in the platform
+    /// posts this message, but every ingress can deliver it: the SignalR and gRPC connection hubs
+    /// forward any delivery to any address (an unauthenticated client arrives as Anonymous), and
+    /// in-mesh code holds an <see cref="IMessageHub"/>. So the handler was an unchecked raw delete of
+    /// ANY node, reachable by anyone who could open a connection. Routing it through
+    /// <see cref="DeleteNodeRequest"/> gives it exactly the checks a delete gets everywhere else:
+    /// the <c>[RequiresPermission(Delete)]</c> gate, the delete-validator chain and, when
+    /// <see cref="DeleteMeshNodeRequest.Recursive"/> is set, the recursive pre-flight.</para>
+    ///
+    /// <para>A delivery with NO access context names nobody to check, so it is refused here rather
+    /// than forwarded — never run as the hub or as System. Pinned by
+    /// <c>DeleteMeshNodeRequestIsAValidatedDeleteTest</c>.</para>
     /// </summary>
+#pragma warning disable CS0618 // the obsolete request is handled ONLY to forward it to the validated delete
     private static IMessageDelivery HandleDeleteMeshNode(
         IMessageHub hub, IMessageDelivery<DeleteMeshNodeRequest> request)
+#pragma warning restore CS0618
     {
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (persistence is null)
-            return request.Processed();
-
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");
         var path = request.Message.Path;
-        // The row is going away — drop the post-commit flush's durable-version mark so a same-id
-        // recreate at Version = 1 is never read as "already persisted" (#1249). Same rule as
-        // MonotonicWriteGuardStorageAdapter.Forget on Delete.
-        hub.ServiceProvider.GetService<PostCommitFlushRegistry>()?.Forget(path);
-        persistence.Delete(path)
+        var caller = request.AccessContext;
+        if (caller is null || string.IsNullOrEmpty(caller.ObjectId))
+        {
+            logger?.LogWarning(
+                "[DeleteMeshNode] refused a delete of {Path} from {Sender}: the delivery carries no "
+                + "access context, so there is nobody to check Delete for — nothing was deleted",
+                path, request.Sender);
+            return request.Processed();
+        }
+
+        var delete = new DeleteNodeRequest(path)
+        {
+            Recursive = request.Message.Recursive,
+            DeletedBy = caller.ObjectId
+        };
+        hub.NodeOperationIssuingHub()
+            .Observe(delete, o => o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(caller))
             .Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex, "DeleteMeshNode failed for {Path}", path));
+                d =>
+                {
+                    if (!d.Message.Success)
+                        logger?.LogWarning(
+                            "[DeleteMeshNode] the validated delete of {Path} requested by {User} was refused "
+                            + "({Reason}): {Error}",
+                            path, caller.ObjectId, d.Message.RejectionReason, d.Message.Error);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[DeleteMeshNode] the validated delete of {Path} requested by {User} failed",
+                    path, caller.ObjectId));
         return request.Processed();
     }
 

@@ -245,18 +245,21 @@ internal static class PermissionEvaluator
             && IsHubReadableScope(userId, nodePath))
             return Observable.Return(Permission.Read);
 
-        // Claim-first composition: static + claim-based roles available
-        // synchronously. Emit immediately; then enrich asynchronously with
-        // the synced AccessAssignment query (so long-lived subscribers see
-        // updates as runtime grants land).
-        var staticOnlyScopeRoles = ComputeStaticOnlyScopeRoles(staticNodes, userId, options);
-        var staticOnlyDeniedScopeRoles = ComputeStaticOnlyDeniedScopeRoles(staticNodes, userId, options);
-        var fast = ComputeRoleState(staticOnlyScopeRoles, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, staticOnlyDeniedScopeRoles);
-        // A gate declared over a STATIC node resolves synchronously — the declared public surface
-        // is readable on the first emission, with no wait on the synced queries (same reasoning as
-        // the static PublicRead policy seeded below).
-        fast = (fast.RoleIds, fast.PermissionCap,
-            fast.PublicGrant | GateGrant(gates, staticGatedNodes, nodePath));
+        // 🚨 NO SYNCHRONOUS STATIC SEED — the fold's FIRST emission already reflects every runtime
+        // grant, deny and policy. It used to emit a "fast" snapshot computed from the STATIC
+        // assignments and policies alone, then concat the enriched fold. That snapshot was the
+        // verdict for every one-shot consumer — AccessControlPipeline (Take(1)), CheckPermission
+        // awaited once, the RLS node validator — so a runtime change that SUBTRACTS (a Denied role,
+        // a capping or inheritance-breaking _Policy) never took effect for them while a static
+        // grant or a static PublicRead policy supplied the role: the deny was written, read back,
+        // and ignored, for as long as the process lived (measured: a runtime Admin deny on a node
+        // whose Admin came from a static grant answered Delete=true on every fresh check for 36 s,
+        // then forever; the long-lived fold emitted [true, false]). The same snapshot also missed
+        // runtime GRANTS layered on a static one, answering a spurious first denial. It is exactly
+        // the leg-seed hazard spelled out below, applied to all four legs at once: a seed computed
+        // from a subset of the inputs is fail-OPEN on every input that subtracts. Pinned by
+        // RuntimeAccessChangeIsEffectiveTest. Static nodes still take part — the assignment leg
+        // unions them in, and the static policy map is the fallback inside ComputeRoleState.
 
         // 🚨 THREE OF THESE FOUR LEGS MUST NEVER BE `StartWith`-SEEDED (issue #2742). CombineLatest
         // emits nothing until every source has, so a leg that starves parks the whole fold — and
@@ -315,18 +318,7 @@ internal static class PermissionEvaluator
                     state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath));
             });
 
-        // Emit the synchronous static snapshot whenever it carries ANY signal —
-        // roles OR a static public-read grant. The public grant is computed from
-        // static policies (collected synchronously above), so a PublicRead catalog
-        // (e.g. the built-in Agent namespace) yields Read on the FIRST emission with
-        // no wait for the synced AccessAssignment/Policy queries. Skipping the seed
-        // on RoleIds-only left role-less readers of a public catalog blocked on the
-        // synced cold-start path — the "No suitable agent" race during execution.
-        var seed = (fast.RoleIds.Count > 0 || fast.PublicGrant != Permission.None)
-            ? Observable.Return(fast)
-            : Observable.Empty<(ImmutableHashSet<string>, Permission, Permission)>();
-
-        return seed.Concat(enriched)
+        return enriched
             .SelectMany(state =>
             {
                 var (roleIds, permissionCap, publicGrant) = state;
@@ -644,70 +636,6 @@ internal static class PermissionEvaluator
                 {
                     result[n.Namespace ?? ""] = policy;
                 }
-            }
-        }
-        return result;
-    }
-
-    #endregion
-
-    #region Static-only scope-role walks (synchronous claim path)
-
-    private static ImmutableDictionary<string, ImmutableHashSet<string>> ComputeStaticOnlyScopeRoles(
-        IReadOnlyList<MeshNode> staticNodes, string userId, JsonSerializerOptions options)
-    {
-        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
-        foreach (var node in staticNodes)
-        {
-            if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
-                continue;
-            var ns = node.Namespace ?? "";
-            var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
-                ? ns[..^"/_Access".Length]
-                : (ns == "_Access" ? "" : null);
-            if (scope is null)
-                continue;
-            var assignment = DeserializeAssignment(node, options);
-            if (assignment == null || assignment.AccessObject != userId)
-                continue;
-            foreach (var ra in assignment.Roles)
-            {
-                if (string.IsNullOrEmpty(ra.Role) || ra.Denied)
-                    continue;
-                var existing = result.TryGetValue(scope, out var roles)
-                    ? roles
-                    : ImmutableHashSet<string>.Empty;
-                result = result.SetItem(scope, existing.Add(ra.Role));
-            }
-        }
-        return result;
-    }
-
-    private static ImmutableDictionary<string, ImmutableHashSet<string>> ComputeStaticOnlyDeniedScopeRoles(
-        IReadOnlyList<MeshNode> staticNodes, string userId, JsonSerializerOptions options)
-    {
-        var result = ImmutableDictionary<string, ImmutableHashSet<string>>.Empty;
-        foreach (var node in staticNodes)
-        {
-            if (node.NodeType != SecurityCollections.AccessAssignmentNodeType)
-                continue;
-            var ns = node.Namespace ?? "";
-            var scope = ns.EndsWith("/_Access", StringComparison.Ordinal)
-                ? ns[..^"/_Access".Length]
-                : (ns == "_Access" ? "" : null);
-            if (scope is null)
-                continue;
-            var assignment = DeserializeAssignment(node, options);
-            if (assignment == null || assignment.AccessObject != userId)
-                continue;
-            foreach (var ra in assignment.Roles)
-            {
-                if (string.IsNullOrEmpty(ra.Role) || !ra.Denied)
-                    continue;
-                var existing = result.TryGetValue(scope, out var roles)
-                    ? roles
-                    : ImmutableHashSet<string>.Empty;
-                result = result.SetItem(scope, existing.Add(ra.Role));
             }
         }
         return result;
