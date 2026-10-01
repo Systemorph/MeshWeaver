@@ -1882,7 +1882,9 @@ public static class MeshDataSourceExtensions
                         .Subscribe(
                             _ =>
                             {
-                                hub.Post(
+                                // Through the issuing seam like every targeted post in this file:
+                                // the identity function on this per-node hub, never the router.
+                                hub.NodeOperationIssuingHub().Post(
                                     new SubmitCodeRequest(code.Code ?? string.Empty)
                                     {
                                         Id = submissionId,
