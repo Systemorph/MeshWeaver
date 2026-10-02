@@ -64,6 +64,48 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// 🚨 True when the error is a DEADLINE MISS — the owner did not answer within the transport's
+    /// response deadline — and nothing else: a <see cref="TimeoutException"/> at any wrapping depth,
+    /// or one of the three timeout sentences the routed NACK flattens it into
+    /// (<c>"Response did not arrive on time"</c>, <c>"Grain placement operation timed out"</c>,
+    /// <c>"No response received in hub"</c>).
+    ///
+    /// <para><b>The one class a view RE-OPENS on</b> (policy <c>area-view-reopens-on-deadline-miss</c>,
+    /// issues #5599 and #5714). A deadline miss says the owner was SLOW, not that it cannot serve this
+    /// area, so its next frame is worth asking for — but only through a FRESH stream: the stream that
+    /// missed the deadline has latched the fault and replays it to every later subscriber. See
+    /// <see cref="AreaStreamReopen.ReopenOnDeadlineMiss{T}"/>, which paces the re-open to at most one
+    /// per <see cref="AreaStreamReopen.DefaultMinReopenInterval"/>.</para>
+    ///
+    /// <para>Deliberately a strict SUBSET of <see cref="IsTransientHubFailure"/>. A cancellation, a
+    /// recycling hub, a not-yet-found hub and an undeliverable banner are transient but are NOT a
+    /// deadline miss, and stay with the bounded <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>.
+    /// Every terminal verdict — a routing NotFound, <see cref="ErrorType.Unavailable"/>, an
+    /// initialisation failure, a CompilationInProgress NACK, a teardown
+    /// <see cref="ObjectDisposedException"/> — is refused first, whatever its text says.</para>
+    /// </summary>
+    /// <param name="ex">The exception to classify; may be null.</param>
+    public static bool IsDeadlineMiss(Exception? ex)
+    {
+        if (ex is null or ObjectDisposedException
+            || IsAvailabilityFailure(ex)
+            || IsNodeGoneNotFound(ex)
+            || TryGetInitializationFailureReason(ex) is not null
+            || TryGetCompilationInProgressNodeType(ex) is not null)
+            return false;
+
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            if (e is TimeoutException) return true;
+            var msg = e.Message ?? string.Empty;
+            if (msg.Contains("Response did not arrive on time", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("Grain placement operation timed out", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 🚨 True when the error says the target hub is BEING RECYCLED — <c>"Hub X is shutting down"</c>
     /// — as opposed to not existing.
     ///

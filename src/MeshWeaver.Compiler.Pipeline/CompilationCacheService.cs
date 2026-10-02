@@ -632,7 +632,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     }
 
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
-        : base(name: $"DynamicNode_{nodeName}", isCollectible: true)
+        : base(name: $"{MeshWeaver.Messaging.InMeshImpersonationGuard.NodeTypeLoadContextPrefix}{nodeName}", isCollectible: true)
     {
         _nodeName = nodeName;
         _dllPath = dllPath;

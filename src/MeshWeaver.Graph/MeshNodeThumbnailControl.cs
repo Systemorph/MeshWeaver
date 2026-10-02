@@ -18,6 +18,73 @@ public record MeshNodeThumbnailControl(
 ) : UiControl<MeshNodeThumbnailControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>
+    /// BINDABLE title: a literal or a <see cref="MeshWeaver.Data.JsonPointerReference"/> the renderer resolves
+    /// against the control's DataContext (node-bound via
+    /// <see cref="MeshWeaver.Data.LayoutAreaReference.GetMeshNodeDataContext"/>, or an ordinary <c>/data</c>
+    /// context) and FOLLOWS. When it resolves to a non-empty value it wins over the literal title and
+    /// over the <see cref="NodePath"/> node's name; while it has no value the card falls back to them.
+    /// See Doc/GUI/DataBinding → "Binding a rich control to a node field".
+    /// </summary>
+    public object? TitleBinding { get; init; }
+
+    /// <summary>
+    /// BINDABLE description — the twin of <see cref="TitleBinding"/>: a non-empty resolved value wins
+    /// over the literal description; while it has no value the card falls back to it.
+    /// </summary>
+    public object? DescriptionBinding { get; init; }
+
+    /// <summary>Returns a copy whose title is <paramref name="title"/> — a literal or a pointer the
+    /// renderer follows. See <see cref="TitleBinding"/>.</summary>
+    /// <param name="title">The title, or a pointer to it.</param>
+    /// <returns>A new instance with the updated <see cref="TitleBinding"/>.</returns>
+    public MeshNodeThumbnailControl BindTitle(object title) => this with { TitleBinding = title };
+
+    /// <summary>Returns a copy whose description is <paramref name="description"/> — a literal or a
+    /// pointer the renderer follows. See <see cref="DescriptionBinding"/>.</summary>
+    /// <param name="description">The description, or a pointer to it.</param>
+    /// <returns>A new instance with the updated <see cref="DescriptionBinding"/>.</returns>
+    public MeshNodeThumbnailControl BindDescription(object description) => this with { DescriptionBinding = description };
+
+    /// <summary>
+    /// Returns a copy whose title and/or description are read live from fields of the node at
+    /// <paramref name="dataNodePath"/> — which need not be the card's own <see cref="NodePath"/>
+    /// (an access-assignment row shows the SUBJECT's card, captioned from the assignment). The
+    /// producing area renders the card at once and never loads either node.
+    /// </summary>
+    /// <param name="dataNodePath">The node whose fields caption the card.</param>
+    /// <param name="titleField">The field bound to the title, or <c>null</c> to leave the title as is.</param>
+    /// <param name="descriptionField">The field bound to the description, or <c>null</c> to leave it as is.</param>
+    /// <param name="bindContent"><c>true</c> (default) resolves the fields against the node's
+    /// <c>Content</c>; <c>false</c> against its top-level fields (<c>Name</c>, <c>Description</c>).</param>
+    /// <returns>A new instance bound to the node fields.</returns>
+    public MeshNodeThumbnailControl BindToNode(string dataNodePath, string? titleField, string? descriptionField = null, bool bindContent = true) =>
+        this with
+        {
+            TitleBinding = titleField is null ? TitleBinding : new MeshWeaver.Data.JsonPointerReference(titleField),
+            DescriptionBinding = descriptionField is null ? DescriptionBinding : new MeshWeaver.Data.JsonPointerReference(descriptionField),
+            DataContext = MeshWeaver.Data.LayoutAreaReference.GetMeshNodeDataContext(dataNodePath, bindContent),
+        };
+
+    /// <summary>
+    /// The TEMPLATE form: a thumbnail declared by PATH alone, for a layout area that must not wait
+    /// on the node (Doc/GUI/DataBinding → "Templates first, data later"). The card's view subscribes
+    /// to the node through <c>IMeshNodeStreamCache</c> and fills in the title and image (and, where
+    /// the view binds it, the description) itself, so the area emits at once and the card follows
+    /// later edits. Until the node answers, the title shows the path's last segment.
+    /// </summary>
+    /// <param name="nodePath">The node the card shows.</param>
+    /// <returns>A card that reads nothing on the hub.</returns>
+    public static MeshNodeThumbnailControl ForPath(string nodePath)
+        => new(nodePath, LastSegment(nodePath));
+
+    private static string LastSegment(string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        var slash = trimmed.LastIndexOf('/');
+        return slash < 0 ? trimmed : trimmed[(slash + 1)..];
+    }
+
+    /// <summary>
     /// Creates a thumbnail control from a MeshNode.
     /// </summary>
     public static MeshNodeThumbnailControl FromNode(MeshNode? node, string fallbackPath)

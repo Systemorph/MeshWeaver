@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 // 🚨 Namespace deliberately NOT MeshWeaver.Messaging.Serialization (where the file now lives).
@@ -106,10 +107,46 @@ public interface IMeshContentTypeRegistry
     ///
     /// <para>Announcement only: it carries no content and resolves nothing. A subscriber
     /// re-asks <see cref="TryRecoverForNodeType"/> (or its own conversion) and keeps the answer
-    /// only when it is now typed — so a registration for an unrelated type is a cheap no-op, and
-    /// the notification can never make a read WORSE than it already was.</para>
+    /// only when it is now typed — so the notification can never make a read WORSE than it already
+    /// was. 🚨 But an unrelated registration is NOT free here: it is still delivered, off-thread, to
+    /// every subscriber. A subscriber that waits on particular types uses
+    /// <see cref="RegistrationsMatching"/>, which drops them before the hop (#5555).</para>
     /// </summary>
     IObservable<MeshContentTypeRegistration> Registrations { get; }
+
+    /// <summary>
+    /// <see cref="Registrations"/>, narrowed to the announcements <paramref name="couldMatter"/>
+    /// accepts — in <see cref="MeshContentTypeRegistry"/> with the predicate evaluated ON THE
+    /// REGISTERING THREAD, before the hop (see the last paragraph for other implementers), so a
+    /// registration the subscriber provably cannot use costs one predicate call and nothing else.
+    ///
+    /// <para>🚨 <b>This is the member a long-lived waiter must use</b> (#5555). Filtering
+    /// <see cref="Registrations"/> AFTER the hop makes every registration in the mesh — and every
+    /// per-node hub activation of a runtime-compiled NodeType is one — cost a scheduled drain for
+    /// EVERY armed waiter: armed waiters × activations of dispatch, almost all of it for types the
+    /// waiter discards. A mass activation is exactly when both factors are large at once.</para>
+    ///
+    /// <para><paramref name="couldMatter"/> runs inside <see cref="Register"/>'s caller — a hub
+    /// configuration build — and inside the registry's announcement gate, so it must be a pure,
+    /// cheap test of the announcement (a string compare), never a read, a conversion, a call back
+    /// into this registry or anything that can block. 🚨 The blast radius of getting that wrong is
+    /// the whole mesh: the gate serialises every concurrent <see cref="Register"/>, so one blocking
+    /// predicate stalls every per-node hub activation that registers a type. What it lets through
+    /// is still delivered off the registering thread, exactly as <see cref="Registrations"/> is.</para>
+    ///
+    /// <para>The pre-hop evaluation is a property of <see cref="MeshContentTypeRegistry"/>, which
+    /// overrides this member. The DEFAULT implementation exists only so other implementers keep
+    /// compiling: it filters <see cref="Registrations"/> after its hop — functionally the same
+    /// answers, but without the cost guarantee. An implementer that serves many waiters overrides
+    /// it.</para>
+    /// </summary>
+    /// <param name="couldMatter">Pure predicate: could this announcement possibly matter to the
+    /// subscriber? It must stay a superset of what could — a wrongly dropped registration is never
+    /// re-delivered.</param>
+    /// <returns>The accepted announcements, delivered on the task pool.</returns>
+    IObservable<MeshContentTypeRegistration> RegistrationsMatching(
+        Func<MeshContentTypeRegistration, bool> couldMatter)
+        => Registrations.Where(couldMatter);
 
     /// <summary>
     /// Resolves a <c>$type</c> discriminator (short or full name) to its CLR type — and REFUSES
@@ -215,9 +252,24 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     /// to that node (a layout area, a Blazor view). Handing that work to the registering thread
     /// would re-enter hub construction from inside itself. Per-subscription by design — each
     /// subscriber gets its own queue, so one slow consumer cannot stall another.
+    ///
+    /// <para>🚨 <b>On <see cref="PooledContinuationScheduler"/>, never on
+    /// <see cref="TaskPoolScheduler.Default"/> (#5555).</b> Rx's task pool advertises
+    /// <see cref="ISchedulerLongRunning"/>, and <c>ObserveOn</c> then gives EVERY subscription a
+    /// dedicated OS thread on its first announcement, which parks in <c>Monitor.Wait</c> until the
+    /// subscription is disposed and is woken by every later <see cref="Register"/>. A subscriber
+    /// here is a degraded node stream waiting for its type — thousands on a large portal, each
+    /// holding the wait for its whole life — so that was one parked thread per waiter and a
+    /// mesh-wide thundering herd on every per-node hub activation. The pooled scheduler withholds
+    /// the long-running capability, so a delivery is one task-pool work item per batch.</para>
     /// </remarks>
     public IObservable<MeshContentTypeRegistration> Registrations
-        => _registrations.ObserveOn(TaskPoolScheduler.Default);
+        => _registrations.ObserveOn(PooledContinuationScheduler.Instance);
+
+    /// <inheritdoc />
+    public IObservable<MeshContentTypeRegistration> RegistrationsMatching(
+        Func<MeshContentTypeRegistration, bool> couldMatter)
+        => _registrations.Where(couldMatter).ObserveOn(PooledContinuationScheduler.Instance);
 
     /// <summary>
     /// WHO declared a content type — the NodeType path when the caller knows it, otherwise the

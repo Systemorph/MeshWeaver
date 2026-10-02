@@ -38,20 +38,20 @@ public static class DomainCatalogLayoutArea
         if (!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         
-        return ret.WithView((areaHost, _) => RenderCatalog(areaHost, typeDefinition));
+        return ret.WithView((areaHost, ctx) => RenderCatalog(areaHost, ctx, typeDefinition));
     }
 
-    private static UiControl RenderCatalog(LayoutAreaHost host, ITypeDefinition typeDefinition)
+    private static UiControl RenderCatalog(LayoutAreaHost host, RenderingContext context, ITypeDefinition typeDefinition)
     {
         var stream = host.Workspace
             .GetStream(new CollectionReference(typeDefinition.CollectionName));
 
         var id = Guid.NewGuid().AsString();
-        host.RegisterForDisposal(stream!
+        // FeedData, never a bare Subscribe: a faulting collection stream must show on this area,
+        // not rethrow on the pool (Template.BindFeed).
+        host.RegisterForDisposal(context.Area, host.FeedData(context.Area, id, stream!
             .Select(i => i.Value?.Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o,
-                host.Hub.JsonSerializerOptions)) ?? [])
-            .Subscribe(x => host.UpdateData(id, x))
-        );
+                host.Hub.JsonSerializerOptions)) ?? [])));
 
         return typeDefinition.ToDataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
             .WithClickAction(HandleClick);
