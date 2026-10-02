@@ -530,6 +530,19 @@ rule that decides it is **monotonicity**:
 | `ObserveScopePolicies` | `PublicRead` | `GetPermissionCap()`, `BreaksInheritance` — and their **absence widens** | ❌ no |
 | `ObserveAllMembershipNodes` | group grants reach the viewer | the same subject set decides which **denials** match | ❌ no |
 
+**There is no whole-fold seed either.** The fold used to emit a synchronous snapshot computed from
+the STATIC assignments and policies alone (`AddMeshNodes` / `IStaticNodeProvider`), then the
+enriched fold. That snapshot is a seed of all four legs at once, so the monotonicity rule refuses it
+for the same reason: it drops every runtime subtraction. Measured in the monolith fixture: a subject
+whose Admin came from a static grant kept `Delete` on every fresh check after a runtime
+`AccessAssignment` denied Admin at the node — the deny was stored and ignored, and the long-lived fold
+emitted `[true, false]` — while a runtime grant layered on a static Viewer answered its first check
+without it. Production has the same shape wherever a static grant or a static `PublicRead` policy
+supplies the role (the `Doc` partition ships both), so a runtime deny or cap there did not bind any
+one-shot check. The seed is gone: the first emission is the enriched fold's, which already unions
+the static layer in. Pinned by `RuntimeAccessChangeIsEffectiveTest` (both directions, each with its
+sibling control).
+
 **Why the first emission is the whole story.** `AccessControlPipeline` runs
 `hub.CheckPermissionOutcome(…).TakeDecisionOutsideGate()`, and `TakeDecisionOutsideGate` is a
 `Take(1)`. The fold's **first** emission *is* the verdict for every `[RequiresPermission]` delivery. A
@@ -762,7 +775,7 @@ Access control uses these shipped node types:
 
 > There is no `SecurityService` class any more, and **no write surface on the evaluator**. `AddUserRole`, `RemoveUserRole`, `SetPolicy`, `RemovePolicy`, `SaveRole` do not exist. Grants are ordinary MeshNodes: create/update them with `meshService.CreateNode(...)` / `workspace.GetMeshNodeStream(path).Update(...)` like any other node, and the shared `$security-*` queries pick the change up.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously**, unioned with the two anchored reads, so a statically declared grant resolves on the first emission without waiting for storage.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` read the static layer synchronously and union it with the two anchored reads, so a statically declared grant is part of the first emission — but that emission waits for the anchored reads too, because a runtime deny or cap must be able to override a static grant (see "The convergence contract").
 
 ## The read surface
 
