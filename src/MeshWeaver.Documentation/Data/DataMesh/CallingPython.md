@@ -152,27 +152,27 @@ public record PrimeReport
 
 ### `Source/PrimeReportLayoutAreas.cs` (core)
 
-The area reads the node reactively from the per-node hub's `MeshDataSource` — `host.Workspace.GetStream<MeshNode>()`, the same read the framework's default node areas use — and `Switch`es into a fresh pooled Python run whenever `Count` changes:
+The area is a TEMPLATE ([Templates first, data later](/Doc/GUI/DataBinding)): one markdown control, on screen at the first render and bound to `/data/primeReport`. The FEED — a function that builds no control — reads the node reactively from the per-node hub's own stream and `Switch`es into a fresh pooled Python run whenever `Count` changes:
 
 ```csharp
-public static IObservable<UiControl?> Report(LayoutAreaHost host, RenderingContext _)
+public static UiControl Report(LayoutAreaHost host, RenderingContext _)
+    => ReportTemplate(ReportFeed(host));
+
+public static UiControl ReportTemplate(IObservable<string> report) =>
+    report.Bind(markdown => Controls.Markdown(markdown), ReportDataId);
+
+public static IObservable<string> ReportFeed(LayoutAreaHost host)
 {
     var hub = host.Hub;
-    var hubPath = hub.Address.ToString();
-    var nodeStream = host.Workspace.GetStream<MeshNode>();
-    if (nodeStream is null)
-        return Observable.Return(
-            (UiControl?)Controls.Markdown("*Unable to load the prime report node.*"));
-
-    return nodeStream
-        .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
-        .Select(node => Math.Clamp(ExtractReport(node)?.Count ?? 25, 1, 200))
+    return host.Workspace.GetMeshNodeStream()
+        .Select(node => Math.Clamp(ExtractReport(hub, node)?.Count ?? 25, 1, 200))
         .DistinctUntilChanged()
         .Select(count => ProcessPool(hub)
-            .InvokeBlocking(ct => RunPython(BuildScript(count), ct))
-            .Select(markdown => (UiControl?)Controls.Markdown(markdown))
-            .StartWith((UiControl?)Controls.Markdown("*Running Python…*")))
-        .Switch();
+            .InvokeBlocking(ct => RunPython(BuildScript(count), ct)))
+        .Switch()
+        .StartWith("*Running Python…*")
+        .Catch<string, Exception>(ex => /* logged, then shown */
+            Observable.Return($"> **The report could not be computed:** {ex.Message}"));
 }
 
 private static IIoPool ProcessPool(IMessageHub hub) =>
