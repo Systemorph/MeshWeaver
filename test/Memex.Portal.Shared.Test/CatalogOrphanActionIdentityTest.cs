@@ -141,8 +141,9 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
             Submit(stream, AutoArea, RowOf(cards, CatalogLayoutAreas.CardsDataId, id));
             var now = await records.Where(items => items.Any(i => i.Id == id && i.EffectiveUpdatePolicy == PackageUpdatePolicy.Auto))
                 .Should().Within(TestTimeouts.Convergence).Emit();
+            Assert.NotNull(now);
             foreach (var other in Listed.Skip(k + 1))
-                Assert.NotEqual(PackageUpdatePolicy.Auto, now!.Single(i => i.Id == other.Id).EffectiveUpdatePolicy);
+                Assert.NotEqual(PackageUpdatePolicy.Auto, now.Single(i => i.Id == other.Id).EffectiveUpdatePolicy);
         }
     }
 
@@ -170,8 +171,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
             })
             .Select(map => (IReadOnlyList<PackageManifest>)map.Values
                 .Select(n => n.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
-                .Where(m => m is not null)
-                .Select(m => m!)
+                .OfType<PackageManifest>()
                 .ToList())
             .Replay(1);
         records.Connect();

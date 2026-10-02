@@ -73,7 +73,7 @@ public class CatalogActionIdentityTest : HubTestBase
         var root = await stream.GetControlStream("Silent").Should().Within(10.Seconds()).Match(
             c => c is StackControl, "the template is returned at once, before any listing",
             TestContext.Current.CancellationToken);
-        ((StackControl)root!).Areas.Select(a => a.Id?.ToString()).Should().Contain(
+        Assert.IsAssignableFrom<StackControl>(root).Areas.Select(a => a.Id?.ToString()).Should().Contain(
             ["title", "loading", "categories", "cards", "orphans"], "every section is declared up front");
         (await stream.GetControlStream($"Silent/cards").Should().Within(10.Seconds()).Match(
                 c => c is ItemTemplateControl, "the cards are one bound row template",
@@ -187,7 +187,8 @@ public class CatalogActionIdentityTest : HubTestBase
         var id = await next.Should().Within(10.Seconds()).Emit(
             "the Install click asks the source for the package's files", TestContext.Current.CancellationToken);
         Fetches++;
-        return id!;
+        Assert.NotNull(id);
+        return id;
     }
 
     private int Fetches { get; set; }

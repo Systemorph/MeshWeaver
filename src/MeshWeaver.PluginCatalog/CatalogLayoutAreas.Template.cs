@@ -261,7 +261,7 @@ public static partial class CatalogLayoutAreas
     }
 
     // A pointer to a property of the bound record, as the serializer spells it.
-    private static JsonPointerReference Bound(string property) => new(property.ToCamelCase()!);
+    private static JsonPointerReference Bound(string property) => new(property.ToCamelCase() ?? property);
 
     // A bound row list: ONE view, rendered by the client once per element of /data/{id}.
     private static ItemTemplateControl Rows(string id, UiControl view)
@@ -523,9 +523,10 @@ public static partial class CatalogLayoutAreas
     {
         var installedById = installed
             .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
-            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
-            .GroupBy(m => m!.Id, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First()!, StringComparer.Ordinal);
+            .OfType<PackageManifest>()
+            .Where(m => !string.IsNullOrEmpty(m.Id))
+            .GroupBy(m => m.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
         // The whole listing + what is already installed are what a click needs to resolve the
         // package's dependency closure (PackageDependencyGraph.InstallClosure) — the listing is in
@@ -542,8 +543,8 @@ public static partial class CatalogLayoutAreas
             cards.Add(card);
             if (card.InstallStyle != Hidden)
                 installable[pkg.Id] = pkg;
-            if (card.PolicyStyle != Hidden)
-                policies[pkg.Id] = inst!.EffectiveUpdatePolicy;
+            if (card.PolicyStyle != Hidden && inst is not null)
+                policies[pkg.Id] = inst.EffectiveUpdatePolicy;
         }
 
         var orphans = plan.Kind == CatalogPage.All
@@ -566,7 +567,7 @@ public static partial class CatalogLayoutAreas
             BackStyle = "align-self: flex-start; margin: 0 0 8px 0;",
             Heading = plan.Kind == CatalogPage.All
                 ? host.Localize("ui.catalogAllPackages")
-                : CategoryLabel(host, plan.Category!),
+                : CategoryLabel(host, plan.Category ?? Uncategorized),
             HeadingStyle = "margin: 8px 0 4px 0;",
             EmptyStyle = Show(plan.Packages.Count == 0, ""),
             OrphansStyle = Show(orphanRows.Count > 0, ""),
@@ -623,10 +624,10 @@ public static partial class CatalogLayoutAreas
             };
         }
 
-        if (upToDate)
+        if (upToDate && installed is not null)
             card = card with
             {
-                Status = host.Localize("ui.catalogInstalledVersion", installed!.Version),
+                Status = host.Localize("ui.catalogInstalledVersion", installed.Version),
                 StatusStyle = "color: var(--success-foreground, #107c10); font-weight: 600;",
             };
         else if (pkg.IsCommercial() && !viewerIsGlobalAdmin)
