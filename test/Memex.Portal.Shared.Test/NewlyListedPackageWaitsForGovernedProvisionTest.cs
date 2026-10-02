@@ -15,29 +15,29 @@ public class NewlyListedPackageWaitsForGovernedProvisionTest
     [Fact]
     public void ANewPackageCoveredOnlyByAWildcard_IsHeld_OnASeededInstance() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
-            wildcardOnly: true, reconciled: false, seededBefore: false, freshInstance: false).Should().BeTrue();
+            wildcardOnly: true, reconciled: false, recordedInLedger: false, freshInstance: false).Should().BeTrue();
 
     /// <summary>A fresh deployment still seeds everything its patterns cover — that is what the seed is for.</summary>
     [Fact]
     public void AFreshInstance_StillSeedsItsWildcards() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
-            wildcardOnly: true, reconciled: false, seededBefore: false, freshInstance: true).Should().BeFalse();
+            wildcardOnly: true, reconciled: false, recordedInLedger: false, freshInstance: true).Should().BeFalse();
 
     /// <summary>An entry that names the package exactly is a reviewed decision (a deployment PR) — PartnerRe's explicit list.</summary>
     [Fact]
     public void AnExactlyNamedPackage_Installs() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
-            wildcardOnly: false, reconciled: false, seededBefore: false, freshInstance: false).Should().BeFalse();
+            wildcardOnly: false, reconciled: false, recordedInLedger: false, freshInstance: false).Should().BeFalse();
 
     /// <summary>The platform baseline and this environment's flags are reconciled lanes and re-assert as before.</summary>
     [Fact]
     public void AReconciledLane_Installs() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
-            wildcardOnly: true, reconciled: true, seededBefore: false, freshInstance: false).Should().BeFalse();
+            wildcardOnly: true, reconciled: true, recordedInLedger: false, freshInstance: false).Should().BeFalse();
 
     /// <summary>Nothing already seeded changes: the ledger filter owns that case and is untouched.</summary>
     [Fact]
     public void AnAlreadySeededPackage_IsNotTheHoldsBusiness() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
-            wildcardOnly: true, reconciled: false, seededBefore: true, freshInstance: false).Should().BeFalse();
+            wildcardOnly: true, reconciled: false, recordedInLedger: true, freshInstance: false).Should().BeFalse();
 }

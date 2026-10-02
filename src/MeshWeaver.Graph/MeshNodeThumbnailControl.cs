@@ -18,6 +18,25 @@ public record MeshNodeThumbnailControl(
 ) : UiControl<MeshNodeThumbnailControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>
+    /// The TEMPLATE form: a thumbnail declared by PATH alone, for a layout area that must not wait
+    /// on the node (Doc/GUI/DataBinding → "Templates first, data later"). The card's view subscribes
+    /// to the node through <c>IMeshNodeStreamCache</c> and fills in the title and image (and, where
+    /// the view binds it, the description) itself, so the area emits at once and the card follows
+    /// later edits. Until the node answers, the title shows the path's last segment.
+    /// </summary>
+    /// <param name="nodePath">The node the card shows.</param>
+    /// <returns>A card that reads nothing on the hub.</returns>
+    public static MeshNodeThumbnailControl ForPath(string nodePath)
+        => new(nodePath, LastSegment(nodePath));
+
+    private static string LastSegment(string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        var slash = trimmed.LastIndexOf('/');
+        return slash < 0 ? trimmed : trimmed[(slash + 1)..];
+    }
+
+    /// <summary>
     /// Creates a thumbnail control from a MeshNode.
     /// </summary>
     public static MeshNodeThumbnailControl FromNode(MeshNode? node, string fallbackPath)

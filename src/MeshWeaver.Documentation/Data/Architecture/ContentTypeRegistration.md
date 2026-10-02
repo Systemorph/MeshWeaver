@@ -114,7 +114,8 @@ waits on it:
 
 ```csharp
 // MeshNodeStreamHandle.TypedContentObserver — arms only when the conversion DEGRADED
-contentTypeRegistry.Registrations
+contentTypeRegistry
+    .RegistrationsMatching(r => CouldResolve(r, raw, discriminator)) // judged BEFORE the hop
     .StartWith(Unit.Default)          // closes the gap between the conversion and this Subscribe
     .Select(_ => TryRetype(raw))      // re-ask; keep the answer only if it is now typed
     .Where(n => n is not null)
@@ -139,6 +140,39 @@ used:
   `MessageHubConfiguration` build; handing a subscriber's render to that thread would re-enter hub
   construction from inside itself. `Registrations` therefore observes on the task pool, the same way
   a storage change notification arrives.
+
+### 🚨 What one registration COSTS — the waits are many and long-lived ([#5555](https://github.com/Systemorph/MeshWeaver/issues/5555))
+
+Two populations meet here, and both grow with load. **Every per-node hub activation of a
+runtime-compiled NodeType registers** (`MeshDataSource.WithContentType` runs in its configuration),
+and **every node stream whose content arrived untyped holds a wait** for as long as it stays
+degraded. A mass activation — a roll, a bake, a listing that activates hundreds of nodes — is
+exactly when both are large at once.
+
+Two defects multiplied them, and both are now pinned by `ContentTypeRegistrationFanOutTest`:
+
+| Defect | Cost | Cure |
+|---|---|---|
+| The hop was `ObserveOn(TaskPoolScheduler.Default)`. Rx's task pool advertises `ISchedulerLongRunning`, and `ObserveOn` then uses `ObserveOnObserverLongRunning`: **a dedicated OS thread per subscription**, parked in `Monitor.Wait` until the subscription is disposed and woken by every later `Register`. | One parked thread per armed wait. Measured: 500 waits → +501 threads; 2,000 waits → +1,971 threads, and 50 registrations then took **4,420 ms** to announce (each `Register` pulses every parked thread). | The hop is on `PooledContinuationScheduler`, which withholds long-running support — one pool work item per delivered batch. Same counts after the fix: **+1 / +0 threads, 2–3 ms.** |
+| The waiter filtered **after** the hop, so every registration in the mesh was shipped to every waiter just to be discarded there. | waits × activations of off-thread dispatch, nearly all of it irrelevant. | `RegistrationsMatching(predicate)` judges the announcement on the registering thread (a string compare) and hops only what passes. |
+
+The predicate passed to `RegistrationsMatching` runs inside a hub configuration build, so it must be
+a pure, cheap test of the announcement — never a read or a conversion — and it must stay a superset
+of what could resolve: a registration it drops is never re-delivered.
+
+🚨 **The general rule, for any `ObserveOn` in this codebase:** never `ObserveOn(TaskPoolScheduler.Default)`,
+`ObserveOn(Scheduler.Default)` or `ObserveOn(DefaultScheduler.Instance)` on a subscription that is
+created per node, per request or per hub — use `PooledContinuationScheduler` (inside
+`MeshWeaver.Messaging.Hub`) or `TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning))`
+elsewhere, as `ReleaseLane` does. A process-wide singleton subscription costs one thread and is
+tolerable; a per-instance one is a thread per instance.
+
+**What this does NOT establish.** The production readings on #5555 (245,955 pending pool items,
+heap 2 → 10 GiB on one replica during a burst of 124 `Ops/Logs` activations) show a pool and heap
+surge during mass activation; this mechanism is a measured amplifier of mass activation, not a
+measured attribution of those 245,955 items — the heartbeat counts pool threads, not the dedicated
+threads this defect created, so it could not have shown them. How many waits a production replica
+holds was not measured either.
 
 ### Where the wait lives, and why one place is enough
 

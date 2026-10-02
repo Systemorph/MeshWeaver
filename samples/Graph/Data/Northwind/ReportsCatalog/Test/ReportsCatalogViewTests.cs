@@ -47,9 +47,9 @@ public static class ReportsCatalogViewTests
         ExpectTemplate(template, "Overview");
         Expect(Bindings(template).Single() == ("name", LayoutAreaReference.GetMeshNodeDataContext(NodePath, bindContent: false)),
             "the title binds the node's own name");
-        var search = LayoutTemplate.Descendants(template).OfType<MeshSearchControl>().SingleOrDefault();
-        Expect(search is not null, "the reports are a MeshSearch the GUI runs");
-        Expect(Equals(search!.HiddenQuery, $"namespace:{NodePath} sort:order"), $"the reports are the catalog's children, got {search.HiddenQuery}");
+        if (LayoutTemplate.Descendants(template).OfType<MeshSearchControl>().SingleOrDefault() is not { } search)
+            throw new InvalidOperationException("the reports are a MeshSearch the GUI runs");
+        Expect(Equals(search.HiddenQuery, $"namespace:{NodePath} sort:order"), $"the reports are the catalog's children, got {search.HiddenQuery}");
     }
 
     /// <summary>The node-bound pointers of the tree's labels, as <c>(pointer, data context)</c>.</summary>

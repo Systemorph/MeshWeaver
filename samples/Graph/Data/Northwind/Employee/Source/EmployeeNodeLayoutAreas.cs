@@ -67,6 +67,7 @@ public static class EmployeeNodeLayoutAreas
                         ("First Name", nameof(EmployeeContent.FirstName)),
                         ("Last Name", nameof(EmployeeContent.LastName)),
                         ("City", nameof(EmployeeContent.City)),
+                        ("Region", nameof(EmployeeContent.Region)),
                         ("Country", nameof(EmployeeContent.Country))),
                     skin => skin.WithXs(12).WithMd(6))
                 .WithView(Card("Position", content,
