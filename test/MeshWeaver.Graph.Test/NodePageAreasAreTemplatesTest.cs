@@ -260,11 +260,11 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     public async Task SearchOnADefinition_EmitsTheTemplate_WithoutReadingTheNode()
     {
         var (stream, area) = Open(TypePath, MeshNodeLayoutAreas.SearchArea);
-        var slot = await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(
-            c => c is LayoutAreaControl, "a definition's Search page is the frame with the instance slot")
-            as LayoutAreaControl;
+        var slot = Assert.IsType<LayoutAreaControl>(
+            await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(
+                c => c is LayoutAreaControl, "a definition's Search page is the frame with the instance slot"));
 
-        slot!.Reference.Area.Should().Be(MeshNodeLayoutAreas.NodeTypeInstancesArea);
+        slot.Reference.Area.Should().Be(MeshNodeLayoutAreas.NodeTypeInstancesArea);
     }
 
     [Fact]
