@@ -17,7 +17,7 @@ src/MeshWeaver.GitSync/GitHubSyncSettingsTab.cs	1
 src/MeshWeaver.Graph/ExportLayoutArea.cs	1
 src/MeshWeaver.Graph/GlobalSettingsLayoutArea.cs	1
 src/MeshWeaver.Graph/MarkdownNotebookLayoutArea.cs	1
-src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	4
+src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	1
 src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	9
 src/MeshWeaver.Graph/OverviewLayoutArea.cs	1
 src/MeshWeaver.Graph/SettingsLayoutArea.cs	3
