@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Connection.Orleans;
 
@@ -23,7 +24,7 @@ namespace MeshWeaver.Connection.Orleans;
 /// </summary>
 /// <param name="basePath">Fallback directory probed for an assembly DLL when the platform cannot
 /// supply it and it is not in the current working directory.</param>
-public class ModulesAssemblyLoadContext(string basePath) : AssemblyLoadContext(true){
+public class ModulesAssemblyLoadContext(string basePath) : AssemblyLoadContext(true), IPlatformLoadContext {
 
     /// <summary>
     /// Resolves and loads the requested assembly: the platform's copy when the default context

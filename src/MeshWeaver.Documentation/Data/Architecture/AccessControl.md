@@ -270,6 +270,8 @@ A `Denied` assignment only removes access and always passes; a person sharing th
 
 **A newly listed package waits for a governed provision.** The boot default install no longer installs a package just because a whole-source pattern (`Plugins/*`) covers it once the instance has been seeded (`InstanceAutoRegistrationService.HoldsForGovernedProvision`); it lands through a `package.provision` activity or an entry that names it. "Newly listed" means *unknown to the default-install ledger* (`KnownToTheLedger`), not merely "never seeded": a package the ledger recorded as FAILED is re-attempted on the next pass (the retry the ledger exists for), and one it recorded as SKIPPED is re-classified, exactly as before the hold. A fresh instance (empty seeded list) still seeds everything its patterns cover.
 
+**The guard does not stop anyone from becoming System.** User-authored code that the mesh compiles at runtime, and gates on the trusted gRPC port, can still act as System for everything except a broad grant. For the log-only guards that measure this and the options for closing it, see [In-Mesh Impersonation](../InMeshImpersonation).
+
 **Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
 
 ---
