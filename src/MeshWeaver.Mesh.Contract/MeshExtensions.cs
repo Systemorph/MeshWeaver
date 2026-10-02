@@ -5480,6 +5480,19 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs the create-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// create — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="CreateNodeRequest"/> runs it. Emits the first refusal, or <c>null</c> when every
+    /// validator lets the create through.
+    /// <para>For create paths that do not go through <see cref="CreateNodeRequest"/> — a
+    /// <c>MeshNode</c> entering a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunCreationValidatorsObs(hub, node, new CreateNodeRequest(node), accessContext);
+
+    /// <summary>
     /// Runs the delete-validator chain — every <see cref="INodeValidator"/> that takes part in a
     /// delete — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
     /// <see cref="DeleteNodeRequest"/> runs it for a single (non-recursive) delete. Emits the first
@@ -5797,7 +5810,8 @@ public static class MeshExtensions
     private static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
         MeshNode node,
-        CreateNodeRequest request)
+        CreateNodeRequest request,
+        AccessContext? accessContext = null)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -5805,7 +5819,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Create,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessContext ?? accessService?.Context ?? accessService?.CircuitContext
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()

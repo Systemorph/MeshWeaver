@@ -5,4 +5,5 @@
 /// Used to defer messages until initialization is complete.
 /// </summary>
 [SystemMessage]
+[InfrastructureOnly]
 public record InitializeHubRequest();
