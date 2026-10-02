@@ -220,13 +220,68 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact]
-    public async Task SearchOnADefinition_StillCatalogsItsInstances()
+    public void TheNodeTypeCatalogPage_IsATemplate_TheListInASkeletonSlot()
+    {
+        var page = MeshNodeLayoutAreas.NodeTypeCatalogTemplate(new Address(TypePath), TypePath, "?groupBy=flat&q=abc");
+
+        EveryViewIsStatic(page);
+        Descendants(page).OfType<MeshSearchControl>().Should().BeEmpty(
+            "the instance list's query is computed from the definition — it never sits in the frame");
+        var slot = Descendants(page).OfType<LayoutAreaControl>().Should().ContainSingle(
+            "the one computed part renders into its own slot").Subject;
+        slot.Reference.Area.Should().Be(MeshNodeLayoutAreas.NodeTypeInstancesArea);
+        slot.Reference.Id.Should().Be("?groupBy=flat&q=abc", "every catalog knob still reaches the list");
+        slot.SpinnerType.Should().Be(SpinnerType.Skeleton, "the slot shows the loading shape, not a spinner");
+    }
+
+    [Fact]
+    public void TheNodeTypeCatalogQuery_IsDecidedByTheDefinition()
+    {
+        var plain = MeshNodeLayoutAreas.NodeTypeCatalogQuery.From(TypePath, new NodeTypeDefinition());
+        plain.HiddenQuery.Should().Be(
+            $"namespace:{TypePath} scope:subtree is:main -nodeType:Code -nodeType:NodeType -nodeType:Markdown");
+        plain.CreateHref.Should().Be($"/create?type={Uri.EscapeDataString(TypePath)}");
+
+        var grouped = MeshNodeLayoutAreas.NodeTypeCatalogQuery.From(TypePath, new NodeTypeDefinition
+        {
+            DefaultNamespace = "Tpl/Widgets",
+            RestrictedToNamespaces = ["Tpl/A", "Tpl/B"],
+        });
+        grouped.HiddenQuery.Should().Be($"nodeType:{TypePath} namespace:Tpl/Widgets");
+        grouped.CreateHref.Should().Be(
+            $"/create?type={Uri.EscapeDataString(TypePath)}&namespace={Uri.EscapeDataString("Tpl/Widgets")}"
+            + $"&namespaces={Uri.EscapeDataString("Tpl/A")},{Uri.EscapeDataString("Tpl/B")}");
+
+        MeshNodeLayoutAreas.NodeTypeCatalogQuery.From(TypePath, null).Should().Be(plain,
+            "content that is not a definition lists the namespace subtree, as before");
+    }
+
+    [Fact]
+    public async Task SearchOnADefinition_EmitsTheTemplate_WithoutReadingTheNode()
     {
         var (stream, area) = Open(TypePath, MeshNodeLayoutAreas.SearchArea);
-        var search = await CatalogOf(stream, area);
+        var slot = Assert.IsType<LayoutAreaControl>(
+            await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(
+                c => c is LayoutAreaControl, "a definition's Search page is the frame with the instance slot"));
 
-        search!.HiddenQuery!.ToString().Should().Contain($"namespace:{TypePath}",
-            "a definition's hub is recognised from its configuration and still lists its instances");
+        slot.Reference.Area.Should().Be(MeshNodeLayoutAreas.NodeTypeInstancesArea);
+    }
+
+    [Fact]
+    public async Task TheInstanceSlot_CatalogsTheInstances_AndFollowsTheDefinition()
+    {
+        var (stream, area) = Open(TypePath, MeshNodeLayoutAreas.NodeTypeInstancesArea);
+
+        await QueryOf(stream, area).Should().Within(TestTimeouts.Convergence).Match(
+            q => q != null && q.Contains($"namespace:{TypePath}"),
+            "a definition's hub lists its instances by a query the GUI runs");
+
+        await Mesh.GetMeshNodeStream(TypePath)
+            .Update(n => n with { Content = new NodeTypeDefinition { Description = "A widget type", DefaultNamespace = "Tpl/Widgets" } })
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        await QueryOf(stream, area).Should().Within(TestTimeouts.Convergence).Match(
+            q => q == $"nodeType:{TypePath} namespace:Tpl/Widgets",
+            "the slot follows a later edit of the definition — never a snapshot");
     }
 
     [Fact]
@@ -248,6 +303,10 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     private static async Task<MeshSearchControl?> CatalogOf(ISynchronizationStream<JsonElement> stream, string area)
         => await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(c => c is MeshSearchControl,
             "the Search area shows a catalog") as MeshSearchControl;
+
+    /// <summary>The hidden query of every catalog the area renders, as it changes.</summary>
+    private static IObservable<string?> QueryOf(ISynchronizationStream<JsonElement> stream, string area)
+        => Walk(stream, area).OfType<MeshSearchControl>().Select(s => s.HiddenQuery?.ToString());
 
     /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
     private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
