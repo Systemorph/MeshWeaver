@@ -5480,6 +5480,19 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs the delete-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// delete — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="DeleteNodeRequest"/> runs it for a single (non-recursive) delete. Emits the first
+    /// refusal, or <c>null</c> when every validator lets the delete through.
+    /// <para>For delete paths that do not go through <see cref="DeleteNodeRequest"/> — a
+    /// <c>MeshNode</c> leaving a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunDeletionValidatorsObs(DeletionValidators(hub), accessContext, node, new DeleteNodeRequest(node.Path));
+
+    /// <summary>
     /// Every registered <see cref="INodeValidator"/> that takes part in a delete, resolved NOW.
     /// Call it where the hub is known to be alive — at handler entry — never from a continuation.
     /// </summary>

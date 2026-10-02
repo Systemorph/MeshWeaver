@@ -185,12 +185,14 @@ window — and fails without the scope (the late write lands and is removed unva
 **Other lifecycle paths** (swept with this change): a recursive delete pre-validates every
 descendant; GitSync prune, `StaticRepoImporter` orphan removal, installer clean-up and registry
 reconcile all delete through `IMeshService.DeleteNode` and are validated. `PartitionTeardown` drops a
-whole partition store directly — deliberately, system-only, behind a governed `DeleteSpace`. Two
-paths still remove a node without the delete-validator chain and are filed separately: the
-`DeleteMeshNodeRequest` handler on every per-node hub (raw `IStorageAdapter.Delete`, no permission
-attribute, no poster in core), and a `MeshNode` deletion arriving through a workspace data change
-(`MeshNodeTypeSource` → `DeleteAndPublish`, permission-checked by `RlsDataValidator` but not by the
-node validators).
+whole partition store directly — deliberately, system-only, behind a governed `DeleteSpace`. The two
+paths that used to remove a node without the delete-validator chain now run it: the
+`DeleteMeshNodeRequest` handler on every per-node hub (once a raw `IStorageAdapter.Delete` with no
+permission check, reachable from every ingress that forwards deliveries) forwards to the validated
+`DeleteNodeRequest` under the delivery's own identity and refuses a delivery with none; and a
+`MeshNode` leaving a workspace through a `DataChangeRequest` (`MeshNodeTypeSource` →
+`DeleteAndPublish`) is checked by `MeshNodeDeletionDataValidator`, which runs the same chain beside
+`RlsDataValidator`.
 
 ## What this means for callers
 

@@ -1,10 +1,13 @@
+using System.ComponentModel;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
@@ -15,22 +18,34 @@ namespace MeshWeaver.Graph;
 public static class MarkdownNotebookLayoutArea
 {
     /// <summary>
+    /// The notebook's cells, as their own area: the one part of the page that genuinely has to
+    /// COMPUTE — the cells are parsed out of the node's markdown — so it renders into a skeleton
+    /// slot of the page's template rather than holding the whole page back.
+    /// </summary>
+    public const string CellsArea = "NotebookCells";
+
+    /// <summary>
     /// Renders the Notebook layout area — markdown content shown as interactive code/markdown cells.
+    ///
+    /// <para>A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the header — back
+    /// link and the node's name, bound to the node by pointer — and the cells slot are emitted at
+    /// once. The page used to wait for the node before it emitted anything, and its title was a
+    /// snapshot of the name at that moment.</para>
     /// </summary>
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
     /// <returns>An observable stream of the view for the Notebook layout area.</returns>
     public static IObservable<UiControl?> Notebook(LayoutAreaHost host, RenderingContext _)
-    {
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node => BuildNotebookView(host, node));
-    }
+        => Observable.Return<UiControl?>(BuildTemplate(host.Hub.Address.ToString()));
 
-    private static UiControl BuildNotebookView(LayoutAreaHost host, MeshNode? node)
+    /// <summary>
+    /// The Notebook page for <paramref name="nodePath"/> — pure, so its shape is assertable without
+    /// a hub.
+    /// </summary>
+    /// <param name="nodePath">The Markdown node shown as a notebook — the hub's own path.</param>
+    /// <returns>The complete control tree; it never waits on data.</returns>
+    public static UiControl BuildTemplate(string nodePath)
     {
-        var nodePath = node?.Path ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? "Notebook";
-
         var container = Controls.Stack
             .WithWidth("100%")
             .WithStyle("height: 100%; display: flex; flex-direction: column;");
@@ -48,29 +63,38 @@ public static class MarkdownNotebookLayoutArea
                 .WithAppearance(Appearance.Stealth)
                 .WithNavigateToHref(readHref));
 
+        // The title is the node's Name, read by the GUI off the node stream — live, never baked.
         headerStack = headerStack.WithView(
-            Controls.Html($"<h2 style=\"margin: 0; font-size: 1.25rem;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
+            (Controls.H2(new JsonPointerReference(nameof(MeshNode.Name))) with
+            {
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false)
+            }).WithStyle("margin: 0; font-size: 1.25rem;"));
 
         container = container.WithView(headerStack);
-
-        // Parse markdown content into cells
-        var content = MarkdownOverviewLayoutArea.GetMarkdownContent(node);
-        var cells = NotebookParser.ParseMarkdown(content ?? string.Empty);
-
-        var notebook = new NotebookControl()
-            .WithCells(cells)
-            .WithDefaultLanguage("csharp")
-            .WithAvailableLanguages("csharp", "python", "javascript", "typescript", "fsharp", "markdown")
-            .WithShowLineNumbers(true)
-            .WithHeight("100%");
 
         var notebookArea = Controls.Stack
             .WithWidth("100%")
             .WithStyle("flex: 1; padding: 16px; overflow: auto; box-sizing: border-box;")
-            .WithView(notebook);
+            .WithView(Controls.LayoutArea(new Address(nodePath), CellsArea)
+                .WithSpinnerType(SpinnerType.Skeleton));
 
-        container = container.WithView(notebookArea);
-
-        return container;
+        return container.WithView(notebookArea);
     }
+
+    /// <summary>
+    /// The <see cref="CellsArea"/>: the node's markdown parsed into notebook cells. It follows the
+    /// node, so an edit made elsewhere re-parses the cells.
+    /// </summary>
+    /// <param name="host">The layout area host rendering the area.</param>
+    /// <param name="_">The rendering context for the area.</param>
+    /// <returns>The notebook control, once the node has been read.</returns>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Cells(LayoutAreaHost host, RenderingContext _)
+        => host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)new NotebookControl()
+                .WithCells(NotebookParser.ParseMarkdown(MarkdownOverviewLayoutArea.GetMarkdownContent(node) ?? string.Empty))
+                .WithDefaultLanguage("csharp")
+                .WithAvailableLanguages("csharp", "python", "javascript", "typescript", "fsharp", "markdown")
+                .WithShowLineNumbers(true)
+                .WithHeight("100%"));
 }
