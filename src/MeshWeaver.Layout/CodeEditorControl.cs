@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 
 namespace MeshWeaver.Layout;
 
@@ -86,6 +86,13 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// (<see cref="MarkdownEditorControl.AutoSaveAddress"/>), so the write carries the
     /// viewer's own identity and every reader on the path observes the patch in order.
     /// Null = no auto-save (default; the classic bind-and-Save flow).
+    ///
+    /// <para>🚨 An editor has ONE write target. Auto-save and a node-bound <see cref="Value"/>
+    /// (<see cref="BindToNode"/>) are mutually exclusive: the first writes
+    /// <c>CodeConfiguration.Code</c>, the second writes the bound field, and a control carrying
+    /// both would write the same keystroke twice. The builders keep the combination out —
+    /// <see cref="BindToNode"/> clears this address, <see cref="WithAutoSave"/> refuses a
+    /// node-bound editor — so never set both through an initializer or a <c>with</c>.</para>
     /// </summary>
     public string? AutoSaveAddress { get; init; }
 
@@ -146,7 +153,24 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// <paramref name="nodePath"/> — see <see cref="AutoSaveAddress"/>.</summary>
     /// <param name="nodePath">Path of the Code MeshNode this editor edits in place.</param>
     /// <returns>A new instance with the updated AutoSaveAddress.</returns>
-    public CodeEditorControl WithAutoSave(string nodePath) => this with { AutoSaveAddress = nodePath };
+    /// <exception cref="InvalidOperationException">The editor is already bound to a node field
+    /// (<see cref="BindToNode"/>): that binding IS its write path, and an auto-save address would be a
+    /// second, competing one. Dropping the binding instead would leave the editor with no text to
+    /// show, so the combination is refused rather than resolved.</exception>
+    public CodeEditorControl WithAutoSave(string nodePath) =>
+        IsBoundToNodeField
+            ? throw new InvalidOperationException(
+                $"This {nameof(CodeEditorControl)} is bound to a node field ({nameof(BindToNode)}), which already "
+                + $"writes every edit to that field. {nameof(WithAutoSave)} would add a second write target "
+                + $"(CodeConfiguration.Code of '{nodePath}'). Use one or the other.")
+            : this with { AutoSaveAddress = nodePath };
+
+    /// <summary>True when <see cref="Value"/> is a relative pointer under a node-bound DataContext —
+    /// the shape <see cref="BindToNode"/> produces and the renderers write back through.</summary>
+    private bool IsBoundToNodeField =>
+        Value is JsonPointerReference pointer
+        && !pointer.Pointer.StartsWith('/')
+        && LayoutAreaReference.TryParseMeshNodeDataContext(DataContext) is not null;
 
     /// <summary>
     /// Returns a copy whose text is BOUND to one field of the node at <paramref name="nodePath"/> —
@@ -157,20 +181,29 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// off the node stream and writes every edit straight back to that ONE field. The producing area
     /// renders the editor at once and never loads the node — no <c>/data</c> copy, no Save button,
     /// no save subscription.
+    ///
+    /// <para>The binding is the editor's ONE write target: an <see cref="AutoSaveAddress"/> set
+    /// earlier is cleared (it would write <c>CodeConfiguration.Code</c> on top of the bound field).</para>
     /// </summary>
     /// <param name="nodePath">Path of the node whose field the editor edits.</param>
-    /// <param name="field">The field to bind, relative to the node's <c>Content</c> (or to the whole
-    /// node when <paramref name="bindContent"/> is <c>false</c>), e.g. <c>"instructions"</c>.
-    /// Resolved case-insensitively.</param>
+    /// <param name="field">A RELATIVE JSON pointer to the field, resolved against the node's
+    /// <c>Content</c> (or against the whole node when <paramref name="bindContent"/> is <c>false</c>):
+    /// a property name such as <c>"instructions"</c>, or a <c>/</c>-separated path to a nested one
+    /// (<c>"review/notes"</c>). Because it is pointer syntax, a property name that itself contains
+    /// <c>/</c> or <c>~</c> is written escaped (<c>~1</c>, <c>~0</c>, RFC 6901). Each segment is
+    /// resolved case-insensitively. It must not start with <c>/</c> — an absolute pointer reads the
+    /// layout area's data, not the node.</param>
     /// <param name="bindContent"><c>true</c> (default) resolves <paramref name="field"/> against the
     /// node's <c>Content</c>; <c>false</c> against the node's top-level fields
     /// (<c>Description</c>, <c>Name</c>, …).</param>
     /// <returns>A new instance bound to the node field.</returns>
+    /// <exception cref="ArgumentException"><paramref name="field"/> is empty or absolute.</exception>
     public CodeEditorControl BindToNode(string nodePath, string field, bool bindContent = true) =>
         this with
         {
-            Value = new JsonPointerReference(field),
+            Value = NodeFieldPointer.Relative(field, nameof(field)),
             DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent),
+            AutoSaveAddress = null,
         };
 }
 

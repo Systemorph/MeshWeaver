@@ -67,15 +67,17 @@ public record DiffEditorControl() : UiControl<DiffEditorControl>(ModuleSetup.Mod
 
     /// <summary>Returns a copy whose original (left) text is <paramref name="original"/> — a literal
     /// or a <see cref="JsonPointerReference"/> the renderer follows. See <see cref="Original"/>.</summary>
-    /// <param name="original">The text, or a pointer to it.</param>
+    /// <param name="original">The text, or a pointer to it; <c>null</c> clears the slot, so the
+    /// pane falls back to <see cref="OriginalContent"/>.</param>
     /// <returns>A new instance with the updated <see cref="Original"/>.</returns>
-    public DiffEditorControl WithOriginal(object original) => this with { Original = original };
+    public DiffEditorControl WithOriginal(object? original) => this with { Original = original };
 
     /// <summary>Returns a copy whose modified (right) text is <paramref name="modified"/> — a literal
     /// or a <see cref="JsonPointerReference"/> the renderer follows. See <see cref="Modified"/>.</summary>
-    /// <param name="modified">The text, or a pointer to it.</param>
+    /// <param name="modified">The text, or a pointer to it; <c>null</c> clears the slot, so the
+    /// pane falls back to <see cref="ModifiedContent"/>.</param>
     /// <returns>A new instance with the updated <see cref="Modified"/>.</returns>
-    public DiffEditorControl WithModified(object modified) => this with { Modified = modified };
+    public DiffEditorControl WithModified(object? modified) => this with { Modified = modified };
 
     /// <summary>
     /// Returns a copy that compares two fields of ONE node, both read live off its node stream:
@@ -86,16 +88,21 @@ public record DiffEditorControl() : UiControl<DiffEditorControl>(ModuleSetup.Mod
     /// <see cref="Modified"/> to an absolute <c>/data/…</c> pointer instead.
     /// </summary>
     /// <param name="nodePath">Path of the node both fields live on.</param>
-    /// <param name="originalField">The left-hand field, e.g. <c>"baselineText"</c>.</param>
-    /// <param name="modifiedField">The right-hand field, e.g. <c>"text"</c>.</param>
+    /// <param name="originalField">The left-hand field, e.g. <c>"baselineText"</c> — a RELATIVE JSON
+    /// pointer: a property name, or a <c>/</c>-separated path to a nested one; a name containing
+    /// <c>/</c> or <c>~</c> is written escaped (<c>~1</c>, <c>~0</c>). Each segment is resolved
+    /// case-insensitively. It must not start with <c>/</c>.</param>
+    /// <param name="modifiedField">The right-hand field, e.g. <c>"text"</c> — same syntax as
+    /// <paramref name="originalField"/>.</param>
     /// <param name="bindContent"><c>true</c> (default) resolves both fields against the node's
     /// <c>Content</c>; <c>false</c> against its top-level fields.</param>
     /// <returns>A new instance bound to the two node fields.</returns>
+    /// <exception cref="ArgumentException">A field is empty or absolute.</exception>
     public DiffEditorControl BindToNode(string nodePath, string originalField, string modifiedField, bool bindContent = true) =>
         this with
         {
-            Original = new JsonPointerReference(originalField),
-            Modified = new JsonPointerReference(modifiedField),
+            Original = NodeFieldPointer.Relative(originalField, nameof(originalField)),
+            Modified = NodeFieldPointer.Relative(modifiedField, nameof(modifiedField)),
             DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent),
         };
 }

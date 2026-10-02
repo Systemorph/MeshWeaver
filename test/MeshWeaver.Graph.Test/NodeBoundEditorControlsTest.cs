@@ -56,9 +56,10 @@ public class NodeBoundEditorControlsTest(ITestOutputHelper output) : MonolithMes
             "a bound control carries a POINTER, never the text itself").Subject;
         var ctx = LayoutAreaReference.TryParseMeshNodeDataContext(dataContext);
         ctx.Should().NotBeNull("the control's DataContext is the node-bound context the renderer branches on");
+        var (nodePath, bindContent, subPath) = ctx.GetValueOrDefault();
         MeshNodeBindingExtensions.IsNodeBound(dataContext, pointer).Should().BeTrue();
         return MeshNodeBindingExtensions
-            .Bind(Mesh, ctx!.Value.NodePath, ctx.Value.BindContent, ctx.Value.SubPath, pointer)
+            .Bind(Mesh, nodePath, bindContent, subPath, pointer)
             .Select(Text);
     }
 
@@ -108,11 +109,14 @@ public class NodeBoundEditorControlsTest(ITestOutputHelper output) : MonolithMes
     {
         var path = await SeedNode("""{"instructions":"before","other":"untouched"}""");
         var editor = new CodeEditorControl().BindToNode(path, "instructions");
-        var ctx = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext)!.Value;
+        var parsed = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext);
+        parsed.Should().NotBeNull("BindToNode sets the node-bound context the write seam branches on");
+        var ctx = parsed.GetValueOrDefault();
+        var pointer = editor.Value.Should().BeOfType<JsonPointerReference>().Subject;
 
         // The renderer's write seam (BlazorView.UpdatePointer → MeshNodeBindingExtensions.Write).
         MeshNodeBindingExtensions.Write(Mesh, NullLogger.Instance, ctx.NodePath, ctx.BindContent, ctx.SubPath,
-            (JsonPointerReference)editor.Value!, "typed by the user");
+            pointer, "typed by the user");
 
         var node = await Mesh.GetMeshNodeStream(path)
             .Should().Within(TestTimeouts.Convergence).Match(
@@ -182,16 +186,117 @@ public class NodeBoundEditorControlsTest(ITestOutputHelper output) : MonolithMes
     {
         var options = Mesh.JsonSerializerOptions;
         var editor = new CodeEditorControl().BindToNode("p/agent", "instructions");
-        var editorBack = (CodeEditorControl)JsonSerializer.Deserialize<UiControl>(
-            JsonSerializer.Serialize<UiControl>(editor, options), options)!;
+        var editorBack = JsonSerializer.Deserialize<UiControl>(
+                JsonSerializer.Serialize<UiControl>(editor, options), options)
+            .Should().BeOfType<CodeEditorControl>().Subject;
         editorBack.Value.Should().Be(new JsonPointerReference("instructions"));
         editorBack.DataContext.Should().Be(editor.DataContext);
 
         var diff = new DiffEditorControl().BindToNode("p/post", "baselineText", "text");
-        var diffBack = (DiffEditorControl)JsonSerializer.Deserialize<UiControl>(
-            JsonSerializer.Serialize<UiControl>(diff, options), options)!;
+        var diffBack = JsonSerializer.Deserialize<UiControl>(
+                JsonSerializer.Serialize<UiControl>(diff, options), options)
+            .Should().BeOfType<DiffEditorControl>().Subject;
         diffBack.Original.Should().Be(new JsonPointerReference("baselineText"));
         diffBack.Modified.Should().Be(new JsonPointerReference("text"));
         diffBack.DataContext.Should().Be(diff.DataContext);
+    }
+
+    /// <summary>
+    /// The documented escape hatch for a pane whose text is NOT on the node: an ABSOLUTE pointer
+    /// (<c>/data/…</c>) is never node-bound, even under the node-bound DataContext
+    /// <c>BindToNode</c> set, so the renderer resolves it against the layout area's data. The
+    /// relative sibling on the same control stays node-bound — the control arm, so the
+    /// <c>false</c> is the pointer's shape and not a context that failed to parse.
+    /// </summary>
+    [Fact]
+    public void AnAbsolutePointerUnderANodeBoundContext_ReadsTheLayoutAreasData_NotTheNode()
+    {
+        var diff = new DiffEditorControl()
+            .BindToNode("p/post", "baselineText", "text")
+            .WithOriginal(new JsonPointerReference("/data/previousVersion"));
+
+        var original = diff.Original.Should().BeOfType<JsonPointerReference>().Subject;
+        var modified = diff.Modified.Should().BeOfType<JsonPointerReference>().Subject;
+        MeshNodeBindingExtensions.IsNodeBound(diff.DataContext, original).Should().BeFalse(
+            "an absolute pointer is a layout-area path — the pane is fed from /data");
+        MeshNodeBindingExtensions.IsNodeBound(diff.DataContext, modified).Should().BeTrue(
+            "the relative pane on the same control still reads the node");
+    }
+
+    /// <summary>
+    /// <c>field</c> is a RELATIVE JSON POINTER, not a bare property name: a <c>/</c> descends, and a
+    /// property whose NAME contains <c>/</c> is written escaped (<c>~1</c>). The unescaped spelling of
+    /// that same name is the control arm — it descends instead and finds nothing.
+    /// </summary>
+    [Fact]
+    public void TheField_IsARelativeJsonPointer_NestedAndEscaped()
+    {
+        var node = new MeshNode("n", "p")
+        {
+            Content = JsonSerializer.Deserialize<JsonElement>(
+                """{"review":{"notes":"nested"},"a/b":"slash in the name"}"""),
+        };
+        string? Read(string field)
+        {
+            var editor = new CodeEditorControl().BindToNode("p/n", field);
+            var pointer = editor.Value.Should().BeOfType<JsonPointerReference>().Subject;
+            return Text(MeshNodeBindingExtensions.ResolveField(
+                node, bindContent: true, subPath: null, pointer, Mesh.JsonSerializerOptions));
+        }
+
+        Read("review/notes").Should().Be("nested", "a / in the pointer descends into the nested object");
+        Read("a~1b").Should().Be("slash in the name", "~1 is the escaped / of a property NAME");
+        Read("a/b").Should().BeNull("unescaped, the same text is a path a → b, which does not exist");
+    }
+
+    /// <summary>A leading <c>/</c> would make the pointer absolute — bound to the layout area's data
+    /// instead of the node, silently. The builders refuse it, and an empty field with it.</summary>
+    [Theory]
+    [InlineData("/instructions")]
+    [InlineData("")]
+    public void BindToNode_RefusesAnAbsoluteOrEmptyField(string field)
+    {
+        Action codeEditor = () => new CodeEditorControl().BindToNode("p/n", field);
+        Action diffOriginal = () => new DiffEditorControl().BindToNode("p/n", field, "text");
+        Action diffModified = () => new DiffEditorControl().BindToNode("p/n", "text", field);
+        codeEditor.Should().Throw<ArgumentException>();
+        diffOriginal.Should().Throw<ArgumentException>();
+        diffModified.Should().Throw<ArgumentException>();
+    }
+
+    /// <summary>
+    /// An editor has ONE write target. <c>WithAutoSave</c> writes <c>CodeConfiguration.Code</c>,
+    /// <c>BindToNode</c> writes the bound field; a control carrying both would write each keystroke
+    /// twice. <c>BindToNode</c> replaces an earlier auto-save address, and <c>WithAutoSave</c> refuses
+    /// a node-bound editor. Control arm: on an editor that is NOT node-bound, <c>WithAutoSave</c>
+    /// still works.
+    /// </summary>
+    [Fact]
+    public void AutoSaveAndANodeBinding_AreMutuallyExclusive()
+    {
+        var bound = new CodeEditorControl().WithAutoSave("p/code").BindToNode("p/agent", "instructions");
+        bound.AutoSaveAddress.Should().BeNull("the binding is the write path; the auto-save address is cleared");
+        bound.Value.Should().Be(new JsonPointerReference("instructions"));
+
+        Action secondWriteTarget = () => new CodeEditorControl().BindToNode("p/agent", "instructions").WithAutoSave("p/code");
+        secondWriteTarget.Should().Throw<InvalidOperationException>("a second write target is refused, not silently added");
+
+        new CodeEditorControl().WithValue("var x = 1;").WithAutoSave("p/code")
+            .AutoSaveAddress.Should().Be("p/code", "the Code-node shape is unchanged");
+    }
+
+    /// <summary><c>WithOriginal(null)</c> / <c>WithModified(null)</c> clear the bindable slot, so the
+    /// pane falls back to its literal.</summary>
+    [Fact]
+    public void ClearingABindablePane_FallsBackToTheLiteral()
+    {
+        var diff = new DiffEditorControl { OriginalContent = "a", ModifiedContent = "b" }
+            .BindToNode("p/post", "baselineText", "text")
+            .WithOriginal(null)
+            .WithModified(null);
+        diff.Original.Should().BeNull();
+        diff.Modified.Should().BeNull();
+        diff.OriginalContent.Should().Be("a");
+        diff.ModifiedContent.Should().Be("b");
     }
 }
