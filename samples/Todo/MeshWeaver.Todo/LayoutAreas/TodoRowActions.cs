@@ -15,8 +15,9 @@ namespace MeshWeaver.Todo.LayoutAreas;
 /// <c>ctx.RowAs&lt;TodoEntry&gt;()</c> — the row as the person saw it, never one re-read by
 /// position. A click with no row acts on nothing.
 ///
-/// <para>Writes go to the hub that owns the todo data source (the area's own hub) as a
-/// <see cref="DataChangeRequest"/> — todos are data-source entities, not mesh nodes.</para>
+/// <para>Writes go to the hub that owns the todo data source (the area's own hub) through the two
+/// write helpers on <see cref="TodoLayoutAreas"/> (<see cref="TodoLayoutAreas.Update"/>,
+/// <see cref="TodoLayoutAreas.Delete"/>) — todos are data-source entities, not mesh nodes.</para>
 /// </summary>
 public static class TodoRowActions
 {
@@ -49,7 +50,7 @@ public static class TodoRowActions
     public static Task OnDelete(UiActionContext ctx, LayoutAreaHost host)
     {
         if (ctx.RowAs<TodoEntry>() is { Item: { } todo })
-            Post(host, new DataChangeRequest().WithDeletions(todo));
+            TodoLayoutAreas.Delete(host, [todo]);
         return Task.CompletedTask;
     }
 
@@ -57,7 +58,7 @@ public static class TodoRowActions
     public static Task OnAssign(UiActionContext ctx, LayoutAreaHost host, string person)
     {
         if (ctx.RowAs<TodoEntry>() is { Item: { } todo })
-            Post(host, new DataChangeRequest().WithUpdates(todo with { ResponsiblePerson = person, UpdatedAt = DateTime.UtcNow }));
+            TodoLayoutAreas.Update(host, [todo with { ResponsiblePerson = person, UpdatedAt = DateTime.UtcNow }]);
         return Task.CompletedTask;
     }
 
@@ -95,16 +96,16 @@ public static class TodoRowActions
                 SetStatus(host, row.Group, TodoStatus.Completed);
                 break;
             case TodoGroupActions.Delete:
-                Post(host, new DataChangeRequest().WithDeletions(row.Group.ToArray()));
+                TodoLayoutAreas.Delete(host, row.Group);
                 break;
             case TodoGroupActions.AutoAssign:
                 var team = ResponsiblePersons.AvailablePersons;
-                Post(host, new DataChangeRequest().WithUpdates(row.Group.Select((todo, i) =>
-                    todo with { ResponsiblePerson = team[i % team.Length], UpdatedAt = DateTime.UtcNow })));
+                TodoLayoutAreas.Update(host, row.Group.Select((todo, i) =>
+                    todo with { ResponsiblePerson = team[i % team.Length], UpdatedAt = DateTime.UtcNow }));
                 break;
             case TodoGroupActions.AssignFirst when row.Person is { Length: > 0 } person:
-                Post(host, new DataChangeRequest().WithUpdates(
-                    row.Group[0] with { ResponsiblePerson = person, UpdatedAt = DateTime.UtcNow }));
+                TodoLayoutAreas.Update(host,
+                    [row.Group[0] with { ResponsiblePerson = person, UpdatedAt = DateTime.UtcNow }]);
                 break;
             default:
                 host.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(TodoRowActions))
@@ -116,14 +117,11 @@ public static class TodoRowActions
     }
 
     private static void SetStatus(LayoutAreaHost host, TodoItem todo, TodoStatus status)
-        => Post(host, new DataChangeRequest().WithUpdates(todo with { Status = status, UpdatedAt = DateTime.UtcNow }));
+        => SetStatus(host, [todo], status);
 
     private static void SetStatus(LayoutAreaHost host, IEnumerable<TodoItem> todos, TodoStatus status)
-        => Post(host, new DataChangeRequest().WithUpdates(
-            todos.Select(todo => todo with { Status = status, UpdatedAt = DateTime.UtcNow })));
-
-    private static void Post(LayoutAreaHost host, DataChangeRequest request)
-        => host.Hub.Post(request, o => o.WithTarget(host.Hub.Address));
+        => TodoLayoutAreas.Update(host,
+            todos.Select(todo => todo with { Status = status, UpdatedAt = DateTime.UtcNow }));
 
     // ── Dialogs ────────────────────────────────────────────────────────────────────────────────
 
@@ -160,7 +158,7 @@ public static class TodoRowActions
                 .WithView(Controls.Button(host.Localize("todo.dialog.cancel"))
                     .WithClickAction(_ =>
                     {
-                        Post(host, new DataChangeRequest { Deletions = [todo] });
+                        TodoLayoutAreas.Delete(host, [todo]);
                         host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
                     }))

@@ -1,5 +1,7 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace MeshWeaver.Messaging;
 
@@ -81,10 +83,17 @@ public static class ImpersonationScopeExtensions
     /// <typeparam name="T">What the scoped operation emits.</typeparam>
     /// <param name="access">The access service, or null on a host without one.</param>
     /// <param name="work">The cold operation to run as System.</param>
-    public static IObservable<T> RunAsSystem<T>(this AccessService? access, Func<IObservable<T>> work) =>
-        access is null
-            ? Observable.Defer(work)
-            : new SubscribeScopedObservable<T>(access, access.ImpersonateAsSystem, work);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static IObservable<T> RunAsSystem<T>(this AccessService? access, Func<IObservable<T>> work)
+    {
+        if (access is null)
+            return Observable.Defer(work);
+        // Checked at COMPOSITION, against the code that asked: the subscriber may be platform code
+        // the caller handed the observable to, with no frame of the caller left on the stack.
+        access.ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(RunAsSystem),
+            new AccessContext { ObjectId = AccessService.SystemObjectId, Name = AccessService.SystemObjectId });
+        return new SubscribeScopedObservable<T>(access, access.ImpersonateAsSystem, work);
+    }
 
     /// <summary>
     /// Runs <paramref name="work"/> as <paramref name="hub"/>'s own identity, sealed exactly as
@@ -94,11 +103,16 @@ public static class ImpersonationScopeExtensions
     /// <param name="access">The access service, or null on a host without one.</param>
     /// <param name="hub">The hub whose address is stamped as the principal.</param>
     /// <param name="work">The cold operation to run as the hub.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IObservable<T> RunAsHub<T>(
-        this AccessService? access, IMessageHub hub, Func<IObservable<T>> work) =>
-        access is null
-            ? Observable.Defer(work)
-            : new SubscribeScopedObservable<T>(access, () => access.ImpersonateAsHub(hub), work);
+        this AccessService? access, IMessageHub hub, Func<IObservable<T>> work)
+    {
+        if (access is null)
+            return Observable.Defer(work);
+        access.ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(RunAsHub),
+            new AccessContext { ObjectId = hub.Address.ToFullString(), Name = hub.Address.ToString(), IsHub = true });
+        return new SubscribeScopedObservable<T>(access, () => access.ImpersonateAsHub(hub), work);
+    }
 
     /// <summary>
     /// Runs <paramref name="work"/> as an EXPLICIT identity the caller has already resolved — the
@@ -115,11 +129,15 @@ public static class ImpersonationScopeExtensions
     /// <param name="access">The access service, or null on a host without one.</param>
     /// <param name="identity">The identity to run under; null runs the work unswitched.</param>
     /// <param name="work">The cold operation to run under <paramref name="identity"/>.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IObservable<T> RunAs<T>(
-        this AccessService? access, AccessContext? identity, Func<IObservable<T>> work) =>
-        access is null || identity is null
-            ? Observable.Defer(work)
-            : new SubscribeScopedObservable<T>(access, () => access.SwitchAccessContext(identity), work);
+        this AccessService? access, AccessContext? identity, Func<IObservable<T>> work)
+    {
+        if (access is null || identity is null)
+            return Observable.Defer(work);
+        access.ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(RunAs), identity);
+        return new SubscribeScopedObservable<T>(access, () => access.SwitchAccessContext(identity), work);
+    }
 
     /// <summary>
     /// The overload that resolves the identity AT SUBSCRIBE rather than at composition — for a
@@ -132,14 +150,26 @@ public static class ImpersonationScopeExtensions
     /// <param name="access">The access service, or null on a host without one.</param>
     /// <param name="resolveIdentity">Resolves the identity on the subscribing thread; may return null.</param>
     /// <param name="work">The cold operation to run under the resolved identity.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IObservable<T> RunAs<T>(
-        this AccessService? access, Func<AccessContext?> resolveIdentity, Func<IObservable<T>> work) =>
-        access is null
-            ? Observable.Defer(work)
-            : new SubscribeScopedObservable<T>(
-                access,
-                () => resolveIdentity() is { } identity ? access.SwitchAccessContext(identity) : null,
-                work);
+        this AccessService? access, Func<AccessContext?> resolveIdentity, Func<IObservable<T>> work)
+    {
+        if (access is null)
+            return Observable.Defer(work);
+        // The identity is only known at Subscribe; the caller is only known now. Capture the caller
+        // and check the pair when the scope opens.
+        var caller = Assembly.GetCallingAssembly();
+        return new SubscribeScopedObservable<T>(
+            access,
+            () =>
+            {
+                if (resolveIdentity() is not { } identity)
+                    return null;
+                access.ImpersonationGuard.Check(caller, nameof(RunAs), identity);
+                return access.SwitchAccessContext(identity);
+            },
+            work);
+    }
 
     /// <summary>
     /// Seals an ALREADY-COMPOSED <paramref name="source"/>: every notification is delivered to the

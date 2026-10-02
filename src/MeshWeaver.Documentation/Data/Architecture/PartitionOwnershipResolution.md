@@ -177,7 +177,7 @@ the store, not the process.
 |---|---|---|
 | owns | the static or the stored definition declares `ownsPartition: true` | **refused** — `InvalidPath`, `access.partitionCreate.nestedOwningType` |
 | does not own | the declaration says `false`; the row is not a NodeType definition; the row is ABSENT (the store's verdict, not a missing answer); the host has no storage adapter | **proceeds** |
-| could not be established | the store faulted, or did not answer within `ProbeTimeout` | **refused** — `Unavailable`, `access.partitionCreate.undetermined`: retryable, not a verdict |
+| could not be established | the store's read FAULTED (a slow read is waited for — see below) | **refused** — `Unavailable`, `access.partitionCreate.undeterminedFault`, naming the fault: retryable, not a verdict |
 
 🚨 **An absent row answers "does not own", not "unknown", on purpose.** Absent is a verdict the store
 gave, and the create does not land on it: the existence check that follows refuses the type as
@@ -213,13 +213,27 @@ store told it. The lesson is about the sentence above, which is an assumption to
 stack rather than an invariant this seam enforces (fixed in the stand-in as
 Systemorph/MeshWeaver.Plugins#2047).
 
-**What the refusal SAYS, and why it names both arms.** `.Timeout(ProbeTimeout, null)` and
-`.Catch(_ => null)` fold into the same `null`, so by the time a validator sees the answer the code
-genuinely cannot tell a fault from a timeout. `access.partitionCreate.undetermined` therefore names
-both — *"the read of its NodeType definition failed, or did not answer within {1} s"* — and
-deliberately does not claim a bound it cannot know. Until 2026-09-18 it named only the timeout, and
-the fault case above surfaced it in 148 ms wearing a sentence about 10 s; the next reader's first
-move on such a message is to reach for the bound, which is never the fix here.
+**The nested read has NO budget of its own, and the refusal names the fault** (Systemorph/MeshWeaver#5734).
+This read used to carry `.Timeout(ProbeTimeout, null)` and `.Catch(_ => null)`, so a fault and a
+timeout folded into one `null` and the refusal could only say *"failed, or did not answer within 10 s"*.
+The timeout was also what broke the parity claim above: `NodeTypeResolution.Resolve` reads the SAME
+row through the SAME `ReadMany` seam and carries no budget, while the store admits both through its
+shared read pool (`pg-read`, cap 16 — measured on memex.systemorph.com at a mean of 342 ms with tens of
+thousands of admissions over a second, `IoPoolOptions`). A 10 s clock started at subscribe counts that
+queue wait, so under read-pool contention the ownership probe alone gave up and refused a create the
+existence check would have let through. In production that was 1–5 of every ~100 `Hosting/LogEntry`
+rows a `Logs` InstanceAction landed (`'memex-cloud' FAILED in phase 4/4 'Record entries' … 99 of them
+landed`), each recorded as a permanently failed row.
+
+Now the read is bounded where every other store read is bounded — by the pool and the store's own
+command budget — and `PartitionOwningTypes.ProbeWithoutActivating` returns a
+`PartitionOwnershipAnswer` whose `Fault` is the exception when `Owns` is `null`. The validator logs it
+at Warning with the exception and refuses with `access.partitionCreate.undeterminedFault`, which quotes
+the fault's type and message. The top-level resolver (`OwnsPartition`) keeps its budget, because its
+second half is an ACTIVATION, and its refusal keeps the two-armed `access.partitionCreate.undetermined`
+sentence. Pinned by `InMeshPartitionOwnerNestedCreateTest.ASlowDefinitionRead_IsWaitedFor_NotRefusedAsUndetermined`
+(a definition read answering 12 s late still lets a non-owning nested create land and still refuses an
+owning one on placement) and by the fault case, which now asserts the fault's own text in the refusal.
 
 **Why reading the row is not a CQRS violation.** The [CQRS](/Doc/Architecture/CqrsAndContentAccess)
 rule forbids reading `Content` off a QUERY row, whose index trails the store; the durable row is what

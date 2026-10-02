@@ -20,6 +20,15 @@
 #                          the pull request number comes from the queue ref
 #                          gh-readonly-queue/main/pr-<N>-<sha>
 #
+# and ONE re-evaluation that is deliberately NOT a trigger of this file: the internal reviewer's
+# "Reviewer unavailable" check run (MeshWeaver.Feedback#86 — the degradation that releases the
+# review condition). `check_run` is not listed above ON PURPOSE: a check_run-triggered run executes
+# on the DEFAULT branch with GITHUB_SHA = main's head, so its `Automatic review answered` check-run
+# would land on main's commit, where the pull request's branch protection never reads it — and a
+# red one would sit on main for every unrelated check run. review-answered-on-degradation.yml
+# listens for it instead and RE-RUNS this file's newest `pull_request` run for that head, whose
+# check-run IS read (the remedy recorded for #4649).
+#
 # 🛡️ NO SKIP-TRAPDOOR (AGENTS.md — a gate never tests its own inputs):
 #   * no job-level `if:` at all — a skipped required context counts as SATISFIED, so every event
 #     that reaches this file evaluates the predicate in full, forks included (every read here is
@@ -56,11 +65,15 @@ on:
 # Reads only, and only what the predicate needs: the pull request, its reviews and review comments
 # (pull-requests), the label events that attribute a waiver (issues), and the checkout (contents).
 # The collaborator-permission read that verifies a waiver needs `metadata: read`, which every
-# GITHUB_TOKEN carries.
+# GITHUB_TOKEN carries. `checks: read` is for the reviewer-unavailable degradation (the head's
+# `internal-review` check runs, MeshWeaver.Feedback#86): measured on #5920 the listing also answers
+# without it, because this repository is PUBLIC — it is granted explicitly so the read does not rest
+# on that, and so the lane below carries the same grant into a private caller.
 permissions:
   contents: read
   pull-requests: read
   issues: read
+  checks: read
 
 # 🚨 The group is per PULL REQUEST for pull-request events and per QUEUE ENTRY for `merge_group`
 # (the queue head ref carries the entry's sha), because that is the granularity that matters: two
@@ -162,6 +175,15 @@ jobs:
       # the wait a pull request whose review raises NO findings would keep the red from its `opened`
       # evaluation until somebody pushed again. The reviewer took 4m38s on #4575; 3–12 minutes is
       # the range on the thread of #4299. Nothing else is ever waited for.
+      #
+      # 🚨 Why it stays 15 and is NOT raised to the internal reviewer's 23–30 minutes
+      # (MeshWeaver.Feedback#86): the wait exists because COPILOT's review event cannot start a run
+      # here. The internal reviewer's CAN — measured over the last 100 runs of this workflow,
+      # `systemorph-com[bot]` started 11 `pull_request_review` runs and 30 `pull_request_review_comment`
+      # runs, none of them `action_required` — so its review re-evaluates the gate by itself, and its
+      # "Reviewer unavailable" check run re-evaluates it through review-answered-on-degradation.yml.
+      # A 30-minute wait would buy nothing those two events do not already deliver, and would hold
+      # TWO runners (this job and `lane`) for half an hour on every pull request opened.
       - name: Judge the pull request's automatic review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,5 +219,6 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      checks: read
     with:
       scripts-ref: ${{ github.sha }}

@@ -145,6 +145,48 @@ Upstream, the commonest source of the response timeout — a grain whose acknowl
 hub's whole activation — was removed by #5458; the view-side classification is still needed for the
 timeouts that remain (a silo under load, a placement that outlives its window).
 
+#### A deadline miss re-opens the view — paced, once per 30 s (#5599, #5714)
+
+The bounded retry above did not, in fact, recover a view. An area stream is a
+`SynchronizationStream` whose store is a `ReplaySubject`: when the owner's `SubscribeRequest` comes
+back with the deadline miss, the stream latches the fault and replays it to every later subscriber
+(`SynchronizationStream.cs`: *"A FAULT IS FOREVER on this type"*). `NamedAreaView` retried by
+re-subscribing that SAME stream, so all five attempts got the stored error back instantly, the budget
+was spent in ~8 s without a single new request, and the view showed "Area unavailable" until a
+reload — although the owner was only slow and would have served the next frame.
+
+The rule now (policy `area-view-reopens-on-deadline-miss`): **on a deadline miss the view opens a
+FRESH area stream, at most once per 30 s per open view.** `AreaStreamReopen.ReopenOnDeadlineMiss`
+takes a factory that opens a new stream on every call; on an error that
+`AreaErrorClassifier.IsDeadlineMiss` accepts — a `TimeoutException`, or the routed text
+`Response did not arrive on time` / `Grain placement operation timed out` / `No response received in
+hub` — it calls the factory again, no sooner than 30 s after the previous open, measured on the
+injected scheduler. Every other error, including every terminal verdict above and every transient
+that is not a deadline miss, propagates on the first occurrence.
+
+Why this cannot storm, although it reverses "timeouts are terminal" for this one path:
+
+- **Only a deadline miss re-opens.** `IsDeadlineMiss` refuses a routing NotFound, `Unavailable`, an
+  initialisation failure, a CompilationInProgress NACK and a teardown `ObjectDisposedException` before
+  it looks at any text.
+- **One open per 30 s, from the previous OPEN.** A stream that replays its fault instantly waits out
+  the rest of the interval; it never re-opens in a loop.
+- **Against a hung owner each open itself waits the deadline**, so the realised rate is one
+  `SubscribeRequest` per 30 s per open view.
+- **The router's verdict is unchanged.** `RoutingGrain.ClassifyDeliveryException` still reports a
+  bare timeout as `Failed`, so every consumer with unbounded recovery (`SynchronizationStream`'s
+  resubscribe latch, `MeshNodeStreamCache`) still tears down; see
+  [A Departed Silo Is Not a Delivery Defect](../ADepartedSiloIsNotADeliveryDefect).
+
+No deadline was raised: the transport's 30 s still decides when an open has failed. Evidence that
+misses remain after #5458 (which made the grain answer on acceptance): a `Logs` read of memex-cloud
+for `Response did not arrive on time` over 2026-09-26 → 2026-10-01 returned 200 lines, cut at the
+limit, the newest 200 all from one burst on pod `54bd7f5466-9rwtg` at 2026-09-29 23:52:31Z — every
+pending call from one silo to another timed out at once (Orleans' *"About to break its promise"*).
+The same read on memex returned 0. `AreaStreamReopenTest` pins the slow-owner recovery, the
+once-per-30 s bound against a hung owner on virtual time, and two negative controls: retrying the
+failed stream never recovers, and a non-deadline error never re-opens.
+
 #### Who refused? The BANNER, not the classification (#3017)
 
 A caller that gets `ErrorType.ShuttingDown` still has a second question to answer: **did the OWNER

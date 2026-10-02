@@ -319,6 +319,7 @@ Manufacturing — ratchets `tests=skipped`, which the gate prints *inside* a lin
 | `plugin-gate.allow` | **repo root** | not a script — passed to `mw-plugin-test` as `--allow`, and it is `node-repo-gate.yml`'s `allow-file` **default** |
 | `plugin-tests.allow` | repo root | `scripts/check-test-suites.py` (growth blocked separately via `--base-ref origin/main`) |
 | `cover-prose.allow` | repo root | `scripts/check-covers.py` |
+| `layout-area-data-bake.allow` | repo root | core's `.github/scripts/check-layout-area-data-bake.py`, fetched by `node-repo-validate.yml`. It is **REQUIRED**: a missing file is red. An empty file is correct for a repository where nothing bakes. On a PR, the tree is compared with the base (`--base`): the number of baking units may not grow, and a PR that converts an area must lower or delete its line. Doc/GUI/DataBinding has the details. |
 
 🚨 **Seed every one of them EMPTY.** They exist to grandfather debt you inherited; a new repo has
 none, and an entry added in the same diff as the hole it excuses is a trapdoor exactly one commit

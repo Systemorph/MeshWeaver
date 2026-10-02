@@ -114,8 +114,17 @@ public class OneReadOneAnswerTest : MonolithMeshTestBase
         await reader.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(NodePath)))
             .Take(1).Timeout(TimeSpan.FromSeconds(20)).Await(ct);
 
-        (_capture.Dropped - before).Should().Be(1,
-            "the un-observed read's single answer must be counted as a drop");
+        // 🚨 Wait for the drop, do not assume the barrier delivered it. The owner answers a
+        // MeshNodeReference read from the read-validator pipeline's own Subscribe, off its turn, so
+        // the two answers are not ordered: CI (run 36926964455, shard 3) saw the observed read
+        // answered while the raw read's answer had not reached the reader yet — Dropped was 0.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => _capture.Dropped - before)
+            .Where(dropped => dropped >= 1)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the un-observed read's single answer must be counted as a drop", cancellationToken: ct);
+        (_capture.Dropped - before).Should().Be(1, "one read, one answer — counted once");
     }
 
     /// <summary>Counts the requester-side "no subject" drops of <see cref="GetDataResponse"/>, mesh-wide.</summary>

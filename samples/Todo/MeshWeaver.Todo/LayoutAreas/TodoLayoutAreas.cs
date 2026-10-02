@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Todo.Domain;
@@ -214,6 +215,24 @@ public static class TodoLayoutAreas
             ?? throw new InvalidOperationException($"No data source for {nameof(TodoItem)} on {host.Hub.Address}.");
         return todos.Select(items => project((IReadOnlyCollection<TodoItem>?)items ?? [], text));
     }
+
+    // ── Writes ─────────────────────────────────────────────────────────────────────────────────
+    // The ONLY two places the sample names the data-plane change message. Todos are data-source
+    // entities of this hub, not mesh nodes, so there is no node stream to Update; the change is
+    // POSTED to the owning hub rather than applied on its workspace directly, so it passes the
+    // hub's delivery gate and change validators as the clicking user.
+
+    /// <summary>Writes <paramref name="todos"/> to the hub that owns the todo data source.</summary>
+    /// <param name="host">The area host; its hub owns the data source.</param>
+    /// <param name="todos">The todos as they should be stored.</param>
+    internal static void Update(LayoutAreaHost host, IEnumerable<TodoItem> todos)
+        => host.Hub.Post(new DataChangeRequest().WithUpdates(todos), o => o.WithTarget(host.Hub.Address));
+
+    /// <summary>Deletes <paramref name="todos"/> on the hub that owns the todo data source.</summary>
+    /// <param name="host">The area host; its hub owns the data source.</param>
+    /// <param name="todos">The todos to delete.</param>
+    internal static void Delete(LayoutAreaHost host, IEnumerable<TodoItem> todos)
+        => host.Hub.Post(new DataChangeRequest().WithDeletions(todos), o => o.WithTarget(host.Hub.Address));
 }
 
 /// <summary>
