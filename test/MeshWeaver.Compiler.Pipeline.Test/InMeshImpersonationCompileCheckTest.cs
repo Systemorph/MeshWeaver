@@ -140,7 +140,7 @@ public class InMeshImpersonationCompileCheckTrustedTest(ITestOutputHelper output
         var settled = await CompileAsync("Governance/ImpersonationProbe", TestContext.Current.CancellationToken);
 
         settled.Failure.Should().BeEmpty();
-        settled.Result!.AssemblyLocation.Should().NotBeNullOrEmpty(
+        settled.Result?.AssemblyLocation.Should().NotBeNullOrEmpty(
             "the source is valid; only the trust list separates this from the refused case: " + Describe(settled));
     }
 }
@@ -155,6 +155,6 @@ public class InMeshImpersonationCompileCheckLogOnlyTest(ITestOutputHelper output
         var settled = await CompileAsync("rbuergi/ImpersonationProbe", TestContext.Current.CancellationToken);
 
         settled.Failure.Should().BeEmpty();
-        settled.Result!.AssemblyLocation.Should().NotBeNullOrEmpty("LogOnly refuses nothing: " + Describe(settled));
+        settled.Result?.AssemblyLocation.Should().NotBeNullOrEmpty("LogOnly refuses nothing: " + Describe(settled));
     }
 }
