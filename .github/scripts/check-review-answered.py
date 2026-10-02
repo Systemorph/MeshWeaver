@@ -45,6 +45,26 @@ through the REST issue-events API to the account that applied it, and honoured o
 account's `role_name` on this repository is `admin` or `maintain`. Threads the reviewer DID open
 still need replies under a waiver. The waiver is never automatic.
 
+THE REVIEWER-UNAVAILABLE DEGRADATION — the governed, non-person exit (MeshWeaver.Feedback#86)
+------------------------------------------------------------------------------------------
+Without it the gate is circular: when the internal reviewer itself cannot complete a round (on
+2026-09-29 rounds aborted at the 30-minute cap — MeshWeaver.Plugins#2564/#2565/#2568), EVERY pull
+request is held, including the one that repairs the reviewer, until a person applies the waiver.
+So condition 1 is also released — and again NOTHING else — when the pull request's HEAD commit
+carries a check run that the reviewer's own App posted to say it could not review:
+
+  name `internal-review`  AND  app slug `systemorph-com` AND app id 4918443 (both; measured on
+  check run 109436738198, 2026-09-29T13:45Z)  AND  status `completed`  AND  conclusion `neutral`
+  AND  output.title starting `Reviewer unavailable`.
+
+The NEWEST completed `internal-review` run from that App on the head decides (so a later real
+round supersedes an earlier degradation). Provenance, not presentation, exactly as for the review
+itself: a neutral run from another App, under another name, or with that title at any other
+conclusion is NOT a degradation. The Plugins steward posts it only for an INFRASTRUCTURE cause,
+after one re-kick, naming the cause in the summary; the review is DEFERRED, not skipped — a
+post-merge review is owed on the item. The GREEN verdict names the degradation and its summary, so
+it is never silent. A run completed after `--as-of` is ignored.
+
 THE REVIEWER, MEASURED (2026-09-17, 50 merged pull requests, #4487–#4568)
 ----------------------------------------------------------------------
 The reviewer posts under TWO logins with ONE account id:
@@ -124,6 +144,15 @@ REFUSAL_MARKERS = (
     re.compile(r"\bunable to review this pull request\b", re.IGNORECASE),
     re.compile(r"\*\*Files reviewed:\*\*\s*0\s*/", re.IGNORECASE),
 )
+# The reviewer-unavailable degradation (MeshWeaver.Feedback#86): the check run the internal
+# reviewer's App posts on the head commit when it could not review. Slug AND id, because a slug is
+# a display name an App owner can change and an id cannot be claimed by another App. The id was
+# read off a real `internal-review` run (109436738198 on d433fc0c10, 2026-09-29T13:45:38Z).
+DEGRADATION_CHECK_NAME = "internal-review"
+DEGRADATION_APP_SLUG = "systemorph-com"
+DEGRADATION_APP_ID = 4918443
+DEGRADATION_CONCLUSION = "neutral"
+DEGRADATION_TITLE_PREFIX = "Reviewer unavailable"
 WAIVER_LABEL = "review-waived"
 WAIVER_ROLES = frozenset({"admin", "maintain"})
 QUEUE_REF = re.compile(r"^(?:refs/heads/)?gh-readonly-queue/(?P<base>[^/]+)/pr-(?P<pr>[1-9]\d*)-(?P<sha>[0-9a-f]{40})$")
@@ -198,12 +227,42 @@ class Verdict:
     #: First lines of the reviewer posts that were REFUSALS, when no review landed. Empty when a
     #: review landed, when the reviewer has not posted at all, or when a waiver released the state.
     refused: tuple[str, ...] = ()
+    #: The reviewer-unavailable check run that released condition 1, when one did — the sentence
+    #: every surface prints so a degraded GREEN is never mistaken for a reviewed one.
+    degraded: str = ""
 
 
-def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None) -> Verdict:
+def is_degradation_app(app: dict | None) -> bool:
+    return bool(app) and app.get("slug") == DEGRADATION_APP_SLUG and app.get("id") == DEGRADATION_APP_ID
+
+
+def newest_internal_review_run(check_runs, as_of: str | None) -> dict | None:
+    """The newest COMPLETED `internal-review` run the reviewer's own App posted, as of `as_of`.
+    Runs from any other App are not looked at at all — they cannot supersede the App's own verdict
+    in either direction."""
+    mine = [c for c in check_runs or ()
+            if c.get("name") == DEGRADATION_CHECK_NAME and is_degradation_app(c.get("app"))
+            and c.get("status") == "completed" and c.get("completed_at")
+            and not_after(c.get("completed_at"), as_of)]
+    return max(mine, key=lambda c: (c.get("completed_at") or "", c.get("id") or 0)) if mine else None
+
+
+def degradation_of(check_runs, as_of: str | None) -> dict | None:
+    """The check run that says the reviewer was unavailable for this head, or None. See
+    "THE REVIEWER-UNAVAILABLE DEGRADATION" in the module docstring for the contract."""
+    run = newest_internal_review_run(check_runs, as_of)
+    if run is None or run.get("conclusion") != DEGRADATION_CONCLUSION:
+        return None
+    title = ((run.get("output") or {}).get("title") or "").strip()
+    return run if title.startswith(DEGRADATION_TITLE_PREFIX) else None
+
+
+def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
+             check_runs: list | tuple = ()) -> Verdict:
     reasons: list[str] = []
     notes: list[str] = []
     refused: list[str] = []
+    degraded = ""
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
     reported = pr.get("review_comments")
@@ -226,8 +285,20 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         else:
             parts = [f"review {r.get('id')} at {r.get('submitted_at')} is {'a refusal' if k == 'refused' else 'an unrecognised body'}: \"{first_line(r.get('body'))}\"" for k, r in kinds]
             why = "the automatic review has not landed — the reviewer posted, but not a review: " + "; ".join(parts)
+        run = degradation_of(check_runs, as_of)
         granted, message = waiver_holder(waiver, as_of)
-        if granted:
+        if run is not None:
+            # Checked BEFORE the waiver: it is the governed exit and needs nobody, and when both
+            # stand the log should say the system released it, not that a person had to.
+            summary = " ".join((((run.get("output") or {}).get("summary")) or "(no summary)").split())[:400]
+            degraded = (f"REVIEWER UNAVAILABLE — condition 1 released by degradation: check run "
+                        f"{run.get('id')} `{DEGRADATION_CHECK_NAME}` from the `{DEGRADATION_APP_SLUG}` App "
+                        f"(id {DEGRADATION_APP_ID}), {DEGRADATION_CONCLUSION} at {run.get('completed_at')} on the head: "
+                        f"\"{((run.get('output') or {}).get('title') or '').strip()}\" — {summary}. "
+                        "The review is DEFERRED, not skipped: a post-merge review is owed; every thread "
+                        "the reviewer did open still needs a reply")
+            notes.append(f"DEGRADED: {why}. {degraded}")
+        elif granted:
             notes.append(f"WAIVED: {why}. {message}")
         else:
             reasons.append(why + (f". {message}" if message else ""))
@@ -251,7 +322,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
-                   refused=tuple(refused))
+                   refused=tuple(refused), degraded=degraded)
 
 
 def waiver_holder(waiver: Waiver, as_of: str | None) -> tuple[bool, str]:
@@ -479,14 +550,31 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
     # collaborator roles would otherwise be discovered at the moment a maintainer needs the waiver.
     author = pr.get("user") or {}
     author_role = gh.role(author["login"]) if is_person(author) else None
-    return pr, reviews, comments, Waiver(present, events, roles), author_role
+    # The degradation is read on EVERY run too, for the same reason: a token that cannot list check
+    # runs must be discovered now, not on the day the reviewer is down. It is read off the pull
+    # request's HEAD (pr.head.sha) on every path — for a merge-queue entry too, whose own sha is the
+    # queue's merge commit, where the reviewer never posts. `filter=all` so `--as-of` can see a run
+    # that a newer one has since superseded.
+    head_sha = (pr.get("head") or {}).get("sha") or ""
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        raise ReadError(f"pulls/{number} reported no head sha, so its `{DEGRADATION_CHECK_NAME}` check runs cannot be read")
+    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
+    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
+            or len(check_runs) < listing["total_count"]:
+        raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
+    return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
-    state = "GREEN" if verdict.green else ("RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)"
-                                           if verdict.refused else "RED")
+    state = (("GREEN — REVIEWER UNAVAILABLE, review deferred (degradation, not a review)" if verdict.degraded else "GREEN")
+             if verdict.green else ("RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)"
+                                    if verdict.refused else "RED"))
     lines = [f"check-review-answered: {head}{' as of ' + as_of if as_of else ''} — {state}"]
+    if verdict.degraded:
+        # A GitHub annotation, so the degradation shows on the run page and not only in its log.
+        lines.append(f"::warning::{verdict.degraded}")
     if author_role is not None:
         lines.append(f"  waiver path readable: author @{(pr.get('user') or {}).get('login')} holds `{author_role or 'none'}`")
     lines += [f"  {n}" for n in verdict.notes]
@@ -520,7 +608,9 @@ def guidance(verdict: Verdict) -> list[str]:
     elif "has not landed" in text:
         out.append("the automatic review must land. It usually arrives minutes after the pull request opens; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
-                   f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically.")
+                   f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically. If the internal "
+                   f"reviewer is DOWN, its own App posts a `{DEGRADATION_CHECK_NAME}` check run \"{DEGRADATION_TITLE_PREFIX} …\" "
+                   "(neutral) on the head, which releases this condition by itself and re-runs this check.")
     if verdict.unanswered:
         out.append("reply to each unanswered thread (fixed, or why not). Resolving a thread is not a reply, and a waiver "
                    "does not release a finding the reviewer did post.")
@@ -531,7 +621,8 @@ def guidance(verdict: Verdict) -> list[str]:
 
 
 def summary_markdown(number: int, verdict: Verdict) -> str:
-    state = ("✅ green" if verdict.green
+    state = (("✅ green — ⚠️ **reviewer unavailable: degraded, review deferred**" if verdict.degraded else "✅ green")
+             if verdict.green
              else "❌ red — **unreviewable right now**: the reviewer refused to review this pull request"
              if verdict.refused else "❌ red")
     out = [f"### Automatic review answered — #{number}: {state}", ""]
@@ -569,11 +660,11 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
     settled_for = 0.0
     while True:
         try:
-            pr, reviews, comments, waiver, author_role = read_inputs(gh, number, as_of)
+            pr, reviews, comments, waiver, author_role, check_runs = read_inputs(gh, number, as_of)
         except (ReadError, KeyError) as e:
             print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
             return 1
-        verdict = evaluate(pr, reviews, comments, waiver, as_of)
+        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs)
         left = deadline - time.monotonic()
         if waiting_would_help(verdict) and left > POLL_SECONDS:
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
@@ -643,6 +734,16 @@ def _labeled(actor, at="2026-09-14T13:00:00Z", event="labeled", eid=1):
 
 
 NO_WAIVER = Waiver(False, (), {})
+DEGRADATION_APP = {"id": DEGRADATION_APP_ID, "slug": DEGRADATION_APP_SLUG, "owner": {"login": "Systemorph"}}
+DEGRADED_TITLE = "Reviewer unavailable — round aborted at the 30-minute cap twice"
+DEGRADED_SUMMARY = "Cause: GLM-5.3 provider timeouts (infrastructure). Re-kicked once at 13:50Z; aborted again."
+
+
+def _check_run(name=DEGRADATION_CHECK_NAME, app=DEGRADATION_APP, status="completed", conclusion=DEGRADATION_CONCLUSION,
+               title=DEGRADED_TITLE, at="2026-09-14T12:40:00Z", crid=900):
+    return {"id": crid, "name": name, "app": app, "status": status, "conclusion": conclusion,
+            "completed_at": at if status == "completed" else None,
+            "output": {"title": title, "summary": DEGRADED_SUMMARY}}
 
 
 def self_test() -> int:
@@ -653,12 +754,13 @@ def self_test() -> int:
     LISTING, NOT_LANDED, UNANSWERED = "comment listing", "has not landed", "have no reply from a person"
 
     def case(name: str, expect: tuple[str, ...], pr, reviews, comments, waiver=NO_WAIVER, as_of=None,
-             mention: tuple[str, ...] = (), says: tuple[str, ...] = (), never_says: tuple[str, ...] = ()):
+             mention: tuple[str, ...] = (), says: tuple[str, ...] = (), never_says: tuple[str, ...] = (),
+             check_runs=()):
         """`says`/`never_says` assert what the READER is told — the guidance line and the step
         summary — not just the verdict. #4730 was entirely about those two strings being wrong while
         the verdict was right, so a case that checks only `reasons` cannot see it."""
         nonlocal failures
-        v = evaluate(pr, reviews, comments, waiver, as_of)
+        v = evaluate(pr, reviews, comments, waiver, as_of, check_runs)
         text = "\n".join(v.reasons + v.notes)
         # 🚨 render() is IN here (#4730 review). Without it the run headline — the first of the
         # three surfaces the doc promises — could be deleted with every case still green.
@@ -745,6 +847,56 @@ def self_test() -> int:
     case("a User account named systemorph-com[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "systemorph-com[bot]", "type": "User", "id": 7})], [])
 
+    # the reviewer-unavailable degradation (MeshWeaver.Feedback#86) — releases condition 1 ONLY, and
+    # only for the reviewer's own App, under the contract's name, conclusion and title. Every
+    # negative control below carries the SAME remaining fields as the positive case, so each one
+    # proves that exactly its one differing field is load-bearing.
+    DEGRADED = ("REVIEWER UNAVAILABLE", "DEFERRED", DEGRADED_SUMMARY)
+    case("degradation: the reviewer's App says it is unavailable → green, and SAYS so", GREEN, _pr(0), [], [],
+         check_runs=[_check_run()], mention=("DEGRADED", "check run 900"),
+         says=("GREEN — REVIEWER UNAVAILABLE",) + DEGRADED + (DEGRADED_TITLE,))
+    case("degradation: a real review needs no degradation and is not called degraded", GREEN, _pr(0), [_review()], [],
+         check_runs=[_check_run()], never_says=("REVIEWER UNAVAILABLE",))
+    case("degradation: an ordinary green stays an ordinary green", GREEN, _pr(0), [_review()], [],
+         never_says=("REVIEWER UNAVAILABLE", "DEGRADED"))
+    other_app = {"id": 15368, "slug": "github-actions", "owner": {"login": "github"}}
+    case("degradation NEG: the same run from another App", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(app=other_app)], never_says=("REVIEWER UNAVAILABLE",))
+    case("degradation NEG: right slug, wrong app id (an impostor App)", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(app={"id": 1234, "slug": DEGRADATION_APP_SLUG})])
+    case("degradation NEG: right app id, wrong slug", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(app={"id": DEGRADATION_APP_ID, "slug": "someone-else"})])
+    case("degradation NEG: that title at conclusion success", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(conclusion="success")])
+    case("degradation NEG: that title at conclusion failure", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(conclusion="failure")])
+    case("degradation NEG: the right run under another name", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(name="internal-review-2")])
+    case("degradation NEG: neutral with another title", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(title="No blocking findings")])
+    case("degradation NEG: still in progress is not a verdict", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(status="in_progress")])
+    case("degradation NEG: the right run, but a reviewer thread is unanswered", (UNANSWERED,), _pr(1), [],
+         [_comment(1, INTERNAL_REVIEWER_USER)], check_runs=[_check_run()], mention=("DEGRADED", "1 of 1"))
+    case("degradation: the reviewer's thread answered by a person → green", GREEN, _pr(2), [],
+         [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1, "2026-09-14T13:00:00Z")],
+         check_runs=[_check_run()])
+    case("degradation NEG: a later real round supersedes it (newest App run decides)", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(), _check_run(conclusion="success", title="No blocking findings",
+                                              at="2026-09-14T13:10:00Z", crid=901)])
+    case("degradation: a later degradation after an earlier round still counts", GREEN, _pr(0), [], [],
+         check_runs=[_check_run(conclusion="success", title="No blocking findings", crid=899, at="2026-09-14T12:00:00Z"),
+                     _check_run()])
+    case("degradation: another App's newer run does not supersede the App's own", GREEN, _pr(0), [], [],
+         check_runs=[_check_run(), _check_run(app=other_app, conclusion="success", at="2026-09-14T13:10:00Z", crid=902)])
+    case("degradation --as-of: completed after the instant is ignored", (NOT_LANDED,), _pr(0), [], [],
+         check_runs=[_check_run(at="2026-09-14T14:00:00Z")], as_of="2026-09-14T13:00:00Z")
+    case("degradation --as-of: completed before the instant counts", GREEN, _pr(0), [], [],
+         check_runs=[_check_run(at="2026-09-14T12:40:00Z")], as_of="2026-09-14T13:00:00Z")
+    case("degradation beats a waiver: the log credits the system, not a person", GREEN, _pr(0, [WAIVER_LABEL]), [], [],
+         Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), check_runs=[_check_run()],
+         mention=("DEGRADED",), never_says=("WAIVED",))
+
     # condition 2 — is every thread the reviewer opened answered by a person?
     case("#4310 shape: 3 findings, 0 replies", (UNANSWERED,), _pr(3), [_review()], three, mention=("3 of 3",))
     case("every finding answered by a person", GREEN, _pr(6), [_review()], three + answers)
@@ -816,6 +968,14 @@ def self_test() -> int:
         ("no wait: waived", False, _pr(0, [WAIVER_LABEL]), [], [], Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"})),
     ]:
         got = waiting_would_help(evaluate(pr_, reviews_, comments_, waiver_))
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={'wait' if expect else 'no wait'} got={'wait' if got else 'no wait'}")
+    for name, expect, runs_ in [
+        ("no wait: degraded (released, nothing left to arrive)", False, [_check_run()]),
+        ("wait: an in-progress internal-review is not a degradation", True, [_check_run(status="in_progress")]),
+    ]:
+        got = waiting_would_help(evaluate(_pr(0), [], [], NO_WAIVER, None, runs_))
         ok = got == expect
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={'wait' if expect else 'no wait'} got={'wait' if got else 'no wait'}")
