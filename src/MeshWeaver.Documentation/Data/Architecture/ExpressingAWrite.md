@@ -207,8 +207,8 @@ The repair is deliberately narrow:
 |---|---|
 | valid JSON | returned untouched |
 | short of closers at the END (`{"content":{"policy":"None"}`) | the containers still open — counted **outside string literals**, honouring `\"` and `\\` — are closed innermost-first, and the result is used **only if it parses** |
-| a complete value followed by junk (a stray fence) | trimmed back to the longest prefix that parses |
-| ends inside a string, has a closer of the wrong kind or one too many, a trailing comma, … | returned **untouched**, so the caller reports the ORIGINAL parse error |
+| a complete value followed by junk — a stray fence, or a **surplus closer at the end** (`{"a":1}}`) | trimmed back to the longest prefix that parses |
+| ends inside a string, has a closer of the wrong kind in the middle (`{"a":[1,2}`), a trailing comma, a missing value, … | returned **untouched**, so the caller reports the ORIGINAL parse error |
 
 It never invents content: a value truncated mid-string is not closed, because closing it would store
 half a sentence as if it were the whole one. Measured in `RepairJsonTest` (Memex.Portal.Shared.Test).

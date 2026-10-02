@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -39,6 +37,10 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
 
     // ── the repair rules, measured directly ──
 
+    /// <summary>A payload short of closers at the END gets exactly the closers its open containers
+    /// need, innermost first, and the result parses.</summary>
+    /// <param name="input">The payload as the model wrote it.</param>
+    /// <param name="expected">The repaired payload.</param>
     [Theory]
     [InlineData("""{"content":{"policy":"None"}""", """{"content":{"policy":"None"}}""")]
     [InlineData("""{"a":{"b":{"c":1""", """{"a":{"b":{"c":1}}}""")]
@@ -52,6 +54,10 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         Parses(repaired).Should().BeTrue();
     }
 
+    /// <summary>Closers and quotes inside string literals are text: they neither close a container
+    /// nor end the string when escaped.</summary>
+    /// <param name="input">The payload as the model wrote it.</param>
+    /// <param name="expected">The repaired payload.</param>
     [Theory]
     // A closer INSIDE a string is text, not structure — it must neither close nor be counted.
     [InlineData("""{"text":"a } and ] here","n":{"x":"{["}""", """{"text":"a } and ] here","n":{"x":"{["}}""")]
@@ -66,6 +72,9 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             "the closers inside the string literals must still be inside them after the repair");
     }
 
+    /// <summary>A payload that no appended closer and no trimmed tail can make parse is returned
+    /// byte-identical, so the caller's parse reports the ORIGINAL error.</summary>
+    /// <param name="input">The malformed payload.</param>
     [Theory]
     // Ends INSIDE a string: the value was truncated — closing it would invent content.
     [InlineData("""{"content":{"text":"half a sent""")]
@@ -84,6 +93,8 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
             + "caller's parse reports the original error rather than one about a guessed repair");
     }
 
+    /// <summary>Text that already parses is never touched.</summary>
+    /// <param name="input">A valid JSON document (or the empty string).</param>
     [Theory]
     [InlineData("""{"a":1}""")]
     [InlineData("""[1,{"b":"}"}]""")]
@@ -92,12 +103,30 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     public void ValidJson_IsNeverChanged(string input) =>
         MeshOperations.RepairJson(input).Should().Be(input);
 
+    /// <summary>Text after a complete value — a stray fence — is trimmed back to the longest prefix
+    /// that parses.</summary>
     [Fact]
     public void TrailingJunkAfterACompleteValue_IsStillTrimmed() =>
         MeshOperations.RepairJson("{\"a\":{\"b\":1}}\n```").Should().Be("{\"a\":{\"b\":1}}");
 
+    /// <summary>
+    /// A SURPLUS closer at the very end is trailing junk too: the closer step declines it (more
+    /// closers than openers), and the trim leg then returns the complete value in front of it. This
+    /// is NOT the "returned untouched" row — a closer of the wrong kind in the MIDDLE is
+    /// (<see cref="GenuinelyMalformedInput_IsReturnedUntouched"/>, <c>{"a":[1,2}</c>).
+    /// </summary>
+    /// <param name="input">A complete value followed by one or more closers too many.</param>
+    /// <param name="expected">The complete value.</param>
+    [Theory]
+    [InlineData("""{"a":1}}""", """{"a":1}""")]
+    [InlineData("""[1,2]]""", """[1,2]""")]
+    [InlineData("""{"a":{"b":1}}}]""", """{"a":{"b":1}}""")]
+    public void ASurplusCloserAtTheEnd_IsTrimmedAsTrailingJunk(string input, string expected) =>
+        MeshOperations.RepairJson(input).Should().Be(expected);
+
     // ── end to end, through the tool the model calls ──
 
+    /// <summary>End to end: the <c>patch</c> tool applies a payload one closing brace short.</summary>
     [Fact]
     public async Task Patch_OneClosingBraceShort_IsApplied()
     {
@@ -114,6 +143,8 @@ public class RepairJsonTest(ITestOutputHelper output) : MonolithMeshTestBase(out
         after.Version.Should().BeGreaterThan(before.Version);
     }
 
+    /// <summary>End to end: a payload truncated inside a string is refused with the parser's own
+    /// message for the ORIGINAL text, and the node is not written.</summary>
     [Fact]
     public async Task Patch_TruncatedInsideAString_KeepsTheOriginalError_AndWritesNothing()
     {

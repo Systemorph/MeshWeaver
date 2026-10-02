@@ -90,6 +90,17 @@ public class ClickActionSubscribeHasErrorArmGuard
         Offenders(oldShape, out var lambdas).Should().ContainSingle();
         lambdas.Should().Be(1);
 
+        // A zero-argument Subscribe() has no error arm either.
+        const string bare = """
+            Controls.Button("x").WithClickAction(ctx =>
+            {
+                Write(ctx).Subscribe();
+                return Task.CompletedTask;
+            });
+            """;
+        Offenders(bare, out lambdas).Should().ContainSingle();
+        lambdas.Should().Be(1);
+
         const string converted = """
             Controls.Button("x").WithReactiveClickAction(ctx =>
                 ctx.Host.Stream.GetDataStream<string>("f").Take(1).Do(d => Use(d)).Select(_ => Unit.Default));
@@ -106,7 +117,8 @@ public class ClickActionSubscribeHasErrorArmGuard
         Offenders("stream.Subscribe(x => Use(x));", out _).Should().BeEmpty();
     }
 
-    /// <summary>1-based line numbers of one-argument <c>Subscribe</c> calls inside click lambdas.</summary>
+    /// <summary>1-based line numbers of <c>Subscribe</c> calls with no error arm — one argument or
+    /// none — inside click lambdas.</summary>
     private static IReadOnlyList<int> Offenders(string text, out int clickLambdas)
     {
         var code = SourceScan.MaskCommentsAndStrings(text);
@@ -124,7 +136,7 @@ public class ClickActionSubscribeHasErrorArmGuard
             {
                 var subOpen = open + sub.Index + sub.Length - 1;
                 var subClose = MatchingClose(code, subOpen);
-                if (subClose > 0 && TopLevelArguments(code, subOpen, subClose) == 1)
+                if (subClose > 0 && TopLevelArguments(code, subOpen, subClose) <= 1)
                     lines.Add(LineOf(code, subOpen));
             }
         }

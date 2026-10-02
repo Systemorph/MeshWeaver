@@ -121,7 +121,7 @@ public static class CreateLayoutArea
     private static void ReportFormPatchFault(UiActionContext ctx, string formId, Exception ex)
     {
         ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger(typeof(CreateLayoutArea).FullName!)
+            ?.CreateLogger(typeof(CreateLayoutArea))
             .LogWarning(ex, "Create form {FormId} on area {Area} of {Hub} could not be patched",
                 formId, ctx.Area, ctx.Host.Hub.Address);
         ShowErrorDialog(ctx, ctx.Host.Localize("error.title"), ex.Message);

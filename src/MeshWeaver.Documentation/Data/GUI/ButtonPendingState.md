@@ -81,7 +81,14 @@ Controls.Button(host.Localize("ui.invite"))
 The host then owns the subscription: completion answers the click, and an error is logged with the
 area and hub (`LayoutAreaHost.FailClick`) and refused to the client, whose button leaves its pending
 state showing the reason. A helper the handler calls returns the observable too
-(`ctx => RemoveCollectionItem(ctx.Host, …)`). Work that deliberately continues AFTER the click is
+(`ctx => RemoveCollectionItem(ctx.Host, …)`).
+
+🚨 **The id the click reads must be SEEDED when the form is rendered** (`host.UpdateData(formId, new
+Dictionary<string, object?> { … })` before the button exists). A data id that was never written emits
+nothing and never completes (`GetDataStreamUnsetIdTest`), so `Take(1)` on it neither completes nor
+faults: there is no bound on a returned click observable, and the button stays pending until the
+page goes away. A field bound by pointer does not seed its form — the id is first written when the
+person types. Seeding is also what lets an empty submit reach the handler's own validation message. Work that deliberately continues AFTER the click is
 answered (an agent round, a background write) keeps its own `.Subscribe(onNext, onError)` whose error
 arm reports and shows the fault — never a one-argument `Subscribe`.
 

@@ -117,6 +117,10 @@ public static class GitHubIssuesTab
                 return Task.CompletedTask;
             }));
 
+        // Seeded at render: a data id that was never written emits nothing and never completes, so
+        // the button's one-off read would leave the click unanswered (and the "enter a title"
+        // message unreachable) until the person had typed into the form.
+        host.UpdateData(NewIssueFormId, new Dictionary<string, object?> { ["title"] = "", ["body"] = "" });
         stack = stack.WithView(BuildNewIssueForm(issues, spacePath, userId, locale: host.ViewerLocale()));
 
         // Live issues grid — binds to the synced query, refreshes itself as issues land.
@@ -149,6 +153,8 @@ public static class GitHubIssuesTab
                 return Task.CompletedTask;
             }));
 
+        // Seeded at render, for the same reason as the new-issue form above.
+        host.UpdateData(MergeFormId, new Dictionary<string, object?> { ["prNumber"] = "" });
         stack = stack.WithView(BuildMergeForm(spacePath, userId));
 
         // Initial PR load (live from GitHub, never persisted).
