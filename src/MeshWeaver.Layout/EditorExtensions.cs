@@ -521,8 +521,7 @@ public static class EditorExtensions
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
-                    GetStream(host, dimensionAttribute)
-                        .Subscribe(x => host.UpdateData(id, x)));
+                    host.FeedData(ctx.Area, id, GetStream(host, dimensionAttribute)));
                 return Controls.Select(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)));
             });
         }
@@ -605,7 +604,7 @@ public static class EditorExtensions
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
-                    GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
+                    host.FeedData(ctx.Area, id, GetStream(host, dimensionAttribute)));
                 return RenderListControl(host, Controls.Select, jsonPointerReference, id).WithAriaLabel(propertySkinLabel);
             }, skinConfiguration);
         }
@@ -1203,7 +1202,7 @@ public static class EditorExtensions
         // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
         string? lastDisplayName = null;
         host.ReplaceDisposable(displayLabelId,
-            dataStream.Select(data =>
+            host.FeedData(null, displayLabelId, dataStream.Select(data =>
             {
                 if (data.ValueKind == JsonValueKind.Undefined)
                     return "";
@@ -1217,8 +1216,8 @@ public static class EditorExtensions
 
                 var option = optionsList.FirstOrDefault(o => o.GetItem()?.ToString() == keyValue);
                 return option?.Text ?? keyValue ?? "";
-            })
-            .Subscribe(displayName =>
+            }),
+            displayName =>
             {
                 // Manual DistinctUntilChanged to avoid unnecessary emissions
                 if (displayName == lastDisplayName)
@@ -1243,7 +1242,7 @@ public static class EditorExtensions
         // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
         string? lastFormattedDate = null;
         host.ReplaceDisposable(displayLabelId,
-            dataStream.Select(data =>
+            host.FeedData(null, displayLabelId, dataStream.Select(data =>
             {
                 if (data.ValueKind == JsonValueKind.Undefined)
                     return "";
@@ -1267,8 +1266,8 @@ public static class EditorExtensions
                 }
 
                 return valueElement.ToString();
-            })
-            .Subscribe(formattedDate =>
+            }),
+            formattedDate =>
             {
                 // Manual DistinctUntilChanged to avoid unnecessary emissions
                 if (formattedDate == lastFormattedDate)
@@ -1302,7 +1301,7 @@ public static class EditorExtensions
         // Use ReplaceDisposable to prevent duplicate subscriptions when the control is rebuilt.
         string? lastFormatted = null;
         host.ReplaceDisposable(displayLabelId,
-            dataStream.Select(data =>
+            host.FeedData(null, displayLabelId, dataStream.Select(data =>
             {
                 if (data.ValueKind == JsonValueKind.Undefined)
                     return "";
@@ -1333,8 +1332,8 @@ public static class EditorExtensions
                     // Malformed format string — fall through to the raw numeric text.
                 }
                 return valueElement.GetRawText();
-            })
-            .Subscribe(formatted =>
+            }),
+            formatted =>
             {
                 // Manual DistinctUntilChanged to avoid unnecessary emissions.
                 if (formatted == lastFormatted)

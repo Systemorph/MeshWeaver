@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -472,14 +474,26 @@ public sealed class ContentImportBuilder
     }
 
     /// <inheritdoc cref="SyncContentFilesBuilder.WithAccessContext"/>
-    public ContentImportBuilder WithAccessContext(AccessContext identity)
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public ContentImportBuilder WithAccessContext(AccessContext identity) =>
+        Declare(identity, Assembly.GetCallingAssembly(), nameof(WithAccessContext));
+
+    private ContentImportBuilder Declare(AccessContext identity, Assembly caller, string surface)
     {
-        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        ArgumentNullException.ThrowIfNull(identity);
+        // Declaring a platform principal here is an impersonation on behalf of the CALLER.
+        _hub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard
+            .Check(caller, nameof(ContentImportBuilder) + "." + surface, identity);
+        _identity = identity;
         return this;
     }
 
     /// <inheritdoc cref="SyncContentFilesBuilder.ImpersonateAsSystem"/>
-    public ContentImportBuilder ImpersonateAsSystem() => WithAccessContext(WellKnownUsers.SystemContext);
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public ContentImportBuilder ImpersonateAsSystem() =>
+        Declare(WellKnownUsers.SystemContext, Assembly.GetCallingAssembly(), nameof(ImpersonateAsSystem));
 
     /// <summary>Source content collection + folder within it to copy from.</summary>
     public ContentImportBuilder From(string sourceCollection, string sourcePath = "")
@@ -579,9 +593,18 @@ public sealed class SyncContentFilesBuilder
     /// is what the 2026-05-21 hub-self-fallback deletion removed, and it masked a real prod bug.</para>
     /// </summary>
     /// <param name="identity">The identity to post under; never null.</param>
-    public SyncContentFilesBuilder WithAccessContext(AccessContext identity)
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public SyncContentFilesBuilder WithAccessContext(AccessContext identity) =>
+        Declare(identity, Assembly.GetCallingAssembly(), nameof(WithAccessContext));
+
+    private SyncContentFilesBuilder Declare(AccessContext identity, Assembly caller, string surface)
     {
-        _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        ArgumentNullException.ThrowIfNull(identity);
+        // Declaring a platform principal here is an impersonation on behalf of the CALLER.
+        _hub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard
+            .Check(caller, nameof(SyncContentFilesBuilder) + "." + surface, identity);
+        _identity = identity;
         return this;
     }
 
@@ -591,7 +614,10 @@ public sealed class SyncContentFilesBuilder
     /// wrapping the call in <c>AccessService.ImpersonateAsSystem()</c>. See
     /// <see cref="WithAccessContext"/> for why the ambient scope is not enough.
     /// </summary>
-    public SyncContentFilesBuilder ImpersonateAsSystem() => WithAccessContext(WellKnownUsers.SystemContext);
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public SyncContentFilesBuilder ImpersonateAsSystem() =>
+        Declare(WellKnownUsers.SystemContext, Assembly.GetCallingAssembly(), nameof(ImpersonateAsSystem));
 
     /// <summary>Target content collection (default <c>"content"</c>) + folder within it.</summary>
     public SyncContentFilesBuilder To(string targetCollection, string targetPath = "")

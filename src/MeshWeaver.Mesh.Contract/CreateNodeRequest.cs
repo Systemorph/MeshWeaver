@@ -31,6 +31,21 @@ public record CreateNodeRequest(MeshNode Node)
     public string? CreatedBy { get; init; }
 
     /// <summary>
+    /// 🚨 The STORED node whose authorship this create carries over — set by the copy leg of a
+    /// MOVE (<see cref="CopyNodeRequest.PreserveAuthorship"/>, issue #3263) and by nothing else.
+    ///
+    /// <para>A person or service never chooses the author stamps of a node it creates: the stamps
+    /// on the incoming node are replaced by the requester (<c>RequestIdentity.Author</c>), because
+    /// <c>CreatedBy</c> is what owner-scoped work impersonates (<c>AccessContextScope.FromNode</c>)
+    /// and what control planes read as "who asked". A relocation is the one exception, and it is
+    /// granted here the way <c>CopyNodeRequest</c> grants it: the requester must hold Delete on
+    /// the source's namespace (the entitlement a move of it requires), and the four stamps are then
+    /// read from STORAGE at this path, never taken from the message. A caller who holds that could
+    /// have moved the node anyway, so this grants nothing new.</para>
+    /// </summary>
+    public string? AuthorshipFrom { get; init; }
+
+    /// <summary>
     /// Optional initialization payload forwarded to the newly-created node's hub
     /// after persistence succeeds. Lets a single CreateNodeRequest atomically
     /// create the node AND queue the first message of work for it — e.g. a

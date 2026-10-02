@@ -12,6 +12,6 @@
     "displayName": "Prime Report",
     "iconName": "Calculator",
     "description": "A report computed by python3 via IIoPool.InvokeBlocking",
-    "configuration": "config => config.WithContentType<PrimeReport>().AddLayout(layout => layout.AddPrimeReportLayoutAreas().WithDefaultArea(\"Report\"))"
+    "configuration": "config => config.WithContentType<PrimeReport>().AddLayout(layout => layout.AddPrimeReportLayoutAreas().WithView(\"Tests\", PrimeReportViewTests.Tests).WithDefaultArea(\"Report\"))"
   }
 }

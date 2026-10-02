@@ -716,7 +716,7 @@ data:
   Hosting__MirrorHostingReadFromAdmins: "{{ $hostingMirror | toString | trim }}"
   {{- end }}
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
-  # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
+  # ONE instance of a fleet: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
   # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
   # fallback cadence. Rendered whenever the key is PRESENT (hasKey), so an explicit `false` reaches
   # the container and switches it off; absent on every other portal (config-key-coverage).
@@ -731,6 +731,30 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interval" }}
   Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
+  {{- end }}
+  # Interrupt and fix-on-red (MeshWeaver.Plugins#2607, Hosting/Deployment/Source/PrFixer.cs):
+  # Interrupt=false stops the cancel of a code red's own pull_request run (on by default), Fix=true
+  # lets the pr-fixer agent push ONE validated commit for a code red (off by default), FixerModel
+  # and ValidatorModel pin the two agents' threads to a model node. Same rule as above: rendered
+  # whenever PRESENT, so a record that declares one is a pod that reads it (config-key-coverage).
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interrupt" }}
+  Hosting__PrBabysitter__Interrupt: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interrupt }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Fix" }}
+  Hosting__PrBabysitter__Fix: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Fix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__FixerModel" }}
+  Hosting__PrBabysitter__FixerModel: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__FixerModel }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__ValidatorModel" }}
+  Hosting__PrBabysitter__ValidatorModel: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__ValidatorModel }}"
+  {{- end }}
+  # ---- The bug-fix pool (MeshWeaver.Plugins Hosting/BugFix, Essentials/BugTriage) ----------------
+  # Enabled=false stops an instance's pool entirely (no re-drive sweep, no new bug thread; bugs wait
+  # QUEUED with that reason — Plugins #2635). It moves to the control instance: memex sets false,
+  # control true. Rendered whenever PRESENT (hasKey), so an explicit `false` reaches the container.
+  {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
+  Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
   {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).

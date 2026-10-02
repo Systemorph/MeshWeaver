@@ -21,6 +21,17 @@ namespace MeshWeaver.Data;
 /// </summary>
 public sealed record DataContext : IDisposable
 {
+    /// <summary>
+    /// Where the initialization gate's settle runs: the task pool, one work item per hub. 🚨 Rx's
+    /// <see cref="TaskPoolScheduler.Default"/> advertises <see cref="ISchedulerLongRunning"/>, and
+    /// <c>ObserveOn</c> then starts a DEDICATED thread per subscription — one thread creation per
+    /// hub activation, thousands in a mass activation (#5555). Withholding the capability keeps the
+    /// hop the single pool work item the original <c>ContinueWith(TaskScheduler.Default)</c> was.
+    /// Immutable; holds only a scheduler.
+    /// </summary>
+    internal static readonly IScheduler InitializationSettleScheduler =
+        TaskPoolScheduler.Default.DisableOptimizations(typeof(ISchedulerLongRunning));
+
     /// <summary>Name of the message-hub gate that stays closed until the data context has finished initializing.</summary>
     public const string InitializationGateName = "DataContextInit";
 
@@ -488,12 +499,16 @@ public sealed record DataContext : IDisposable
         // this context and the subscription need not be stored. ObserveOn: the settle
         // body must not run inline on the last data source's completing thread (arm 1)
         // nor on Dispose()'s teardown stack (arm 3) — the same hop the previous
-        // ContinueWith(TaskScheduler.Default) gave it.
+        // ContinueWith(TaskScheduler.Default) gave it. 🚨 And it must stay THAT hop — one pool
+        // work item — which a bare ObserveOn(TaskPoolScheduler.Default) is not: Rx's task pool
+        // advertises ISchedulerLongRunning, so ObserveOn started a dedicated OS thread for every
+        // hub's settle, i.e. one thread creation per hub activation, thousands in a mass
+        // activation (#5555; ContentTypeRegistration.md → "What one registration COSTS").
         var initSettled = allInit.ToObservable().Materialize().Take(1).Select(_ => Unit.Default);
         var timeBox = Observable.Timer(EffectiveInitializationTimeout).Select(_ => Unit.Default);
         Observable.Amb(initSettled, timeBox, watchdogDisarm)
             .Take(1)
-            .ObserveOn(TaskPoolScheduler.Default)
+            .ObserveOn(InitializationSettleScheduler)
             .Subscribe(
                 _ => SettleInitializationGate(allInit),
                 ex =>

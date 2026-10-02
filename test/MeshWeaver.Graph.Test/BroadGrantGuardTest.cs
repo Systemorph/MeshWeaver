@@ -168,6 +168,103 @@ public class BroadGrantGuardTest
             .Should().Be(expected);
     }
 
+    // ── a governed activity's facts: what a LATER reader decides on ───────────────────────
+
+    /// <summary>
+    /// The provision watcher runs AFTER the executor's create, by which time the activity may be
+    /// Done. "Has started" is monotone, so a governed request is not refused for having been seen
+    /// late (Plugins#2601 review); "is executing" flips under it.
+    /// </summary>
+    [Theory]
+    [InlineData("Executing", true, true)]
+    [InlineData("Done", true, false)]
+    [InlineData("Failed", true, false)]
+    [InlineData("Ready", false, false)]
+    [InlineData("Gating", false, false)]
+    [InlineData("Proposed", false, false)]
+    [InlineData("Rejected", false, false)]
+    public void HasStarted_IsMonotone_IsExecuting_IsNot(string state, bool started, bool executing)
+    {
+        var facts = GovernedActivityFacts.Read(Activity(new JsonObject
+        {
+            ["standard"] = "Governance/Standards/package.provision",
+            ["state"] = state,
+        }), null);
+
+        (facts?.HasStarted).Should().Be(started);
+        (facts?.IsExecuting).Should().Be(executing);
+    }
+
+    [Theory]
+    [InlineData(4, "Executing")]
+    [InlineData(5, "Done")]
+    [InlineData(6, "Failed")]
+    [InlineData(3, "3")]
+    public void ANumericState_IsNamed(int number, string name)
+    {
+        var facts = GovernedActivityFacts.Read(Activity(new JsonObject
+        {
+            ["standard"] = "package.remove",
+            ["state"] = number,
+        }), null);
+
+        (facts?.State).Should().Be(name);
+    }
+
+    [Fact]
+    public void TheSignedInputsAndTheStandardId_AreRead()
+    {
+        var facts = GovernedActivityFacts.Read(Activity(new JsonObject
+        {
+            ["standard"] = "Governance/Standards/package.provision",
+            ["state"] = "Done",
+            ["inputs"] = new JsonObject { ["package"] = " Reporting ", ["blank"] = "  " },
+        }), null);
+
+        (facts?.StandardId).Should().Be("package.provision");
+        (facts?.Input("package")).Should().Be("Reporting");
+        (facts?.Input("blank")).Should().BeNull();
+        (facts?.Input("absent")).Should().BeNull();
+    }
+
+    [Fact]
+    public void AnActivityWithoutAStandard_HasNoFacts()
+    {
+        GovernedActivityFacts.Read(Activity(new JsonObject { ["state"] = "Executing" }), null).Should().BeNull();
+        GovernedActivityFacts.Read(null, null).Should().BeNull();
+    }
+
+    // ── a claim introduced, or only kept ──────────────────────────────────────────────────
+
+    [Fact]
+    public void AClaimIsIntroducedWhenNewOrChanged_NotWhenKept()
+    {
+        static MeshNode Claiming(string? claim) => new("Reporting", "Admin/Provision")
+        {
+            Content = claim is null ? new JsonObject() : new JsonObject { ["governedBy"] = claim },
+        };
+
+        BroadGrantGuard.IntroducedClaim(Claiming("A"), null, null).Should().Be("A");
+        BroadGrantGuard.IntroducedClaim(Claiming("A"), Claiming(null), null).Should().Be("A");
+        BroadGrantGuard.IntroducedClaim(Claiming("B"), Claiming("A"), null).Should().Be("B");
+        BroadGrantGuard.IntroducedClaim(Claiming("A"), Claiming("A"), null).Should().BeNull();
+        BroadGrantGuard.IntroducedClaim(Claiming(null), Claiming("A"), null).Should().BeNull();
+    }
+
+    [Fact]
+    public void OnlyTheActivityItself_IsTheClaimedWriter()
+    {
+        BroadGrantGuard.WriterIsClaimedActivity("Governance/Activities/a", System).Should().BeFalse();
+        BroadGrantGuard.WriterIsClaimedActivity("Governance/Activities/a", Person).Should().BeFalse();
+        BroadGrantGuard.WriterIsClaimedActivity("Governance/Activities/a", System with { GovernedBy = "Governance/Activities/b" })
+            .Should().BeFalse();
+        BroadGrantGuard.WriterIsClaimedActivity("Governance/Activities/a", System with { GovernedBy = "Governance/Activities/a" })
+            .Should().BeTrue();
+    }
+
+    private static MeshNode Activity(JsonObject content) =>
+        new("act", "Governance/Activities") { Content = content };
+
     // ── settings ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
