@@ -1028,12 +1028,9 @@ public sealed class InstanceAutoRegistrationService(
             .Distinct(StringComparer.Ordinal)
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToImmutableList();
-        // The cause of each, same snapshot (#5826): one per failed package, the first one named.
-        var failureCauses = (summary.FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
-            .GroupBy(f => f.Package, StringComparer.Ordinal)
-            .Select(g => g.First())
-            .OrderBy(f => f.Package, StringComparer.Ordinal)
-            .ToImmutableList();
+        // The cause of each, same snapshot (#5826): exactly one per failed package — the first one
+        // named, or an entry that SAYS none was recorded. See DefaultInstallSummary.CausePerFailure.
+        var failureCauses = summary.CausePerFailure();
 
         // Snapshot semantics, exactly like Failed (#2536): what THIS pass classified as outside
         // the unattended lane's authority, deduplicated by package (records compare by value).
@@ -2543,6 +2540,32 @@ public readonly record struct DefaultInstallSummary(
         => (Packages ?? ImmutableList<string>.Empty)
             .RemoveRange(Failures ?? ImmutableList<string>.Empty);
 
+    /// <summary>
+    /// Exactly ONE cause per package in <see cref="Failures"/>, in ordinal package order: the first
+    /// one <see cref="FailureCauses"/> names for it, or <see cref="DefaultInstallFailure.Unrecorded"/>
+    /// when none was recorded. What the ledger stores and the summary line prints. Pure.
+    ///
+    /// <para>🚨 The two lists are filled by whoever records a failure, and nothing in the type ties
+    /// them together: today ONE site does (the per-package catch of the default install) and it
+    /// fills both, but a second site that named a failed package and forgot its cause would put
+    /// back the exact silence #5826 removed — a failed id with nothing to triage from — and neither
+    /// the ledger nor the summary line would show the gap. Deriving the causes FROM the failures
+    /// makes that gap an entry that says so. A cause for a package that did not fail is dropped:
+    /// the ledger's causes have exactly <c>Failed</c>'s semantics.</para>
+    /// </summary>
+    /// <returns>One cause per failed package.</returns>
+    internal ImmutableList<DefaultInstallFailure> CausePerFailure()
+    {
+        var recorded = (FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
+            .GroupBy(f => f.Package, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        return (Failures ?? ImmutableList<string>.Empty)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Select(id => recorded.GetValueOrDefault(id) ?? DefaultInstallFailure.Unrecorded(id))
+            .ToImmutableList();
+    }
+
     /// <summary>A pass that covered nothing.</summary>
     public static DefaultInstallSummary Empty { get; } = new(0, 0, 0, ImmutableList<string>.Empty);
 
@@ -2571,7 +2594,7 @@ public readonly record struct DefaultInstallSummary(
         $"{Installed} installed, {UpToDate} up to date, {Failed} failed "
         + $"[{string.Join(", ", Packages)}]"
         + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "")
-        + (FailureCauses is { Count: > 0 } c
+        + (CausePerFailure() is { Count: > 0 } c
             ? $" — CAUSES: [{string.Join("; ", c.Select(x => $"{x.Package}: {x.Cause}"))}]"
             : "")
         + (Skipped is { Count: > 0 } s
@@ -2595,6 +2618,19 @@ public sealed record DefaultInstallFailure(string Package, string Cause)
 {
     /// <summary>The longest cause kept — a ledger entry, not a stack trace.</summary>
     internal const int MaxCauseLength = 600;
+
+    /// <summary>What <see cref="Unrecorded"/> says in place of a cause.</summary>
+    internal const string UnrecordedCause =
+        "no cause was recorded — the site that marked this package failed did not say why";
+
+    /// <summary>
+    /// The entry for a package that was recorded as failed with NO cause beside it — a defect in
+    /// whatever recorded the failure, made visible instead of leaving a failed id with nothing to
+    /// triage from (<see cref="DefaultInstallSummary.CausePerFailure"/>). Pure.
+    /// </summary>
+    /// <param name="package">The package id.</param>
+    /// <returns>The ledger entry.</returns>
+    public static DefaultInstallFailure Unrecorded(string package) => new(package, UnrecordedCause);
 
     /// <summary>
     /// The failure of <paramref name="package"/> as <paramref name="exception"/> describes it: the

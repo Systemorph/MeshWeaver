@@ -549,6 +549,11 @@ the skip is never silent:
   (MeshWeaver#5826). Before, the ledger said `failed: ["Anthropic"]` and nothing else; the cause — a
   registry file fetch whose three 30 s attempts all expired waiting for headers — lived only in a
   separate per-package log line.
+- **Exactly one cause per failed package, derived from the failures.** The ledger and the summary
+  line take their causes from `DefaultInstallSummary.CausePerFailure()`: a failed id whose recording
+  site supplied no cause gets an entry that says *"no cause was recorded …"* rather than nothing, and
+  a cause for a package that did not fail is dropped. One site records failures today (the
+  per-package catch); this keeps a second one from re-introducing a failed id with nothing beside it.
 - **Kept off the seeded list, and retried by the next pass** (#2254) — the ledger knows the package,
   so the governed-provision hold does not take it for a newly listed one (#5934).
 - **A snapshot.** `failed` and `failureCauses` describe the last pass that attempted anything: an entry

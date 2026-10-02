@@ -143,6 +143,34 @@ public class AFailedPackageNamesItsCauseTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
+    /// 🚨 A failed package ALWAYS has a cause on the ledger and the summary line, even when the site
+    /// that recorded the failure supplied none: the gap is an entry that says so, never an id with
+    /// nothing beside it — and a cause for a package that did not fail is not advertised. Pure.
+    /// </summary>
+    [Fact]
+    public void AFailureRecordedWithoutACause_SaysSo_AndACauseWithoutAFailureIsDropped()
+    {
+        var summary = new DefaultInstallSummary(0, 0, 2, ["Named", "Silent", "Fine"])
+        {
+            Failures = ["Silent", "Named", "Named"],
+            FailureCauses =
+            [
+                new DefaultInstallFailure("Named", "first"),
+                new DefaultInstallFailure("Named", "second"),
+                new DefaultInstallFailure("Fine", "did not fail"),
+            ],
+        };
+
+        summary.CausePerFailure().Should().Equal(
+            new DefaultInstallFailure("Named", "first"),
+            DefaultInstallFailure.Unrecorded("Silent"));
+        summary.ToString().Should().Contain($"Silent: {DefaultInstallFailure.UnrecordedCause}",
+            "the summary line must show a failure nobody explained, not hide it")
+            .And.NotContain("did not fail");
+        DefaultInstallSummary.Empty.CausePerFailure().Should().BeEmpty();
+    }
+
+    /// <summary>
     /// The ledger as stored, once it satisfies <paramref name="condition"/> — read off storage (never
     /// the lagging index) and re-read until the condition holds, since the write may still be in
     /// flight when the pass's summary is emitted.
@@ -153,8 +181,8 @@ public class AFailedPackageNamesItsCauseTest(ITestOutputHelper output) : Monolit
         return Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .SelectMany(_ => storage.Read(LedgerPath, Mesh.JsonSerializerOptions).Take(1))
             .Select(node => node?.ContentAs<DefaultInstallLedger>(Mesh.JsonSerializerOptions))
-            .Where(ledger => ledger is not null && condition(ledger))
-            .Select(ledger => ledger!)
+            .OfType<DefaultInstallLedger>()
+            .Where(condition)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
