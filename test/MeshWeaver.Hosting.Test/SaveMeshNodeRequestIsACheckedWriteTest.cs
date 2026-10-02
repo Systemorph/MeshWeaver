@@ -81,7 +81,11 @@ public class SaveMeshNodeRequestIsACheckedWriteTest(ITestOutputHelper output) : 
                 cancellationToken: TestContext.Current.CancellationToken);
 
         // The refusal: same message, same window, a caller without Update — the node keeps its name.
-        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick,
+        // A negative assertion spends its whole window by construction, and here the positive
+        // terminal is already in hand (the control posted after it has already been written), so the window
+        // is a fraction of the budget. TestTimeouts.Quick is a full CI-scaled bound (36 s on a
+        // runner); one of those per case pushed this project past its 8-minute cap.
+        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick / 10,
             $"'{callerId}' holds no Update on {target.Path}; the save must not write it raw");
         (await StoredAt(target.Path))!.Name.Should().Be(target.Name, "the refused save left the node as it was");
     }
@@ -125,7 +129,11 @@ public class SaveMeshNodeRequestIsACheckedWriteTest(ITestOutputHelper output) : 
         await Overwrote(control.Path).Should().Within(TestTimeouts.Convergence)
             .Emit("the unstamped delivery is not refused, so the stamp is what refused the other", cancellationToken: ct);
 
-        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick, "the refused save wrote nothing");
+        // A negative assertion spends its whole window by construction, and here the positive
+        // terminal is already in hand (the refusal has been answered and the control written), so the window
+        // is a fraction of the budget. TestTimeouts.Quick is a full CI-scaled bound (36 s on a
+        // runner); one of those per case pushed this project past its 8-minute cap.
+        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick / 10, "the refused save wrote nothing");
     }
 
     /// <summary>A participant cannot pose as the hub's own persistence post by writing the target's
