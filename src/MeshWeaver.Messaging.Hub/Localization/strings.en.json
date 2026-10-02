@@ -1966,5 +1966,10 @@
   "serviceIdentities.noTokens": "No tokens issued.",
   "serviceIdentities.rotate": "Rotate",
   "serviceIdentities.status.active": "Active",
-  "serviceIdentities.status.revoked": "Revoked"
+  "serviceIdentities.status.revoked": "Revoked",
+  "data.noDefaultReference": "_No default data reference configured._",
+  "data.streamUnavailable": "_Unable to get a data stream for `{0}`._",
+  "data.none": "_No data._",
+  "data.loadAll": "Load all ({0} lines)",
+  "data.failed": "_Could not read the data: {0}_"
 }

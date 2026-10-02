@@ -222,6 +222,9 @@ public static class LayoutExtensions
                 // and a hub that did not would hand the view untyped JsonElements: a deck that
                 // renders no slides at all.
                 typeof(SlideFrame),
+                // The $Data area's bound projection (DataPathViews): written into /data and read by
+                // pointer, so the IUiControl sweep above misses it.
+                typeof(MeshWeaver.Layout.Views.DataPathViews.DataViewModel),
                 // Icon lives in MeshWeaver.Domain, so the IUiControl/Skin reflection sweep above
                 // cannot see it — yet it rides inside control state on almost every control
                 // (IconStart/IconEnd, NavItem, MenuItem, ProgressMessage). Unregistered, it
