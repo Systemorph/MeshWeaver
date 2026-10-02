@@ -359,7 +359,20 @@ public static class ServiceDefaults
                 caching.AddPolicy("HealthChecks",
                     build: static policy => policy.Expire(TimeSpan.FromSeconds(20))));
 
+        // 🚦 Readiness = this replica can authenticate an API token (maintainer, 2026-09-30: "we must
+        // show as ready only when this stuff can be served"). A background canary runs the SAME
+        // verdict the auth middleware runs, against the SAME store; the probe only reads its last
+        // sample (no I/O on /ready), and it takes FailuresToUnready consecutive failures to leave
+        // rotation — see TokenValidationReadiness for why one slow read never does.
+        builder.Services.AddSingleton<TokenValidationReadiness>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TokenValidationReadiness>());
+
         builder.Services.AddHealthChecks()
+            .Add(new HealthCheckRegistration(
+                TokenValidationReadiness.HealthCheckName,
+                sp => sp.GetRequiredService<TokenValidationReadiness>(),
+                failureStatus: null,
+                tags: [ProbeEndpoints.ReadyTag, ProbeEndpoints.CensusTag]))
             // The trivial process-up check: the process is running and can execute a delegate.
             //
             // 🚨 It carries BOTH probe tags, and that is what keeps ProbeEndpoints.Ready

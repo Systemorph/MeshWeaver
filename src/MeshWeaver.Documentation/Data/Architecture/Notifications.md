@@ -1,7 +1,7 @@
 ---
 Name: Notifications — Satellites, the Bell, and Routing
 Category: Architecture
-Description: How notifications work end-to-end — addressed Notification nodes, the reactive bell, mark-as-read via stream.Update, per-feature channel preferences (bell, Teams, email) and rule-based routing.
+Description: How notifications work end-to-end — addressed Notification nodes, the reactive bell, mark-as-read via stream.Update, per-feature and per-app channel preferences (bell, Teams, email) and rule-based routing.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
 ---
 
@@ -85,6 +85,8 @@ A scalar flip is race-safe across mirrors (RFC 7396 merges object keys), so the 
 
 Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). 🚨 Open, but not free-form: the key is the node id of each person's preference, so it must be a camel-case identifier (`^[a-z][a-zA-Z0-9]*$`, `NotificationFeatures.IsValidKey`). A key outside that alphabet is **rejected** where it enters (`Raise` errors, `PathFor` throws, the settings tab gives it no row) — never slugged, because a lossy slug would make two features share one preference node. A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
 
+🚨 **`accessGranted` is raised only for a grant a PERSON made.** `AccessGrantNotifier` notifies the grantee when an `AccessAssignment` is created, and skips every grant whose `CreatedBy` is the system identity (`WellKnownUsers.System`, `system-security`): a free app, a plan unlock, a purchase, a coupon, or any other entitlement the platform issues (MeshWeaver#5901). The rule behind it: nobody is ever notified that an app became available — on 2026-09-29 a Store sweep granted a newly published plugin to 72 users and each of them received an access notification by bell, Teams and email.
+
 Each person chooses, **per feature**, which channels reach them. The choice is an ordinary node in their own partition:
 
 | Node type | Lives at | Holds |
@@ -100,9 +102,26 @@ Each person chooses, **per feature**, which channels reach them. The choice is a
 
 The **Notifications** settings tab shows one section per feature (the platform's `NotificationFeatures.BuiltIn` plus every `NotificationFeatureDescriptor` a module registers) and binds the standard node-content editor straight to that feature's node. The node is created on first view **seeded with the effective preference** — the legacy row read from its authoritative stream — so opening the tab changes no delivery; a legacy row that exists but cannot be read refuses the seed (the tab says so) rather than persisting a value nobody saw.
 
+### Per app — iOS *Settings → Notifications → {app}*
+
+Above the feature choice sits a second, per-**app** one, modelled on the phone. Every notification is **attributed** to the app it belongs to (`NotificationApps.Attribute`, pure): an explicit `NotificationRequest.App` wins; otherwise the recipient's installed app (their `InstalledApp` records, `{user}/_App/{appId}` — one single-partition query, the same one the home's Apps grid makes) whose plugin path is the longest prefix of the target path, then of the main node path, either as is (`Chess/Game/1`) or below the recipient's own partition, where an app's content is installed (`{user}/Parties/SampleDossier`). A path in no installed app is the **platform's own** (Memex), and no app preference touches it.
+
+| Node type | Lives at | Holds |
+|---|---|---|
+| `NotificationAppPreference` | `{user}/_Settings/Notifications/Apps/{appId}` | `allowNotifications` (master), `deliverQuietly`, `bell`, `teams`, `email` |
+
+`NotificationApps.Gate` is the one rule. It can only **take channels away**, never add one the feature switched off:
+
+- master switch **off** → nothing, on any channel, the platform's approvals about the app included;
+- otherwise the feature's channels ∩ the app's switches;
+- 🚨 **Deliver quietly** — iOS *provisional authorization*, and the **default for every app the person has not configured**: the app's **own** notifications (a feature it raises itself, not one of `NotificationFeatures.BuiltIn`) reach the **bell only** — no Teams message, no email — until the person switches it off. An app that never asked does not get to reach anyone's inbox or Teams in bulk. The platform's own kinds (an approval, an access grant) about something in the app are **not** provisional: they follow the feature preference unless the person restricts the app, so an approval nobody configured still arrives where it did before.
+- **Fail closed**, exactly like the feature read: when the installed apps or the app's preference cannot be read, the notification may belong to an app the person silenced — the bell only (and only if the feature allows the bell), logged at Warning.
+
+The settings tab lists one section per installed app below the kinds, each binding the standard node-content editor to that app's node, created on first view with the default the dispatcher already applies — so opening the tab changes no delivery. The app key is the installed-app record's id, one path segment (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, `NotificationApps.IsValidKey`), rejected rather than slugged; the `Apps` segment is PascalCase so it can never collide with a (camel-case) feature key.
+
 ### Delivery — `NotificationService.Raise`
 
-`Raise(hub, NotificationRequest)` is the feature-aware entry point; `Dispatch` / `DispatchLocalizable` forward to it with the feature their type implies. It resolves the recipient's preference for the feature and runs one independent leg per channel, reporting what each did (`NotificationChannelResult`):
+`Raise(hub, NotificationRequest)` is the feature-aware entry point; `Dispatch` / `DispatchLocalizable` forward to it with the feature their type implies. It resolves the recipient's preference for the feature, applies the app gate above, and runs one independent leg per channel, reporting what each did (`NotificationChannelResult`):
 
 - **Bell** (`InApp`) — the addressed row, stamped with the feature.
 - **Email** — the profile address, unchanged, including the deferral to triage for a person who authored routing rules.
@@ -111,6 +130,16 @@ The **Notifications** settings tab shows one section per feature (the platform's
 🚨 **A channel the recipient cannot be reached on is a SKIP, logged at Debug — never an error to the raiser.** No deliverer installed, the bot not configured, or the person never having messaged the bot each come back as `Skipped` with the reason, and the other legs are unaffected. A leg that throws is logged at Warning and reported as a skip for the same reason.
 
 A notification with **no recipient** addresses the platform operators' bell and reaches no other channel — it has no person, so no preference, no mailbox and no Teams. An emitter that needs a person's attention (an approval, say) must address the people: the Hosting approval notice enumerates the eligible global administrators and raises one `approvals` notification each.
+
+### A bulk grant never mails — the per-granter budget (`AccessGrantMailBudget`)
+
+A raiser can cap a request to the bell with `NotificationRequest.BellOnly`: it is applied after every preference and app gate, so it can only remove channels. The access-granted notifier uses it. Per granter (the assignment's `CreatedBy`), at most `MailPerWindow` (3) access-granted notifications per fixed 10-minute window may use email or Teams; every further grant in that window reaches the recipient's bell only, and the granter gets ONE bell notice that the rest went out quietly.
+
+- **The budget lives in the store, not in a process.** A slot is a node at a deterministic path, `Admin/_GrantMail/{granter}/{window}-{n}` (plus one `{window}-told` marker), claimed by CREATING it. A create on a taken path is refused by the owning hub and by the store's unique path, so concurrent claims on any number of replicas admit exactly the budget, with no read and no index lag in the decision. A claim that cannot be decided is bell-only (fail closed).
+- **The sweep keeps the previous window.** The first slot of a new window deletes the granter's windows older than the previous one. The previous window stays because a claim dated in it can still be in flight; deleting its slots under it would let it win slot 1 again and mail past the budget. A claim is bounded by a 15-second timeout, far shorter than one window, so nothing older can still be claiming.
+- The granter id is sanitised to one path segment (`GranterKey`); a segment of only dots (`.`, `..`) becomes underscores, so it can never name a parent path.
+
+Pinned by `AccessGrantMailBudgetTest`, which also drives the notifier end to end: five grants by one person through the change feed yield five bells, three Teams messages and one notice to the granter.
 
 ## 5. Routing beyond the bell — rules, channels, triage
 

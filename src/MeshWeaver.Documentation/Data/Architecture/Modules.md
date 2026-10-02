@@ -123,7 +123,11 @@ folder is deleted, and the change likewise takes effect at restart.
 
 **The skip rules** (persisted entries only — the deployment must always boot):
 
-- **Declared platform floor — ADVISORY, never a skip (#3648).** The entry's `minMeshVersion` is
+- **Declared platform floor — never a BOOT skip (#3648).** Since policy
+  `package-min-mesh-version` the floor holds a version BEFORE it lands: a bundle whose floor is
+  comparable with the running platform and above it is not landed (`ModuleUpdateDecision` →
+  `SkipPlatformBelowFloor`, decided by `PlatformFloor` —
+  [Module Adoption Policy](../ModuleAdoptionPolicy) R2). At boot the entry's `minMeshVersion` is
   compared with the running platform by `ModulePlatformFloor.DeclineReason` — still the ONE notion
   of the declared requirement, shared with landing, serving and the pack-time lint — but since
   #3648 a floor the running platform does not satisfy decides nothing at boot: the sentence
@@ -1025,8 +1029,10 @@ published (for that one package), and every 30 minutes as a safety net
 module-declaring package it consults the registry's bundle index and applies the one pure decision
 (`ModuleUpdateDecision`): a newer version lands via `ModuleLandingService` and flags
 `PendingRestart`; the same served version **built against the same framework** is skipped without a
-download; a bundle's declared floor is an **advisory** worded into the log, never a skip (#3648) —
-whether the bytes load is measured by the link probe at placement. Nothing is ever rolled back
+download; a bundle whose declared floor is comparable with the running platform and above it is
+**held** (`SkipPlatformBelowFloor`, not downloaded, the landed generation keeps running — policy
+`package-min-mesh-version`), while an unorderable floor stays an advisory worded into the log —
+whether the bytes that pass the floor load is measured by the link probe at placement. Nothing is ever rolled back
 unattended.
 
 **The restart happens, too.** A landed generation loads only at a restart, and that restart used to

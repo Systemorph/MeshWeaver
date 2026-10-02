@@ -249,6 +249,12 @@ public static class HubPermissionExtensions
     public static IObservable<bool> IsGlobalAdmin(this IMessageHub hub, string userId)
     {
         ArgumentNullException.ThrowIfNull(hub);
+        // 🚨 A SERVICE principal never administers the platform, whatever a grant says: platform
+        // administration is for people. The Admin-partition guard refuses such a grant at write
+        // time; this is the read-side half, so a grant that got in by any other road (a group, a
+        // hand-edited row) still confers nothing here. Doc/Architecture/ServiceIdentities.
+        if (ServiceIdentity.IsServiceObjectId(userId))
+            return Observable.Return(false);
         return hub.GetEffectivePermissions(PermissionEvaluator.AdminScope, userId)
             .Select(p => p.HasFlag(Permission.All));
     }

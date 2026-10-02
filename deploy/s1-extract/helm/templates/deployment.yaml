@@ -61,8 +61,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # Startup and liveness ask only whether the PROCESS is up (/healthz). The model load gates
+          # READINESS alone: a slow load holds traffic back, a failed one leaves the pod NotReady with
+          # the reason on /readyz — neither ever restarts it into a crash loop.
           startupProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /healthz, port: http }
             {{- with .Values.startupProbe }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

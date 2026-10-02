@@ -30,4 +30,28 @@ public static class WellKnownPartitions
     /// </summary>
     public static bool IsMirror(string? partition) =>
         !string.IsNullOrEmpty(partition) && Mirror.Contains(partition);
+
+    /// <summary>
+    /// 🚨 The PLATFORM's own partitions: <c>Admin</c> (a grant there IS platform administration),
+    /// the <see cref="Mirror"/> pair, and the pseudo-identity / credential partitions. Together with
+    /// <see cref="Fleet"/> this is the protected set of the <c>DeleteSpace</c> break-glass action
+    /// (MeshWeaver.Plugins <c>Hosting/InstanceAction/Source/DeleteSpaceRunner.cs</c>,
+    /// <c>ProtectedPartitions</c>), hosted HERE so both repositories read one list. None of them is
+    /// ever a Space somebody lost: the platform-admin grant repair (#5904) refuses them outright.
+    /// <c>_</c>-prefixed framework namespaces are refused by shape, not listed.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> Platform = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "Admin", "Auth", "User", "Portal", "Kernel", "ApiToken", "system-security", "Anonymous");
+
+    /// <summary>
+    /// The FLEET's partitions — the records and shipped content every instance runs on. The rest of
+    /// <c>DeleteSpaceRunner.ProtectedPartitions</c> (see <see cref="Platform"/>). The platform-admin
+    /// grant repair (#5904) issues only an ENTITLEMENT here (no Admin/Editor), whatever their state.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> Fleet = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "Hosting", "Hosting.Instance", "Deployments", "Ops", "Store", "Plugins", "Governance",
+        "Doc", "Documentation", "Essentials", "Agent", "Skill", "Provider", "Providers", "Model", "AI",
+        "Approvals", "Feedback", "Home");
 }

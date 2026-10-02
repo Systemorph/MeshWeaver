@@ -434,14 +434,43 @@ public static class CatalogLayoutAreas
     /// deserialized to its <see cref="PackageManifest"/> and sorted by display name. This is the
     /// read-only "what is running on this instance" view the About tab shows every user — the
     /// catalog's ALL page joins the SAME records against a package source for install status.
+    ///
+    /// <para>🚨 Two properties a consumer can rely on. A live instance's Overview said "No plugins are
+    /// installed on this instance" over dozens of installs; the first property is the reproduced
+    /// cause (<c>AdminAppFirstFrameTest</c>), the second hardens the read against losing its
+    /// viewer:</para>
+    /// <list type="bullet">
+    /// <item><description><b>It emits the registry's ANSWER, never a placeholder.</b> The first
+    /// emission is the query's Initial — so an empty list means the registry IS empty, and a view
+    /// may say so. (The catalog pages seed their own frame; this inventory does not.)</description></item>
+    /// <item><description><b>It reads as the VIEWER the page renders for</b>, stamped explicitly
+    /// (<see cref="MeshQueryRequest.ForViewer"/>) from the host's viewer rather than resolved from
+    /// the ambient context when the query subscribes — which, for a view rendered on a live
+    /// emission on a distributed mesh, is nobody: the anonymous view, and on an instance closed to
+    /// logged-out callers that is an empty registry.</description></item>
+    /// </list>
     /// </summary>
     public static IObservable<IReadOnlyList<PackageManifest>> ObserveInstalledManifests(LayoutAreaHost host)
-        => ObserveInstalled(host).Select(nodes => (IReadOnlyList<PackageManifest>)nodes
-            .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
-            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
-            .Select(m => m!)
-            .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
-            .ToList());
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return Observable.Return<IReadOnlyList<PackageManifest>>([]);
+        var request = MeshQueryRequest.FromQuery(AllInstalledQuery);
+        // The subscriber the page was opened for first; the ambient context only when the host
+        // carries none. A logged-out (virtual) visitor or a hub credential is never stamped as a
+        // signed-in viewer — those reads keep the framework's own resolution.
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        if ((host.ViewerContext ?? access?.Context ?? access?.CircuitContext)
+            is { ObjectId: { Length: > 0 } viewerId, IsVirtual: false, IsHub: false })
+            request = request.ForViewer(viewerId);
+        return FoldInstalledAnswers(mesh.Query<MeshNode>(request))
+            .Select(nodes => (IReadOnlyList<PackageManifest>)nodes
+                .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
+                .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
+                .Select(m => m!)
+                .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList());
+    }
 
     // The install records a card page joins against: the whole registry for the ALL page (its
     // orphan section needs every record), and for a category page ONLY its members — one exact-path
@@ -485,6 +514,11 @@ public static class CatalogLayoutAreas
     // Folds a query's change stream into the current path-keyed set, seeded empty so the page never
     // waits on the registry's first frame.
     private static IObservable<IReadOnlyList<MeshNode>> FoldInstalled(IObservable<QueryResultChange<MeshNode>> changes) =>
+        FoldInstalledAnswers(changes).StartWith((IReadOnlyList<MeshNode>)[]);
+
+    // The same fold WITHOUT the seed: every emission is the registry's answer (its Initial, then
+    // each change), so an empty list means empty — never "not answered yet".
+    private static IObservable<IReadOnlyList<MeshNode>> FoldInstalledAnswers(IObservable<QueryResultChange<MeshNode>> changes) =>
         changes
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
@@ -499,8 +533,7 @@ public static class CatalogLayoutAreas
                     };
                 return map;
             })
-            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList())
-            .StartWith((IReadOnlyList<MeshNode>)[]);
+            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList());
 
     // The page frame every catalog page opens with: title, the authored intro, the source line.
     private static StackControl Frame(
@@ -1064,7 +1097,52 @@ public static class CatalogLayoutAreas
             // the Store's Provision click, the auto-update reconciler), so this is the ONE place it
             // needs to sit.
             .SelectMany(_ => PackageParameters.Require(hub, pkg, logger))
-            .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
+            // …then the PLATFORM floor (policy package-min-mesh-version): an update whose candidate
+            // declares a minMeshVersion above the running platform is HELD before a file travels —
+            // the installed version keeps running and the record says why. Every lane funnels
+            // here (the boot install, the Store's click, the auto-update apply).
+            .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
+                () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId)));
+    }
+
+    /// <summary>
+    /// 🚨 The UPDATE half of policy <c>package-min-mesh-version</c> on the one install orchestrator:
+    /// when <paramref name="pkg"/>'s declared floor is held on this platform
+    /// (<see cref="PackagePlatformFloorGate.Evaluate"/>) and an install record with a DIFFERENT
+    /// content hash exists, nothing is fetched or written — the installed version keeps running
+    /// (rule R1), the record carries <see cref="PackageManifest.HeldUpdate"/>, and the result is an
+    /// empty <see cref="InstallResult"/>. Everything else proceeds to <paramref name="proceed"/>:
+    /// a satisfied or advisory floor, and a record at the SAME hash (the skip / heal path —
+    /// re-landing what is already here replaces nothing). With no record at all the install is a
+    /// FRESH one and is refused before anything is fetched
+    /// (<see cref="PackagePlatformFloorGate.RequireForFreshInstall"/>).
+    /// </summary>
+    private static IObservable<InstallResult> HoldIfPlatformBelowFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
+    {
+        var verdict = PackagePlatformFloorGate.Evaluate(hub, pkg);
+        if (!verdict.IsHeld)
+            return proceed();
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return proceed();
+
+        return persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty()
+            .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .SelectMany(record =>
+                record is null
+                    // A FRESH install: refused here, before a single file is fetched — the
+                    // installer's own gate says the same thing to callers that reach it directly.
+                    ? PackagePlatformFloorGate.RequireForFreshInstall(hub, pkg, logger).SelectMany(_ => proceed())
+                    : !string.IsNullOrEmpty(pkg.ModuleVersion)
+                      && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
+                        ? proceed()
+                        : PackagePlatformFloorGate.RecordHold(hub, pkg, record, verdict, logger)
+                            .Select(_ => new InstallResult(0, 0)));
     }
 
     /// <summary>

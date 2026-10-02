@@ -700,6 +700,21 @@ data:
   {{- if .Values.config.memex_portal.Hosting__Triage__Repositories }}
   Hosting__Triage__Repositories: "{{ .Values.config.memex_portal.Hosting__Triage__Repositories }}"
   {{- end }}
+  # The PR steward's SELF-HEAL SWEEP on the triage inbox (MeshWeaver.Plugins Hosting PullRequestSweep,
+  # EnabledKey). It arms wherever the triage inbox is, so a control instance that is the inbox but must
+  # not review its repositories' pull requests sets it "false". Rendered only when set.
+  {{- $prSweep := .Values.config.memex_portal.Hosting__Triage__PullRequestSweep__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled") (not (kindIs "invalid" $prSweep)) (ne ($prSweep | toString | trim) "") }}
+  Hosting__Triage__PullRequestSweep__Enabled: "{{ $prSweep | toString | trim }}"
+  {{- end }}
+  # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
+  # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on
+  # Hosting/_Access, so the triage items and their threads are readable (a global admin has no data
+  # access by definition). Rendered only when set.
+  {{- $hostingMirror := .Values.config.memex_portal.Hosting__MirrorHostingReadFromAdmins }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins") (not (kindIs "invalid" $hostingMirror)) (ne ($hostingMirror | toString | trim) "") }}
+  Hosting__MirrorHostingReadFromAdmins: "{{ $hostingMirror | toString | trim }}"
+  {{- end }}
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
   # Build instance only: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
   # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
@@ -717,10 +732,34 @@ data:
   {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interval" }}
   Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
   {{- end }}
+  # ---- The bug-fix pool (MeshWeaver.Plugins Hosting/BugFix, Essentials/BugTriage) ----------------
+  # Enabled=false stops an instance's pool entirely (no re-drive sweep, no new bug thread; bugs wait
+  # QUEUED with that reason — Plugins #2635). It moves to the control instance: memex sets false,
+  # control true. Rendered whenever PRESENT (hasKey), so an explicit `false` reaches the container.
+  {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
+  Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
+  {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
   {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
   Hosting__PrEvents__ForwardTo: "{{ .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}"
+  {{- end }}
+  # The triage ISSUE sweep's off-switch (MeshWeaver.Plugins Hosting TriageIssueSweep.EnabledKey). The
+  # sweep arms wherever the triage inbox is (Hosting:PlatformWebhookSecret held, no
+  # Hosting:ControlInbox:Url), so an instance that holds the secret but must not triage yet — a control
+  # instance before its cut-over — sets it "false". Rendered only when set.
+  # 🚨 Tested with `ne … ""` over toString, never `default ""`: an UNQUOTED `false` in an overlay is a
+  # YAML boolean, `default` treats false as empty, and the one value this key exists to carry would
+  # be dropped.
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__IssueSweep__Enabled") (ne (.Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim) "") }}
+  Hosting__Triage__IssueSweep__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim }}"
+  {{- end }}
+  # Where the triage scope comes from (MeshWeaver.Plugins Hosting TriageIntake.ScopeSourceKey). Absent
+  # = the CRM. "Configuration" DECLARES an instance with no CRM by design (the operations instance,
+  # whose type set is compiled into its image): Hosting:Triage:Repositories is then its whole scope.
+  # Without it such an instance's scope is UNKNOWN and triage does nothing there. Rendered only when set.
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__ScopeSource") (ne (.Values.config.memex_portal.Hosting__Triage__ScopeSource | toString | trim) "") }}
+  Hosting__Triage__ScopeSource: "{{ .Values.config.memex_portal.Hosting__Triage__ScopeSource | toString | trim }}"
   {{- end }}
   # A control-lane TARGET's declared inbox for forwarded events (Doc/Architecture/ControlLane →
   # "Forwarded events"): the ONLY local inbox the lane may store an event into. Absent = none.

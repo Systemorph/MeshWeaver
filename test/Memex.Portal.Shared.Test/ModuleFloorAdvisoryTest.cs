@@ -12,8 +12,14 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 <b>A declared <c>minMeshVersion</c> floor is ADVISORY at every runtime decision point
-/// (#3648)</b> — it never refuses, holds or skips; loadability is measured.
+/// 🚨 <b>The 2026-09-07 floor pair never refuses, holds or skips</b> (#3648).
+///
+/// <para><b>Re-scoped by policy <c>package-min-mesh-version</c>.</b> Until then every declared floor
+/// was advisory at runtime. A floor that is COMPARABLE with the running platform and strictly above
+/// it now HOLDS an update (<c>MinMeshVersionHoldsTheUpdateTest</c>); what this fixture keeps pinning
+/// is that the pair below — an <c>rc</c> floor against a <c>ci</c> build, UNORDERED — is advisory
+/// under that decision too, at every decision point, so the trap that held every portal stays
+/// closed. The reconcile tests pass the production <c>floorHold</c> for exactly that reason.</para>
 ///
 /// <para><b>The incident these pin — 2026-09-07.</b> memex-cloud ran <c>3.0.0-ci.8055</c>. Every
 /// installed <c>Plugins/*</c> record carried an <c>rc</c> floor — <c>3.0.0-rc8</c> for most — and
@@ -50,6 +56,11 @@ public class ModuleFloorAdvisoryTest : IDisposable
 
     /// <summary>The production wording of the floor, bound to the deadlock's running version.</summary>
     private static string? Gate(string? floor) => ModulePlatformFloor.DeclineReason(floor, Running);
+
+    /// <summary>The production floor DECISION bound to the deadlock's running version (policy
+    /// <c>package-min-mesh-version</c>): <c>PlatformFloor</c>, under which the 2026-09-07 pair is
+    /// unordered — advisory — and therefore never holds.</summary>
+    private static string? Hold(string? floor) => MeshWeaver.Plugin.Packaging.PlatformFloor.HoldReason(floor, Running);
 
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "mw-flooradvisory-" + Guid.NewGuid().ToString("N"));
@@ -103,10 +114,12 @@ public class ModuleFloorAdvisoryTest : IDisposable
     [Fact]
     public void TheReconcile_LandsABundleWhoseFloorExceedsThePlatform()
     {
+        // 🚨 With the production floor DECISION passed (policy package-min-mesh-version re-armed the
+        // floor): the 2026-09-07 pair is unordered, so it still LANDS — the trap stays closed.
         var neverLanded = ModuleUpdateDecision.Decide(
-            "1.2.0", Floor, Gate, landed: null, policyDecline: null, _ => true, "s-new");
+            "1.2.0", Floor, Gate, landed: null, policyDecline: null, _ => true, "s-new", floorHold: Hold);
         var upgrade = ModuleUpdateDecision.Decide(
-            "1.2.0", Floor, Gate, Landed("1.1.0", "s-old"), policyDecline: null, _ => true, "s-new");
+            "1.2.0", Floor, Gate, Landed("1.1.0", "s-old"), policyDecline: null, _ => true, "s-new", floorHold: Hold);
 
         Assert.Equal(ModuleUpdateAction.Land, neverLanded.Action);
         Assert.Equal(ModuleUpdateAction.Land, upgrade.Action);
@@ -123,13 +136,13 @@ public class ModuleFloorAdvisoryTest : IDisposable
     public void TheReconcile_KeepsEveryOtherVerdict_WhateverTheFloorSays()
     {
         Assert.Equal(ModuleUpdateAction.SkipUpToDate, ModuleUpdateDecision.Decide(
-            "1.1.0", Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, "s-old").Action);
+            "1.1.0", Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, "s-old", floorHold: Hold).Action);
         Assert.Equal(ModuleUpdateAction.SkipUninstalled, ModuleUpdateDecision.Decide(
-            "1.2.0", Floor, Gate, Landed("1.1.0", "s-old", enabled: false), null, _ => true, "s-new").Action);
+            "1.2.0", Floor, Gate, Landed("1.1.0", "s-old", enabled: false), null, _ => true, "s-new", floorHold: Hold).Action);
         Assert.Equal(ModuleUpdateAction.SkipOlder, ModuleUpdateDecision.Decide(
-            "1.0.0", Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, "s-old").Action);
+            "1.0.0", Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, "s-old", floorHold: Hold).Action);
         Assert.Equal(ModuleUpdateAction.SkipNoBundle, ModuleUpdateDecision.Decide(
-            null, Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, null).Action);
+            null, Floor, Gate, Landed("1.1.0", "s-old"), null, _ => true, null, floorHold: Hold).Action);
     }
 
     // ───────────────────────────────────────────── decision point 2: the boot union

@@ -855,6 +855,9 @@ public sealed class InstanceAutoRegistrationService(
             : SeedLedger().SelectMany(ledger =>
             {
                 var seeded = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
+                // What the governed-provision hold treats as already known: seeded, FAILED (the
+                // retry #2254 exists for) and SKIPPED (a standing decision re-derived each pass).
+                var known = KnownToTheLedger(ledger);
                 // 🚨 PER-PACKAGE, not once-per-installation. The old gate was "install the seed only
                 // while the instance has ZERO packages", which made a misconfigured first boot
                 // unrecoverable: the boot installed the pre-installed baseline, the instance was no
@@ -887,11 +890,61 @@ public sealed class InstanceAutoRegistrationService(
                     // same exemption the platform's own preInstalled baseline already has.
                     .SelectMany(selection => InstallAll(selection.Candidates
                             .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
+                            .Where(c => !HeldForGovernedProvision(c, known, freshInstance: seeded.Count == 0))
                             .ToList())
                         .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
+
+    /// <summary>
+    /// 🚨 A package NEWLY LISTED in a source this instance already seeded from is NOT installed just
+    /// because a whole-source pattern (<c>Plugins/*</c>) covers it. It is AVAILABLE; it lands on this
+    /// instance through a governed <c>package.provision</c> activity, or by naming it in
+    /// <see cref="PluginCatalogOptions.InstallByDefault"/> (a reviewed deployment change).
+    ///
+    /// <para><b>Why.</b> Measured 2026-09-29: a package merged into MeshWeaver.Plugins <c>main</c>
+    /// (<c>Parties</c>) was on memex.systemorph.com 20 minutes later and on memex.meshweaver.cloud
+    /// 33 minutes later, because both seed <c>Plugins/*</c> and "never seeded" read as "install
+    /// it". A merge was a release to every instance with nobody deciding (maintainer, 2026-09-30:
+    /// "an instance installs a new package only through its own signed provision").</para>
+    ///
+    /// <para><b>What still installs</b>: everything on a FRESH instance (an empty ledger — the seed
+    /// exists to populate a new deployment), a package an entry names exactly, the platform
+    /// baseline and this environment's flags (reconciled lanes), and a package pulled in as a
+    /// selected package's requirement. What is already installed is untouched.</para>
+    /// </summary>
+    private bool HeldForGovernedProvision(InstallCandidate candidate, IReadOnlySet<string> known, bool freshInstance)
+    {
+        if (!HoldsForGovernedProvision(candidate.WildcardOnly, candidate.Reconciled,
+                known.Contains(candidate.Package.Id), freshInstance))
+            return false;
+        logger.LogWarning(
+            "[DefaultInstall] HELD {Id} from {Source}: newly listed and covered only by a whole-source "
+            + "pattern. It is available but NOT installed — provision it through a governed "
+            + "package.provision activity, or name it in PluginCatalog:InstallByDefault.",
+            candidate.Package.Id, candidate.Package.Source ?? candidate.Source.Name);
+        return true;
+    }
+
+    /// <summary>
+    /// Every package id this instance's default-install ledger has RECORDED: delivered (seeded),
+    /// FAILED (kept off the seeded list so the next pass retries it — #2254), or SKIPPED with a
+    /// standing reason that is re-derived each pass. The governed-provision hold is for a package
+    /// the instance has never seen; one on this set is not "newly listed", and holding it would
+    /// swallow the ledger's retry. A persisted list that reads back <c>null</c> (an explicit
+    /// JSON <c>null</c>) is empty, for every list alike — this runs inside the boot install. Pure.
+    /// </summary>
+    internal static ImmutableHashSet<string> KnownToTheLedger(DefaultInstallLedger ledger) =>
+        (ledger.Seeded ?? ImmutableList<string>.Empty)
+            .Concat(ledger.Failed ?? ImmutableList<string>.Empty)
+            .Concat((ledger.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty).Select(s => s.Package))
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>The hold's decision (<see cref="HeldForGovernedProvision"/>), over its four facts. Pure.</summary>
+    internal static bool HoldsForGovernedProvision(
+        bool wildcardOnly, bool reconciled, bool recordedInLedger, bool freshInstance) =>
+        wildcardOnly && !reconciled && !recordedInLedger && !freshInstance;
 
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
@@ -1377,6 +1430,14 @@ public sealed class InstanceAutoRegistrationService(
                         Reconciled = (baseline && c.Package.PreInstalled)
                                      || IsIncluded(c)
                                      || (c.Source.LocalCheckout && IsWanted(c)),
+                        // Selected ONLY because a whole-source pattern (`Source/*`) covers it — no
+                        // entry names it, no flag declares it, it is not the platform baseline.
+                        // Read by the governed-provision hold in InstallSelection.
+                        WildcardOnly = IsWanted(c)
+                                       && !wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                                                           && w.Matches(c.Package.Source ?? "", c.Package.Id))
+                                       && !IsIncluded(c)
+                                       && !(baseline && c.Package.PreInstalled),
                     })
                     .ToList(), listingIncomplete);
             }));
@@ -2092,6 +2153,13 @@ public sealed class InstanceAutoRegistrationService(
         /// (or a mirrored working tree) and a seed.
         /// </summary>
         public bool Reconciled { get; init; }
+
+        /// <summary>
+        /// Whether ONLY a whole-source pattern (<c>Source/*</c>) selected it — see
+        /// <see cref="HeldForGovernedProvision"/>, which holds such a package back once the
+        /// instance has been seeded.
+        /// </summary>
+        public bool WildcardOnly { get; init; }
 
         /// <summary>
         /// Whether the ref this candidate would be installed at was PROVEN for this instance: the

@@ -170,12 +170,46 @@ it — the update is legitimate and proceeds.
 ordinary discriminator-less snapshot, the proposal is then the only evidence available, and refusing
 there would reopen #3056 wholesale.
 
+### 🚨 Admitted is not claimed — a failed bind of discriminator-less bytes is an answer, not a fault
+
+`Admits` lets discriminator-less JSON through because it contradicts nothing — but it **claims**
+nothing either. When such bytes then fail to bind, the seam has learned exactly what the refused
+branch learns: *these bytes are not a `{proposed}`*. Handing that answer to `As`'s logger filed it at
+**Error** as a failed recovery, and that is what kept #4597 open after the titled half was fixed and
+what filed #5736:
+
+```text
+As<MarkdownContent> for Plyona/Konzeptpapier could not recover value: JsonException.
+```
+
+Two stored shapes reach that line deterministically when a markdown writer saves: a **bare JSON
+string** (a *sanctioned* markdown shape — `WithMarkdownContent` keeps a string a string and
+`ReadMarkdownContent` reads it as Present) and the legacy **`{"markdown": …}`** key (#4600's
+Unreadable shape; `MarkdownContent`'s one `required` member is `content`). In both, the update is the
+write that *replaces* the content — the repair — and it was being reported as the fault.
+
+So the seam now splits on whether the stored JSON **names its own record**:
+
+| Stored JSON that fails to bind | Level | Why |
+|---|---|---|
+| no `$type` | **Warning**, naming the path, the proposed type and the JSON *kind* (never members or values) | it never claimed to be the proposed record |
+| `$type` naming the proposed record | **Error** (from `As`, unchanged) | content claiming to be the record and not binding is corrupt; the writer that stored it is the defect (#4600/#4657) |
+
+The platform deliberately does **not** reinterpret `{"markdown": …}` as `MarkdownContent` here: that
+would be the same manufacture this page forbids, and the reader already surfaces it as Unreadable
+rather than guessing.
+
 `NodeUpdateContentTypeChangeTest` (MeshWeaver.Hosting.Test) pins all four states against the real
 hub's `JsonSerializerOptions` and a recording logger: the silent manufacture (stored bytes naming
 another record must come back untouched — before the fix they came back as the proposed record,
 carrying the stored subject under a new member name), the false Error (a typed foreign snapshot must
 produce no Error and one Warning naming both types), and the two counterparties the gate must not
-swallow — a same-short-named record still converts, and discriminator-less bytes still convert.
+swallow — a same-short-named record still converts, and discriminator-less bytes still convert. The
+same class measures the admitted-not-claimed split through the REAL `MarkdownContent`: the legacy
+key (both JSON shapes) and a bare string produce no Error and one Warning, discriminated content that
+does not bind still produces an Error, discriminator-less bytes that bind are still typed, and a
+plugin record (live or stored with its own `$type`) proposed over as `MarkdownContent` produces no
+Error.
 
 ## What this does not change
 

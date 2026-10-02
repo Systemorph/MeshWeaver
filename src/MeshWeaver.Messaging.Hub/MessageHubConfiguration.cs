@@ -578,7 +578,7 @@ public record MessageHubConfiguration
                 //
                 // Genuine identity-free framework traffic is EXEMPT (see
                 // IsAccessContextExempt): [SystemMessage] (heartbeats, hub-lifecycle,
-                // SetCurrentRequest, Save/DeleteMeshNodeRequest), [CanBeIgnored]
+                // SetCurrentRequest, SaveMeshNodeRequest), [CanBeIgnored]
                 // (Shutdown/Dispose/HeartBeat), and DeliveryFailure (the courier's
                 // own error channel). Infrastructure that legitimately bypasses RLS
                 // opts in EXPLICITLY at the callsite via ImpersonateAsSystem /
@@ -712,7 +712,7 @@ public record MessageHubConfiguration
     /// The exempt set is exactly the genuinely identity-free framework traffic:
     /// <list type="bullet">
     /// <item><b><see cref="SystemMessageAttribute"/></b> — heartbeats, hub-lifecycle,
-    /// subscription management, <c>SetCurrentRequest</c>, <c>Save/DeleteMeshNodeRequest</c>
+    /// subscription management, <c>SetCurrentRequest</c>, <c>SaveMeshNodeRequest</c>
     /// (per-node-hub self-writes). Carry no security-relevant payload.</item>
     /// <item><b><see cref="CanBeIgnoredAttribute"/></b> — fire-and-forget control traffic
     /// (Shutdown / Dispose / HeartBeat) with no awaiting requester.</item>

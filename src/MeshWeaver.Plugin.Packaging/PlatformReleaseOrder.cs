@@ -177,7 +177,7 @@ public static class PlatformReleaseOrder
     /// <c>3.0.0.0</c>, which is comparable — and deliberately strict about it being NUMERIC, which is
     /// what separates a version from <c>unknown</c>, a git sha, or <c>main</c>.
     /// </summary>
-    private static bool TrySplit(string? version, out string core, out string[] preRelease)
+    internal static bool TrySplit(string? version, out string core, out string[] preRelease)
     {
         core = "";
         preRelease = [];

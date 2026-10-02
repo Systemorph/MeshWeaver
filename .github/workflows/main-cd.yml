@@ -2187,9 +2187,10 @@ jobs:
           --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
           ${{ steps.previous.outputs.args }}
 
-  # Tags the accepted image — `memex-control:<version>`, `:<sha>`, `:main` — on ACR and the fleet
-  # registry (digest verified). Only after `control-acceptance` is green: an image that failed it
-  # never receives a name a record or an operator could select.
+  # Tags the accepted image — `memex-control:<sha>`, `:<sha>-p<plugins>`, `:main` — on ACR and the
+  # fleet registry (digest verified). Only after `control-acceptance` is green: an image that failed it
+  # never receives a name at all. Its VERSION tag and line pointers — the names a record selects — are
+  # written by `control-arm`, only once `arm` armed this pair.
   control-promote:
     name: "Promote the control image (after its acceptance test)"
     needs: [gate, control-image, control-acceptance]
@@ -2219,22 +2220,150 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Tag memex-control:<version>, :<sha>, :main and the line pointers (ACR, then the fleet registry)
+      - name: Tag memex-control:<sha>, :<sha>-p<plugins>, :main (ACR, then the fleet registry) — identity only, never the version
+        env:
+          PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
         run: |
           set -euo pipefail
-          # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as Phase D moves them
-          # for memex-portal-ai: a NEW instance seeds from the line pointer, never a specific build
-          # (Memex AGENTS.md "NO PINS"; Plugins#2034). Without them the shadow Provision of control
-          # (Memex docs/control-instance.md §8 step 4) planned "selected tag (none)" on 2026-09-26 —
-          # memex-control carried only <version>, <sha> and main.
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # 🚨 IDENTITY TAGS ONLY — the same split `promote` makes for memex-portal-ai (policy
+          # `one-promotion-gate`). The VERSION tag (what a Continuous record with `updatePattern:
+          # 3.0.0-ci*` rolls to) and the line pointers are the ARMING write, made by `control-arm` only
+          # for a set `arm` armed — so an instance on this image follows the same release gate as the
+          # fleet instead of rolling to every promoted set. The PAIR tag `<core7>-p<plugins7>` is the
+          # join `control-arm` reads: the armed portal manifest carries the same pair tag, and unlike
+          # the bare sha a rebuild of the same core commit never re-points it.
+          # The SAME expression, from the SAME gate outputs, as `promote`'s portal pair tag — and held
+          # to the shape `control-arm` joins on (arm-promoted-set.py PAIR_TAG), so a drift in either
+          # output reds HERE instead of leaving every armed set `missing` with only a warning.
+          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7> — control-arm could never join it to the armed portal manifest"; exit 1; }
           args=(); margs=()
-          for t in "$V_CONTROL" "$SHA" main $(line_tags "$V_CONTROL"); do
+          for t in "$SHA" "$SHA-p$PLUGINS_SHORT" main; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
           done
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
-          echo "- memex-control \`$V_CONTROL\`, \`$SHA\`, \`main\`, $(line_tags "$V_CONTROL") — accepted (empty DB · broken NodeType · N−1) and promoted" >> "$GITHUB_STEP_SUMMARY"
+          echo "- memex-control \`$SHA\`, \`$SHA-p$PLUGINS_SHORT\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written by \`control-arm\` once this pair is ARMED" >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────── THE CONTROL IMAGE FOLLOWS THE ARMED SET (policy `one-promotion-gate`) ──────────
+  # `memex-control:<version>` and its line pointers are written HERE, for the set `arm` armed on
+  # memex-portal-ai and nothing else — the control instance runs this image under a Continuous
+  # policy, so a version tag written at promotion would roll it to sets the fleet gate refused.
+  # Runs in every main-cd run after `arm` (like `arm`, never waiting): it reads the newest ARMED
+  # version and its pair tag off memex-portal-ai, and tags the accepted control image of that pair.
+  #   done    → nothing to write (idempotent; control-arm writes the ACR version tag LAST, so for
+  #             its own writes presence on ACR implies the fleet registry got the same tags — a tag
+  #             written before control-arm existed was verified on cr by control-promote's mirror);
+  #   tag     → version (+ line pointers unless a newer control version exists — never backwards);
+  #   missing → no accepted control image for the armed pair: the control lane failed or has not
+  #             finished for it. NOT red here — the control lane reports its own failure
+  #             (`control-lane-report`) and must never block or re-trigger the fleet's delivery —
+  #             but said out loud: a warning and a summary line naming the version the control
+  #             image stays on. The next run re-reads and heals once the pair is accepted.
+  control-arm:
+    name: "Arm the control image: memex-control follows the armed set"
+    needs: [preflight, arm]
+    if: always() && needs.preflight.result == 'success' && needs.arm.result == 'success'
+    runs-on: ubuntu-latest
+    # ~3× the measured cr copy of a portal-sized manifest, as control-promote.
+    timeout-minutes: 25
+    concurrency:
+      group: main-cd-control-arm
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      issues: write     # a red here reports itself on the control-image issue, as the control lane does
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: "The decision can say no (self-test)"
+        run: python3 .github/scripts/arm-promoted-set.py --self-test
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: What must memex-control be told about the newest armed set?
+        id: follow
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          az acr manifest list-metadata --registry meshweaver --name memex-control --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
+          python3 .github/scripts/arm-promoted-set.py control-follow \
+            --manifests "$RUNNER_TEMP/portal-manifests.json" --control-manifests "$RUNNER_TEMP/control-manifests.json"
+      - name: Already armed — say where memex-control is
+        if: steps.follow.outputs.action == 'done'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+        run: echo "- memex-control already carries the armed set \`$V\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
+      - name: The armed set has no accepted control image — say so
+        if: steps.follow.outputs.action == 'missing'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+          PAIR: ${{ steps.follow.outputs.pair }}
+          STAYS: ${{ steps.follow.outputs.control_newest }}
+        run: |
+          echo "::warning title=Control image not armed::the armed set $V (pair $PAIR) has no accepted memex-control image — the control image stays on ${STAYS:-nothing}. Its control lane failed or has not finished for that pair (see the open \`control-image\` issue); the next main-cd run re-reads this."
+          echo "- ⚠️ memex-control NOT armed for \`$V\` (pair \`$PAIR\`): no accepted control image of that pair; stays on \`${STAYS:-none}\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: ACR login
+        if: steps.follow.outputs.action == 'tag'
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        if: steps.follow.outputs.action == 'tag'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: "Tag memex-control:<version> (+ the line pointers) — the fleet registry first, ACR's version tag LAST"
+        if: steps.follow.outputs.action == 'tag'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+          PAIR: ${{ steps.follow.outputs.pair }}
+          MOVE: ${{ steps.follow.outputs.move_pointers }}
+        run: |
+          set -euo pipefail
+          # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as `arm`'s phase D
+          # moves them for memex-portal-ai: a NEW instance seeds from the line pointer, never a
+          # specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          tags=("$V")
+          if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V")"; tags+=("${pointers[@]}"); fi
+          [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V only, the line pointers stay"
+          margs=(); args=()
+          for t in "${tags[@]}"; do margs+=("${{ env.REGISTRY }}/memex-control:$t"); args+=(--tag "${{ env.ACR }}/memex-control:$t"); done
+          # cr first: `done` is decided from ACR's version tag, so ACR must be the LAST write — a
+          # mirror failure then leaves `tag` for the next run instead of a `done` that never reached cr.
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$PAIR" "${margs[@]}"
+          docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$PAIR"
+          echo "- memex-control ARMED: \`$V\` ← pair \`$PAIR\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
+      # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
+      # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
+      # the next promotion; a later green control-arm heals the tag itself.
+      - name: Report a red control-arm on the control-image issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          V: ${{ steps.follow.outputs.version }}
+        run: |
+          set -euo pipefail
+          body="control-arm failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — memex-control was not tagged for the armed set \`${V:-unknown}\`. The fleet's own delivery (memex-portal-ai) is NOT affected. The next main-cd run re-reads and re-tags; read the failed step for the cause."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-image --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh label create control-image --repo "$GITHUB_REPOSITORY" \
+              --description "The control-instance image lane (main-cd control-*) failed" \
+              --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-arm failed on main: run ${GITHUB_RUN_ID}" \
+              --label control-image --body "$body"
+          fi
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
@@ -2546,8 +2675,9 @@ jobs:
       # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
       # base would diff, and control-arm, only the last one. `arm-promoted-set.py armed-base` names the
       # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
-      # sha tag). `base_kind` records which rule produced `base`, and an UNRESOLVED base still promotes
-      # for CI but is never armed and never measured (see the script's header) — CI is never held, and
+      # core/Plugins pair tag; the bare sha tag may have moved to a newer pair). `base_kind` records
+      # which rule produced `base`, and an UNRESOLVED base still promotes for CI but is never armed
+      # and never measured (see the script's header) — CI is never held, and
       # the fleet never receives merges nobody measured.
       - name: "Promotion record (what `arm` needs to arm this set later)"
         env:

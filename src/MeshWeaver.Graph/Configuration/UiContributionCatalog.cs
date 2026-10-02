@@ -24,13 +24,20 @@ namespace MeshWeaver.Graph.Configuration;
 /// <para>Fault-tolerant: a query error logs and degrades to the LAST known set (or empty), then
 /// the subscription retries on the next subscriber epoch — the menu keeps rendering its compiled
 /// items no matter what this catalog does.</para>
+///
+/// <para>🚨 <see cref="Contributions"/> emits the query's ANSWER, never a placeholder: until the
+/// first Initial (or a fault) arrives it emits nothing. It used to open with an empty set, and a
+/// consumer that combines it into a page (the settings nav) painted that empty set as "no
+/// contributed tabs" — the frame an MCP read or a first paint takes. Consumers that must not wait
+/// (the node menus) seed their own slice empty, as they always have.</para>
 /// </summary>
 public sealed class UiContributionCatalog : IDisposable
 {
     private readonly IMessageHub hub;
     private readonly ILogger<UiContributionCatalog>? logger;
-    private readonly BehaviorSubject<ImmutableDictionary<string, (MeshNode Node, UiContribution Content)>> state =
-        new(ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty);
+    // Null until the catalog query has ANSWERED (its first Initial, or a fault) — see Contributions.
+    private readonly BehaviorSubject<ImmutableDictionary<string, (MeshNode Node, UiContribution Content)>?> state =
+        new(null);
     private readonly object gate = new();
     private IDisposable? subscription;
 
@@ -42,15 +49,16 @@ public sealed class UiContributionCatalog : IDisposable
     }
 
     /// <summary>
-    /// The live contribution set, replayed to every subscriber. First access starts the shared
-    /// query subscription.
+    /// The live contribution set, replayed to every subscriber once the catalog query has answered
+    /// (nothing is emitted before that — an empty placeholder would read as "no contributions").
+    /// First access starts the shared query subscription.
     /// </summary>
     public IObservable<ImmutableList<(MeshNode Node, UiContribution Content)>> Contributions
     {
         get
         {
             EnsureSubscribed();
-            return state.Select(s => s.Values.ToImmutableList());
+            return state.Where(s => s is not null).Select(s => s!.Values.ToImmutableList());
         }
     }
 
@@ -65,7 +73,7 @@ public sealed class UiContributionCatalog : IDisposable
         get
         {
             EnsureSubscribed();
-            return state.Value.Values.ToImmutableList();
+            return state.Value?.Values.ToImmutableList() ?? [];
         }
     }
 
@@ -82,8 +90,9 @@ public sealed class UiContributionCatalog : IDisposable
             if (meshService is null)
             {
                 // A mesh without the query surface (minimal fixtures) — the catalog stays empty
-                // and the menu renders its compiled items only.
+                // and the menu renders its compiled items only. Empty IS the answer here.
                 subscription = System.Reactive.Disposables.Disposable.Empty;
+                state.OnNext(ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty);
                 return;
             }
 
@@ -97,8 +106,11 @@ public sealed class UiContributionCatalog : IDisposable
                         .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(UiContributionNodeType.NodeType)))
                         .Subscribe(OnChange, ex =>
                         {
-                            // Degrade to the last known set; the compiled menu is unaffected.
+                            // Degrade to the last known set; the compiled menu is unaffected. A fault
+                            // before the first answer answers EMPTY, so nothing waits on it forever.
                             logger?.LogWarning(ex, "UiContribution catalog query faulted; menu contributions frozen at the last known set");
+                            if (state.Value is null)
+                                state.OnNext(ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty);
                         });
                 }
             }
@@ -109,7 +121,7 @@ public sealed class UiContributionCatalog : IDisposable
 
     private void OnChange(QueryResultChange<MeshNode> change)
     {
-        var current = state.Value;
+        var current = state.Value ?? ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty;
         switch (change.ChangeType)
         {
             case QueryChangeType.Initial:

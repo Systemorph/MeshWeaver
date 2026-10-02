@@ -49,6 +49,9 @@ public static class PlatformSettingsTabAreas
     /// <summary>Layout area rendering <see cref="ControlLaneSettingsTab.BuildContent"/> (admin-gated).</summary>
     public const string ControlLaneArea = "SettingsControlLane";
 
+    /// <summary>Layout area rendering <see cref="ServiceIdentitiesSettingsTab.BuildContent"/> (admin-gated).</summary>
+    public const string ServiceIdentitiesArea = "SettingsServiceIdentities";
+
 
     /// <summary>
     /// Registers the tranches' tab contents as layout areas on the per-node hubs. The settings
@@ -76,7 +79,9 @@ public static class PlatformSettingsTabAreas
             .WithView(PublishedArea, (host, _) => AdminGated(host,
                 () => PublishedSettingsTab.BuildContent(host, PaneStack())))
             .WithView(ControlLaneArea, (host, _) => AdminGated(host,
-                () => ControlLaneSettingsTab.BuildContent(host, PaneStack()))));
+                () => ControlLaneSettingsTab.BuildContent(host, PaneStack())))
+            .WithView(ServiceIdentitiesArea, (host, _) => AdminGated(host,
+                () => ServiceIdentitiesSettingsTab.BuildContent(host, PaneStack()))));
 
     /// <summary>
     /// The admin-gated area body. Each admin tab's contributed entry hides the tab via
@@ -101,7 +106,7 @@ public static class PlatformSettingsTabAreas
     internal static IReadOnlyList<string> Areas { get; } =
     [
         WhatsNewArea, AboutArea, PrivacyArea, InvitationsArea, InboxArea,
-        UpdatePolicyArea, PublishedArea, ControlLaneArea,
+        UpdatePolicyArea, PublishedArea, ControlLaneArea, ServiceIdentitiesArea,
     ];
 
     /// <summary>
@@ -202,6 +207,19 @@ public static class PlatformSettingsTabAreas
             Order = AdminAppNodeType.PeopleOrder + 30,
             Gates = AdminAppOnly,
         }),
+        Seed(ServiceIdentitiesSettingsTab.TabId, "Service identities", new UiContribution
+        {
+            Context = UiContribution.NodeSettingsContext,
+            Area = ServiceIdentitiesArea,
+            Label = "Service identities",
+            LabelKey = "settings.serviceIdentities",
+            Icon = "Bot",
+            Group = AdminAppNodeType.PeopleGroup,
+            GroupKey = AdminAppNodeType.PeopleGroupKey,
+            GroupIcon = "People",
+            Order = AdminAppNodeType.PeopleOrder + 40,
+            Gates = AdminAppOnly,
+        }),
         Seed(PrivacySettingsTab.TabId, "Privacy", new UiContribution
         {
             Context = UiContribution.NodeSettingsContext,
@@ -240,6 +258,7 @@ public static class PlatformSettingsTabAreas
     [
         InvitationsSettingsTab.TabId, InboxSettingsTab.TabId, UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId, PrivacySettingsTab.TabId, ControlLaneSettingsTab.TabId,
+        ServiceIdentitiesSettingsTab.TabId,
     ];
 
     private static MeshNode Seed(string id, string name, UiContribution content)

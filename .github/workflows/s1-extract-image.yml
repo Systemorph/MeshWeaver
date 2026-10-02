@@ -1,0 +1,127 @@
+name: s1-extract image
+
+# Builds deploy/s1-extract (GLiNER multi v2.1 exported to ONNX, behind FastAPI) and, on main, pushes
+# it to ACR — the ONE channel the cluster pulls it from. Until this workflow the only route to the
+# registry was a hand `az acr build` (deploy/s1-extract/README.md), which is how
+# `whisper-swiss-german` came to be an image nobody can say was built from which commit.
+#
+# 🚨 THE TAGS, and which one an overlay names.
+#   gliner-multi-2.1-<short sha>  immutable — what an estate's values file names. The chart values an
+#                                 approved ApplyChart binds carry this tag, so the approval binds the
+#                                 bytes that run (Systemorph/Memex docs/aks-ops.md → ApplyChart).
+#   gliner-multi-2.1              moving — the model line, for a laptop `docker pull`. Never name it in
+#                                 an overlay: IfNotPresent + a moving tag is two nodes running two builds.
+# The tag names the MODEL (urchade/gliner_multi-v2.1), not the service; a model swap is a new line.
+#
+# 🚨 NOT A GATE, so the path filter is correct here. The build fetches the model from Hugging Face and
+# takes most of a runner's disk, and the service's own tests run INSIDE the image build
+# (app/test_server.py, offline). A PR that does not touch deploy/s1-extract has nothing to build.
+#
+# Auth is the OIDC federated credential main-cd.yml and hosting-operator.yml use, scoped to this
+# repository's main branch — which is the only ref the push job runs on.
+
+on:
+  pull_request:
+    paths:
+      - deploy/s1-extract/**
+      - .github/workflows/s1-extract-image.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/s1-extract/**
+      - .github/workflows/s1-extract-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR branch supersedes its build; a main run is never cancelled (each main push is
+# its own group, keyed on the commit — check-main-runs-not-cancelled.py).
+concurrency:
+  group: s1-extract-image-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  ACR: meshweaver.azurecr.io
+  LINE: gliner-multi-2.1
+
+jobs:
+  # Pull requests: build only — the image build IS the test. Nothing from a PR reaches ACR, and this job
+  # holds no secret (check-pr-secret-preflight.py: a PR-reachable job consuming a secret needs a preflight).
+  build:
+    name: Build s1-extract (export + offline tests in the image)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      # torch (CPU) + the exported 1.1 GB model + the export stage's onnx toolchain do not fit the
+      # hosted runner's free disk as shipped; reclaim the preinstalled toolchains this job never uses.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          dotnet: true
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      # The Dockerfile's export stage smoke-tests the ONNX export (it must find an organisation) and
+      # the runtime stage runs the service tests offline — so a green build IS the test.
+      - name: Build
+        run: docker build -t s1-extract:ci deploy/s1-extract
+
+  # main (push or dispatch): build the same way, push both tags, read them back.
+  publish:
+    name: Build and push s1-extract to ACR
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write   # OIDC to Azure (the federated credential is scoped to main)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          dotnet: true
+          android: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Build
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker build -t "$ACR/s1-extract:${LINE}-${short}" -t "$ACR/s1-extract:${LINE}" deploy/s1-extract
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Push s1-extract:<line>-<sha> and :<line>
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker push "$ACR/s1-extract:${LINE}-${short}"
+          docker push "$ACR/s1-extract:${LINE}"
+      - name: Verify the tags exist in the registry (read back, never the green tick)
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          immutable=$(az acr manifest show-metadata --registry meshweaver --name "s1-extract:${LINE}-${short}" --query digest -o tsv)
+          moving=$(az acr manifest show-metadata --registry meshweaver --name "s1-extract:${LINE}" --query digest -o tsv)
+          [ -n "$immutable" ] && [ "$immutable" = "$moving" ] \
+            || { echo "::error::s1-extract:${LINE}-${short} (${immutable:-absent}) and :${LINE} (${moving:-absent}) do not name one pushed manifest"; exit 1; }
+          echo "published $ACR/s1-extract:${LINE}-${short} = ${immutable} (+ :${LINE})"
+          echo "### s1-extract published" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ACR/s1-extract:${LINE}-${short}\` — \`${immutable}\`. An estate overlay names this immutable tag." >> "$GITHUB_STEP_SUMMARY"

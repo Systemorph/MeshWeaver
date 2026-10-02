@@ -139,7 +139,19 @@ public static class McpAuthenticationExtensions
         // produce a 302 to /login which MCP clients can't follow.
         options.ForwardChallenge = null;
         options.ForwardForbid = null;
-        options.ForwardDefaultSelector = null;
+        // 🚨 …EXCEPT when validation could not RUN (issue #637). The ApiToken handler flags that
+        // on the request and its own challenge answers 503 + Retry-After — but the MCP scheme
+        // writes the challenge itself, so that override never ran on /mcp: a token the mesh
+        // simply could not look up for a moment was answered 401 + WWW-Authenticate: Bearer, and
+        // an MCP client reads exactly that as "sign in again". Measured on memex, 2026-09-29/30:
+        // every validation stall signed the maintainer's MCP connections out
+        // (Doc/Architecture/TokenValidationHotPath). With no explicit ForwardChallenge the handler
+        // resolves its target through this selector, so a flagged request's challenge goes to the
+        // ApiToken scheme (503, token kept) and every other one stays here (401 + discovery).
+        options.ForwardDefaultSelector = context =>
+            context.Items.ContainsKey(ApiTokenAuthenticationHandler.ValidationUnavailableItemKey)
+                ? ApiTokenAuthenticationHandler.SchemeName
+                : null;
 
         options.ResourceMetadata = new ProtectedResourceMetadata
         {

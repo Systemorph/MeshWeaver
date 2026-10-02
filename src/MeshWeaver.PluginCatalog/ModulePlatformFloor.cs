@@ -1,5 +1,4 @@
-using System.Reflection;
-using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.PluginCatalog;
@@ -8,30 +7,31 @@ namespace MeshWeaver.PluginCatalog;
 /// The DECLARED platform floor of the MODULE lane (#1664): whether the RUNNING platform version
 /// satisfies a module's declared <c>minMeshVersion</c>, and if not, a sentence naming both sides.
 ///
-/// <para>🚨 <b>ADVISORY at runtime since #3648 — it decides nothing.</b> Maintainer directive of
-/// 2026-09-07 (<c>Doc/Architecture/ModuleAdoptionPolicy</c>, rule R2): whether a module loads is
-/// MEASURED — the type-level link probe <c>MeshWeaver.Mesh.ModulePlatformLink</c> at landing and at
-/// boot, plus the actual load — never declared by a version string. The floor is a CLAIM a module
-/// author writes by hand, compared by a total order that encodes a release POLICY rather than
-/// compatibility: <see cref="NuGetVersionComparer"/> ranks <c>ci &lt; rc &lt; clean</c>, so on
-/// 2026-09-07 every installed <c>Plugins/*</c> record carrying an <c>rc</c> or <c>3.0.0</c> floor
-/// made memex-cloud's self-updater decline all 11 candidate releases ("77 plugins required … every
-/// one declined") — every one of which the link probe would have loaded — and every production
-/// portal was held on the morning build for the whole day. The floor had already been wrong the
-/// other way round two days earlier (#3538): a declared <c>3.0.0-rc8</c> was SATISFIED by
-/// <c>3.0.0-rc9.ci.7693</c> while the bytes were linked against a type that platform did not have.
-/// A string can be unsatisfiable and satisfied-yet-wrong; the probe reads the bytes and is neither.</para>
+/// <para>🚨 <b>The floor HOLDS again — through <see cref="PlatformFloor"/>
+/// (<see cref="PackagePlatformFloorGate.HoldFor"/>), never through
+/// <see cref="DeclineReason(string?)"/></b> (policy <c>package-min-mesh-version</c>,
+/// <c>Doc/Architecture/ModuleAdoptionPolicy</c> R2). A package version is used only when the
+/// running platform satisfies its declared floor; the decision is <see cref="PlatformFloor"/>
+/// (run-number aware, and an unordered comparison proceeds as advisory). Evidence that re-armed it
+/// (2026-09-27): Store 1.16 used <c>IPaymentProvider</c> billing-portal members and Hosting used
+/// <c>DeploymentContent.AnnouncementKeySecret</c>, both synced onto instances running
+/// <c>3.0.0-ci.9412</c>/<c>9414</c> — images predating those members — and 14 NodeTypes were left
+/// with no usable assembly (CS0117/CS1061). The link probe measures a compiled MODULE; it cannot
+/// see NodeType SOURCE compiled in the mesh, which is exactly what broke.</para>
 ///
-/// <para><b>What the answer is used for now.</b> <see cref="DeclineReason(string?)"/> still names
-/// both versions, and every runtime decision point LOGS that sentence (Information) and carries it
-/// onto the status surfaces as "declares platform ≥ X; running Y" — <c>ModuleUpdateDecision</c>,
-/// <c>PluginBundleClient.LandFromBundle</c>, <c>ModuleLandingService.LandCore</c>, the boot union,
-/// <c>ReleaseAvailability</c> (an advisory beside the verdict, never in <c>IsUpdatable</c>),
-/// <c>RequiredModuleStatus</c> and the activation report. None of them refuses, holds or skips on
-/// it. Its one remaining GATE is at PACK time: <c>check-module-platform-floor.py</c> refuses a
-/// module whose declared floor the platform it is compiled against cannot satisfy — an authoring
-/// error — and <c>ModulePlatformFloorScriptParityTest</c> pins that script against the two-argument
-/// overload here, which is why the comparison stays exactly what it was.</para>
+/// <para><b>Why the SemVer comparison below does not decide at runtime.</b> Between #3648 and
+/// the policy above the floor was advisory everywhere, because this type's
+/// <see cref="NuGetVersionComparer"/> comparison ranks <c>ci &lt; rc &lt; clean</c>: on
+/// 2026-09-07 every installed <c>Plugins/*</c> record carrying an <c>rc</c> or <c>3.0.0</c> floor
+/// made memex-cloud's self-updater decline all 11 candidate releases, and every production portal
+/// was held on the morning build for the whole day. That comparison stays for exactly two jobs:
+/// the WORDING of the advisory lines on the status surfaces (<c>PluginBundleClient.LandFromBundle</c>,
+/// <c>ModuleLandingService.LandCore</c>, the boot union, <c>ReleaseAvailability</c>,
+/// <c>RequiredModuleStatus</c>, the activation report — none of which refuses on it), and the
+/// PACK-time gate: <c>check-module-platform-floor.py</c> refuses a module whose declared floor the
+/// platform it is compiled against cannot satisfy, and <c>ModulePlatformFloorScriptParityTest</c>
+/// pins that script against the two-argument overload here, which is why it stays exactly what
+/// it was.</para>
 ///
 /// <para><b>Deliberately NOT the MVID gate.</b> MVID equality is BAKE semantics — a NodeType
 /// assembly is compiled in-process against exact framework references, so only the identical build
@@ -40,37 +40,27 @@ namespace MeshWeaver.PluginCatalog;
 /// built against as metadata the update reconcile compares to tell a rebuild from a no-op
 /// (Plugins#931), never as a refusal.</para>
 ///
-/// <para>The comparison is SemVer via <see cref="NuGetVersionComparer"/> (string order silently
-/// picks wrong across <c>ci.900</c>/<c>ci.3758</c>); an ABSENT floor is no constraint — most
+/// <para>The advisory comparison is SemVer via <see cref="NuGetVersionComparer"/> (string order
+/// silently picks wrong across <c>ci.900</c>/<c>ci.3758</c>); an ABSENT floor is no constraint — most
 /// modules need none, and inventing one would be a claim the author never made.</para>
 /// </summary>
 public static class ModulePlatformFloor
 {
     /// <summary>
-    /// The RUNNING platform's version: MeshWeaver.Graph's <c>AssemblyInformationalVersion</c>
-    /// (stamped centrally by <c>Directory.Build.props</c>), with the <c>+gitSha</c> build metadata
-    /// stripped (SemVer ignores it for ordering; stripping keeps log lines readable). Null when
-    /// the assembly carries no version stamp — which <see cref="DeclineReason(string?)"/> treats
-    /// as "cannot verify a declared floor".
+    /// The RUNNING platform's version — <see cref="PlatformBuildInfo.RunningPlatformVersion"/>, the
+    /// ONE reader every version decision uses (<see cref="PlatformFloor"/>, the prebuilt-adoption
+    /// policy, GitSync). It used to read MeshWeaver.Graph's <c>AssemblyInformationalVersion</c>,
+    /// which carries no run number, so the module lane and the content lane compared a floor
+    /// against two different "running" versions. Null when the build carries no version.
     /// </summary>
-    public static string? RunningVersion { get; } = Resolve();
-
-    private static string? Resolve()
-    {
-        var version = typeof(PrebuiltAssemblySeeder).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (string.IsNullOrWhiteSpace(version))
-            return null;
-        var plus = version.IndexOf('+');
-        return plus < 0 ? version : version[..plus];
-    }
+    public static string? RunningVersion => PlatformBuildInfo.RunningPlatformVersion;
 
     /// <summary>
     /// The ADVISORY for a module declaring <paramref name="minMeshVersion"/> on THIS process: null
     /// when the running platform satisfies the floor (or none is declared); otherwise a sentence
     /// naming both versions. The production overload every fetch/land/boot/status call site uses,
-    /// so there is never a second notion of the floor — and since #3648 none of them treats a
-    /// non-null answer as a reason to refuse, hold or skip.
+    /// so the wording never varies — and none of them treats a non-null answer as a reason to
+    /// refuse, hold or skip: the runtime HOLD is <see cref="PlatformFloor"/> alone.
     /// </summary>
     public static string? DeclineReason(string? minMeshVersion) =>
         DeclineReason(minMeshVersion, RunningVersion);
@@ -101,8 +91,9 @@ public static class ModulePlatformFloor
 
         return NuGetVersionComparer.Instance.Compare(runningVersion, minMeshVersion) < 0
             ? $"the module declares platform ≥ {minMeshVersion} but this deployment runs "
-              + $"{runningVersion} — advisory (#3648): whether it loads is measured by the link "
-              + "probe, never by this comparison"
+              + $"{runningVersion} — advisory: this SemVer wording decides nothing at runtime; "
+              + "whether the version is held is PlatformFloor's decision (policy "
+              + "package-min-mesh-version)"
             : null;
     }
 }

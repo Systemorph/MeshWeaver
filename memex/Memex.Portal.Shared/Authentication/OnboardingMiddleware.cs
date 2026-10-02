@@ -339,8 +339,10 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
         var userContext = accessService.Context ?? accessService.CircuitContext;
 
-        // Skip virtual users — they don't need onboarding.
-        if (userContext is not { IsVirtual: false } || string.IsNullOrEmpty(userContext.ObjectId))
+        // Skip virtual users — they don't need onboarding. Nor does a SERVICE principal: it has no
+        // User node by design and never will (Doc/Architecture/ServiceIdentities), so looking one up
+        // would bounce every service request to /onboarding.
+        if (userContext is not { IsVirtual: false, IsService: false } || string.IsNullOrEmpty(userContext.ObjectId))
             return Observable.Return(OnboardingDecision.PassThrough);
 
         var email = userContext.Email ?? userContext.ObjectId;

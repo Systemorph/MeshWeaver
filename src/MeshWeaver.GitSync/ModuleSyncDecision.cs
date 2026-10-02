@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
-using MeshWeaver.Compiler;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.GitSync;
 
@@ -63,8 +63,9 @@ public sealed record ModuleSyncOutcome(
 /// <para><b>The rule, per module, in order:</b></para>
 /// <list type="number">
 ///   <item><description><b>Declined</b> — the module declares a platform floor above the running
-///   platform (<see cref="PlatformCompatibility.ProducerIsNewer"/>, the ladder's own comparison;
-///   an unknown version on either side is accepted, never declined). The ONE per-module decline:
+///   platform (<see cref="PlatformFloor.Evaluate"/> — the ONE floor decision every package consumer
+///   uses, policy <c>package-min-mesh-version</c>; an unknown, unreadable or unordered version on
+///   either side, or a local <c>-ci.0</c> build, is accepted, never declined). The ONE per-module decline:
 ///   the module's paths are neither written nor pruned, the reason names both versions, and it
 ///   holds NO sibling module.</description></item>
 ///   <item><description><b>Unchanged</b> — the incoming <c>moduleVersion</c> equals the one this
@@ -114,16 +115,22 @@ public static class ModuleSyncDecision
     {
         var heldVersion = held is not null && held.TryGetValue(module.Module, out var h) ? h : null;
 
-        if (module.Floor is { Length: > 0 } floor
-            && PlatformCompatibility.ProducerIsNewer(floor, runningPlatformVersion))
+        // 🚨 The ONE floor decision every package consumer uses (PlatformFloor — policy
+        // package-min-mesh-version): only a floor comparable with the running platform and strictly
+        // above it declines; an unreadable or unordered floor, an unknown running version or a
+        // local -ci.0 build proceeds (advisory), which is what keeps an rc or clean floor from
+        // holding a ci build (the 2026-09-07 trap).
+        var floorVerdict = PlatformFloor.Evaluate(module.Floor, runningPlatformVersion);
+        if (floorVerdict.IsHeld)
             return new ModuleSyncOutcome(module.Module, ModuleSyncOutcomeKind.Declined, heldVersion,
                 module.ModuleVersion,
-                $"module '{module.Module}' declares platform ≥ {floor} but this instance runs "
+                $"module '{module.Module}' declares platform ≥ {floorVerdict.Floor} but this instance runs "
                 + $"{runningPlatformVersion} — it is not written until the platform is rolled forward; "
-                + "every other module syncs (policy platform-backwards-compatibility)")
+                + "every other module syncs (policies package-min-mesh-version, "
+                + "platform-backwards-compatibility)")
             {
                 Root = module.Root,
-                Floor = floor,
+                Floor = floorVerdict.Floor,
             };
 
         if (!reconcile

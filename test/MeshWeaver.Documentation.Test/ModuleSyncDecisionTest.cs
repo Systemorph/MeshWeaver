@@ -87,6 +87,33 @@ public class ModuleSyncDecisionTest
                 [Module("Hosting", "1f75ade77bdf2fa5", floor: "3.0.0-ci.7845")], null, Running, reconcile: false)
             .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
 
+    /// <summary>
+    /// 🚨 The 2026-09-07 trap on the GitSync lane: an rc floor, a clean floor, an ancient floor, an
+    /// unreadable floor and a local <c>-ci.0</c> build are all UNORDERED or satisfied — the module
+    /// syncs. The decline is <c>PlatformFloor</c>, the one decision every package consumer uses
+    /// (policy <c>package-min-mesh-version</c>).
+    /// </summary>
+    [Theory]
+    [InlineData("3.0.0-rc8", Running)]
+    [InlineData("3.0.0", Running)]
+    [InlineData("1.0.0", Running)]
+    [InlineData("not-a-version", Running)]
+    [InlineData("3.0.0-ci.9300", "3.0.0-ci.0")]
+    [InlineData("3.0.0-ci.0", Running)]
+    public void TheSeptember7Trap_NeverDeclines(string floor, string running)
+        => ModuleSyncDecision.Decide(
+                [Module("Hosting", "1f75ade77bdf2fa5", floor: floor)], null, running, reconcile: false)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced,
+                $"floor {floor} against {running} cannot be ordered, or is satisfied — never a decline");
+
+    /// <summary>A clean floor whose numeric core is above the running line declines — the
+    /// release-vs-continuous comparison the ladder's <c>ProducerIsNewer</c> could not make.</summary>
+    [Fact]
+    public void AReleaseFloorAboveTheRunningLine_Declines()
+        => ModuleSyncDecision.Decide(
+                [Module("Hosting", "1f75ade77bdf2fa5", floor: "3.1.0")], null, Running, reconcile: false)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+
     [Fact]
     public void AnUnknownRunningPlatform_NeverDeclines()
         => ModuleSyncDecision.Decide(

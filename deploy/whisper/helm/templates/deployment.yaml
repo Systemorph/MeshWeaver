@@ -35,7 +35,7 @@ spec:
       # with nothing to load. Mount one only to deliberately swap the model, and then set WHISPER_MODEL.
       containers:
         - name: whisper
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ required "image.tag: name the immutable whisper-swiss-german:1.7.4-flix-large-v3-q8-<sha> tag (1.7.4 / 1.7.4-static carry no model)" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # The image CMD already runs whisper-server with these envs on :8080 (see Dockerfile).
           env:

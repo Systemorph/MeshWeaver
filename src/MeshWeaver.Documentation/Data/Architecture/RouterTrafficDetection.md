@@ -425,6 +425,30 @@ undocumented one.
 > means an explicit disposal-completion barrier instead of relying on queue order, which is a
 > different change with its own design.
 
+### A request/response READ neither ratchet can see (#5900, #5620)
+
+`AutocompleteRequest` and `GetDataRequest` are neither lifecycle messages nor posted on a field the
+code has declared router-capable, so both `src/` ratchets are blind to them by construction, and the
+runtime ORIGIN line is the only instrument that names them. Three production sightings were of this
+class and each had its own call site:
+
+| call site | message | fix |
+|---|---|---|
+| `ChatCompletionOrchestrator.SendAutocompleteRequest` (#5900) | `AutocompleteRequest` / `AutocompleteResponse` | `hub.ReadIssuingHub().Observe(…)` |
+| `ContentIndexingObserver.RegisterCollection` (MeshWeaver.Plugins, #5620) | `GetDataRequest` / `GetDataResponse` | `hub.ReadIssuingHub()` (Plugins#2355) |
+| `ProviderCredentialSeed.Write` (#5747) | `SaveMeshNodeRequest` | `hub.NodeOperationIssuingHub()` |
+
+The first is the common shape: a service registered **scoped** (`TryAddScoped<IChatCompletionOrchestrator>`)
+is resolved from the root container, where its injected `IMessageHub` IS the router. "Scoped" does
+not mean "per hub" once the root provider does the resolving. The same sweep hopped two more scoped
+read issuers of the same shape, `HubStreamProviderFactory` (keyed-scoped) and
+`UnifiedReferenceAutocompleteProvider`'s delegated per-node request. Neither has a production
+sighting, and the seam is the identity function for every hub that is not the router.
+
+The orchestrator also moved from `Post` then `Observe(delivery)` to the pre-registering
+`Observe(request, …)`. The old ordering registered the response subject after the post, so a warm
+node hub's sub-millisecond reply could arrive before the subject existed and be dropped.
+
 ## Reading a report
 
 `ROUTER_TRAFFIC ORIGIN:` prints up to twelve frames, with `MessageHub`'s own plumbing dropped off the
@@ -466,6 +490,11 @@ another process.
   defect rather than three. Its positive anchor is a parsed `{areas, …}` frame, because the verb
   answers `"Not found: …"` / `"Error: …"` without opening any stream and its budget gate faults
   before subscribing, so silence would otherwise be trivially true.
+- `RouterTrafficOnNodeCreateFromTheRootHubTest.AnAutocompleteIssuedFromTheRootMeshHub_NeverPutsTheRouterOnEitherEnd`
+  — the chat `@` autocomplete resolved from the root provider, the production shape of #5900.
+  Reverted in rehearsal it reproduces both production lines down to the frame:
+  `ChatCompletionOrchestrator…<SendAutocompleteRequest>b__0 (ChatCompletionOrchestrator.cs:503)` as
+  sender and `DataExtensions.PostAutocompleteResponse (DataExtensions.cs:4768)` as target.
 - `EverySeam_IsTheIdentityFunction_ForAHubThatIsNotTheRouter` — the premise all three seams rest on,
   plus the half that matters for the third: `StreamSubscribingHub()` must not resolve to
   `ReadIssuingHub()`'s hub, because that one registers no handlers and could never deliver a

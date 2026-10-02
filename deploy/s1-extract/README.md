@@ -24,7 +24,7 @@ then go to review. The service:
 POST /v1/extract   {"texts": ["…"], "labels": ["organization", "person"], "threshold": 0.5}
                  → {"model": "urchade/gliner_multi-v2.1", "results": [[{"start","end","label","score","text"}]]}
 GET  /healthz      process alive
-GET  /readyz       model loaded (the startup and readiness probes)
+GET  /readyz       model loaded (the readiness probe only — startup and liveness use /healthz)
 ```
 
 Limits: 256 texts per call and 2,000 characters per text (`limits.*`). A larger batch is split by
@@ -34,8 +34,13 @@ the caller.
 
 ```bash
 docker build -t s1-extract:dev deploy/s1-extract            # local
-az acr build -r <registry> -t s1-extract:gliner-multi-2.1 deploy/s1-extract
 ```
+
+The registry image is built by CI, never by hand: `.github/workflows/s1-extract-image.yml` builds
+on every PR that touches this folder and, on `main`, pushes `meshweaver.azurecr.io/s1-extract` with
+two tags — `gliner-multi-2.1-<short sha>` (immutable) and `gliner-multi-2.1` (the moving model
+line). An estate overlay names the **immutable** tag, so the values an approved chart apply binds
+name the bytes that run. The run's summary prints the tag and its digest.
 
 The `export` stage downloads the model from Hugging Face, exports it to ONNX and **smoke-tests the
 export**: it must find an organisation in a fixed sentence, or the build fails. The runtime stage

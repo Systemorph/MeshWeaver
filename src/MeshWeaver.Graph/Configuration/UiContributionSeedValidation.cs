@@ -54,6 +54,7 @@ public static class UiContributionSeedValidation
         UiContribution.NodeSettingsContext,
         UiContribution.TopBarContext,
         UiContribution.ProfileContext,
+        UiContribution.PersonAppContext,
         NodeMenuItemsExtensions.AiMenuContext,
         NodeMenuItemsExtensions.GitHubMenuContext,
     ];
@@ -127,6 +128,26 @@ public static class UiContributionSeedValidation
             {
                 problems.Add($"{path}: Href '{href}' is not portal-internal — the projection discards it and the entry quietly opens the derived area URL instead");
             }
+
+            // An embedding contribution may only render an address inside its OWN partition; the
+            // projection drops any other one, silently.
+            if (content.Context is UiContribution.ProfileContext or UiContribution.PersonAppContext
+                && content.Address is { Length: > 0 } embedded
+                && !UiContributionProjection.IsInContributorsPartition(embedded.Trim('/'), path))
+                problems.Add($"{path}: Address '{embedded}' lies outside the contribution's own partition — the projection drops the entry, silently");
+
+            // A person-app tab id is the contribution node's id; one naming a built-in tab would be
+            // dropped by the settings fold (a contribution never shadows Sharing, Preferences, …).
+            if (content.Context == UiContribution.PersonAppContext
+                && PersonApp.BuiltInTabIds.Contains(node.Id is { Length: > 0 } tabId ? tabId : content.Area ?? ""))
+                problems.Add($"{path}: its tab id collides with a built-in person-app tab ({string.Join(", ", PersonApp.BuiltInTabIds.OrderBy(i => i, StringComparer.Ordinal))}) — the settings page keeps the built-in and drops this one");
+
+            // RequireAddressAccess probes the embedded address; with none there is nothing to probe
+            // and the gate the author meant to narrow with is inert.
+            if (content.Gates?.RequireAddressAccess == true && content.Address is not { Length: > 0 })
+                problems.Add($"{path}: Gates.RequireAddressAccess without an Address — nothing to probe, so the gate is inert");
+            else if (content.Gates?.RequireAddressAccess == true && context != UiContribution.PersonAppContext)
+                problems.Add($"{path}: Gates.RequireAddressAccess on context '{context}' — only the PersonApp lane folds it, so the gate is inert here");
 
             if (content.Label is { Length: > 0 } && content.LabelKey is not { Length: > 0 })
                 problems.Add($"{path}: Label '{content.Label}' has no LabelKey — it ships English to every non-English viewer");

@@ -137,19 +137,10 @@ public static class PrebuiltAdoptionPolicy
     public sealed record Live(string FrameworkIdentity, string? PlatformVersion, bool RequirePrebuilt);
 
     /// <summary>The running platform's version with the <c>+sha</c> build metadata stripped —
-    /// the same reading <c>ModulePlatformFloor.RunningVersion</c> takes, so the two lanes never
-    /// disagree about what version is running.</summary>
-    public static string? RunningPlatformVersion
-    {
-        get
-        {
-            var version = PlatformBuildInfo.PlatformVersion;
-            if (string.IsNullOrWhiteSpace(version) || version == "unknown")
-                return null;
-            var plus = version.IndexOf('+');
-            return plus < 0 ? version : version[..plus];
-        }
-    }
+    /// <see cref="PlatformBuildInfo.RunningPlatformVersion"/>, the ONE reader every version decision
+    /// uses (the declared floor, <c>ModulePlatformFloor.RunningVersion</c>, GitSync), so the lanes
+    /// never disagree about what version is running.</summary>
+    public static string? RunningPlatformVersion => PlatformBuildInfo.RunningPlatformVersion;
 
     /// <summary>The live side as this process resolves it. Never throws.</summary>
     public static Live LiveOf(IServiceProvider? services) =>
@@ -377,15 +368,15 @@ public static class PrebuiltAdoptionPolicy
         return builder.ToImmutable();
     }
 
-    private static string? FloorDecline(string? minMeshVersion, string? running)
-    {
-        if (string.IsNullOrWhiteSpace(minMeshVersion))
-            return null;
-        if (string.IsNullOrWhiteSpace(running))
-            return $"the bundle declares minMeshVersion {minMeshVersion} but the running platform's "
-                   + "version could not be determined";
-        return NuGetVersionComparer.Instance.Compare(running, minMeshVersion) < 0
-            ? $"the bundle declares platform ≥ {minMeshVersion} but this deployment runs {running}"
+    /// <summary>
+    /// The declared floor, decided by THE one floor decision (<see cref="PlatformFloor"/>, policy
+    /// <c>package-min-mesh-version</c>): the held sentence when the floor is comparable with the
+    /// running platform and strictly above it, else null. It used to be a private SemVer
+    /// comparison — the <c>ci &lt; rc &lt; clean</c> order of the 2026-09-07 trap, so an rc floor
+    /// declined every prebuilt bundle on every ci build.
+    /// </summary>
+    private static string? FloorDecline(string? minMeshVersion, string? running) =>
+        PlatformFloor.HoldReason(minMeshVersion, running) is { } held
+            ? $"the bundle {held}"
             : null;
-    }
 }

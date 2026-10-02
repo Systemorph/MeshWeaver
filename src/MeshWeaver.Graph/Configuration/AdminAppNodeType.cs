@@ -134,6 +134,29 @@ public static class AdminAppNodeType
             .DistinctUntilChanged();
 
     /// <summary>
+    /// The viewer's platform-admin verdict, LIVE, for a surface that must not paint BEFORE it is
+    /// known — the Admin app's settings nav. Unlike <see cref="LiveAdminVerdict"/> it opens with no
+    /// synthetic <c>false</c>: its first emission is the evaluator's first ANSWER, then every change
+    /// (a grant arriving AND a grant being revoked), de-duplicated, failing closed to <c>false</c> on
+    /// a fault. Never a one-shot (never <c>.Take(1)</c>).
+    ///
+    /// <para>🚨 Why the settings page takes this one. The page already waits for the viewer's
+    /// permissions on the node — the same evaluator fold — before it renders anything, so a verdict
+    /// seeded <c>false</c> buys no earlier paint; it only lets the first frame carry "not an admin"
+    /// for a lane whose own evaluation has not answered yet. Each lane subscribes its own verdict, so
+    /// which lanes made the first frame was a race: the compiled Admin-app tabs did, the seeded ones
+    /// (Invitations, Privacy, Published to the web, Updates, Control lane, Inbox) did not — and a
+    /// reader that takes ONE frame (an MCP <c>get @Admin/area/Settings</c>, a first paint) saw them
+    /// missing. <c>AdminAppFirstFrameTest</c> pins it.</para>
+    /// </summary>
+    /// <param name="hub">The hub to evaluate on.</param>
+    /// <param name="viewerId">The viewer.</param>
+    public static IObservable<bool> AnsweredAdminVerdict(IMessageHub hub, string viewerId)
+        => hub.IsGlobalAdmin(viewerId)
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .DistinctUntilChanged();
+
+    /// <summary>
     /// The href of one tab inside the Admin app: <c>/Admin/Settings/{tabId}</c>. Built through
     /// <see cref="LayoutAreaReference.ToHref(object)"/> so it cannot drift from the menu's own links.
     /// </summary>
@@ -206,7 +229,8 @@ public static class AdminAppNodeType
     /// that arrives adds the tab, a grant that is revoked removes it again — so the menu never
     /// latches an earlier answer (a one-shot positive would keep offering administration after the
     /// grant is gone). It starts empty so the menu renders at once, and a faulted verdict stream
-    /// fails CLOSED to no tab. Public so a module whose provider is itself public API can delegate to
+    /// fails CLOSED to no tab. The tab lane emits nothing until the verdict has ANSWERED
+    /// (<see cref="AnsweredAdminVerdict"/>), so the nav never paints without it. Public so a module whose provider is itself public API can delegate to
     /// it; everything else registers through <see cref="AddAdminAppTab"/>.
     /// </summary>
     /// <param name="host">The layout host of the settings page being rendered.</param>
@@ -221,7 +245,9 @@ public static class AdminAppNodeType
         if (string.IsNullOrEmpty(viewerId))
             return Observable.Return(none);
 
-        return LiveAdminVerdict(host.Hub, viewerId)
+        // The ANSWERED verdict, never a seeded false: this lane is part of the settings nav, which
+        // must not paint before the verdict is known (see AnsweredAdminVerdict).
+        return AnsweredAdminVerdict(host.Hub, viewerId)
             .Select(isAdmin => isAdmin ? (IReadOnlyList<SettingsMenuItemDefinition>)[tab] : none);
     }
 

@@ -32,6 +32,7 @@ Two places in the platform ride out a `ShuttingDown` address, and they are the w
 |---|---|---|
 | The **point read** | `MeshNodeStreamExtensions.GetMeshNodeOutcome` | one immediate re-probe, then paced re-probes inside the caller's budget |
 | The **sync stream** | `JsonSynchronizationStream`'s recycle re-arm latch | one re-ask per rejection, gated on the rejecting hub's teardown |
+| The **cross-hub write** | `MeshNodeStreamHandle.UpdateRemote` | the same bounded never-applied re-enqueue as `OwnerDisposing` (see *A write is a rider too*, below) |
 
 Everything else treats the classification as *information* rather than as something to recover from:
 `MeshNodeStreamCache.IsTransientOwnerFailure` refuses to poison its negative cache with it,
@@ -344,3 +345,34 @@ What this does **not** cover: a subscriber that was already **warm** when the si
 gets no goodbye from the leaving host, because its `StreamEndedEvent` rides the refused router like any
 other outbound message. It recovers on its next request to the address, which is now refused
 honestly and handed off.
+
+## A write is a rider too (#5011, MeshWeaver.Plugins#2403)
+
+The refusal #5256 introduced tells the sender the truth — *"… is shutting down (activation #…, its host
+is stopping) … the address may reactivate … Rejecting now"* — and hands the address off. The read
+riders above ride it out. The cross-hub **write** did not: `UpdateRemote`'s response wait mapped a
+`DeliveryFailure{ShuttingDown}` to `MeshNodeErrorCode.Unknown` and faulted the caller. The very same
+fact carried as a `PatchDataResponse` with `OwnerDisposing` was re-driven against the next activation.
+So every write that met an owner on a pod being rolled was lost with a terminal error: the fleet
+watch's `Ops/Status/*` rows, an instance action's status record, any `stream.Update` whose owner sat on
+the old ReplicaSet for the length of the termination grace period.
+
+`AWriteDuringAPodRollIsReDrivenTest` (MeshWeaver.FaultInjection.Test, on the
+[fault-injection harness](../FaultInjectionHarness)) pins it. Silo 1 hosts the owner and is told to
+stop and left lingering (`FaultInjectionCluster.Linger`). Silo 0 holds the node's stream open (the
+fleet-watch heartbeat and running-action resumer shape) and writes the node; the cross-process
+invalidation arrives through the harness's LISTEN model, as it does on every replica in production.
+Before the fix the **write** failed in about a second with `MeshNode Unknown … Rejecting now`, so no
+reader could ever see it. After it, the write lands on the handed-off activation and the held read
+delivers it. Its siblings pin the rest of the roll: `AHeldReadSurvivesItsSourceSiloBeingKilledTest`
+(kill) and `AHeldReadSurvivesItsSourceSiloDrainingTest` (graceful stop), each asserting that a write
+after the move reaches the **already-held** read, not only that the owner re-activates (the half
+`AKilledOwnerSiloIsReactivatedByItsHoldersTest` covers). They replaced the hand-published
+`AHeldReadKeepsDelivering…` trio in MeshWeaver.Hosting.Orleans.Test.
+
+**The fix is classification, not a retry.** `MeshNodeStreamHandle.IsShuttingDownRefusal` recognises
+the routed refusal, and both arms of the response wait (the prompt one and the late
+`LatePatchResponseRegistry` one) send it down the existing `OwnerDisposing` path. The budget is the
+same (`MaxOwnerDisposingReenqueues`), with `ownerSaidNeverApplied: true`, because a refusal issued
+before any handler ran is the strongest form of "never applied". Hence `LatePatchResponseRegistry.WriteTotalBound`
+is unchanged: a ShuttingDown re-attempt spends exactly what an `OwnerDisposing` one already spent.

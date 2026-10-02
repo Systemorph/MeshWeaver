@@ -5,6 +5,7 @@
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
+    python3 .github/scripts/arm-promoted-set.py control-follow --manifests portal.json --control-manifests control.json
     python3 .github/scripts/arm-promoted-set.py --self-test
 
 Policy `one-promotion-gate` (register: Doc/Architecture/PolicyNotProse). Design of record:
@@ -51,7 +52,7 @@ every one of them reaches the fleet when the set is armed. So the record's `base
 Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
 core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
 seen. `armed-base` resolves it from memex-portal-ai's manifests (the armed version tag shares its
-manifest with the seven-character sha tag). The record says which rule produced `base` in
+manifest with a core sha or pair tag). The record says which rule produced `base` in
 `base_kind`:
 
   * `armed`         — the newest armed set's commit (the normal case);
@@ -101,6 +102,7 @@ RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugin
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
+PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
 
@@ -172,9 +174,10 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
 
-    The version tag is written by `arm` onto the promoted image's manifest, which already carries the
-    sha tag from `promote`, so both are on ONE manifest. A newest armed manifest WITHOUT a sha tag is
-    a fact this cannot interpret — ValueError, never a guess (a wrong base narrows the bundle)."""
+    The version tag is written by `arm` onto the promoted image's manifest. `promote` writes both a
+    core sha tag and a core/Plugins pair tag, but a later pair for the SAME core moves the sha tag
+    to that later manifest. The pair tag remains on the armed manifest and still names its core.
+    Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle)."""
     if not isinstance(manifests, list):
         raise ValueError("the manifest metadata is not a JSON list")
     best: tuple[int, str, list[str]] | None = None
@@ -190,11 +193,66 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
         return None
     if not require_sha:
         return best[1], ""
-    shas = [t for t in best[2] if SHORT_SHA_TAG.match(t)]
+    shas = {t for t in best[2] if SHORT_SHA_TAG.match(t)}
+    shas.update(m.group(1) for t in best[2] if (m := PAIR_TAG.match(t)))
     if len(shas) != 1:
-        raise ValueError(f"the newest armed manifest {best[1]} carries {len(shas)} seven-character sha tag(s) "
+        raise ValueError(f"the newest armed manifest {best[1]} names {len(shas)} distinct core commits "
                          f"({best[2]}) — cannot name its core commit")
-    return best[1], shas[0]
+    return best[1], next(iter(shas))
+
+
+def control_follow(portal_manifests: object, control_manifests: object) -> dict:
+    """What the CONTROL image (`memex-control`) must be told about the newest ARMED set. Pure.
+
+    The control image is the same build as memex-portal-ai under another repository name
+    (`-p:MemexControlImage=true`), so it follows the SAME promotion gate: `control-promote` writes
+    only identity tags (the core sha and the `<core7>-p<plugins7>` pair), and a version tag — the
+    thing a Continuous record with `updatePattern: 3.0.0-ci*` rolls to — and the line pointers are
+    written only for a set `arm` armed on memex-portal-ai. The pair tag is the join: the armed
+    version shares its manifest with exactly one pair tag, and the accepted control image of that
+    pair carries the same pair tag (the bare sha tag is re-pointed by a rebuild, the pair is not).
+
+    Returns {"action", "version", "pair", "move_pointers", "control_newest"}:
+      * `none`    — nothing was ever armed;
+      * `done`    — memex-control already carries the armed version;
+      * `tag`     — its accepted image for the armed pair exists: tag the version (and the line
+                    pointers when `move_pointers` — never backwards past a newer control version);
+      * `missing` — no accepted control image for the armed pair (its control lane failed or has not
+                    finished): the control image stays where it is, and the caller SAYS so.
+    An armed manifest naming zero or several pairs is a ValueError — never a guess."""
+    got = armed_commit(portal_manifests, require_sha=False)
+    if got is None:
+        return {"action": "none", "version": "", "pair": "", "move_pointers": False, "control_newest": ""}
+    version = got[0]
+    armed_tags: list[str] = []
+    for row in portal_manifests:  # armed_commit validated it is a list
+        t = row.get("tags") if isinstance(row, dict) else None
+        if isinstance(t, list) and version in t:
+            armed_tags = [str(x) for x in t]
+            break
+    pairs = sorted({t for t in armed_tags if PAIR_TAG.match(t)})
+    if len(pairs) != 1:
+        raise ValueError(f"the armed manifest {version} names {len(pairs)} pair tags ({armed_tags}) — "
+                         f"cannot name the control image that belongs to it")
+    if not isinstance(control_manifests, list):
+        raise ValueError("the memex-control manifest metadata is not a JSON list")
+    control_tags: set[str] = set()
+    for row in control_manifests:
+        t = row.get("tags") if isinstance(row, dict) else None
+        if isinstance(t, list):
+            control_tags.update(str(x) for x in t)
+    numbered = [(n, t) for t in control_tags if (n := run_number_of(t)) is not None]
+    newest = max(numbered)[1] if numbered else ""
+    n_self = run_number_of(version) or 0
+    if version in control_tags:
+        action = "done"
+    elif pairs[0] in control_tags:
+        action = "tag"
+    else:
+        action = "missing"
+    return {"action": action, "version": version, "pair": pairs[0],
+            "move_pointers": action == "tag" and (not numbered or n_self >= max(numbered)[0]),
+            "control_newest": newest}
 
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
@@ -485,14 +543,19 @@ def self_test() -> int:
         {"tags": ["3.0.0-ci.9535", "9357060", "9357060-p90f70cd"]},
         {"tags": None},
     ]
-    check("armed-base: the NEWEST version tag's manifest names the base (its seven-character sha tag)",
+    check("armed-base: the NEWEST version tag's manifest names the base (its core sha tag)",
           armed_commit(live) == ("3.0.0-ci.9538", "b9fe5ed"), str(armed_commit(live)))
+    pair_only = [{"tags": ["3.0.0-ci.9564", "f0f9a7b-p217aa51", "arm-complete-3.0.0-ci.9564"]},
+                 {"tags": ["f0f9a7b", "f0f9a7b-pb7390a0"]}]
+    check("armed-base: pair tag names the armed core after its bare sha tag moves to a newer pair",
+          armed_commit(pair_only) == ("3.0.0-ci.9564", "f0f9a7b"))
     check("armed-base: newest by RUN NUMBER, not by listing order",
           armed_commit(list(reversed(live))) == ("3.0.0-ci.9538", "b9fe5ed"))
     check("armed-base: no version tag anywhere means nothing was ever armed (None, not a guess)",
           armed_commit([{"tags": ["main", "b9fe5ed"]}]) is None)
-    for bad, why in (([{"tags": ["3.0.0-ci.9538", "main"]}], "no sha tag"),
+    for bad, why in (([{"tags": ["3.0.0-ci.9538", "main"]}], "no identity tag"),
                      ([{"tags": ["3.0.0-ci.9538", "b9fe5ed", "a1b2c3d"]}], "two sha tags"),
+                     ([{"tags": ["3.0.0-ci.9538", "b9fe5ed", "a1b2c3d-p217aa51"]}], "conflicting sha and pair tags"),
                      ({"tags": []}, "not a list")):
         try:
             armed_commit(bad)
@@ -517,6 +580,27 @@ def self_test() -> int:
     check("armed-state: the marker is never version-shaped (no self-updater can select it)",
           run_number_of("arm-complete-3.0.0-ci.9538") is None)
     check("armed-state: nothing ever armed is None", armed_state([{"tags": ["main"]}]) is None)
+    armed_p = [{"tags": ["3.0.0-ci.9598", "0d14493", "0d14493-pc791b44", "arm-complete-3.0.0-ci.9598"]},
+               {"tags": ["3.0.0-ci.9590", "5145540-pa5ef923"]}]
+    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-pc791b44", "main"]},
+                                  {"tags": ["3.0.0-ci.9590", "5145540", "3-latest"]}])
+    check("control-follow: the accepted control image of the ARMED pair is tagged with its version",
+          cf["action"] == "tag" and cf["version"] == "3.0.0-ci.9598" and cf["pair"] == "0d14493-pc791b44"
+          and cf["move_pointers"] is True, str(cf))
+    cf = control_follow(armed_p, [{"tags": ["3.0.0-ci.9598", "0d14493-pc791b44"]}])
+    check("control-follow: already carrying the armed version is DONE (idempotent)", cf["action"] == "done", str(cf))
+    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-p1111111"]}, {"tags": ["3.0.0-ci.9590"]}])
+    check("control-follow: a control image of ANOTHER pair of the same core is not the armed one (MISSING)",
+          cf["action"] == "missing" and cf["control_newest"] == "3.0.0-ci.9590", str(cf))
+    cf = control_follow(armed_p, [{"tags": ["0d14493-pc791b44"]}, {"tags": ["3.0.0-ci.9601"]}])
+    check("control-follow: never moves the line pointers backwards past a newer control version",
+          cf["action"] == "tag" and cf["move_pointers"] is False, str(cf))
+    check("control-follow: nothing armed is NONE", control_follow([{"tags": ["main"]}], [])["action"] == "none")
+    try:
+        control_follow([{"tags": ["3.0.0-ci.9598", "0d14493"]}], [])
+        check("control-follow: an armed manifest with no pair tag is RED", False)
+    except ValueError:
+        check("control-follow: an armed manifest with no pair tag is RED, never a guess", True)
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -526,8 +610,9 @@ def self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state"))
+    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state", "control-follow"))
     ap.add_argument("--manifests", type=Path, help="armed-base: memex-portal-ai manifest metadata (JSON list)")
+    ap.add_argument("--control-manifests", type=Path, help="control-follow: memex-control manifest metadata (JSON list)")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
     ap.add_argument("--override", default="", help="arm exactly this set name, verdict or not")
@@ -554,6 +639,20 @@ def main() -> int:
         if out:
             with open(out, "a") as f:
                 f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        print(json.dumps(rows))
+        return 0
+    if a.command == "control-follow":
+        if a.manifests is None or a.control_manifests is None:
+            ap.error("control-follow needs --manifests and --control-manifests")
+        try:
+            rows = control_follow(json.loads(a.manifests.read_text()), json.loads(a.control_manifests.read_text()))
+        except (OSError, ValueError) as e:
+            print(f"::error::the control image's arming cannot be decided: {e}")
+            return 1
+        out = os.environ.get("GITHUB_OUTPUT")
+        if out:
+            with open(out, "a") as f:
+                f.writelines(f"{k}={str(v).lower() if isinstance(v, bool) else v}\n" for k, v in rows.items())
         print(json.dumps(rows))
         return 0
     if a.command == "armed-base":

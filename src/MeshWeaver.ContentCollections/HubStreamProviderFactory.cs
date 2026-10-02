@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -35,7 +36,12 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
         // shape raced: the Post fired at Create() call time while the callback only registered at
         // subscription — a fast response landed unobserved and the observable NEVER emitted, which
         // a promise-cached collection entry then pins forever (silence, not an error).
-        return hub.Observe(
+        //
+        // 🚨 ISSUED OFF THE ROUTER (#5620). This factory is keyed-scoped, so resolved from the ROOT
+        // container its hub IS the mesh router — the exact shape of #5620's production pair
+        // (`GetDataRequest … sender: mesh/{id}` / `GetDataResponse … target: mesh/{id}`). A one-shot
+        // config read belongs on ReadIssuingHub(), the identity function for every other hub.
+        return hub.ReadIssuingHub().Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
                 o => o.WithTarget(config.Address))
             .SelectMany(callbackResponse =>

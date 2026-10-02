@@ -169,6 +169,11 @@ public static class UserActivityLayoutAreas
             accessService?.CircuitContext != null);
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        // [Home] timing: how long the owner's node took to answer — the first gate of every home
+        // render (nothing below paints before it). One line per render, owner only.
+        var homeClock = isOwner ? System.Diagnostics.Stopwatch.StartNew() : null;
+        var homeLogger = isOwner ? host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home") : null;
+        var ownerFrameLogged = 0;
 
         // The composer region (@@("area/Composer")) renders its ThreadChatControl INLINE — a pure
         // layout area with no backing node (see ComposerAreaView) — so the dashboard no longer has to
@@ -180,6 +185,10 @@ public static class UserActivityLayoutAreas
             {
                 var ownerNode = t.change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
+                if (homeClock is not null && System.Threading.Interlocked.Exchange(ref ownerFrameLogged, 1) == 0)
+                    homeLogger?.LogInformation(
+                        "[Home] server viewer={Viewer} +{ElapsedMs}ms activity: owner node first frame (found={Found})",
+                        nodeOwnerId, homeClock.ElapsedMilliseconds, ownerNode is not null);
 
                 if (isOwner)
                     return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
@@ -531,6 +540,11 @@ public static class UserActivityLayoutAreas
         // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
         // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        // [Home] timing: when the catalog's four legs first combined (= first catalog paint), and
+        // when the shared-targets leg delivered its REAL answer rather than its StartWith([]).
+        var homeClock = System.Diagnostics.Stopwatch.StartNew();
+        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
+        var catalogLogged = 0;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
@@ -546,7 +560,14 @@ public static class UserActivityLayoutAreas
                 // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
                 // the proxy was reaching for: once per user because the ledger says so.
                 (config, shared, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen));
+                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen))
+            .Do(_ =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
+                    homeLogger?.LogInformation(
+                        "[Home] server owner={Owner} +{ElapsedMs}ms catalog: config, shared, owner and screen combined",
+                        ownerId, homeClock.ElapsedMilliseconds);
+            });
     }
 
     /// <summary>
@@ -562,6 +583,7 @@ public static class UserActivityLayoutAreas
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null || string.IsNullOrEmpty(ownerId))
             return Observable.Return<IReadOnlyList<string>>([]);
+        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         return mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 // A share grant lives in the GRANTING partition — that is what makes it a share —
@@ -583,7 +605,15 @@ public static class UserActivityLayoutAreas
                     return map;
                 })
             .Select(map => SharedTargetPaths(map.Values, ownerId))
-            .StartWith((IReadOnlyList<string>)[]);
+            .Do(targets => homeLogger?.LogDebug(
+                "[Home] server owner={Owner} shared targets answered: {Count}", ownerId, targets.Count))
+            .StartWith((IReadOnlyList<string>)[])
+            // 🚨 Emit only when the LIST changes. Every Updated of any of the viewer's grants re-ran
+            // the Scan and re-emitted an equal list, which rebuilt the whole home control; and the
+            // common case — the real answer is ALSO empty — re-emitted [] over the StartWith([]).
+            // A changed list still flows (it re-shapes the content section's union, which the view
+            // now re-queries without blanking — MeshSearchView.LoadResults(keepVisible)).
+            .DistinctUntilChanged(SharedTargetsComparer.Instance);
     }
 
     /// <summary>
@@ -1851,4 +1881,20 @@ public static class UserActivityLayoutAreas
         return withTitle ? search.WithTitle("Pinned") : search;
     }
 
+    /// <summary>
+    /// Order-sensitive, ORDINAL equality of two shared-target lists. Ordinal on purpose: a re-emission
+    /// of the same data is already ordinally identical, so ordinal suffices to stop the rebuild, and a
+    /// case-only change of a target still flows to the union query downstream rather than being
+    /// swallowed as "no change".
+    /// </summary>
+    internal sealed class SharedTargetsComparer : IEqualityComparer<IReadOnlyList<string>>
+    {
+        public static readonly SharedTargetsComparer Instance = new();
+
+        public bool Equals(IReadOnlyList<string>? x, IReadOnlyList<string>? y) =>
+            ReferenceEquals(x, y)
+            || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
+
+        public int GetHashCode(IReadOnlyList<string> obj) => obj.Count;
+    }
 }

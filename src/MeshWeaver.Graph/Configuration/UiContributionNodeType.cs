@@ -114,9 +114,28 @@ public record UiContribution
     public const string ProfileContext = "Profile";
 
     /// <summary>
+    /// The PERSON-APP context (<c>/{user}/Settings/{Id}</c>, <c>PersonApp</c>): a contribution here
+    /// adds a TAB to the signed-in person's own settings app — the content-driven twin of the
+    /// compiled <c>PersonApp.AddPersonAppTab</c>, for a module compiled from mesh content (which
+    /// cannot reach the User hub's configuration). It is the surface an IN-APP EXTENSION uses to
+    /// appear inside the person app once the viewer holds it (<c>Doc/Architecture/InAppExtensions</c>):
+    /// the tab's body EMBEDS the layout area <see cref="Area"/> of the hub at <see cref="Address"/>
+    /// (unset ⇒ the user node itself) through the platform's <c>LayoutAreaControl</c>, exactly like a
+    /// <see cref="ProfileContext"/> section, and the address obeys the same partition rule.
+    ///
+    /// <para>The tab shows ONLY on the viewer's own user root (the person-app predicate) — never on a
+    /// Space's, a node's or another person's settings page. The tab id is the contribution node's id,
+    /// sorted by <see cref="Order"/> among the person app's tabs (<c>PersonApp.*Order</c> are the
+    /// built-in slots), gated by <see cref="RequiredPermission"/> on the user node and the closed
+    /// <see cref="Gates"/> — including <see cref="UiContributionGates.RequireAddressAccess"/>, which
+    /// hides the tab until the viewer can read the extension it embeds.</para>
+    /// </summary>
+    public const string PersonAppContext = "PersonApp";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
-    /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>
-    /// or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
+    /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
+    /// <c>Profile</c>, <c>PersonApp</c> or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
     ///
     /// <para>🚨 A context nobody consumes renders NOWHERE — no error, no warning, not even an
     /// area-not-found placeholder. <see cref="UiContributionSeedValidation"/> is the static check
@@ -144,8 +163,8 @@ public record UiContribution
     public string? Area { get; init; }
 
     /// <summary>
-    /// The hub address whose <see cref="Area"/> an EMBEDDING context renders — today only
-    /// <see cref="ProfileContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
+    /// The hub address whose <see cref="Area"/> an EMBEDDING context renders —
+    /// <see cref="ProfileContext"/> and <see cref="PersonAppContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
     /// puts the Store's own plan view on every profile page. Unset ⇒ the anchoring node's own hub
     /// (for a profile section, the user node). 🚨 It must lie inside the contribution node's OWN
     /// partition (<c>Store/ProfileSections/x</c> may embed <c>Store</c> or <c>Store/…</c>); any other
@@ -267,4 +286,22 @@ public record UiContributionGates
     /// viewer's own. Declare both when both apply.</para>
     /// </summary>
     public bool ExcludeViewerHome { get; init; }
+
+    /// <summary>
+    /// Only when the VIEWER can READ the contribution's <see cref="UiContribution.Address"/> — the
+    /// hub whose area the entry embeds. This is how an IN-APP EXTENSION appears in its host app only
+    /// once the viewer holds it: a Store package is gated (an un-entitled viewer cannot read below
+    /// its root), so "may read the embedded address" IS "has acquired the extension", and the answer
+    /// follows the viewer's live effective permissions — acquiring the package shows the tab with no
+    /// reload, and a revoked grant hides it again. Consumed ONLY by
+    /// <see cref="UiContribution.PersonAppContext"/> today; on any other context — a
+    /// <see cref="UiContribution.ProfileContext"/> section included, although it embeds an Address too
+    /// — the gate is inert, and <c>UiContributionSeedValidation</c> reports that, as it reports the
+    /// gate on an entry without an Address (nothing to probe).
+    ///
+    /// <para>Narrowing only, like every gate here: a failed or pending permission read hides the
+    /// entry (missing evidence ⇒ do not show), and the embedded area still runs its own access
+    /// checks for the viewer.</para>
+    /// </summary>
+    public bool RequireAddressAccess { get; init; }
 }

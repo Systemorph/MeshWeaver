@@ -300,6 +300,28 @@ no copy of the Store's `PlanTiers` to drift. The rules at the edges are delibera
   cannot license MORE. A registry with no tier nodes at all (a local self-registry, the e2e stub)
   therefore serves its free and untiered packages to every instance and refuses every paid tier —
   `free` ranks at the baseline by definition, ladder or not;
+  On a registry that HAS a ladder, deciding at the baseline is **never silent** (#5894): the registry
+  logs a warning naming the instance, the stored plan and the plans it does know on every resolution
+  of that instance (a registry with no tier nodes at all is not reported — every plan is unknown
+  there by construction, and the ladder read says so once), and a plan-tier refusal reports the
+  STORED id, in canonical form (trimmed, lower-cased), as `instancePlan` — "this instance is on gold", never
+  "this instance is on free" for a record that says something else. (An unknown **cap** on a grant
+  entry is still reported as the baseline: it is neither the instance's plan nor an upgrade target.)
+  Measured on the public registry: a dedicated client instance stored `sme`, a plan renamed to
+  `dedicated` whose tier node had been deleted, and its ledger listed 18 refusals — Mail and Teams
+  among them — every one reading "this instance is on free";
+- a **retired** plan id resolves to its successor, explicitly: `PlanTierRanks.RetiredPlans` is a
+  closed table of renames (today `sme` → `dedicated`), applied by `PlanTierRanks.Canonical`, so a
+  record still storing the old id stands on the successor and a promotion to the old id writes the
+  new one. The registry logs a warning for every resolved instance that still stores a retired id,
+  and a tier node still carrying one is ignored by the ladder (its successor's own node ranks it).
+  Only a RENAME belongs in that table; a withdrawn plan has no successor and stays unknown;
+- **a tier node cannot be deleted while an instance stands on it** (`TierInUseDeletionGuard`,
+  #5894). The guard counts, as System, every registered instance whose plan resolves to the tier
+  (a record with no plan stands on `free`), refuses the delete naming them, and refuses it too when
+  the census itself fails — an unknown count is never zero. Deleting the `Admin/Tiers` container is
+  refused while any instance is registered. A node carrying a retired id is used by nobody and stays
+  deletable. Move the instances to another plan on Instance grants ▸ Plan first;
 - a package tier the ladder does not know is covered by **nothing**;
 - a caller that does not know the package's tier (the tier-blind `Allows(source, package)`) is
   never answered by a plan-scoped entry — otherwise every plan would be all-access at exactly the
@@ -316,6 +338,26 @@ tells the process's `InstanceRegistryAuthenticator` to forget its cached verdict
 other replicas follow within the cache minute. `PluginBundlePlanTest` pins both halves — a legacy
 plan-less grant is capped at free, and a promoted instance pulls its pro package on the very next
 request.
+
+**The instance lookup has ONE bound, the query's.** The Plan form finds the record by id
+(`InstancePlanService.FindInstancePath`, a declared mesh-wide listing read as System) and waits
+for the fan-in's merged Initial, which faults at its own budget
+(`MeshOperationOptions.QueryInitialBudget`, 15 s on the default ladder) with a
+`QueryProviderStalledException` naming the provider. The lookup used to carry a 10 s timer of its
+own, written before the fan-in had a bound: a second, shorter bound on the same wait, so the form
+gave up while the query was still inside its budget (#5894, the inverted ladder of #1198). It, the
+two lookups in `MeshWeaverInstanceService` and `PlanTierLadder.Read` now carry none
+(`InstanceLookupHasNoBoundOfItsOwnTest`).
+
+**Only a global administrator sets a plan, and the write runs as System.** An instance record lives
+in its registrant's partition (`{owner}/MeshWeaverInstance/{id}`), and a global administrator is a
+platform admin, not a data superuser — under the admin's own identity the read of another user's
+record is refused. `SetPlan` therefore checks `hub.IsGlobalAdmin()` first and then reads and writes
+the record as System, the same shape as `RevokeKey`; any other caller is refused with
+`UnauthorizedAccessException` before anything is read. `InstancePlanSetByGlobalAdminTest` pins both
+halves on a mesh without the default public admin grant: an admin whose only grant is `Admin` on the
+Admin partition promotes an instance another user registered, and a plain member is refused with the
+plan unchanged.
 
 **A registration key carries the plan.** Mint it for a plan (Instance grants ▸ Registration keys ▸
 Plan) and every install that registers with it lands ON that plan and is seeded one plan-less
