@@ -855,6 +855,9 @@ public sealed class InstanceAutoRegistrationService(
             : SeedLedger().SelectMany(ledger =>
             {
                 var seeded = ledger.Seeded.ToImmutableHashSet(StringComparer.Ordinal);
+                // What the governed-provision hold treats as already known: seeded, FAILED (the
+                // retry #2254 exists for) and SKIPPED (a standing decision re-derived each pass).
+                var known = KnownToTheLedger(ledger);
                 // 🚨 PER-PACKAGE, not once-per-installation. The old gate was "install the seed only
                 // while the instance has ZERO packages", which made a misconfigured first boot
                 // unrecoverable: the boot installed the pre-installed baseline, the instance was no
@@ -887,7 +890,7 @@ public sealed class InstanceAutoRegistrationService(
                     // same exemption the platform's own preInstalled baseline already has.
                     .SelectMany(selection => InstallAll(selection.Candidates
                             .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
-                            .Where(c => !HeldForGovernedProvision(c, seeded))
+                            .Where(c => !HeldForGovernedProvision(c, known, freshInstance: seeded.Count == 0))
                             .ToList())
                         .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
@@ -911,10 +914,10 @@ public sealed class InstanceAutoRegistrationService(
     /// baseline and this environment's flags (reconciled lanes), and a package pulled in as a
     /// selected package's requirement. What is already installed is untouched.</para>
     /// </summary>
-    private bool HeldForGovernedProvision(InstallCandidate candidate, IReadOnlySet<string> seeded)
+    private bool HeldForGovernedProvision(InstallCandidate candidate, IReadOnlySet<string> known, bool freshInstance)
     {
         if (!HoldsForGovernedProvision(candidate.WildcardOnly, candidate.Reconciled,
-                seeded.Contains(candidate.Package.Id), freshInstance: seeded.Count == 0))
+                known.Contains(candidate.Package.Id), freshInstance))
             return false;
         logger.LogWarning(
             "[DefaultInstall] HELD {Id} from {Source}: newly listed and covered only by a whole-source "
@@ -924,10 +927,24 @@ public sealed class InstanceAutoRegistrationService(
         return true;
     }
 
+    /// <summary>
+    /// Every package id this instance's default-install ledger has RECORDED: delivered (seeded),
+    /// FAILED (kept off the seeded list so the next pass retries it — #2254), or SKIPPED with a
+    /// standing reason that is re-derived each pass. The governed-provision hold is for a package
+    /// the instance has never seen; one on this set is not "newly listed", and holding it would
+    /// swallow the ledger's retry. A persisted list that reads back <c>null</c> (an explicit
+    /// JSON <c>null</c>) is empty, for every list alike — this runs inside the boot install. Pure.
+    /// </summary>
+    internal static ImmutableHashSet<string> KnownToTheLedger(DefaultInstallLedger ledger) =>
+        (ledger.Seeded ?? ImmutableList<string>.Empty)
+            .Concat(ledger.Failed ?? ImmutableList<string>.Empty)
+            .Concat((ledger.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty).Select(s => s.Package))
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
     /// <summary>The hold's decision (<see cref="HeldForGovernedProvision"/>), over its four facts. Pure.</summary>
     internal static bool HoldsForGovernedProvision(
-        bool wildcardOnly, bool reconciled, bool seededBefore, bool freshInstance) =>
-        wildcardOnly && !reconciled && !seededBefore && !freshInstance;
+        bool wildcardOnly, bool reconciled, bool recordedInLedger, bool freshInstance) =>
+        wildcardOnly && !reconciled && !recordedInLedger && !freshInstance;
 
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";

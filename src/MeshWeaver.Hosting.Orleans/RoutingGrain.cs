@@ -1769,6 +1769,15 @@ internal class RoutingGrain(
     /// Only the two conditions that ARE a lifecycle transition by construction qualify: the grain
     /// directory mid-handoff, and the host going away.</para>
     ///
+    /// <para>🚨 <b>One path is exempt from "timeouts are terminal": a layout-area VIEW</b> (policy
+    /// <c>area-view-reopens-on-deadline-miss</c>, issues #5599 and #5714). This verdict is unchanged
+    /// and still <see cref="ErrorType.Failed"/>, so every consumer with UNBOUNDED recovery still
+    /// tears down. The view instead opens a FRESH area stream after a deadline miss, at most once per
+    /// 30 s per open view (<c>MeshWeaver.Layout.AreaStreamReopen</c>), so it renders the owner's
+    /// next frame rather than staying on "Area unavailable" until a reload. That pacing is what
+    /// keeps the resubscribe storm described above out of reach: a hung owner costs one
+    /// <c>SubscribeRequest</c> per 30 s per open view, never a loop.</para>
+    ///
     /// <para>Anything this does not recognise stays terminal, so a genuine defect is still reported
     /// as one.</para>
     /// </summary>

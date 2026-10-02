@@ -1914,9 +1914,64 @@ public static class DataExtensions
         PatchDataRequest message,
         System.Text.Json.JsonSerializerOptions jsonOpts,
         ILogger? logger,
-        string hubPath)
+        string hubPath,
+        AccessContext? sender = null)
     {
         if (isMeshNode)
+        {
+            StampAuthorFromSender(currentNode, patchNode, sender, jsonOpts, logger, hubPath);
+            var refusedKeys = ApplyMeshNodeMergeCore(currentNode, patchNode, message, jsonOpts, logger, hubPath, out var changed);
+            if (changed)
+                RecordSenderAsAuthor(currentNode, patchNode, sender, jsonOpts);
+            return refusedKeys;
+        }
+        MergePatchRecursive(currentNode, patchNode);
+        return 0;
+    }
+
+    /// <summary>
+    /// After a merge that CHANGED the node: when the sender is a person or service and the patch
+    /// named no author, the sender is recorded as the author. A raw client patch that omits
+    /// <c>lastModifiedBy</c> would otherwise credit the change to the PREVIOUS author. Applied only
+    /// on an actual change, so a pure re-assert stays a no-op for the owner's no-change backstop.
+    /// </summary>
+    internal static void RecordSenderAsAuthor(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        AccessContext? sender,
+        System.Text.Json.JsonSerializerOptions jsonOpts)
+    {
+        var who = sender?.ObjectId;
+        if (string.IsNullOrEmpty(who) || AccessService.IsPlatformPrincipal(who))
+            return;
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+        if (!patchNode.ContainsKey(authorKey))
+            currentNode[authorKey] = who;
+    }
+
+    private static int ApplyMeshNodeMergeCore(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath,
+        out bool changed)
+    {
+        var before = currentNode.DeepClone();
+        var refused = ApplyMeshNodeMergeBody(currentNode, patchNode, message, jsonOpts, logger, hubPath);
+        changed = !System.Text.Json.Nodes.JsonNode.DeepEquals(before, currentNode);
+        return refused;
+    }
+
+    private static int ApplyMeshNodeMergeBody(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        PatchDataRequest message,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
         {
             var baseText = message.BaseValues?.Content;
             if (!string.IsNullOrEmpty(baseText)
@@ -2093,6 +2148,58 @@ public static class DataExtensions
     /// with whichever stamp wins — an author without its instant is meaningless — so it is dropped or
     /// rebased in lockstep and likewise never refused.</para>
     /// </summary>
+    /// <summary>
+    /// 🚨 <b>The author of a write is the delivery's principal, never a value in the patch.</b> A
+    /// MeshNode merge patch can carry <c>lastModifiedBy</c> and <c>createdBy</c> like any other
+    /// field, and they were applied verbatim: a client sending <c>{"lastModifiedBy":
+    /// "system-security"}</c> recorded System as the author. The Store's control planes read that
+    /// stamp as "who asked" (<c>InvokerOf</c>), and the Governance package admits a signature only
+    /// when it equals the stamp. When the sender is an authenticated principal that is not the
+    /// platform, a <c>lastModifiedBy</c> in the patch is replaced by the sender and a
+    /// <c>createdBy</c> is dropped, because nobody rewrites who created a node. A patch that does
+    /// not touch the author is left alone, so the no-change backstop is unaffected. The platform
+    /// (System, a hub) still writes the stamp it carries: imports and repairs preserve authorship.
+    /// </summary>
+    internal static void StampAuthorFromSender(
+        System.Text.Json.Nodes.JsonObject currentNode,
+        System.Text.Json.Nodes.JsonObject patchNode,
+        AccessContext? sender,
+        System.Text.Json.JsonSerializerOptions jsonOpts,
+        ILogger? logger,
+        string hubPath)
+    {
+        var who = sender?.ObjectId;
+        if (string.IsNullOrEmpty(who) || AccessService.IsPlatformPrincipal(who))
+            return;
+        var authorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("LastModifiedBy") ?? "LastModifiedBy";
+        var creatorKey = jsonOpts.PropertyNamingPolicy?.ConvertName("CreatedBy") ?? "CreatedBy";
+        // A patch that RE-ASSERTS the live author changes nothing and claims nothing, so it is left
+        // alone: rewriting it would turn a no-op into a version bump attributed to the sender.
+        if (patchNode.TryGetPropertyValue(authorKey, out var author)
+            && !string.Equals(StringOf(author), who, StringComparison.Ordinal)
+            && !(currentNode.TryGetPropertyValue(authorKey, out var live)
+                 && string.Equals(StringOf(author), StringOf(live), StringComparison.Ordinal)))
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: the patch names lastModifiedBy={Claimed} but the sender is {Sender} — "
+                + "recording the sender (a client cannot choose its own author)",
+                hubPath, author?.ToJsonString(), who);
+            patchNode[authorKey] = who;
+        }
+        if (patchNode.TryGetPropertyValue(creatorKey, out var creator)
+            && !(currentNode.TryGetPropertyValue(creatorKey, out var liveCreator)
+                 && string.Equals(StringOf(creator), StringOf(liveCreator), StringComparison.Ordinal)))
+        {
+            logger?.LogWarning(
+                "[MergeGuard] {HubPath}: dropping createdBy from a patch sent by {Sender} — who created a node is not rewritten",
+                hubPath, who);
+            patchNode.Remove(creatorKey);
+        }
+
+        static string? StringOf(System.Text.Json.Nodes.JsonNode? value) =>
+            value is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<string>(out var text) ? text : null;
+    }
+
     internal static void RebaseAuditStamp(
         System.Text.Json.Nodes.JsonObject currentNode,
         System.Text.Json.Nodes.JsonObject patchNode,
@@ -2288,7 +2395,7 @@ public static class DataExtensions
                         request.Message, jsonOpts,
                         hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger("MeshWeaver.Data.MergeGuard"),
-                        hubPath);
+                        hubPath, request.AccessContext);
 
                     // 🚨 No-change backstop (same rule as ApplyMeshNodePatchInTurn): a patch whose
                     // every value already matches the live state must NOT bump the version or
@@ -2751,7 +2858,7 @@ public static class DataExtensions
                     // monotonic-trigger guard + last-write-wins when no base is carried.
                     var preMergeNode = currentNode.DeepClone().AsObject();
                     var refusedKeys = ApplyMeshNodeMerge(currentNode, patchNode, isMeshNode: true,
-                        request.Message, jsonOpts, mergeGuardLogger, hubPath);
+                        request.Message, jsonOpts, mergeGuardLogger, hubPath, request.AccessContext);
                     // 🚨 Owner-side no-change backstop: a patch whose every value already matches
                     // the live node (an MCP patch re-asserting current state, an importer
                     // re-writing unchanged content) must NOT bump the Version, persist a history

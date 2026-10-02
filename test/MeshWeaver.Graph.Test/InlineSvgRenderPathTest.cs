@@ -99,8 +99,8 @@ public class InlineSvgRenderPathTest
     [Fact]
     public void TheContentSelfReferenceIcon_Plates()
     {
-        var markup = Html(MeshNodeLayoutAreas.RenderNodeIcon(
-            new MeshNode("Page", "Space") { Icon = MonochromeOutline }, ""));
+        var markup = MeshNodeLayoutAreas.RenderNodeIconHtml(
+            new MeshNode("Page", "Space") { Icon = MonochromeOutline });
 
         ShouldBePlated(markup, "a node that references itself in its own content draws its icon");
         markup.Should().Contain("width: 24px; height: 24px; display: block;",

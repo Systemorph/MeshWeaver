@@ -4,8 +4,9 @@ Category: Architecture
 Description: >-
   A pull request into main reads RED until the automatic review has landed and every thread it opened
   has a reply from a person. Why review was advisory, the reviewer as measured (two logins, one
-  account, and a quota refusal posted as if it were a review), the maintainer waiver, the controls
-  replayed on real merges, and what the check still cannot see.
+  account, and a quota refusal posted as if it were a review), the maintainer waiver, the
+  reviewer-unavailable degradation that lets the gate release itself when the reviewer is down, the
+  controls replayed on real merges, and what the check still cannot see.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><polyline points="8 10 11 13 16 8"/></svg>
 ---
 
@@ -14,7 +15,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 **The check `Automatic review answered` is RED until the automatic review has landed on a pull
 request and every inline thread that review opened has a reply from a person.** It never skips, it
 never passes on no evidence, and a pull request the reviewer could not review is released only by a
-maintainer's visible waiver. It is the build of option B on #4299, decided by the maintainer on
+maintainer's visible waiver — or, when the internal reviewer itself is down, by the
+[reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody)
+its own App records on the head, which defers the review rather than skipping it. It is the build of option B on #4299, decided by the maintainer on
 2026-09-17.
 
 - Workflow: `.github/workflows/review-answered.yml`
@@ -88,6 +91,9 @@ All three hold, or the check is RED:
 1. **The automatic review has landed** — a review by the reviewer account, at a non-`PENDING` state,
    whose body is not a refusal. What makes it a review is *who posted it*, not how it is worded — see
    **"Provenance, not presentation"** below for why, and what requiring a recognisable shape cost.
+   Two things release this condition — and only this one — without a review: a maintainer's
+   [waiver](#the-waiver), and the internal reviewer's own
+   [reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody).
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
@@ -176,6 +182,7 @@ to go **red** if the marker rule is restored.
 | `pull_request_review` | submitted, dismissed | the reviewer's review; a person's reply also creates a review |
 | `pull_request_review_comment` | created, deleted | a finding or a reply arriving, or a reply going |
 | `merge_group` | checks_requested | the queue entry is judged again; the number comes from `gh-readonly-queue/main/pr-<N>-<sha>` |
+| `check_run` (in `review-answered-on-degradation.yml`) | completed | the reviewer's "Reviewer unavailable" check run — this file **re-runs** the gate's newest `pull_request` run for that head rather than judging itself; see [the degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody) for why |
 
 There is no job-level `if:`, no path or branch filter and no `continue-on-error`: a skipped required
 context counts as satisfied, so every event evaluates the predicate in full. The script's self-test
@@ -235,6 +242,7 @@ opens…"*. That sentence is correct for exactly one of them.
 | the reviewer has not posted yet | "the automatic review must land … usually arrives minutes after the pull request opens" | time |
 | the reviewer posted a **refusal** | "**unreviewable right now** … nothing on this pull request can answer this" | the reviewer becoming able to review, then a maintainer's re-request — or the waiver |
 | the reviewer posted **findings** nobody answered | "reply to each unanswered thread (fixed, or why not)" | a reply ON each thread |
+| the internal reviewer is **down** (rounds abort) | "the automatic review must land …" until its App posts the degradation | the App's `Reviewer unavailable` check run — automatic, then GREEN reading **`REVIEWER UNAVAILABLE, review deferred`** |
 
 **The middle row is the one that cost something** (#4730). On 2026-09-18 the reviewer refused for
 quota from 11:39Z, and six pull requests — every one green on `Consolidate test results`, every one
@@ -267,10 +275,12 @@ verdict *is*, because that is precisely the half that was wrong while the verdic
 half has a negative control: remove the wait's `not verdict.refused` and the refusal-only wait case
 goes red; delete the headline and the refusal case goes red.
 
-**Still open, and deliberately not decided here:** what a structurally unavailable reviewer should
-do to the merge gate — hold as today, retry on a schedule once quota resets, or a time-boxed
-maintainer waiver. That is a policy call (#4730's second ask), and naming the state does not make
-it.
+**Decided since for the INTERNAL reviewer, still open for Copilot:** what a structurally
+unavailable reviewer does to the merge gate. For the internal reviewer the answer is the
+[reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody)
+(MeshWeaver.Feedback#86): its App records that it could not review, the gate releases condition 1,
+and a post-merge review is owed. A Copilot quota refusal is still held as described above — Copilot
+has no App of ours to record anything with, and it is being retired.
 
 ## The waiver
 
@@ -292,6 +302,94 @@ review replaces the refusal.
 🚨 **An agent never applies the waiver.** Agent sessions here run under the maintainer's own GitHub
 account, and the check reads an account's role, not who was at the keyboard — it cannot tell a
 maintainer's waiver from an agent's. The label event in the pull request's timeline is the audit.
+
+## The reviewer-unavailable degradation — the exit that needs nobody
+
+**Why it exists** (MeshWeaver.Feedback#86). With the waiver as the only exit, the gate was circular:
+when the internal reviewer itself stops completing rounds — on 2026-09-29 they aborted at the
+30-minute cap (MeshWeaver.Plugins#2564, #2565, #2568) — *every* pull request is held, **including the
+one that repairs the reviewer**, until a person is available to waive. Whether a change can merge
+must not depend on a person's availability, and a defect in the review step must not be able to
+block its own fix.
+
+**The rule.** Condition 1 is also released when the pull request's **head commit** carries a check
+run that satisfies ALL of:
+
+| field | must be | why |
+|---|---|---|
+| `name` | `internal-review` | the reviewer's own check run, the one it posts on every round |
+| `app.slug` **and** `app.id` | `systemorph-com` **and** `4918443` | provenance: the slug is a display name, the id cannot be claimed by another App (read off check run `109436738198`, 2026-09-29T13:45Z) |
+| `status` | `completed` | an in-progress round is not a verdict |
+| `conclusion` | `neutral` | the same title at `success` or `failure` is a round that ran, not a degradation |
+| `output.title` | starts with `Reviewer unavailable` | the contract the Plugins steward posts |
+
+The **newest** completed `internal-review` run from that App on the head decides, so a later real
+round supersedes an earlier degradation (and runs from other Apps are never looked at). `--as-of`
+ignores a run completed after the instant; the merge-queue path reads the pull request's head, not
+the queue's merge commit. The check-run listing is read on every evaluation, and a failed or
+incomplete read is RED, like every other input. The gate and the fleet lane grant `checks: read` for
+it explicitly: measured on #5920 the listing answers without it, but only because core is public — a
+private caller's token would refuse it and hold every pull request.
+
+**Provenance, not presentation — the same principle as for the review itself.** A `neutral`
+`internal-review` from any other App, a run under any other name, or that title at any other
+conclusion is not a degradation. The self-test carries a negative control for each field, and
+mutating the predicate to drop any one of them turns its control red.
+
+**It is a DEFERRED review, not a skipped one.** The Plugins steward (`Governance/PullRequestSteward`,
+MeshWeaver.Plugins) re-kicks a failed round once, and posts the neutral run only for an
+**infrastructure** cause — never because a change was hard to review — naming that cause in the
+run's summary. A pull request merged on a degradation **owes a post-merge review, recorded on the
+item**. The GREEN verdict is never silent about it: the run headline reads
+`GREEN — REVIEWER UNAVAILABLE, review deferred (degradation, not a review)`, a `::warning::`
+annotation carries the check run's id, title and summary, and the step summary heads with
+*reviewer unavailable: degraded, review deferred*.
+
+**It releases condition 1 only**, exactly as the waiver does: every thread the reviewer DID open
+before it went down still needs a person's reply. When a degradation and a waiver both stand, the log
+credits the degradation — the system released it, nobody had to.
+
+### How the degradation turns the context green without a push
+
+A predicate is re-asked only when an event starts the gate, and none of `review-answered.yml`'s
+triggers fires when a check run completes. Measured and read, in order:
+
+- **The internal reviewer's events DO start runs here.** Over the last 100 runs of
+  `review-answered.yml` (2026-09-30), `systemorph-com[bot]` triggered 11 `pull_request_review` and 30
+  `pull_request_review_comment` runs, **none** `action_required` — unlike Copilot's (#4575, above).
+  So a review that does land re-evaluates the gate by itself.
+- **`check_run` cannot be added to `review-answered.yml`.** A `check_run`-triggered run executes on
+  the DEFAULT branch with `GITHUB_SHA` = main's last commit (GitHub's event reference), and the event
+  fires only for a workflow file already on the default branch. Its `Automatic review answered`
+  check-run would therefore land on **main's** commit, where the pull request's branch protection
+  never reads it — the "green in the log, BLOCKED on the pull request" shape below — and a red one
+  would sit on main for every unrelated check run. Check runs created by GitHub Actions do not raise
+  the event at all, so a re-run cannot loop.
+- **So `review-answered-on-degradation.yml` listens for it and RE-RUNS the gate.** On a `completed`
+  check run matching the contract, it lets any gate run still in flight for that head finish (one
+  that read before the degradation would otherwise publish a stale red), then re-runs the newest
+  `pull_request` run of `review-answered.yml` unless it already reads success. A `pull_request` run
+  is the one branch protection reads (#4649), and re-running it is the remedy this page already
+  names as legitimate. The listener is single-shot — the degradation completes once — so each of
+  its API calls gets three attempts before it goes RED, naming the head it could not re-evaluate.
+  The listener decides nothing: the re-run applies the whole predicate,
+  provenance included, so a drift in its filter can cost or miss a re-run but never turn a gate
+  green.
+- 🚨 **Not yet observed end to end.** A `check_run` workflow cannot run before its file is on
+  `main`, so the first real degradation after the merge is the first observation. Read it there: the
+  listener's run on main's head names the gate run it re-ran, and that gate run's new attempt must
+  read GREEN with the degradation line.
+
+**Why `--wait-for-review` stays 15 minutes** although the internal reviewer takes 23–30: the wait
+exists only because Copilot's event cannot start a run. The internal reviewer's review event and
+its degradation check run each re-evaluate the gate, so a longer wait buys nothing they do not
+already deliver — and would hold two runners (`answered` and `lane`) for half an hour on every pull
+request opened.
+
+**The fleet lane** (`node-repo-review-answered.yml`) fetches the same predicate, so a satellite
+caller that moves its pinned sha past this change judges the degradation too; the re-run listener
+is core's own file, and a satellite that needs the context to turn green without a push adds the
+same listener naming its own caller workflow.
 
 ## What it does not see
 

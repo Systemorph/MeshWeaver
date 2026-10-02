@@ -181,19 +181,19 @@ public static class EditLayoutArea
             stack = stack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{description}</p>"));
 
         // Use Overview with startInEditMode=true for the form
-        return stack.WithView((areaHost, _) => EditLayout(areaHost, typeDefinition, id));
+        return stack.WithView((areaHost, ctx) => EditLayout(areaHost, ctx, typeDefinition, id));
     }
 
-    private static UiControl EditLayout(LayoutAreaHost host, ITypeDefinition typeDefinition, object id)
+    private static UiControl EditLayout(LayoutAreaHost host, RenderingContext context, ITypeDefinition typeDefinition, object id)
     {
         var dataId = GetDataId($"{host.Hub.Address}_{typeDefinition.CollectionName}_{id}");
         var stream = host.Workspace
             .GetStream(new EntityReference(typeDefinition.CollectionName, id));
 
-        host.RegisterForDisposal(stream!
-            .Select(e => typeDefinition.SerializeEntityAndId(e?.Value ?? throw new InvalidOperationException("Entity value is null"), host.Hub.JsonSerializerOptions))
-            .Subscribe(e => host.UpdateData(dataId, e))
-        );
+        // FeedData, never a bare Subscribe: the projection below THROWS on a missing entity, and
+        // without an error arm that rethrew on the pool (Template.BindFeed).
+        host.RegisterForDisposal(context.Area, host.FeedData(context.Area, dataId, stream!
+            .Select(e => typeDefinition.SerializeEntityAndId(e?.Value ?? throw new InvalidOperationException("Entity value is null"), host.Hub.JsonSerializerOptions))));
 
         // Reuse BuildPropertyForm with isToggleable=false for pure edit mode (no toggle back to read-only)
         return BuildPropertyForm(host, typeDefinition.Type, dataId, canEdit: true, isToggleable: false);

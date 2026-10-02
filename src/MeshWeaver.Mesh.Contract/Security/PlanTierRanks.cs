@@ -46,13 +46,19 @@ public sealed record PlanTierRanks(
     public const int BaselineRank = 0;
 
     /// <summary>Builds a ladder from <c>(id, rank, allAccess)</c> rows — the tier nodes, or a test's
-    /// literal. Ids are trimmed and matched case-insensitively; a blank id is skipped.</summary>
+    /// literal. Ids are trimmed and matched case-insensitively; a blank id is skipped, and so is a
+    /// RETIRED id (<see cref="RetiredPlans"/>) — its successor's own row ranks it.</summary>
     public static PlanTierRanks From(IEnumerable<(string Id, int Rank, bool AllAccess)> plans)
     {
         var ranks = ImmutableDictionary.CreateBuilder<string, int>(StringComparer.OrdinalIgnoreCase);
         var allAccess = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, rank, isAllAccess) in plans)
         {
+            // A tier node still carrying a RETIRED id is not a second definition of its successor:
+            // the successor's own node ranks it, and letting the retired node's rank overwrite it
+            // would make the ladder depend on enumeration order.
+            if (SuccessorOf(id) is not null)
+                continue;
             var key = Canonical(id);
             if (key.Length == 0)
                 continue;
@@ -117,6 +123,10 @@ public sealed record PlanTierRanks(
     /// this registry has not seeded, can never widen a licence) without turning it into an outage:
     /// "nothing at all, not even the Store" is not a safer answer than "free", it is a broken
     /// portal. A package tier the ladder does not know is still covered by nothing.
+    /// <para>🚨 Deciding at the baseline is never SILENT: this method is pure, so the surfaces that
+    /// call it name the stored id — the registry logs it per resolved instance and a plan-tier
+    /// refusal carries it (<see cref="IsUnknownPlan"/>, #5894). A RETIRED id is not unknown: it
+    /// resolves to its successor (<see cref="RetiredPlans"/>).</para>
     /// </remarks>
     public bool CoversInstance(string? instancePlan, string? packageTier)
     {
@@ -153,6 +163,56 @@ public sealed record PlanTierRanks(
         return capRank < planRank ? capId : plan;
     }
 
-    /// <summary>The comparison form of a plan id — trimmed, lower-case; empty for blank.</summary>
-    public static string Canonical(string? tier) => (tier ?? "").Trim().ToLowerInvariant();
+    /// <summary>
+    /// 🚨 RETIRED plan ids and the plan each one now IS — an explicit, closed table of renames,
+    /// never a fallback. A plan id that was once seeded and stamped on records, then renamed, must
+    /// keep resolving to its successor: otherwise every record still carrying it reads as an
+    /// UNKNOWN plan, which decides at the baseline (<see cref="CoversInstance"/>) and silently
+    /// strips the instance of everything it paid for (#5894 — <c>sme</c> was renamed to
+    /// <c>dedicated</c> in the licence documents only, its tier node was deleted, and a dedicated
+    /// instance was refused 18 packages as <c>free</c>).
+    ///
+    /// <para>This is NOT how an unknown id is handled. An id absent from both this table and the
+    /// ladder stays unknown — <see cref="IsUnknownPlan"/> names it, and the registry logs it on
+    /// every decision taken for that instance. Add an entry here only for a plan that was RENAMED,
+    /// with the successor the business decided on; a plan that was withdrawn has no successor and
+    /// does not belong here.</para>
+    /// </summary>
+    public static readonly ImmutableDictionary<string, string> RetiredPlans =
+        ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase, new[]
+        {
+            // Renamed in the licence documents (MeshWeaver.Plugins 997898990); the maintainer
+            // decided the stored id maps to its successor (#5894).
+            KeyValuePair.Create("sme", "dedicated"),
+        });
+
+    /// <summary>
+    /// The successor of <paramref name="tier"/> when it is a RETIRED plan id
+    /// (<see cref="RetiredPlans"/>), otherwise null. What a surface reports when it reads a record
+    /// that still stores the old id, so the rename is visible rather than silent.
+    /// </summary>
+    public static string? SuccessorOf(string? tier) =>
+        RetiredPlans.TryGetValue(Lower(tier), out var successor) ? successor : null;
+
+    /// <summary>
+    /// Whether <paramref name="plan"/> — an instance record's plan — is UNKNOWN to this ladder:
+    /// non-blank, not the baseline, not a retired id, and ranked by no tier node. Such a plan is
+    /// decided at the baseline (fail closed, <see cref="CoversInstance"/>), and that decision must
+    /// never be silent: every surface that takes it names the stored id.
+    /// </summary>
+    public bool IsUnknownPlan(string? plan)
+    {
+        var id = Canonical(plan);
+        return id.Length > 0 && id != BaselinePlan && RankOf(id) is null && !IsAllAccess(id);
+    }
+
+    /// <summary>The comparison form of a plan id — trimmed, lower-case, a RETIRED id replaced by its
+    /// successor (<see cref="RetiredPlans"/>); empty for blank.</summary>
+    public static string Canonical(string? tier)
+    {
+        var id = Lower(tier);
+        return RetiredPlans.TryGetValue(id, out var successor) ? successor : id;
+    }
+
+    private static string Lower(string? tier) => (tier ?? "").Trim().ToLowerInvariant();
 }

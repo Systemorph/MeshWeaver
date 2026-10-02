@@ -14,6 +14,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Views for the PythonDemo/PrimeReport sample: a layout area that computes its content
@@ -26,34 +27,54 @@ public static class PrimeReportLayoutAreas
     public static LayoutDefinition AddPrimeReportLayoutAreas(this LayoutDefinition layout) =>
         layout.WithView("Report", Report);
 
+    /// <summary>The <c>/data</c> id the report feed writes to.</summary>
+    public const string ReportDataId = "primeReport";
+
     /// <summary>
-    /// Renders the prime table computed by Python. Reads the node reactively from the
-    /// per-node hub's MeshDataSource (<c>host.Workspace.GetStream&lt;MeshNode&gt;()</c> —
-    /// the same read the framework's default node areas use), reruns the script whenever
-    /// <see cref="PrimeReport.Count"/> changes, and degrades to an informative note when
-    /// <c>python3</c> is not installed on the host.
+    /// The prime table computed by Python — a TEMPLATE (Doc/GUI/DataBinding → "Templates first,
+    /// data later"): the markdown control is on screen at the first render, bound to
+    /// <c>/data/primeReport</c>, and <see cref="ReportFeed"/> fills it once Python has answered.
     /// </summary>
-    public static IObservable<UiControl?> Report(LayoutAreaHost host, RenderingContext _)
+    /// <param name="host">The area host; the feed reads its node.</param>
+    /// <param name="_">The rendering context.</param>
+    /// <returns>The report template.</returns>
+    public static UiControl Report(LayoutAreaHost host, RenderingContext _)
+        => ReportTemplate(ReportFeed(host));
+
+    /// <summary>The report page: one markdown control, bound to what <paramref name="report"/> writes.</summary>
+    /// <param name="report">The rendered report, as it changes.</param>
+    /// <returns>The complete control tree — it never waits on data.</returns>
+    public static UiControl ReportTemplate(IObservable<string> report) =>
+        report.Bind(markdown => Controls.Markdown(markdown), ReportDataId);
+
+    /// <summary>
+    /// The FEED half: reads the node reactively from the per-node hub's own stream, reruns the
+    /// script whenever <see cref="PrimeReport.Count"/> changes, and degrades to an informative note
+    /// when <c>python3</c> is not installed on the host. Builds no control. "Running Python…" is
+    /// written first, so the slot says what it is waiting for; a failure is logged and shown —
+    /// reported, never swallowed.
+    /// </summary>
+    /// <param name="host">The area host whose node is read.</param>
+    /// <returns>The report markdown.</returns>
+    public static IObservable<string> ReportFeed(LayoutAreaHost host)
     {
         var hub = host.Hub;
-        var hubPath = hub.Address.ToString();
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
-        if (nodeStream is null)
-            return Observable.Return(
-                (UiControl?)Controls.Markdown("*Unable to load the prime report node.*"));
-
-        return nodeStream
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
+        return host.Workspace.GetMeshNodeStream()
             .Select(node => Math.Clamp(ExtractReport(hub, node)?.Count ?? 25, 1, 200))
             .DistinctUntilChanged()
             .Select(count => ProcessPool(hub)
                 // InvokeBlocking = sync-blocking leaf on the pool's limited-concurrency
                 // scheduler. The Process never starts on the hub's action block.
-                .InvokeBlocking(ct => RunPython(BuildScript(count), ct))
-                .Select(markdown => (UiControl?)Controls.Markdown(markdown)))
+                .InvokeBlocking(ct => RunPython(BuildScript(count), ct)))
             .Switch()
-            // Render immediately; the Python result replaces the placeholder when it lands.
-            .StartWith((UiControl?)Controls.Markdown("*Running Python…*"));
+            .StartWith("*Running Python…*")
+            .Catch<string, Exception>(ex =>
+            {
+                hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(nameof(PrimeReportLayoutAreas))
+                    .LogWarning(ex, "The prime report of {Path} could not be computed", hub.Address);
+                return Observable.Return($"> **The report could not be computed:** {ex.Message}");
+            });
     }
 
     private static IIoPool ProcessPool(IMessageHub hub) =>

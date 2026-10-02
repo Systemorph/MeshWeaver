@@ -56,10 +56,11 @@ public class MarkdownEditIsATemplateTest(ITestOutputHelper output) : MonolithMes
         editor.Value.Should().BeOfType<JsonPointerReference>(
             "the body is a POINTER into the node, never the markdown text baked in on the hub")
             .Which.Pointer.Should().Be(MarkdownEditLayoutArea.MarkdownBodyPointer);
-        var ctx = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext);
-        ctx.Should().NotBeNull("the pointer resolves against the node, on the GUI side");
-        ctx!.Value.NodePath.Should().Be(path);
-        ctx.Value.BindContent.Should().BeTrue("the body lives in the node's MarkdownContent");
+        var parsed = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext);
+        parsed.Should().NotBeNull("the pointer resolves against the node, on the GUI side");
+        var ctx = parsed.GetValueOrDefault();
+        ctx.NodePath.Should().Be(path);
+        ctx.BindContent.Should().BeTrue("the body lives in the node's MarkdownContent");
         editor.TrackChangesEnabled.Should().Be(trackChanges);
         editor.AutoSaveAddress.Should().Be(path);
 
@@ -84,9 +85,13 @@ public class MarkdownEditIsATemplateTest(ITestOutputHelper output) : MonolithMes
         // The pointer and context exactly as the template hands them to the GUI.
         var editor = Descendants(MarkdownEditLayoutArea.BuildTemplate(path, trackChanges: false, locale: "en"))
             .OfType<MarkdownEditorControl>().Single();
-        var ctx = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext)!.Value;
+        var parsed = LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext);
+        parsed.Should().NotBeNull("the template's DataContext must parse as a node-bound context");
+        var ctx = parsed.GetValueOrDefault();
+        var pointer = editor.Value.Should().BeOfType<JsonPointerReference>(
+            "the body is a pointer into the node").Subject;
         var bound = MeshNodeBindingExtensions.Bind(
-                Mesh, ctx.NodePath, ctx.BindContent, ctx.SubPath, (JsonPointerReference)editor.Value!)
+                Mesh, ctx.NodePath, ctx.BindContent, ctx.SubPath, pointer)
             .Replay();
         using var connection = bound.Connect();
 
@@ -123,8 +128,8 @@ public class MarkdownEditIsATemplateTest(ITestOutputHelper output) : MonolithMes
         {
             if (Member(control.GetType(), "Views")?.GetValue(control) is not IEnumerable views)
                 continue;
-            var deferred = views.Cast<object?>().Where(v => v is not null and not UiControl)
-                .Select(v => v!.GetType().Name).ToList();
+            var deferred = views.OfType<object>().Where(v => v is not UiControl)
+                .Select(v => v.GetType().Name).ToList();
             deferred.Should().BeEmpty(
                 $"{control.GetType().Name} carries {deferred.Count} deferred view(s) — a view that renders "
                 + "only once data has arrived. A template binds its data instead.");
