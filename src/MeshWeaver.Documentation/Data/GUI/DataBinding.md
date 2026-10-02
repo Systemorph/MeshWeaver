@@ -139,6 +139,20 @@ Still to convert on the default page: `Overview` and `Data` (`BuildDetailsConten
 - **A deferred slot** already has one: `NamedAreaView` draws the `SpinnerType` of its `LayoutAreaControl` / `NamedAreaControl` until the slot's first control arrives — `SpinnerType.Skeleton` is the ghost-box shape, and it is what a template's data-dependent sub-area should ask for.
 - **A bound field** draws EMPTY until its value arrives (`MeshNodeBindingExtensions.Bind` emits `null` for "absent / not yet"), and the per-control shape is not yet a skeleton. 🚨 That gap is a PLATFORM gap, to be closed once in `BlazorView` (render the skeleton, and keep an editable control read-only, until the first bound emission) — never per view. An editor bound by pointer accepts input before its first value has arrived; the window is short (the cache replays a held node at once) but it is real, and closing it in the base view closes it for every bound control at the same time.
 
+### The authoring samples — what a NodeType author copies
+
+The in-mesh samples are converted, so copy them rather than the framework areas still on the inventory:
+
+| Sample | Shape it shows |
+|---|---|
+| `samples/Graph/Data/Northwind/{Customer,Supplier}` | Stored fields only — every value a `JsonPointerReference` into the content, `DataContext = GetMeshNodeDataContext(path)`; the area is `(host, _) => OverviewTemplate(host.Hub.Address.ToString())` |
+| `samples/Graph/Data/Northwind/Employee` · `…/Product` | Stored fields bound by pointer **and** a value only the hub can compute (dates in the viewer's format, a stock status) — a FEED function that builds no control, bound with `feed.Bind(x => Controls.Markdown(x), id)` (`Template.Bind`) |
+| `samples/Graph/Data/{Northwind,ACME}/Article` | Title and body as pointers into the node; the composed metadata line as a feed; the `Thumbnail` area as `new MeshNodeThumbnailControl(path, path)` — the thumbnail view reads name, abstract and image itself |
+| `samples/Graph/Data/Northwind/ReportsCatalog` | Children as `Controls.MeshSearch.WithHiddenQuery(…)` — the GUI runs the query; the hub reads neither the catalog nor its reports |
+| `samples/Graph/Data/PythonDemo/PrimeReport` | A whole view that must compute (a Python run) — one markdown control bound to `/data`, fed by an `IIoPool`-backed feed |
+
+Each sample's `Test/` folder asserts its template on the mesh: the template is built from a PATH (and, for a fed control, an `Observable.Never` feed — the template must be whole while its feed is silent), and `LayoutTemplate.DeferredViews(template)` must be empty — `LayoutTemplate` (`MeshWeaver.Layout`) is the platform's reading of a control tree, public so in-mesh C# can use it. The cases also pin which pointers are bound against which context. A feed's own subscription is opened by `Template.Bind`'s build-up, so it belongs to the rendered area and ends with it; a feed reports a failure as text and a log line, never by going quiet.
+
 ### The ratchet
 
 `test/MeshWeaver.Documentation.Test/LayoutAreaDataBakeRatchetGuard` counts, per file under `src/`, `memex/` and `samples/`, the layout-area units (methods, local functions, lambdas taking a `LayoutAreaHost`) that both READ data and BUILD controls. The seeded inventory is `test/LayoutAreaDataBakeSites.allow`; it may only shrink. Converting an area means lowering its line (and `TotalBudget`) in the same change. It is a text heuristic, and it says so: a load reached through another file's helper is missed, and an area that reads data only to choose its STRUCTURE (a permission gate) is counted — so the file is an inventory to work down, not a verdict on every line.
