@@ -85,6 +85,8 @@ A scalar flip is race-safe across mirrors (RFC 7396 merges object keys), so the 
 
 Every notification is raised for a **feature** — a stable, open-vocabulary key (`NotificationFeatures`: `approvals`, `inbox`, `triage`, `accessGranted`, `chatReady`, `system`; a module may raise its own). 🚨 Open, but not free-form: the key is the node id of each person's preference, so it must be a camel-case identifier (`^[a-z][a-zA-Z0-9]*$`, `NotificationFeatures.IsValidKey`). A key outside that alphabet is **rejected** where it enters (`Raise` errors, `PathFor` throws, the settings tab gives it no row) — never slugged, because a lossy slug would make two features share one preference node. A notification raised without one gets the feature its `NotificationType` implies (the three approval types → `approvals`, and so on), and the bell row records it (`Notification.Feature`; read it through `FeatureOf()`, which covers rows written before the key existed).
 
+🚨 **`accessGranted` is raised only for a grant a PERSON made.** `AccessGrantNotifier` notifies the grantee when an `AccessAssignment` is created, and skips every grant whose `CreatedBy` is the system identity (`WellKnownUsers.System`, `system-security`): a free app, a plan unlock, a purchase, a coupon, or any other entitlement the platform issues (MeshWeaver#5901). The rule behind it: nobody is ever notified that an app became available — on 2026-09-29 a Store sweep granted a newly published plugin to 72 users and each of them received an access notification by bell, Teams and email.
+
 Each person chooses, **per feature**, which channels reach them. The choice is an ordinary node in their own partition:
 
 | Node type | Lives at | Holds |
@@ -128,6 +130,16 @@ The settings tab lists one section per installed app below the kinds, each bindi
 🚨 **A channel the recipient cannot be reached on is a SKIP, logged at Debug — never an error to the raiser.** No deliverer installed, the bot not configured, or the person never having messaged the bot each come back as `Skipped` with the reason, and the other legs are unaffected. A leg that throws is logged at Warning and reported as a skip for the same reason.
 
 A notification with **no recipient** addresses the platform operators' bell and reaches no other channel — it has no person, so no preference, no mailbox and no Teams. An emitter that needs a person's attention (an approval, say) must address the people: the Hosting approval notice enumerates the eligible global administrators and raises one `approvals` notification each.
+
+### A bulk grant never mails — the per-granter budget (`AccessGrantMailBudget`)
+
+A raiser can cap a request to the bell with `NotificationRequest.BellOnly`: it is applied after every preference and app gate, so it can only remove channels. The access-granted notifier uses it. Per granter (the assignment's `CreatedBy`), at most `MailPerWindow` (3) access-granted notifications per fixed 10-minute window may use email or Teams; every further grant in that window reaches the recipient's bell only, and the granter gets ONE bell notice that the rest went out quietly.
+
+- **The budget lives in the store, not in a process.** A slot is a node at a deterministic path, `Admin/_GrantMail/{granter}/{window}-{n}` (plus one `{window}-told` marker), claimed by CREATING it. A create on a taken path is refused by the owning hub and by the store's unique path, so concurrent claims on any number of replicas admit exactly the budget, with no read and no index lag in the decision. A claim that cannot be decided is bell-only (fail closed).
+- **The sweep keeps the previous window.** The first slot of a new window deletes the granter's windows older than the previous one. The previous window stays because a claim dated in it can still be in flight; deleting its slots under it would let it win slot 1 again and mail past the budget. A claim is bounded by a 15-second timeout, far shorter than one window, so nothing older can still be claiming.
+- The granter id is sanitised to one path segment (`GranterKey`); a segment of only dots (`.`, `..`) becomes underscores, so it can never name a parent path.
+
+Pinned by `AccessGrantMailBudgetTest`, which also drives the notifier end to end: five grants by one person through the change feed yield five bells, three Teams messages and one notice to the granter.
 
 ## 5. Routing beyond the bell — rules, channels, triage
 

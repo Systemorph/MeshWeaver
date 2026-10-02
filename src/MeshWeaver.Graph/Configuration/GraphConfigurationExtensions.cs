@@ -59,6 +59,8 @@ public static class GraphConfigurationExtensions
                 .AddRedirectType()
                 .AddWhatsNewType()
                 .AddAccessAssignmentType()
+                // The per-granter mail budget of access-granted notifications (AccessGrantMailBudget).
+                .AddAccessGrantMailSlotType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
                 .AddVUserType()

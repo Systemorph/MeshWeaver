@@ -601,7 +601,9 @@ public sealed class MeshWeaverInstanceService(
         return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
             .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
+            // No timer of its own: the fan-in's Initial is bounded by its own stall terminal
+            // (MeshOperationOptions.QueryInitialBudget), and a shorter local bound gave up inside
+            // it — the inverted ladder of #1198 (#5894).
             .SelectMany(change =>
             {
                 // The index nodes share the NodeType and use the hash prefix as id, so an instance
@@ -680,7 +682,9 @@ public sealed class MeshWeaverInstanceService(
         return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
             .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
+            // No timer of its own: the fan-in's Initial is bounded by its own stall terminal
+            // (MeshOperationOptions.QueryInitialBudget), and a shorter local bound gave up inside
+            // it — the inverted ladder of #1198 (#5894).
             .Select(change => change.Items.Count == 0);
     }
 

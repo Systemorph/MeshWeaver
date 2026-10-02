@@ -45,10 +45,11 @@ resources:
 threads: 4
 
 startupProbe:
-  # Covers the model load (no download: the model is baked in).
+  # The PROCESS coming up (/healthz), never the model load: that gates readiness only.
   failureThreshold: 30
   periodSeconds: 5
 readinessProbe:
+  # /readyz: 503 "model loading" (or the load error) until the model is in; callers degrade meanwhile.
   periodSeconds: 15
   timeoutSeconds: 5
 livenessProbe:

@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -847,10 +848,19 @@ public static class MeshExtensions
             request.AccessContext?.Name ?? "(null)",
             request.AccessContext?.IsVirtual);
 
-        // Identity resolution: if no explicit CreatedBy, use the sender's AccessContext identity.
-        if (string.IsNullOrEmpty(createRequest.CreatedBy)
-            && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createRequest = createRequest with { CreatedBy = senderId };
+        // Identity resolution (RequestIdentity): an authenticated non-platform sender IS the
+        // requester, whatever CreatedBy the message body names; only the platform may post on
+        // somebody else's behalf. With no explicit CreatedBy, the sender's identity is used.
+        if (RequestIdentity.Resolve(createRequest.CreatedBy, request.AccessContext) is { Length: > 0 } requester
+            && !string.Equals(requester, createRequest.CreatedBy, StringComparison.Ordinal))
+        {
+            if (!string.IsNullOrEmpty(createRequest.CreatedBy))
+                logger.LogWarning(
+                    "[CreateNode] {Path}: the message names CreatedBy={Claimed} but the delivery is {Sender} — "
+                    + "authorising and recording it as the sender (a client cannot choose its own identity)",
+                    createRequest.Node.Path, createRequest.CreatedBy, requester);
+            createRequest = createRequest with { CreatedBy = requester };
+        }
 
         var capturedRequest = createRequest;
         var node = createRequest.Node;
@@ -925,9 +935,14 @@ public static class MeshExtensions
         // 1. Read existing — persistence first (catalog.GetNode auto-creates from templates),
         //    then fall back to the in-memory config. persistence.GetNode is already
         //    IObservable so we don't need to wrap it in Observable.FromAsync.
-        var existingObs = persistence != null
-            ? persistence.Read(node.Path, hub.JsonSerializerOptions)
-            : Observable.Return<MeshNode?>(null);
+        // A relocation's create carries authorship by naming its stored source (AuthorshipFrom):
+        // granted only with the move entitlement, and read from storage, never from the message.
+        MeshNode? authorshipSource = null;
+        var existingObs = AuthorshipSourceFor(hub, capturedRequest, persistence, logger)
+            .Do(source => authorshipSource = source)
+            .SelectMany(_ => persistence != null
+                ? persistence.Read(node.Path, hub.JsonSerializerOptions)
+                : Observable.Return<MeshNode?>(null));
 
         // Handler-side trail (#981). This handler returns Processed() immediately and owes its
         // reply from the DETACHED chain below, so the pipeline's own HANDLER_EXIT stage proves
@@ -1058,6 +1073,18 @@ public static class MeshExtensions
                     //     validators, and folded into the same rejection tuple so the failure is
                     //     posted by the one code path that already knows how.
                     .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
+                    // 1e. BROAD GRANTS only through a governed activity (BroadGrantGuard) — whoever
+                    //     writes, System included: this runs ahead of the validators' System bypass.
+                    //     Log-only until Access:BroadGrantGuard:Mode says Enforce.
+                    .SelectMany(systemOwned => systemOwned is not null
+                        ? Observable.Return<LocalizableText?>(systemOwned)
+                        : BroadGrantRejection(hub, node, request.AccessContext, "CreateNode", logger))
+                    // 1f. A governedBy BACK-REFERENCE is a claim, checked where it is made: only
+                    //     the activity it names, while executing, may write it (any node type —
+                    //     an Admin/Provision request is the case that motivated it).
+                    .SelectMany(broad => broad is not null
+                        ? Observable.Return<LocalizableText?>(broad)
+                        : GovernedClaimRejection(hub, node, existing: null, request.AccessContext, "CreateNode", logger))
                     // 🚨 The key now travels the whole way (#4507). This used to hand on
                     // `grantRejection.English` and throw the key away at this frame, because
                     // CreateNodeResponse.Fail had no keyed surface to render into; it now carries
@@ -1133,11 +1160,18 @@ public static class MeshExtensions
                                 CreatedDate = node.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(node.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? identity : node.CreatedBy,
+                                // A person or service never records somebody else as the author;
+                                // only the platform (an import, a repair) preserves a carried stamp,
+                                // and a relocation carries its STORED source's (AuthorshipFrom).
+                                CreatedBy = authorshipSource is { } fromC
+                                    ? fromC.CreatedBy
+                                    : RequestIdentity.Author(node.CreatedBy, identity),
                                 LastModified = node.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(node.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(node.LastModifiedBy) ? identity : node.LastModifiedBy,
+                                LastModifiedBy = authorshipSource is { } fromM
+                                    ? fromM.LastModifiedBy
+                                    : RequestIdentity.Author(node.LastModifiedBy, identity),
                                 // Stamp an initial Version of 1 so the post-save JSON includes the
                                 // field (the hub's JsonSerializerOptions has
                                 // DefaultIgnoreCondition=WhenWritingDefault → Version=0 is omitted
@@ -1955,9 +1989,9 @@ public static class MeshExtensions
             return request.Processed();
         }
 
-        var createdBy = request.Message.CreatedBy;
-        if (string.IsNullOrEmpty(createdBy) && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
-            createdBy = senderId;
+        // Same identity rule as the singular create (RequestIdentity): an authenticated
+        // non-platform sender is the requester, whatever the message body names.
+        var createdBy = RequestIdentity.Resolve(request.Message.CreatedBy, request.AccessContext);
 
         var nodes = request.Message.Nodes ?? ImmutableList<MeshNode>.Empty;
         if (nodes.Count == 0)
@@ -2145,11 +2179,11 @@ public static class MeshExtensions
                                 CreatedDate = n.CreatedDate == default
                                     ? now
                                     : MeshNode.StorageStable(n.CreatedDate),
-                                CreatedBy = string.IsNullOrEmpty(n.CreatedBy) ? capturedBy : n.CreatedBy,
+                                CreatedBy = RequestIdentity.Author(n.CreatedBy, capturedBy),
                                 LastModified = n.LastModified == default
                                     ? now
                                     : MeshNode.StorageStable(n.LastModified),
-                                LastModifiedBy = string.IsNullOrEmpty(n.LastModifiedBy) ? capturedBy : n.LastModifiedBy,
+                                LastModifiedBy = RequestIdentity.Author(n.LastModifiedBy, capturedBy),
                                 Version = n.Version > 0 ? n.Version : 1,
                             }).ToImmutableList();
 
@@ -3322,6 +3356,17 @@ public static class MeshExtensions
             && !string.IsNullOrEmpty(senderUserId)
             && senderUserId != WellKnownUsers.Anonymous)
             deleteRequest = deleteRequest with { DeletedBy = senderUserId };
+        // A DeletedBy in the message body never outranks an authenticated non-platform sender
+        // (RequestIdentity) — RLS authorises the delete as DeletedBy.
+        else if (RequestIdentity.Resolve(deleteRequest.DeletedBy, request.AccessContext) is { Length: > 0 } deleter
+                 && !string.Equals(deleter, deleteRequest.DeletedBy, StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "[DeleteNode] {Path}: the message names DeletedBy={Claimed} but the delivery is {Sender} — "
+                + "authorising it as the sender (a client cannot choose its own identity)",
+                deleteRequest.Path, deleteRequest.DeletedBy, deleter);
+            deleteRequest = deleteRequest with { DeletedBy = deleter };
+        }
 
         var capturedRequest = deleteRequest;
         var path = capturedRequest.Path;
@@ -4895,6 +4940,12 @@ public static class MeshExtensions
     /// <paramref name="legTimeout"/>, derived by <c>MeshOperationOptions.Nest</c> at the call site:
     /// the read runs INSIDE the leg's <c>.Catch</c>, which the leg's own bound no longer covers.</param>
     /// <param name="logger">Where a per-leaf refusal is reported.</param>
+    /// <param name="includeRoot">Ask the ROOT too — <paramref name="rootPath"/> is added to the set
+    /// whether or not <paramref name="allPaths"/> already carries it. A delete validates its root in-process before
+    /// this fan-out, so it leaves this false; a MOVE has no such earlier stage — the source root is
+    /// as much "going away" as every descendant — so it asks the root's own hub the same question,
+    /// which is also what runs the root's <c>[RequiresPermission(Delete)]</c> gate on the NODE rather
+    /// than only on its namespace.</param>
     private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
         IMessageHub issuingHub,
         string rootPath,
@@ -4904,10 +4955,11 @@ public static class MeshExtensions
         TimeSpan legTimeout,
         IStorageAdapter storage,
         TimeSpan absenceProbeBudget,
-        ILogger logger)
+        ILogger logger,
+        bool includeRoot = false)
     {
-        var descendants = allPaths
-            .Where(p => !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
+        var descendants = (includeRoot ? allPaths.Add(rootPath) : allPaths)
+            .Where(p => includeRoot || !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (descendants.Length == 0)
             return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
@@ -5428,6 +5480,19 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs the delete-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// delete — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="DeleteNodeRequest"/> runs it for a single (non-recursive) delete. Emits the first
+    /// refusal, or <c>null</c> when every validator lets the delete through.
+    /// <para>For delete paths that do not go through <see cref="DeleteNodeRequest"/> — a
+    /// <c>MeshNode</c> leaving a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunDeletionValidatorsObs(DeletionValidators(hub), accessContext, node, new DeleteNodeRequest(node.Path));
+
+    /// <summary>
     /// Every registered <see cref="INodeValidator"/> that takes part in a delete, resolved NOW.
     /// Call it where the hub is known to be alive — at handler entry — never from a continuation.
     /// </summary>
@@ -5528,6 +5593,200 @@ public static class MeshExtensions
                 node, assignment,
                 systemOwned: AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions)));
     }
+
+    /// <summary>
+    /// The broad-grant guard at a write boundary (<see cref="BroadGrantGuard"/>): emits the refusal
+    /// when the write is a broad grant that no executing governed activity accounts for AND the
+    /// guard enforces, else <c>null</c>. In <see cref="BroadGrantMode.LogOnly"/> (the default for
+    /// the first week) it only logs <c>[BroadGrantGuard] WOULD REFUSE</c> — one line per finding,
+    /// naming the seat, the shape, the subject and the writer, so the inventory of writers that
+    /// still need to stamp their context is a single grep.
+    ///
+    /// <para>The pure predicate runs first, so the hot path (an ordinary node, a user's own
+    /// grant) costs nothing; only a finding that CLAIMS a governed activity pays the one read of
+    /// the activity node.</para>
+    /// </summary>
+    private static IObservable<LocalizableText?> BroadGrantRejection(
+        IMessageHub hub, MeshNode node, AccessContext? writer, string seat, ILogger logger)
+    {
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        var mode = BroadGrantGuard.Mode(configuration);
+        if (mode == BroadGrantMode.Off)
+            return Observable.Return<LocalizableText?>(null);
+
+        var assignment = string.Equals(node.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType,
+                StringComparison.OrdinalIgnoreCase)
+            ? node.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)
+            : null;
+        if (BroadGrantGuard.Evaluate(node, assignment, writer) is not { } finding)
+            return Observable.Return<LocalizableText?>(null);
+
+        var claimed = BroadGrantGuard.ClaimedActivity(node, writer, hub.JsonSerializerOptions);
+        var allowed = BroadGrantGuard.GovernedStandards(configuration);
+        var verified = claimed is null
+            ? Observable.Return(false)
+            : hub.IsGovernedActivityExecuting(claimed, allowed);
+
+        return verified.Select(governed =>
+        {
+            if (governed)
+            {
+                logger.LogInformation(
+                    "[BroadGrantGuard] governed {Kind} {Path} subject={Subject} writer={Writer} seat={Seat} governedBy={Activity}",
+                    finding.Kind, finding.Path, finding.Subject, finding.Writer, seat, claimed);
+                return null;
+            }
+            logger.LogWarning(
+                "[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject={Subject} writer={Writer} onBehalfOf={OnBehalfOf} seat={Seat} governedBy={Activity} mode={Mode}",
+                finding.Kind, finding.Path, finding.Subject, finding.Writer, writer?.OnBehalfOf, seat, claimed, mode);
+            return mode == BroadGrantMode.Enforce ? BroadGrantGuard.Refusal(finding) : (LocalizableText?)null;
+        });
+    }
+
+    /// <summary>
+    /// The governed-claim check at a write boundary: emits the refusal when the write INTRODUCES a
+    /// <c>governedBy</c> back-reference (<see cref="BroadGrantGuard.IntroducedClaim"/>) that its
+    /// writer does not account for — the writer's context is not that activity, or the activity is
+    /// not executing an allowlisted standard — AND the guard enforces, else <c>null</c>. In
+    /// <see cref="BroadGrantMode.LogOnly"/> it logs <c>[BroadGrantGuard] WOULD REFUSE GovernedClaim</c>.
+    ///
+    /// <para>Any node type. The broad-grant guard sees grants and policies; a node a control plane
+    /// ACTS on because it names an activity (<c>Admin/Provision/{package}</c>) is the same claim,
+    /// and without this check its <c>governedBy</c> was whatever its creator typed.</para>
+    /// </summary>
+    private static IObservable<LocalizableText?> GovernedClaimRejection(
+        IMessageHub hub, MeshNode node, MeshNode? existing, AccessContext? writer, string seat, ILogger logger)
+    {
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+        var mode = BroadGrantGuard.Mode(configuration);
+        if (mode == BroadGrantMode.Off
+            || BroadGrantGuard.IntroducedClaim(node, existing, hub.JsonSerializerOptions) is not { } claim)
+            return Observable.Return<LocalizableText?>(null);
+
+        var verified = BroadGrantGuard.WriterIsClaimedActivity(claim, writer)
+            ? hub.IsGovernedActivityExecuting(claim, BroadGrantGuard.GovernedStandards(configuration))
+            : Observable.Return(false);
+
+        return verified.Select(governed =>
+        {
+            if (governed)
+                return null;
+            logger.LogWarning(
+                "[BroadGrantGuard] WOULD REFUSE GovernedClaim {Path} nodeType={NodeType} claims={Activity} writer={Writer} writerGovernedBy={WriterActivity} seat={Seat} mode={Mode}",
+                node.Path, node.NodeType, claim, writer?.ObjectId, writer?.GovernedBy, seat, mode);
+            return mode == BroadGrantMode.Enforce ? BroadGrantGuard.ClaimRefusal(node.Path, claim, writer) : (LocalizableText?)null;
+        });
+    }
+
+    /// <summary>
+    /// What the governed activity at <paramref name="activityPath"/> IS — standard, state, signed
+    /// inputs (<see cref="GovernedActivityFacts"/>) — read authoritatively from storage, the same
+    /// identity-independent read the write boundary's verifier uses. Emits null when there is no
+    /// such activity or it cannot be read. Cold; emits once; never throws.
+    ///
+    /// <para>For a control plane that acts on a governed node AFTER it was written: decide on
+    /// <see cref="GovernedActivityFacts.HasStarted"/> and on the signed inputs, never on
+    /// <see cref="GovernedActivityFacts.IsExecuting"/> — the activity may have finished in between.</para>
+    /// </summary>
+    public static IObservable<GovernedActivityFacts?> ReadGovernedActivity(this IMessageHub hub, string activityPath)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null || string.IsNullOrWhiteSpace(activityPath))
+            return Observable.Return<GovernedActivityFacts?>(null);
+        return ReadNodeAuthoritative(hub, persistence, activityPath.Trim())
+            .Select(activity => GovernedActivityFacts.Read(activity, hub.JsonSerializerOptions))
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Catch((Exception _) => Observable.Return<GovernedActivityFacts?>(null));
+    }
+
+    /// <summary>
+    /// 🚨 THE entitlement to relocate <paramref name="sourcePath"/> with its authorship: Delete on
+    /// its namespace, which is what <see cref="MoveNodePermissionAttribute"/> requires of a mover.
+    /// ONE function, so the copy handler's <c>PreserveAuthorship</c> gate and the create handler's
+    /// <c>AuthorshipFrom</c> gate cannot drift apart. Cold.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> MoveEntitlement(IMessageHub hub, string sourcePath) =>
+        hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete);
+
+    /// <summary>
+    /// The stored node whose authorship a create may carry over (<see cref="CreateNodeRequest.AuthorshipFrom"/>),
+    /// or null. Null when the request names none, or when the requester is the platform (whose
+    /// carried stamps are kept anyway). Otherwise the requester must hold Delete on the source's
+    /// namespace — the entitlement a move of it requires, the same gate
+    /// <see cref="CopyNodeRequest.PreserveAuthorship"/> applies — and the node is read from storage.
+    /// A refusal or an unreadable source logs and yields null, so the create records the
+    /// requester: authorship is never taken from the message. Cold; emits once.
+    /// </summary>
+    private static IObservable<MeshNode?> AuthorshipSourceFor(
+        IMessageHub hub, CreateNodeRequest request, IStorageAdapter? persistence, ILogger logger)
+    {
+        var from = request.AuthorshipFrom?.Trim();
+        if (string.IsNullOrEmpty(from) || persistence is null || RequestIdentity.IsPlatform(request.CreatedBy))
+            return Observable.Return<MeshNode?>(null);
+        return MoveEntitlement(hub, from)
+            .Take(1)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return ReadNodeAuthoritative(hub, persistence, from);
+                logger.LogWarning(
+                    "[CreateNode] {Path}: not carrying authorship from {From} — {Requester} lacks the move entitlement "
+                    + "(Delete on its namespace{Undetermined}); recording the requester",
+                    request.Node.Path, from, request.CreatedBy,
+                    outcome.IsUndetermined ? $", undetermined: {outcome.UndeterminedReason}" : "");
+                return Observable.Return<MeshNode?>(null);
+            })
+            .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="activityPath"/> names a governed activity that is EXECUTING one of
+    /// <paramref name="allowed"/> standards — the check <see cref="BroadGrantGuard"/> runs at the
+    /// write boundary, for a control plane that has to authorize a governed request itself (the
+    /// Store's provisioning, say). Uses the registered <see cref="IGovernedActivityVerifier"/> when
+    /// there is one. Cold; emits once; never throws (an unreadable activity is <c>false</c>).
+    /// </summary>
+    public static IObservable<bool> IsGovernedActivityExecuting(
+        this IMessageHub hub, string activityPath, IReadOnlySet<string> allowed) =>
+        (hub.ServiceProvider.GetService<IGovernedActivityVerifier>() is { } verifier
+                ? verifier.IsExecuting(activityPath, allowed)
+                : DefaultGovernedActivityCheck(hub, activityPath, allowed))
+            .Take(1)
+            .DefaultIfEmpty(false)
+            .Catch((Exception _) => Observable.Return(false));
+
+    /// <summary>
+    /// The default <see cref="IGovernedActivityVerifier"/>: reads the activity node authoritatively
+    /// and checks, shape-tolerantly over its raw content, that its <c>state</c> is <c>Executing</c>
+    /// and its <c>standard</c> is on the allowlist. Core does not reference the Governance
+    /// package's types, so it reads the two fields the package's <c>ActivityContent</c> serialises.
+    ///
+    /// <para>No impersonation is needed and none is opened: <see cref="ReadNodeAuthoritative"/>
+    /// reads the <see cref="IStorageAdapter"/> directly, which no adapter filters by the ambient
+    /// <see cref="AccessContext"/> — the same identity-independent read the partition bootstrap's
+    /// grant and <c>_GitSync</c> probes use. An activity the WRITER cannot read is therefore still
+    /// seen, which is the point: the guard asks what the activity IS, not what the writer may see.</para>
+    /// </summary>
+    private static IObservable<bool> DefaultGovernedActivityCheck(
+        IMessageHub hub, string activityPath, IReadOnlySet<string> allowed)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return Observable.Return(false);
+        return ReadNodeAuthoritative(hub, persistence, activityPath)
+            .Select(activity => GovernedActivityExecuting(activity, allowed, hub.JsonSerializerOptions));
+    }
+
+
+    /// <summary>
+    /// Whether an activity node is EXECUTING an allowlisted standard — read from its raw content
+    /// (<c>state</c>: the enum name or <see cref="BroadGrantGuard.GovernanceActivityStateExecuting"/>; <c>standard</c>: a path or an id). Pure.
+    /// </summary>
+    internal static bool GovernedActivityExecuting(
+        MeshNode? activity, IReadOnlySet<string> allowed, System.Text.Json.JsonSerializerOptions? options) =>
+        GovernedActivityFacts.Read(activity, options) is { IsExecuting: true } facts
+        && allowed.Contains(facts.StandardId);
 
     /// <summary>
     /// Sync-friendly observable variant of the creation-validator runner. Iterates
@@ -6156,10 +6415,11 @@ public static class MeshExtensions
         var inboundRequest = request.Message;
         var node = inboundRequest.Node;
 
-        var requestedBy = inboundRequest.RequestedBy
-            ?? request.AccessContext?.ObjectId;
+        // RequestIdentity: an authenticated non-platform sender is the requester, whatever
+        // RequestedBy the message body names.
+        var requestedBy = RequestIdentity.Resolve(inboundRequest.RequestedBy, request.AccessContext);
         if (!string.IsNullOrEmpty(requestedBy)
-            && string.IsNullOrEmpty(inboundRequest.RequestedBy))
+            && !string.Equals(requestedBy, inboundRequest.RequestedBy, StringComparison.Ordinal))
             inboundRequest = inboundRequest with { RequestedBy = requestedBy };
 
         var baseActivity = new ActivityLog("NodeUpsert")
@@ -6222,11 +6482,25 @@ public static class MeshExtensions
         // Viewer grant could simply be upserted up to Admin, which is the identical ownership claim
         // with a version bump instead of a create. Both write paths, or neither.
         var gatedExisting = SystemOwnedGrantRejection(hub, node)
+            // Same broad-grant guard as the create path: an upsert that turns a grant into a Public
+            // grant, or writes a policy, is the same act with a version bump.
+            .SelectMany(systemOwned => systemOwned is not null
+                ? Observable.Return<LocalizableText?>(systemOwned)
+                : BroadGrantRejection(hub, node, inboundCtx, "UpsertNode", logger))
+            // Same governed-claim check as the create path. An upsert that KEEPS the claim the
+            // stored node already carries introduces nothing; one that adds or changes it is
+            // checked — so the existing node is read only when the incoming one claims anything.
+            .SelectMany(broad => broad is not null
+                ? Observable.Return<LocalizableText?>(broad)
+                : BroadGrantGuard.GovernedByOf(node, hub.JsonSerializerOptions) is null
+                    ? Observable.Return<LocalizableText?>(null)
+                    : existingObs.Take(1).DefaultIfEmpty(null)
+                        .SelectMany(existing => GovernedClaimRejection(hub, node, existing, inboundCtx, "UpsertNode", logger)))
             .SelectMany(grantRejection =>
             {
                 if (grantRejection is null)
                     return existingObs;
-                logger.LogError("[UpsertNode] REFUSED privileged grant on system-owned partition {Path}: {Reason}",
+                logger.LogError("[UpsertNode] REFUSED grant {Path}: {Reason}",
                     node.Path, grantRejection.English);
                 PostFail(grantRejection, NodeUpsertRejectionReason.ValidationFailed);
                 return Observable.Empty<MeshNode?>();
@@ -7214,12 +7488,38 @@ public static class MeshExtensions
             options);
 
     /// <summary>
-    /// Sync handler for MoveNodeRequest — Copy subtree to target, then reactively delete
-    /// every source path. Composition is pure <see cref="IObservable{T}"/> end-to-end:
-    /// <c>CopyNode</c> → <c>Query</c> (source subtree paths) → <c>storage.Delete</c>
-    /// per path, with change notifications fired so the query catalog refreshes.
-    /// No <c>await</c>, no recursive <c>DeleteNodeRequest</c> orchestration. Mirror shape
-    /// of <see cref="HandleCopyNodeRequest"/>.
+    /// Sync handler for MoveNodeRequest — validate the source as a DELETE, copy the subtree to the
+    /// target, then reactively delete every source path. Composition is pure
+    /// <see cref="IObservable{T}"/> end-to-end: <c>delete pre-flight</c> → <c>CopyNode</c> →
+    /// <c>ListDescendantPaths</c> → <c>storage.DeleteMany</c>, with change notifications fired so
+    /// the query catalog refreshes. No <c>await</c>. Mirror shape of
+    /// <see cref="HandleCopyNodeRequest"/>.
+    ///
+    /// <para>🚨 A move REMOVES the source, so it is answerable to everything a delete of the source
+    /// is answerable to. The delete leg below goes straight to storage — it has to, because the
+    /// copy has already re-created the subtree and a cascade of <see cref="DeleteNodeRequest"/>s
+    /// would re-decide, half-way through, a question the move must decide before it writes
+    /// anything. Before this pre-flight existed, that leg was the ONLY removal of the source and it
+    /// ran no <see cref="INodeValidator"/> at all: moving <c>Admin/Tiers/pro</c> elsewhere dropped
+    /// an in-use plan tier from the ladder past <c>TierInUseDeletionGuard</c>, and every other delete
+    /// guard (the last-admin invariant, the partition-root guard, a node-level Delete denial) was
+    /// bypassable the same way. Now the source subtree — root included — is put through the SAME
+    /// pre-flight a recursive delete runs (<see cref="PreValidateDescendantsObs"/>: one
+    /// <see cref="ValidateDeleteRequest"/> per path, answered by that node's own hub under the
+    /// caller's identity, so the <c>[RequiresPermission(Delete)]</c> gate runs on the NODE and the
+    /// node's delete-validator chain runs with the move's source as the cascade root), plus the
+    /// read-only-provider probe a delete runs on its root. Any refusal refuses the move before the
+    /// copy creates anything.</para>
+    ///
+    /// <para>The TARGET half needs nothing here: the copy leg creates every node through
+    /// <see cref="CreateNodeRequest"/>, which runs the create permission and the create-validator
+    /// chain per node.</para>
+    ///
+    /// <para><b>Known window.</b> The pre-flight validates the subtree as storage lists it when the
+    /// move starts; the delete leg re-enumerates after the copy. A node created under the source
+    /// in between is carried by the copy (it is <c>RequireComplete</c>) and removed by the delete
+    /// leg without having been asked. Same planning window the recursive delete closes with its
+    /// subtree write scope; not closed here.</para>
     /// </summary>
     private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
@@ -7256,12 +7556,71 @@ public static class MeshExtensions
         var callerContext = request.AccessContext
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
-        // Move = Copy (with satellites + descendants) → reactive delete of every source path.
+        // The delete pre-flight's own budget ladder — the same three rungs HandleDeleteNodeRequest
+        // derives for its recursive pre-flight (stage > leg > absence probe), never new constants.
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+        var budget = opts.Timeout;
+        var legBudget = opts.Nest(budget);
+        var absenceProbeBudget = opts.Nest(legBudget);
+        // Off the router, exactly as the delete issues its fan-out (#2477).
+        var issuingHub = hub.NodeOperationIssuingHub();
+
+        // 🚨 The source must be DELETABLE — see the remarks. Emits once when it is; errors with a
+        // MoveRefusedException naming the path and the reason when it is not.
+        var sourceMayBeDeleted = Observable.Defer(() => storage.FindDeleteBlockingProvider(sourcePath))
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Timeout(budget, Observable.Defer(() => Observable.Throw<string?>(new TimeoutException(
+                $"[MoveNode] the storage-provider probe for '{sourcePath}' did not answer within "
+                + $"{budget.TotalSeconds:0}s"))))
+            .SelectMany(blockingProvider => blockingProvider is not null
+                ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                    $"Cannot move '{sourcePath}': it is served by the read-only storage provider "
+                    + $"'{blockingProvider}', so it cannot be removed from where it is. Nothing was moved.",
+                    NodeMoveRejectionReason.ValidationFailed))
+                : storage.ListDescendantPaths(sourcePath)
+                    .Take(1)
+                    .Timeout(budget, Observable.Defer(() => Observable.Throw<IReadOnlyCollection<string>>(new TimeoutException(
+                        $"[MoveNode] storage did not enumerate the subtree of '{sourcePath}' within "
+                        + $"{budget.TotalSeconds:0}s"))))
+                    .SelectMany(descendants => PreValidateDescendantsObs(
+                        issuingHub,
+                        sourcePath,
+                        descendants
+                            .Where(p => !string.IsNullOrEmpty(p))
+                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                        callerContext,
+                        budget,
+                        legBudget,
+                        storage,
+                        absenceProbeBudget,
+                        logger,
+                        includeRoot: true))
+                    .SelectMany(failure => failure is { } f
+                        ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                            $"Cannot move '{sourcePath}': moving it deletes '{f.Path}' from where it is, "
+                            + $"and that delete is refused: {f.Error}. Nothing was moved.",
+                            f.Reason switch
+                            {
+                                NodeDeletionRejectionReason.Unavailable => NodeMoveRejectionReason.Unavailable,
+                                _ => NodeMoveRejectionReason.ValidationFailed,
+                            }))
+                        : Observable.Return(System.Reactive.Unit.Default)))
+            // A probe or enumeration that ran out of time DECIDED nothing: refused (fail-closed),
+            // but reported as Unavailable — the same vocabulary the delete uses — never as a verdict.
+            .Catch((TimeoutException ex) => Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                $"Cannot move '{sourcePath}' now: whether it may be deleted from where it is could not be "
+                + $"established ({ex.Message}). Nothing was moved; the move may be retried.",
+                NodeMoveRejectionReason.Unavailable)));
+
+        // Move = delete pre-flight of the source → Copy (with satellites + descendants) →
+        // reactive delete of every source path.
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
         // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
         // never the eventually-consistent catalog query — the same stale-plan defect that
         // left recursive-delete survivors (issue #839) would leave source rows behind here.
-        Observable.Defer(() => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+        sourceMayBeDeleted
+            .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
             {
                 o = o.WithTarget(hub.NodeOperationTarget());
                 return callerContext != null ? o.WithAccessContext(callerContext) : o;
@@ -7315,6 +7674,13 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
+                    if (ex is MoveRefusedException refused)
+                    {
+                        logger.LogWarning("[MoveNode] {Source} -> {Target} refused: {Error}",
+                            sourcePath, targetPath, refused.Message);
+                        hub.Post(MoveNodeResponse.Fail(refused.Message, refused.Reason), o => o.ResponseFor(request));
+                        return;
+                    }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = msg.StartsWith(CopyNodeRequest.IncompleteCopyRefusal, StringComparison.Ordinal)
                         ? NodeMoveRejectionReason.ValidationFailed
@@ -7373,6 +7739,28 @@ public static class MeshExtensions
         // per copy), so it is closed here rather than left for the ledger.
         IObservable<MeshNode> CreateUnderCaller(MeshNode node) =>
             accessService.RunAs(callerAccessContext, () => meshService.CreateNode(node));
+
+        // A PRESERVING copy carries authorship by naming the stored source (CreateNodeRequest.
+        // AuthorshipFrom): the create handler re-checks the move entitlement and reads the stamps
+        // from storage, because a requester never chooses its own author stamps.
+        IObservable<MeshNode> CreatePreservingAuthorship(MeshNode node, string fromPath) =>
+            Observable.Defer(() => hub.NodeOperationIssuingHub()
+                .Observe(new CreateNodeRequest(node)
+                    {
+                        CreatedBy = callerAccessContext?.ObjectId,
+                        AuthorshipFrom = fromPath,
+                    },
+                    o => callerAccessContext is null
+                        ? o.WithTarget(hub.NodeOperationTarget())
+                        : o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(callerAccessContext))
+                .SelectMany(d => d.Message is { Success: true, Node: { } created }
+                    ? Observable.Return(created)
+                    : Observable.Throw<MeshNode>(d.Message.ToException(node.Path))));
+
+        IObservable<MeshNode> CreateRetargeted(MeshNode stored) =>
+            copyRequest.PreserveAuthorship
+                ? CreatePreservingAuthorship(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: true), stored.Path)
+                : CreateUnderCaller(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: false));
 
         // The storage inventory below emits on its own scheduler on a persistent store. Query is
         // constructed AFTER that emission, so MeshService cannot recover the request's AsyncLocal
@@ -7466,7 +7854,7 @@ public static class MeshExtensions
         IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
                 ? Observable.Return<(string, bool)?>(null)
-                : hub.CheckPermissionOutcome(NamespaceOf(sourcePath), Permission.Delete)
+                : MoveEntitlement(hub, sourcePath)
                     .Select(outcome => outcome.IsGranted
                         ? ((string, bool)?)null
                         : outcome.IsUndetermined
@@ -7667,16 +8055,14 @@ public static class MeshExtensions
                         // found arrived through the same query surface, so they go through the same
                         // storage read.
                         return Authoritative(sourceNode)
-                            .Select(stored => RetargetNode(stored, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                            .SelectMany(CreateUnderCaller)
+                            .SelectMany(CreateRetargeted)
                             .SelectMany(rootCreated =>
                             {
                                 if (toCopy.Count == 0)
                                     return Observable.Return<(MeshNode Root, int Desc, int Sat)>((rootCreated, descCount, satCount));
                                 return toCopy.ToObservable()
                                     .SelectMany(Authoritative)
-                                    .Select(n => RetargetNode(n, sourcePath, targetPath, copyRequest.PreserveAuthorship))
-                                    .SelectMany(retargeted => CreateUnderCaller(retargeted))
+                                    .SelectMany(CreateRetargeted)
                                     .ToList()
                                     .Select(_ => ((MeshNode Root, int Desc, int Sat))(rootCreated, descCount, satCount));
                             });
@@ -7773,6 +8159,16 @@ public static class MeshExtensions
                 LastModified = default,
                 LastModifiedBy = null,
             };
+    }
+
+    /// <summary>
+    /// A move refused BEFORE it wrote anything — the source cannot be deleted from where it is. An
+    /// expected outcome (Warning, not Error) carrying the reason the response reports.
+    /// </summary>
+    private sealed class MoveRefusedException(string message, NodeMoveRejectionReason reason)
+        : InvalidOperationException(message)
+    {
+        public NodeMoveRejectionReason Reason { get; } = reason;
     }
 
     /// <summary>

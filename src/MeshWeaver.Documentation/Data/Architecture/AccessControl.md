@@ -231,6 +231,8 @@ So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordi
 
 The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
 
+**Issuing a grant where nobody else can (#5904).** Seeing a system-owned Space is not reading it: its records stay behind the fold, and no person holds the `Create` on `{space}/_Access` that issuing a grant demands — nor on an OWNERLESS partition (no grant, no `_Policy`), which denies everyone. Measured on partnerre-control 2026-09-29/30: Space `Deployments`, GitSynced right after it was created, carried no grant once the retraction ran; the refusal told the platform admin that *"a platform admin"* had to grant access under `Deployments/_Access`, and refused that very grant — so every `Hosting/InstanceAction` whose approval re-reads `Deployments/*` as the approver was unapprovable. So on exactly those two partition shapes a platform admin may **create an `AccessAssignment`** (`PlatformAdminGrantRepair`, consulted by `RlsNodeValidator` only after the fold denied). It is an explicit, audited grant node, never an implicit read, and every other validator still applies: on a system-owned partition `IsForbiddenOnSystemOwned` still refuses anything that confers write, so what the admin can issue there is a `Viewer`/`Commenter` entitlement. On a partition that has an owner (a grant or a policy) and no one-way sync the admin is refused as before. The platform's own partitions (`Admin`, the `User`/`Auth` mirrors, `Portal`, `Kernel`, `ApiToken`, `system-security`, `Anonymous`, every `_`-prefixed namespace) are refused outright, and the fleet's (`Deployments`, `Hosting`, `Ops`, `Store`, … — the rest of `DeleteSpaceRunner.ProtectedPartitions`) take an entitlement only, whether or not they are system-owned. Pinned by `PlatformAdminCanGrantOnAnUngrantableSpaceTest`. The denial on a system-owned, grant-less partition now says so, instead of promising that the creator "regains access on their next write" — the bootstrap never restores a creator on a system-owned partition.
+
 ### Deleting a space nobody may delete: the governed break-glass action
 
 A space whose owner is gone, or a stranded partition with no root at all, refuses every person's delete — the platform admin's included, by the rule above. The sanctioned way out is not a wider grant but the **`DeleteSpace`** kind of `Hosting/InstanceAction` (MeshWeaver.Plugins, `Hosting/DeleteSpaceAction`): it reads the space as system, parks with the full plan (rows per table, grants, GitSync configuration, the `Admin/Partition` record, the schema, the NodeTypes and their outside dependents), and after one approval of exactly that plan removes it through the framework's own deletes and the platform's partition teardown, verifies nothing is left and writes an audit record. It refuses the system and fleet partitions, a user's home and a package's partition by name. It is the audited, per-case elevation this page describes — never a standing permission.
@@ -243,6 +245,32 @@ A space whose owner is gone, or a stranded partition with no root at all, refuse
 > 🚨 **Platform-admin grants live in `Admin/_Access`, never root `_Access`.** A root `_Access` grant makes a user a **data superuser** (All on every partition via scope inheritance) — which platform admins must NOT be. An `Admin/_Access` grant scopes them to platform management only. Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) both use the Admin partition — they disagreed before 2026-06-08 (writers wrote root, readers checked Admin scope), which silently locked configured admins out of every admin tab.
 
 > **Emergency / cross-partition data access** is out of scope for the standing grant — it will be a deliberate **elevation (break-glass)** flow (audited, time-boxed), not a permission a platform admin holds by default.
+
+### 🚨 Broad grants only through a governed activity (`BroadGrantGuard`)
+
+Access that reaches many people, or that the platform writes for someone else, is written **only** by an executing governed activity — never by a person's standing rights (a platform admin's included) and never by a platform sweep. Maintainer, 2026-09-30, after a new free plugin was granted to 72 users in three minutes by a System sweep, each grant mailed: *"i don't want to have this possibility in principle."*
+
+`BroadGrantGuard` sits at the create and upsert write boundaries, next to `AccessAssignmentGuard`, **ahead of the validators' System bypass**. It finds three shapes:
+
+| Shape | What it is | Passes when |
+|---|---|---|
+| `PublicSubject` | a non-denied grant to `Public` or `Anonymous` | an executing governed activity wrote it |
+| `SystemForOther` | a grant written as System whose subject is not `AccessContext.OnBehalfOf` | the user acquires it themselves (`OnBehalfOf` = subject: subscription, coupon, purchase), or a governed activity wrote it |
+| `AccessPolicy` | a `PartitionAccessPolicy` (`{scope}/_Policy`) | an executing governed activity wrote it |
+
+A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
+
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.remove`, `store.enroll`, `pr.steward.admin-access` (`Access:BroadGrantGuard:Standards` replaces it).
+
+**Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
+
+**A `governedBy` back-reference is a claim, checked where it is made — on any node type.** A control plane that ACTS on a node because it names an activity (the Store's `Admin/Provision/{package}` request is the case) would otherwise trust whatever its creator typed: a standing admin could create the request with `governedBy` pointing at some activity that happened to be executing, signed for a different package. So the create and upsert boundaries also check every node that INTRODUCES a `governedBy` (new, or changed from what the stored node carried — a claim the owner's own bookkeeping merely keeps was checked when it was introduced): its writer's context must carry the same `GovernedBy`, and that activity must be executing an allowlisted standard. The finding logs as `[BroadGrantGuard] WOULD REFUSE GovernedClaim {Path} …` and follows the same mode; under `Enforce` it refuses with `activity.node.governedClaim`.
+
+**A reader that acts LATER decides on monotone facts.** The write boundary may ask "is the activity executing" because the executor's write happens while it executes. A watcher that runs after that write must not: the activity may have moved on to `Done`, and the answer would depend on which write it saw first. `hub.ReadGovernedActivity(path)` returns the activity's `GovernedActivityFacts` — standard, state, signed inputs — and `HasStarted` (`Executing`, `Done` or `Failed`, reachable only after the signatures were consumed, never left again) is the predicate such a reader uses, together with the signed inputs naming what it is about to do.
+
+**A newly listed package waits for a governed provision.** The boot default install no longer installs a package just because a whole-source pattern (`Plugins/*`) covers it once the instance has been seeded (`InstanceAutoRegistrationService.HoldsForGovernedProvision`); it lands through a `package.provision` activity or an entry that names it. "Newly listed" means *unknown to the default-install ledger* (`KnownToTheLedger`), not merely "never seeded": a package the ledger recorded as FAILED is re-attempted on the next pass (the retry the ledger exists for), and one it recorded as SKIPPED is re-classified, exactly as before the hold. A fresh instance (empty seeded list) still seeds everything its patterns cover.
+
+**Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
 
 ---
 
@@ -270,6 +298,16 @@ The rest of this page covers the **internals** that back those extensions: the A
 ---
 
 # Core concepts
+
+## 🔒 A client cannot choose its own identity — `RequestIdentity`
+
+Every client ingress stamps the DELIVERY with the authenticated caller: SignalR and the public gRPC port re-stamp each delivery with the connection's validated user, and the HTTP middleware and the Blazor circuit derive it from the sign-in claims. Three things a client sends could still name another identity. They are closed in core, so no ingress has to remember them:
+
+- **Identity fields in a message body.** `CreateNodeRequest.CreatedBy`, `CreateNodesRequest.CreatedBy`, `DeleteNodeRequest.DeletedBy` and `CreateOrUpdateNodeRequest.RequestedBy` exist for the platform's own writers, whose AsyncLocal context does not survive every hop. RLS read them before the delivery's context, so a client that typed `createdBy: "system-security"` was authorised as System: measured, an identity with no grant created a node in another user's space. `RequestIdentity.Resolve` now decides. When the delivery carries an authenticated principal that is not the platform (not System, not a hub), that principal is the requester. A field may name somebody else only when the platform posted the message.
+- **The author stamps on the node.** `CreatedBy` and `LastModifiedBy` are what control planes read as "who asked" (the Store's `InvokerOf`, the Governance package's signature admission). A person or service always records itself (`RequestIdentity.Author`). On the create path the node's carried stamps are replaced. On the in-process update path (`ApplyAuditStamp`) a lambda's choice is overridden. On the owner's merge of a client patch (`DataExtensions.StampAuthorFromSender`) a `lastModifiedBy` in the patch is replaced by the sender and a `createdBy` is dropped. Only the platform keeps a carried stamp, so imports and repairs still preserve authorship. A MOVE preserves authorship too (#3263), and it does so without letting the message choose: its copy leg names the STORED source (`CreateNodeRequest.AuthorshipFrom`). The create handler then re-checks Delete on that source's namespace, which is the entitlement a move requires, and reads the four stamps from storage. This matters beyond attribution. `AccessContextScope.FromNode` impersonates a node's `CreatedBy`, so a client-chosen `CreatedBy` would make owner-scoped work run as whoever it named.
+- **A reserved id from a sign-in.** A session's id is the local part of the provider's `preferred_username` or email, and sign-in is multi-tenant. So `system-security@<any tenant>` signed in AS the System identity, and `public@…` as the pseudo-user whose grants everyone inherits. `RequestIdentity.IsReservedPrincipal` covers System, `Anonymous`, `Public` and hub-shaped principals. The middleware and `ResolveHttpCaller` resolve such a sign-in to anonymous, as they already did for a service id or a local part that collides with another person's User node.
+
+What is NOT closed here, and needs a design decision: code that runs INSIDE the portal process can call `AccessService.ImpersonateAsSystem()` / `ImpersonateAsSystemFor(...)`, and the gRPC trusted loopback port runs a gate's deliveries as System by default. Both are reachable by user-authored code: a compiled NodeType or C# Code node in-process, and a python or node Code node in a gate sidecar. The trusted port no longer passes a carried `GovernedBy` or `OnBehalfOf` (MeshWeaver.Plugins), so such code cannot satisfy the broad-grant guard. It still holds the System identity itself.
 
 ## AccessAssignment MeshNodes
 
@@ -491,6 +529,19 @@ rule that decides it is **monotonicity**:
 | `ObserveEffectiveAssignments` | every runtime `AccessAssignment` grant | `Denied` role assignments, from the *same* nodes (`ComputeScopeRoles` returns `Granted` **and** `Denied`) | ❌ no |
 | `ObserveScopePolicies` | `PublicRead` | `GetPermissionCap()`, `BreaksInheritance` — and their **absence widens** | ❌ no |
 | `ObserveAllMembershipNodes` | group grants reach the viewer | the same subject set decides which **denials** match | ❌ no |
+
+**There is no whole-fold seed either.** The fold used to emit a synchronous snapshot computed from
+the STATIC assignments and policies alone (`AddMeshNodes` / `IStaticNodeProvider`), then the
+enriched fold. That snapshot is a seed of all four legs at once, so the monotonicity rule refuses it
+for the same reason: it drops every runtime subtraction. Measured in the monolith fixture: a subject
+whose Admin came from a static grant kept `Delete` on every fresh check after a runtime
+`AccessAssignment` denied Admin at the node — the deny was stored and ignored, and the long-lived fold
+emitted `[true, false]` — while a runtime grant layered on a static Viewer answered its first check
+without it. Production has the same shape wherever a static grant or a static `PublicRead` policy
+supplies the role (the `Doc` partition ships both), so a runtime deny or cap there did not bind any
+one-shot check. The seed is gone: the first emission is the enriched fold's, which already unions
+the static layer in. Pinned by `RuntimeAccessChangeIsEffectiveTest` (both directions, each with its
+sibling control).
 
 **Why the first emission is the whole story.** `AccessControlPipeline` runs
 `hub.CheckPermissionOutcome(…).TakeDecisionOutsideGate()`, and `TakeDecisionOutsideGate` is a
@@ -724,7 +775,7 @@ Access control uses these shipped node types:
 
 > There is no `SecurityService` class any more, and **no write surface on the evaluator**. `AddUserRole`, `RemoveUserRole`, `SetPolicy`, `RemovePolicy`, `SaveRole` do not exist. Grants are ordinary MeshNodes: create/update them with `meshService.CreateNode(...)` / `workspace.GetMeshNodeStream(path).Update(...)` like any other node, and the shared `$security-*` queries pick the change up.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously**, unioned with the two anchored reads, so a statically declared grant resolves on the first emission without waiting for storage.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` read the static layer synchronously and union it with the two anchored reads, so a statically declared grant is part of the first emission — but that emission waits for the anchored reads too, because a runtime deny or cap must be able to override a static grant (see "The convergence contract").
 
 ## The read surface
 
