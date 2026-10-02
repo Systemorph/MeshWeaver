@@ -302,6 +302,28 @@ Mechanics (so you know what's load-bearing):
 | `host.UpdateData(id, node.Content)` + `GetDataStream(id).Debounce().Subscribe(...GetMeshNodeStream(path).Update...)` to edit node content (a.k.a. `SetupAutoSave`) | Replicate-then-save: two stores drift, the save loop races the echo and clobbers unedited fields | `MeshNodeContentEditorControl.ForType(path, typeof(T))` — the GUI view binds to `GetMeshNodeStream(path)` and writes per-field via `.Update(...)`; no replica, no save subscription |
 | A "Save" button that reads `/data/{id}` and writes the node | The edit should already be on the node via the bound stream | Node-bound editor; edits persist on change through `GetMeshNodeStream(path).Update(...)` |
 
+### The "load, then bake" shape is ratcheted in every repository
+
+A layout area that reads data on its hub (a node stream, a query, a workspace stream) and builds controls out of the values is counted, and the count may only go down:
+
+- **Core**: the test `LayoutAreaDataBakeRatchetGuard` checks `test/LayoutAreaDataBakeSites.allow`.
+- **Node repositories** (MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm, .FundReporting): the shared `node-repo-validate.yml` lane fetches `.github/scripts/check-layout-area-data-bake.py` at its scripts ref. The script runs against the caller's `layout-area-data-bake.allow`, a `<file><TAB><units>` list at the repository root. The script ports the core guard's scanner line for line, and its self-test plants the guard's own cases.
+
+The satellite allow-file is shrink-only. These verdicts fail the `Validate node repos` check:
+
+| Verdict | Meaning |
+|---|---|
+| `NEW` | A file bakes data and has no line in the allow-file. |
+| `MORE` | A file holds more baking units than its line allows. |
+| `MISSING` | The repository has no allow-file. This is red, never skipped. |
+| `ADDED` | On a pull request, the tree holds more baking units than the base did. Adding an area together with its line is therefore caught. Moving an existing unit to another file keeps the total, so it passes. |
+| `GREW` / `RAISED` | On a pull request, the allow-file's total, or one of its lines, is higher than in the base's copy. |
+| `STALE` | On a pull request, a file this PR converted now holds fewer units than its line. Lower the line or delete it in the same PR. |
+
+A stale line that the pull request did not cause is a warning, not a failure. This happens when the line was already above its file at the base, for example after two converting PRs merged at the same time. Failing it would turn every unrelated PR red. `ADDED` already stops anyone from re-using the spare allowance, and any PR may carry the one-line tidy.
+
+To print the current inventory in allow-file form, run `python3 <core>/.github/scripts/check-layout-area-data-bake.py --root . --report`.
+
 ---
 
 ## Where to look for working examples
