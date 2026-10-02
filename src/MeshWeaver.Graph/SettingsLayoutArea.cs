@@ -436,12 +436,12 @@ public static class SettingsLayoutArea
             .WithStyle("margin-top: 12px; gap: 8px;")
             .WithView(Controls.Button(host.Localize("ui.check"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction((Action<UiActionContext>)(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    // Pure reactive — Subscribe to the form value, then SelectMany
-                    // into the permission stream and write the rendered HTML back
-                    // to the result data slot. No await, no Task bridging.
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    // Pure reactive — read the form value, then SelectMany into the permission
+                    // stream and write the rendered HTML back to the result data slot. RETURNED
+                    // to the click, so a fault in either read is the click's visible refusal.
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
                         .SelectMany(data =>
                         {
@@ -455,9 +455,10 @@ public static class SettingsLayoutArea
                                 .Take(1)
                                 .Select(perms => (UserId: userId, Perms: perms));
                         })
-                        .Subscribe(t => ctx.Host.UpdateData(resultId,
-                            BuildPermissionResultHtml(t.UserId, t.Perms)));
-                }))));
+                        .Do(t => ctx.Host.UpdateData(resultId,
+                            BuildPermissionResultHtml(t.UserId, t.Perms)))
+                        .Select(_ => System.Reactive.Unit.Default);
+                })));
 
         stack = stack.WithView((h, _) =>
         {
@@ -581,7 +582,7 @@ public static class SettingsLayoutArea
                 .WithView(Controls.Button(host.Localize("ui.generate"))
                     .WithAppearance(Appearance.Neutral)
                     .WithIconStart(FluentIcons.Sparkle())
-                    .WithClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
+                    .WithReactiveClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Category)))
         {
@@ -629,7 +630,7 @@ public static class SettingsLayoutArea
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
-                .WithClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
+                .WithReactiveClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
 
         section = section.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
@@ -661,7 +662,7 @@ public static class SettingsLayoutArea
                 }.WithStyle("flex: 1;"))
                 .WithView(Controls.Button(host.Localize("ui.useAsIcon"))
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
+                    .WithReactiveClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
         }
 
         section = section.WithView(Controls.Body(
@@ -723,11 +724,11 @@ public static class SettingsLayoutArea
     /// node's <see cref="MeshNode.Icon"/> via the node stream. The icon resolver turns that into
     /// <c>/api/content/{nodePath}/{filename}</c> at render time.
     /// </summary>
-    private static void UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
+    private static IObservable<System.Reactive.Unit> UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
     {
-        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
+        return actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
             .Take(1)
-            .Subscribe(data =>
+            .Do(data =>
             {
                 var fileName = data?.GetValueOrDefault("fileName")?.ToString()?.Trim() ?? "";
                 if (string.IsNullOrEmpty(fileName))
@@ -742,7 +743,7 @@ public static class SettingsLayoutArea
                 var iconRef = $"content:{fileName}";
 
                 WriteIcon(actx, nodePath, iconRef);
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>
@@ -750,19 +751,19 @@ public static class SettingsLayoutArea
     /// Description from the node stream, invokes the <see cref="IIconGenerator"/>, and writes the
     /// resulting SVG straight back to the node's <see cref="MeshNode.Icon"/> — ONE source of truth.
     /// </summary>
-    private static void RegenerateIconFromNode(UiActionContext actx, string nodePath)
+    private static IObservable<System.Reactive.Unit> RegenerateIconFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Regenerate Icon",
                 "Icon generator service is not registered. Call AddAgentChatServices().");
-            return;
+            return Observable.Return(System.Reactive.Unit.Default);
         }
-        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+        return actx.Host.Workspace.GetMeshNodeStream(nodePath)
             .Where(n => n is not null)
             .Take(1)
-            .Subscribe(node =>
+            .Do(node =>
             {
                 var name = node!.Name ?? "";
                 var description = node.Description;
@@ -775,7 +776,7 @@ public static class SettingsLayoutArea
                 generator.GenerateSvgAsync(name, description).Subscribe(
                     svg => WriteIcon(actx, nodePath, svg),
                     ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>
@@ -783,19 +784,19 @@ public static class SettingsLayoutArea
     /// Name + Category from the node stream, invokes the <see cref="IDescriptionGenerator"/>, and
     /// writes the resulting text straight back to the node's <see cref="MeshNode.Description"/>.
     /// </summary>
-    private static void RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
+    private static IObservable<System.Reactive.Unit> RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Generate Description",
                 "Description generator service is not registered. Call AddAgentChatServices().");
-            return;
+            return Observable.Return(System.Reactive.Unit.Default);
         }
-        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+        return actx.Host.Workspace.GetMeshNodeStream(nodePath)
             .Where(n => n is not null)
             .Take(1)
-            .Subscribe(node =>
+            .Do(node =>
             {
                 var name = node!.Name ?? "";
                 var category = node.Category;
@@ -812,7 +813,7 @@ public static class SettingsLayoutArea
                             .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
                             .LogWarning(ex, "Description write failed for {Path}", nodePath)),
                     ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     private static void WriteIcon(UiActionContext actx, string nodePath, string icon) =>
