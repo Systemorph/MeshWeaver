@@ -12,7 +12,6 @@ memex/Memex.Portal.Shared/Settings/ServiceIdentitiesSettingsTab.cs	1
 memex/Memex.Portal.Shared/Settings/UpdatePolicySettingsTab.cs	1
 memex/Memex.Portal.Shared/Settings/WhatsNewSettingsTab.cs	1
 samples/Graph/Data/ACME/Project/Source/ProjectLayoutAreas.cs	5
-samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	7
 src/MeshWeaver.GitSync/GitHubSyncSettingsTab.cs	1
 src/MeshWeaver.Graph/ExportLayoutArea.cs	1
 src/MeshWeaver.Graph/GlobalSettingsLayoutArea.cs	1
