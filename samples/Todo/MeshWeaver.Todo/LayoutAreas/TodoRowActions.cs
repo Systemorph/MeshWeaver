@@ -152,14 +152,14 @@ public static class TodoRowActions
                     .WithClickAction(_ =>
                     {
                         // The editor saves as you type — Save only closes.
-                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button(host.Localize("todo.dialog.cancel"))
                     .WithClickAction(_ =>
                     {
                         TodoLayoutAreas.Delete(host, [todo]);
-                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
@@ -185,7 +185,7 @@ public static class TodoRowActions
                 .WithView(Controls.Button(host.Localize("todo.dialog.done"))
                     .WithClickAction(_ =>
                     {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
@@ -221,13 +221,13 @@ public static class TodoRowActions
                         // A sample: a real application would send the reminder here.
                         host.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(TodoRowActions))
                             .LogInformation("Overdue reminder for todo {Id} to {Person}", todo.Id, todo.ResponsiblePerson);
-                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button(host.Localize("todo.dialog.cancel"))
                     .WithClickAction(_ =>
                     {
-                        host.UpdateArea(DialogControl.DialogArea, null!);
+                        host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)

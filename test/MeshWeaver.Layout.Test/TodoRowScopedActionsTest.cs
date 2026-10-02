@@ -103,8 +103,8 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
             var stream = Open(area);
             await stream.GetControlStream(area).Should().Within(10.Seconds()).Match(
                 c => c is LayoutGridControl, $"{area} renders its page", TestContext.Current.CancellationToken);
-            var (_, control) = (await rendered.Where(r => r.Area == area).Should().Within(10.Seconds())
-                .Emit($"{area} was rendered", TestContext.Current.CancellationToken))!;
+            var (_, control) = await rendered.Where(r => r.Area == area).Should().Within(10.Seconds())
+                .Emit($"{area} was rendered", TestContext.Current.CancellationToken);
 
             EveryViewIsStatic(control);
             Descendants(control).OfType<ItemTemplateControl>().Should().ContainSingle(
@@ -141,11 +141,11 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
         for (var k = 0; k < rows.Length; k++)
         {
             Click(stream, primary, rows[k].Row);
-            var started = rows.Take(k + 1).Select(r => r.Entry.Item!.Id).ToImmutableHashSet();
+            var started = rows.Take(k + 1).Select(r => TodoOf(r.Entry).Id).ToImmutableHashSet();
             await Todos().Should().Within(10.Seconds()).Match(
                 todos => todos.Where(t => t.ResponsiblePerson == Assignee)
                     .All(t => (t.Status == TodoStatus.InProgress) == started.Contains(t.Id)),
-                $"Start in row {k} starts todo {rows[k].Entry.Item!.Id} and no other",
+                $"Start in row {k} starts todo {TodoOf(rows[k].Entry).Id} and no other",
                 TestContext.Current.CancellationToken);
         }
     }
@@ -189,7 +189,7 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var member = ResponsiblePersons.AvailablePersons[k + 1];
             Click(stream, await Child(stream, assignMenu, k + 1), rows[k].Row);
-            var id = rows[k].Entry.Item!.Id;
+            var id = TodoOf(rows[k].Entry).Id;
             await Todos().Should().Within(10.Seconds()).Match(
                 todos => todos.Single(t => t.Id == id).ResponsiblePerson == member,
                 $"member {k + 1} in row {k}'s menu assigns {id} to {member}",
@@ -263,15 +263,25 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
         => GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), new LayoutAreaReference(area));
 
+    /// <summary>The value, asserted present — the test fails here, by name, when it is not.</summary>
+    private static T Present<T>(T? value) where T : class
+    {
+        Assert.NotNull(value);
+        return value;
+    }
+
+    /// <summary>The todo a row carries; a heading row carries none, and a test that asks for it there fails.</summary>
+    private static TodoItem TodoOf(TodoEntry entry) => Present(entry.Item);
+
     private IObservable<IReadOnlyCollection<TodoItem>> Todos()
-        => GetHost().GetWorkspace().GetStream<TodoItem>()!.Select(t => (IReadOnlyCollection<TodoItem>)(t ?? []));
+        => Present(GetHost().GetWorkspace().GetStream<TodoItem>()).Select(t => (IReadOnlyCollection<TodoItem>)(t ?? []));
 
     /// <summary>The area of the page's row list (its last child).</summary>
     private static async Task<string> ListArea(ISynchronizationStream<JsonElement> stream, string area)
     {
-        var page = (LayoutGridControl)(await stream.GetControlStream(area).Should().Within(10.Seconds()).Match(
-            c => c is LayoutGridControl, "the page renders", TestContext.Current.CancellationToken))!;
-        return page.Areas.Last().Area.ToString()!;
+        var page = Assert.IsType<LayoutGridControl>(await stream.GetControlStream(area).Should().Within(10.Seconds()).Match(
+            c => c is LayoutGridControl, "the page renders", TestContext.Current.CancellationToken));
+        return Present(page.Areas.Last().Area.ToString());
     }
 
     private static async Task<string> Template(ISynchronizationStream<JsonElement> stream, string area)
@@ -284,9 +294,9 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
 
     private static async Task<string> Child(ISynchronizationStream<JsonElement> stream, string area, int index)
     {
-        var container = (IContainerControl)(await stream.GetControlStream(area).Should().Within(10.Seconds()).Match(
-            c => c is IContainerControl, $"{area} renders", TestContext.Current.CancellationToken))!;
-        return container.Areas.ElementAt(index).Area.ToString()!;
+        var container = Assert.IsAssignableFrom<IContainerControl>(await stream.GetControlStream(area).Should().Within(10.Seconds()).Match(
+            c => c is IContainerControl, $"{area} renders", TestContext.Current.CancellationToken));
+        return Present(container.Areas.ElementAt(index).Area.ToString());
     }
 
     /// <summary>The rows as the client's mirror holds them, once it holds at least
@@ -300,7 +310,7 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
                 r => r.ValueKind == JsonValueKind.Array && r.GetArrayLength() >= min,
                 $"the client mirror holds {area}'s rows", TestContext.Current.CancellationToken);
         return [.. rows.EnumerateArray().Select((r, i) => (
-            r.Deserialize<TodoEntry>(GetClient().JsonSerializerOptions)!,
+            Present(r.Deserialize<TodoEntry>(GetClient().JsonSerializerOptions)),
             new RowContext { Pointer = $"{pointer}/{i}", Index = i, Value = r.Clone() }))];
     }
 
@@ -311,7 +321,7 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
         await stream.GetDataStream<JsonElement>(new JsonPointerReference(pointer))
             .Should().Within(10.Seconds()).Match(
                 r => r.ValueKind == JsonValueKind.Array && r.EnumerateArray()
-                    .Count(e => which(e.Deserialize<TodoEntry>(GetClient().JsonSerializerOptions)!)) == count,
+                    .Count(e => e.Deserialize<TodoEntry>(GetClient().JsonSerializerOptions) is { } entry && which(entry)) == count,
                 $"{area} shows {count} matching todo rows", TestContext.Current.CancellationToken);
         return [.. (await Entries(stream, area, count)).Where(r => which(r.Entry))];
     }
