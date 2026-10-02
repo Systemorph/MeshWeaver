@@ -1167,27 +1167,13 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders a compact thumbnail/card view of a node for use in catalogs and lists.
-    /// Uses GetStream for reactive data binding instead of direct persistence access.
+    /// A TEMPLATE: the card is declared by path and its view binds the node through
+    /// <c>IMeshNodeStreamCache</c>, so the area emits at once rather than after the node's read
+    /// (Doc/GUI/DataBinding → "Templates first, data later").
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
-        return host.StreamView<MeshNode>(
-            (nodes, _) =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildThumbnailContent(node, hubPath);
-            },
-            hubPath);
-    }
-
-    private static UiControl BuildThumbnailContent(MeshNode? node, string hubPath)
-    {
-        return MeshNodeThumbnailControl.FromNode(node, hubPath);
-    }
+        => Observable.Return<UiControl?>(MeshNodeThumbnailControl.ForPath(host.Hub.Address.ToString()));
 
     /// <summary>
     /// Renders the Metadata area showing node properties (name, type, path).
@@ -1315,29 +1301,61 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Search(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var configuredNodeTypeMode = host.Hub.Configuration.Get<NodeTypeCatalogMode>() != null;
 
         // Every catalog knob is URL-driven so one area serves every shape — read by
         // ReadCatalogOptions (see the "Mesh Search" doc): ?groupBy ?subtree ?searchBar
         // ?emptyMessage ?loading ?counts ?limit ?maxRows ?maxColumns ?collapsible ?reactive
         // ?title ?placeholder ?q. The fallback render mode differs by branch (NodeType
         // instances → Hierarchical, content catalog → NamespaceTree).
+        //
+        // 🚨 Which catalog to show is decided from the hub's CONFIGURATION, never by reading the
+        // node (Doc/GUI/DataBinding → "Templates first, data later"). NodeType catalog mode is
+        // used when either (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
+        // (b) the node is a NodeType DEFINITION — this hub then applies the "NodeType" type's own
+        // configuration, which the activation funnel records as NodeTypePathHolder. Every
+        // ordinary node's catalog — the hot path — is therefore a template emitted at once; only
+        // a definition's catalog reads its node, because its query is built from the definition.
+        if (!IsNodeTypeCatalog(host.Hub.Configuration))
+            return Observable.Return<UiControl?>(InstanceCatalog(host, hubPath));
+        return NodeTypeCatalog(host, hubPath);
+    }
+
+    /// <summary>
+    /// Whether <see cref="Search"/> serves a NodeType's catalog of its instances — answered from the
+    /// hub configuration alone, so the ordinary catalog never waits on a read.
+    /// </summary>
+    /// <param name="configuration">The node hub's configuration.</param>
+    internal static bool IsNodeTypeCatalog(MessageHubConfiguration configuration)
+        => configuration.Get<NodeTypeCatalogMode>() != null
+           || configuration.Get<NodeTypePathHolder>()?.Path == MeshNode.NodeTypePath;
+
+    /// <summary>
+    /// The instance-node catalog: this node's own content. Defaults to the re-rooting graph
+    /// navigator: the next populated level below (skipping empty namespace segments) + the
+    /// ancestors above, navigable along the graph's edges. Every knob is still ?param-overridable —
+    /// ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat the grid, etc. (The Space
+    /// "Children" catalog stays on the namespace tree.) A template: the GUI runs the query.
+    /// </summary>
+    private static UiControl InstanceCatalog(LayoutAreaHost host, string hubPath)
+        => WithBreadcrumbs(
+            BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator)),
+            hubPath);
+
+    /// <summary>
+    /// A NodeType definition's catalog of its instances. Its hidden query and create link are built
+    /// from the DEFINITION (<see cref="NodeTypeDefinition.DefaultNamespace"/>,
+    /// <see cref="NodeTypeDefinition.RestrictedToNamespaces"/>), which only the node carries — the
+    /// one branch of <see cref="Search"/> that reads data to decide its structure.
+    /// </summary>
+    private static IObservable<UiControl?> NodeTypeCatalog(LayoutAreaHost host, string hubPath)
+    {
         return host.Workspace.GetMeshNodeStream().Select(node =>
         {
-            // NodeType catalog mode is used when either:
-            //  (a) the hub opts in via NodeTypeCatalogMode (e.g. AddNodeTypeView), or
-            //  (b) the node itself is a NodeType instance (NodeType = "NodeType") —
-            //      so types declared with only AddDefaultLayoutAreas still render as
-            //      catalogs of their instances instead of falling through to the
-            //      generic namespace search.
-            var isNodeTypeMode = configuredNodeTypeMode
-                || node?.NodeType == MeshNode.NodeTypePath;
-
             // For NodeType mode, query instances under this NodeType's namespace.
             // Uses the node's own path as namespace to correctly scope to local instances.
             // E.g., FutuRe/EuropeRe/LineOfBusiness → finds children under that namespace,
             // regardless of whether they reference the local or parent nodeType path.
-            if (isNodeTypeMode && node != null)
+            if (node != null)
             {
                 var nodeTypePath = node.Path;
                 var nodeTypeDefinition = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
@@ -1393,14 +1411,8 @@ public static class MeshNodeLayoutAreas
                 return (UiControl?)WithBreadcrumbs(typeSearch, hubPath);
             }
 
-            // Instance node catalog — this node's own content. The Search area defaults to the
-            // re-rooting graph navigator: the next populated level below (skipping empty namespace
-            // segments) + the ancestors above, navigable along the graph's edges. Every knob is
-            // still ?param-overridable — ?groupBy=tree restores the lazy namespace tree, ?groupBy=flat
-            // the grid, etc. (The Space "Children" catalog stays on the namespace tree.)
-            return WithBreadcrumbs(
-                BuildCatalog(hubPath, ReadCatalogOptions(host, MeshSearchRenderMode.GraphNavigator)),
-                hubPath);
+            // No definition to read (yet): the ordinary catalog, as before.
+            return InstanceCatalog(host, hubPath);
         });
     }
 
@@ -1669,88 +1681,65 @@ public static class MeshNodeLayoutAreas
     /// Renders the NodeTypes view showing NodeType nodes defined at this level.
     /// Shows the node's own type (if any) and any NodeType children.
     /// Accessible from the menu as a separate page.
+    ///
+    /// <para>A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the own type comes
+    /// from the hub's configuration (<see cref="NodeTypePathHolder"/> — the type this hub was bound
+    /// to), its card binds the type node by path, and the children are a
+    /// <see cref="MeshSearchControl"/> whose query the GUI runs. It used to wait for the node, a
+    /// one-shot query snapshot and a point read of the type before it emitted anything, and then
+    /// froze that snapshot: a NodeType added at this level never appeared until the page was
+    /// reloaded.</para>
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Return<UiControl?>(NodeTypesTemplate(
+            host.Hub.Address.ToString(),
+            host.Hub.Configuration.Get<NodeTypePathHolder>()?.Path,
+            host.ViewerLocale()));
+
+    /// <summary>
+    /// The NodeTypes page for <paramref name="nodePath"/> — pure, so its shape is assertable
+    /// without a hub.
+    /// </summary>
+    /// <param name="nodePath">The node whose level is listed.</param>
+    /// <param name="ownTypePath">The node's own NodeType path, or null when it has none.</param>
+    /// <param name="locale">The viewer's locale, for the headings.</param>
+    internal static UiControl NodeTypesTemplate(string nodePath, string? ownTypePath, string? locale)
     {
-        var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        var stack = Controls.Stack.WithWidth("100%");
 
-        if (meshQuery == null)
-        {
-            return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: #888;\">Query service not available.</p>"));
-        }
+        if (!string.IsNullOrEmpty(ownTypePath))
+            stack = stack
+                .WithView(Controls.H3(LocalizationCatalog.Get("node.types.ownType", locale))
+                    .WithStyle("margin: 0 0 16px 0;"))
+                .WithView(Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2))
+                    .WithView(MeshNodeThumbnailControl.ForPath(ownTypePath),
+                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4)));
 
-        return host.Workspace.GetMeshNodeStream().SelectMany(node =>
-        {
-            // NodeType children: Query snapshot — listing observable, no await.
-            var children = meshQuery.Query<MeshNode>(
-                    MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:NodeType"))
-                .Take(1)
-                .Select(c => (IReadOnlyList<MeshNode>)c.Items)
-                .Catch<IReadOnlyList<MeshNode>, Exception>(_ => Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>()));
-
-            // Own NodeType definition by path (known-path lookup): one-shot GetDataRequest
-            // — true request/response, no SubscribeRequest+immediate-unsubscribe.
-            var ownTypeStream = node != null && !string.IsNullOrEmpty(node.NodeType)
-                ? host.Hub.GetMeshNode(node.NodeType)
-                : Observable.Return<MeshNode?>(null);
-
-            return children.CombineLatest(ownTypeStream, (nodeTypeChildren, ownType) =>
-            {
-                var hasOwnType = ownType != null;
-                var hasNodeTypeChildren = nodeTypeChildren.Count > 0;
-                return (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren);
-            });
-        }).Select(tuple =>
-        {
-            var (node, ownType, nodeTypeChildren, hasOwnType, hasNodeTypeChildren) = tuple;
-
-            if (!hasOwnType && !hasNodeTypeChildren)
-            {
-                return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No node types defined at this level.</p>");
-            }
-
-            var stack = Controls.Stack.WithWidth("100%");
-
-            // Own type section
-            if (hasOwnType)
-            {
-                stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 0 0 16px 0;\">Type of {node?.Name ?? "this node"}</h3>"));
-                var ownTypeGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-                ownTypeGrid = ownTypeGrid.WithView(
-                    MeshNodeThumbnailControl.FromNode(ownType!, ownType!.Path),
-                    itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                stack = stack.WithView(ownTypeGrid);
-            }
-
-            // NodeType children section
-            if (hasNodeTypeChildren)
-            {
-                if (hasOwnType)
-                {
-                    stack = stack.WithView(Controls.Html("<div style=\"margin: 24px 0;\"></div>")); // Spacer
-                }
-                stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 0 0 16px 0;\">Types in {node?.Namespace ?? hubPath}</h3>"));
-
-                var typesGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-                foreach (var typeNode in nodeTypeChildren.OrderBy(n => n.Order).ThenBy(n => n.Name))
-                {
-                    // Skip if it's the same as own type
-                    if (ownType != null && typeNode.Path == ownType.Path)
-                        continue;
-
-                    typesGrid = typesGrid.WithView(
-                        MeshNodeThumbnailControl.FromNode(typeNode, typeNode.Path),
-                        itemSkin => itemSkin.WithXs(12).WithSm(6).WithMd(4).WithLg(4));
-                }
-                stack = stack.WithView(typesGrid);
-            }
-
-            return (UiControl?)stack;
-        });
+        return stack
+            .WithView(Controls.H3(LocalizationCatalog.Get("node.types.inNamespace", locale, nodePath))
+                .WithStyle(string.IsNullOrEmpty(ownTypePath) ? "margin: 0 0 16px 0;" : "margin: 24px 0 16px 0;"))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery(NodeTypesAtLevelQuery(nodePath, ownTypePath))
+                .WithNamespace(nodePath)
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(true)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithMaxColumns(3));
     }
 
+    /// <summary>
+    /// The query listing the NodeTypes defined at <paramref name="nodePath"/>'s level. The node's own
+    /// type, when it lives at that level, is already shown as the own-type card above the list, so
+    /// the query excludes it (<c>-path:</c>) — the GUI runs the query, so the de-duplication the
+    /// hub-side loop used to do has to be expressed in the query itself.
+    /// </summary>
+    /// <param name="nodePath">The node whose level is listed.</param>
+    /// <param name="ownTypePath">The node's own NodeType path, or null when it has none.</param>
+    internal static string NodeTypesAtLevelQuery(string nodePath, string? ownTypePath)
+        => string.IsNullOrEmpty(ownTypePath)
+            ? $"namespace:{nodePath} nodeType:{MeshNode.NodeTypePath} sort:order"
+            : $"namespace:{nodePath} nodeType:{MeshNode.NodeTypePath} -path:{ownTypePath} sort:order";
 
     private static DateTime GetWeekStart(DateTime date)
     {
@@ -1906,15 +1895,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         if (string.IsNullOrEmpty(contentPath))
-        {
-            // Self-reference: show the node's icon/logo
-            return host.Workspace.GetMeshNodeStream().Select(node =>
-            {
-                if (node == null)
-                    return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-                return (UiControl?)RenderNodeIcon(node, hubPath);
-            });
-        }
+            return NodeIconView(host, hubPath);
 
         // Determine content type from extension
         var extension = Path.GetExtension(contentPath)?.ToLowerInvariant() ?? "";
@@ -1934,10 +1915,28 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
+    /// Self-reference: the node's icon and name as a TEMPLATE — an <see cref="HtmlControl"/> bound
+    /// to a projection of the node, returned at once instead of after the node's read
+    /// (Doc/GUI/DataBinding → "Templates first, data later"). The fragment is computed on the hub
+    /// because an icon is a URL, an inline svg or a glyph, each drawn differently.
+    /// </summary>
+    private static IObservable<UiControl?> NodeIconView(LayoutAreaHost host, string hubPath)
+        => Observable.Return<UiControl?>(NodeIconHtml(host.Workspace, hubPath).BoundHtml("nodeIcon"));
+
+    /// <summary>The live icon fragment of the hub's own node, or a not-found line.</summary>
+    private static IObservable<string> NodeIconHtml(IWorkspace workspace, string hubPath)
+        => workspace.GetMeshNodeStream().Select(node => node == null
+            ? NodeNotFoundHtml(hubPath)
+            : RenderNodeIconHtml(node));
+
+    private static string NodeNotFoundHtml(string hubPath)
+        => $"<em>Node not found: {System.Web.HttpUtility.HtmlEncode(hubPath)}</em>";
+
+    /// <summary>
     /// Renders the node's icon/logo for content self-reference.
     /// Priority: content.avatar > content.logo > node.Icon
     /// </summary>
-    internal static UiControl RenderNodeIcon(MeshNode node, string _)
+    internal static string RenderNodeIconHtml(MeshNode node)
     {
         var imageUrl = GetNodeImageUrl(node);
         var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
@@ -1949,13 +1948,13 @@ public static class MeshNodeLayoutAreas
         // took the text color and disappeared on one of the two themes.
         var iconHtml = iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
             ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{MeshNodeImageHelper.SizeInlineSvg(iconUrl, 24)}</div>"
-            : $"<img src=\"{iconUrl}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
+            : $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(iconUrl)}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
 
-        return Controls.Html($@"
+        return $@"
             <div style=""display: flex; align-items: center; gap: 8px;"">
                 {iconHtml}
-                <span>{name}</span>
-            </div>");
+                <span>{System.Web.HttpUtility.HtmlEncode(name)}</span>
+            </div>";
     }
 
     /// <summary>
@@ -2036,15 +2035,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         if (string.IsNullOrEmpty(dataPath))
-        {
-            // Self-reference: show the current MeshNode data as JSON.
-            return host.Workspace.GetMeshNodeStream().Select(node =>
-            {
-                if (node == null)
-                    return (UiControl?)Controls.Markdown($"*Node not found: {hubPath}*");
-                return (UiControl?)RenderMeshNodeData(node, host.Hub.JsonSerializerOptions);
-            });
-        }
+            return NodeDataView(host, hubPath);
 
         // Check if dataPath is a collection name or a type name
         if (host.Workspace.DataContext.TypeSources.TryGetValue(dataPath, out var typeSource))
@@ -2088,7 +2079,23 @@ public static class MeshNodeLayoutAreas
             $"[View {collectionName}: {entityId}](/{entityPath})"));
     }
 
-    private static UiControl RenderMeshNodeData(MeshNode node, JsonSerializerOptions jsonOptions)
+    /// <summary>
+    /// Self-reference: the current node as JSON, as a TEMPLATE — a <see cref="MarkdownControl"/>
+    /// bound to a projection of the node, returned at once and following every later write
+    /// (Doc/GUI/DataBinding → "Templates first, data later").
+    /// </summary>
+    private static IObservable<UiControl?> NodeDataView(LayoutAreaHost host, string hubPath)
+        => Observable.Return<UiControl?>(
+            NodeJsonMarkdown(host.Workspace, hubPath, host.Hub.JsonSerializerOptions).BoundMarkdown("nodeJson"));
+
+    /// <summary>The live JSON code block of the hub's own node, or a not-found line.</summary>
+    private static IObservable<string> NodeJsonMarkdown(
+        IWorkspace workspace, string hubPath, JsonSerializerOptions jsonOptions)
+        => workspace.GetMeshNodeStream().Select(node => node == null
+            ? $"*Node not found: {hubPath}*"
+            : RenderMeshNodeJson(node, jsonOptions));
+
+    internal static string RenderMeshNodeJson(MeshNode node, JsonSerializerOptions jsonOptions)
     {
         // Serialize the MeshNode as JSON
         var json = JsonSerializer.Serialize(node, new JsonSerializerOptions(jsonOptions)
@@ -2096,7 +2103,7 @@ public static class MeshNodeLayoutAreas
             WriteIndented = true
         });
 
-        return new MarkdownControl($"```json\n{json}\n```");
+        return $"```json\n{json}\n```";
     }
 
     /// <summary>
@@ -2111,12 +2118,12 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         if (string.IsNullOrEmpty(typeName))
-        {
-            // Self-reference: show MeshNode schema and content type schema.
-            var jsonOptions = host.Hub.JsonSerializerOptions;
-            return host.Workspace.GetMeshNodeStream()
-                .Select(node => (UiControl?)RenderNodeSchema(node, hubPath, jsonOptions));
-        }
+            // Self-reference: the MeshNode schema and the content type's. The content type is the
+            // one this hub's MeshDataSource was CONFIGURED with — structure, not data — so the page
+            // is a template that needs no read of the node at all (Doc/GUI/DataBinding →
+            // "Templates first, data later").
+            return Observable.Return<UiControl?>(
+                RenderNodeSchema(ConfiguredContentType(host.Workspace), host.Hub.JsonSerializerOptions));
 
         // Try to get the type from the registry
         var typeRegistry = host.Hub.ServiceProvider.GetService<ITypeRegistry>();
@@ -2132,7 +2139,17 @@ public static class MeshNodeLayoutAreas
         return Observable.Return<UiControl?>(new MarkdownControl($"## JSON Schema: {typeName}\n\n```json\n{schema}\n```"));
     }
 
-    private static UiControl RenderNodeSchema(MeshNode? node, string _, JsonSerializerOptions jsonOptions)
+    /// <summary>
+    /// The content type this node hub's <see cref="MeshDataSource"/> was configured with
+    /// (<c>WithContentType</c>), or null when it declares none.
+    /// </summary>
+    internal static Type? ConfiguredContentType(IWorkspace workspace)
+        => workspace.DataContext.DataSources
+            .OfType<MeshDataSource>()
+            .Select(ds => ds.ContentType)
+            .FirstOrDefault(t => t != null);
+
+    internal static UiControl RenderNodeSchema(Type? contentType, JsonSerializerOptions jsonOptions)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Schema");
@@ -2145,40 +2162,15 @@ public static class MeshNodeLayoutAreas
         sb.AppendLine(GenerateJsonSchema(typeof(MeshNode), jsonOptions));
         sb.AppendLine("```");
 
-        // Content type schema if available
-        if (node?.Content != null)
+        // Content type schema if the hub declares one
+        if (contentType != null)
         {
-            var contentType = node.Content.GetType();
-
-            // Handle JsonElement specially
-            if (contentType == typeof(JsonElement))
-            {
-                var jsonElement = (JsonElement)node.Content;
-                if (jsonElement.TryGetProperty("$type", out var typeProperty))
-                {
-                    var contentTypeName = typeProperty.GetString();
-                    sb.AppendLine();
-                    sb.AppendLine($"### Content Type: {contentTypeName}");
-                    sb.AppendLine();
-                    sb.AppendLine("Content is a `JsonElement` with type indicator.");
-                }
-                else
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("### Content Type");
-                    sb.AppendLine();
-                    sb.AppendLine("Content is a `JsonElement` (dynamic content).");
-                }
-            }
-            else
-            {
-                sb.AppendLine();
-                sb.AppendLine($"### Content Type: {contentType.Name}");
-                sb.AppendLine();
-                sb.AppendLine("```json");
-                sb.AppendLine(GenerateJsonSchema(contentType, jsonOptions));
-                sb.AppendLine("```");
-            }
+            sb.AppendLine();
+            sb.AppendLine($"### Content Type: {contentType.Name}");
+            sb.AppendLine();
+            sb.AppendLine("```json");
+            sb.AppendLine(GenerateJsonSchema(contentType, jsonOptions));
+            sb.AppendLine("```");
         }
         else
         {
