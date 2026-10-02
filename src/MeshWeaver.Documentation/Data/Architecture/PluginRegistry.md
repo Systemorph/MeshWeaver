@@ -537,6 +537,29 @@ An admin clicks **Install** (or **Update**). No GitHub credential is involved on
 Re-installing is an upsert (create-or-update by path); installing one module never disturbs another
 in a shared partition.
 
+### A default package the boot could not deliver is named, with its cause
+
+The boot's unattended default install (`InstanceAutoRegistrationService`) steps over a package whose
+install throws — one unreachable package must not withhold the rest — and that is only safe because
+the skip is never silent:
+
+- **Named, with its cause.** The pass's summary line carries `FAILED: [<id>]` **and**
+  `CAUSES: [<id>: <exception type>: <message> ← <innermost type>: <message>]`, and
+  `Plugins/_DefaultInstallLedger` records the same pair under `failureCauses` beside `failed`
+  (MeshWeaver#5826). Before, the ledger said `failed: ["Anthropic"]` and nothing else; the cause — a
+  registry file fetch whose three 30 s attempts all expired waiting for headers — lived only in a
+  separate per-package log line.
+- **Kept off the seeded list, and retried by the next pass** (#2254) — the ledger knows the package,
+  so the governed-provision hold does not take it for a newly listed one (#5934).
+- **A snapshot.** `failed` and `failureCauses` describe the last pass that attempted anything: an entry
+  leaves the moment its package is delivered or stops being declared.
+- **A bound that expires says which wait it was.** The install chain's internal bounds fault with
+  `Install leg timed out after 30s: <what was awaited, with its path>` instead of Rx's bare
+  *"The operation has timed out."*, which named no leg (the 2026-09-23 `Store` sample on #2254).
+
+The registry side of `POST /api/plugins/files` reads only the package's folder (a narrow git fetch),
+never the whole repository — see [Registry Listing Cache](../RegistryListingCache).
+
 ## Bundle bytes from the registry
 
 A package's compiled bundle — the `<package>.zip` a bake produces, with its NodeType assemblies
