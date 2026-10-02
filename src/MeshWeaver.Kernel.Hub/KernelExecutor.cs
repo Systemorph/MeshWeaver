@@ -457,8 +457,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                             var submission = current.Compile(cleaned, options, typeof(MeshScriptGlobals), t);
                             // Option C (Doc/Architecture/InMeshImpersonation): judge the submission's
                             // references to impersonation APIs BEFORE any of it runs. A script session is
-                            // never trusted; LogOnly logs, Enforce refuses the cell.
-                            if (publicHub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard is
+                            // never trusted; LogOnly logs, Enforce refuses the cell. The scan covers
+                            // THIS submission only: a continued script's compilation holds one syntax
+                            // tree, its own — earlier cells are a referenced previous compilation — so a
+                            // clean cell is never judged for an earlier cell's reference.
+                            // GetRequiredService: every hub registers an AccessService; a missing one
+                            // must fail the cell loudly, never switch the check off in silence.
+                            if (publicHub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
                                 { Mode: not InMeshImpersonationMode.Off } guard)
                                 guard.CheckCompiled(ScriptSession.LoadContextName, publicHub.Address.ToString(),
                                     InMeshImpersonationReferences.Find(submission.Compilation, t)

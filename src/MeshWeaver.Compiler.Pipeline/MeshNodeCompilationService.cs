@@ -2115,7 +2115,10 @@ internal class MeshNodeCompilationService(
         // impersonation APIs, judged before generators run (their output is the platform's, not the
         // author's) and before anything is emitted. LogOnly logs; Enforce refuses an untrusted
         // NodeType here, which parks it at compilationStatus Error naming the reference.
-        if (hub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard is
+        // GetRequiredService, not GetService: every hub registers an AccessService
+        // (MessageHubConfiguration.ConfigureServices), so a provider without one is a misbuilt host —
+        // and a security check that an absent dependency switches off in silence is no check.
+        if (hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
             { Mode: not InMeshImpersonationMode.Off } guard)
             guard.CheckCompiled(InMeshImpersonationGuard.NodeTypeLoadContextPrefix + nodeName, node.Path,
                 InMeshImpersonationReferences.Find(authored, ct).Select(r => r.ToString()).ToList());

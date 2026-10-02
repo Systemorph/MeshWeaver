@@ -25,13 +25,24 @@ public sealed record InMeshImpersonationReference(string Symbol, string Location
 /// <para><b>What is found</b> (<see cref="Members"/>): every impersonation surface; every API that
 /// installs an identity without going through one (<c>IMessageDelivery.SetAccessContext</c>,
 /// <c>IMessageHub.DeliverMessage</c>, <c>MeshQueryRequest.AsSystem</c> / <c>ForViewer</c> and a WRITE
-/// to <c>MeshQueryRequest.UserId</c>, a write to <c>AccessContext.IsHub</c>); the System identity's
-/// names (<c>WellKnownUsers.System</c> / <c>SystemContext</c>, <c>AccessService.SystemObjectId</c>) and
-/// the literal itself. <c>SwitchAccessContext</c> is deliberately NOT here: in-mesh code switches back
-/// to a captured viewer legitimately, and switching to System needs one of the names above.</para>
+/// to <c>MeshQueryRequest.UserId</c>, a <c>MeshQueryRequest.FromQuery</c> / <c>FromQueries</c> call
+/// that SUPPLIES its <c>userId</c> parameter, a write to <c>AccessContext.IsHub</c>); the System
+/// identity's names (<c>WellKnownUsers.System</c> / <c>SystemContext</c>,
+/// <c>AccessService.SystemObjectId</c>) and the literal itself — wherever it stands, a comparison
+/// included: a syntactic scan cannot follow a value from a local into an identity, so it reports
+/// the name and leaves the judgement to the trust list.</para>
+///
+/// <para><c>SwitchAccessContext</c> is deliberately NOT here: in-mesh code switches back to a
+/// captured viewer legitimately. Switching to a System context that is NAMED in the source needs
+/// one of the names above and is found through it; a System context that arrives as DATA (a
+/// parameter, a captured delivery's context) names nothing and is NOT found here — the runtime
+/// guard judges that call, within its own limits (Doc/Architecture/InMeshImpersonation → "What the
+/// compile-time check cannot see").</para>
 ///
 /// <para>Reflection by NAME is not a symbol reference and is not found; that residual is named in
-/// the doc. Pure over the compilation; reads only the trees it is given.</para>
+/// the doc. Pure over the compilation; reads only the trees it is given — for a script submission
+/// that is the submission's own tree, never the earlier cells' (they are a referenced previous
+/// compilation, not syntax trees of this one).</para>
 /// </summary>
 public static class InMeshImpersonationReferences
 {
@@ -69,10 +80,27 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Messaging.AccessContext"] = ["IsHub"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
+    /// <summary>
+    /// Methods reported only when the reference SUPPLIES an argument for the named parameter — the
+    /// factories that install a query identity with no written member (<c>FromQuery(query)</c> alone
+    /// installs none and is not reported). A method group (no argument list to read) is reported.
+    /// </summary>
+    public static readonly ImmutableDictionary<string, ImmutableDictionary<string, string>> IdentityParameters =
+        new Dictionary<string, ImmutableDictionary<string, string>>
+        {
+            ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = new Dictionary<string, string>
+            {
+                ["FromQuery"] = "userId",
+                ["FromQueries"] = "userId",
+            }.ToImmutableDictionary(StringComparer.Ordinal),
+        }.ToImmutableDictionary(StringComparer.Ordinal);
+
     // Identifier texts worth binding — a cheap prefilter so the semantic model is asked only about
     // names that could be one of the members above.
     private static readonly ImmutableHashSet<string> CandidateNames =
-        Members.Values.Concat(WrittenMembers.Values).SelectMany(s => s).ToImmutableHashSet(StringComparer.Ordinal);
+        Members.Values.Concat(WrittenMembers.Values).SelectMany(s => s)
+            .Concat(IdentityParameters.Values.SelectMany(m => m.Keys))
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>
     /// Every reference in <paramref name="compilation"/>'s syntax trees. Pass the compilation of the
@@ -96,10 +124,16 @@ public static class InMeshImpersonationReferences
                         found.Add(new($"\"{SystemLiteral}\"", Where(literal)));
                         break;
 
-                    case SimpleNameSyntax name when CandidateNames.Contains(name.Identifier.ValueText):
+                    // A name inside a QualifiedNameSyntax stands in a namespace-or-type position
+                    // (`using System.Linq;`, `System.Collections.Generic.List<T>`): it can never be a
+                    // field, property or method, so it is not bound at all. That is what keeps the
+                    // candidate `System` (WellKnownUsers.System) from costing a semantic query per
+                    // using directive.
+                    case SimpleNameSyntax name when CandidateNames.Contains(name.Identifier.ValueText)
+                                                    && name.Parent is not QualifiedNameSyntax:
                         model ??= compilation.GetSemanticModel(tree);
-                        var symbol = model.GetSymbolInfo(name, ct).Symbol
-                                     ?? model.GetSymbolInfo(name, ct).CandidateSymbols.FirstOrDefault();
+                        var info = model.GetSymbolInfo(name, ct);
+                        var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
                         if (symbol is null || symbol.ContainingType is not { } type)
                             break;
                         var typeName = TypeName(type.OriginalDefinition);
@@ -109,6 +143,10 @@ public static class InMeshImpersonationReferences
                         else if (WrittenMembers.TryGetValue(typeName, out var written) && written.Contains(member)
                                  && IsWritten(name))
                             found.Add(new($"{typeName}.{member} (written)", Where(name)));
+                        else if (IdentityParameters.TryGetValue(typeName, out var factories)
+                                 && factories.TryGetValue(member, out var parameter)
+                                 && Supplies(name, symbol, parameter))
+                            found.Add(new($"{typeName}.{member} ({parameter} supplied)", Where(name)));
                         break;
                 }
             }
@@ -124,6 +162,25 @@ public static class InMeshImpersonationReferences
     {
         SyntaxNode target = name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access : name;
         return target.Parent is AssignmentExpressionSyntax assignment && assignment.Left == target;
+    }
+
+    // The reference passes an argument for `parameter`: by name, or by position. A reference that is
+    // not an invocation (a method group handed on) has no argument list to read and counts as
+    // supplying it — whoever invokes the delegate decides, and that is out of the author's source.
+    private static bool Supplies(SimpleNameSyntax name, ISymbol symbol, string parameter)
+    {
+        if (symbol is not IMethodSymbol method)
+            return false;
+        var index = method.Parameters.Select((p, i) => (p, i))
+            .Where(x => x.p.Name == parameter).Select(x => (int?)x.i).FirstOrDefault();
+        if (index is not { } position)
+            return false;
+        SyntaxNode callee = name.Parent is MemberAccessExpressionSyntax access && access.Name == name ? access : name;
+        if (callee.Parent is not InvocationExpressionSyntax invocation || invocation.Expression != callee)
+            return true;
+        var arguments = invocation.ArgumentList.Arguments;
+        return arguments.Any(a => a.NameColon?.Name.Identifier.ValueText == parameter)
+               || arguments.Where(a => a.NameColon is null).Skip(position).Any();
     }
 
     private static string Where(SyntaxNode node)

@@ -40,7 +40,9 @@ internal class ScriptCompilationService : IDisposable
     private readonly ScriptCodeGenerator _generator = new();
     private readonly ILogger<ScriptCompilationService> _logger;
     // Owns the in-mesh impersonation guard (option C judges configuration scripts at compile).
-    private readonly AccessService? _accessService;
+    // REQUIRED: a host that constructs this service without an AccessService fails at construction
+    // rather than compiling configuration scripts unchecked.
+    private readonly AccessService _accessService;
     private readonly CompilationCacheOptions _cacheOptions;
     private readonly ScriptOptions _scriptOptions;
     private readonly INuGetAssemblyResolver _nugetResolver;
@@ -76,9 +78,9 @@ internal class ScriptCompilationService : IDisposable
         ILogger<ScriptCompilationService> logger,
         IOptions<CompilationCacheOptions> cacheOptions,
         INuGetAssemblyResolver nugetResolver,
-        AccessService? accessService = null)
+        AccessService accessService)
     {
-        _accessService = accessService;
+        _accessService = accessService ?? throw new ArgumentNullException(nameof(accessService));
         _logger = logger;
         _cacheOptions = cacheOptions.Value ?? new CompilationCacheOptions();
         _nugetResolver = nugetResolver;
@@ -168,7 +170,7 @@ internal class ScriptCompilationService : IDisposable
         var compilation = script.GetCompilation();
         // Option C (Doc/Architecture/InMeshImpersonation): a configuration script is in-mesh code
         // and never trusted; its references to impersonation APIs are judged before it is emitted.
-        if (_accessService?.ImpersonationGuard is { Mode: not InMeshImpersonationMode.Off } guard)
+        if (_accessService.ImpersonationGuard is { Mode: not InMeshImpersonationMode.Off } guard)
             guard.CheckCompiled($"node-config-script:{nodePath}", nodePath,
                 InMeshImpersonationReferences.Find(compilation, ct).Select(r => r.ToString()).ToList());
 
