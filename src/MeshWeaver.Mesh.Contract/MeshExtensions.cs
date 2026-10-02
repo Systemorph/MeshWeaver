@@ -7632,10 +7632,13 @@ public static class MeshExtensions
         // reaches the subscriber that posts the response — a caller acting on "moved" (or on
         // the refusal) must never meet the scope still held, which Observable.Using alone
         // cannot guarantee.
-        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
-        (recentlyDeleted is null
-                ? MoveWithinScope()
-                : recentlyDeleted.WithinSubtreeDeletion(sourcePath, MoveWithinScope))
+        //
+        // GetRequiredService, never GetService: MeshBuilder registers the registry at the mesh
+        // ROOT unconditionally, so there is no supported host without it — and a move that ran
+        // BARE when it did not resolve would reopen exactly this window with nothing to say so.
+        // Same resolution, for the same reason, as PartitionRemovalOnRecord above.
+        hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
+            .WithinSubtreeDeletion(sourcePath, MoveWithinScope)
             .Subscribe(
                 movedNode =>
                 {

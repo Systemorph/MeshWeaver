@@ -221,7 +221,9 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
             heldDuringDrop.Should().BeTrue("CONTROL: the claim IS held while the store is dropped — the scope is armed");
             result.inFlightAtDelivery.Should().BeFalse("the claim is released before the outcome reaches the caller");
             result.failure.Should().BeNull("a follow-up teardown issued on the outcome is idempotent and must not be refused as in flight");
-            result.second!.RecordDeleted.Should().BeFalse("the follow-up finds the record already gone — it is a no-op, not a second teardown");
+            var second = result.second;
+            Assert.NotNull(second);
+            second.RecordDeleted.Should().BeFalse("the follow-up finds the record already gone — it is a no-op, not a second teardown");
             await AssertNothingLeft(partition, ct);
         }
         finally

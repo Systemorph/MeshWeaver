@@ -59,8 +59,10 @@ public class MoveHoldsTheSubtreeDeletionScopeTest(ITestOutputHelper output) : Mo
 
         // The switch FIRED: the late write was attempted inside the window, after the enumeration.
         var outcome = trap.Outcome;
-        outcome.Should().NotBeNull("the source root's delete validator ran and attempted the late write");
-        Output.WriteLine($"late write: {(outcome!.Refusal is null ? "LANDED" : $"refused — {outcome.Refusal}")}");
+        // The switch not firing means the test proved nothing: the source root's delete validator
+        // never ran, so no late write was attempted inside the window.
+        Assert.NotNull(outcome);
+        Output.WriteLine($"late write: {(outcome.Refusal is null ? "LANDED" : $"refused — {outcome.Refusal}")}");
         Output.WriteLine($"validated: {string.Join(", ", trap.Validated)}");
 
         var lateWasValidated = trap.Validated.Contains(late);
