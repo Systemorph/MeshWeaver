@@ -622,7 +622,7 @@ public static class SettingsLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
-            .WithView((Controls.Html(new JsonPointerReference(nameof(IconPreview.Markup).ToCamelCase()!)) with
+            .WithView((Controls.Html(new JsonPointerReference(IconPreviewMarkupPointer)) with
                 {
                     DataContext = LayoutAreaReference.GetDataPointer(previewId)
                 })
@@ -709,6 +709,10 @@ public static class SettingsLayoutArea
     /// <summary>The icon preview's markup as data, at the pointer the preview control binds to.</summary>
     /// <param name="Markup">The 48px preview markup (<see cref="CreateLayoutArea.IconPreviewMarkup"/>).</param>
     internal sealed record IconPreview(string Markup);
+
+    /// <summary>The pointer of <see cref="IconPreview.Markup"/> inside its data slot (camelCase on the wire).</summary>
+    private static readonly string IconPreviewMarkupPointer =
+        nameof(IconPreview.Markup).ToCamelCase() ?? nameof(IconPreview.Markup);
 
     /// <summary>
     /// The node's Icon, projected into preview markup — the one read behind the icon picker's

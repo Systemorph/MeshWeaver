@@ -97,7 +97,8 @@ public sealed record NodeTypeStatusView(
         var releasesBadge = status == CompilationStatus.Ok ? "" : statusBadge;
 
         var notes = def?.ReleaseNotes;
-        var hasNotes = !string.IsNullOrWhiteSpace(notes);
+        var pendingNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
+        var hasNotes = pendingNotes is not null;
 
         var (logStyle, logHeadline, logHeadlineStyle, logDetail, logLinks) = CompileLog(def, L);
         var (panelStyle, chip, chipStyle, compileLabel, compileDisabled) = CompilePanel(def, L);
@@ -111,7 +112,7 @@ public sealed record NodeTypeStatusView(
             StatusBadge: statusBadge,
             ReleasesStatusBadge: releasesBadge,
             ConfigurationCode: def?.Configuration ?? "",
-            PendingReleaseNotes: hasNotes ? L("ui.pendingReleaseNotes", notes!.Trim()) : "",
+            PendingReleaseNotes: pendingNotes is null ? "" : L("ui.pendingReleaseNotes", pendingNotes),
             PendingReleaseNotesStyle: hasNotes
                 ? "color: var(--neutral-foreground-hint); font-size: 0.9rem; font-style: italic;"
                 : Hidden,
@@ -140,29 +141,29 @@ public sealed record NodeTypeStatusView(
             && (def.CompilationStatus is not null
                 || !string.IsNullOrEmpty(def.LastCompilationActivityPath)
                 || !string.IsNullOrEmpty(def.LatestReleasePath));
-        if (!hasState)
+        if (def is null || !hasState)
             return (Hidden, "", "", "", "");
 
         string headline = "", headlineStyle = "", detail = "";
         var links = new List<string>();
-        switch (def!.CompilationStatus)
+        switch (def.CompilationStatus)
         {
             case CompilationStatus.Pending or CompilationStatus.Compiling:
                 headline = L("ui.compiling", []);
                 headlineStyle = "color: var(--accent-fill-rest); font-weight: 600;";
                 break;
-            case CompilationStatus.Error when !string.IsNullOrEmpty(def.CompilationError):
+            case CompilationStatus.Error when def.CompilationError is { Length: > 0 } compileError:
                 headline = L("ui.compileFailed", []);
                 headlineStyle = "color: var(--error); font-weight: 600;";
-                detail = Fenced(def.CompilationError!);
+                detail = Fenced(compileError);
                 break;
             case CompilationStatus.Unavailable:
                 // Availability problem, not a compile failure — the text is the "could not
                 // determine" message, never Roslyn diagnostics.
                 headline = L("ui.compileStateUnknown", []);
                 headlineStyle = "color: var(--warning-foreground); font-weight: 600;";
-                if (!string.IsNullOrEmpty(def.CompilationError))
-                    detail = Fenced(def.CompilationError!);
+                if (def.CompilationError is { Length: > 0 } unavailableReason)
+                    detail = Fenced(unavailableReason);
                 break;
             case CompilationStatus.Ok when !string.IsNullOrEmpty(def.LatestReleasePath):
                 headline = L("ui.releasePublished", []);
@@ -189,10 +190,10 @@ public sealed record NodeTypeStatusView(
             && (!string.IsNullOrWhiteSpace(def.Configuration)
                 || !string.IsNullOrWhiteSpace(def.HubConfiguration)
                 || (def.CurrentSourceVersions?.Count ?? 0) > 0);
-        if (!hasCode)
+        if (def is null || !hasCode)
             return (Hidden, "", "", L("ui.compile", []), true);
 
-        var status = def!.CompilationStatus;
+        var status = def.CompilationStatus;
         // "Never compiled" = no assembly metadata persisted. Framework versions are deliberately not
         // compared here (that is HasUsableBuild's concern): a build that exists reads "Up to date"
         // until the status flips Dirty / Error / Compiling.

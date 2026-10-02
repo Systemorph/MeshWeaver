@@ -94,7 +94,7 @@ public class NodeTypeAndSettingsPagesAreTemplatesTest(ITestOutputHelper output) 
             .Should().AllSatisfy(ctx =>
             {
                 ctx.Should().NotBeNull("the form edits the node directly — never a /data replica");
-                ctx!.Value.NodePath.Should().Be(TypePath);
+                Assert.NotNull(ctx).NodePath.Should().Be(TypePath);
             });
     }
 
