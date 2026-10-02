@@ -59,7 +59,12 @@ STATUS_NAMES = {1: "Requested", 2: "Pass", 3: "Fail", 4: "NotChecked"}
 
 
 class NotChecked(RuntimeError):
-    """The check could not be performed. Never a pass."""
+    """The check could not be performed. Never a pass. ``hits`` are the masked hits of the chunks
+    that DID answer: a known client name is reported, and fails, whatever else went unchecked."""
+
+    def __init__(self, message: str, hits: list[dict] | None = None):
+        super().__init__(message)
+        self.hits: list[dict] = hits or []
 
 
 # ── collect ──────────────────────────────────────────────────────────────────────────────────
@@ -76,7 +81,31 @@ def parse_diff(diff: str) -> list[dict]:
     path: str | None = None
     old: str | None = None
     line = 0
+    # How much of the open hunk's body is still to come, from its `@@` header. While either is
+    # positive the line IS body: an added line whose text starts `++ ` (raw `+++ …`) or a deleted
+    # one starting `-- ` (raw `--- …`) is content, never a file header. Files that embed unified
+    # diffs (fixtures, a page about this very gate) are exactly where that happens.
+    old_left = new_left = 0
     for raw in diff.splitlines():
+        if old_left > 0 or new_left > 0:
+            if raw.startswith("\\"):          # "\ No newline at end of file"
+                continue
+            if raw.startswith("-") and old_left > 0:
+                old_left -= 1
+                continue
+            if raw.startswith("+") and new_left > 0:
+                new_left -= 1
+                text = raw[1:]
+                if path is not None and text.strip():
+                    out.append({"file": path, "line": line, "text": text[:MAX_TEXT]})
+                line += 1
+                continue
+            if raw.startswith(" ") and old_left > 0 and new_left > 0:
+                old_left -= 1
+                new_left -= 1
+                line += 1
+                continue
+            old_left = new_left = 0             # a body shorter than its header: read on as headers
         if raw.startswith("--- "):
             source = raw[4:]
             old = None if source == "/dev/null" else (source[2:] if source.startswith("a/") else source)
@@ -89,19 +118,11 @@ def parse_diff(diff: str) -> list[dict]:
             continue
         if raw.startswith("diff --git") or raw.startswith("Binary files"):
             continue
-        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+        m = re.match(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", raw)
         if m:
-            line = int(m.group(1))
-            continue
-        if path is None:
-            continue
-        if raw.startswith("+"):
-            text = raw[1:]
-            if text.strip():
-                out.append({"file": path, "line": line, "text": text[:MAX_TEXT]})
-            line += 1
-        elif raw.startswith(" "):
-            line += 1
+            old_left = int(m.group(1)) if m.group(1) is not None else 1
+            line = int(m.group(2))
+            new_left = int(m.group(3)) if m.group(3) is not None else 1
     return out
 
 
@@ -135,7 +156,8 @@ def collect_tree(root: Path, paths: list[str] | None = None) -> list[dict]:
     return out
 
 
-def chunks(lines: list[dict], size: int = CHUNK_LINES) -> list[list[dict]]:
+def chunks(lines: list[dict], size: int | None = None) -> list[list[dict]]:
+    size = size or CHUNK_LINES
     return [lines[i:i + size] for i in range(0, len(lines), size)] or []
 
 
@@ -276,19 +298,50 @@ def submit_and_wait(mesh: Mesh, repo: str, sha: str, run: str, parts: list[list[
 # ── report ───────────────────────────────────────────────────────────────────────────────────
 
 def esc(s: str) -> str:
+    """A workflow-command PROPERTY value (``file=``)."""
     return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(",", "%2C").replace(":", "%3A")
 
 
+def esc_data(s: str) -> str:
+    """A workflow-command MESSAGE: a newline in it would start a second command."""
+    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def kind_of(h: dict) -> str:
+    """The hit's kind is the instance's word (``name``, ``alias``, ``host``, …) and goes into a
+    public log, so it is cut to a plain token: nothing in it can forge a command or a table cell."""
+    return re.sub(r"[^A-Za-z0-9 _-]+", "", str(h.get("kind") or "name"))[:40] or "name"
+
+
+def cell(value) -> str:
+    """One markdown table cell from a remote-provided value."""
+    return re.sub(r"[\r\n|`<>]+", " ", str(value if value is not None else ""))[:300]
+
+
+# What a not-checked answer says about itself, by status. The instance's own ``reason`` is NOT
+# printed: this log is public and the reason is free text from another process. It stays on the
+# request node, where the people who may read the CRM can read it.
+def unchecked_message(answers: list[dict]) -> str:
+    states = sorted({status_of(a) if status_of(a) in STATUS_NAMES.values() else "an unknown status"
+                     for a in answers if status_of(a) not in ("Pass", "Fail")})
+    n = sum(1 for a in answers if status_of(a) not in ("Pass", "Fail"))
+    return (f"the instance answered {', '.join(states)} for {n} of {len(answers)} request(s) — the reason is on "
+            f"the request node(s) under {NAMESPACE} on the CRM-owning instance")
+
+
 def report(answers: list[dict], say=None) -> tuple[str, list[dict]]:
-    """Folds the answers: ('NotChecked', []) wins over ('Fail', hits) over ('Pass', []). Hits are
-    re-numbered across chunks so one client keeps one number in this run. Pure but for ``say``."""
-    for a in answers:
-        if status_of(a) == "NotChecked" or status_of(a) not in ("Pass", "Fail"):
-            raise NotChecked(f"the instance answered {status_of(a)}: {a.get('reason') or 'no reason given'}")
+    """Folds the answers into ('Fail', hits) or ('Pass', []), and raises NotChecked — carrying the
+    hits — when any chunk was not answered Pass or Fail. The hits of the chunks that DID answer are
+    annotated FIRST, so one unanswered chunk never hides a name another chunk found. Hits are
+    re-numbered per (chunk, term): each chunk numbers its clients independently, so the same
+    ``client#n`` from two chunks need not be the same client, and one client seen in two chunks
+    gets two numbers. Pure but for ``say``."""
     say = say or print
     hits: list[dict] = []
     renumber: dict[tuple[int, str], str] = {}
     for i, a in enumerate(answers):
+        if status_of(a) != "Fail":
+            continue
         for h in a.get("hits") or []:
             key = (i, str(h.get("term")))
             if key not in renumber:
@@ -297,12 +350,14 @@ def report(answers: list[dict], say=None) -> tuple[str, list[dict]]:
             hits.append({**h, "term": renumber[key]})
     for h in hits:
         f, line, col = h.get("file", ""), int(h.get("line") or 0), int(h.get("column") or 1)
-        what = f"{h['term']} ({h.get('kind', 'name')})"
+        what = esc_data(f"{h['term']} ({kind_of(h)})")
         if line <= 0:
             say(f"::error file={esc(f)}::The path names a client of ours: {what}. Rename it with a neutral placeholder.")
         else:
             say(f"::error file={esc(f)},line={line},col={col}::A client of ours is named here: {what}. "
                 "Replace it with a neutral placeholder (AGENTS.md, 'Confidential terms').")
+    if any(status_of(a) not in ("Pass", "Fail") for a in answers):
+        raise NotChecked(unchecked_message(answers), hits)
     return ("Fail" if hits else "Pass"), hits
 
 
@@ -314,10 +369,14 @@ def summary(status: str, hits: list[dict], lines: int, reason: str | None = None
         clients = len({h['term'] for h in hits})
         out.append(f"❌ {len(hits)} hit(s) naming {clients} client(s) in {lines} line(s). Terms are masked; "
                    "the CRM decides who is a client.")
-        out += ["", "| File | Line | Col | Term | Kind |", "|---|---|---|---|---|"]
-        out += [f"| `{h.get('file')}` | {h.get('line')} | {h.get('column')} | {h['term']} | {h.get('kind')} |" for h in hits[:200]]
     else:
-        out.append(f"⛔ Not checked: {reason}. An unchecked diff is not a clean one.")
+        out.append(f"⛔ Not checked: {cell(reason)}. An unchecked diff is not a clean one.")
+        if hits:
+            out += ["", f"❌ The part that WAS checked has {len(hits)} hit(s). Terms are masked."]
+    if hits:
+        out += ["", "| File | Line | Col | Term | Kind |", "|---|---|---|---|---|"]
+        out += [f"| {cell(h.get('file'))} | {cell(h.get('line'))} | {cell(h.get('column'))} | {cell(h['term'])} | {kind_of(h)} |"
+                for h in hits[:200]]
     return "\n".join(out) + "\n"
 
 
@@ -358,9 +417,14 @@ def main(argv: list[str]) -> int:
     except NotChecked as exc:
         lenient = a.report_only or a.unchecked == "warn"
         level = "warning" if lenient else "error"
-        print(f"::{level}::No client names — NOT CHECKED: {exc}")
+        print(f"::{level}::No client names — NOT CHECKED: {esc_data(str(exc))}")
         if step_summary:
-            Path(step_summary).open("a").write(summary("NotChecked", [], len(lines), str(exc)))
+            Path(step_summary).open("a").write(summary("NotChecked", exc.hits, len(lines), str(exc)))
+        # A HIT in the part that was checked fails exactly as it would alone: `--unchecked warn`
+        # forgives "not checked", never a known client name. Only --report-only forgives a hit.
+        if exc.hits and not a.report_only:
+            print(f"No client names: Fail — {len(exc.hits)} hit(s) in the part that was checked.")
+            return 1
         return 0 if lenient else 1
     if step_summary:
         Path(step_summary).open("a").write(summary(status, hits, len(lines)))
@@ -410,7 +474,7 @@ def self_test() -> int:
                     text = "Not found"
                 else:
                     if flags["answer"] and c.get("lines"):
-                        if flags["not_checked"]:
+                        if flags["not_checked"] or any(l["file"] == flags.get("not_checked_file") for l in c["lines"]):
                             c = {**c, "status": "NotChecked", "reason": "ground truth empty", "lines": []}
                         else:
                             hits = [{"file": l["file"], "line": l["line"], "column": m.start() + 1,
@@ -443,6 +507,47 @@ def self_test() -> int:
           and parse_diff("--- a/o.md\n+++ b/p.md\n")[0]["file"] == "p.md")
     check("diff: a deleted file contributes nothing", parse_diff("--- a/x\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n") == [])
     check("chunks split at the size", [len(c) for c in chunks([{}] * 5, 2)] == [2, 2, 1])
+
+    # A file that EMBEDS a unified diff: its added lines start `+++ `/`--- ` once git prefixes them.
+    embedded = ("diff --git a/doc.md b/doc.md\n--- a/doc.md\n+++ b/doc.md\n@@ -5,2 +5,4 @@\n"
+                "--- a/old.txt\n-- gone\n+++ b/zorblax.txt\n+-- kept\n+@@ -1 +1 @@\n+after\n"
+                "diff --git a/e.md b/e.md\n--- a/e.md\n+++ b/e.md\n@@ -1,0 +2 @@\n+next file\n")
+    check("diff: an added line that LOOKS like a file header is content, on its own file and line",
+          parse_diff(embedded) == [{"file": "doc.md", "line": 5, "text": "++ b/zorblax.txt"},
+                                   {"file": "doc.md", "line": 6, "text": "-- kept"},
+                                   {"file": "doc.md", "line": 7, "text": "@@ -1 +1 @@"},
+                                   {"file": "doc.md", "line": 8, "text": "after"},
+                                   {"file": "e.md", "line": 2, "text": "next file"}])
+    check("diff: '\\ No newline at end of file' is not content",
+          parse_diff("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n\\ No newline at end of file\n")
+          == [{"file": "x", "line": 1, "text": "b"}])
+
+    # One chunk answered Fail, the next NotChecked: the hit is annotated BEFORE the refusal.
+    said: list[str] = []
+    mixed = [{"status": "Fail", "hits": [{"file": "a.md", "line": 2, "column": 3, "term": "client#1", "kind": "name"}]},
+             {"status": "NotChecked", "reason": "SECRET-REASON zorblax"}]
+    try:
+        report(mixed, said.append)
+        raised = None
+    except NotChecked as exc:
+        raised = exc
+    check("🚨 a NotChecked chunk does not hide another chunk's hit: annotated first, carried on the refusal",
+          raised is not None and len(raised.hits) == 1 and any("file=a.md,line=2,col=3::" in x for x in said))
+    check("🚨 the instance's free-text reason is never printed",
+          raised is not None and "SECRET-REASON" not in str(raised) and "NotChecked" in str(raised)
+          and "SECRET-REASON" not in summary("NotChecked", raised.hits, 3, str(raised)))
+    said.clear()
+    report([{"status": "Fail", "hits": [{"file": "a.md", "line": 1, "column": 1, "term": "client#1",
+                                         "kind": "name\n::error::forged|`x`"}]}], said.append)
+    check("a remote `kind` cannot forge a workflow command or a table cell",
+          len(said) == 1 and "\n" not in said[0] and "::error::forged" not in said[0] and "(nameerrorforgedx)" in said[0]
+          and "forged|" not in summary("Fail", [{"file": "a|b\n", "line": 1, "column": 1, "term": "client#1",
+                                                 "kind": "k|`"}], 1))
+    said.clear()
+    _, two = report([{"status": "Fail", "hits": [{"term": "client#1", "file": "a", "line": 1}]},
+                     {"status": "Fail", "hits": [{"term": "client#1", "file": "b", "line": 1}]}], said.append)
+    check("chunks number independently: the same client#n from two chunks gets two numbers",
+          [h["term"] for h in two] == ["client#1", "client#2"])
 
     with tempfile.TemporaryDirectory() as tmp:
         r = Path(tmp)
@@ -519,6 +624,17 @@ def self_test() -> int:
         subprocess.run(["git", "-C", str(r), "commit", "-qam", "hit"], check=True)
         rc, out = run(ok_env, "--base", "HEAD~1", "--unchecked", "warn")
         check("--unchecked warn: a HIT still fails", rc == 1 and "client#1" in out)
+        global CHUNK_LINES
+        saved_chunk, CHUNK_LINES = CHUNK_LINES, 1
+        flags["not_checked_file"] = "c.md"
+        (r / "c.md").write_text("unanswerable\n")
+        (r / "b.md").write_text("new text\nzorblax\nzorblax again\n")
+        subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(r), "commit", "-qm", "mixed"], check=True)
+        rc, out = run(ok_env, "--base", "HEAD~1", "--unchecked", "warn")
+        check("🚨 --unchecked warn: a hit in one chunk FAILS though another chunk was not checked",
+              rc == 1 and "file=b.md,line=3" in out and "::warning::" in out and "ground truth empty" not in out)
+        CHUNK_LINES, flags["not_checked_file"] = saved_chunk, None
     srv.shutdown()
     print(f"\n{'FAILED' if failures else 'OK'}: {len(failures)} failure(s)")
     return 1 if failures else 0
