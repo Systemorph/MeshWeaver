@@ -153,9 +153,8 @@ Three rules travel with it:
   null** for the three cases that actually occur in a live mesh — untyped JSON from an unresolvable
   `$type`, the as-written `JsonObject` before materialization, and a same-named type from another
   collectible assembly (every NodeType recompile mints one). The view renders empty with no
-  exception and nothing to grep. Use `ContentAs<T>(hub.JsonSerializerOptions)`. The shipped
-  `SocialMediaProfileLayoutAreas` sample predates this and hand-digs a `JsonElement` through a
-  `GetProp` helper — that helper *is* the symptom, not a pattern to copy.
+  exception and nothing to grep. Use `ContentAs<T>(hub.JsonSerializerOptions)` — in a feed; a
+  view that only SHOWS a field binds it by pointer and never holds the content at all.
 - 🚨 **Never `.Take(1)`** on the stream feeding a view or a feed — it freezes the binding at the
   first emission and the area stops tracking the node.
 - **Writing back** is `GetMeshNodeStream(path).Update(current => current with { … })`, the only
