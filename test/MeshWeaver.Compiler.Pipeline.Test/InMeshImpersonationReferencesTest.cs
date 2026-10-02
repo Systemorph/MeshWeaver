@@ -38,8 +38,13 @@ public class InMeshImpersonationReferencesTest
         // Touch every assembly the snippets bind against so it is loaded and has a Location.
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
                     typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable) };
+        // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
+        // node assemblies into temp folders, load them and delete the folder when they finish; such
+        // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
+        // it fails the compilation with FileNotFoundException. Which classes ran before this one is
+        // a matter of class order, so the reference set must not depend on it.
         var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location));
         var compilation = CSharpCompilation.Create("InMeshProbe",
             [CSharpSyntaxTree.ParseText($"{Usings}\npublic static class Probe {{\n{body}\n}}", path: "Probe.cs")],
