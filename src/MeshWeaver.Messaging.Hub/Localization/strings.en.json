@@ -152,6 +152,8 @@
   "node.meta.updated": "Updated:",
   "node.meta.lastActivity": "Last activity:",
   "node.meta.by": "by {0}",
+  "node.types.ownType": "Type of this node",
+  "node.types.inNamespace": "Types in {0}",
   "menu.edit": "Edit",
   "menu.pin": "Pin",
   "menu.move": "Move",
