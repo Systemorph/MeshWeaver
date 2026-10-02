@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
@@ -158,11 +159,7 @@ public static class PromptCell
                 SuggestButtonArea)
             .WithView(Controls.Button(host.Localize("common.send"))
                     .WithAppearance(Appearance.Accent)
-                    .WithClickAction(ctx =>
-                    {
-                        Send(ctx, config, dataId);
-                        return Task.CompletedTask;
-                    }),
+                    .WithReactiveClickAction(ctx => Send(ctx, config, dataId)),
                 SendButtonArea);
 
         return Controls.Stack
@@ -178,9 +175,10 @@ public static class PromptCell
     /// Send click: snapshot the bound draft (seeded, so <c>Take(1)</c> emits the
     /// current value synchronously), render the exchange, invoke the responder,
     /// swap in code + output + stats when it emits. Errors land in the exchange
-    /// pane — never a silent hang.
+    /// pane — never a silent hang. The draft read is RETURNED to the click, never subscribed here
+    /// without an error arm: a fault reading it reaches the person as the click's refusal.
     /// </summary>
-    private static void Send(UiActionContext ctx, PromptCellConfig config, string dataId)
+    private static IObservable<Unit> Send(UiActionContext ctx, PromptCellConfig config, string dataId)
     {
         // The exchange pane sits at the CELL root, one level above the Send
         // button ({root}/Composer/SendPrompt → {root}/Exchange). Rendered
@@ -192,9 +190,9 @@ public static class PromptCell
             prefix = prefix[..^(ComposerArea.Length + 1)];
         var exchangeArea = prefix + ExchangeArea;
 
-        ctx.Host.Stream.GetDataStream<string>(dataId)
+        return ctx.Host.Stream.GetDataStream<string>(dataId)
             .Take(1)
-            .Subscribe(draft =>
+            .Do(draft =>
             {
                 var prompt = draft?.Trim() ?? "";
                 if (prompt.Length == 0)
@@ -224,7 +222,8 @@ public static class PromptCell
                             new PromptCellResponse("", Controls.Markdown(
                                 $"**The training agent could not answer:** {ex.Message}")),
                             config)));
-            });
+            })
+            .Select(_ => Unit.Default);
     }
 
     /// <summary>
