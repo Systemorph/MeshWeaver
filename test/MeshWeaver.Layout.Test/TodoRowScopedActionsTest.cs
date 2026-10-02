@@ -254,6 +254,77 @@ public class TodoRowScopedActionsTest(ITestOutputHelper output) : HubTestBase(ou
         row.HeadingStyle.Should().Be(TodoStyles.Hidden, "an item row shows no heading");
     }
 
+    /// <summary>
+    /// The planning area hands out OPEN work only. A member's "Assign" takes the first entry of its
+    /// group and Auto-Assign takes all of them, so a completed or cancelled unassigned todo in either
+    /// group would be assigned to someone; and the backlog title must count the rows under it.
+    /// </summary>
+    [Fact]
+    public void Planning_HandsOutOnlyOpenUnassignedWork_AndCountsWhatItLists()
+    {
+        var todos = ImmutableList.Create(
+            Todo("a"),
+            Todo("p", "Unassigned", TodoStatus.Completed),
+            Todo("q", "Unassigned", TodoStatus.Cancelled),
+            Todo("r", "Unassigned"),
+            Todo("s", "Unassigned", TodoStatus.InProgress));
+
+        var rows = TodoProjections.Planning(todos, English).ToList();
+
+        var member = rows.Single(r => r.Key == $"member-{Assignee}");
+        member.GroupAction.Should().Be(TodoGroupActions.AssignFirst);
+        member.Group.Select(t => t.Id).Should().Equal(["r", "s"],
+            "Assign takes the first of these: the finished 'p' and the cancelled 'q' must not be offered");
+
+        var backlog = rows.Single(r => r.Key == "backlog");
+        backlog.GroupAction.Should().Be(TodoGroupActions.AutoAssign);
+        backlog.Group.Select(t => t.Id).Should().Equal(["r", "s"],
+            "Auto-Assign hands out open work only");
+        var listed = rows.Where(r => r.Item is not null).Select(r => TodoOf(r).Id).ToList();
+        listed.Should().Equal(["r", "s"], "the backlog lists the open unassigned todos, soonest due first");
+        backlog.Heading.Should().Be($"##### {English.T("todo.planning.unassigned", listed.Count)}",
+            "the title counts the rows shown under it, not every unassigned todo");
+    }
+
+    /// <summary>With nothing open left to hand out, a member row offers no "Assign" and the planning
+    /// area shows no backlog — finished and cancelled todos are not a backlog.</summary>
+    [Fact]
+    public void Planning_WithNoOpenUnassignedWork_OffersNoAssignment()
+    {
+        var todos = ImmutableList.Create(
+            Todo("a"),
+            Todo("p", "Unassigned", TodoStatus.Completed),
+            Todo("q", "Unassigned", TodoStatus.Cancelled));
+
+        var rows = TodoProjections.Planning(todos, English).ToList();
+
+        var member = rows.Single(r => r.Key == $"member-{Assignee}");
+        member.GroupAction.Should().BeEmpty("there is nothing open to assign");
+        member.GroupStyle.Should().Be(TodoStyles.Hidden);
+        member.Group.Should().BeEmpty();
+        rows.Should().NotContain(r => r.Key == "backlog");
+        rows.Should().NotContain(r => r.Item != null);
+    }
+
+    /// <summary>One definition of "open" for the planning, backlog and focus areas: a cancelled todo
+    /// is finished work in all three.</summary>
+    [Theory]
+    [InlineData(TodoStatus.Pending, true)]
+    [InlineData(TodoStatus.InProgress, true)]
+    [InlineData(TodoStatus.Completed, false)]
+    [InlineData(TodoStatus.Cancelled, false)]
+    public void OpenMeansNeitherCompletedNorCancelled_InEveryArea(TodoStatus status, bool open)
+    {
+        var todo = Todo("x", "Unassigned", status);
+        ImmutableList<TodoItem> todos = [Todo("a"), todo];
+
+        TodoProjections.IsOpen(todo).Should().Be(open);
+        TodoProjections.Planning(todos, English).Any(r => r.Item?.Id == "x").Should().Be(open);
+        TodoProjections.Backlog(todos, English).Any(r => r.Item?.Id == "x").Should().Be(open);
+        TodoProjections.TodaysFocus([todo with { DueDate = DateTime.Now.Date }], English)
+            .Any(r => r.Item?.Id == "x").Should().Be(open);
+    }
+
     private static readonly TodoViewText English =
         new((key, args) => LocalizationCatalog.Get(key, "en", args), System.Globalization.CultureInfo.InvariantCulture);
 

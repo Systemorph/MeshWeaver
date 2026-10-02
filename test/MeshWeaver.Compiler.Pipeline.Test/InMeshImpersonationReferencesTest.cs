@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Compiler.Pipeline.Test;
 
 /// <summary>
 /// 🚨 Option C of Doc/Architecture/InMeshImpersonation: the compiler finds every reference in
@@ -38,8 +38,13 @@ public class InMeshImpersonationReferencesTest
         // Touch every assembly the snippets bind against so it is loaded and has a Location.
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
                     typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable) };
+        // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
+        // node assemblies into temp folders, load them and delete the folder when they finish; such
+        // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
+        // it fails the compilation with FileNotFoundException. Which classes ran before this one is
+        // a matter of class order, so the reference set must not depend on it.
         var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location));
         var compilation = CSharpCompilation.Create("InMeshProbe",
             [CSharpSyntaxTree.ParseText($"{Usings}\npublic static class Probe {{\n{body}\n}}", path: "Probe.cs")],
@@ -88,6 +93,11 @@ public class InMeshImpersonationReferencesTest
     [InlineData("public static MeshQueryRequest M(MeshQueryRequest r) => r with { UserId = \"alice\" };",
         "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
     [InlineData("public static MeshQueryRequest M() => new() { UserId = \"alice\" };",
+        "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
+    // The STATEMENT-shaped write: the member is the Name of a member access that is the left side
+    // of an assignment (`this.UserId = …`). UserId is init-only, so a derived request's constructor
+    // is where in-mesh code can write it that way.
+    [InlineData("public record Mine : MeshQueryRequest { public Mine(string who) { this.UserId = who; } }",
         "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
     // The factories that install a query identity with NO written member — positional and named.
     [InlineData("public static MeshQueryRequest M(string who) => MeshQueryRequest.FromQuery(\"nodeType:X\", who);",
