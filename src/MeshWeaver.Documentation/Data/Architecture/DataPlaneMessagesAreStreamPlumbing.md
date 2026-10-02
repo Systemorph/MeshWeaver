@@ -110,7 +110,7 @@ one). Measured on `main` at `39f49494eb` (core) and `e9d9283ab` (MeshWeaver.Plug
 |---|---:|---|
 | `GetDataRequest` | 18 | 9 |
 | `GetDataResponse` | 26 | 8 |
-| `DataChangeRequest` | 11 | 5 (incl. 2 in `samples/`) |
+| `DataChangeRequest` | 7 | 5 (incl. 2 in `samples/`) |
 | `PatchDataChangeRequest` | 0 | — |
 | `DataChangedEvent` | 0 | — |
 
@@ -160,7 +160,7 @@ not a zero.
 
 | Where | Found |
 |---|---|
-| core `samples/` | **7 code references, both in-mesh or sample C#.** `samples/Graph/Data/ACME/Project/Todo/Source/TodoLayoutAreas.cs` (1, a NodeType source compiled at runtime) and `samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs` (6, the Todo sample app writing workspace entities to its app hub). Both are in the ratchet — the guard scans `samples/` because its `Data/` trees are exactly the code `dotnet build` never sees. The rest are prose in sample `.md` files. |
+| core `samples/` | **3 code references, both in-mesh or sample C#.** `samples/Graph/Data/ACME/Project/Todo/Source/TodoLayoutAreas.cs` (1, a NodeType source compiled at runtime) and `samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs` (2 — the Todo sample app's one `Update` and one `Delete` helper, through which every row action posts its workspace-entity write to the owning hub). Both are in the ratchet — the guard scans `samples/` because its `Data/` trees are exactly the code `dotnet build` never sees. The rest are prose in sample `.md` files. |
 | MeshWeaver.Plugins module folders (`Mail/`, `Store/`, …) | code: 0 (one doc comment in `Store/Installer/Source/DependencyInstall.cs`) |
 | MeshWeaver.Plugins `clients/` (TypeScript) | **`DataChangedEvent` is a WIRE CONTRACT.** The grpc-web and React clients decode `DataChangedEvent { changeType, change, streamId }` frames by their `$type` name (`clients/grpc-web/src/changeFold.ts`, `connection.test.ts`, `clients/react/docs/live-protocol.md`). Making the CLR type `internal` does not change the wire, but its NAME and its field names can never change — so it is plumbing to C# code and a published protocol to clients. |
 | MeshWeaver.SocialMedia | **14 in-mesh callers**: every `LinkedIn/*/Source/*Loader.cs` reads its CSV through `hub.Observe<GetDataResponse>(new GetDataRequest(new FileReference("content", "archive/….csv")))` — the `FileReference` kind, which has no stream surface yet |

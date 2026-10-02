@@ -205,6 +205,47 @@ public sealed class InMeshImpersonationGuard
     }
 
     /// <summary>
+    /// The COMPILE-TIME half (option C, Doc/Architecture/InMeshImpersonation): judges the references
+    /// to impersonation APIs that the compiler found in in-mesh source <paramref name="codeOwner"/>
+    /// (<c>DynamicNode_{node}</c>, <c>kernel-script-session</c>, <c>node-config-script:{path}</c>).
+    /// Same mode, same trust list, same log prefix as the runtime half. Under Enforce an untrusted
+    /// owner's compile is refused with <see cref="InMeshImpersonationRefusedException"/> — the caller
+    /// reports it as a compile error, so a NodeType parks at <c>compilationStatus: Error</c> naming the
+    /// reference, which is the visible place for it.
+    /// </summary>
+    /// <param name="codeOwner">The load context the code will run in.</param>
+    /// <param name="source">What was compiled — the node path, for the log.</param>
+    /// <param name="references">The references the compiler found, rendered (<c>Symbol at file(line)</c>).</param>
+    public void CheckCompiled(string codeOwner, string source, IReadOnlyList<string> references)
+    {
+        if (Mode == InMeshImpersonationMode.Off || references.Count == 0)
+            return;
+        var trusted = IsTrusted(codeOwner);
+        var verdict = trusted ? "TRUSTED"
+            : Mode == InMeshImpersonationMode.Enforce ? "REFUSED"
+            : "WOULD REFUSE";
+        if (logger is not null)
+        {
+            // One line per (verdict, owner, reference) the first time — a recompile of the same
+            // source is counted, never re-written until the 1000th.
+            foreach (var reference in references)
+            {
+                var key = $"compile|{verdict}|{codeOwner}|{reference}";
+                var count = occurrences.AddOrUpdate(key, 1, (_, c) => c + 1);
+                if (count != 1 && count % 1000 != 0)
+                    continue;
+                logger.Log(trusted ? LogLevel.Information : LogLevel.Warning,
+                    "{Prefix} COMPILE {Verdict} {CodeOwner} ({Source}) references {Reference}; occurrence {Count}, mode {Mode}",
+                    LogPrefix, verdict, codeOwner, source, reference, count, Mode);
+            }
+        }
+        if (!trusted && Mode == InMeshImpersonationMode.Enforce)
+            throw new InMeshImpersonationRefusedException(
+                "compile: " + string.Join("; ", references),
+                new ImpersonationCaller(true, codeOwner, source, codeOwner));
+    }
+
+    /// <summary>
     /// True when <see cref="Check"/> can have any effect for <paramref name="principal"/>: the mode
     /// is not <see cref="InMeshImpersonationMode.Off"/> and the principal is a platform one. The
     /// per-message setters (<see cref="AccessService.SetContext"/> and its siblings) ask this FIRST,
