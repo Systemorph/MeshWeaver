@@ -11,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -382,37 +383,26 @@ public static class SettingsLayoutArea
     }
 
     internal static UiControl BuildGroupsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        stack = stack.WithView(Controls.H2(host.Localize("settings.groups")).WithStyle("margin: 0 0 16px 0;"));
+        => stack
+            .WithView(Controls.H2(host.Localize("settings.groups")).WithStyle("margin: 0 0 16px 0;"))
+            .WithView(GroupsList(host.Hub.Address.ToString()));
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
-            return stack;
-        }
-
-        stack = stack.WithView((h, _) =>
-            meshQuery
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:Group"))
-                .Select(change =>
-                {
-                    var groupNodes = change.Items?.ToList() ?? [];
-                    if (groupNodes.Count == 0)
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No groups defined at this level.</p>");
-
-                    var container = Controls.Stack.WithStyle("gap: 8px;");
-                    foreach (var groupNode in groupNodes.OrderBy(n => n.Order).ThenBy(n => n.Name))
-                    {
-                        container = container.WithView(
-                            MeshNodeThumbnailControl.FromNode(groupNode, groupNode.Path));
-                    }
-                    return (UiControl?)container;
-                }));
-
-        return stack;
-    }
+    /// <summary>
+    /// The groups defined at <paramref name="hubPath"/>, listed by the GUI — the viewer's client runs
+    /// the query and draws each group as a card bound to its node, so the tab renders at once
+    /// instead of waiting on a hub-side query and baking one thumbnail per loaded node
+    /// (Doc/GUI/DataBinding → "Templates first, data later").
+    /// </summary>
+    /// <param name="hubPath">The node whose groups are listed.</param>
+    internal static MeshSearchControl GroupsList(string hubPath)
+        => Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{hubPath} nodeType:Group sort:order")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.List)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithReactiveMode(true);
 
     internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
@@ -623,21 +613,20 @@ public static class SettingsLayoutArea
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
 
-        // Live preview + Regenerate button — reads the Icon straight off the node stream (the same
-        // source the Icon Path field below binds to), so the preview tracks edits live.
+        // Live preview + Regenerate button. The preview is a TEMPLATE bound to the projected
+        // markup of the node's Icon (the same field the Icon Path box below binds to), so it is
+        // drawn at once and tracks edits live — it no longer waits for the node before it renders.
+        var previewId = $"iconPreview_{nodePath.Replace("/", "_")}";
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
-            .WithView((h, _) => h.Workspace.GetMeshNodeStream(nodePath)
-                .Select(node =>
+            .WithView((Controls.Html(new JsonPointerReference(IconPreviewMarkupPointer)) with
                 {
-                    var icon = node?.Icon ?? "";
-                    return string.IsNullOrEmpty(icon)
-                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
-                        : CreateLayoutArea.BuildIconPreview(icon);
-                }))
+                    DataContext = LayoutAreaReference.GetDataPointer(previewId)
+                })
+                .PublishingTo(previewId, IconPreviewProjection(host, nodePath)))
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
@@ -716,6 +705,22 @@ public static class SettingsLayoutArea
 
         return section;
     }
+
+    /// <summary>The icon preview's markup as data, at the pointer the preview control binds to.</summary>
+    /// <param name="Markup">The 48px preview markup (<see cref="CreateLayoutArea.IconPreviewMarkup"/>).</param>
+    internal sealed record IconPreview(string Markup);
+
+    /// <summary>The pointer of <see cref="IconPreview.Markup"/> inside its data slot (camelCase on the wire).</summary>
+    private static readonly string IconPreviewMarkupPointer =
+        nameof(IconPreview.Markup).ToCamelCase() ?? nameof(IconPreview.Markup);
+
+    /// <summary>
+    /// The node's Icon, projected into preview markup — the one read behind the icon picker's
+    /// preview. A projection, not a control: the preview template binds to it and never waits for it.
+    /// </summary>
+    private static IObservable<IconPreview> IconPreviewProjection(LayoutAreaHost host, string nodePath)
+        => host.Workspace.GetMeshNodeStream(nodePath)
+            .Select(node => new IconPreview(CreateLayoutArea.IconPreviewMarkup(node?.Icon)));
 
     /// <summary>
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user

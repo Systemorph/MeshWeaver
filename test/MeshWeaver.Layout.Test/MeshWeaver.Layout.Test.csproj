@@ -10,6 +10,9 @@
     <!-- The actual catalog projection pins retained-click identity on LayoutAreaHost's owner
          dispatch. This is a library reference, not a second catalog/installer test executable. -->
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
+    <!-- The Todo sample's areas are templates with row-scoped actions; they are pinned here, next to
+         the platform half they exercise (RowScopedClickActionTest). -->
+    <ProjectReference Include="..\..\samples\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
