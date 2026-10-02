@@ -160,9 +160,12 @@ public sealed class StrandedPartitionTeardownValidator : INodeValidator
         // under the partition root, so a recreate (an installer provisioning the same name, a
         // child write healing a root) cannot land between the reading and the drop and then be
         // dropped on a verdict about a partition that no longer exists.
-        return Observable.Using(
-            () => registry.BeginSubtreeDeletion(partition),
-            _ => StrandedBecause(partition).SelectMany(reason =>
+        // WithinSubtreeDeletion releases the claim BEFORE the verdict is delivered, so the record
+        // delete that proceeds on it — and whoever acts on that delete's answer — never meets the
+        // claim still held (Observable.Using alone released it after the verdict was processed).
+        return registry.WithinSubtreeDeletion(
+            partition,
+            () => StrandedBecause(partition).SelectMany(reason =>
             {
                 if (reason is null)
                 {

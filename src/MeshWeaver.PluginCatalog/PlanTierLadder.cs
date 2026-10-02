@@ -39,8 +39,6 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
     /// <summary>How long a snapshot is reused before the tier nodes are listed again.</summary>
     public static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(1);
 
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
-
     /// <summary>One immutable snapshot — a REFERENCE, so a concurrent read can never observe a torn
     /// (time, ranks) pair the way a nullable value tuple written from two threads could.</summary>
     private sealed record Snapshot(DateTimeOffset At, PlanTierRanks Ranks);
@@ -59,8 +57,19 @@ public sealed class PlanTierLadder(IMessageHub hub, ILogger<PlanTierLadder> logg
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{Namespace}"))
             .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(ReadTimeout)
-            .Select(c => PlanTierRanks.From(c.Items.Select(Plan)))
+            // No bound of its own: the query's merged Initial is already bounded by the fan-in's
+            // stall terminal (MeshOperationOptions.QueryInitialBudget), which faults into the Catch
+            // below. A shorter local timer here would give up while the query is still inside its
+            // own budget — the inverted ladder of #1198 (#5894).
+            .Select(c =>
+            {
+                foreach (var retired in c.Items.Where(n => PlanTierRanks.SuccessorOf(n.Id) is not null))
+                    logger.LogWarning(
+                        "Plan ladder: tier node {Path} carries the RETIRED plan id '{Retired}' — ignored; "
+                        + "'{Retired}' resolves to '{Successor}', whose own tier node ranks it",
+                        retired.Path, retired.Id, retired.Id, PlanTierRanks.SuccessorOf(retired.Id));
+                return PlanTierRanks.From(c.Items.Select(Plan));
+            })
             .Do(ranks =>
             {
                 Volatile.Write(ref cached, new Snapshot(DateTimeOffset.UtcNow, ranks));

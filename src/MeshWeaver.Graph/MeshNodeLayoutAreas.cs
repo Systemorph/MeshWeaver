@@ -1876,13 +1876,26 @@ public static class MeshNodeLayoutAreas
             .WithView(Controls.H3(LocalizationCatalog.Get("node.types.inNamespace", locale, nodePath))
                 .WithStyle(string.IsNullOrEmpty(ownTypePath) ? "margin: 0 0 16px 0;" : "margin: 24px 0 16px 0;"))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"namespace:{nodePath} nodeType:{MeshNode.NodeTypePath} sort:order")
+                .WithHiddenQuery(NodeTypesAtLevelQuery(nodePath, ownTypePath))
                 .WithNamespace(nodePath)
                 .WithShowSearchBox(false)
                 .WithShowEmptyMessage(true)
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
     }
+
+    /// <summary>
+    /// The query listing the NodeTypes defined at <paramref name="nodePath"/>'s level. The node's own
+    /// type, when it lives at that level, is already shown as the own-type card above the list, so
+    /// the query excludes it (<c>-path:</c>) — the GUI runs the query, so the de-duplication the
+    /// hub-side loop used to do has to be expressed in the query itself.
+    /// </summary>
+    /// <param name="nodePath">The node whose level is listed.</param>
+    /// <param name="ownTypePath">The node's own NodeType path, or null when it has none.</param>
+    internal static string NodeTypesAtLevelQuery(string nodePath, string? ownTypePath)
+        => string.IsNullOrEmpty(ownTypePath)
+            ? $"namespace:{nodePath} nodeType:{MeshNode.NodeTypePath} sort:order"
+            : $"namespace:{nodePath} nodeType:{MeshNode.NodeTypePath} -path:{ownTypePath} sort:order";
 
     private static DateTime GetWeekStart(DateTime date)
     {
@@ -2091,7 +2104,7 @@ public static class MeshNodeLayoutAreas
         // took the text color and disappeared on one of the two themes.
         var iconHtml = iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
             ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{MeshNodeImageHelper.SizeInlineSvg(iconUrl, 24)}</div>"
-            : $"<img src=\"{iconUrl}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
+            : $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(iconUrl)}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
 
         return $@"
             <div style=""display: flex; align-items: center; gap: 8px;"">

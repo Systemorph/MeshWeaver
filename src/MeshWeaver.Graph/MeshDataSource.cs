@@ -230,7 +230,14 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
-            .WithServices(services => services.AddSingleton<OwnNodeCache>())
+            .WithServices(services => services
+                .AddSingleton<OwnNodeCache>()
+                // A MeshNode leaving this hub's workspace through a DataChangeRequest is a delete,
+                // so it answers to the delete-validator chain too — not to RLS alone.
+                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeDeletionDataValidator>()
+                // …and a MeshNode ENTERING it is a create (a raw storage write), so it answers to the
+                // create-validator chain — not to RLS alone.
+                .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeCreationDataValidator>())
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
@@ -294,6 +301,19 @@ public static class MeshDataSourceExtensions
     private static IMessageDelivery HandleSaveMeshNode(
         IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
     {
+        // 🚨 ONLY THE HUB'S OWN POST IS A RAW WRITE. The persistence sampler and the deferred
+        // re-post below post this to their own hub, and what they persist is state an already-
+        // checked write produced. Any other sender — another hub, in-mesh code, a client whose
+        // delivery an ingress forwarded — is asking for a node write, and gets the checked one.
+        // This handler used to write whatever any sender named: no permission check, no
+        // validator, and SignalR/gRPC forward any delivery to any address, so an anonymous
+        // connection could overwrite any node. (A participant cannot pose as the self-post by
+        // writing this hub's address as the sender: its delivery carries the ingress stamp, and the
+        // type is [InfrastructureOnly], so the hub refuses it before this handler runs. The stamp
+        // is checked here too, so the two layers do not lean on each other.)
+        if (!IsOwnPersistencePost(hub, request))
+            return ForwardSaveToCheckedWrite(hub, request);
+
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return request.Processed();
@@ -403,6 +423,62 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
+    /// Whether <paramref name="request"/> is this hub's own persistence post — sent by this hub
+    /// (host part ignored, as the router does) and not injected by a participant ingress.
+    /// </summary>
+    private static bool IsOwnPersistencePost(IMessageHub hub, IMessageDelivery request)
+        => !request.IsFromParticipant()
+           && request.Sender is { } sender
+           && (sender with { Host = null }).Equals(hub.Address with { Host = null });
+
+    /// <summary>
+    /// A <see cref="SaveMeshNodeRequest"/> from anyone but the hub itself is a request to write a
+    /// node, so it takes the checked write: a <see cref="CreateOrUpdateNodeRequest"/> under the
+    /// delivery's own access context — Create or Update permission by existence, and every node
+    /// validator. A delivery without an identity has nobody to check for and is refused. Mirrors
+    /// the <see cref="DeleteMeshNodeRequest"/> forwarder.
+    /// </summary>
+    private static IMessageDelivery ForwardSaveToCheckedWrite(
+        IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
+        var node = request.Message.Node;
+        var caller = request.AccessContext;
+        if (node is null || string.IsNullOrEmpty(node.Path))
+        {
+            logger?.LogWarning(
+                "[SaveMeshNode] refused a save from {Sender} on {Address}: it names no node — nothing was written",
+                request.Sender, hub.Address);
+            return request.Processed();
+        }
+        if (caller is null || string.IsNullOrEmpty(caller.ObjectId))
+        {
+            logger?.LogWarning(
+                "[SaveMeshNode] refused a save of {Path} from {Sender}: it is not this hub's own persistence "
+                + "post and carries no access context, so there is nobody to check the write for — nothing "
+                + "was written", node.Path, request.Sender);
+            return request.Processed();
+        }
+
+        var upsert = new CreateOrUpdateNodeRequest(node) { RequestedBy = caller.ObjectId };
+        hub.NodeOperationIssuingHub()
+            .Observe(upsert, o => o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(caller))
+            .Subscribe(
+                d =>
+                {
+                    if (!d.Message.Success)
+                        logger?.LogWarning(
+                            "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} was "
+                            + "refused: {Error}", node.Path, caller.ObjectId, request.Sender, d.Message.Error);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} failed",
+                    node.Path, caller.ObjectId, request.Sender));
+        return request.Processed();
+    }
+
+    /// <summary>
     /// The sampler's durable write — extracted so the deferred path (a sampled state held behind an
     /// unresolved post-commit flush claim, see <c>PostCommitFlushRegistry</c>) writes through
     /// exactly the same code, including the <c>MonotonicWriteGuard</c> refusal contract below.
@@ -491,28 +567,59 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
-    /// Per-node hub handler for <see cref="DeleteMeshNodeRequest"/>: removes the
-    /// node at the supplied path through <see cref="IStorageAdapter.Delete"/>.
-    /// Fire-and-forget; failures log and drop.
+    /// Per-node hub handler for the legacy <see cref="DeleteMeshNodeRequest"/>: FORWARDS it to the
+    /// validated delete — a <see cref="DeleteNodeRequest"/> issued under the DELIVERY's own
+    /// <see cref="AccessContext"/> — and never touches storage itself.
+    ///
+    /// <para>🚨 It used to call <see cref="IStorageAdapter.Delete"/> on whatever path the message
+    /// named, with no permission check and no <see cref="INodeValidator"/>. Nothing in the platform
+    /// posts this message, but every ingress can deliver it: the SignalR and gRPC connection hubs
+    /// forward any delivery to any address (an unauthenticated client arrives as Anonymous), and
+    /// in-mesh code holds an <see cref="IMessageHub"/>. So the handler was an unchecked raw delete of
+    /// ANY node, reachable by anyone who could open a connection. Routing it through
+    /// <see cref="DeleteNodeRequest"/> gives it exactly the checks a delete gets everywhere else:
+    /// the <c>[RequiresPermission(Delete)]</c> gate, the delete-validator chain and, when
+    /// <see cref="DeleteMeshNodeRequest.Recursive"/> is set, the recursive pre-flight.</para>
+    ///
+    /// <para>A delivery with NO access context names nobody to check, so it is refused here rather
+    /// than forwarded — never run as the hub or as System. Pinned by
+    /// <c>DeleteMeshNodeRequestIsAValidatedDeleteTest</c>.</para>
     /// </summary>
     private static IMessageDelivery HandleDeleteMeshNode(
         IMessageHub hub, IMessageDelivery<DeleteMeshNodeRequest> request)
     {
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (persistence is null)
-            return request.Processed();
-
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");
         var path = request.Message.Path;
-        // The row is going away — drop the post-commit flush's durable-version mark so a same-id
-        // recreate at Version = 1 is never read as "already persisted" (#1249). Same rule as
-        // MonotonicWriteGuardStorageAdapter.Forget on Delete.
-        hub.ServiceProvider.GetService<PostCommitFlushRegistry>()?.Forget(path);
-        persistence.Delete(path)
+        var caller = request.AccessContext;
+        if (caller is null || string.IsNullOrEmpty(caller.ObjectId))
+        {
+            logger?.LogWarning(
+                "[DeleteMeshNode] refused a delete of {Path} from {Sender}: the delivery carries no "
+                + "access context, so there is nobody to check Delete for — nothing was deleted",
+                path, request.Sender);
+            return request.Processed();
+        }
+
+        var delete = new DeleteNodeRequest(path)
+        {
+            Recursive = request.Message.Recursive,
+            DeletedBy = caller.ObjectId
+        };
+        hub.NodeOperationIssuingHub()
+            .Observe(delete, o => o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(caller))
             .Subscribe(
-                _ => { },
-                ex => logger?.LogWarning(ex, "DeleteMeshNode failed for {Path}", path));
+                d =>
+                {
+                    if (!d.Message.Success)
+                        logger?.LogWarning(
+                            "[DeleteMeshNode] the validated delete of {Path} requested by {User} was refused "
+                            + "({Reason}): {Error}",
+                            path, caller.ObjectId, d.Message.RejectionReason, d.Message.Error);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[DeleteMeshNode] the validated delete of {Path} requested by {User} failed",
+                    path, caller.ObjectId));
         return request.Processed();
     }
 
@@ -1843,7 +1950,9 @@ public static class MeshDataSourceExtensions
                         .Subscribe(
                             _ =>
                             {
-                                hub.Post(
+                                // Through the issuing seam like every targeted post in this file:
+                                // the identity function on this per-node hub, never the router.
+                                hub.NodeOperationIssuingHub().Post(
                                     new SubmitCodeRequest(code.Code ?? string.Empty)
                                     {
                                         Id = submissionId,

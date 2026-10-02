@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -46,7 +44,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     private const string AllowFileName = "LayoutAreaDataBakeSites.allow";
 
     /// <summary>The seeded inventory's size. Lower it in the same change that lowers a line.</summary>
-    private const int TotalBudget = 64;
+    private const int TotalBudget = 51;
 
     /// <summary>Reads that make a unit wait on data.</summary>
     internal static readonly Regex LoadPattern = new(
@@ -75,6 +73,8 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
         "typeof", "when", "select", "sizeof", "default", "base", "this", "static",
     ];
 
+    /// <summary>The ratchet itself: no file may hold more bake units than its allow-file line, and the
+    /// total may never exceed <see cref="TotalBudget"/>.</summary>
     [Fact]
     public void NoNewLayoutAreaBakesDataIntoControls()
     {
@@ -154,7 +154,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
         Assert.Equal(["Overview"], UnitsInCode("""
             static IObservable<MeshNode?> Load(IWorkspace ws) => ws.GetMeshNodeStream("p");
             public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
-                => Load(host.Workspace).Select(n => (UiControl?)Controls.Markdown(n!.Name!));
+                => Load(host.Workspace).Select(n => (UiControl?)Controls.Markdown(n?.Name ?? ""));
             """));
 
         // The sanctioned shape: a template bound by path — no read on the hub.
