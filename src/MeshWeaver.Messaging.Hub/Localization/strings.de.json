@@ -835,6 +835,8 @@
   "ui.fieldWriteRefused": "Nicht gespeichert: Sie dürfen diese Seite lesen, aber nicht ändern.",
   "ui.accessDeniedAdminsOnly": "Zugriff verweigert — nur für Plattform-Administratoren.",
   "ui.autoSaved": "Änderungen werden automatisch gespeichert",
+  "ui.markdownTitlePlaceholder": "Ohne Titel",
+  "ui.markdownBodyPlaceholder": "Beginnen Sie mit Ihrem Markdown-Inhalt …",
   "ui.connectRepoFirst": "Zuerst im Tab **GitHub Sync** ein GitHub-Repository verbinden.",
   "ui.gitHistoryInSpace": "Der Git-Verlauf ist innerhalb eines Space verfügbar.",
   "ui.loginWithSubscription": "Mit dem eigenen Abonnement anmelden — kein Schlüssel, keine Modellliste.",
