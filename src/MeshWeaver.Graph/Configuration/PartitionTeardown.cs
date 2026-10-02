@@ -130,9 +130,13 @@ public static class PartitionTeardown
                 "[PartitionTeardown] tearing down '{Partition}' as a whole, as system, across {Providers} provider(s): {Because}",
                 partition, providers, because);
 
-            return Observable.Using(
-                () => registry.BeginSubtreeDeletion(partition),
-                _ =>
+            // 🚨 WithinSubtreeDeletion, not Observable.Using: the outcome is the caller's "torn down"
+            // signal, so the claim is released BEFORE it is delivered. Under Using it was released
+            // only after the subscriber had processed it, and a follow-up teardown issued on that
+            // signal (the DeleteSpace probe's cleanup) was refused as "already in flight".
+            return registry.WithinSubtreeDeletion(
+                partition,
+                () =>
                 {
                     registry.MarkDeleted(partition);
                     return StoreKnown(hub, partition)

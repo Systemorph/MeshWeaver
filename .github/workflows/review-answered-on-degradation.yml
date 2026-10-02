@@ -1,0 +1,119 @@
+# Re-evaluate `Automatic review answered` when the internal reviewer says it is UNAVAILABLE.
+#
+# 🚨 WHY (MeshWeaver.Feedback#86). check-review-answered.py releases its condition 1 when the pull
+# request's head carries the reviewer-unavailable check run (`internal-review`, App `systemorph-com`
+# id 4918443, completed, `neutral`, title "Reviewer unavailable …" — the full contract is in the
+# script's docstring). But a predicate is only re-asked when an event starts the gate, and none of
+# review-answered.yml's triggers fires when a check run completes: the degradation would release
+# nothing until somebody pushed, which is the person-dependence it exists to remove.
+#
+# 🚨 WHY A SEPARATE FILE, AND WHY IT RE-RUNS INSTEAD OF JUDGING. A `check_run` event starts a
+# workflow run on the DEFAULT BRANCH: GITHUB_SHA is main's last commit, not the pull request's head
+# (GitHub's event reference, "check_run" → GITHUB_SHA "Last commit on default branch"; the event
+# also fires only for a workflow file that is on the default branch). So a job judging the pull
+# request from here would publish its `Automatic review answered` check-run onto MAIN's commit,
+# where branch protection for the pull request never reads it — and would plant a red required
+# context name on main for every unrelated check run. Adding `check_run:` to review-answered.yml
+# would therefore be exactly the "green in the log, BLOCKED on the pull request" shape its header
+# warns about. What IS read is a `pull_request` run of the gate (measured on #4649), so this lane
+# RE-RUNS the newest one for that head — the remedy Doc/Architecture/ReviewFindingsAnswered already
+# names as legitimate, because the gate reads live state and that state genuinely changed. It
+# decides nothing itself: the re-run applies the full predicate, provenance check included.
+#
+# 🔁 No loop: runs created by GitHub Actions do not raise `check_run` workflow events, so the
+# re-run's own check-runs cannot start this file again.
+#
+# 🛡️ No job-level `if:` and no `continue-on-error` — every event runs the step, which prints what it
+# decided (a skipped job would say nothing). This file is NOT a required context and can turn
+# nothing green on its own; a failure here is RED, named, and leaves the gate exactly where it was.
+name: Review answered (reviewer-unavailable re-evaluation)
+
+on:
+  check_run:
+    types: [completed]
+
+permissions:
+  actions: write      # list the gate's runs for the head sha, POST …/runs/{id}/rerun
+  contents: read
+
+# One per head sha: a burst of check runs on one commit must not re-run the gate twice at once.
+concurrency:
+  group: review-answered-degradation-${{ github.event.check_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  reevaluate:
+    name: Re-evaluate the review gate on a reviewer-unavailable degradation
+    runs-on: ubuntu-latest
+    # 25 = the gate job's own 20-minute cap (a run in its review wait is let finish, see below) +
+    # headroom for the reads and the re-run request.
+    timeout-minutes: 25
+    steps:
+      - name: Re-run the gate's pull_request run for this head, iff this is the degradation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NAME: ${{ github.event.check_run.name }}
+          APP_ID: ${{ github.event.check_run.app.id }}
+          APP_SLUG: ${{ github.event.check_run.app.slug }}
+          CONCLUSION: ${{ github.event.check_run.conclusion }}
+          TITLE: ${{ github.event.check_run.output.title }}
+          HEAD_SHA: ${{ github.event.check_run.head_sha }}
+          CHECK_RUN_ID: ${{ github.event.check_run.id }}
+        run: |
+          set -euo pipefail
+          # The SAME contract the predicate applies (check-review-answered.py DEGRADATION_*). This
+          # is only a filter for when to ask again — the re-run judges provenance on its own, so a
+          # drift here can cost a re-run or miss one, never turn a gate green.
+          if [ "$NAME" != "internal-review" ] || [ "$APP_ID" != "4918443" ] || [ "$APP_SLUG" != "systemorph-com" ] \
+             || [ "$CONCLUSION" != "neutral" ] || [[ "$TITLE" != "Reviewer unavailable"* ]]; then
+            echo "check run $CHECK_RUN_ID ('$NAME' from ${APP_SLUG:-?}/${APP_ID:-?}, $CONCLUSION) is not a reviewer-unavailable degradation — nothing to re-evaluate"
+            exit 0
+          fi
+          echo "::notice::reviewer-unavailable degradation on ${HEAD_SHA:0:10}: check run $CHECK_RUN_ID — \"$TITLE\""
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the check_run event carried no head sha"; exit 1; }
+
+          # 🚨 This run is SINGLE-SHOT (#5920 review): the degradation's `completed` event comes once,
+          # and nothing re-fires this file if a read or the re-run request dies on a transient API
+          # error — the gate would then stay red on that head until a person pushed, the very
+          # dependence this lane removes. So every API call gets three attempts, 15 s then 30 s
+          # apart, and a failure that survives them is RED and named. Not a widened bound: the
+          # verdict is unchanged, only a transport blip is absorbed.
+          api() {
+            local out attempt
+            for attempt in 1 2 3; do
+              if out=$(gh api "$@"); then printf '%s\n' "$out"; return 0; fi
+              echo "  gh api $* failed (attempt $attempt of 3)" >&2
+              [ "$attempt" -lt 3 ] && sleep $((attempt * 15))
+            done
+            echo "::error::gh api $* failed three times — the gate for ${HEAD_SHA:0:10} was NOT re-evaluated; re-run this workflow run" >&2
+            return 1
+          }
+          runs() {
+            api "repos/$REPO/actions/workflows/review-answered.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
+              --jq '[.workflow_runs[] | {id, status, conclusion, created_at, run_attempt}] | sort_by(.created_at)'
+          }
+          # A gate run still in flight may have read BEFORE this check run completed, and would then
+          # publish a red it took on stale input. Let it finish (it also re-reads the check runs on
+          # every poll of its review wait, so it may go green by itself), then judge what it left.
+          for _ in $(seq 1 40); do
+            listing=$(runs)
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$listing")
+            [ "$pending" = "0" ] && break
+            echo "  $pending gate run(s) for ${HEAD_SHA:0:10} still in flight — letting them finish first"
+            sleep 30
+          done
+          listing=$(runs)
+          newest=$(jq -c 'last // empty' <<<"$listing")
+          [ -n "$newest" ] || { echo "::error::no \`pull_request\` run of review-answered.yml exists for ${HEAD_SHA:0:10} — there is no read-eligible gate run to re-evaluate; push to the pull request to start one"; exit 1; }
+          id=$(jq -r .id <<<"$newest"); status=$(jq -r .status <<<"$newest"); conclusion=$(jq -r .conclusion <<<"$newest")
+          if [ "$status" != "completed" ]; then
+            echo "::error::gate run $id is still $status after the wait — not re-running over it; it re-reads the degradation itself"
+            exit 1
+          fi
+          if [ "$conclusion" = "success" ]; then
+            echo "gate run $id (pull_request, attempt $(jq -r .run_attempt <<<"$newest")) already reads success — nothing to re-run"
+            exit 0
+          fi
+          api -X POST "repos/$REPO/actions/runs/$id/rerun" >/dev/null
+          echo "re-ran gate run $id (was $conclusion) so it judges the head with the degradation in view: https://github.com/$REPO/actions/runs/$id"

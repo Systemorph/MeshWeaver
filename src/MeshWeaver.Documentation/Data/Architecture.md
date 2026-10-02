@@ -200,6 +200,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Granting Access](GrantingAccess)
 - [AccessContext Propagation](AccessContextPropagation)
 - [Query Identity](QueryIdentity) — an unstamped read answers as Anonymous, which reads as absence
+- [Participant Ingress](ParticipantIngress) — SignalR and gRPC forward any delivery to any address with a client-written envelope; mesh infrastructure is `[InfrastructureOnly]`, every ingress delivery is stamped, and the receiving hub refuses a stamped infrastructure message (`SaveMeshNodeRequest`, partition storage, compile triggers) before any handler runs
 - [Owner Injection](OwnerInjection)
 - [Permission API](PermissionApi)
 - [Settings by Owner — the Instance, Person and Node Apps](AdminApp) — every settings tab lives in the app of the thing it changes: `/Admin` (the instance, titled with its name, platform admins only), `/{user}/Settings` (the person, titled with their name, the owner only) and a node's ⋯ → Settings…; the mapping of every tab, the module API, the redirects that keep old links working, and the Inbox app every user gets
@@ -213,6 +214,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Unanchored Security Reads](UnanchoredSecurityReads) — why the permission fold reads mesh-wide, and why pinning it to the viewer's partition is a silent revocation-fails-open bug
 - [A Denial Is an Answer](DenialIsAnAnswer) — a check on a hub with no evaluator grants Permission.All, and a refusal the mesh decided is rendered, never raised
 - [PublicRead and Denies](PublicReadAndDenies) — a Public/Anonymous deny under a `PublicRead` policy is honoured by the SQL read path and ignored by the C# evaluator; what that split exposes, and what each remedy costs
+- [In-Mesh Impersonation](InMeshImpersonation): who may act as the platform. These are the log-only guards on code the mesh compiles at runtime and on gate deliveries over the trusted gRPC port, the blast radius measured across the fleet, what the runtime guard cannot see (tail calls, delegates, hand-built contexts), and the options for closing it
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
 - [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
