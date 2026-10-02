@@ -1227,6 +1227,12 @@ public static class NodeTypeLayoutAreas
     /// The release history of a NodeType, listed by the GUI — newest first. A query control, so the
     /// hub never loads the releases: the viewer's client runs <c>namespace:{type}/Release</c> and
     /// keeps the list live as the compile watcher writes new Release nodes.
+    ///
+    /// <para><c>sort:CreatedAt-desc</c> orders by the RELEASE's own time: a <see cref="MeshNode"/> has
+    /// no <c>CreatedAt</c> (its field is <c>CreatedDate</c>), so the selector resolves in the node's
+    /// content — <see cref="NodeTypeRelease.CreatedAt"/>, a required member the one release writer
+    /// always stamps — on every backend. The query language carries ONE sort key, so there is no
+    /// node-date fallback for a row whose content is not a release; such a row sorts by an absent key.</para>
     /// </summary>
     /// <param name="nodeTypePath">The NodeType's path.</param>
     /// <param name="limit">How many releases to show, or <c>null</c> for all.</param>
@@ -1255,24 +1261,47 @@ public static class NodeTypeLayoutAreas
         => Controls.Button(LocalizationCatalog.Get("ui.createRelease", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Play())
-            .WithClickAction(ctx =>
-            {
-                RequestRelease(ctx.Host.Hub, nodeTypePath);
-                return Task.CompletedTask;
-            });
+            .WithReactiveClickAction(ctx => ReleaseClick(ctx.Host.Hub, nodeTypePath));
 
     /// <summary>
-    /// Requests a FORCED release of <paramref name="nodeTypePath"/> as the clicking user — the
-    /// compile buttons' one write. Forced, so "Recompile" on an up-to-date type still compiles; on a
-    /// type with changed sources forcing changes nothing.
+    /// The compile buttons' one write, as the CLICK's own outcome: requests a FORCED release of
+    /// <paramref name="nodeTypePath"/> as the clicking user and answers the click with what became
+    /// of it. Forced, so "Recompile" on an up-to-date type still compiles; on a type with changed
+    /// sources forcing changes nothing.
+    ///
+    /// <para>🚨 <b>A refusal reaches the person who clicked.</b> The release request checks
+    /// <c>Permission.Compile</c> and ANSWERS a refusal (it never faults — a caller batching many
+    /// releases must not lose the rest to one of them). A click is not a batch: a viewer who holds
+    /// <c>Update</c> but not <c>Compile</c> would press an enabled button and see nothing happen,
+    /// with the reason only in the hub's log. So the answered refusal is turned into the click's
+    /// error here, and the host refuses the click to the client with that sentence
+    /// (<c>WithReactiveClickAction</c> → <c>LayoutAreaHost.FailClick</c>; Doc/GUI/ButtonPendingState).
+    /// Completion is the trigger write having landed — never the compile it starts, which the
+    /// per-NodeType hub's watcher runs and the page's status projection shows.</para>
     /// </summary>
-    private static void RequestRelease(IMessageHub hub, string nodeTypePath)
-        => hub.RequestNodeTypeRelease(
-            nodeTypePath,
-            force: true,
-            onError: reason => hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(typeof(NodeTypeLayoutAreas))
-                .LogWarning("Release request for {Path} refused: {Reason}", nodeTypePath, reason));
+    /// <param name="hub">The hub the click arrived on; its AccessContext is the clicking user.</param>
+    /// <param name="nodeTypePath">The NodeType to release.</param>
+    /// <returns>Completes when the release was requested; errors with the refusal's reason otherwise.</returns>
+    internal static IObservable<System.Reactive.Unit> ReleaseClick(IMessageHub hub, string nodeTypePath)
+        => Observable.Defer(() =>
+        {
+            string? refusal = null;
+            return hub.ObserveNodeTypeRelease(
+                    nodeTypePath,
+                    force: true,
+                    releaseNotes: null,
+                    onError: reason =>
+                    {
+                        refusal = reason;
+                        hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger(typeof(NodeTypeLayoutAreas))
+                            .LogWarning("Release request for {Path} refused: {Reason}", nodeTypePath, reason);
+                    })
+                .SelectMany(requested => requested
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
+                        refusal ?? $"The release of '{nodeTypePath}' was not requested.")));
+        });
 
 
 
@@ -1762,7 +1791,7 @@ public static class NodeTypeLayoutAreas
     /// / never compiled / source changed / up to date), the compile button — disabled while a compile
     /// runs — and a link to the latest release. Hidden for a NodeType with no code, which never
     /// participates in compilation. The decisions live in <see cref="NodeTypeStatusView.From"/>.
-    /// The button routes through the permission-checked release request (<see cref="RequestRelease"/>).
+    /// The button routes through the permission-checked release request (<see cref="ReleaseClick"/>).
     /// </summary>
     /// <param name="nodeTypePath">The NodeType's path.</param>
     internal static UiControl BuildCompileStatusPanel(string nodeTypePath)
@@ -1784,11 +1813,7 @@ public static class NodeTypeLayoutAreas
                     DataContext = status
                 }
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    RequestRelease(ctx.Host.Hub, nodeTypePath);
-                    return Task.CompletedTask;
-                }))
+                .WithReactiveClickAction(ctx => ReleaseClick(ctx.Host.Hub, nodeTypePath)))
             .WithView(Controls.Markdown(NodeTypeStatusView.Pointer(nameof(NodeTypeStatusView.LatestReleaseLink)))
                 .WithStyle("margin-left: auto; font-size: 12px;") with { DataContext = status });
     }
