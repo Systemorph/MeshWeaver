@@ -437,6 +437,20 @@ public static class MeshDataSourceExtensions
     /// delivery's own access context — Create or Update permission by existence, and every node
     /// validator. A delivery without an identity has nobody to check for and is refused. Mirrors
     /// the <see cref="DeleteMeshNodeRequest"/> forwarder.
+    ///
+    /// <para>🚨 <b>The save keeps its version.</b> What a save carries is a whole-node SNAPSHOT, and
+    /// the checked upsert takes content wholesale without looking at the incoming
+    /// <see cref="MeshNode.Version"/>. So the snapshot's version travels as
+    /// <see cref="CreateOrUpdateNodeRequest.SnapshotVersion"/>: a snapshot taken before the node's
+    /// latest write is refused instead of putting the node back. The raw path below never needed
+    /// to say so — a save at or below the flushed version is dropped
+    /// (<see cref="PostCommitFlushRegistry"/>) and a strictly lower one is refused by the storage
+    /// guard — and forwarding without the version dropped both.</para>
+    ///
+    /// <para><b>A refused save is answered.</b> The sender receives a
+    /// <see cref="DeliveryFailure"/> naming why — a caller that observes its post sees a
+    /// <see cref="DeliveryFailureException"/>; one that only posts sees nothing, and the refusal
+    /// is in this hub's log at Warning.</para>
     /// </summary>
     private static IMessageDelivery ForwardSaveToCheckedWrite(
         IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request)
@@ -461,21 +475,59 @@ public static class MeshDataSourceExtensions
             return request.Processed();
         }
 
-        var upsert = new CreateOrUpdateNodeRequest(node) { RequestedBy = caller.ObjectId };
+        var upsert = new CreateOrUpdateNodeRequest(node)
+        {
+            RequestedBy = caller.ObjectId,
+            // The same floor the raw path applies before it writes (Version 0 is persisted as 1),
+            // so "this snapshot carries no version" compares exactly as it did there.
+            SnapshotVersion = Math.Max(node.Version, 1),
+        };
         hub.NodeOperationIssuingHub()
             .Observe(upsert, o => o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(caller))
             .Subscribe(
                 d =>
                 {
-                    if (!d.Message.Success)
-                        logger?.LogWarning(
-                            "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} was "
-                            + "refused: {Error}", node.Path, caller.ObjectId, request.Sender, d.Message.Error);
+                    if (d.Message.Success)
+                        return;
+                    logger?.LogWarning(
+                        "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} was "
+                        + "refused: {Error}", node.Path, caller.ObjectId, request.Sender, d.Message.Error);
+                    AnswerRefusedSave(hub, request,
+                        d.Message.Error ?? $"The save of '{node.Path}' was refused.",
+                        d.Message switch
+                        {
+                            { RejectionReason: NodeUpsertRejectionReason.Unauthorized } => ErrorType.Forbidden,
+                            { FailureKind: NodeUpsertFailureKind.StaleSnapshot } => ErrorType.Rejected,
+                            _ => ErrorType.Failed,
+                        });
                 },
-                ex => logger?.LogWarning(ex,
-                    "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} failed",
-                    node.Path, caller.ObjectId, request.Sender));
+                ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[SaveMeshNode] the checked write of {Path} requested by {User} from {Sender} failed",
+                        node.Path, caller.ObjectId, request.Sender);
+                    // A refusal ahead of the handler (the permission gate on the upsert) arrives
+                    // here already classified — keep its classification.
+                    AnswerRefusedSave(hub, request,
+                        $"The save of '{node.Path}' failed: {ex.Message}",
+                        ex is DeliveryFailureException { Failure: { } failure }
+                            ? failure.ErrorType
+                            : ErrorType.Failed);
+                });
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Answers the sender of a forwarded save that was not written. Posted as the response to the
+    /// save, so it reaches a caller that observes its post and is dropped by one that does not.
+    /// </summary>
+    private static void AnswerRefusedSave(
+        IMessageHub hub, IMessageDelivery<SaveMeshNodeRequest> request, string reason, ErrorType errorType)
+    {
+        if (!request.MayAnswer())
+            return;
+        hub.Post(new DeliveryFailure(request, reason) { ErrorType = errorType },
+            o => o.ResponseFor(request));
     }
 
     /// <summary>
