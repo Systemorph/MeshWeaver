@@ -736,7 +736,7 @@ data:
   # Interrupt=false stops the cancel of a code red's own pull_request run (on by default), Fix=true
   # lets the pr-fixer agent push ONE validated commit for a code red (off by default), FixerModel
   # and ValidatorModel pin the two agents' threads to a model node. Same rule as above: rendered
-  # whenever PRESENT. Before these lines a record could declare Fix=true and the pod never saw it.
+  # whenever PRESENT, so a record that declares one is a pod that reads it (config-key-coverage).
   {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interrupt" }}
   Hosting__PrBabysitter__Interrupt: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interrupt }}"
   {{- end }}
