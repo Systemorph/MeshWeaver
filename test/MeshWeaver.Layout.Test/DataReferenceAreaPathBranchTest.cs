@@ -61,7 +61,7 @@ public class DataReferenceAreaPathBranchTest(ITestOutputHelper output) : HubTest
             CreateHostAddress(), reference);
 
         // 1. The template arrives while the order has not emitted anything.
-        var root = await stream.GetControlStream(reference.Area!)
+        var root = await stream.GetControlStream(DataPathViews.DataAreaName)
             .Should().Within(10.Seconds()).Match(c => c is StackControl,
                 "the $Data area is a template for a path too: its controls do not wait for the data");
         var areas = root.Should().BeOfType<StackControl>().Subject.Areas;
@@ -91,7 +91,7 @@ public class DataReferenceAreaPathBranchTest(ITestOutputHelper output) : HubTest
         await view.Where(v => Markdown(v)?.Contains("Toms Spezialit") == true)
             .Should().Within(10.Seconds()).Emit("a later change of the data reaches the same slot");
 
-        var current = await stream.GetControlStream(reference.Area!)
+        var current = await stream.GetControlStream(DataPathViews.DataAreaName)
             .Should().Within(10.Seconds()).Emit();
         current.Should().BeOfType<StackControl>()
             .Which.Areas.Select(a => a.Area.ToString()).Should().Equal(areas.Select(a => a.Area.ToString()),
@@ -105,7 +105,7 @@ public class DataReferenceAreaPathBranchTest(ITestOutputHelper output) : HubTest
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), reference);
 
-        await stream.GetControlStream(reference.Area!)
+        await stream.GetControlStream(DataPathViews.DataAreaName)
             .Should().Within(10.Seconds()).Match(c => c is StackControl,
                 "an unopenable path still gets its template — the failure is data, not an absent page");
 

@@ -1633,11 +1633,23 @@ public static class EditorExtensions
     private static void FeedDimensionOptions(
         LayoutAreaHost host, string collectionName, DimensionAttribute dimensionAttr,
         string registrationKey, string optionsId)
-        => host.ReplaceDisposable(registrationKey,
-            host.Workspace.GetStream(new CollectionReference(collectionName))!
-                .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
-                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
+    {
+        // A dimension whose collection has no stream, whose stream emits no collection, or whose
+        // type is not registered is a misconfigured dimension: each of these threw before (a null
+        // dereference) and still throws — now naming what is missing.
+        var dimensions = host.Workspace.GetStream(new CollectionReference(collectionName))
+            ?? throw new InvalidOperationException(
+                $"No data stream for the dimension collection '{collectionName}'.");
+        host.ReplaceDisposable(registrationKey,
+            dimensions
+                .Select(x => ConvertDimensionToOptionsForToggle(
+                    x.Value ?? throw new InvalidOperationException(
+                        $"The dimension collection '{collectionName}' emitted no instances."),
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)
+                        ?? throw new InvalidOperationException(
+                            $"The dimension type '{dimensionAttr.Type.Name}' is not registered.")))
                 .Subscribe(opts => host.UpdateData(optionsId, opts)));
+    }
 
     /// <summary>
     /// Builds a full-width section for a collection property marked with [MeshNodeCollection].
