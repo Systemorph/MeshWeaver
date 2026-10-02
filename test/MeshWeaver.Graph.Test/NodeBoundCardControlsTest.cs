@@ -45,10 +45,11 @@ public class NodeBoundCardControlsTest(ITestOutputHelper output) : MonolithMeshT
     private IObservable<string?> Resolve(object? binding, string? dataContext)
     {
         var pointer = binding.Should().BeOfType<JsonPointerReference>().Subject;
-        var ctx = LayoutAreaReference.TryParseMeshNodeDataContext(dataContext);
-        ctx.Should().NotBeNull("the card's DataContext is the node-bound context the renderer branches on");
+        if (LayoutAreaReference.TryParseMeshNodeDataContext(dataContext) is not { } ctx)
+            throw new Xunit.Sdk.XunitException(
+                $"the card's DataContext must be the node-bound context the renderer branches on, but was '{dataContext}'");
         return MeshNodeBindingExtensions
-            .Bind(Mesh, ctx!.Value.NodePath, ctx.Value.BindContent, ctx.Value.SubPath, pointer)
+            .Bind(Mesh, ctx.NodePath, ctx.BindContent, ctx.SubPath, pointer)
             .Select(v => v is JsonElement { ValueKind: JsonValueKind.String } je ? je.GetString() : null);
     }
 
@@ -118,20 +119,38 @@ public class NodeBoundCardControlsTest(ITestOutputHelper output) : MonolithMeshT
             "a change to a different node never reaches this card's title");
     }
 
+    private T RoundTrip<T>(T control) where T : class =>
+        JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(control, Mesh.JsonSerializerOptions), Mesh.JsonSerializerOptions)
+        ?? throw new Xunit.Sdk.XunitException($"{typeof(T).Name} deserialized to null");
+
     [Fact]
     public void BoundCardsSurviveSerialization()
     {
-        var options = Mesh.JsonSerializerOptions;
         var thumb = new MeshNodeThumbnailControl("p/subject", "subject").BindToNode("p/assignment", "displayName", "note");
-        var back = JsonSerializer.Deserialize<MeshNodeThumbnailControl>(
-            JsonSerializer.Serialize(thumb, options), options)!;
+        var back = RoundTrip(thumb);
         back.TitleBinding.Should().Be(new JsonPointerReference("displayName"));
         back.DescriptionBinding.Should().Be(new JsonPointerReference("note"));
         back.DataContext.Should().Be(thumb.DataContext);
 
         var card = new MeshNodeCardControl("p/n").BindTitle(new JsonPointerReference("/data/\"title\""));
-        var cardBack = JsonSerializer.Deserialize<MeshNodeCardControl>(
-            JsonSerializer.Serialize(card, options), options)!;
-        cardBack.TitleBinding.Should().Be(new JsonPointerReference("/data/\"title\""));
+        RoundTrip(card).TitleBinding.Should().Be(new JsonPointerReference("/data/\"title\""));
+    }
+
+    /// <summary>The slots take "a literal or a pointer". With the hub's serializer options a LITERAL
+    /// string comes back as a <see cref="string"/> — not a <see cref="JsonElement"/> — so a renderer's
+    /// literal branch reads it as it was set. Pinned so the wire shape of a literal cannot change
+    /// unnoticed.</summary>
+    [Fact]
+    public void ALiteralTitleAndDescription_SurviveSerializationAsStrings()
+    {
+        var thumb = RoundTrip(new MeshNodeThumbnailControl("p/subject", "subject")
+            .BindTitle("Ada Lovelace").BindDescription("editor since 2025"));
+        thumb.TitleBinding.Should().BeOfType<string>().Which.Should().Be("Ada Lovelace");
+        thumb.DescriptionBinding.Should().BeOfType<string>().Which.Should().Be("editor since 2025");
+        thumb.DataContext.Should().BeNull("a literal needs no data context");
+
+        var card = RoundTrip(new MeshNodeCardControl("p/n").BindTitle("A title").BindDescription("A subtitle"));
+        card.TitleBinding.Should().BeOfType<string>().Which.Should().Be("A title");
+        card.DescriptionBinding.Should().BeOfType<string>().Which.Should().Be("A subtitle");
     }
 }

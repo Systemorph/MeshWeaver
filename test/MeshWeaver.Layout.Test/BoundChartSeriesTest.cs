@@ -79,8 +79,9 @@ public class BoundChartSeriesTest(ITestOutputHelper output) : HubTestBase(output
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             CreateHostAddress(), new LayoutAreaReference(BoundChart));
 
-        var chart = (ChartControl)(await stream.GetControlStream(BoundChart)
-            .Should().Within(10.Seconds()).Match(c => c is not null))!;
+        var chart = (await stream.GetControlStream(BoundChart)
+            .Should().Within(10.Seconds()).Match(c => c is not null))
+            .Should().BeOfType<ChartControl>().Subject;
         var seriesPointer = chart.Series.Should().BeOfType<JsonPointerReference>(
             "the area declares WHERE the series live, never the numbers").Subject;
         chart.Labels.Should().BeOfType<JsonPointerReference>();
@@ -102,16 +103,19 @@ public class BoundChartSeriesTest(ITestOutputHelper output) : HubTestBase(output
             .Should().Equal(7, 8);
 
         // The feed changes (a new row arrived). Patch the data entry the pointer names.
-        var replacement = JsonSerializer.SerializeToNode(Series(5, 6), options)!;
+        var replacement = JsonSerializer.SerializeToNode(Series(5, 6), options)
+            ?? throw new Xunit.Sdk.XunitException("the replacement series serialized to a JSON null");
+        Exception? updateFailure = null;
         stream.Update(ci =>
         {
             var patch = new JsonPatch(PatchOperation.Replace(JsonPointer.Parse(seriesPointer.Pointer), replacement));
             return stream.ToChangeItem(ci, patch.Apply(ci), patch, stream.StreamId);
-        }, null!);
+        }, ex => updateFailure = ex);
 
         Values(await bound.Should().Within(10.Seconds()).Match(
                 s => Values(s).SequenceEqual([5.0, 6.0]), "a bound chart FOLLOWS its feed"))
             .Should().Equal(5, 6);
+        updateFailure.Should().BeNull("the patch to the feed applied");
 
         // NEGATIVE CONTROL: the other entry was not touched, so its binding must not move.
         await other.Where(s => Values(s).SequenceEqual([5.0, 6.0])).Should().NotEmit(TimeSpan.FromSeconds(1),
