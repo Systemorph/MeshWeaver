@@ -485,12 +485,23 @@ public static class SpaceDeletion
         definition.TableMappings is { } mappings
         && mappings.Keys.Any(segment => segment.StartsWith('_') && path.Split('/').Contains(segment, StringComparer.Ordinal));
 
-    /// <summary>The complete direct-child listing that establishes whether <paramref name="path"/> exists. Pure.</summary>
+    /// <summary>
+    /// The complete listing that establishes whether <paramref name="path"/> exists: its parent's
+    /// direct children, or — for a TOP-LEVEL path (a space root), whose parent is the mesh root —
+    /// the path itself, read exactly. Either way the answer lists the path when it exists. Pure.
+    ///
+    /// <para>🚨 A top-level path is NEVER listed through its parent (MeshWeaver#5508). The parent is
+    /// the empty root, and <c>path: scope:children</c> names no partition: on a partitioned store it
+    /// is one <c>UNION ALL</c> over every partition schema (the lock-bomb shape the planner reports as
+    /// <c>[FanOut] UNANCHORED</c>), run to find ONE row that lives in exactly one schema — the one
+    /// the path's own first segment names. <c>path:X</c> anchors there.</para>
+    /// </summary>
     public static string ParentListingQuery(string path)
     {
         var separator = path.LastIndexOf('/');
-        var parent = separator < 0 ? "" : path[..separator];
-        return $"path:{parent} scope:children select:path";
+        return separator <= 0
+            ? $"path:{path} select:path"
+            : $"path:{path[..separator]} scope:children select:path";
     }
 
     /// <summary>The listing that establishes whether the space's <c>Admin/Partition</c> record exists. Pure.</summary>
