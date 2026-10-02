@@ -22,13 +22,13 @@ This page prepares the decision to close these paths. Nothing here enforces anyt
 | `AccessService.ImpersonateAsSystem` / `ImpersonateAsSystemFor` / `ImpersonateAsHub` | always |
 | `AccessService.SwitchAccessContext` / `SetContext` / `SetCircuitContext` / `SetHostIdentity` | when the new context is a platform principal (System or hub-shaped) |
 | `ImpersonationScopeExtensions.RunAsSystem` / `RunAsHub` / `RunAs` | at **composition**, against the code that composed it. `RunAs(resolver)` is checked when the scope opens, against the caller captured at composition |
-| `PostOptions.WithAccessContext` / `ImpersonateAsHub` | at `hub.Post`, against the code that set the option |
+| `PostOptions.WithAccessContext` / `ImpersonateAsHub` | at `hub.Post`, against the code that set the option. The log names the setter that was called (`PostOptions.WithAccessContext` or `PostOptions.ImpersonateAsHub`) |
 | `AccessContextScope.AsSystem` / `FromNode` (Mesh.Contract) | always for `AsSystem`. For `FromNode`, when the node's author resolves to a platform principal or the method falls back to System |
 | `ContentImportBuilder` / `SyncContentFilesBuilder` `.ImpersonateAsSystem()` / `.WithAccessContext(...)` | when the declared identity is a platform principal |
 
 **How a caller is classified.** The guard looks at the `AssemblyLoadContext` of the calling method's assembly:
 
-- **Platform:** the default context, or any context marked `IPlatformLoadContext` (for example, the Orleans modules context).
+- **Platform:** the default context, or a context marked `IPlatformLoadContext` **whose own type the default context loaded** (for example, the Orleans modules context). The marker interface is public, so implementing it proves nothing: a context type declared by in-mesh code lives in that code's own load context and is not honoured (`InMeshImpersonationGuard.IsPlatformLoadContext`; pinned by `Enforce_AForgedPlatformLoadContext_IsStillInMesh`, with the platform-declared marker as its control).
 - **In-mesh:** every other context. This includes `DynamicNode_{node path}` for a NodeType, `kernel-script-session` for scripts, `node-config-script:{path}` for configuration scripts, and any context the code built for itself.
 
 The fast path reads only the immediate caller (`Assembly.GetCallingAssembly()`, one frame). That keeps the cost on the hot platform paths at one frame. The guard walks the stack only when that frame is the BCL (reflection, or an Rx operator invoking a method group) or is in-mesh. The walk steps past the surface and the BCL to the first frame that decides.
@@ -121,17 +121,19 @@ These limits were measured, not reasoned. They are why `Enforce` on the runtime 
    - `IMessageDelivery.SetAccessContext(...)` followed by `hub.DeliverMessage(...)`.
    - `MeshQueryRequest.AsSystem()`, or any `UserId` value. This is an RLS bypass on reads, and the request carries the user id as plain data.
    - Any future API that accepts a context.
-4. **A gate's passthrough of a carried ordinary user.** The gate principal closes System and hub identities. A gate can still claim to be **any user**, a global admin included, because the trusted port passes a carried non-platform identity through.
+4. **A platform load context that in-mesh code instantiates.** `ModulesAssemblyLoadContext` is a public platform type with a public constructor and it resolves DLLs from a directory it is given. In-mesh code that creates one and loads a copy of itself through it is classified as platform, because the context's type is authentically the platform's. Measured 2026-10-02: no production code in core or MeshWeaver.Plugins creates this context (only two tests do; `MessageHubGrain` holds a field that is never assigned), so today the marker exempts nothing that runs. The compile-time check (option C) can close it for compiled code by adding the context type to the symbols it refuses; a host that starts loading modules through the context must decide then what it lets into that directory.
+5. **Reflection into the non-public setters.** `AccessService`'s private scope type and its unchecked core setter are not reachable by a compiled call from in-mesh code, but reflection by name reaches them. Option C lists this as open unless `System.Reflection` is banned there; option D closes it by construction.
+6. **A gate's passthrough of a carried ordinary user.** The gate principal closes System and hub identities. A gate can still claim to be **any user**, a global admin included, because the trusted port passes a carried non-platform identity through.
 
 ## Decision options
 
 | | Option | Closes | Cost / blast radius |
 |---|---|---|---|
 | **A** | Status quo: keep the broad-grant guard only | Broad grants only | Nothing breaks. In-mesh code keeps every other power System has |
-| **B** | **Runtime guard + gate principal (these drafts) → `Enforce`**, with `TrustedCode` = the package roots that need it (`Store`, `Hosting`, `Governance`, `Feedback`, `Essentials`, …) | Direct impersonation by user-authored NodeTypes and scripts in user partitions and Spaces; gate deliveries without a user | Low once the trust list matches the `LogOnly` inventory. Leaves limits 1–4 open, so it is a measurement and a speed bump, not a boundary |
+| **B** | **Runtime guard + gate principal (these drafts) → `Enforce`**, with `TrustedCode` = the package roots that need it (`Store`, `Hosting`, `Governance`, `Feedback`, `Essentials`, …) | Direct impersonation by user-authored NodeTypes and scripts in user partitions and Spaces; gate deliveries without a user | Low once the trust list matches the `LogOnly` inventory. Leaves limits 1–6 open, so it is a measurement and a speed bump, not a boundary |
 | **C** | **B + a compile-time check**: when the portal compiles in-mesh code, refuse (under Enforce) any **symbol reference** to an impersonation surface, `WellKnownUsers.System`/`SystemContext`, `IMessageDelivery.SetAccessContext` or `MeshQueryRequest.AsSystem`, unless the NodeType is trusted | Limits 1–3 for compiled code: the compiler sees the reference however the JIT emits the call. Reflection by name stays open unless `System.Reflection` is also banned there | Medium. It must report through `compilationStatus` and the warning ratchet, **never** through a `GeneralDiagnosticOption` in `EmitPipeline` (that would park types and stall a roll; see [In-Mesh Warning Standard](/Doc/Architecture/InMeshWarningStandard)). It needs the same trust list |
 | **D** | **Sealed platform principal**: System and hub contexts carry an unforgeable seal (an object only platform assemblies can mint); `SecurityService` treats an unsealed `system-security` as an ordinary, grant-less id; transports re-seal on ingress | Every forgery path, by construction, including hand-built contexts and reflection | High. Every serialization hop (the Orleans silo boundary, packaging) must re-seal; it touches the identity model fleet-wide |
-| **E** | Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 4 | Medium, and confined to Plugins' gRPC registry |
+| **E** | Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 6 | Medium, and confined to Plugins' gRPC registry |
 
 **Decision: B now, in `LogOnly`, then C and E.** The order is binding:
 

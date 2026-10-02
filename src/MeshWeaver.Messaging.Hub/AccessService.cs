@@ -185,7 +185,10 @@ public class AccessService
     [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetContext(AccessContext? accessContext)
     {
-        ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetContext), accessContext);
+        // Per-message hot path: capture the caller only when a platform principal is being
+        // installed (and the guard is on) — an ordinary user's delivery pays one predicate.
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetContext), accessContext);
         SetContextCore(accessContext);
     }
 
@@ -218,7 +221,8 @@ public class AccessService
     [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetCircuitContext(AccessContext? accessContext)
     {
-        ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetCircuitContext), accessContext);
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetCircuitContext), accessContext);
         var prev = circuitContext.Value?.ObjectId;
         circuitContext.Value = accessContext;
 
@@ -249,7 +253,8 @@ public class AccessService
     [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetHostIdentity(AccessContext? accessContext)
     {
-        ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetHostIdentity), accessContext);
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetHostIdentity), accessContext);
         var prev = hostIdentity?.ObjectId;
         hostIdentity = accessContext;
         // Keep the AsyncLocal in step for the calling flow, so a host that sets its identity
@@ -336,7 +341,8 @@ public class AccessService
     [MethodImpl(MethodImplOptions.NoInlining)]
     public IDisposable SwitchAccessContext(AccessContext? newContext)
     {
-        ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SwitchAccessContext), newContext);
+        if (ImpersonationGuard.Applies(newContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SwitchAccessContext), newContext);
         return new AccessContextScope(this, newContext);
     }
 

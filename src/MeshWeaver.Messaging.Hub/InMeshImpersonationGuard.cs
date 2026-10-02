@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.Extensions.Configuration;
@@ -29,6 +30,11 @@ public static class InMeshImpersonationMode
 /// Marks an <see cref="AssemblyLoadContext"/> whose assemblies are PLATFORM code even though they
 /// do not live in the default context — e.g. the Orleans grain modules context. Every other
 /// non-default context is treated as in-mesh code (see <see cref="InMeshImpersonationGuard"/>).
+///
+/// <para>🚨 The interface is public, so implementing it proves nothing by itself. The guard honours
+/// the marker only when the context's OWN TYPE was loaded by the default context — i.e. the platform
+/// declared it (<see cref="InMeshImpersonationGuard.IsPlatformLoadContext"/>). A context type that
+/// in-mesh code declares, marker or not, is in-mesh.</para>
 /// </summary>
 public interface IPlatformLoadContext;
 
@@ -171,7 +177,7 @@ public sealed class InMeshImpersonationGuard
     /// <param name="principal">The identity being installed.</param>
     public void Check(Assembly immediateCaller, string surface, AccessContext? principal)
     {
-        if (Mode == InMeshImpersonationMode.Off || !IsPlatformPrincipal(principal))
+        if (!Applies(principal))
             return;
 
         // Fast path: the caller is platform code that is not the BCL, or is this assembly (whose
@@ -193,27 +199,50 @@ public sealed class InMeshImpersonationGuard
         var verdict = trusted ? "TRUSTED"
             : Mode == InMeshImpersonationMode.Enforce ? "REFUSED"
             : "WOULD REFUSE";
-        Log(verdict, surface, principal!, caller, trusted);
+        Log(verdict, surface, principal, caller, trusted);
         if (!trusted && Mode == InMeshImpersonationMode.Enforce)
             throw new InMeshImpersonationRefusedException(surface, caller);
     }
 
+    /// <summary>
+    /// True when <see cref="Check"/> can have any effect for <paramref name="principal"/>: the mode
+    /// is not <see cref="InMeshImpersonationMode.Off"/> and the principal is a platform one. The
+    /// per-message setters (<see cref="AccessService.SetContext"/> and its siblings) ask this FIRST,
+    /// so the delivery hot path pays the caller capture (<see cref="Assembly.GetCallingAssembly"/>)
+    /// only when a platform principal is actually being installed — never for an ordinary user.
+    /// </summary>
+    public bool Applies([NotNullWhen(true)] AccessContext? principal) =>
+        Mode != InMeshImpersonationMode.Off && IsPlatformPrincipal(principal);
+
     /// <summary>System or a hub-shaped principal. Pure.</summary>
-    public static bool IsPlatformPrincipal(AccessContext? principal) =>
+    public static bool IsPlatformPrincipal([NotNullWhen(true)] AccessContext? principal) =>
         principal is not null
         && (principal.IsHub || AccessService.IsPlatformPrincipal(principal.ObjectId));
 
     /// <summary>
     /// True when <paramref name="assembly"/> was loaded outside the default context and outside
-    /// every <see cref="IPlatformLoadContext"/> — i.e. it is code the mesh compiled at runtime. Pure.
+    /// every platform-declared <see cref="IPlatformLoadContext"/> — i.e. it is code the mesh
+    /// compiled at runtime. Pure.
     /// </summary>
     public static bool IsInMeshAssembly(Assembly assembly)
     {
         var context = AssemblyLoadContext.GetLoadContext(assembly);
         return context is not null
                && !ReferenceEquals(context, AssemblyLoadContext.Default)
-               && context is not IPlatformLoadContext;
+               && !IsPlatformLoadContext(context);
     }
+
+    /// <summary>
+    /// True when <paramref name="context"/> carries the <see cref="IPlatformLoadContext"/> marker
+    /// AND the marker is authentic: the context's own type lives in an assembly the DEFAULT context
+    /// loaded. The marker interface is public, so a NodeType source can declare a context that
+    /// implements it and load a copy of itself there; that type lives in the NodeType's own
+    /// (non-default) context, so it is not honoured — the same origin test <c>IsTransparent</c>
+    /// applies to an assembly merely NAMED <c>System.*</c>. Pure.
+    /// </summary>
+    public static bool IsPlatformLoadContext(AssemblyLoadContext context) =>
+        context is IPlatformLoadContext
+        && ReferenceEquals(AssemblyLoadContext.GetLoadContext(context.GetType().Assembly), AssemblyLoadContext.Default);
 
     /// <summary>
     /// Classifies <paramref name="assembly"/> as a caller, naming its load context. Pure.

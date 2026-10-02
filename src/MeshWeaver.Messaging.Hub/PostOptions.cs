@@ -122,7 +122,12 @@ public record PostOptions(Address Sender)
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public PostOptions WithAccessContext(AccessContext context)
-        => this with { ImpersonateContext = context, ImpersonationRequestedBy = Assembly.GetCallingAssembly() };
+        => this with
+        {
+            ImpersonateContext = context,
+            ImpersonationRequestedBy = Assembly.GetCallingAssembly(),
+            ImpersonationSurface = nameof(WithAccessContext),
+        };
 
     /// <summary>
     /// The assembly that asked for <see cref="ImpersonateContext"/> — read where the delivery is
@@ -130,6 +135,13 @@ public record PostOptions(Address Sender)
     /// Null when the framework set the context itself (a response stamped with its request's user).
     /// </summary>
     internal Assembly? ImpersonationRequestedBy { get; init; }
+
+    /// <summary>
+    /// Which setter stamped <see cref="ImpersonateContext"/> — <see cref="WithAccessContext"/> or
+    /// <see cref="ImpersonateAsHub()"/> — so the guard's log names the surface that was really
+    /// called. Set together with <see cref="ImpersonationRequestedBy"/>.
+    /// </summary>
+    internal string? ImpersonationSurface { get; init; }
 
     /// <summary>
     /// Instructs the post pipeline to use the hub's own address as the identity
@@ -157,6 +169,7 @@ public record PostOptions(Address Sender)
             IsHub = true
         },
         ImpersonationRequestedBy = requestedBy,
+        ImpersonationSurface = nameof(ImpersonateAsHub),
     };
 
     internal string MessageId { get; init; } = Guid.NewGuid().AsString();

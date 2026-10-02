@@ -49,11 +49,39 @@ public static class InMeshCode
     /// <summary>Reaches ImpersonateAsSystem through REFLECTION, so the immediate caller is the BCL.</summary>
     public static string? ImpersonateThroughReflection(AccessService access)
     {
-        var scope = (IDisposable)typeof(AccessService)
-            .GetMethod(nameof(AccessService.ImpersonateAsSystem), Type.EmptyTypes)!
-            .Invoke(access, null)!;
+        if (typeof(AccessService).GetMethod(nameof(AccessService.ImpersonateAsSystem), Type.EmptyTypes)
+                is not { } surface
+            || surface.Invoke(access, null) is not IDisposable scope)
+            throw new InvalidOperationException("AccessService.ImpersonateAsSystem() did not return a scope");
         using (scope)
             return access.Context?.ObjectId;
+    }
+
+    /// <summary>
+    /// The forgery: declares a load context that CLAIMS to be the platform's
+    /// (<see cref="ClaimsToBePlatformContext"/>), loads a further copy of this assembly into it and
+    /// opens a System scope through that copy. Returns the identity the copy installed.
+    /// </summary>
+    public static string? ImpersonateThroughAContextThatClaimsToBePlatform(AccessService access)
+    {
+        var claimed = new ClaimsToBePlatformContext();
+        try
+        {
+            var copy = claimed.LoadFromAssemblyPath(typeof(InMeshCode).Assembly.Location);
+            if (copy.GetType(typeof(InMeshCode).FullName ?? nameof(InMeshCode), throwOnError: true)
+                    ?.GetMethod(nameof(ImpersonateAsSystem)) is not { } method)
+                throw new InvalidOperationException("the copy has no InMeshCode.ImpersonateAsSystem");
+            return method.Invoke(null, [access]) as string;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw;
+        }
+        finally
+        {
+            claimed.Unload();
+        }
     }
 
     /// <summary>Installs System with the raw setter, the shape a hand-rolled scope would use.</summary>
@@ -62,6 +90,18 @@ public static class InMeshCode
         access.SetContext(new AccessContext { ObjectId = AccessService.SystemObjectId, Name = AccessService.SystemObjectId });
         GC.KeepAlive(access);
     }
+}
+
+/// <summary>
+/// A load context that carries the <see cref="IPlatformLoadContext"/> marker. Declared by the
+/// PLATFORM (this type loaded in the default context) the marker is honoured; declared by in-mesh
+/// code (this type loaded from a copy in a NodeType's context) it is a forgery and is not.
+/// </summary>
+public sealed class ClaimsToBePlatformContext()
+    : AssemblyLoadContext(ContextName, isCollectible: true), IPlatformLoadContext
+{
+    /// <summary>The name the claimed context reports as the code owner when it is not honoured.</summary>
+    public const string ContextName = "claims-to-be-platform";
 }
 
 /// <summary>
@@ -96,14 +136,18 @@ public sealed class InMeshImpersonationGuardTest : IDisposable
         contexts.Add(context);
         var copy = context.LoadFromAssemblyPath(typeof(InMeshCode).Assembly.Location);
         AssemblyLoadContext.GetLoadContext(copy).Should().BeSameAs(context, "the copy must really live in the in-mesh context");
-        return copy.GetType(typeof(InMeshCode).FullName!, throwOnError: true)!;
+        if (copy.GetType(typeof(InMeshCode).FullName ?? nameof(InMeshCode), throwOnError: true) is not { } inMesh)
+            throw new InvalidOperationException("the copy does not contain InMeshCode");
+        return inMesh;
     }
 
     private static object? Call(Type inMesh, string method, params object[] args)
     {
         try
         {
-            return inMesh.GetMethod(method)!.Invoke(null, args);
+            if (inMesh.GetMethod(method) is not { } target)
+                throw new InvalidOperationException($"InMeshCode has no method '{method}'");
+            return target.Invoke(null, args);
         }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {
@@ -163,9 +207,58 @@ public sealed class InMeshImpersonationGuardTest : IDisposable
         var refused = ((Action)(() => Call(inMesh, nameof(InMeshCode.ImpersonateThroughReflection), access)))
             .Should().Throw<TargetInvocationException>()
             .Which.InnerException as InMeshImpersonationRefusedException;
-        (refused is not null).Should().BeTrue("the refusal is what the reflected call threw");
-        refused!.Caller.Method.Should().Contain(nameof(InMeshCode.ImpersonateThroughReflection));
+        if (refused is not { } refusal)
+        {
+            Assert.Fail("the refusal is what the reflected call threw");
+            return;
+        }
+        refusal.Caller.Method.Should().Contain(nameof(InMeshCode.ImpersonateThroughReflection));
         access.Context.Should().BeNull();
+    }
+
+    [Fact]
+    public void Enforce_AForgedPlatformLoadContext_IsStillInMesh()
+    {
+        // IPlatformLoadContext is a public interface. In-mesh code that declares a context
+        // implementing it and calls through a copy of itself loaded there must NOT be read as the
+        // platform: the context's own type lives in the NodeType's context, so the marker is forged.
+        var access = Access(InMeshImpersonationMode.Enforce);
+        var inMesh = InMeshCopy(UserNodeType);
+
+        ((Action)(() => Call(inMesh, nameof(InMeshCode.ImpersonateThroughAContextThatClaimsToBePlatform), access)))
+            .Should().Throw<InMeshImpersonationRefusedException>()
+            .Which.Caller.CodeOwner.Should().Be(ClaimsToBePlatformContext.ContextName);
+        access.Context.Should().BeNull("a refused impersonation installs nothing");
+    }
+
+    [Fact]
+    public void Enforce_APlatformDeclaredLoadContext_IsPlatform()
+    {
+        // CONTROL for the forgery test: the IDENTICAL context type and the identical call, with the
+        // context type loaded by the default context — the marker is the platform's own, so code
+        // loaded through it is platform code and may impersonate. Without this, a guard that simply
+        // ignored the marker would pass the forgery test too.
+        var access = Access(InMeshImpersonationMode.Enforce);
+
+        InMeshCode.ImpersonateThroughAContextThatClaimsToBePlatform(access)
+            .Should().Be(AccessService.SystemObjectId);
+        access.Context.Should().BeNull("the scope was disposed");
+    }
+
+    [Fact]
+    public void LogOnly_AForgedPlatformLoadContext_IsLogged()
+    {
+        // The mode that ships: the forgery is allowed, and it is NAMED — before the marker was
+        // authenticated the fast path returned without a line.
+        var logs = new CapturingLoggerFactory();
+        var access = Access(InMeshImpersonationMode.LogOnly, logs);
+        var inMesh = InMeshCopy(UserNodeType);
+
+        Call(inMesh, nameof(InMeshCode.ImpersonateThroughAContextThatClaimsToBePlatform), access)
+            .Should().Be(AccessService.SystemObjectId);
+
+        logs.Lines.Should().ContainSingle(l => l.Contains(InMeshImpersonationGuard.LogPrefix))
+            .Which.Should().Contain("WOULD REFUSE").And.Contain(ClaimsToBePlatformContext.ContextName);
     }
 
     [Fact]
