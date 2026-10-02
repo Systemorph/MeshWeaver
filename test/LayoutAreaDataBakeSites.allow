@@ -15,12 +15,11 @@ samples/Graph/Data/ACME/Project/Source/ProjectLayoutAreas.cs	5
 samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	7
 src/MeshWeaver.GitSync/GitHubSyncSettingsTab.cs	1
 src/MeshWeaver.Graph/ExportLayoutArea.cs	1
-src/MeshWeaver.Graph/GlobalSettingsLayoutArea.cs	1
 src/MeshWeaver.Graph/MarkdownNotebookLayoutArea.cs	1
 src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	1
-src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	9
+src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	5
 src/MeshWeaver.Graph/OverviewLayoutArea.cs	1
-src/MeshWeaver.Graph/SettingsLayoutArea.cs	3
+src/MeshWeaver.Graph/SettingsLayoutArea.cs	2
 src/MeshWeaver.Graph/UserActivityLayoutAreas.cs	1
 src/MeshWeaver.Layout/Domain/LayoutHelperExtensions.cs	2
 src/MeshWeaver.Layout/EditorExtensions.cs	2
