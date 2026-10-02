@@ -139,6 +139,20 @@ Still to convert on the default page: `Overview` and `Data` (`BuildDetailsConten
 - **A deferred slot** already has one: `NamedAreaView` draws the `SpinnerType` of its `LayoutAreaControl` / `NamedAreaControl` until the slot's first control arrives — `SpinnerType.Skeleton` is the ghost-box shape, and it is what a template's data-dependent sub-area should ask for.
 - **A bound field** draws EMPTY until its value arrives (`MeshNodeBindingExtensions.Bind` emits `null` for "absent / not yet"), and the per-control shape is not yet a skeleton. 🚨 That gap is a PLATFORM gap, to be closed once in `BlazorView` (render the skeleton, and keep an editable control read-only, until the first bound emission) — never per view. An editor bound by pointer accepts input before its first value has arrived; the window is short (the cache replays a held node at once) but it is real, and closing it in the base view closes it for every bound control at the same time.
 
+### The authoring samples — what a NodeType author copies
+
+The in-mesh samples are converted, so copy them rather than the framework areas still on the inventory:
+
+| Sample | Shape it shows |
+|---|---|
+| `samples/Graph/Data/Northwind/{Customer,Supplier}` | Stored fields only — every value a `JsonPointerReference` into the content, `DataContext = GetMeshNodeDataContext(path)`; the area is `(host, _) => OverviewTemplate(host.Hub.Address.ToString())` |
+| `samples/Graph/Data/Northwind/Employee` · `…/Product` | Stored fields bound by pointer **and** a value only the hub can compute (dates in the viewer's format, a stock status) — a FEED function that builds no control, bound with `feed.Bind(x => Controls.Markdown(x), id)` (`Template.Bind`) |
+| `samples/Graph/Data/{Northwind,ACME}/Article` | Title and body as pointers into the node; the composed metadata line as a feed; the `Thumbnail` area as `new MeshNodeThumbnailControl(path, path)` — the thumbnail view reads name, abstract and image itself |
+| `samples/Graph/Data/Northwind/ReportsCatalog` | Children as `Controls.MeshSearch.WithHiddenQuery(…)` — the GUI runs the query; the hub reads neither the catalog nor its reports |
+| `samples/Graph/Data/PythonDemo/PrimeReport` | A whole view that must compute (a Python run) — one markdown control bound to `/data`, fed by an `IIoPool`-backed feed |
+
+Each sample's `Test/` folder asserts its template on the mesh: the template is built from a PATH (and, for a fed control, an `Observable.Never` feed — the template must be whole while its feed is silent), and `LayoutTemplate.DeferredViews(template)` must be empty — `LayoutTemplate` (`MeshWeaver.Layout`) is the platform's reading of a control tree, public so in-mesh C# can use it. The cases also pin which pointers are bound against which context. A feed's own subscription is opened by `Template.Bind`'s build-up, so it belongs to the rendered area and ends with it; a feed reports a failure as text and a log line, never by going quiet.
+
 ### The ratchet
 
 `test/MeshWeaver.Documentation.Test/LayoutAreaDataBakeRatchetGuard` counts, per file under `src/`, `memex/` and `samples/`, the layout-area units (methods, local functions, lambdas taking a `LayoutAreaHost`) that both READ data and BUILD controls. The seeded inventory is `test/LayoutAreaDataBakeSites.allow`; it may only shrink. Converting an area means lowering its line (and `TotalBudget`) in the same change. It is a text heuristic, and it says so: a load reached through another file's helper is missed, and an area that reads data only to choose its STRUCTURE (a permission gate) is counted — so the file is an inventory to work down, not a verdict on every line.
@@ -288,6 +302,32 @@ Mechanics (so you know what's load-bearing):
 - A few read-only display controls (the `[Dimension]` / options / formatted-date toggle *labels*) derive their text from the layout-area `/data` stream rather than a value pointer. When you node-bind a toggleable form, keep `/data/{dataId}` as a **one-way live projection** of the node content (`GetMeshNodeStream(path).Select(n => n.Content).Subscribe(c => host.UpdateData(dataId, c))`) so those labels stay correct. This is a pure read mirror — it follows the node, has no save loop, and never writes back, so it is NOT the forbidden replicate-then-save pattern.
 - **🚨 Editability is the PRODUCING AREA's decision, and it is part of the structure.** A node-bound field writes as the viewer, and the owning hub refuses a viewer without `Update` on the node. So the area that emits the control resolves `hub.GetEffectivePermissions(path)` and sets `Readonly = !canUpdate` (or `CanEdit` on the editors that carry it) — never hands a public visitor a box that invites typing its write can only refuse. The course wish books are the reference shape (`AgenticPrimer/WishBook` → `WishBookAreas.Write`, Education#363). **A write that is refused anyway** (grants changed while the page was open, or an area that forgot the check) reaches the view as an `UnauthorizedAccessException`; `BlazorView.UpdatePointer` classifies it as a REFUSAL, not a fault: the person sees the localized `ui.fieldWriteRefused` sentence and the log carries a Warning, instead of the raw English exception in the error modal and an Error line the incident filer turns into a ticket (#5600).
 
+## Binding a rich control to a node field
+
+The Monaco controls carry their text in a bindable slot too, so an area that shows or edits a node's text renders the control AT ONCE and never loads the node. Each has a `BindToNode` builder that sets a relative pointer and the node-bound DataContext above in one call:
+
+| Control | Bindable slot(s) | Builder | What the renderer does |
+|---|---|---|---|
+| `CodeEditorControl` | `Value` | `.BindToNode(nodePath, "instructions")` | reads the field live off the node stream, writes each edit straight back to THAT field (per-field read-modify-write) |
+| `DiffEditorControl` | `Original`, `Modified` | `.BindToNode(nodePath, "baselineText", "text")` | binds both panes; redraws when either field changes. Read-only |
+
+```csharp
+// ✅ Agent Edit — the instructions editor IS the node field. No /data copy, no Save button.
+stack.WithView(new CodeEditorControl().WithLanguage("markdown").WithHeight("400px")
+    .BindToNode(agentPath, "instructions"));
+
+// ✅ Post Changes — the diff compares two fields of the post, live.
+stack.WithView(new DiffEditorControl { Language = "plaintext", Height = "560px" }
+    .BindToNode(postPath, "baselineText", "text"));
+```
+
+- `bindContent: false` resolves the field against the node's TOP-LEVEL fields (`Description`, `Name`) instead of its `Content`.
+- The field is a RELATIVE JSON pointer, not a bare property name: `"instructions"`, or a `/`-separated path to a nested field (`"review/notes"`). A property whose NAME contains `/` or `~` is written escaped (`~1`, `~0`); each segment resolves case-insensitively. A leading `/` would make it absolute — bound to the layout area's data instead of the node — so `BindToNode` refuses it (`ArgumentException`), and an empty field with it.
+- A pane whose text is not on that node: set `Original` / `Modified` to an ABSOLUTE pointer (`new JsonPointerReference("/data/previousVersion")`) — absolute pointers always read the layout area's data, even under a node-bound DataContext — and feed that entry from a stream.
+- `DiffEditorControl.OriginalContent` / `ModifiedContent` stay as LITERAL strings for text the area genuinely holds already; `Original` / `Modified` win when set.
+- `CodeEditorControl.WithAutoSave(nodePath)` remains the Code-node shape (it writes `CodeConfiguration.Code`); `BindToNode` is the general one — any field, any node. **An editor has ONE write target, so the two are mutually exclusive:** `BindToNode` clears an auto-save address set earlier, and `WithAutoSave` on a node-bound editor throws `InvalidOperationException` (dropping the binding instead would leave the editor with no text). Never set `AutoSaveAddress` next to a node-bound `Value` through an initializer or a `with` — both writes would fire on every edit.
+- Pinned by `NodeBoundEditorControlsTest` (MeshWeaver.Graph.Test): the bound value renders, follows a change made by someone else, an edit writes only its field; an absolute pointer under the node-bound context is NOT node-bound while its relative sibling is; the field is pointer syntax (nested, escaped); auto-save and a node binding exclude each other — and the negative controls (a baked literal has nothing to follow; a pointer against the wrong root stays empty through the change).
+
 ## Anti-patterns — never do these
 
 | ❌ Wrong | Why | ✅ Right |
@@ -301,6 +341,28 @@ Mechanics (so you know what's load-bearing):
 | `workspace.GetRemoteStream<MeshNode, MeshNodeReference>(addr, ...)` directly in a Blazor view | Opens a per-view upstream handle; bypasses `IMeshNodeStreamCache`; multiplies subscriptions; writes through the cache aren't observed | `Hub.GetMeshNodeStream(path)` — shared, write-coherent |
 | `host.UpdateData(id, node.Content)` + `GetDataStream(id).Debounce().Subscribe(...GetMeshNodeStream(path).Update...)` to edit node content (a.k.a. `SetupAutoSave`) | Replicate-then-save: two stores drift, the save loop races the echo and clobbers unedited fields | `MeshNodeContentEditorControl.ForType(path, typeof(T))` — the GUI view binds to `GetMeshNodeStream(path)` and writes per-field via `.Update(...)`; no replica, no save subscription |
 | A "Save" button that reads `/data/{id}` and writes the node | The edit should already be on the node via the bound stream | Node-bound editor; edits persist on change through `GetMeshNodeStream(path).Update(...)` |
+
+### The "load, then bake" shape is ratcheted in every repository
+
+A layout area that reads data on its hub (a node stream, a query, a workspace stream) and builds controls out of the values is counted, and the count may only go down:
+
+- **Core**: the test `LayoutAreaDataBakeRatchetGuard` checks `test/LayoutAreaDataBakeSites.allow`.
+- **Node repositories** (MeshWeaver.Plugins, .Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm, .FundReporting): the shared `node-repo-validate.yml` lane fetches `.github/scripts/check-layout-area-data-bake.py` at its scripts ref. The script runs against the caller's `layout-area-data-bake.allow`, a `<file><TAB><units>` list at the repository root. The script ports the core guard's scanner line for line, and its self-test plants the guard's own cases.
+
+The satellite allow-file is shrink-only. These verdicts fail the `Validate node repos` check:
+
+| Verdict | Meaning |
+|---|---|
+| `NEW` | A file bakes data and has no line in the allow-file. |
+| `MORE` | A file holds more baking units than its line allows. |
+| `MISSING` | The repository has no allow-file. This is red, never skipped. |
+| `ADDED` | On a pull request, the tree holds more baking units than the base did. Adding an area together with its line is therefore caught. Moving an existing unit to another file keeps the total, so it passes. |
+| `GREW` / `RAISED` | On a pull request, the allow-file's total, or one of its lines, is higher than in the base's copy. |
+| `STALE` | On a pull request, a file this PR converted now holds fewer units than its line. Lower the line or delete it in the same PR. |
+
+A stale line that the pull request did not cause is a warning, not a failure. This happens when the line was already above its file at the base, for example after two converting PRs merged at the same time. Failing it would turn every unrelated PR red. `ADDED` already stops anyone from re-using the spare allowance, and any PR may carry the one-line tidy.
+
+To print the current inventory in allow-file form, run `python3 <core>/.github/scripts/check-layout-area-data-bake.py --root . --report`.
 
 ---
 
@@ -593,6 +655,42 @@ public record MyForm
 ```
 
 ---
+
+## Node cards: a bindable title and description
+
+`MeshNodeThumbnailControl` and `MeshNodeCardControl` take their caption from data without the area loading anything. `NodePath` still names the node the card shows (its avatar, its click target); `TitleBinding` / `DescriptionBinding` caption it from a pointer:
+
+```csharp
+// ✅ An access-assignment row: the SUBJECT's card, captioned from the ASSIGNMENT — live.
+new MeshNodeThumbnailControl(subjectPath, subjectId)
+    .BindToNode(assignmentPath, titleField: "displayName", descriptionField: "note");
+
+// ✅ A card whose subtitle follows its own node's top-level Description.
+new MeshNodeCardControl(path).BindToNode(path, titleField: null, descriptionField: "Description", bindContent: false);
+
+// ✅ Or any pointer, e.g. into a fed /data entry.
+new MeshNodeCardControl(path).BindTitle(new JsonPointerReference(LayoutAreaReference.GetDataPointer("caption")));
+```
+
+The controls carry the binding; the card views draw it. The precedence is the renderers' contract — a bound value that resolves non-empty wins over the literal `Title`/`Description` and over the node's own name, and while it has no value the card falls back to them, so the literal is the loading shape. That half ships with the card views (the Blazor `MeshNodeThumbnailView` / `MeshNodeCardView` and the React card, MeshWeaver.Plugins#2677) and is pinned there; a portal whose views predate it ignores the slots and shows the literal title and the node's name. The pointer is read under the VIEWER's identity through the same node-bound seam every form control uses (`MeshNodeBindingExtensions.Bind` → `GetMeshNodeStream`, whose per-viewer gate refuses a viewer without Read on that node), so binding a caption to a node never shows its fields to a viewer who cannot read it.
+
+`FromNode(node, …)` remains the shape for a node the caller ALREADY holds (a row of a query result) — never load a node in order to call it. `NodeBoundCardControlsTest` (MeshWeaver.Graph.Test) pins the control half: the pointers resolve through the renderer seam and follow a change, `FromNode` carries no binding, a change to a different node does not reach the card, and pointers and literals survive the wire (a literal string arrives as a `string`).
+
+## Charts: series and labels are already bindable
+
+`ChartControl.Series` and `ChartControl.Labels` are `object?` slots that both renderers resolve through the generic binding (Blazor `RadzenChartView` via `DataBind`, React `chart.tsx` via `useResolve`) — so a chart area is a template today. Declare the chart with pointers, and feed the data entry from a stream:
+
+```csharp
+// ✅ The chart renders at once; the series follow the feed.
+stream.Select(rows => BuildSeries(rows)).Subscribe(series => host.UpdateData("economics", series));
+return new ChartControl
+{
+    Series = new JsonPointerReference(LayoutAreaReference.GetDataPointer("economics")),
+    Labels = new JsonPointerReference(LayoutAreaReference.GetDataPointer("economicsLabels")),
+}.WithTitle(host.Localize("<your title key>"));
+```
+
+The bound value must be the WHOLE series list (`ImmutableList<ChartSeries>`), and its series types must be registered on the hub that receives them — an unregistered `BarSeries` drops to its base and draws empty. Pinned by `BoundChartSeriesTest` (MeshWeaver.Layout.Test): the series render from the feed, follow a change to it, and a pointer to a different entry does not move.
 
 # Best Practices
 
