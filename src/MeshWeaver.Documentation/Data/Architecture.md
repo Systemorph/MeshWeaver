@@ -410,6 +410,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The /api/content 503](ContentRoute503) — three causes with different fixes, why the third wears the first's signature, and the black-box discriminator that needs no log line
 - [Refused Replies During Teardown](RefusedRepliesDuringTeardown) — every failure route answers the SENDER, which for a reply is the responder; the answer the caller is parked on is dropped with nobody told
 - [Refusing a Lost User Action](RefusingALostUserAction) — a click whose stream is gone is refused out loud instead of dropped as churn; why "deliver it anyway" is not implementable as stated
+- [Input From the Subscriber](InputFromTheSubscriber) — a layout area is rendered once per subscriber, and its stream accepts a click, a blur, a dialog dismissal or an edited value only from the identity it was subscribed under; anything else is refused with an answer
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
 - [The Bake Gate Only Stalls a Roll](TheBakeGateOnlyStallsARoll) — a type that never built was read as a regression, a refused pod could not record the failure, and a restarted pod of the serving image refused itself until nothing served; a regression now needs a working build from another, older image, and an image that has served here never refuses itself
