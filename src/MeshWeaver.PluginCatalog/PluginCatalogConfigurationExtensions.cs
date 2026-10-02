@@ -311,6 +311,12 @@ public static class PluginCatalogConfigurationExtensions
         => typeRegistry
             .WithType(typeof(PackageManifest), nameof(PackageManifest))
             .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
+            // The catalog template's bound rows (CatalogLayoutAreas.CatalogTemplate) — written to the
+            // area's /data and read back from a row-scoped click with RowAs<T>().
+            .WithType(typeof(CatalogPageView), nameof(CatalogPageView))
+            .WithType(typeof(CatalogTileRow), nameof(CatalogTileRow))
+            .WithType(typeof(CatalogCardRow), nameof(CatalogCardRow))
+            .WithType(typeof(CatalogOrphanRow), nameof(CatalogOrphanRow))
             .WithType(typeof(PluginManifest), nameof(PluginManifest))
             .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
             .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))

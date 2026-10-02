@@ -22,6 +22,5 @@ src/MeshWeaver.Graph/UserActivityLayoutAreas.cs	1
 src/MeshWeaver.Layout/Domain/LayoutHelperExtensions.cs	2
 src/MeshWeaver.Layout/EditorExtensions.cs	2
 src/MeshWeaver.Layout/Views/DataPathViews.cs	1
-src/MeshWeaver.PluginCatalog/CatalogLayoutAreas.cs	1
 src/MeshWeaver.PluginCatalog/CouponAdminSettingsTab.cs	1
 src/MeshWeaver.PluginCatalog/InstanceGrantAdminSettingsTab.cs	2
