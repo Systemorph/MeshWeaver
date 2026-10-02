@@ -171,10 +171,18 @@ public static partial class CatalogLayoutAreas
     /// <param name="Installable">The packages whose card currently offers Install / Update, by id.</param>
     /// <param name="Policies">The current update policy of each package whose card offers the policy row, by id.</param>
     /// <param name="RemovableOrphans">The orphaned records whose card currently offers Remove.</param>
+    /// <param name="ViewerId">
+    /// The viewer these offers were computed FOR — the id the global-admin flag behind
+    /// <paramref name="Policies"/> and <paramref name="RemovableOrphans"/> was evaluated on. Null
+    /// when nobody is signed in. 🚨 The two administrator actions run as System, so the action
+    /// itself verifies the acting identity: it acts only when the identity acting is this viewer
+    /// (<see cref="ClickedByThePagesViewer"/>), a platform administrator.
+    /// </param>
     internal sealed record CatalogActionContext(
         IPackageSource? Source, string SourceRef, IReadOnlyList<PackageManifest> Available,
         IReadOnlySet<string> KnownInstalled, ImmutableDictionary<string, PackageManifest> Installable,
-        ImmutableDictionary<string, PackageUpdatePolicy> Policies, ImmutableHashSet<string> RemovableOrphans)
+        ImmutableDictionary<string, PackageUpdatePolicy> Policies, ImmutableHashSet<string> RemovableOrphans,
+        string? ViewerId = null)
     {
         /// <summary>Before anything has rendered: nothing is on offer.</summary>
         public static readonly CatalogActionContext None = new(
@@ -387,6 +395,13 @@ public static partial class CatalogLayoutAreas
             || currentPolicy == policy)
             return Task.CompletedTask;
         var logger = Logger(ctx.Host);
+        if (!ClickedByThePagesViewer(ctx.Host, page))
+        {
+            logger?.LogWarning(
+                "Catalog: update-policy click on {Id} refused — it was not made by the viewer this page was rendered for.",
+                row.Id);
+            return Task.CompletedTask;
+        }
         PackageInstaller.SetUpdatePolicy(ctx.Hub, row.Id, policy, logger)
             .Subscribe(
                 _ => { },
@@ -398,10 +413,45 @@ public static partial class CatalogLayoutAreas
     /// (an orphan, a global administrator viewing).</summary>
     internal static Task RemoveClicked(LayoutAreaHost host, UiActionContext ctx, CatalogActionContext page)
     {
-        if (ctx.RowAs<CatalogOrphanRow>() is { Id.Length: > 0 } row && page.RemovableOrphans.Contains(row.Id))
-            RemoveInstallRecord(host, row.Id);
+        if (ctx.RowAs<CatalogOrphanRow>() is not { Id.Length: > 0 } row || !page.RemovableOrphans.Contains(row.Id))
+            return Task.CompletedTask;
+        if (!ClickedByThePagesViewer(host, page))
+        {
+            Logger(host)?.LogWarning(
+                "Catalog: Remove click on orphaned record {Id} refused — it was not made by the viewer this page was rendered for.",
+                row.Id);
+            return Task.CompletedTask;
+        }
+        RemoveInstallRecord(host, row.Id);
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Whether the click being handled was made by the viewer <paramref name="page"/>'s offers were
+    /// computed for. The click's identity is the ambient one of its delivery (the same reading
+    /// <c>InstallPackage</c> takes as "who authorized the install"); the page's is
+    /// <see cref="CatalogActionContext.ViewerId"/>.
+    ///
+    /// <para>🚨 The two administrator actions execute as System, so nothing downstream can refuse
+    /// them: the action verifies, here, that the acting identity is the platform administrator the
+    /// offers were computed for.</para>
+    /// </summary>
+    /// <param name="host">The layout area host handling the click.</param>
+    /// <param name="page">The server's current view of the page.</param>
+    /// <returns>True only when a signed-in viewer rendered the page and the same identity clicked.</returns>
+    internal static bool ClickedByThePagesViewer(LayoutAreaHost host, CatalogActionContext page)
+        => page.ViewerId is { Length: > 0 } viewer
+           && string.Equals(ResolveViewerId(host), viewer, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The viewer a page of this render is FOR: the identity of the subscription that opened the
+    /// host (<see cref="LayoutAreaHost.ViewerContext"/>), which holds whichever thread the source's
+    /// listing answers on; the ambient identity only when the subscription carried none.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <returns>The viewer's id, or null when nobody is signed in.</returns>
+    internal static string? PageViewerId(LayoutAreaHost host)
+        => host.ViewerContext?.ObjectId is { Length: > 0 } subscriber ? subscriber : ResolveViewerId(host);
 
     // ————————————————————————————————————————————— the feed (reads; builds no control)
 
@@ -441,12 +491,15 @@ public static partial class CatalogLayoutAreas
                     // record, no permission evaluation, no activation-state read. That is the whole
                     // point of opening on categories.
                     return Observable.Return(ProjectLanding(host, source, description, sourceLabel, sourceRef, plan));
+                // Resolved ONCE, here, and handed to both the admin flag and the offers it gates, so
+                // the page can say whose offers they are (CatalogActionContext.ViewerId).
+                var viewerId = PageViewerId(host);
                 return ObserveInstalledFor(host, plan)
-                    .CombineLatest(ObserveInstalledIds(host, plan), ObserveViewerIsGlobalAdmin(host),
+                    .CombineLatest(ObserveInstalledIds(host, plan), ObserveViewerIsGlobalAdmin(host, viewerId),
                         ObserveActivation(host),
                         (installed, installedIds, isAdmin, activation) => ProjectPackages(
                             host, source, sourceRef, description, sourceLabel, plan, installed, installedIds,
-                            isAdmin, activation));
+                            isAdmin, viewerId, activation));
             })
             // Switch, never SelectMany: a re-listing of the source supersedes the page built from
             // the previous listing instead of leaving two computations pushing into one view.
@@ -519,7 +572,7 @@ public static partial class CatalogLayoutAreas
     private static CatalogState ProjectPackages(
         LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
         CatalogPlan plan, IReadOnlyList<MeshNode> installed, ImmutableHashSet<string> installedIds,
-        bool viewerIsGlobalAdmin, ModuleActivationReport activation)
+        bool viewerIsGlobalAdmin, string? viewerId, ModuleActivationReport activation)
     {
         var installedById = installed
             .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
@@ -577,7 +630,8 @@ public static partial class CatalogLayoutAreas
                 installable.ToImmutable(), policies.ToImmutable(),
                 viewerIsGlobalAdmin
                     ? orphans.Select(o => o.Id).ToImmutableHashSet(StringComparer.Ordinal)
-                    : ImmutableHashSet<string>.Empty));
+                    : ImmutableHashSet<string>.Empty,
+                viewerId));
     }
 
     /// <summary>One package's card: every line it shows, decided from the package, its install record,

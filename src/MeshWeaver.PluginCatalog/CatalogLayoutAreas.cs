@@ -328,11 +328,20 @@ public static partial class CatalogLayoutAreas
     /// all, because this feeds a live data-bound view.
     /// </summary>
     private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host)
+        => ObserveViewerIsGlobalAdmin(host, ResolveViewerId(host));
+
+    /// <summary>
+    /// <see cref="ObserveViewerIsGlobalAdmin(LayoutAreaHost)"/> for a viewer id the caller already
+    /// resolved — so the flag and the id it was evaluated FOR travel together (the catalog's
+    /// row-scoped actions act only for that viewer; see <c>CatalogActionContext.ViewerId</c>).
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="viewerId">The viewer the flag is evaluated for; null or empty is nobody, never an administrator.</param>
+    private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host, string? viewerId)
     {
-        var viewerId = ResolveViewerId(host);
-        if (string.IsNullOrEmpty(viewerId))
+        if (viewerId is not { Length: > 0 })
             return Observable.Return(false);
-        return host.Hub.IsGlobalAdmin(viewerId!)
+        return host.Hub.IsGlobalAdmin(viewerId)
             .Catch<bool, Exception>(_ => Observable.Return(false))
             .StartWith(false)
             // After StartWith, so the evaluator's own seeded false does not re-render the view.
