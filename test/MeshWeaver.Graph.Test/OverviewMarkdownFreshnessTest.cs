@@ -122,7 +122,7 @@ public class OverviewMarkdownFreshnessTest(ITestOutputHelper output) : MonolithM
                 .CombineLatest().Select(children => children.OfType<MarkdownControl>().ToArray()))
             .Switch()
             .Select(bodies => bodies.Select(body => Resolve(stream, body)).CombineLatest()
-                .Select(resolved => resolved.Where(b => b is not null).Select(b => b!).ToArray()))
+                .Select(resolved => resolved.OfType<MarkdownControl>().ToArray()))
             .Switch();
     }
 

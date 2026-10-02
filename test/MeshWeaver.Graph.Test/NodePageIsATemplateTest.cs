@@ -175,8 +175,8 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
     private static async Task<T> Find<T>(
         ISynchronizationStream<JsonElement> stream, string area, Func<T, bool> predicate, string because)
         where T : UiControl
-        => (T)(await Walk(stream, area).Should().Within(TestTimeouts.Convergence)
-            .Match(c => c is T t && predicate(t), because))!;
+        => await Walk(stream, area).OfType<T>().Should().Within(TestTimeouts.Convergence)
+            .Match(predicate, because);
 
     /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
     private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
