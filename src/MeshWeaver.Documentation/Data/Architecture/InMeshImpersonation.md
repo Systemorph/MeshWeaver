@@ -159,6 +159,8 @@ It reports a reference, not a call. That is why it closes three things the runti
 3. **Reflection by name** (`GetMethod("ImpersonateAsSystem")`). Only option D closes that. That is limit 5 below.
 4. **A reference to `ModulesAssemblyLoadContext`** is not reported, so limit 4 below (a platform load context that in-mesh code instantiates) stays open as well.
 
+**What is NOT on this list: a constructor.** `MeshQueryRequest` and `AccessContext` are body-only records with no positional constructor, so an identity can only arrive through a written member (object initializer, `with`, or an assignment such as a derived request's `this.UserId = …`), a factory (`FromQuery` / `FromQueries` with a `userId`) or a surface call, and all three are reported. If either type ever gains a positional parameter for the identity, `new MeshQueryRequest(…)` becomes a new shape the check must learn.
+
 ### Gate passthrough bound to the request it answers (option E, Plugins)
 
 Under the same `Grpc:GateIdentityMode` switch, the trusted port records each request it forwards to a gate under an ordinary user: the request id and that user. A carried user on a gate delivery is **bound**, and passes through, in two cases:
