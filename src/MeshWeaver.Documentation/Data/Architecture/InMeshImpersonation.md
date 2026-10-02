@@ -111,6 +111,72 @@ Every in-mesh Plugins NodeType group that impersonates, from the sweep:
 
 Separately, four satellite sites still use raw `Observable.Using(() => access.ImpersonateAsSystem(), …)`. That is the #1790 latch, which leaves System on the subscribing thread. The four sites are Reinsurance ×2, SocialMedia and Crm. Plugins' `check-impersonation.py` runs only in Plugins CI, which is how these four got in.
 
+### Compile-time check (option C, core)
+
+When the portal compiles in-mesh code, `InMeshImpersonationReferences.Find` reports every **symbol reference** in the authored source to an API that lets code act as someone else. The same guard then judges the compile with `CheckCompiled`, under the same mode and trust list as the runtime check.
+
+**Where it runs:**
+
+| What is compiled | Load context the code runs in |
+|---|---|
+| A NodeType (`MeshNodeCompilationService`, before source generators, so platform-generated code is not attributed to the author) | `DynamicNode_{node}` |
+| A C# Code cell or script (`KernelExecutor`) | `kernel-script-session`, never trusted |
+| A NodeType configuration script (`ScriptCompilationService`) | `node-config-script:{path}`, never trusted |
+
+**What it reports:**
+
+- **Every impersonation surface.**
+- **APIs that install an identity without going through a surface:** `IMessageDelivery.SetAccessContext`, `IMessageHub.DeliverMessage`, `MeshQueryRequest.AsSystem` and `ForViewer`, a **write** to `MeshQueryRequest.UserId`, a `MeshQueryRequest.FromQuery` / `FromQueries` call that **supplies its `userId` parameter** (the factories install the identity with no written member; `FromQuery(query)` alone installs none and is not reported), and a write to `AccessContext.IsHub`.
+- **The System identity's names:** `WellKnownUsers.System` and `SystemContext`, `AccessService.SystemObjectId`, and the literal `"system-security"`.
+
+🚨 **The literal and the names are reported wherever they stand, a comparison included** (`ctx.ObjectId == "system-security"`). That is deliberate. The scan is syntactic: it cannot follow a value from a local into an identity (`var id = "system-security"; new AccessContext { ObjectId = id }`), so narrowing the report to "written to an identity-bearing member" would lose exactly that forgery. What `LogOnly` records is therefore an **inventory of references, not of forgeries**, and it is the trust list that separates the two at the flip. In-mesh code that only compares against the System id will be on that inventory. Whether it is then trusted or rewritten is part of sizing the list from the `LogOnly` data, and is one of the things the flip decision has to look at.
+
+It reports a reference, not a call. That is why it closes three things the runtime guard cannot see:
+
+- the **tail call**, because the reference is in the source however the JIT later emits the call;
+- the **delegate hand-back**, because a method group is a reference;
+- the **hand-built context**.
+
+`SwitchAccessContext` is deliberately not reported. In-mesh code switches back to a captured viewer legitimately. Switching to a System context that is **named** in the source needs one of the names above and is found through that name. A System context that arrives as **data** is the first item under "What the compile-time check cannot see" below.
+
+**The guard is a required dependency at all three sites.** `MeshNodeCompilationService` and `KernelExecutor` resolve `AccessService` with `GetRequiredService`, and `ScriptCompilationService` takes it as a required constructor parameter. Every hub registers an `AccessService` (`MessageHubConfiguration.ConfigureServices`), so a provider without one is a misbuilt host. It fails loudly there instead of compiling in-mesh code unchecked.
+
+**A script session is judged cell by cell.** A continued submission's compilation holds one syntax tree, the new cell's. Earlier cells are a referenced previous compilation. So a clean cell is never reported, or under `Enforce` refused, for a reference an earlier cell wrote (`InMeshImpersonationReferencesTest.ALaterCell_IsNotJudgedForAnEarlierCellsReference`).
+
+**What it does in each mode:**
+
+| Mode | Effect |
+|---|---|
+| `LogOnly` | Logs `[InMeshImpersonation] COMPILE WOULD REFUSE {owner} ({path}) references {Symbol at file(line)}` |
+| `Enforce` | Refuses the compile. A NodeType parks at `compilationStatus: Error` with the refusal as its message; a cell fails to run. Either way, nothing runs |
+
+#### What the compile-time check cannot see
+
+1. **A System context that arrives as data.** `access.SwitchAccessContext(captured)`, where `captured` is a System `AccessContext` taken from a parameter, a delivery or an earlier capture, names no reported member and no literal. The runtime guard does judge that call (`SwitchAccessContext` is checked when the principal is a platform one), but within its own limits 1 and 2 below: written in tail position or handed over as a method group, it passes both halves.
+2. **Code the portal did not compile in this pass.** The check runs inside the compile. A NodeType served from the **disk cache** emits nothing and is not scanned, and neither is an **adopted prebuilt bundle**, which is compiled at bake time and only loaded here. Two consequences:
+   - Under `LogOnly` the inventory is a **floor**: it lists the references of what this portal compiled while the mode was on, not of everything it runs. On a `Modules:RequirePrebuilt` mesh that can be close to nothing.
+   - 🚨 **Under `Enforce` this is a hole, and it is not closed.** A type cached or baked while the mode was `Off` or `LogOnly` would load unchecked. Closing it means running the scan where the assembly is ADOPTED as well (over the bundle's sources at bake, and on a cache hit, or with the mode folded into the cache key). That is not built, and it belongs in front of the maintainer together with the `LogOnly` data.
+3. **Reflection by name** (`GetMethod("ImpersonateAsSystem")`). Only option D closes that. That is limit 5 below.
+4. **A reference to `ModulesAssemblyLoadContext`** is not reported, so limit 4 below (a platform load context that in-mesh code instantiates) stays open as well.
+
+### Gate passthrough bound to the request it answers (option E, Plugins)
+
+Under the same `Grpc:GateIdentityMode` switch, the trusted port records each request it forwards to a gate under an ordinary user: the request id and that user. A carried user on a gate delivery is **bound**, and passes through, in two cases:
+
+- the delivery is the response to an in-flight request of that same user, which also retires the request;
+- the delivery arrives while a request of that user is still in flight. This covers a Code run's activity-log patches, which the worker posts as the requester with no request id.
+
+Every other carried user is **unbound**:
+
+| Mode | An unbound carried user |
+|---|---|
+| `LogOnly` | keeps the passthrough and logs `[GatePrincipal] WOULD REFUSE passthrough …` |
+| `Enforce` | runs as the gate principal |
+
+The record keeps at most 256 requests per connection and is dropped on answer and on disconnect.
+
+The residual: while a request for user U is in flight, the gate can write anything as U, not only that run's output. Closing it needs the gate protocol to carry the request id on follow-ups.
+
 ## What the runtime guard cannot see
 
 These limits were measured, not reasoned. They are why `Enforce` on the runtime guard alone is **defence in depth, not a boundary**:
@@ -131,9 +197,9 @@ These limits were measured, not reasoned. They are why `Enforce` on the runtime 
 |---|---|---|---|
 | **A** | Status quo: keep the broad-grant guard only | Broad grants only | Nothing breaks. In-mesh code keeps every other power System has |
 | **B** | **Runtime guard + gate principal (these drafts) → `Enforce`**, with `TrustedCode` = the package roots that need it (`Store`, `Hosting`, `Governance`, `Feedback`, `Essentials`, …) | Direct impersonation by user-authored NodeTypes and scripts in user partitions and Spaces; gate deliveries without a user | Low once the trust list matches the `LogOnly` inventory. Leaves limits 1–6 open, so it is a measurement and a speed bump, not a boundary |
-| **C** | **B + a compile-time check**: when the portal compiles in-mesh code, refuse (under Enforce) any **symbol reference** to an impersonation surface, `WellKnownUsers.System`/`SystemContext`, `IMessageDelivery.SetAccessContext` or `MeshQueryRequest.AsSystem`, unless the NodeType is trusted | Limits 1–3 for compiled code: the compiler sees the reference however the JIT emits the call. Reflection by name stays open unless `System.Reflection` is also banned there | Medium. It must report through `compilationStatus` and the warning ratchet, **never** through a `GeneralDiagnosticOption` in `EmitPipeline` (that would park types and stall a roll; see [In-Mesh Warning Standard](/Doc/Architecture/InMeshWarningStandard)). It needs the same trust list |
+| **C** | **B + a compile-time check** (built, `LogOnly`; see above): when the portal compiles in-mesh code, refuse (under Enforce) any **symbol reference** to an impersonation surface, `WellKnownUsers.System`/`SystemContext`, `IMessageDelivery.SetAccessContext` or `MeshQueryRequest.AsSystem`, unless the NodeType is trusted | Limits 1–3 for code this portal compiles: the compiler sees the reference however the JIT emits the call. A disk-cache hit and an adopted prebuilt bundle are not scanned, and a System context passed as data is not found (see "What the compile-time check cannot see"). Reflection by name stays open unless `System.Reflection` is also banned there | Medium. It must report through `compilationStatus` and the warning ratchet, **never** through a `GeneralDiagnosticOption` in `EmitPipeline` (that would park types and stall a roll; see [In-Mesh Warning Standard](/Doc/Architecture/InMeshWarningStandard)). It needs the same trust list |
 | **D** | **Sealed platform principal**: System and hub contexts carry an unforgeable seal (an object only platform assemblies can mint); `SecurityService` treats an unsealed `system-security` as an ordinary, grant-less id; transports re-seal on ingress | Every forgery path, by construction, including hand-built contexts and reflection | High. Every serialization hop (the Orleans silo boundary, packaging) must re-seal; it touches the identity model fleet-wide |
-| **E** | Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 6 | Medium, and confined to Plugins' gRPC registry |
+| **E** | (built, `LogOnly`; see above) Bind the gate's passthrough to its in-flight requests: a carried user is honored only when it matches the context of a request the gate received and has not yet answered | Limit 6 | Medium, and confined to Plugins' gRPC registry |
 
 **Decision: B now, in `LogOnly`, then C and E.** The order is binding:
 
