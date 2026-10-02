@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
-namespace MeshWeaver.Graph.Test;
+namespace MeshWeaver.Compiler.Pipeline.Test;
 
 /// <summary>
 /// 🚨 Option C of Doc/Architecture/InMeshImpersonation: the compiler finds every reference in
@@ -88,6 +88,11 @@ public class InMeshImpersonationReferencesTest
     [InlineData("public static MeshQueryRequest M(MeshQueryRequest r) => r with { UserId = \"alice\" };",
         "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
     [InlineData("public static MeshQueryRequest M() => new() { UserId = \"alice\" };",
+        "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
+    // The STATEMENT-shaped write: the member is the Name of a member access that is the left side
+    // of an assignment (`this.UserId = …`). UserId is init-only, so a derived request's constructor
+    // is where in-mesh code can write it that way.
+    [InlineData("public record Mine : MeshQueryRequest { public Mine(string who) { this.UserId = who; } }",
         "MeshWeaver.Mesh.Services.MeshQueryRequest.UserId (written)")]
     // The factories that install a query identity with NO written member — positional and named.
     [InlineData("public static MeshQueryRequest M(string who) => MeshQueryRequest.FromQuery(\"nodeType:X\", who);",

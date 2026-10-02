@@ -139,7 +139,9 @@ public static class TodoProjections
         }
 
         var today = DateTime.Now.Date;
-        var unassigned = todos.Where(t => t.ResponsiblePerson == Unassigned).ToList();
+        // What can still be handed out: the SAME list the backlog section below shows. A member's
+        // "Assign" takes its first entry, so a finished or cancelled todo is never the one assigned.
+        var open = OpenUnassigned(todos);
 
         yield return Section("workload",
             x.T("todo.planning.workload", todos.Count(t => t.ResponsiblePerson != Unassigned)), DefaultColor, "20px");
@@ -153,7 +155,7 @@ public static class TodoProjections
             var line = x.T("todo.planning.member", load, DisplayName(person.Key, x.Localize), active)
                        + (overdue > 0 ? x.T("todo.planning.memberOverdue", overdue) : "");
             var entry = Line($"member-{person.Key}", line, TodoStyles.Stat);
-            yield return unassigned.Count == 0
+            yield return open.Count == 0
                 ? entry
                 : entry with
                 {
@@ -161,21 +163,19 @@ public static class TodoProjections
                     GroupIcon = "user-plus",
                     GroupAction = TodoGroupActions.AssignFirst,
                     GroupStyle = TodoStyles.Menu,
-                    Group = [.. unassigned],
+                    Group = [.. open],
                     Person = person.Key,
                 };
         }
 
-        if (unassigned.Count == 0)
+        if (open.Count == 0)
             yield break;
 
-        var open = unassigned.Where(t => t.Status != TodoStatus.Completed).ToList();
-        yield return open.Count == 0
-            ? Section("backlog", x.T("todo.planning.unassigned", unassigned.Count), DefaultColor)
-            : Section("backlog", x.T("todo.planning.unassigned", unassigned.Count), DefaultColor, "16px",
-                x.T("todo.group.autoAssign"), "shuffle", TodoGroupActions.AutoAssign, open);
+        // The title counts what Auto-Assign hands out; the rows below are its first eight.
+        yield return Section("backlog", x.T("todo.planning.unassigned", open.Count), DefaultColor, "16px",
+            x.T("todo.group.autoAssign"), "shuffle", TodoGroupActions.AutoAssign, open);
 
-        foreach (var task in open.OrderBy(t => t.DueDate ?? DateTime.MaxValue).Take(8))
+        foreach (var task in open.Take(8))
         {
             var urgency = task.DueDate?.Date <= today ? "🚨" : task.DueDate?.Date <= today.AddDays(1) ? "⏰" : "📅";
             var line = x.T("todo.planning.task", urgency, task.Title, task.Category)
@@ -238,11 +238,7 @@ public static class TodoProjections
     /// <summary>Open tasks nobody is assigned to, each with its assignment menu.</summary>
     public static IEnumerable<TodoEntry> Backlog(IReadOnlyCollection<TodoItem> todos, TodoViewText x)
     {
-        var open = todos
-            .Where(t => t.ResponsiblePerson == Unassigned
-                        && t.Status != TodoStatus.Completed && t.Status != TodoStatus.Cancelled)
-            .OrderBy(t => t.DueDate ?? DateTime.MaxValue).ThenBy(t => t.CreatedAt)
-            .ToList();
+        var open = OpenUnassigned(todos);
 
         if (open.Count == 0)
         {
@@ -260,13 +256,12 @@ public static class TodoProjections
     public static IEnumerable<TodoEntry> TodaysFocus(IReadOnlyCollection<TodoItem> todos, TodoViewText x)
     {
         var today = DateTime.Now.Date;
-        bool Open(TodoItem t) => t.Status != TodoStatus.Completed && t.Status != TodoStatus.Cancelled;
         IOrderedEnumerable<TodoItem> MineFirst(IEnumerable<TodoItem> items)
             => items.OrderBy(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) ? 0 : 1).ThenBy(t => t.Status);
 
-        var overdue = MineFirst(todos.Where(t => t.DueDate?.Date < today && Open(t))).ThenBy(t => t.CreatedAt).ToList();
-        var dueToday = MineFirst(todos.Where(t => t.DueDate?.Date == today && Open(t))).ThenBy(t => t.CreatedAt).ToList();
-        var ongoing = MineFirst(todos.Where(t => t.ResponsiblePerson != Unassigned && Open(t)
+        var overdue = MineFirst(todos.Where(t => t.DueDate?.Date < today && IsOpen(t))).ThenBy(t => t.CreatedAt).ToList();
+        var dueToday = MineFirst(todos.Where(t => t.DueDate?.Date == today && IsOpen(t))).ThenBy(t => t.CreatedAt).ToList();
+        var ongoing = MineFirst(todos.Where(t => t.ResponsiblePerson != Unassigned && IsOpen(t)
                                                  && (t.DueDate is null || t.DueDate.Value.Date > today)))
             .ThenBy(t => t.DueDate ?? DateTime.MaxValue).ThenBy(t => t.CreatedAt).ToList();
 
@@ -298,6 +293,21 @@ public static class TodoProjections
     }
 
     // ── Rows ───────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Work that is still to be done: neither completed nor cancelled. The ONE definition
+    /// the planning, backlog and focus areas share, so a todo is open in all of them or in none.</summary>
+    /// <param name="todo">The todo to judge.</param>
+    /// <returns><c>true</c> while the todo can still be worked on.</returns>
+    public static bool IsOpen(TodoItem todo) =>
+        todo.Status is not (TodoStatus.Completed or TodoStatus.Cancelled);
+
+    /// <summary>The open todos nobody is assigned to, soonest due first (then oldest) — what the
+    /// backlog lists and what an assignment action hands out, in that order.</summary>
+    /// <param name="todos">All todos.</param>
+    /// <returns>The open unassigned todos, ordered.</returns>
+    public static IReadOnlyList<TodoItem> OpenUnassigned(IEnumerable<TodoItem> todos) =>
+        [.. todos.Where(t => t.ResponsiblePerson == Unassigned && IsOpen(t))
+            .OrderBy(t => t.DueDate ?? DateTime.MaxValue).ThenBy(t => t.CreatedAt)];
 
     /// <summary>A section heading, optionally with a group action over <paramref name="group"/>.</summary>
     public static TodoEntry Section(string key, string title, string color, string marginTop = "16px",
