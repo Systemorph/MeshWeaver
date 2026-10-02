@@ -1933,7 +1933,7 @@ public static class PackageInstaller
                     _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                         $"path:{partition} scope:subtree limit:{QueryLimit}")))
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
+                .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"listing the children of partition '{partition}' (scoped public read)")
                 .Select(change => (IReadOnlyList<string>)change.Items.Select(n => n.Path).ToList());
 
         return currentChildren.SelectMany(children =>
@@ -3549,7 +3549,7 @@ public static class PackageInstaller
                         .SelectMany(_ => persistence.Exists(path))
                         .Where(exists => exists)
                         .FirstAsync()
-                        .Timeout(TimeSpan.FromSeconds(30)))
+                        .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for '{path}' to become visible in storage"))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -3780,7 +3780,7 @@ public static class PackageInstaller
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(30))
+                    .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for root '{root.Path}' to reconcile its retype to '{root.NodeType}'")
                     .Select(_ => System.Reactive.Unit.Default);
 
         // 🚨 AND the retype must be PERSISTED, not just reconciled on the stream: the owning
@@ -3802,7 +3802,7 @@ public static class PackageInstaller
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
                     .FirstAsync()
-                    .Timeout(TimeSpan.FromSeconds(30))
+                    .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for root '{root.Path}' to persist its retype to '{root.NodeType}'")
                     .Select(_ => System.Reactive.Unit.Default);
 
         // Eager provisioning must also cover the package's OWN partition: with a dynamic root
@@ -4336,7 +4336,7 @@ public static class PackageInstaller
                         .SelectMany(_ => persistence.Exists(path))
                         .Where(exists => exists)
                         .FirstAsync()
-                        .Timeout(TimeSpan.FromSeconds(30)))
+                        .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for NodeType '{path}' to become visible in storage"))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
         IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>

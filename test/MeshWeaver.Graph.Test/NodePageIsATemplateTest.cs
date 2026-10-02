@@ -92,7 +92,7 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
             "the title is a POINTER into the header's projection, not the name baked in on the hub");
         title.Should().NotBeNull();
 
-        var bound = Bound(stream, header.DataContext!, "title");
+        var bound = Bound(stream, ContextOf(header), "title");
         await bound.Should().Within(TestTimeouts.Convergence).Match(t => t == "Gizmo One",
             "the projection carries the node's name");
 
@@ -101,7 +101,7 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
         await bound.Should().Within(TestTimeouts.Convergence).Match(t => t == "Gizmo Renamed",
             "the page is not rebuilt — the bound title follows the edit");
 
-        var meta = Bound(stream, header.DataContext!, "metaHtml");
+        var meta = Bound(stream, ContextOf(header), "metaHtml");
         await meta.Should().Within(TestTimeouts.Convergence).Match(
             t => t != null && t.Contains("Type:") && t.Contains(GadgetType),
             "the provenance line is computed on the hub and bound into the NodeMeta row");
@@ -119,7 +119,7 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
         var body = await Find<MarkdownControl>(stream, MeshNodeLayoutAreas.OverviewArea,
             m => m.Markdown is JsonPointerReference,
             "the markdown body is bound to a projection of the node, never its text baked in");
-        await Bound(stream, body.DataContext!, "style").Should().Within(TestTimeouts.Convergence)
+        await Bound(stream, ContextOf(body), "style").Should().Within(TestTimeouts.Convergence)
             .Match(s => s != null && s.Contains("display: none"),
                 "a node with no markdown body hides the bound body instead of omitting the control");
     }
@@ -143,7 +143,7 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
             s => s.DataContext?.Contains(MeshNodeLayoutAreas.ProvenanceDataId) == true,
             "the composed provenance strip is a template bound to its projection");
 
-        await Bound(stream, strip.DataContext!, "metaHtml").Should().Within(TestTimeouts.Convergence).Match(
+        await Bound(stream, ContextOf(strip), "metaHtml").Should().Within(TestTimeouts.Convergence).Match(
             t => t != null && t.Contains("Type:") && t.Contains(ProvenanceType),
             "the provenance line is computed on the hub and bound into the strip");
         await Find<MarkdownControl>(stream, MeshNodeLayoutAreas.OverviewArea,
@@ -175,20 +175,27 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
     private static async Task<T> Find<T>(
         ISynchronizationStream<JsonElement> stream, string area, Func<T, bool> predicate, string because)
         where T : UiControl
-        => (T)(await Walk(stream, area).Should().Within(TestTimeouts.Convergence)
-            .Match(c => c is T t && predicate(t), because))!;
+        => await Walk(stream, area).OfType<T>().Should().Within(TestTimeouts.Convergence)
+            .Match(predicate, because);
 
     /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
     private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
         => stream.GetControlStream(area)
             .Select(control => control is IContainerControl container
                 ? container.Areas
-                    .Where(a => a.Area is not null)
-                    .Select(a => Walk(stream, a.Area!.ToString()!))
+                    .Select(a => a.Area?.ToString())
+                    .OfType<string>()
+                    .Select(subArea => Walk(stream, subArea))
                     .Merge()
                     .StartWith(control)
                 : Observable.Return(control))
             .Switch();
+
+    /// <summary>The data context a bound template carries — the test fails, naming the control, when
+    /// it carries none.</summary>
+    private static string ContextOf(UiControl control)
+        => control.DataContext
+           ?? throw new InvalidOperationException($"{control.GetType().Name} carries no DataContext to resolve a bound value against.");
 
     /// <summary>The live text at <paramref name="field"/> of a projection bound at
     /// <paramref name="dataContext"/>, as the GUI resolves it.</summary>

@@ -63,16 +63,7 @@ public static class OverviewLayoutArea
                 return UnresolvableContentType(host, node, je);
         }
 
-        var contentType = instance.GetType();
-
-        // The property form is bound DIRECTLY to the node's Content (node-bound DataContext): every
-        // field reads from and writes straight back to the node stream (IMeshNodeStreamCache). ONE
-        // source of truth — no /data replica of the node content, no SetupAutoSave save subscription.
-        // See Doc/GUI/DataBinding "edit node content by binding to the node stream".
-        var dataId = EditLayoutArea.GetDataId(node.Path);
-        var boundContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: true);
-
-        return PropertyOverview(host, node.Path, contentType, canEdit);
+        return PropertyOverview(host, node.Path, instance.GetType(), canEdit);
     }
 
     /// <summary>
@@ -145,22 +136,43 @@ public static class OverviewLayoutArea
     /// names no content type, so the form's SHAPE can only come from the node's own content
     /// (its <c>$type</c>). This is a STRUCTURE read and the one place the default node page still
     /// reads the node on the hub; the fields themselves stay bound to the node. Re-renders only when
-    /// the shape can change — the content type, or the viewer's edit right.
+    /// the shape can change — the content type, or the viewer's read or edit right.
+    ///
+    /// <para>🚨 READ-GATED in the view, like <see cref="MeshNodeLayoutAreas.Overview"/> and
+    /// <see cref="MeshNodeLayoutAreas.ContentData"/>: this is a registered top-level area, so it is
+    /// addressable by reference on its own and must not lean on the page that normally embeds it.
+    /// The delivery pipeline already refuses a <c>SubscribeRequest</c> from a viewer without Read
+    /// (<c>[RequiresPermission(Permission.Read)]</c>); this gate is the second layer for the
+    /// configurations where that check is decided by a hub-level or node-type rule rather than by
+    /// the viewer's effective permissions on the node.</para>
     /// </summary>
     [System.ComponentModel.Browsable(false)]
     public static IObservable<UiControl?> ContentForm(LayoutAreaHost host, RenderingContext ctx)
+        => ContentForm(host, host.Hub.GetEffectivePermissions(host.Hub.Address.ToString()));
+
+    /// <summary>
+    /// <see cref="ContentForm(LayoutAreaHost, RenderingContext)"/> over an explicit permission
+    /// stream — the seam the read gate is measured through (<c>ContentFormIsReadGatedTest</c>).
+    /// </summary>
+    /// <param name="host">The layout area host of the hub's own node.</param>
+    /// <param name="permissions">The viewer's effective permissions on that node.</param>
+    /// <returns>The access-denied view without Read; otherwise the form in the requested mode.</returns>
+    internal static IObservable<UiControl?> ContentForm(LayoutAreaHost host, IObservable<Permission> permissions)
     {
         var hubPath = host.Hub.Address.ToString();
         var edit = string.Equals(host.Reference.Id?.ToString(), ContentFormEdit, StringComparison.Ordinal);
         return host.Workspace.GetMeshNodeStream()
-            .CombineLatest(host.Hub.GetEffectivePermissions(hubPath),
-                (node, permissions) => (Node: node, CanEdit: permissions.HasFlag(Permission.Update)))
-            .DistinctUntilChanged(t => (ShapeOf(t.Node), t.CanEdit))
-            .Select(t => t.Node is null
-                ? (UiControl?)Controls.Markdown(host.Localize("ui.mdNodeNotFound"))
-                : edit
-                    ? (t.CanEdit ? EditForm(host, t.Node) : null)
-                    : BuildPropertyOverview(host, t.Node, t.CanEdit));
+            .CombineLatest(permissions,
+                (node, granted) => (Node: node,
+                    CanRead: granted.HasFlag(Permission.Read), CanEdit: granted.HasFlag(Permission.Update)))
+            .DistinctUntilChanged(t => (ShapeOf(t.Node), t.CanRead, t.CanEdit))
+            .Select(t => !t.CanRead
+                ? MeshNodeLayoutAreas.BuildAccessDenied(hubPath, locale: host.ViewerLocale())
+                : t.Node is null
+                    ? (UiControl?)Controls.Markdown(host.Localize("ui.mdNodeNotFound"))
+                    : edit
+                        ? (t.CanEdit ? EditForm(host, t.Node) : null)
+                        : BuildPropertyOverview(host, t.Node, t.CanEdit));
     }
 
     /// <summary>What decides the form's shape: the content's CLR type, or its JSON discriminator.</summary>
@@ -252,8 +264,8 @@ public static class OverviewLayoutArea
     /// through serialization without losing the @@() references.</para>
     /// </summary>
     public static UiControl? BuildMarkdownBody(LayoutAreaHost host, MeshNode? node)
-        => MarkdownBodyText(node) is { } body
-            ? new MarkdownControl(body.Markdown ?? "") { Html = body.Html, NodePath = node!.Path }
+        => node is not null && MarkdownBodyText(node) is { } body
+            ? new MarkdownControl(body.Markdown ?? "") { Html = body.Html, NodePath = node.Path }
                 .WithStyle(MarkdownBodyStyle)
             : null;
 

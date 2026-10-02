@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -74,6 +76,8 @@ public static class AccessContextScope
     /// activities. NOT for compilation or other system infrastructure
     /// (see <see cref="AsSystem"/>).</para>
     /// </summary>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static IDisposable FromNode(
         MeshNode? node,
         AccessService? accessService,
@@ -86,15 +90,21 @@ public static class AccessContextScope
             ? (node?.LastModifiedBy ?? node?.CreatedBy)
             : (node?.CreatedBy ?? node?.LastModifiedBy);
 
+        var caller = Assembly.GetCallingAssembly();
         if (!string.IsNullOrEmpty(principalId))
         {
-            return accessService.SwitchAccessContext(new AccessContext
+            var owner = new AccessContext
             {
                 ObjectId = principalId,
                 Name = principalId
-            });
+            };
+            // A node stamped by System yields System here — the same impersonation as AsSystem.
+            accessService.ImpersonationGuard.Check(caller, nameof(AccessContextScope) + "." + nameof(FromNode), owner);
+            return accessService.SwitchAccessContext(owner);
         }
 
+        accessService.ImpersonationGuard.Check(caller, nameof(AccessContextScope) + "." + nameof(FromNode),
+            WellKnownUsers.SystemContext);
         logger?.LogDebug(
             "[AccessContextScope.FromNode] Falling back to system identity " +
             "for node {Path} (CreatedBy={CreatedBy}, LastModifiedBy={LastModifiedBy})",
@@ -120,10 +130,17 @@ public static class AccessContextScope
     /// <paramref name="accessService"/> is null (minimal test fixtures);
     /// callers should treat that as a no-op.</para>
     /// </summary>
-    public static IDisposable AsSystem(AccessService? accessService) =>
-        accessService is null
-            ? (IDisposable)EmptyDisposable.Instance
-            : accessService.ImpersonateAsSystem();
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static IDisposable AsSystem(AccessService? accessService)
+    {
+        if (accessService is null)
+            return EmptyDisposable.Instance;
+        // A surface on behalf of ITS caller: the guard judges who called AsSystem, not this assembly.
+        accessService.ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(AccessContextScope) + "." + nameof(AsSystem),
+            WellKnownUsers.SystemContext);
+        return accessService.ImpersonateAsSystem();
+    }
 
     private sealed class EmptyDisposable : IDisposable
     {

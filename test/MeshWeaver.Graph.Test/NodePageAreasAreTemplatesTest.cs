@@ -98,10 +98,25 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
         var list = Descendants(page).OfType<MeshSearchControl>().Should().ContainSingle(
             "the NodeTypes at this level are a query the GUI runs — never a snapshot taken on the hub").Subject;
         list.HiddenQuery!.ToString().Should().Contain($"namespace:{PagePath}")
-            .And.Contain($"nodeType:{MeshNode.NodeTypePath}");
+            .And.Contain($"nodeType:{MeshNode.NodeTypePath}")
+            .And.Contain("-path:Markdown", "the own type is the card above — the list must not repeat it");
 
         Descendants(MeshNodeLayoutAreas.NodeTypesTemplate(PagePath, null, "en"))
             .OfType<MeshNodeThumbnailControl>().Should().BeEmpty("a node without a type shows no own-type card");
+        MeshNodeLayoutAreas.NodeTypesAtLevelQuery(PagePath, null).Should().NotContain("-path:",
+            "with no own type there is nothing to exclude");
+    }
+
+    [Fact]
+    public void TheSelfReferenceIcon_EncodesTheNodesIconUrl()
+    {
+        var markup = MeshNodeLayoutAreas.RenderNodeIconHtml(
+            new MeshNode("Page", "Space") { Icon = "/x.png\" onerror=\"alert(1)", Name = "<b>n</b>" });
+
+        markup.Should().NotContain("\" onerror=",
+            "the icon URL is editable node content — a quote in it must not break out of src=\"…\"");
+        markup.Should().Contain("&quot; onerror=");
+        markup.Should().NotContain("<b>n</b>", "the name is encoded as well");
     }
 
     [Fact]

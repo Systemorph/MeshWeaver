@@ -133,8 +133,8 @@ internal static class NodePageProjections
         {
             var subscription = host.Workspace.GetMeshNodeStream(nodePath)
                 .Select(n => n?.Content)
-                .Where(c => c is not null)
-                .Subscribe(content => host.UpdateData(dataId, content!));
+                .OfType<object>()
+                .Subscribe(content => host.UpdateData(dataId, content));
             host.RegisterForDisposal(context.Area, subscription);
             return new(store, [], null);
         });
@@ -145,10 +145,10 @@ internal static class NodePageProjections
     /// </summary>
     internal static void OpenIconPicker(LayoutAreaHost host, UiActionContext ctx)
         => host.Workspace.GetMeshNodeStream()
-            .Where(node => node is not null)
+            .OfType<MeshNode>()
             .Take(1)
             .Subscribe(
-                node => ctx.Host.UpdateArea(DialogControl.DialogArea, NodeIconPickerDialog.Build(host, node!)),
+                node => ctx.Host.UpdateArea(DialogControl.DialogArea, NodeIconPickerDialog.Build(host, node)),
                 ex => host.Hub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger(typeof(NodePageProjections))
                     .LogWarning(ex, "Could not open the icon picker for {Path}: its node could not be read.",
@@ -171,7 +171,8 @@ internal static class NodePageProjections
     /// <summary>
     /// The icon tile's content, in the shapes <see cref="MeshNodeLayoutAreas.BuildClickableIcon"/>
     /// draws: an image or inline svg at 48px, a Fluent icon (the node's OWN name for it) at 36px, a
-    /// glyph at 30px, and a dashed "+" placeholder while the node has none.
+    /// glyph at 34px (the <c>IconControl</c> width that draws it as large as that method's inline
+    /// 30px text glyph), and a dashed "+" placeholder while the node has none.
     /// </summary>
     private static (string Icon, string Width, string Tile) IconOf(MeshNode? node, MeshNode? partitionRoot)
     {

@@ -2015,6 +2015,11 @@ public sealed class MessageHub : IMessageHub
         var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
+        // A platform principal stamped by the CALLER (WithAccessContext / ImpersonateAsHub) is an
+        // impersonation like any other: check who asked (Doc/Architecture/InMeshImpersonation).
+        if (options.ImpersonationRequestedBy is { } requestedBy && options.ImpersonateContext is { } stamped)
+            accessService.ImpersonationGuard.Check(requestedBy,
+                nameof(PostOptions) + "." + (options.ImpersonationSurface ?? nameof(PostOptions.WithAccessContext)), stamped);
 
         // Per-message hot path. typeof(TMessage).Name is JIT-folded so it's free,
         // but params object[] boxing of options.Target / Sender / result.Id is not.

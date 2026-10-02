@@ -67,7 +67,7 @@ The companion line is on a **separate** category because the Error line's text i
 
 Genuinely identity-free framework traffic is exempt from the never-null rule and is delivered (not failed) even with no context:
 
-- **`[SystemMessage]`** — heartbeats, hub-lifecycle, subscription management, `SetCurrentRequest`, `Save/DeleteMeshNodeRequest`.
+- **`[SystemMessage]`** — heartbeats, hub-lifecycle, subscription management, `SetCurrentRequest`, `SaveMeshNodeRequest`. (`DeleteMeshNodeRequest` is no longer one: it is forwarded to the validated delete under the delivery's own identity, and a delivery without one is refused.)
 - **`[CanBeIgnored]`** — fire-and-forget control (Shutdown / Dispose / HeartBeat) with no awaiting requester.
 - **`DeliveryFailure`** — the courier's own error channel (inherits the request's identity via `ResponseFor` when there is one; failing it would turn a NACK into a NACK-of-a-NACK).
 

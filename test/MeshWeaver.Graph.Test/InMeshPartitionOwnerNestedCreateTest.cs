@@ -64,6 +64,19 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
     /// </summary>
     private volatile string? unreadableRow;
 
+    /// <summary>
+    /// The one path whose FIRST durable read answers late — later than
+    /// <see cref="PartitionOwningTypes.ProbeTimeout"/> — standing in for a read queued behind a
+    /// contended store read pool (#5734). Null for every other test.
+    /// </summary>
+    private volatile string? slowRow;
+
+    /// <summary>How many reads of <see cref="slowRow"/> are still to be delayed. Decremented atomically.</summary>
+    private int slowReadsLeft;
+
+    /// <summary>How late the slow read answers: past the old probe budget, well inside the create's.</summary>
+    private static readonly TimeSpan SlowReadDelay = PartitionOwningTypes.ProbeTimeout + TimeSpan.FromSeconds(2);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         ConfigureMeshBase(builder)
             .ConfigureServices(services =>
@@ -73,8 +86,12 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
                 var registered = services.Last(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService);
                 services.Remove(registered);
                 return services.AddSingleton<IStorageAdapter>(sp =>
-                    new ReadFaultingStorageAdapter(Materialise(registered, sp), path =>
-                        string.Equals(path, unreadableRow, StringComparison.OrdinalIgnoreCase)));
+                    new ReadFaultingStorageAdapter(Materialise(registered, sp),
+                        path => string.Equals(path, unreadableRow, StringComparison.OrdinalIgnoreCase),
+                        path => string.Equals(path, slowRow, StringComparison.OrdinalIgnoreCase)
+                                && Interlocked.Decrement(ref slowReadsLeft) >= 0
+                            ? SlowReadDelay
+                            : TimeSpan.Zero));
             });
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -242,11 +259,13 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
         var nested = Nested("unreadablepartner", OwnerType);
         var message = await RefusedAs(Probe, nested, ct);
         message.Should().Contain(
-            LocalizationCatalog.Get("access.partitionCreate.undetermined", null,
-                OwnerType, PartitionOwningTypes.ProbeTimeout.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture),
+            LocalizationCatalog.Get("access.partitionCreate.undeterminedFault", null,
+                OwnerType,
+                $"{nameof(InvalidOperationException)}: storage read of '{OwnerType}' failed: the connection was reset (test-injected)",
                 nested.Path),
             "a durable read that faulted is NOT a verdict: the create is refused as unavailable and "
-            + "may be retried — never allowed as though the type did not own its partition");
+            + "may be retried — never allowed as though the type did not own its partition — and "
+            + "the refusal NAMES the fault instead of guessing between a fault and a budget (#5734)");
 
         await Access.RunAs(Probe, () => MeshService.CreateNode(Nested("stillapage", "Markdown")))
             .Should().Within(TestTimeouts.CrossSilo).Emit(
@@ -261,6 +280,46 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
                 cancellationToken: ct);
     }
 
+    /// <summary>
+    /// 🚨 A SLOW read is not a refusal (#5734). The definition's durable row answers — just later
+    /// than the probe's old 10 s budget, the way a read queued behind a contended store read pool
+    /// does in production. The existence check reads the same row through the same seam with no
+    /// budget of its own, so the ownership probe giving up first refused creates the existence check
+    /// would have let through: 1–5 of every ~100 <c>Hosting/LogEntry</c> rows of a Logs action,
+    /// recorded as permanently failed. The create must LAND, and the owning type must still be
+    /// refused on the same slow read — slowness decides nothing either way.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ASlowDefinitionRead_IsWaitedFor_NotRefusedAsUndetermined()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct);
+
+        slowRow = NonOwnerType;
+        Volatile.Write(ref slowReadsLeft, 1);
+        var started = DateTimeOffset.UtcNow;
+        await Access.RunAs(Probe, () => MeshService.CreateNode(Nested("slowwidget", NonOwnerType)))
+            .Should().Within(TestTimeouts.CrossSilo + SlowReadDelay).Emit(
+                "a definition read that answers late is still an answer: a nested create of a "
+                + "non-owning type lands, as the existence check reading the same row would let it",
+                cancellationToken: ct);
+        Volatile.Read(ref slowReadsLeft).Should().BeLessThan(0,
+            "the premise: the slow read was actually served — otherwise this create never waited "
+            + "past the old budget and proves nothing");
+        (DateTimeOffset.UtcNow - started).Should().BeGreaterThan(PartitionOwningTypes.ProbeTimeout,
+            "the premise: the create really waited past the old 10 s probe budget");
+
+        slowRow = OwnerType;
+        Volatile.Write(ref slowReadsLeft, 1);
+        var nested = Nested("slowpartner", OwnerType);
+        var message = await RefusedAs(Probe, nested, ct);
+        message.Should().Contain(
+            LocalizationCatalog.Get("access.partitionCreate.nestedOwningType", null,
+                nested.Path, OwnerType, nested.Id, nested.Namespace),
+            "the same slow read of an OWNING type still refuses the nested instance — with the "
+            + "placement verdict, not 'could not be established'");
+    }
+
     private static IStorageAdapter Materialise(ServiceDescriptor descriptor, IServiceProvider sp)
         => descriptor.ImplementationFactory is { } factory
             ? (IStorageAdapter)factory(sp)
@@ -272,11 +331,13 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
 
     /// <summary>
     /// Faults <see cref="IStorageAdapter.Read"/> (and <see cref="IStorageAdapter.ReadMany"/>) for the
-    /// paths <paramref name="faults"/> selects; every other member, and every other path, forwards to
+    /// paths <paramref name="faults"/> selects, and answers a <see cref="IStorageAdapter.ReadMany"/>
+    /// late by whatever <paramref name="delayFor"/> says; every other member, and every other path, forwards to
     /// the REAL adapter untouched. Forwarding is exhaustive on purpose: a decorator that falls back to
     /// an interface default silently changes what the store below it does.
     /// </summary>
-    private sealed class ReadFaultingStorageAdapter(IStorageAdapter inner, Func<string, bool> faults) : IStorageAdapter
+    private sealed class ReadFaultingStorageAdapter(
+        IStorageAdapter inner, Func<string, bool> faults, Func<string, TimeSpan> delayFor) : IStorageAdapter
     {
         private static InvalidOperationException Unreachable(string path) =>
             new($"storage read of '{path}' failed: the connection was reset (test-injected)");
@@ -289,7 +350,10 @@ public class InMeshPartitionOwnerNestedCreateTest(ITestOutputHelper output) : Mo
         public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
             => paths.FirstOrDefault(faults) is { } path
                 ? Observable.Throw<MeshNode>(Unreachable(path))
-                : inner.ReadMany(paths, options);
+                : Observable.Defer(() => paths.Select(delayFor).DefaultIfEmpty(TimeSpan.Zero).Max() is var delay
+                                         && delay > TimeSpan.Zero
+                    ? Observable.Timer(delay).SelectMany(_ => inner.ReadMany(paths, options))
+                    : inner.ReadMany(paths, options));
 
         public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) => inner.Write(node, options);
 

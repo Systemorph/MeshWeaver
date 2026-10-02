@@ -493,8 +493,11 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
             DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };
+        // 🚨 …but never OVER an authenticated non-platform caller (RequestIdentity): the field
+        // exists for the platform posting on someone's behalf, and a client that typed
+        // CreatedBy = system-security into a message body was authorised as System.
         if (!string.IsNullOrEmpty(requestUserId))
-            return requestUserId;
+            return RequestIdentity.Resolve(requestUserId, context.AccessContext);
 
         // Fall back to AccessContext (authenticated session user)
         if (!string.IsNullOrEmpty(context.AccessContext?.ObjectId))
