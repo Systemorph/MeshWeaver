@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -1702,11 +1703,8 @@ public static class EditorExtensions
                     .WithView(Controls.Button("×")
                         .WithAppearance(Appearance.Stealth)
                         .WithStyle("min-width: 18px; padding: 0 2px; height: 20px; font-size: 14px; line-height: 1;")
-                        .WithClickAction(ctx =>
-                        {
-                            RemoveCollectionItem(ctx.Host, dataId, propName, capturedIndex);
-                            return Task.CompletedTask;
-                        }));
+                        .WithReactiveClickAction(ctx =>
+                            RemoveCollectionItem(ctx.Host, dataId, propName, capturedIndex)));
                 chipStack = chipStack.WithView(chipRow);
             }
             else
@@ -1740,11 +1738,16 @@ public static class EditorExtensions
         return "(empty)";
     }
 
-    private static void RemoveCollectionItem(LayoutAreaHost host, string dataId, string propName, int indexToRemove)
+    /// <summary>
+    /// The chip's × click: reads the current data once, removes the item at
+    /// <paramref name="indexToRemove"/> and writes it back. Returned, never subscribed here — the
+    /// click owns the subscription, so a fault reaches the person as the click's refusal.
+    /// </summary>
+    private static IObservable<Unit> RemoveCollectionItem(LayoutAreaHost host, string dataId, string propName, int indexToRemove)
     {
         // Read current data, remove item at index, write back
         var current = host.Stream.GetDataStream<JsonElement>(dataId);
-        current.Take(1).Subscribe(data =>
+        return current.Take(1).Do(data =>
         {
             if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
                 return;
@@ -1757,7 +1760,7 @@ public static class EditorExtensions
                 var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
                 host.UpdateData(dataId, updated);
             }
-        });
+        }).Select(_ => Unit.Default);
     }
 
     /// <summary>
@@ -1796,27 +1799,24 @@ public static class EditorExtensions
             .WithStyle("justify-content: flex-end; gap: 8px;")
             .WithView(Controls.Button(ctx.Host.Localize("ui.add"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(addCtx =>
-                {
+                .WithReactiveClickAction(addCtx =>
                     addCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
-                        .Subscribe(formValues =>
+                        .SelectMany(formValues =>
                         {
                             var selectedValue = formValues.GetValueOrDefault("selectedItem")?.ToString()?.Trim();
                             if (string.IsNullOrEmpty(selectedValue))
                             {
                                 var errorDialog = Controls.Dialog(
                                     Controls.Markdown(ctx.Host.Localize("ui.selectItem")),
-                                    "Validation Error"
+                                    ctx.Host.Localize("dialog.validationError")
                                 ).WithSize("S").WithClosable(true);
                                 addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                                return;
+                                return Observable.Return(Unit.Default);
                             }
                             addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                            AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
-                        });
-                    return Task.CompletedTask;
-                }))
+                            return AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                        })))
             .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
@@ -1836,7 +1836,7 @@ public static class EditorExtensions
     /// Adds a new item to a collection array in the data stream.
     /// Creates a default instance of the element type with the key property set to the selected value.
     /// </summary>
-    private static void AddCollectionItem(
+    private static IObservable<Unit> AddCollectionItem(
         LayoutAreaHost host,
         string dataId,
         string propName,
@@ -1845,7 +1845,7 @@ public static class EditorExtensions
         string selectedValue)
     {
         var current = host.Stream.GetDataStream<JsonElement>(dataId);
-        current.Take(1).Subscribe(data =>
+        return current.Take(1).Do(data =>
         {
             var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
 
@@ -1881,7 +1881,7 @@ public static class EditorExtensions
             jsonArr.Add(newItem);
             var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
             host.UpdateData(dataId, updated);
-        });
+        }).Select(_ => Unit.Default);
     }
 
     /// <summary>

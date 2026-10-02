@@ -197,9 +197,9 @@ public static class GitHubIssuesTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.createIssue", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(c =>
+            .WithReactiveClickAction(c =>
             {
-                c.Host.Stream.GetDataStream<Dictionary<string, object?>>(NewIssueFormId).Take(1).Subscribe(d =>
+                return c.Host.Stream.GetDataStream<Dictionary<string, object?>>(NewIssueFormId).Take(1).Do(d =>
                 {
                     var title = Str(d, "title");
                     if (string.IsNullOrWhiteSpace(title))
@@ -210,8 +210,7 @@ public static class GitHubIssuesTab
                     issues.CreateIssue(spacePath, title, Str(d, "body"), null, userId).Subscribe(
                         n => c.Host.UpdateData(ResultId, Ok($"Issue created — {n.Name}.")),
                         ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }
@@ -233,9 +232,9 @@ public static class GitHubIssuesTab
     private static UiControl MergeButton(string label, GitHubMergeMethod method, string spacePath, string userId) =>
         Controls.Button(label)
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(c =>
+            .WithReactiveClickAction(c =>
             {
-                c.Host.Stream.GetDataStream<Dictionary<string, object?>>(MergeFormId).Take(1).Subscribe(d =>
+                return c.Host.Stream.GetDataStream<Dictionary<string, object?>>(MergeFormId).Take(1).Do(d =>
                 {
                     if (!int.TryParse(Str(d, "prNumber"), out var number) || number <= 0)
                     {
@@ -246,8 +245,7 @@ public static class GitHubIssuesTab
                     c.Host.Hub.MergePullRequestOnGitHub(spacePath, number, method, userId,
                             onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
                         .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             });
 
     // ── Mapping ──────────────────────────────────────────────────────────────
