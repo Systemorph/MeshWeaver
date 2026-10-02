@@ -106,6 +106,12 @@ public class OverviewMarkdownFreshnessTest(ITestOutputHelper output) : MonolithM
         Assert.Equal(Stale, stored.PreRenderedHtml);
     }
 
+    /// <summary>
+    /// The VISIBLE markdown bodies of the Data area's root, resolved the way the GUI resolves them:
+    /// the body is a template bound to a projection of the node (B1 part 2), so its markdown, HTML
+    /// and style are read from the area's <c>/data</c>; a body whose bound style hides it is a page
+    /// with no body.
+    /// </summary>
     private IObservable<MarkdownControl[]> Bodies(string path)
     {
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ContentDataArea);
@@ -114,6 +120,21 @@ public class OverviewMarkdownFreshnessTest(ITestOutputHelper output) : MonolithM
         return stream.GetControlStream(reference.Area!).OfType<StackControl>()
             .Select(root => root.Areas.Select(area => stream.GetControlStream(area.Area!.ToString()!))
                 .CombineLatest().Select(children => children.OfType<MarkdownControl>().ToArray()))
+            .Switch()
+            .Select(bodies => bodies.Select(body => Resolve(stream, body)).CombineLatest()
+                .Select(resolved => resolved.Where(b => b is not null).Select(b => b!).ToArray()))
             .Switch();
     }
+
+    private static IObservable<MarkdownControl?> Resolve(ISynchronizationStream<JsonElement> stream, MarkdownControl body)
+        => body.Markdown is not JsonPointerReference || string.IsNullOrEmpty(body.DataContext)
+            ? Observable.Return<MarkdownControl?>(body)
+            : stream.GetDataStream<JsonElement>(new JsonPointerReference(body.DataContext))
+                .Where(je => je.ValueKind == JsonValueKind.Object)
+                .Select(je => Text(je, "style")?.Contains("display: none") == true
+                    ? null
+                    : new MarkdownControl(Text(je, "markdown") ?? "") { Html = Text(je, "html"), NodePath = body.NodePath });
+
+    private static string? Text(JsonElement je, string name)
+        => je.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }

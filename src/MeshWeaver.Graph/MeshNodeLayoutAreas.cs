@@ -259,6 +259,10 @@ public static class MeshNodeLayoutAreas
             // calls, and GroupsLayoutArea's membership deserializer.
             .WithView(CreateNodeArea, CreateNode)
             .WithView(EditArea, EditNode)
+            // The property form's fallback slot, for a hub whose configuration names no content
+            // type (OverviewLayoutArea.ContentForm) — the one place the node page still reads the
+            // node to decide STRUCTURE.
+            .WithView(OverviewLayoutArea.ContentFormArea, OverviewLayoutArea.ContentForm)
             .WithView(ContentDataArea, ContentData)
             // The import VIEW rides the MeshWeaver.Graph.Views MODULE; its menu descriptor stays.
             .WithView(ExportArea, ExportLayoutArea.Export)
@@ -290,25 +294,25 @@ public static class MeshNodeLayoutAreas
     /// <summary>
     /// Renders the Overview area showing the node's main content with action menu.
     /// This is the default view for a node, showing content and providing navigation.
-    /// Uses GetStream for node data. Children are displayed via LayoutAreaControl.Children.
+    ///
+    /// <para>A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the page is emitted
+    /// as soon as the viewer's permissions are known and BINDS what it shows — the header, the
+    /// property form and the markdown body read the node through pointers
+    /// (<see cref="BuildDetailsTemplate"/>). It used to wait for the node, the permissions AND the
+    /// partition root, and rebuild the whole page out of the node's values on every edit.</para>
+    ///
+    /// <para>The one read it keeps is the PERMISSION, and it decides STRUCTURE only: whether the
+    /// viewer sees the page or the denial, and whether the form is click-to-edit.</para>
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        // CombineLatest with permission stream — pure observable composition, no await. The third
-        // input is the node's PARTITION ROOT, which the header's icon inherits its package mark from
-        // (#2075 item 2); it starts null, so it can never delay the page.
-        return host.Workspace.GetMeshNodeStream().CombineLatest(
-                host.Hub.GetEffectivePermissions(hubPath),
-                host.Workspace.ObservePartitionRoot(host.Hub.Address.Path),
-                (node, permissions, partitionRoot) =>
-                    (Node: node, Permissions: permissions, PartitionRoot: partitionRoot))
-            .SelectMany(t =>
+        return PermissionGate(host, hubPath)
+            .SelectMany(gate =>
             {
-                if (t.Permissions.HasFlag(Permission.Read))
-                    return Observable.Return((UiControl?)host.BuildDetailsContent(
-                        t.Node, null, t.Permissions.HasFlag(Permission.Update), t.PartitionRoot));
+                if (gate.Read)
+                    return Observable.Return((UiControl?)host.BuildDetailsTemplate(gate.Update));
                 // Read denied: the partition's declared funnel page (RedirectOnDenied — e.g.
                 // a product's glossy marketing brochure) takes the viewer there instead of a
                 // dead-end Request-Access wall. Rendering the denial INSIDE the area used to
@@ -328,6 +332,16 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
+    /// The two permission facts a node page's STRUCTURE depends on — may the viewer read it, may
+    /// they edit it — emitted only when one of them changes, so a permission re-evaluation that
+    /// changes neither does not rebuild the page.
+    /// </summary>
+    private static IObservable<(bool Read, bool Update)> PermissionGate(LayoutAreaHost host, string hubPath)
+        => host.Hub.GetEffectivePermissions(hubPath)
+            .Select(p => (Read: p.HasFlag(Permission.Read), Update: p.HasFlag(Permission.Update)))
+            .DistinctUntilChanged();
+
+    /// <summary>
     /// The node's DATA page — the framework's reflected content view (header + property overview,
     /// exactly what the default <see cref="Overview"/> renders), always available at
     /// <c>/{node}/Data</c> even when a type overrides Overview with a designed page. Read-only for
@@ -338,14 +352,9 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> ContentData(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetMeshNodeStream().CombineLatest(
-                host.Hub.GetEffectivePermissions(hubPath),
-                host.Workspace.ObservePartitionRoot(host.Hub.Address.Path),
-                (node, permissions, partitionRoot) =>
-                    (Node: node, Permissions: permissions, PartitionRoot: partitionRoot))
-            .Select(t => t.Permissions.HasFlag(Permission.Read)
-                ? (UiControl?)host.BuildDetailsContent(
-                    t.Node, null, t.Permissions.HasFlag(Permission.Update), t.PartitionRoot)
+        return PermissionGate(host, hubPath)
+            .Select(gate => gate.Read
+                ? (UiControl?)host.BuildDetailsTemplate(gate.Update)
                 : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
     }
 
@@ -405,47 +414,33 @@ public static class MeshNodeLayoutAreas
         return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
     }
 
-    // partitionRoot: the node's partition root, when the caller holds it — the header icon inherits
-    // its package mark from there (#2075 item 2). Null simply keeps the NodeType glyph.
-    internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true, MeshNode? partitionRoot = null)
+    /// <summary>
+    /// The node page — header, property overview, markdown body, comments — as a TEMPLATE: every
+    /// control is emitted at once, and what it shows is BOUND. Field values bind straight to the
+    /// node (<see cref="LayoutAreaReference.GetMeshNodeDataContext"/>); what has to be computed
+    /// first (the header's title, icon and provenance line; the markdown body rendered to HTML) is a
+    /// projection the hub feeds into <c>/data</c> (<see cref="NodePageProjections"/>, bound with
+    /// <see cref="Template"/>'s stream <c>Bind</c>). Which form to draw is STRUCTURE and is read from
+    /// the hub's configuration (<see cref="ConfiguredContentType(LayoutAreaHost)"/>), never the node.
+    /// </summary>
+    /// <param name="host">The node hub's layout host.</param>
+    /// <param name="canEdit">Whether the viewer may edit — click-to-edit fields and the icon picker.</param>
+    internal static UiControl BuildDetailsTemplate(this LayoutAreaHost host, bool canEdit)
     {
-        // Outer wrapper at full page width
-        var outer = Controls.Stack.WithWidth("100%");
+        var containerStyle = GetContainerStyle(host);
+        var content = Controls.Stack.WithWidth("100%").WithStyle(containerStyle)
+            .WithView(BuildHeaderTemplate(host, canEdit))
+            .WithView(BuildPropertySection(host, canEdit));
 
-        // Constrained content area (header + properties)
-        var content = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
-
-        // Header with title/icon
-        content = content.WithView(BuildHeader(host, node, canEdit, partitionRoot));
-
-        // For built-in type nodes (Content is NodeTypeDefinition), show type info
-        // instead of property editor which would expose internal NodeTypeDefinition fields.
-        if (node?.Content is NodeTypeDefinition ntd)
-        {
-            content = content.WithView(BuildTypeInfoSection(node, ntd));
-        }
-        // Property overview (read-only with click-to-edit)
-        else if (node != null)
-        {
-            content = content.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
-        }
-
-        outer = outer.WithView(content);
-
-        // Markdown body (raw + pre-rendered). Hoisted out of BuildPropertyOverview
-        // so the markdown body is a DIRECT child of `outer` — agents and tests can
-        // locate it without walking through nested property-overview stacks, and
-        // the rendering surfaces the .md content even when the property summary is
-        // empty (e.g., a NodeType with only an `index.md`).
-        var markdownBody = OverviewLayoutArea.BuildMarkdownBody(host, node);
-        if (markdownBody != null)
-            outer = outer.WithView(markdownBody);
+        // The markdown body is a DIRECT child of the outer stack — agents, tests and the document
+        // export locate it there — bound to a projection of the node, hidden while there is none.
+        var outer = Controls.Stack.WithWidth("100%")
+            .WithView(content)
+            .WithView(OverviewLayoutArea.BuildMarkdownBodyTemplate(host));
 
         // No hardcoded children section. A node page is a MARKDOWN SPACE: it shows exactly what its
         // body contains, and children (or any other content) are injected INLINE with the @@(query)
-        // operator. Appending a hardcoded LayoutAreaControl.Children here rendered the children twice
-        // on any page that already listed them inline (the Space/Doc double-content). Browsing child
-        // nodes is still available via the Catalog / Search areas.
+        // operator. Browsing child nodes is still available via the Catalog / Search areas.
 
         // Comments — back in constrained width. The section is an EMBEDDED AREA, not a compiled
         // call: the platform knows the area's name and nothing else, and the collaboration module
@@ -455,12 +450,51 @@ public static class MeshNodeLayoutAreas
             outer = outer.WithView(
                 Controls.Stack
                     .WithWidth("100%")
-                    .WithStyle(GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithStyle(containerStyle + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
                     .WithView(BuildInlineCommentsSection(host)));
         }
 
         return outer;
     }
+
+    /// <summary>
+    /// The property section of the node page, chosen from CONFIGURATION: a NodeType definition's
+    /// description, the content type's click-to-edit form, or — on a hub whose configuration names
+    /// no content type — the <see cref="OverviewLayoutArea.ContentFormArea"/> slot, which is the
+    /// one place the page still reads the node, to find the form's shape.
+    /// </summary>
+    private static UiControl BuildPropertySection(LayoutAreaHost host, bool canEdit)
+    {
+        if (IsNodeTypeDefinitionHub(host))
+            return NodePageProjections.TypeInfo(host)
+                .Bind(p => new MarkdownControl(p.Markdown), "nodeTypeInfo");
+
+        return ConfiguredContentType(host) is { } contentType
+            ? OverviewLayoutArea.BuildPropertyOverviewTemplate(host, contentType, canEdit)
+            : OverviewLayoutArea.ContentFormSlot(host, OverviewLayoutArea.ContentFormOverview);
+    }
+
+    /// <summary>
+    /// The content type this node hub is CONFIGURED with: its <see cref="MeshDataSource"/>'s
+    /// (<c>WithContentType</c>), else the one the mesh registered for its NodeType. Null when
+    /// neither names one.
+    /// </summary>
+    internal static Type? ConfiguredContentType(LayoutAreaHost host)
+    {
+        if (ConfiguredContentType(host.Workspace) is { } configured)
+            return configured;
+        var nodeType = host.Hub.Configuration.Get<NodeTypePathHolder>()?.Path;
+        return !string.IsNullOrEmpty(nodeType)
+               && host.Hub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } registry
+               && registry.TryResolveByNodeType(nodeType, out var registered)
+            ? registered
+            : null;
+    }
+
+    /// <summary>Whether this hub serves a NodeType DEFINITION — from its configuration, not its node.</summary>
+    internal static bool IsNodeTypeDefinitionHub(LayoutAreaHost host)
+        => host.Hub.Configuration.Get<NodeTypePathHolder>()?.Path == MeshNode.NodeTypePath
+           || ConfiguredContentType(host.Workspace) == typeof(NodeTypeDefinition);
 
     /// <summary>
     /// Builds a description section for built-in type nodes.
@@ -575,7 +609,7 @@ public static class MeshNodeLayoutAreas
         }
 
         identityRow = identityRow.WithView(titleColumn);
-        identityRow = identityRow.WithView(BuildHeaderActionRow(host, node, nodePath, canEdit));
+        identityRow = identityRow.WithView(BuildHeaderActionRow(host, node?.NodeType == MeshNode.NodeTypePath, nodePath, canEdit));
 
         // Row 2 — node-type link + timestamps
         var metaRow = BuildMetaRow(host, node, lastActivity);
@@ -588,6 +622,88 @@ public static class MeshNodeLayoutAreas
             // (GetAutoName is Renderers.Count + 1, so naming the SECOND view shifts nothing).
             .WithView(metaRow, NodeMetaArea);
     }
+
+    /// <summary>The <c>/data</c> id the node page header's projection is published under.</summary>
+    internal const string HeaderDataId = "nodeHeader";
+
+    private const string HeaderStyle =
+        "padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 8px;";
+
+    private const string MetaRowStyle =
+        "align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);";
+
+    private const string TitleStyle =
+        "margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;";
+
+    /// <summary>
+    /// The node page header — icon, title, object actions, provenance line — as a TEMPLATE of
+    /// the hub's own node. Same shape as <see cref="BuildHeader(LayoutAreaHost, MeshNode?, bool)"/>
+    /// (the identity row, then the <see cref="NodeMetaArea"/> row), emitted at once: the title,
+    /// the icon and the provenance line are bound to <see cref="NodePageProjections.Header"/>, the
+    /// object actions are chosen from configuration, and a node excluded from the header context
+    /// hides the header rather than delaying the page to find out.
+    /// </summary>
+    /// <param name="host">The node hub's layout host.</param>
+    /// <param name="canEdit">Whether the viewer may edit — the icon picker, Edit, an editable title.</param>
+    internal static UiControl BuildHeaderTemplate(LayoutAreaHost host, bool canEdit)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        UiControl tileFrame = canEdit
+            ? Controls.Stack.WithStyle("cursor: pointer;").WithClickAction(ctx =>
+            {
+                NodePageProjections.OpenIconPicker(host, ctx);
+                return Task.CompletedTask;
+            })
+            : Controls.Stack;
+
+        // A content type with a Title property is titled by THAT field, click-to-edit; every other
+        // node by its name.
+        var editableTitle = ConfiguredContentType(host)?.GetProperty("Title") != null
+            ? OverviewLayoutArea.BuildTitleTemplate(host, hubPath, EditLayoutArea.GetDataId(hubPath), canEdit)
+            : null;
+        var actions = BuildHeaderActionRow(host, IsNodeTypeDefinitionHub(host), hubPath, canEdit);
+
+        return NodePageProjections.Header(host, HeaderStyle, NodePageProjections.Viewer.Of(host))
+            .Bind(p => HeaderTemplate(p.Style, p.Title, p.Icon, p.IconWidth, p.TileStyle, p.MetaHtml,
+                tileFrame, editableTitle, actions), HeaderDataId);
+    }
+
+    /// <summary>
+    /// The header's controls with its bound values as POINTERS (<see cref="Template"/> substitutes
+    /// them). Every other part is the static structure the caller built.
+    /// </summary>
+    internal static StackControl HeaderTemplate(
+        object style, object title, object icon, object iconWidth, object tileStyle, object metaHtml,
+        UiControl tileFrame, UiControl? editableTitle, UiControl actions)
+    {
+        var tile = (tileFrame as StackControl ?? Controls.Stack)
+            .WithView((Controls.Stack with { Style = tileStyle })
+                .WithView(new IconControl(icon) { Width = iconWidth }));
+
+        var titleColumn = Controls.Stack.WithStyle("flex: 1; min-width: 0;")
+            .WithView(editableTitle ?? Controls.H1(title).WithStyle(TitleStyle));
+
+        var identityRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("align-items: center; gap: 20px; margin-top: 16px;")
+            .WithView(tile)
+            .WithView(titleColumn)
+            .WithView(actions);
+
+        return (Controls.Stack.WithWidth("100%") with { Style = style })
+            .WithView(identityRow)
+            // Named, not auto-named: see NodeMetaArea.
+            .WithView(MetaRowTemplate(metaHtml), NodeMetaArea);
+    }
+
+    /// <summary>The provenance line bound to a pointer — <see cref="MetaRowHtml"/> computed on the hub.</summary>
+    private static StackControl MetaRowTemplate(object metaHtml)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle(MetaRowStyle)
+            .WithView(new HtmlControl(metaHtml));
 
     /// <summary>
     /// Renders the node icon as a clickable tile that opens the icon-picker dialog when the
@@ -672,14 +788,14 @@ public static class MeshNodeLayoutAreas
     /// — the menu list already dropped the unrenderable entries for the same reason.</para>
     /// </summary>
     private static UiControl BuildHeaderActionRow(
-        LayoutAreaHost host, MeshNode? node, string nodePath, bool canEdit)
+        LayoutAreaHost host, bool isNodeTypeDefinition, string nodePath, bool canEdit)
     {
         var row = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end;");
 
         // Configuration button for NodeType definition nodes — points at their own Configuration area.
-        if (node?.NodeType == MeshNode.NodeTypePath)
+        if (isNodeTypeDefinition)
         {
             row = row.WithView(Controls.Button(host.Localize("ui.configuration"))
                 .WithAppearance(Appearance.Accent)
@@ -957,6 +1073,35 @@ public static class MeshNodeLayoutAreas
     }
 
     /// <summary>
+    /// The provenance line as ONE fragment of markup — the same segments, labels and links
+    /// <see cref="BuildMetaRow"/> draws, for the template header and strip that BIND it
+    /// (<see cref="NodePageProjections"/>). Pure: the viewer's language is passed in, because the
+    /// projection that calls this runs off the render turn, where no viewer is ambient.
+    /// </summary>
+    /// <param name="entries">The segments (<see cref="BuildMetaEntries"/>).</param>
+    /// <param name="locale">The viewer's language tag.</param>
+    internal static string MetaRowHtml(ImmutableArray<NodeMetaEntry> entries, string? locale)
+    {
+        var spans = entries.Select(entry =>
+        {
+            var label = System.Web.HttpUtility.HtmlEncode(LocalizationCatalog.Get(entry.LabelKey, locale));
+            var text = System.Web.HttpUtility.HtmlEncode(entry.Text);
+            if (entry.By is { } by)
+                text += " " + System.Web.HttpUtility.HtmlEncode(LocalizationCatalog.Get(MetaByKey, locale, by));
+            if (entry.What is { } what)
+                text += " — " + System.Web.HttpUtility.HtmlEncode(what);
+            return entry.Href is { } href
+                ? "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">"
+                  + $"<span>{label}</span>"
+                  + $"<a href=\"{href}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{text}</a>"
+                  + "</span>"
+                : $"<span><span style=\"color: var(--neutral-foreground-rest);\">{label}</span> {text}</span>";
+        });
+        return "<div style=\"display: flex; align-items: center; gap: 24px; flex-wrap: wrap;\">"
+               + string.Concat(spans) + "</div>";
+    }
+
+    /// <summary>
     /// Registers the page a node LANDS ON, and says what it does about provenance. Use this — not
     /// the bare <c>WithView(area, …)</c> — for any area a node type names with
     /// <c>WithDefaultArea</c>.
@@ -1049,19 +1194,30 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     private static IObservable<UiControl?> ComposeProvenance(
         LayoutAreaHost host, IObservable<UiControl?> page)
-        => host.Workspace.GetMeshNodeStream()
-            .CombineLatest(page, (node, view) =>
-                view is null || node?.IsExcludedFromContext(MeshNodeVisibility.HeaderContext) == true
-                    ? view
-                    : (UiControl?)Controls.Stack
-                        .WithWidth("100%")
-                        .WithView(
-                            Controls.Stack
-                                .WithWidth("100%")
-                                .WithStyle(GetContainerStyle(host) + " margin-top: 16px; margin-bottom: 8px;")
-                                .WithView(BuildMetaRow(host, node)),
-                            NodeMetaArea)
-                        .WithView(view));
+    {
+        // A TEMPLATE strip: emitted with the page, its line bound to a projection of the node
+        // (NodePageProjections.Meta). The viewer — zone and language — is captured HERE, on the
+        // render turn; the projection runs later, off it.
+        var stripStyle = GetContainerStyle(host) + " margin-top: 16px; margin-bottom: 8px;";
+        var viewer = NodePageProjections.Viewer.Of(host);
+        return page.Select(view => view is null
+            ? null
+            : (UiControl?)Controls.Stack
+                .WithWidth("100%")
+                .WithView(
+                    NodePageProjections.Meta(host, stripStyle, viewer)
+                        .Bind(p => ProvenanceStrip(p.Style, p.MetaHtml), ProvenanceDataId),
+                    NodeMetaArea)
+                .WithView(view));
+    }
+
+    /// <summary>The <c>/data</c> id the composed provenance strip's projection is published under.</summary>
+    internal const string ProvenanceDataId = "nodeProvenance";
+
+    /// <summary>The composed provenance strip with its bound values as POINTERS.</summary>
+    internal static StackControl ProvenanceStrip(object style, object metaHtml)
+        => (Controls.Stack.WithWidth("100%") with { Style = style })
+            .WithView(MetaRowTemplate(metaHtml));
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
@@ -2313,83 +2469,44 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> EditNode(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        return host.Workspace.GetMeshNodeStream().CombineLatest(
-            host.Hub.GetEffectivePermissions(hubPath),
-            (node, permissions) =>
-            {
-                if (!permissions.HasFlag(Permission.Update))
-                    return (UiControl?)BuildAccessDenied(hubPath, locale: host.ViewerLocale());
-                return (UiControl?)BuildEditNodeContent(host, node);
-            });
+        return PermissionGate(host, hubPath)
+            .Select(gate => gate.Update
+                ? (UiControl?)BuildEditTemplate(host)
+                : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
     }
 
-    private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)
+    /// <summary>
+    /// The Edit page as a TEMPLATE: the header and the content type's form in pure edit mode, every
+    /// field bound to the node (<see cref="LayoutAreaReference.GetMeshNodeDataContext"/>) so each
+    /// write goes straight back to it. Which form is STRUCTURE, read from configuration
+    /// (<see cref="ConfiguredContentType(LayoutAreaHost)"/>); a hub that names no content type
+    /// falls back to the <see cref="OverviewLayoutArea.ContentFormArea"/> slot.
+    /// </summary>
+    internal static UiControl BuildEditTemplate(LayoutAreaHost host)
     {
-        if (node == null)
-            return Controls.Markdown(host.Localize("ui.mdNodeNotFound"));
-
-        var instance = node.Content;
-        if (instance == null)
-        {
-            // A freshly-created node carries no Content yet — the create flow persists an Active
-            // node with null Content (never a transient placeholder) and lands here on its own hub.
-            // That hub knows the node's content type via its MeshDataSource, so materialise a default
-            // instance to resolve the form SHAPE (contentType). The form binds to the node stream
-            // below, so the first field write persists it — we deliberately do NOT seed the /data
-            // projection here: this method re-runs on every render (the permissions CombineLatest),
-            // and an unconditional seed could reset in-progress edits before the first write lands.
-            var dataSource = host.Workspace.DataContext.DataSources
-                .OfType<MeshDataSource>()
-                .FirstOrDefault(ds => ds.ContentType != null);
-            instance = dataSource?.CreateContentInstance(node);
-        }
-        if (instance == null)
-            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
-                .WithView(BuildHeader(host, node, false))
-                .WithView(Controls.Markdown(host.Localize("ui.mdNoContentType"))
-                    .WithStyle("color: var(--neutral-foreground-hint);"));
-
-        if (instance is JsonElement je)
-            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
+        var nodePath = host.Hub.Address.ToString();
+        var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
 
         // Skip edit form for NodeTypeDefinition content (type root nodes)
-        if (instance is Configuration.NodeTypeDefinition)
-            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
-                .WithView(BuildHeader(host, node, false))
+        if (IsNodeTypeDefinitionHub(host))
+            return container
+                .WithView(BuildHeaderTemplate(host, canEdit: false))
                 .WithView(Controls.Markdown(host.Localize("ui.mdBuiltInNotEditable"))
                     .WithStyle("color: var(--neutral-foreground-hint);"));
 
-        var contentType = instance.GetType();
-        var nodePath = node.Path;
-        var dataId = Layout.Domain.EditLayoutArea.GetDataId(nodePath);
+        container = container.WithView(BuildHeaderTemplate(host, canEdit: true));
+        if (ConfiguredContentType(host) is not { } contentType)
+            return container.WithView(OverviewLayoutArea.ContentFormSlot(host, OverviewLayoutArea.ContentFormEdit));
 
         // The form binds DIRECTLY to the node's Content (node-bound DataContext): each field reads
         // from and writes straight back to the node stream — ONE source of truth, no /data replica,
-        // no SetupAutoSave save subscription. The one-way /data projection below keeps the
-        // derived-label read views (dimension/options/date) correct from the Layout layer.
+        // no SetupAutoSave save subscription. The one-way /data mirror keeps the derived-label read
+        // views (dimension/options/date) correct from the Layout layer.
+        var dataId = EditLayoutArea.GetDataId(nodePath);
         var boundContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: true);
-        // 🚨 ReplaceDisposable, NEVER RegisterForDisposal — see the identical seam in
-        // OverviewLayoutArea.BuildPropertyOverview (issue #606). BuildEditNodeContent re-runs on
-        // every emission of the node/permission CombineLatest, and the appending overload would
-        // stack one more live node-stream subscription per render under a key no area teardown
-        // reaps.
-        host.ReplaceDisposable($"editnode-content-projection_{dataId}",
-            host.Workspace.GetMeshNodeStream(nodePath)
-                .Select(n => n?.Content)
-                .Where(c => c is not null)
-                .Subscribe(content => host.UpdateData(dataId, content!)));
-
-        var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
-
-        // Header with title
-        container = container.WithView(BuildHeader(host, node, canEdit: true));
-
-        // Property form in pure edit mode (not toggleable)
-        container = container.WithView(Layout.Domain.EditLayoutArea.BuildPropertyForm(
-            host, contentType, dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext));
-
-        return container;
+        return container.WithView(EditLayoutArea.BuildPropertyForm(
+                host, contentType, dataId, canEdit: true, isToggleable: false, boundDataContext: boundContext)
+            .MirrorContent(nodePath, dataId));
     }
 
     #endregion
