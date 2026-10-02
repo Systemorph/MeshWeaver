@@ -288,6 +288,32 @@ Mechanics (so you know what's load-bearing):
 - A few read-only display controls (the `[Dimension]` / options / formatted-date toggle *labels*) derive their text from the layout-area `/data` stream rather than a value pointer. When you node-bind a toggleable form, keep `/data/{dataId}` as a **one-way live projection** of the node content (`GetMeshNodeStream(path).Select(n => n.Content).Subscribe(c => host.UpdateData(dataId, c))`) so those labels stay correct. This is a pure read mirror — it follows the node, has no save loop, and never writes back, so it is NOT the forbidden replicate-then-save pattern.
 - **🚨 Editability is the PRODUCING AREA's decision, and it is part of the structure.** A node-bound field writes as the viewer, and the owning hub refuses a viewer without `Update` on the node. So the area that emits the control resolves `hub.GetEffectivePermissions(path)` and sets `Readonly = !canUpdate` (or `CanEdit` on the editors that carry it) — never hands a public visitor a box that invites typing its write can only refuse. The course wish books are the reference shape (`AgenticPrimer/WishBook` → `WishBookAreas.Write`, Education#363). **A write that is refused anyway** (grants changed while the page was open, or an area that forgot the check) reaches the view as an `UnauthorizedAccessException`; `BlazorView.UpdatePointer` classifies it as a REFUSAL, not a fault: the person sees the localized `ui.fieldWriteRefused` sentence and the log carries a Warning, instead of the raw English exception in the error modal and an Error line the incident filer turns into a ticket (#5600).
 
+## Binding a rich control to a node field
+
+The Monaco controls carry their text in a bindable slot too, so an area that shows or edits a node's text renders the control AT ONCE and never loads the node. Each has a `BindToNode` builder that sets a relative pointer and the node-bound DataContext above in one call:
+
+| Control | Bindable slot(s) | Builder | What the renderer does |
+|---|---|---|---|
+| `CodeEditorControl` | `Value` | `.BindToNode(nodePath, "instructions")` | reads the field live off the node stream, writes each edit straight back to THAT field (per-field read-modify-write) |
+| `DiffEditorControl` | `Original`, `Modified` | `.BindToNode(nodePath, "baselineText", "text")` | binds both panes; redraws when either field changes. Read-only |
+
+```csharp
+// ✅ Agent Edit — the instructions editor IS the node field. No /data copy, no Save button.
+stack.WithView(new CodeEditorControl().WithLanguage("markdown").WithHeight("400px")
+    .BindToNode(agentPath, "instructions"));
+
+// ✅ Post Changes — the diff compares two fields of the post, live.
+stack.WithView(new DiffEditorControl { Language = "plaintext", Height = "560px" }
+    .BindToNode(postPath, "baselineText", "text"));
+```
+
+- `bindContent: false` resolves the field against the node's TOP-LEVEL fields (`Description`, `Name`) instead of its `Content`.
+- The field is a RELATIVE JSON pointer, not a bare property name: `"instructions"`, or a `/`-separated path to a nested field (`"review/notes"`). A property whose NAME contains `/` or `~` is written escaped (`~1`, `~0`); each segment resolves case-insensitively. A leading `/` would make it absolute — bound to the layout area's data instead of the node — so `BindToNode` refuses it (`ArgumentException`), and an empty field with it.
+- A pane whose text is not on that node: set `Original` / `Modified` to an ABSOLUTE pointer (`new JsonPointerReference("/data/previousVersion")`) — absolute pointers always read the layout area's data, even under a node-bound DataContext — and feed that entry from a stream.
+- `DiffEditorControl.OriginalContent` / `ModifiedContent` stay as LITERAL strings for text the area genuinely holds already; `Original` / `Modified` win when set.
+- `CodeEditorControl.WithAutoSave(nodePath)` remains the Code-node shape (it writes `CodeConfiguration.Code`); `BindToNode` is the general one — any field, any node. **An editor has ONE write target, so the two are mutually exclusive:** `BindToNode` clears an auto-save address set earlier, and `WithAutoSave` on a node-bound editor throws `InvalidOperationException` (dropping the binding instead would leave the editor with no text). Never set `AutoSaveAddress` next to a node-bound `Value` through an initializer or a `with` — both writes would fire on every edit.
+- Pinned by `NodeBoundEditorControlsTest` (MeshWeaver.Graph.Test): the bound value renders, follows a change made by someone else, an edit writes only its field; an absolute pointer under the node-bound context is NOT node-bound while its relative sibling is; the field is pointer syntax (nested, escaped); auto-save and a node binding exclude each other — and the negative controls (a baked literal has nothing to follow; a pointer against the wrong root stays empty through the change).
+
 ## Anti-patterns — never do these
 
 | ❌ Wrong | Why | ✅ Right |
