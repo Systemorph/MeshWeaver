@@ -132,7 +132,20 @@ These areas of every node hub are templates; each pins its shape in `test/MeshWe
 | `$Schema` (self) | The content type the hub's `MeshDataSource` was configured with; no read. |
 | `$Data`, `$Content` (self) | A markdown/HTML control bound to a projection of the node, following later edits. On a node hub the layout's `DataPathViews` renderer also matches `$Data` and, running after the named renderer, overwrites it — a client sees that one there. |
 
-Still to convert on the default page: `Overview` and `Data` (`BuildDetailsContent` → header, property overview, markdown body), the provenance strip `WithNodePage` composes, and `Edit`. Their markdown body is consumed by the document export (`AreaMarkupRenderer`, MeshWeaver.Plugins), which reads `MarkdownControl.Markdown` as text — a pointer-bound body needs that renderer to resolve node-bound pointers first.
+### The default node page itself (converted)
+
+The main page and its siblings are templates as well. `test/MeshWeaver.Graph.Test/NodePageIsATemplateTest` pins their shape:
+
+| Area | Template |
+|---|---|
+| `Overview`, `Data` (`BuildDetailsTemplate`) | The page is emitted once the viewer's permissions are known. Permissions are STRUCTURE: they decide the page or the denial, and whether fields are click-to-edit. The header binds its title, icon and provenance line to a projection the hub feeds into `/data/nodeHeader` (`NodePageProjections.Header`). A node excluded from the header context hides the header through its bound style. The property form is the configured content type's form (`ConfiguredContentType`: the `MeshDataSource`'s, else the type the mesh registered for the NodeType), with every field bound to the node. The markdown body is a `MarkdownControl` bound to `/data/nodeBody`, and it is hidden while the node has no body. A NodeType definition's description is bound the same way. |
+| The provenance strip `WithNodePage` composes (`ComposeProvenance`) | Emitted with the page. Its line is bound to `/data/nodeProvenance` (`NodePageProjections.Meta`). The viewer's zone and language are captured on the render turn. |
+| `Edit` (`BuildEditTemplate`) | The header template, plus the configured content type's form in pure edit mode, bound to the node. |
+| `NodeContentForm` (`OverviewLayoutArea.ContentForm`) | The fallback slot, rendered with a skeleton, for a hub whose configuration names no content type. The form's SHAPE can then only come from the node's own `$type`. It is the one place the default page still reads the node on the hub, and that read decides structure only, so it stays in the ratchet's inventory. |
+
+Every projection is a pure `Select` over the hub's own node, published with `Template`'s stream `Bind`. That `Bind` subscribes in the control's buildup and is disposed with its area, so the page is never rebuilt on an edit. The one-way `/data` mirror of the node's Content, which a few read-only labels of the property form read, is opened the same way (`NodePageProjections.MirrorContent`). The ratchet's text scan does not see a load that sits in another file. Keeping the projections in `NodePageProjections.cs` therefore relies on that blind spot, so the file's contract is narrow: projections and the mirror, never a control.
+
+**Consumers that read these controls' values server-side must resolve pointers.** The document export (`AreaMarkupRenderer`, MeshWeaver.Plugins) resolves a node-bound pointer through `MeshNodeBindingExtensions.Bind` and a `/data` pointer through `LayoutClientExtensions.DataBind`, with the control's own data context or the one its container cascades. That change landed before this conversion went live.
 
 ### The loading shape
 
