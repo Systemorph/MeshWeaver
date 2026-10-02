@@ -71,7 +71,11 @@ public class DeleteMeshNodeRequestIsAValidatedDeleteTest(ITestOutputHelper outpu
                 cancellationToken: TestContext.Current.CancellationToken);
 
         // The refusal: same message, same window, a caller without Delete — the node stays.
-        await Gone(target).Should().NotEmit(TestTimeouts.Quick,
+        // A negative assertion spends its whole window by construction, and here the positive
+        // terminal is already in hand (the control posted after it is already gone), so the window
+        // is a fraction of the budget. TestTimeouts.Quick is a full CI-scaled bound (36 s on a
+        // runner); one of those per case pushed this project past its 8-minute cap.
+        await Gone(target).Should().NotEmit(TestTimeouts.Quick / 10,
             $"'{callerId}' holds no Delete on {target}; the request must not delete it raw");
         (await StoredAt(target)).Should().NotBeNull("the refused request left the node in storage");
     }
