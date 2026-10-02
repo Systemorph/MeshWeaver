@@ -189,6 +189,12 @@ A bare `TimeoutException` is the opposite statement and stays terminal: the silo
 connection and did not answer across the whole budget, i.e. plausibly wedged rather than restarting.
 Telling a sender "transient" about a wedge is a resubscribe storm against a hub that never comes back.
 
+**One path is exempt, and it does not change this verdict:** a layout-area VIEW re-opens its stream
+after a deadline miss, at most once per 30 s per open view (policy
+`area-view-reopens-on-deadline-miss`; see [Error Propagation & Wedges](../ErrorPropagationAndWedges)
+→ *A deadline miss re-opens the view*). The router still answers `Failed`; the view's own paced
+re-open is what keeps that from being the storm described here.
+
 **And what the verdict arms is bounded, which is what makes the generous answer safe here.**
 `MeshNodeStreamCache`'s transient-fault breaker gives a transient claim three grace failures and then
 backs re-probes off exponentially (1 s base, 60 s cap), on the explicit reasoning that a *streak* is

@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -68,18 +69,13 @@ public static class Template
         object? current = null;
 
         return new ItemTemplateControl(view, new JsonPointerReference("")) { DataContext = LayoutAreaReference.GetDataPointer(id) }
-            .WithBuildup((host, context, store) =>
+            .WithBuildup((host, context, store) => BindFeed(host, context, store, stream, id, val =>
             {
-                var forwardSubscription = stream.Subscribe(val =>
-                {
-                    if (Equals(val, current))
-                        return;
-                    current = val;
-                    host.Stream.SetData(id, val, host.Stream.StreamId);
-                });
-                host.RegisterForDisposal(context.Area, forwardSubscription);
-                return new(store, [], null);
-            });
+                if (Equals(val, current))
+                    return;
+                current = val;
+                host.Stream.SetData(id, val, host.Stream.StreamId);
+            }));
 
     }
 
@@ -95,18 +91,37 @@ public static class Template
         object? current = null;
         id ??= Guid.NewGuid().AsString();
         return (TView)GetTemplateControl(id!, dataTemplate)
-            .WithBuildup((host, context, store) =>
+            .WithBuildup((host, context, store) => BindFeed(host, context, store, stream, id!, val =>
             {
-                var forwardSubscription = stream.Subscribe(val =>
-                {
-                    if (Equals(val, current))
-                        return;
-                    current = val;
-                    host.Stream.SetData(id!, val, host.Stream.StreamId);
-                });
-                host.RegisterForDisposal(context.Area, forwardSubscription);
-                return new(store, [], null);
-            });
+                if (Equals(val, current))
+                    return;
+                current = val;
+                host.Stream.SetData(id!, val, host.Stream.StreamId);
+            }));
+    }
+
+    /// <summary>
+    /// The buildup both stream overloads share: subscribes the fed stream for the lifetime of the
+    /// bound control's area, WITH an error arm.
+    ///
+    /// <para>🚨 It used to be <c>stream.Subscribe(onNext)</c> alone. A fed stream that faulted — a
+    /// query stall, a projection throwing on an empty cube, a denied read — reached Rx's default
+    /// <c>OnError</c>, which rethrows on the thread that delivered the fault: an unhandled exception
+    /// on the pool, the shape that took memex-cloud replicas down in #5650. Now the fault is logged
+    /// with the area and data id and the bound control is replaced by the standard localized error
+    /// frame (<see cref="LayoutAreaHost.FeedData{T}"/>): in the store being built when the stream
+    /// faults during Subscribe, through the stream when it faults later. The area recovers by being
+    /// rendered again, which re-subscribes the feed.</para>
+    /// </summary>
+    private static EntityStoreAndUpdates BindFeed<T>(
+        LayoutAreaHost host, RenderingContext context, EntityStore store,
+        IObservable<T> stream, string id, Action<T> onNext)
+    {
+        var subscription = host.SubscribeFeed(stream, context.Area, id, onNext, out var synchronousFault);
+        host.RegisterForDisposal(context.Area, subscription);
+        return synchronousFault is null
+            ? new(store, [], null)
+            : host.RenderFeedFault(synchronousFault, context, store, id);
     }
 
     private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
