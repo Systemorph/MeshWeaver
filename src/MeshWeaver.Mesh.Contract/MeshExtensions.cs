@@ -4940,6 +4940,12 @@ public static class MeshExtensions
     /// <paramref name="legTimeout"/>, derived by <c>MeshOperationOptions.Nest</c> at the call site:
     /// the read runs INSIDE the leg's <c>.Catch</c>, which the leg's own bound no longer covers.</param>
     /// <param name="logger">Where a per-leaf refusal is reported.</param>
+    /// <param name="includeRoot">Ask the ROOT too — <paramref name="rootPath"/> is added to the set
+    /// whether or not <paramref name="allPaths"/> already carries it. A delete validates its root in-process before
+    /// this fan-out, so it leaves this false; a MOVE has no such earlier stage — the source root is
+    /// as much "going away" as every descendant — so it asks the root's own hub the same question,
+    /// which is also what runs the root's <c>[RequiresPermission(Delete)]</c> gate on the NODE rather
+    /// than only on its namespace.</param>
     private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?> PreValidateDescendantsObs(
         IMessageHub issuingHub,
         string rootPath,
@@ -4949,10 +4955,11 @@ public static class MeshExtensions
         TimeSpan legTimeout,
         IStorageAdapter storage,
         TimeSpan absenceProbeBudget,
-        ILogger logger)
+        ILogger logger,
+        bool includeRoot = false)
     {
-        var descendants = allPaths
-            .Where(p => !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
+        var descendants = (includeRoot ? allPaths.Add(rootPath) : allPaths)
+            .Where(p => includeRoot || !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (descendants.Length == 0)
             return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
@@ -5473,6 +5480,32 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs the create-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// create — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="CreateNodeRequest"/> runs it. Emits the first refusal, or <c>null</c> when every
+    /// validator lets the create through.
+    /// <para>For create paths that do not go through <see cref="CreateNodeRequest"/> — a
+    /// <c>MeshNode</c> entering a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunCreationValidatorsObs(hub, node, new CreateNodeRequest(node), accessContext);
+
+    /// <summary>
+    /// Runs the delete-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// delete — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="DeleteNodeRequest"/> runs it for a single (non-recursive) delete. Emits the first
+    /// refusal, or <c>null</c> when every validator lets the delete through.
+    /// <para>For delete paths that do not go through <see cref="DeleteNodeRequest"/> — a
+    /// <c>MeshNode</c> leaving a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunDeletionValidatorsObs(DeletionValidators(hub), accessContext, node, new DeleteNodeRequest(node.Path));
+
+    /// <summary>
     /// Every registered <see cref="INodeValidator"/> that takes part in a delete, resolved NOW.
     /// Call it where the hub is known to be alive — at handler entry — never from a continuation.
     /// </summary>
@@ -5777,7 +5810,8 @@ public static class MeshExtensions
     private static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
         MeshNode node,
-        CreateNodeRequest request)
+        CreateNodeRequest request,
+        AccessContext? accessContext = null)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -5785,7 +5819,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Create,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessContext ?? accessService?.Context ?? accessService?.CircuitContext
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
@@ -7468,12 +7502,42 @@ public static class MeshExtensions
             options);
 
     /// <summary>
-    /// Sync handler for MoveNodeRequest — Copy subtree to target, then reactively delete
-    /// every source path. Composition is pure <see cref="IObservable{T}"/> end-to-end:
-    /// <c>CopyNode</c> → <c>Query</c> (source subtree paths) → <c>storage.Delete</c>
-    /// per path, with change notifications fired so the query catalog refreshes.
-    /// No <c>await</c>, no recursive <c>DeleteNodeRequest</c> orchestration. Mirror shape
-    /// of <see cref="HandleCopyNodeRequest"/>.
+    /// Sync handler for MoveNodeRequest — validate the source as a DELETE, copy the subtree to the
+    /// target, then reactively delete every source path. Composition is pure
+    /// <see cref="IObservable{T}"/> end-to-end: <c>delete pre-flight</c> → <c>CopyNode</c> →
+    /// <c>ListDescendantPaths</c> → <c>storage.DeleteMany</c>, with change notifications fired so
+    /// the query catalog refreshes. No <c>await</c>. Mirror shape of
+    /// <see cref="HandleCopyNodeRequest"/>.
+    ///
+    /// <para>🚨 A move REMOVES the source, so it is answerable to everything a delete of the source
+    /// is answerable to. The delete leg below goes straight to storage — it has to, because the
+    /// copy has already re-created the subtree and a cascade of <see cref="DeleteNodeRequest"/>s
+    /// would re-decide, half-way through, a question the move must decide before it writes
+    /// anything. Before this pre-flight existed, that leg was the ONLY removal of the source and it
+    /// ran no <see cref="INodeValidator"/> at all: moving <c>Admin/Tiers/pro</c> elsewhere dropped
+    /// an in-use plan tier from the ladder past <c>TierInUseDeletionGuard</c>, and every other delete
+    /// guard (the last-admin invariant, the partition-root guard, a node-level Delete denial) was
+    /// bypassable the same way. Now the source subtree — root included — is put through the SAME
+    /// pre-flight a recursive delete runs (<see cref="PreValidateDescendantsObs"/>: one
+    /// <see cref="ValidateDeleteRequest"/> per path, answered by that node's own hub under the
+    /// caller's identity, so the <c>[RequiresPermission(Delete)]</c> gate runs on the NODE and the
+    /// node's delete-validator chain runs with the move's source as the cascade root), plus the
+    /// read-only-provider probe a delete runs on its root. Any refusal refuses the move before the
+    /// copy creates anything.</para>
+    ///
+    /// <para>The TARGET half needs nothing here: the copy leg creates every node through
+    /// <see cref="CreateNodeRequest"/>, which runs the create permission and the create-validator
+    /// chain per node.</para>
+    ///
+    /// <para><b>The planning window is closed by the delete's own subtree write scope.</b> The
+    /// pre-flight validates the subtree as storage lists it when the move starts; the delete leg
+    /// re-enumerates after the copy. A node created under the source in between would be carried by
+    /// the copy (it is <c>RequireComplete</c>) and removed by the delete leg without having been
+    /// asked. So the move holds <see cref="RecentlyDeletedRegistry.BeginSubtreeDeletion"/> on the
+    /// source from BEFORE the pre-flight enumerates to the end of the delete leg — exactly the scope
+    /// <c>HandleDeleteNodeRequest</c> holds from planning to commit — and the storage write guard
+    /// refuses every in-process write at or under the source meanwhile. The scope is released
+    /// BEFORE the response is posted, so a caller acting on the answer never meets it.</para>
     /// </summary>
     private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
@@ -7510,56 +7574,85 @@ public static class MeshExtensions
         var callerContext = request.AccessContext
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
-        // Move = Copy (with satellites + descendants) → reactive delete of every source path.
+        // The delete pre-flight's own budget ladder — the same three rungs HandleDeleteNodeRequest
+        // derives for its recursive pre-flight (stage > leg > absence probe), never new constants.
+        var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
+        var budget = opts.Timeout;
+        var legBudget = opts.Nest(budget);
+        var absenceProbeBudget = opts.Nest(legBudget);
+        // Off the router, exactly as the delete issues its fan-out (#2477).
+        var issuingHub = hub.NodeOperationIssuingHub();
+
+        // 🚨 The source must be DELETABLE — see the remarks. Emits once when it is; errors with a
+        // MoveRefusedException naming the path and the reason when it is not.
+        var sourceMayBeDeleted = Observable.Defer(() => storage.FindDeleteBlockingProvider(sourcePath))
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Timeout(budget, Observable.Defer(() => Observable.Throw<string?>(new TimeoutException(
+                $"[MoveNode] the storage-provider probe for '{sourcePath}' did not answer within "
+                + $"{budget.TotalSeconds:0}s"))))
+            .SelectMany(blockingProvider => blockingProvider is not null
+                ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                    $"Cannot move '{sourcePath}': it is served by the read-only storage provider "
+                    + $"'{blockingProvider}', so it cannot be removed from where it is. Nothing was moved.",
+                    NodeMoveRejectionReason.ValidationFailed))
+                : storage.ListDescendantPaths(sourcePath)
+                    .Take(1)
+                    .Timeout(budget, Observable.Defer(() => Observable.Throw<IReadOnlyCollection<string>>(new TimeoutException(
+                        $"[MoveNode] storage did not enumerate the subtree of '{sourcePath}' within "
+                        + $"{budget.TotalSeconds:0}s"))))
+                    .SelectMany(descendants => PreValidateDescendantsObs(
+                        issuingHub,
+                        sourcePath,
+                        descendants
+                            .Where(p => !string.IsNullOrEmpty(p))
+                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
+                        callerContext,
+                        budget,
+                        legBudget,
+                        storage,
+                        absenceProbeBudget,
+                        logger,
+                        includeRoot: true))
+                    .SelectMany(failure => failure is { } f
+                        ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                            $"Cannot move '{sourcePath}': moving it deletes '{f.Path}' from where it is, "
+                            + $"and that delete is refused: {f.Error}. Nothing was moved.",
+                            f.Reason switch
+                            {
+                                NodeDeletionRejectionReason.Unavailable => NodeMoveRejectionReason.Unavailable,
+                                _ => NodeMoveRejectionReason.ValidationFailed,
+                            }))
+                        : Observable.Return(System.Reactive.Unit.Default)))
+            // A probe or enumeration that ran out of time DECIDED nothing: refused (fail-closed),
+            // but reported as Unavailable — the same vocabulary the delete uses — never as a verdict.
+            .Catch((TimeoutException ex) => Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
+                $"Cannot move '{sourcePath}' now: whether it may be deleted from where it is could not be "
+                + $"established ({ex.Message}). Nothing was moved; the move may be retried.",
+                NodeMoveRejectionReason.Unavailable)));
+
+        // Move = delete pre-flight of the source → Copy (with satellites + descendants) →
+        // reactive delete of every source path.
         // Delete only fires after Copy succeeds (SelectMany short-circuits on copy error).
         // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
         // never the eventually-consistent catalog query — the same stale-plan defect that
         // left recursive-delete survivors (issue #839) would leave source rows behind here.
-        Observable.Defer(() => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
-            {
-                o = o.WithTarget(hub.NodeOperationTarget());
-                return callerContext != null ? o.WithAccessContext(callerContext) : o;
-            }))
-            .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
-                ? Observable.Return(copiedRoot)
-                : Observable.Throw<MeshNode>(
-                    new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
-            .SelectMany(copied =>
-                storage.ListDescendantPaths(sourcePath)
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .SelectMany(descendants =>
-                    {
-                        var paths = descendants
-                            .Where(p => !string.IsNullOrEmpty(p))
-                            .Append(sourcePath)
-                            .ToImmutableList();
-
-                        if (paths.IsEmpty)
-                            return Observable.Return(copied);
-
-                        // Bottom-up delete (longest path first) so parent storage entries
-                        // are removed only after their descendants. Each delete is its own
-                        // observable; Merge runs them concurrently, ToList awaits all.
-                        //
-                        // Commit-then-publish: DeleteAndPublish chains the
-                        // MeshChangeEvent.Deleted into the storage observable, so the
-                        // event for each path fires only after that path's storage
-                        // commit completes. The storage adapter's Changes feed
-                        // fires the Deleted notification from inside its Delete.
-                        // Children before parents, then ONE batch: the path set is already
-                        // authoritative and already committed to, so there is nothing to gain
-                        // from paying a round-trip per row (IStorageAdapter.DeleteMany).
-                        var ordered = paths.OrderByDescending(p => p.Length).ToList();
-                        return storage.DeleteMany(ordered)
-                            .Take(1)
-                            .Do(deleted =>
-                            {
-                                foreach (var p in deleted)
-                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                            })
-                            .Select(_ => copied);
-                    }))
+        //
+        // 🚨 The whole sequence runs inside the source's SUBTREE-DELETION SCOPE — the same
+        // RecentlyDeletedRegistry.BeginSubtreeDeletion the recursive delete holds from planning
+        // to commit. It opens on Subscribe, BEFORE the pre-flight enumerates, so no in-process
+        // writer can create a node under the source that the pre-flight never validated and the
+        // delete leg would then remove. WithinSubtreeDeletion releases it BEFORE the result
+        // reaches the subscriber that posts the response — a caller acting on "moved" (or on
+        // the refusal) must never meet the scope still held, which Observable.Using alone
+        // cannot guarantee.
+        //
+        // GetRequiredService, never GetService: MeshBuilder registers the registry at the mesh
+        // ROOT unconditionally, so there is no supported host without it — and a move that ran
+        // BARE when it did not resolve would reopen exactly this window with nothing to say so.
+        // Same resolution, for the same reason, as PartitionRemovalOnRecord above.
+        hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
+            .WithinSubtreeDeletion(sourcePath, MoveWithinScope)
             .Subscribe(
                 movedNode =>
                 {
@@ -7569,6 +7662,13 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
+                    if (ex is MoveRefusedException refused)
+                    {
+                        logger.LogWarning("[MoveNode] {Source} -> {Target} refused: {Error}",
+                            sourcePath, targetPath, refused.Message);
+                        hub.Post(MoveNodeResponse.Fail(refused.Message, refused.Reason), o => o.ResponseFor(request));
+                        return;
+                    }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = msg.StartsWith(CopyNodeRequest.IncompleteCopyRefusal, StringComparison.Ordinal)
                         ? NodeMoveRejectionReason.ValidationFailed
@@ -7582,6 +7682,54 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+
+        IObservable<MeshNode> MoveWithinScope() =>
+            sourceMayBeDeleted
+                .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+                {
+                    o = o.WithTarget(hub.NodeOperationTarget());
+                    return callerContext != null ? o.WithAccessContext(callerContext) : o;
+                }))
+                .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
+                    ? Observable.Return(copiedRoot)
+                    : Observable.Throw<MeshNode>(
+                        new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
+                .SelectMany(copied =>
+                    storage.ListDescendantPaths(sourcePath)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(15))
+                        .SelectMany(descendants =>
+                        {
+                            var paths = descendants
+                                .Where(p => !string.IsNullOrEmpty(p))
+                                .Append(sourcePath)
+                                .ToImmutableList();
+
+                            if (paths.IsEmpty)
+                                return Observable.Return(copied);
+
+                            // Bottom-up delete (longest path first) so parent storage entries
+                            // are removed only after their descendants. Each delete is its own
+                            // observable; Merge runs them concurrently, ToList awaits all.
+                            //
+                            // Commit-then-publish: DeleteAndPublish chains the
+                            // MeshChangeEvent.Deleted into the storage observable, so the
+                            // event for each path fires only after that path's storage
+                            // commit completes. The storage adapter's Changes feed
+                            // fires the Deleted notification from inside its Delete.
+                            // Children before parents, then ONE batch: the path set is already
+                            // authoritative and already committed to, so there is nothing to gain
+                            // from paying a round-trip per row (IStorageAdapter.DeleteMany).
+                            var ordered = paths.OrderByDescending(p => p.Length).ToList();
+                            return storage.DeleteMany(ordered)
+                                .Take(1)
+                                .Do(deleted =>
+                                {
+                                    foreach (var p in deleted)
+                                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                })
+                                .Select(_ => copied);
+                        }));
     }
 
     /// <summary>
@@ -8047,6 +8195,16 @@ public static class MeshExtensions
                 LastModified = default,
                 LastModifiedBy = null,
             };
+    }
+
+    /// <summary>
+    /// A move refused BEFORE it wrote anything — the source cannot be deleted from where it is. An
+    /// expected outcome (Warning, not Error) carrying the reason the response reports.
+    /// </summary>
+    private sealed class MoveRefusedException(string message, NodeMoveRejectionReason reason)
+        : InvalidOperationException(message)
+    {
+        public NodeMoveRejectionReason Reason { get; } = reason;
     }
 
     /// <summary>

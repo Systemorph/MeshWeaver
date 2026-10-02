@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -67,5 +68,55 @@ public class RecentlyDeletedRegistrySubtreeScopeTests
         var registry = new RecentlyDeletedRegistry();
         using var scope = registry.BeginSubtreeDeletion("");
         registry.IsUnderActiveDeletion("anything", out _).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 <see cref="RecentlyDeletedRegistry.WithinSubtreeDeletion{T}"/> holds the scope while the body
+    /// runs and releases it BEFORE the body's value reaches the subscriber — the value is the caller's
+    /// "done" signal, and a caller acting on it must not meet the scope still held. Under a bare
+    /// <c>Observable.Using</c> the third assertion fails: Rx disposes the resource only after the
+    /// observer has processed the value.
+    /// </summary>
+    [Fact]
+    public void WithinSubtreeDeletion_holds_while_the_body_runs_and_releases_before_the_value_is_delivered()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        bool? heldInBody = null;
+        bool? heldAtDelivery = null;
+        var completed = false;
+
+        using var subscription = registry.WithinSubtreeDeletion("s/t", () =>
+            {
+                heldInBody = registry.IsUnderActiveDeletion("s/t/u", out _);
+                return Observable.Return(42);
+            })
+            .Subscribe(value => heldAtDelivery = registry.IsUnderActiveDeletion("s/t/u", out _), () => completed = true);
+
+        heldInBody.Should().BeTrue("the scope opens before the body is subscribed");
+        completed.Should().BeTrue();
+        heldAtDelivery.Should().BeFalse("the scope is released before the value reaches the subscriber");
+    }
+
+    [Fact]
+    public void WithinSubtreeDeletion_releases_before_an_error_is_delivered()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        bool? heldAtError = null;
+
+        using var subscription = registry.WithinSubtreeDeletion("e", () => Observable.Throw<int>(new InvalidOperationException("boom")))
+            .Subscribe(_ => { }, ex => heldAtError = registry.IsUnderActiveDeletion("e/f", out _));
+
+        heldAtError.Should().BeFalse("a retry issued on the failure must not be refused as in flight");
+    }
+
+    [Fact]
+    public void WithinSubtreeDeletion_releases_on_unsubscribe()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        var subscription = registry.WithinSubtreeDeletion("n", Observable.Never<int>).Subscribe(_ => { });
+        registry.IsUnderActiveDeletion("n/m", out _).Should().BeTrue("the body has not terminated");
+
+        subscription.Dispose();
+        registry.IsUnderActiveDeletion("n/m", out _).Should().BeFalse("unsubscribing releases the scope");
     }
 }

@@ -11,6 +11,7 @@ namespace MeshWeaver.Hosting.Persistence.PartitionStorage;
 /// activity entry. Single message in / single response out — batching at the
 /// caller level avoids one-message-per-row overhead.
 /// </summary>
+[InfrastructureOnly]
 public record WriteBatchRequest(
     ImmutableList<MeshNode> Nodes,
     JsonSerializerOptions Options) : IRequest<WriteBatchResponse>;
@@ -24,6 +25,7 @@ public record WriteBatchResponse(
 /// Delete a batch of nodes by path. The handler opens a transaction, deletes
 /// every path, commits, then emits an activity entry.
 /// </summary>
+[InfrastructureOnly]
 public record DeleteBatchRequest(
     ImmutableList<string> Paths) : IRequest<DeleteBatchResponse>;
 
@@ -33,6 +35,7 @@ public record DeleteBatchResponse(
     string? Error = null);
 
 /// <summary>Read a single node from the partition.</summary>
+[InfrastructureOnly]
 public record ReadNodeRequest(
     string Path,
     JsonSerializerOptions Options) : IRequest<ReadNodeResponse>;
@@ -41,6 +44,7 @@ public record ReadNodeRequest(
 public record ReadNodeResponse(MeshNode? Node);
 
 /// <summary>Existence check for a single node path.</summary>
+[InfrastructureOnly]
 public record ExistsRequest(string Path) : IRequest<ExistsResponse>;
 
 /// <summary>Result of an <see cref="ExistsRequest"/>.</summary>
@@ -51,6 +55,7 @@ public record ExistsResponse(bool Exists);
 /// Returns node paths (records present at that level) and directory paths
 /// (intermediate folders).
 /// </summary>
+[InfrastructureOnly]
 public record ListChildPathsRequest(string? ParentPath)
     : IRequest<ListChildPathsResponse>;
 
@@ -66,6 +71,7 @@ public record ListChildPathsResponse(
 /// (Postgres: one UNION across primary + satellite tables) instead of the
 /// caller degrading to a level-by-level <see cref="ListChildPathsRequest"/> walk.
 /// </summary>
+[InfrastructureOnly]
 public record ListDescendantPathsRequest(string RootPath)
     : IRequest<ListDescendantPathsResponse>;
 
