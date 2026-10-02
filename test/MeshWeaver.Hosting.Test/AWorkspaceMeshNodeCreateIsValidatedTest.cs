@@ -74,7 +74,11 @@ public class AWorkspaceMeshNodeCreateIsValidatedTest(ITestOutputHelper output) :
         await Stored(free.Path!).Should().Within(TestTimeouts.Convergence)
             .Emit("the change path writes the node to storage", cancellationToken: ct);
 
-        await Stored(held.Path!).Should().NotEmit(TestTimeouts.Quick,
+        // A negative assertion spends its whole window by construction, and here the positive
+        // terminal is already in hand (the change has already answered Failed and the control is stored), so the window
+        // is a fraction of the budget. TestTimeouts.Quick is a full CI-scaled bound (36 s on a
+        // runner); one of those per case pushed this project past its 8-minute cap.
+        await Stored(held.Path!).Should().NotEmit(TestTimeouts.Quick / 10,
             "the refused change must not write the held node to storage");
     }
 

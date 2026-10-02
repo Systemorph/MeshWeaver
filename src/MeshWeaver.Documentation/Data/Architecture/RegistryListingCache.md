@@ -50,7 +50,8 @@ other side: two instances with different grants, served off one cached listing, 
 own packages.
 
 **File fetches are not cached.** `FetchPackageFiles` is a per-package read on the INSTALL path; it is
-not repeated per catalog render, and a stale one would install stale bytes.
+not repeated per catalog render, and a stale one would install stale bytes. It is NARROWED instead —
+see the narrow-fetch section below.
 
 🚨 **A LOCAL directory source is not cached either, and that is a correctness boundary rather than a
 tuning choice.** The defect is a repository fetched OVER THE NETWORK per request; a local read is
@@ -160,9 +161,21 @@ correct, but the saving is gone, and an unannounced loss of it is exactly how th
 return unnoticed. The client detects that line and says so in its log. Only a hard fetch failure
 takes the fallback branch, and a failure of the fallback propagates — nothing is swallowed.
 
-🚨 **Only the LISTING is narrowed.** `FetchPackageFiles` — the install path — still reads the whole
-package folder; narrowing that one would install an empty package. The unfiltered `Fetch` is
-untouched and still transfers everything, which is what a content sync wants.
+🚨 **The INSTALL read is narrowed too — to the package's whole folder, never to the listing's
+predicate** (MeshWeaver#5826). It used to call the unfiltered `Fetch` with no subdirectory and keep
+`<Plugin>/` out of the snapshot afterwards, so every `POST /api/plugins/files` cost the registry a
+whole-repository transfer of MeshWeaver.Plugins (47.8 MB / 13 s on its own) before the first byte of
+the answer — against the consumer's 30 s per-attempt budget. On memex.systemorph.com the boot's fetch
+for `Anthropic` (2026-09-27) and `AppleIntelligence` (2026-09-28) spent all three attempts waiting
+for response headers (`HttpConnection.InitialFillAsync`) and the 90 s pipeline failed the package.
+The reason it had been left whole — *"narrowing that one would install an empty package"* — holds
+for the listing's manifest-only predicate and not for one that keeps the folder:
+`NodeRepoPackageSource` now asks for `path.StartsWith("<Plugin>/")` (and, on the manifest-diff fast
+path, only the named paths inside it), `GitHubPackageSource` for everything under the package's
+subdirectory. The answer is byte-identical; a client with no narrow implementation falls back to the
+old fetch-then-filter. The unfiltered `Fetch` is untouched and still transfers everything, which is
+what a content sync wants. `PackageListingCacheIsArmedTest` pins that the install takes the narrow
+read AND returns the whole folder, binary blob included, and nothing from a prefix-sharing neighbour.
 `GitProtocolNarrowFetchTest` pins both halves, and pins **which** path ran rather than only what it
 answered: a narrow fetch that silently regressed to a whole checkout still returns the right files,
 so asserting the files alone would pass over the defect the test exists to prevent.
