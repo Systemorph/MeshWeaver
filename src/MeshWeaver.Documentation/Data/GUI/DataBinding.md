@@ -153,6 +153,21 @@ The in-mesh samples are converted, so copy them rather than the framework areas 
 
 Each sample's `Test/` folder asserts its template on the mesh: the template is built from a PATH (and, for a fed control, an `Observable.Never` feed — the template must be whole while its feed is silent), and `LayoutTemplate.DeferredViews(template)` must be empty — `LayoutTemplate` (`MeshWeaver.Layout`) is the platform's reading of a control tree, public so in-mesh C# can use it. The cases also pin which pointers are bound against which context. A feed's own subscription is opened by `Template.Bind`'s build-up, so it belongs to the rendered area and ends with it; a feed reports a failure as text and a log line, never by going quiet.
 
+### A decision over several fields: publish a projection, bind the template to it
+
+Some of what a page shows is not a FIELD of a node but a DECISION over several — a compile panel whose chip, colour and button label depend on status × build presence × dirty flag, in the viewer's language. A field binding cannot express that, and computing it in a `GetMeshNodeStream().Select(…)` that builds controls is the bake. The shape the NodeType pages use:
+
+1. A **pure record** of the decided values (`NodeTypeStatusView` — title, status lines, panel style, button label, links), made by a pure `From(node, definition, path, locale)` that tests pin without a renderer.
+2. A **projection** — the ONE read of the node — `GetMeshNodeStream().Select(NodeTypeStatusView.From…)`, a function that builds no control.
+3. A **template** whose controls carry `DataContext = LayoutAreaReference.GetDataPointer(id)` and pointers into the record (`Controls.Body(pointer)`, `Style = pointer`, a button's `Disabled = pointer`), with the projection attached by `control.PublishingTo(id, projection)` (`MeshWeaver.Graph.LayoutProjection`): a buildup that publishes to `/data/{id}` for as long as the AREA lives and is disposed with it.
+
+The template is emitted at once and the values fill in; nothing is ever interpolated into a control. Lists go further and leave the hub entirely: the NodeType release history, the Settings Groups tab and the Admin Data Sources tab are `Controls.MeshSearch.WithHiddenQuery(…)`, run by the viewer's client.
+
+Two things a template cannot close from the server side — both live in the Blazor layer:
+
+- **A code editor reads a node field only through `CodeEditorControl.BindToNode`** ("Binding a rich control to a node field" below), whose view half ships with the Blazor client; a `Value` pointer handed to the layout stream is never resolved against a node-bound DataContext. The NodeType configuration preview does not need it: its text is a DECISION (the lambda, or a localized placeholder when there is none), so it binds to a `/data` projection like the rest of the page.
+- **`NodeExportView` reads `NodeName` / `AvailableSatelliteTypes` straight off the view model**, so the Export area still loads them on the hub; the conversion is the view resolving both from `SourcePath` itself.
+
 ### The ratchet
 
 `test/MeshWeaver.Documentation.Test/LayoutAreaDataBakeRatchetGuard` counts, per file under `src/`, `memex/` and `samples/`, the layout-area units (methods, local functions, lambdas taking a `LayoutAreaHost`) that both READ data and BUILD controls. The seeded inventory is `test/LayoutAreaDataBakeSites.allow`; it may only shrink. Converting an area means lowering its line (and `TotalBudget`) in the same change. It is a text heuristic, and it says so: a load reached through another file's helper is missed, and an area that reads data only to choose its STRUCTURE (a permission gate) is counted — so the file is an inventory to work down, not a verdict on every line.
