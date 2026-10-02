@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The template + row-scoped actions are pinned there (TodoRowScopedActionsTest). -->
+    <InternalsVisibleTo Include="MeshWeaver.Layout.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Content\**\*.*" />
   </ItemGroup>
 
