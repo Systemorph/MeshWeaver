@@ -1028,6 +1028,9 @@ public sealed class InstanceAutoRegistrationService(
             .Distinct(StringComparer.Ordinal)
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToImmutableList();
+        // The cause of each, same snapshot (#5826): exactly one per failed package — the first one
+        // named, or an entry that SAYS none was recorded. See DefaultInstallSummary.CausePerFailure.
+        var failureCauses = summary.CausePerFailure();
 
         // Snapshot semantics, exactly like Failed (#2536): what THIS pass classified as outside
         // the unattended lane's authority, deduplicated by package (records compare by value).
@@ -1084,7 +1087,8 @@ public sealed class InstanceAutoRegistrationService(
         }
 
         if (delivered.Count == 0
-            && failures.SequenceEqual(ledger.Failed, StringComparer.Ordinal)
+            && failures.SequenceEqual(ledger.Failed ?? ImmutableList<string>.Empty, StringComparer.Ordinal)
+            && failureCauses.SequenceEqual(ledger.FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
             && skipped.SequenceEqual(ledger.Skipped)
             && held.SequenceEqual(ledger.Held)
             && tierRefused.SequenceEqual(ledger.TierRefused))
@@ -1112,6 +1116,7 @@ public sealed class InstanceAutoRegistrationService(
             {
                 Seeded = already.Union(delivered).OrderBy(x => x, StringComparer.Ordinal).ToImmutableList(),
                 Failed = failures,
+                FailureCauses = failureCauses,
                 Skipped = skipped,
                 Held = held,
                 TierRefused = tierRefused,
@@ -2087,6 +2092,11 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return(new DefaultInstallSummary(0, 0, 1, [package.Id])
                 {
                     Failures = [package.Id],
+                    // 🚨 …and WHY. The id alone left the ledger and the boot's summary line saying
+                    // "Anthropic failed" with nothing to triage from: the cause lived only in a
+                    // separate per-package line, which a reader of the summary or the ledger never
+                    // sees (#5826).
+                    FailureCauses = [DefaultInstallFailure.Of(package.Id, exception)],
                 });
             });
     }
@@ -2393,6 +2403,20 @@ public record DefaultInstallLedger
     public ImmutableList<string> Failed { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// WHY each of <see cref="Failed"/> could not be delivered on the last pass that attempted
+    /// anything — the exception's type and message, per package. A SNAPSHOT with exactly
+    /// <see cref="Failed"/>'s semantics, so an entry leaves the moment its package is delivered or
+    /// stops being declared.
+    ///
+    /// <para>Exists because a failed id with no cause is the silent half of a skip: the ledger said
+    /// <c>failed: ["Anthropic"]</c>, the boot summary said <c>FAILED: [Anthropic]</c>, and the cause
+    /// — a registry fetch that never sent its headers — was only in a separate per-package line
+    /// nobody reading the ledger sees (#5826).</para>
+    /// </summary>
+    public ImmutableList<DefaultInstallFailure> FailureCauses { get; init; } =
+        ImmutableList<DefaultInstallFailure>.Empty;
+
+    /// <summary>
     /// The declared default packages the last pass deliberately did NOT act on, with the reason
     /// each — the terminal-skip classification (#2536): an authorization the unattended lane can
     /// never obtain. 🚨 NOT failures — a failure is retried next boot because a retry can repair
@@ -2456,6 +2480,14 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<string> Failures { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// WHY each of <see cref="Failures"/> failed — one entry per failed package, carrying the
+    /// exception's type and message. The ledger records it, and the summary line names it, so a
+    /// missing package is diagnosable from either without the per-package log line (#5826).
+    /// </summary>
+    public ImmutableList<DefaultInstallFailure> FailureCauses { get; init; } =
+        ImmutableList<DefaultInstallFailure>.Empty;
+
+    /// <summary>
     /// The packages this pass deliberately did NOT attempt, with the reason each — the
     /// terminal-skip classification (#2536): an authorization the unattended installer can never
     /// obtain (a commercial package with no authorizing principal, a licence nobody is present to
@@ -2508,6 +2540,32 @@ public readonly record struct DefaultInstallSummary(
         => (Packages ?? ImmutableList<string>.Empty)
             .RemoveRange(Failures ?? ImmutableList<string>.Empty);
 
+    /// <summary>
+    /// Exactly ONE cause per package in <see cref="Failures"/>, in ordinal package order: the first
+    /// one <see cref="FailureCauses"/> names for it, or <see cref="DefaultInstallFailure.Unrecorded"/>
+    /// when none was recorded. What the ledger stores and the summary line prints. Pure.
+    ///
+    /// <para>🚨 The two lists are filled by whoever records a failure, and nothing in the type ties
+    /// them together: today ONE site does (the per-package catch of the default install) and it
+    /// fills both, but a second site that named a failed package and forgot its cause would put
+    /// back the exact silence #5826 removed — a failed id with nothing to triage from — and neither
+    /// the ledger nor the summary line would show the gap. Deriving the causes FROM the failures
+    /// makes that gap an entry that says so. A cause for a package that did not fail is dropped:
+    /// the ledger's causes have exactly <c>Failed</c>'s semantics.</para>
+    /// </summary>
+    /// <returns>One cause per failed package.</returns>
+    internal ImmutableList<DefaultInstallFailure> CausePerFailure()
+    {
+        var recorded = (FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
+            .GroupBy(f => f.Package, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        return (Failures ?? ImmutableList<string>.Empty)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .Select(id => recorded.GetValueOrDefault(id) ?? DefaultInstallFailure.Unrecorded(id))
+            .ToImmutableList();
+    }
+
     /// <summary>A pass that covered nothing.</summary>
     public static DefaultInstallSummary Empty { get; } = new(0, 0, 0, ImmutableList<string>.Empty);
 
@@ -2520,6 +2578,8 @@ public readonly record struct DefaultInstallSummary(
     {
         Failures = (Failures ?? ImmutableList<string>.Empty)
             .AddRange(other.Failures ?? ImmutableList<string>.Empty),
+        FailureCauses = (FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
+            .AddRange(other.FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty),
         Skipped = (Skipped ?? ImmutableList<DefaultInstallSkip>.Empty)
             .AddRange(other.Skipped ?? ImmutableList<DefaultInstallSkip>.Empty),
         Held = (Held ?? ImmutableList<DefaultInstallHold>.Empty)
@@ -2534,6 +2594,9 @@ public readonly record struct DefaultInstallSummary(
         $"{Installed} installed, {UpToDate} up to date, {Failed} failed "
         + $"[{string.Join(", ", Packages)}]"
         + (Failures is { Count: > 0 } f ? $" — FAILED: [{string.Join(", ", f)}]" : "")
+        + (CausePerFailure() is { Count: > 0 } c
+            ? $" — CAUSES: [{string.Join("; ", c.Select(x => $"{x.Package}: {x.Cause}"))}]"
+            : "")
         + (Skipped is { Count: > 0 } s
             ? $" — SKIPPED (authorization, not retried): [{string.Join(", ", s.Select(x => x.Package))}]"
             : "")
@@ -2541,6 +2604,55 @@ public readonly record struct DefaultInstallSummary(
             ? " — HELD (another writer owns the partition; re-derived next boot): "
               + $"[{string.Join(", ", h.Select(x => x.Package))}]"
             : "");
+}
+
+/// <summary>
+/// One package a default-install pass attempted and could NOT deliver, and why (#5826) — recorded
+/// on the <see cref="DefaultInstallLedger"/> beside the failed id, so the cause outlives the boot
+/// log line that carried it. A failure is retried by the next pass; this says what the last
+/// attempt ran into.
+/// </summary>
+/// <param name="Package">The package id.</param>
+/// <param name="Cause">The exception's type and message, innermost cause appended when it differs.</param>
+public sealed record DefaultInstallFailure(string Package, string Cause)
+{
+    /// <summary>The longest cause kept — a ledger entry, not a stack trace.</summary>
+    internal const int MaxCauseLength = 600;
+
+    /// <summary>What <see cref="Unrecorded"/> says in place of a cause.</summary>
+    internal const string UnrecordedCause =
+        "no cause was recorded — the site that marked this package failed did not say why";
+
+    /// <summary>
+    /// The entry for a package that was recorded as failed with NO cause beside it — a defect in
+    /// whatever recorded the failure, made visible instead of leaving a failed id with nothing to
+    /// triage from (<see cref="DefaultInstallSummary.CausePerFailure"/>). Pure.
+    /// </summary>
+    /// <param name="package">The package id.</param>
+    /// <returns>The ledger entry.</returns>
+    public static DefaultInstallFailure Unrecorded(string package) => new(package, UnrecordedCause);
+
+    /// <summary>
+    /// The failure of <paramref name="package"/> as <paramref name="exception"/> describes it: the
+    /// outer type and message, and the innermost exception's when it is a different one (a Polly
+    /// timeout wraps the socket read that actually stalled). Bounded to
+    /// <see cref="MaxCauseLength"/>. Pure.
+    /// </summary>
+    /// <param name="package">The package id.</param>
+    /// <param name="exception">What the install threw.</param>
+    /// <returns>The ledger entry.</returns>
+    public static DefaultInstallFailure Of(string package, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var cause = $"{exception.GetType().Name}: {exception.Message}";
+        var inner = exception;
+        while (inner.InnerException is { } next)
+            inner = next;
+        if (!ReferenceEquals(inner, exception))
+            cause += $" ← {inner.GetType().Name}: {inner.Message}";
+        return new DefaultInstallFailure(package,
+            cause.Length <= MaxCauseLength ? cause : cause[..MaxCauseLength] + "…");
+    }
 }
 
 /// <summary>

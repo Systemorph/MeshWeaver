@@ -662,7 +662,7 @@ public record LayoutAreaHost : IDisposable
         }
         catch (Exception ex)
         {
-            FailRequest(ex, request);
+            FailClick(ex, request);
             return request.Processed();
         }
 
@@ -679,7 +679,7 @@ public record LayoutAreaHost : IDisposable
         pendingClickActions.Add(subscription);
         subscription.Disposable = completion.Subscribe(
             _ => { },
-            ex => { FailRequest(ex, request); pendingClickActions.Remove(subscription); },
+            ex => { FailClick(ex, request); pendingClickActions.Remove(subscription); },
             () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
         return request.Processed();
     }
@@ -739,6 +739,22 @@ public record LayoutAreaHost : IDisposable
     {
         Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// A click action that threw, or whose reactive completion errored: reported with the area and
+    /// hub it belongs to, then refused to the clicking client — whose button leaves its pending state
+    /// and shows the refusal (<c>UserActionSubmission</c>'s <c>onRefused</c>). This is the ONE surface
+    /// a click-time fault reaches the person through; a handler composes its one-off reads into the
+    /// observable it returns (<c>WithReactiveClickAction</c>) rather than subscribing them itself
+    /// with no error arm, where a fault would be rethrown on whatever thread produced it.
+    /// </summary>
+    private void FailClick(Exception exception, IMessageDelivery<ClickedEvent> request)
+    {
+        logger.LogWarning(exception,
+            "Click action on area {Area} of {Hub} failed — refused to the client: {Message}",
+            request.Message.Area, Hub.Address, exception.Message);
+        Hub.Post(new DeliveryFailure(request, exception.Message), o => o.ResponseFor(request));
     }
 
     private Task FailRequest(Exception? exception, IMessageDelivery request)

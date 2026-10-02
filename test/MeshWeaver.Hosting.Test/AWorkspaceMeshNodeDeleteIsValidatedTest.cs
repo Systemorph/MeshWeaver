@@ -59,7 +59,11 @@ public class AWorkspaceMeshNodeDeleteIsValidatedTest(ITestOutputHelper output) :
         var refused = await Change(host, new DataChangeRequest { Deletions = [held] });
         refused.Status.Should().Be(DataChangeStatus.Failed,
             "removing the node from the workspace deletes it, and that delete is refused");
-        await Gone(held.Path!).Should().NotEmit(TestTimeouts.Quick,
+        // A negative assertion spends its whole window by construction, and here the positive
+        // terminal is already in hand (the change has already answered Failed), so the window
+        // is a fraction of the budget. TestTimeouts.Quick is a full CI-scaled bound (36 s on a
+        // runner); one of those per case pushed this project past its 8-minute cap.
+        await Gone(held.Path!).Should().NotEmit(TestTimeouts.Quick / 10,
             "the refused change must not delete the held node from storage");
 
         // The control: the same change for a node no validator objects to removes it from storage.
