@@ -127,6 +127,19 @@ for a partition as a whole:
 
 A drop that faults lifts the tombstone, keeps the record (the retry handle) and propagates.
 
+🚨 **The claim is released BEFORE the outcome is delivered** — success and failure alike. The outcome
+is the caller's "torn down" signal, and a caller may act on it at once: the live `DeleteSpace` probe's
+cleanup issues a second, idempotent teardown of the same partition. The claim used to ride an
+`Observable.Using`, which Rx disposes only after the subscriber has processed the outcome, so that
+follow-up met the claim still held and was refused with *"a deletion … is already in flight — one
+teardown at a time"* (intermittent on MeshWeaver.Plugins#2651, because the probe hops through an
+inventory read before its cleanup). The claim now rides `RecentlyDeletedRegistry.WithinSubtreeDeletion`,
+which holds the body's notifications until it terminates, releases the scope, and only then delivers
+them; `StrandedPartitionTeardownValidator` and the move use the same primitive, and
+`HandleDeleteNodeRequest` releases its scope by hand before posting its response for the same reason.
+Pinned by `PartitionTeardownTest.AFollowUpTeardownIssuedOnTheOutcome_IsNotRefusedAsInFlight`, which
+subscribes the follow-up synchronously inside the outcome's delivery — the race with the hop removed.
+
 🚨 **It is not a user verb.** `PartitionTeardown.Refusal` refuses unless the current identity IS system,
 and also names an invalid segment, a database-populated mirror, a static partition, a deletion already
 in flight, or a hub with no store at all. A governed action calls `Refusal` at PLAN time, under

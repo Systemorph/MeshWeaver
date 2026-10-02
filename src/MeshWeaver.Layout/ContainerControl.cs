@@ -26,9 +26,10 @@ public interface IContainerControl : IUiControl
 /// <param name="ModuleName">The name of the module.</param>
 /// <param name="ApiVersion">The API version.</param>
 public abstract record ContainerControl<TControl>(string ModuleName, string ApiVersion)
-    : UiControl<TControl>(ModuleName, ApiVersion), IContainerControl
+    : UiControl<TControl>(ModuleName, ApiVersion), IContainerControl, IDeclaresViews
     where TControl : ContainerControl<TControl>
 {
+    IReadOnlyList<object?> IDeclaresViews.DeclaredViews => Views;
     internal const string Root = "";
     /// <summary>
     /// Gets the list of renderers for the container control.
