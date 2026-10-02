@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Data;
 
 namespace MeshWeaver.Layout.DataGrid;
 
@@ -27,6 +28,43 @@ public record DataGridControl(object Data)
     {
         Style = Style ?? $"min-width: {Columns.Count * 120}px"
     };
+
+    /// <summary>
+    /// The sub-area, relative to the grid's own, under which the template of the
+    /// <see cref="TemplateColumnControl"/> at <paramref name="columnIndex"/> is rendered.
+    /// </summary>
+    /// <param name="columnIndex">The zero-based position of the column in <see cref="Columns"/>.</param>
+    /// <returns>The relative area name (<c>Column{index}</c>).</returns>
+    public static string TemplateColumnArea(int columnIndex) => $"Column{columnIndex}";
+
+    /// <summary>
+    /// Writes the grid, then renders the template of every <see cref="TemplateColumnControl"/> into
+    /// its own sub-area (<see cref="TemplateColumnArea"/>), the way <see cref="ItemTemplateControl"/>
+    /// renders its row view.
+    ///
+    /// <para>🚨 Without it a template column's control existed only INLINE in the grid: the owner had
+    /// no area holding it, so a click inside a cell posted the GRID's area and ran the grid's click
+    /// action (or nothing), and a container template's children had no areas to resolve. Rendered as
+    /// an area, the template's controls — and their click actions — are found where the client's
+    /// <c>ClickedEvent</c> names them, and the event's <see cref="ClickedEvent.Row"/> says which row
+    /// (Doc/GUI/DataBinding → "Row-scoped actions").</para>
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="context">The rendering context of the grid's area.</param>
+    /// <param name="store">The entity store to update.</param>
+    /// <returns>The store with the grid and its column templates written.</returns>
+    protected override EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
+    {
+        var ret = base.RenderSelf(host, context, store);
+        for (var i = 0; i < Columns.Count; i++)
+        {
+            if (Columns[i] is not TemplateColumnControl { Template: { } template })
+                continue;
+            var rendered = host.RenderArea(GetContextForArea(context, TemplateColumnArea(i)), template, ret.Store);
+            ret = rendered with { Updates = ret.Updates.Concat(rendered.Updates) };
+        }
+        return ret;
+    }
 
     /// <summary>
     /// Returns a copy of the control with the given <paramref name="columns"/> appended to the column list.
