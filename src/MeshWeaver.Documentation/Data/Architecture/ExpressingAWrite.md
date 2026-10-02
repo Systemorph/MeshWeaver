@@ -196,6 +196,23 @@ Two gaps are visible in that table and both are real:
 - **The CLI has no anchored-edit verb.** `memex patch` can replace a whole content field; there is no
   `memex edit-content`, so a scripted text edit re-emits the document.
 
+### A payload one closer short is repaired — and nothing else is
+
+Every JSON-taking tool body (`create`, `update`, `patch`, `delete`) passes its payload through
+`MeshOperations.RepairJson` before parsing, whether it arrived over MCP or as an agent tool call (the
+agent factory hands a JSON object argument over as its raw text, so it lands in the same method).
+The repair is deliberately narrow:
+
+| The payload | What happens |
+|---|---|
+| valid JSON | returned untouched |
+| short of closers at the END (`{"content":{"policy":"None"}`) | the containers still open — counted **outside string literals**, honouring `\"` and `\\` — are closed innermost-first, and the result is used **only if it parses** |
+| a complete value followed by junk — a stray fence, or a **surplus closer at the end** (`{"a":1}}`) | trimmed back to the longest prefix that parses |
+| ends inside a string, has a closer of the wrong kind in the middle (`{"a":[1,2}`), a trailing comma, a missing value, … | returned **untouched**, so the caller reports the ORIGINAL parse error |
+
+It never invents content: a value truncated mid-string is not closed, because closing it would store
+half a sentence as if it were the whole one. Measured in `RepairJsonTest` (Memex.Portal.Shared.Test).
+
 🚨 **`CreateOrUpdateNodeRequest` is not the same "full entity" the `update` verb is**, and the
 difference decides whether an omitted field survives. Its update leg merges through
 `UpdateAccordingToSourceNode`, which **null-coalesces** most top-level fields against the live node
