@@ -27,6 +27,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// CompilationStatus = Pending was observed. <see cref="NodeTypeCompilationHelpers.RunCompile"/>
 /// compiles from this snapshot so it reads the trigger-time state (ReleaseNotes
 /// etc.) without re-fetching through the mesh-hub-cached remote stream.</param>
+[InfrastructureOnly]
 public record DispatchCompileTrigger(MeshNode PendingNode);
 
 /// <summary>
