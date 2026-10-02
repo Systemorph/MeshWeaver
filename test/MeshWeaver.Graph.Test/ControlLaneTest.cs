@@ -500,7 +500,13 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public void SpaceDeletionExistenceQueriesDoNotProjectRootOrPartitionContent()
     {
         SpaceDeletion.ParentListingQuery("TestData/Recyclable").Should().Be("path:TestData scope:children select:path");
-        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path: scope:children select:path");
+        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path:LiveInventory select:path",
+            "a space root is read exactly in its own partition — never listed through the empty root, "
+            + "which names no partition and UNIONs every schema (#5508)");
+        new QueryParser().Parse(SpaceDeletion.RootQuery("LiveInventory")).IsSufficientlySpecified()
+            .Should().BeTrue("the existence read of a space root must anchor to a partition (#5508)");
+        new QueryParser().Parse("path: scope:children select:path").IsSufficientlySpecified()
+            .Should().BeFalse("negative control: the previous root listing names no partition");
         SpaceDeletion.RecordQuery("LiveInventory").Should().Be("path:Admin/Partition scope:children select:path");
         SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
     }
