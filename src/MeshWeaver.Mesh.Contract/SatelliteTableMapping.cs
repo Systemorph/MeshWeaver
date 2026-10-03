@@ -50,6 +50,13 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         new SatelliteTableMapping("_Approval", "annotations", "Approval", "Approvals/Approval"),
         new SatelliteTableMapping("_Comment", "annotations", "Comment"),
         new SatelliteTableMapping("_Notification", "notifications", "Notification"),
+        // A durable stream's ITEMS — one node per appended item at
+        // {owner}/_DurableStream/{family}/_DurableStreamItem/{seq:D12} (Doc/Architecture/DurableStreams).
+        // Their own table in the OWNER's partition schema, so a busy stream never lands in mesh_nodes.
+        // 🚨 The segment is deliberately LONGER than every satellite a stream owner may sit under
+        // (_Activity, _DocumentPart, _ThreadMessage …): ResolveTable picks the LONGEST mapped segment in
+        // the path, so an item of a stream owned by a thread message still resolves here.
+        new SatelliteTableMapping(DurableStreamPaths.ItemSegment, DurableStreamPaths.ItemTable, DurableStreamNodeTypes.Item),
         new SatelliteTableMapping("Source", "code"),
         new SatelliteTableMapping("Test", "code"),
     ];
