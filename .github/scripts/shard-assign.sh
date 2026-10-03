@@ -90,6 +90,11 @@
 #      480 s exit=124 on run 36913173194, still progressing through its classes, once three
 #      security tests added ~40 s of deliberate negative waits. It runs in two parts since.
 #
+#      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
+#      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,
+#      still progressing through its classes (no TEST START without its TEST END). It runs in
+#      two parts since.
+#
 # 🚨 The two triggers must BOTH be checked when re-measuring. A project that grows
 # past 288 s (60% of 480) needs splitting even while the LPT loop still reports
 # six balanced shards, which is precisely why the balance rule alone missed this.
@@ -134,7 +139,7 @@ WEIGHTS=$(cat <<'EOF'
 91 MeshWeaver.Data.Test
 76 MeshWeaver.Messaging.Hub.Test
 74 MeshWeaver.PluginTester.Test
-64 MeshWeaver.Graph.Test
+480 MeshWeaver.Graph.Test 2
 50 MeshWeaver.FaultInjection.Test
 365 MeshWeaver.Hosting.Test 2
 26 MeshWeaver.Layout.Test
