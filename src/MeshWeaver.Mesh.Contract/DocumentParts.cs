@@ -269,6 +269,14 @@ public record AppendDocumentTextResponse
 }
 
 /// <summary>
+/// Present in a host's services when the module that WRITES document logs is installed (the content
+/// indexing module registers it with the <c>Document</c> node type). A best-effort producer — an agent
+/// round's transcript — checks <see cref="DocumentLogExtensions.SupportsDocumentLogs"/> and writes
+/// nothing on a host without it, instead of failing a create per round.
+/// </summary>
+public sealed class DocumentLogSupport;
+
+/// <summary>
 /// The producer entry points for a document log — "append log text to document X". Any hub may call
 /// them (a job runner, an agent round, the CI log downloader); the document's own hub does the work.
 /// </summary>
@@ -294,6 +302,9 @@ public static class DocumentLogExtensions
         {
             NodeType = DocumentPartPaths.DocumentNodeType,
             Name = target.Name ?? System.IO.Path.GetFileName(target.FilePath),
+            // A document filed under a satellite (a thread's transcript, a job activity's log) belongs
+            // to that satellite's owner; under a main node it is its own main node.
+            MainNode = SatelliteTableMapping.OwnerOfSatellitePath(path),
             State = MeshNodeState.Active,
         };
         // CreateNode captures the caller's identity at the CALL, so it is built here, eagerly; an
@@ -346,6 +357,12 @@ public static class DocumentLogExtensions
             .Take(1)
             .Select(delivery => delivery.Message);
     }
+
+    /// <summary>True when this host has the module that writes document logs.</summary>
+    /// <param name="hub">Any hub of the host.</param>
+    /// <returns>Whether <see cref="DocumentLogSupport"/> is registered.</returns>
+    public static bool SupportsDocumentLogs(this IMessageHub hub) =>
+        hub.ServiceProvider.GetService<DocumentLogSupport>() is not null;
 
     private static bool IsAlreadyExists(Exception ex) =>
         ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase);
