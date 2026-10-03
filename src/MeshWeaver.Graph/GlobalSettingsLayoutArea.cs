@@ -177,122 +177,31 @@ public static class GlobalSettingsLayoutArea
     { LabelKey = "settings.dataSources", GroupKey = AdminAppNodeType.OperationsGroupKey };
 
     /// <summary>
-    /// Data Sources tab: lists all MeshDataSource nodes with status and actions.
+    /// Data Sources tab: the registered MeshDataSource nodes, listed by the GUI
+    /// (<see cref="DataSourcesList"/>) — a template, so the tab renders at once and the list fills in.
     /// </summary>
     internal static UiControl BuildDataSourcesTab(LayoutAreaHost host, StackControl stack)
-    {
-        stack = stack.WithView(Controls.H2(host.Localize("settings.dataSources")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Markdown(host.Localize("settings.dataSourcesIntro")));
+        => stack
+            .WithView(Controls.H2(host.Localize("settings.dataSources")).WithStyle("margin: 0 0 8px 0;"))
+            .WithView(Controls.Markdown(host.Localize("settings.dataSourcesIntro")))
+            .WithView(DataSourcesList());
 
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService == null)
-        {
-            stack = stack.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint);\">Mesh service not available.</p>"));
-            return stack;
-        }
-
-        stack = stack.WithView((h, _) =>
-            meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{MeshDataSourceNodeType.SourcesNamespace} nodeType:{MeshDataSourceNodeType.NodeType}"))
-                .Select(change =>
-                {
-                    var nodes = change.Items?.ToList() ?? [];
-                    if (nodes.Count == 0)
-                        return (UiControl?)Controls.Html(
-                            "<p style=\"color: var(--neutral-foreground-hint);\">No data sources registered.</p>");
-
-                    return (UiControl?)BuildDataSourcesList(nodes, host.Hub.JsonSerializerOptions, locale: host.ViewerLocale());
-                }));
-
-        return stack;
-    }
-
-    private static UiControl BuildDataSourcesList(List<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options, string? locale = null)
-    {
-        var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
-
-        foreach (var node in nodes.OrderBy(n => n.Name))
-        {
-            var config = node.ContentAs<MeshDataSourceConfiguration>(options);
-            var isEnabled = config?.Enabled ?? true;
-            var isSearchable = config?.IncludeInSearch ?? true;
-            var isInstalled = !string.IsNullOrEmpty(config?.InstalledTo);
-
-            var card = Controls.Stack.WithWidth("100%")
-                .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 8px;");
-
-            // Header row: name + provider badge + status
-            var header = Controls.Stack.WithOrientation(Orientation.Horizontal)
-                .WithStyle("align-items: center; gap: 8px;");
-            header = header.WithView(Controls.Html(
-                $"<div style=\"font-size: 1.05rem; font-weight: 600;\">{Esc(node.Name ?? node.Path)}</div>"));
-
-            if (config?.ProviderType != null)
-            {
-                header = header.WithView(Controls.Html(
-                    $"<span style=\"font-size: 0.75rem; padding: 2px 8px; background: var(--neutral-layer-2); border-radius: 4px;\">{Esc(config.ProviderType)}</span>"));
-            }
-
-            var statusColor = isEnabled ? "#4ade80" : "#f87171";
-            var statusText = isEnabled ? "Enabled" : "Disabled";
-            header = header.WithView(Controls.Html(
-                $"<span style=\"margin-left: auto; font-size: 0.8rem; font-weight: 600; color: {statusColor};\">{statusText}</span>"));
-
-            card = card.WithView(header);
-
-            // Description
-            if (!string.IsNullOrEmpty(config?.Description))
-            {
-                card = card.WithView(Controls.Html(
-                    $"<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin: 0;\">{Esc(config.Description)}</p>"));
-            }
-
-            // Installed note
-            if (isInstalled)
-            {
-                card = card.WithView(Controls.Html(
-                    $"<div style=\"padding: 6px 10px; background: var(--warning-fill-rest); border-radius: 6px; font-size: 0.8rem;\">" +
-                    $"Installed to <strong>{Esc(config!.InstalledTo!)}</strong>" +
-                    (config.LastSyncedAt.HasValue ? $" — last synced: {config.LastSyncedAt.Value:yyyy-MM-dd HH:mm}" : "") +
-                    "</div>"));
-            }
-
-            // Info row: search status + storage path
-            var info = Controls.Stack.WithOrientation(Orientation.Horizontal)
-                .WithStyle("gap: 16px; font-size: 0.8rem; color: var(--neutral-foreground-hint);");
-            info = info.WithView(Controls.Html(
-                $"<span>Search: <strong>{(isSearchable ? "Included" : "Excluded")}</strong></span>"));
-            if (config?.StorageConfig?.BasePath != null)
-            {
-                info = info.WithView(Controls.Html(
-                    $"<span>Path: <code>{Esc(config.StorageConfig.BasePath)}</code></span>"));
-            }
-            card = card.WithView(info);
-
-            // Action buttons
-            var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
-                .WithStyle("gap: 8px; margin-top: 4px;");
-
-            buttonRow = buttonRow.WithView(Controls.Button(LocalizationCatalog.Get("ui.open", locale))
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    var navService = ctx.Host.Hub.ServiceProvider.GetService<INavigationService>();
-                    navService?.NavigateTo($"/{node.Path}");
-                    return Task.CompletedTask;
-                }));
-
-            card = card.WithView(buttonRow);
-
-            container = container.WithView(card);
-        }
-
-        return container;
-    }
+    /// <summary>
+    /// The registered data sources as a query control: the viewer's client runs the query and
+    /// renders each source as a card that opens it, and keeps the list live. It used to be loaded
+    /// here and drawn as hand-built HTML cards, so the tab waited on the query and showed a
+    /// snapshot (Doc/GUI/DataBinding → "Templates first, data later").
+    /// </summary>
+    internal static MeshSearchControl DataSourcesList()
+        => Controls.MeshSearch
+            .WithHiddenQuery(
+                $"namespace:{MeshDataSourceNodeType.SourcesNamespace} nodeType:{MeshDataSourceNodeType.NodeType} sort:name")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.List)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithReactiveMode(true);
 
     #endregion
-
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
 }

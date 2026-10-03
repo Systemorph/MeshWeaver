@@ -300,6 +300,28 @@ no copy of the Store's `PlanTiers` to drift. The rules at the edges are delibera
   cannot license MORE. A registry with no tier nodes at all (a local self-registry, the e2e stub)
   therefore serves its free and untiered packages to every instance and refuses every paid tier —
   `free` ranks at the baseline by definition, ladder or not;
+  On a registry that HAS a ladder, deciding at the baseline is **never silent** (#5894): the registry
+  logs a warning naming the instance, the stored plan and the plans it does know on every resolution
+  of that instance (a registry with no tier nodes at all is not reported — every plan is unknown
+  there by construction, and the ladder read says so once), and a plan-tier refusal reports the
+  STORED id, in canonical form (trimmed, lower-cased), as `instancePlan` — "this instance is on gold", never
+  "this instance is on free" for a record that says something else. (An unknown **cap** on a grant
+  entry is still reported as the baseline: it is neither the instance's plan nor an upgrade target.)
+  Measured on the public registry: a dedicated client instance stored `sme`, a plan renamed to
+  `dedicated` whose tier node had been deleted, and its ledger listed 18 refusals — Mail and Teams
+  among them — every one reading "this instance is on free";
+- a **retired** plan id resolves to its successor, explicitly: `PlanTierRanks.RetiredPlans` is a
+  closed table of renames (today `sme` → `dedicated`), applied by `PlanTierRanks.Canonical`, so a
+  record still storing the old id stands on the successor and a promotion to the old id writes the
+  new one. The registry logs a warning for every resolved instance that still stores a retired id,
+  and a tier node still carrying one is ignored by the ladder (its successor's own node ranks it).
+  Only a RENAME belongs in that table; a withdrawn plan has no successor and stays unknown;
+- **a tier node cannot be deleted while an instance stands on it** (`TierInUseDeletionGuard`,
+  #5894). The guard counts, as System, every registered instance whose plan resolves to the tier
+  (a record with no plan stands on `free`), refuses the delete naming them, and refuses it too when
+  the census itself fails — an unknown count is never zero. Deleting the `Admin/Tiers` container is
+  refused while any instance is registered. A node carrying a retired id is used by nobody and stays
+  deletable. Move the instances to another plan on Instance grants ▸ Plan first;
 - a package tier the ladder does not know is covered by **nothing**;
 - a caller that does not know the package's tier (the tier-blind `Allows(source, package)`) is
   never answered by a plan-scoped entry — otherwise every plan would be all-access at exactly the
@@ -316,6 +338,16 @@ tells the process's `InstanceRegistryAuthenticator` to forget its cached verdict
 other replicas follow within the cache minute. `PluginBundlePlanTest` pins both halves — a legacy
 plan-less grant is capped at free, and a promoted instance pulls its pro package on the very next
 request.
+
+**The instance lookup has ONE bound, the query's.** The Plan form finds the record by id
+(`InstancePlanService.FindInstancePath`, a declared mesh-wide listing read as System) and waits
+for the fan-in's merged Initial, which faults at its own budget
+(`MeshOperationOptions.QueryInitialBudget`, 15 s on the default ladder) with a
+`QueryProviderStalledException` naming the provider. The lookup used to carry a 10 s timer of its
+own, written before the fan-in had a bound: a second, shorter bound on the same wait, so the form
+gave up while the query was still inside its budget (#5894, the inverted ladder of #1198). It, the
+two lookups in `MeshWeaverInstanceService` and `PlanTierLadder.Read` now carry none
+(`InstanceLookupHasNoBoundOfItsOwnTest`).
 
 **Only a global administrator sets a plan, and the write runs as System.** An instance record lives
 in its registrant's partition (`{owner}/MeshWeaverInstance/{id}`), and a global administrator is a
@@ -504,6 +536,34 @@ An admin clicks **Install** (or **Update**). No GitHub credential is involved on
 
 Re-installing is an upsert (create-or-update by path); installing one module never disturbs another
 in a shared partition.
+
+### A default package the boot could not deliver is named, with its cause
+
+The boot's unattended default install (`InstanceAutoRegistrationService`) steps over a package whose
+install throws — one unreachable package must not withhold the rest — and that is only safe because
+the skip is never silent:
+
+- **Named, with its cause.** The pass's summary line carries `FAILED: [<id>]` **and**
+  `CAUSES: [<id>: <exception type>: <message> ← <innermost type>: <message>]`, and
+  `Plugins/_DefaultInstallLedger` records the same pair under `failureCauses` beside `failed`
+  (MeshWeaver#5826). Before, the ledger said `failed: ["Anthropic"]` and nothing else; the cause — a
+  registry file fetch whose three 30 s attempts all expired waiting for headers — lived only in a
+  separate per-package log line.
+- **Exactly one cause per failed package, derived from the failures.** The ledger and the summary
+  line take their causes from `DefaultInstallSummary.CausePerFailure()`: a failed id whose recording
+  site supplied no cause gets an entry that says *"no cause was recorded …"* rather than nothing, and
+  a cause for a package that did not fail is dropped. One site records failures today (the
+  per-package catch); this keeps a second one from re-introducing a failed id with nothing beside it.
+- **Kept off the seeded list, and retried by the next pass** (#2254) — the ledger knows the package,
+  so the governed-provision hold does not take it for a newly listed one (#5934).
+- **A snapshot.** `failed` and `failureCauses` describe the last pass that attempted anything: an entry
+  leaves the moment its package is delivered or stops being declared.
+- **A bound that expires says which wait it was.** The install chain's internal bounds fault with
+  `Install leg timed out after 30s: <what was awaited, with its path>` instead of Rx's bare
+  *"The operation has timed out."*, which named no leg (the 2026-09-23 `Store` sample on #2254).
+
+The registry side of `POST /api/plugins/files` reads only the package's folder (a narrow git fetch),
+never the whole repository — see [Registry Listing Cache](../RegistryListingCache).
 
 ## Bundle bytes from the registry
 

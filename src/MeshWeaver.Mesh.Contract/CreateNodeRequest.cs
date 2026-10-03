@@ -31,6 +31,21 @@ public record CreateNodeRequest(MeshNode Node)
     public string? CreatedBy { get; init; }
 
     /// <summary>
+    /// 🚨 The STORED node whose authorship this create carries over — set by the copy leg of a
+    /// MOVE (<see cref="CopyNodeRequest.PreserveAuthorship"/>, issue #3263) and by nothing else.
+    ///
+    /// <para>A person or service never chooses the author stamps of a node it creates: the stamps
+    /// on the incoming node are replaced by the requester (<c>RequestIdentity.Author</c>), because
+    /// <c>CreatedBy</c> is what owner-scoped work impersonates (<c>AccessContextScope.FromNode</c>)
+    /// and what control planes read as "who asked". A relocation is the one exception, and it is
+    /// granted here the way <c>CopyNodeRequest</c> grants it: the requester must hold Delete on
+    /// the source's namespace (the entitlement a move of it requires), and the four stamps are then
+    /// read from STORAGE at this path, never taken from the message. A caller who holds that could
+    /// have moved the node anyway, so this grants nothing new.</para>
+    /// </summary>
+    public string? AuthorshipFrom { get; init; }
+
+    /// <summary>
     /// Optional initialization payload forwarded to the newly-created node's hub
     /// after persistence succeeds. Lets a single CreateNodeRequest atomically
     /// create the node AND queue the first message of work for it — e.g. a
@@ -714,6 +729,46 @@ public record CreateOrUpdateNodeRequest(MeshNode Node)
     /// <c>Doc/Architecture/DanglingNodeTypes</c>.</para>
     /// </summary>
     public bool AllowUnresolvableNodeType { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>The version PRECONDITION of a write that carries a whole-node snapshot.</b> Set it to the
+    /// <see cref="MeshNode.Version"/> the caller's snapshot was taken at, and the UPDATE branch
+    /// refuses the write when the node has since moved PAST that version — the stored row or the
+    /// node as this hub holds it carries a strictly higher one — and the write would change it.
+    /// The refusal is answered, never
+    /// dropped: <see cref="CreateOrUpdateNodeResponse.FailureKind"/> is
+    /// <see cref="NodeUpsertFailureKind.StaleSnapshot"/> and the error names both versions.
+    ///
+    /// <para><b>Why it exists.</b> Full-instance mode takes <see cref="MeshNode.Content"/> wholesale
+    /// and never looks at the incoming <see cref="MeshNode.Version"/>: the merge floors the version
+    /// on the stored row and the owner mints above it. That is right for a writer that holds no
+    /// snapshot (an import, a copy) and wrong for one that does — a snapshot read at version 5 and
+    /// written back after the node reached 6 puts every member it carries back to its version-5
+    /// value, and reports success. The raw <see cref="SaveMeshNodeRequest"/> path was protected
+    /// from exactly that by the storage layer (a save at or below the flushed version is dropped;
+    /// a strictly lower version is refused by <c>MonotonicWriteGuard</c>); forwarding the save to
+    /// this verb without carrying its version lost the protection.
+    /// <c>Doc/Architecture/ParticipantIngress</c> → "The forwarded save keeps its version".</para>
+    ///
+    /// <para><b>The rule is "not older", never "equal".</b> A snapshot at the current version
+    /// writes, and so does one carrying a higher version (a caller that pre-incremented, or a
+    /// replayed history) — the same strict-regression rule the storage guard applies.</para>
+    ///
+    /// <para><b>An older snapshot that would change nothing is not refused.</b> A cross-hub
+    /// <c>stream.Update</c> hands its caller the node it computed locally, at the BASE version —
+    /// only the owner mints — so "write, then save what the write returned" always offers a
+    /// version one behind the row it just produced, carrying exactly what that row holds. There
+    /// is nothing for such a snapshot to put back; it is acknowledged as unchanged.</para>
+    ///
+    /// <para><b>It is evaluated only for a caller established to hold write access.</b> A refusal
+    /// that names the stored version is a statement about the node, so the precondition is not
+    /// looked at until the requester is known to hold <see cref="Permission.Update"/> on the path;
+    /// anyone else is refused as unauthorised, whatever version they offered.</para>
+    ///
+    /// <para><b>The CREATE branch ignores it</b> — there is no stored version to compare against.
+    /// <c>null</c> (the default) states no precondition, which is every existing caller.</para>
+    /// </summary>
+    public long? SnapshotVersion { get; init; }
 }
 
 /// <summary>
@@ -804,6 +859,13 @@ public static class NodeUpsertFailureKind
 
     /// <summary>The operation ended during teardown; whether the write was applied is unknown.</summary>
     public const string HubTeardown = "HubTeardown";
+
+    /// <summary>
+    /// The write carried <see cref="CreateOrUpdateNodeRequest.SnapshotVersion"/> and the node has
+    /// moved past it. Nothing was written; re-read the node and re-apply the change to what it
+    /// holds now. Retrying the same snapshot is refused the same way.
+    /// </summary>
+    public const string StaleSnapshot = "StaleSnapshot";
 }
 
 /// <summary>

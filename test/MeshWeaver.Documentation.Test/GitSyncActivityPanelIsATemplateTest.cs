@@ -1,7 +1,6 @@
 using System.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.GitSync;
-using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using Xunit;
 
@@ -22,8 +21,8 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para>Negative control, run before this file was committed: one deferred view —
 /// <c>WithView((h, _) =&gt; observable)</c>, the shape the old panel was built from — added to the
-/// panel fails <see cref="LayoutTemplateAssertions.EveryViewIsStatic"/> ("StackControl carries 1
-/// deferred view(s)").</para>
+/// panel makes <see cref="LayoutTemplate.DeferredViews"/> name it (<c>StackControl[n]: …</c>), so
+/// the emptiness assertion below fails.</para>
 /// </summary>
 public class GitSyncActivityPanelIsATemplateTest
 {
@@ -34,8 +33,8 @@ public class GitSyncActivityPanelIsATemplateTest
 
         var panel = GitHubSyncSettingsTab.BuildActivityPanel(activityPath);
 
-        LayoutTemplateAssertions.EveryViewIsStatic(panel);
-        var progress = Assert.Single(LayoutTemplateAssertions.Descendants(panel).OfType<LayoutAreaControl>());
+        Assert.Empty(LayoutTemplate.DeferredViews(panel));
+        var progress = Assert.Single(LayoutTemplate.Descendants(panel).OfType<LayoutAreaControl>());
         Assert.Equal(activityPath, progress.Address.ToString());
         Assert.Equal(ActivityLayoutAreas.ProgressArea, progress.Reference.Area);
         Assert.Equal(SpinnerType.Skeleton, progress.SpinnerType);
@@ -46,6 +45,6 @@ public class GitSyncActivityPanelIsATemplateTest
     {
         var panel = GitHubSyncSettingsTab.BuildActivityPanel(null);
 
-        Assert.Single(LayoutTemplateAssertions.Descendants(panel));
+        Assert.Single(LayoutTemplate.Descendants(panel));
     }
 }

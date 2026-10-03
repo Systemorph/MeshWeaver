@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -182,27 +183,28 @@ public static class ContentLayoutArea
     /// <summary>
     /// Renders the MeshNode's own content from the Content property.
     /// Used when $Content area is accessed without a path.
+    ///
+    /// <para>A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the
+    /// <see cref="MarkdownControl"/> is returned at once, bound to a projection of the node's
+    /// markdown, and follows every later edit. It used to be built only once the node had been
+    /// read, out of the text of that moment.</para>
     /// </summary>
     private static IObservable<UiControl?> RenderNodeContent(LayoutAreaHost host)
-    {
-        var hubPath = host.Hub.Address.ToString();
+        => Observable.Return<UiControl?>(
+            NodeMarkdown(host.Workspace, host.Hub.Address.ToString()).BoundMarkdown(NodeContentDataId));
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+    /// <summary>The data id the node's own markdown is projected under.</summary>
+    internal const string NodeContentDataId = "nodeContent";
 
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            if (node == null)
-                return new MarkdownControl($"*Node not found: {hubPath}*");
-
-            var content = GetMarkdownContent(node);
-            if (string.IsNullOrWhiteSpace(content))
-                return new MarkdownControl("*No content available.*");
-
-            return new MarkdownControl(content);
-        });
-    }
+    /// <summary>The live markdown of the hub's own node, or a one-line notice when there is none.</summary>
+    private static IObservable<string> NodeMarkdown(IWorkspace workspace, string hubPath)
+        => (workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+                ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>()))
+            .Select(nodes => nodes.FirstOrDefault(n => n.Path == hubPath) is not { } node
+                ? $"*Node not found: {hubPath}*"
+                : GetMarkdownContent(node) is { } content && !string.IsNullOrWhiteSpace(content)
+                    ? content
+                    : "*No content available.*");
 
     /// <summary>
     /// Extracts markdown content from a MeshNode's Content property.

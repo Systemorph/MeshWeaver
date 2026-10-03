@@ -50,10 +50,13 @@ public static class SpaceInviteLayoutArea
 
         var inviteButton = Controls.Button(host.Localize("ui.invite"))
             .WithAppearance(Appearance.Accent)
-            .WithClickAction((Action<UiActionContext>)(ctx =>
+            // The form read is RETURNED to the click: a fault reading it is the click's visible
+            // refusal, never an unobserved rethrow.
+            .WithReactiveClickAction(ctx =>
                 ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
-                    .Subscribe(form => Submit(ctx, spacePath, form))));
+                    .Do(form => Submit(ctx, spacePath, form))
+                    .Select(_ => System.Reactive.Unit.Default));
 
         var stack = Controls.Stack
             .WithView(Controls.H2(host.Localize("menu.invitePeople")).WithStyle("margin: 0 0 8px 0;"))

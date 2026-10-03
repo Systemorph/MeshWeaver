@@ -113,6 +113,20 @@ public static class CreateLayoutArea
             (UiControl?)BuildCreateNewForm(host, nodes, currentPath));
     }
 
+    /// <summary>
+    /// A form-patch read that faulted on a click's continuation — after the click itself has been
+    /// answered, so there is no refusal left to carry it. Reported with the form, area and hub, and
+    /// shown to the person in the dialog area; never rethrown on the producer's thread.
+    /// </summary>
+    private static void ReportFormPatchFault(UiActionContext ctx, string formId, Exception ex)
+    {
+        ctx.Host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(CreateLayoutArea))
+            .LogWarning(ex, "Create form {FormId} on area {Area} of {Hub} could not be patched",
+                formId, ctx.Area, ctx.Host.Hub.Address);
+        ShowErrorDialog(ctx, ctx.Host.Localize("error.title"), ex.Message);
+    }
+
     private static void ShowErrorDialog(UiActionContext ctx, string title, string message)
     {
         var errorDialog = Controls.Dialog(
@@ -126,18 +140,28 @@ public static class CreateLayoutArea
     /// Renders an icon value as a 48x48 preview. Supports three forms:
     /// inline SVG markup, an http(s) or /api/content URL, and a FluentIcon name.
     /// </summary>
-    internal static UiControl BuildIconPreview(string icon)
+    internal static UiControl BuildIconPreview(string icon) => Controls.Html(IconPreviewMarkup(icon));
+
+    /// <summary>
+    /// The markup of the 48px icon preview for <paramref name="icon"/> — an inline SVG plated and
+    /// sized, an image URL, or the raw value as text; a dashed empty box for no icon. Shared by the
+    /// Create form and the Settings icon picker, which binds to it as data.
+    /// </summary>
+    /// <param name="icon">The node's Icon value, or empty.</param>
+    internal static string IconPreviewMarkup(string? icon)
     {
+        if (string.IsNullOrEmpty(icon))
+            return "<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>";
         const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
         // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it into
         // the 48px box — the preview has to show what the portal will actually draw, and drawn raw
         // a currentColor outline is invisible on one of the two themes.
         if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return Controls.Html($"<div style=\"{boxStyle}\">{MeshNodeImageHelper.SizeInlineSvg(icon, 32)}</div>");
+            return $"<div style=\"{boxStyle}\">{MeshNodeImageHelper.SizeInlineSvg(icon, 32)}</div>";
         if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/")
             || icon.StartsWith("data:image", StringComparison.OrdinalIgnoreCase))
-            return Controls.Html($"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>");
-        return Controls.Html($"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>");
+            return $"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>";
+        return $"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>";
     }
 
     /// <summary>
@@ -163,7 +187,7 @@ public static class CreateLayoutArea
                 var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
                 mutate(next);
                 actx.Host.UpdateData(formId, next);
-            });
+            }, ex => ReportFormPatchFault(actx, formId, ex));
 
         // Single reactive chain (no nested Subscribe): read the form → generate → write back.
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
@@ -225,7 +249,7 @@ public static class CreateLayoutArea
                 var next = form is null ? new Dictionary<string, object?>() : new Dictionary<string, object?>(form);
                 mutate(next);
                 actx.Host.UpdateData(formId, next);
-            });
+            }, ex => ReportFormPatchFault(actx, formId, ex));
 
         actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
             .Take(1)
@@ -636,12 +660,13 @@ public static class CreateLayoutArea
 
         buttonRow = buttonRow.WithView(Controls.Button(host.Localize("menu.create"))
             .WithAppearance(Appearance.Accent)
-            .WithClickAction(actx =>
+            .WithReactiveClickAction(actx =>
             {
                 // Reactive click — read form, CreateNode (completes after the create response),
                 // then navigate to the new node's Edit area. No await on the click path
-                // (AsynchronousCalls.md).
-                actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                // (AsynchronousCalls.md). The read is RETURNED to the click, so a fault reading the
+                // form reaches the person as the click's refusal instead of rethrowing unobserved.
+                return actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                     .Take(1)
                     // 🚨 WAITS for the offered set's ownership answer rather than reading a
                     // placeholder: a click that beats the provider must not place an in-mesh owning
@@ -652,7 +677,7 @@ public static class CreateLayoutArea
                             .Take(1)
                             .Timeout(OfferedTypesBudget, Observable.Return(Array.Empty<string>())),
                         (form, owning) => (Form: form, Owning: owning))
-                    .Subscribe(submitted =>
+                    .Do(submitted =>
                     {
                         var formValues = submitted.Form;
                         var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
@@ -742,8 +767,7 @@ public static class CreateLayoutArea
                                         ex.RefusalText()?.Localize(locale) ?? ex.Message);
                                 ShowErrorDialog(actx, actx.Host.Localize("dialog.creationFailed"), errorMsg);
                             });
-                    });
-                return Task.CompletedTask;
+                    }).Select(_ => System.Reactive.Unit.Default);
             }));
 
         stack = stack.WithView(buttonRow);

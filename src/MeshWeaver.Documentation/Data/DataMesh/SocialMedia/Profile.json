@@ -13,6 +13,6 @@
     "namespace": "Doc/DataMesh/SocialMedia",
     "displayName": "Social Media Profile",
     "description": "A social media profile owned by a user",
-    "configuration": "config => config.WithContentType<SocialMediaProfile>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaProfileLayoutAreas().WithDefaultArea(\"Detail\"))"
+    "configuration": "config => config.WithContentType<SocialMediaProfile>().AddData(data => data.AddSource(source => source.WithType<Platform>(t => t.WithInitialData(Platform.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddSocialMediaProfileLayoutAreas().WithView(\"Tests\", ProfileViewTests.Tests).WithDefaultArea(\"Detail\"))"
   }
 }

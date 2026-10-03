@@ -14,6 +14,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Compiler;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
@@ -451,7 +452,24 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         name => cellSurfaceBindings?.GetValueOrDefault(name));
                     var options = scriptOptions;
                     return cpuLane
-                        .InvokeBlocking(t => current.Compile(cleaned, options, typeof(MeshScriptGlobals), t))
+                        .InvokeBlocking(t =>
+                        {
+                            var submission = current.Compile(cleaned, options, typeof(MeshScriptGlobals), t);
+                            // Option C (Doc/Architecture/InMeshImpersonation): judge the submission's
+                            // references to impersonation APIs BEFORE any of it runs. A script session is
+                            // never trusted; LogOnly logs, Enforce refuses the cell. The scan covers
+                            // THIS submission only: a continued script's compilation holds one syntax
+                            // tree, its own — earlier cells are a referenced previous compilation — so a
+                            // clean cell is never judged for an earlier cell's reference.
+                            // GetRequiredService: every hub registers an AccessService; a missing one
+                            // must fail the cell loudly, never switch the check off in silence.
+                            if (publicHub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
+                                { Mode: not InMeshImpersonationMode.Off } guard)
+                                guard.CheckCompiled(ScriptSession.LoadContextName, publicHub.Address.ToString(),
+                                    InMeshImpersonationReferences.Find(submission.Compilation, t)
+                                        .Select(r => r.ToString()).ToList());
+                            return submission;
+                        })
                         .SelectMany(compiled => compilePool.Invoke(t =>
                         {
                             // The scope is held only while the submission STARTS: its first await
@@ -477,13 +495,32 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         // Collections.Immutable.ImmutableList`1[...] }"). Observed on
                         // RiskTransfer/01-GrossToNet under the rendered loss-book grid.
                         //
-                        // Everything else still logs: for `1 + 1` or a string, that line IS the
-                        // cell's output and the only thing the learner sees.
-                        if (returnValue is not IUiControl)
-                            scriptOutputLogger.LogInformation("{Value}", returnValue.ToString() ?? "");
+                        // Everything that DESCRIBES ITSELF still logs: for `1 + 1` or a string, that
+                        // line IS the cell's output and the only thing the learner sees.
+                        if (OutputLine(returnValue) is { } line)
+                            scriptOutputLogger.LogInformation("{Value}", line);
                     }
                     return returnValue;
                 }));
+    }
+
+    /// <summary>
+    /// The transcript line a script's return value earns, or <c>null</c> when it earns none.
+    /// <para>A control earns none (it is rendered, see above). Neither does a value whose
+    /// <c>ToString()</c> is the one <see cref="object"/> gives everything — a dictionary, a list,
+    /// an array, a plain class print their TYPE NAME
+    /// (<c>System.Collections.Generic.Dictionary`2[System.String,System.Object]</c>), which tells
+    /// the reader nothing about the result and became the activity page's headline. The value
+    /// itself is not lost: it is serialized onto <c>ActivityLog.ReturnValue</c>, which is what a
+    /// view renders.</para>
+    /// </summary>
+    internal static string? OutputLine(object returnValue)
+    {
+        if (returnValue is IUiControl) return null;
+        // A string is its own text — even one that happens to spell "System.String".
+        if (returnValue is string s) return s;
+        var text = returnValue.ToString() ?? "";
+        return text == returnValue.GetType().ToString() ? null : text;
     }
 
     private sealed class StdoutScope(LoggerTextWriter stdoutPipe, LoggerTextWriter stderrPipe, IDisposable capture) : IDisposable
