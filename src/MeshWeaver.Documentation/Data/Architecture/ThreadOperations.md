@@ -151,6 +151,34 @@ var sub = thread
 
 Tests bridge to `Task` exactly once at the assertion edge — see [WritingTests](/Doc/Architecture/WritingTests). `ThreadFlow.SubmitAndWait` packages submit + wait into one observable for that test-edge use.
 
+## Thread id and thread name — the id is unique, the name speaks
+
+A thread has two labels, and they do different jobs. The **id** (the last path segment,
+`{owner}/_Thread/{id}`) is the identity: `ThreadNodeType.GenerateSpeakingId` mints it from the
+first message's slug plus a unique suffix, or a caller passes `speakingId` when the id must be
+deterministic (the control plane's `bug-{repo}-{number}`, on which "one thread per defect" rests).
+It never changes, and nothing parses meaning out of it. The **name** is what every thread listing
+shows, and it is display only.
+
+Since 2026-10-03 (maintainer: *"can't we use speaking names of threads going forward? we generate
+them at beginning"* / *"just keep id of thread. must be unique"*) the name is chosen at creation:
+
+- **A caller that knows what the thread is about** passes it through `StartPreparedThread`'s
+  `ThreadPreparation` (`Name`, `Description`, `Category`). The control plane's starters do this:
+  `Review · Plugins #2734 · {PR title}`, `Triage · Plugins main red · {failed job}`,
+  `Fix · core #5944 · {issue title}` (MeshWeaver.Plugins `Hosting/Triage` → *Every thread is created
+  with a SPEAKING name*).
+- **The chat composer** prepares the name with the `ThreadNamer` from the first prompt before it
+  creates the thread.
+- **Every other caller** (`StartThread` from MCP `start_thread`, mail, Teams, …) gets
+  `ThreadNodeType.SpeakingName(firstMessage)`: the first non-empty line, markdown link, emphasis,
+  code and heading syntax flattened, clipped on a word boundary at 80 characters. Until then it was a
+  raw 57-character cut, so twenty review threads were all listed as
+  ``**Review pull request `Systemorph/MeshWeaver.Plugins#2736...``.
+
+Existing threads keep both their id and their name. The engine (`MeshWeaver.AI`) lives in
+MeshWeaver.Plugins, so the code and its tests (`ThreadCreationTest`, `ThreadNamesTests`) are there.
+
 ## One-shot callbacks on `StartThread`
 
 `onCreated` fires exactly once when the new thread node is confirmed (used by the chat view to navigate to the new thread). `onError` fires exactly once if create or submit fails (post returned null, permission denied, etc.). Both parameters are optional — pass `null` if you don't need them.
