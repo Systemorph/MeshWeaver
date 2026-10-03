@@ -121,6 +121,10 @@ public static class GraphConfigurationExtensions
             // catalog the menu aggregation maps (one query subscription per silo).
             builder.AddUiContributionType();
             builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
+            // Type-scoped recycle (Admin/_Recycle): every process disposes the live activations it
+            // HOSTS of the requested NodeTypes — the per-process LiveActivationRegistry is filled by
+            // MeshNodeHubFactory. Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".
+            builder.AddActivationRecycle();
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
             builder.ConfigureServices(s => s.AddSingleton<InstalledModulesFingerprint>());

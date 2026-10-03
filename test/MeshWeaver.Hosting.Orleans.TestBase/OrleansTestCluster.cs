@@ -6,6 +6,7 @@ using System.Net;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -56,12 +57,31 @@ internal sealed class OrleansTestBackingStore
     public IServiceCollection Register(IServiceCollection services)
     {
         services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
-            new InMemoryStorageAdapter(
-                nodes,
-                partitionObjects,
-                sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
+            sharedChanges is { } shared
+                ? new InMemoryStorageAdapter(
+                    nodes,
+                    partitionObjects,
+                    shared,
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())
+                : new InMemoryStorageAdapter(
+                    nodes,
+                    partitionObjects,
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<InMemoryStorageAdapter>())));
         return services;
     }
+
+    /// <summary>
+    /// Opt-in: one change feed for every host's adapter, so a write on one silo is HEARD on the other
+    /// — the PostgreSQL LISTEN/NOTIFY shape. Off by default (see the class remarks); a fixture whose
+    /// subject is a cross-silo signal carried by a durable write turns it on.
+    /// </summary>
+    public OrleansTestBackingStore ShareChanges()
+    {
+        sharedChanges ??= new IsolatedChangeFeed(null, "in-memory-shared");
+        return this;
+    }
+
+    private IsolatedChangeFeed? sharedChanges;
 
     /// <summary>
     /// Reads the durable row a test asserts on (what the store of record actually holds).
