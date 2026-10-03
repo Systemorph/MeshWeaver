@@ -50,6 +50,20 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         new SatelliteTableMapping("_Approval", "annotations", "Approval", "Approvals/Approval"),
         new SatelliteTableMapping("_Comment", "annotations", "Comment"),
         new SatelliteTableMapping("_Notification", "notifications", "Notification"),
+        // A DOCUMENT's parts — one node per 1000-char chunk at {documentPath}/_DocumentPart/{index:D6}
+        // (see DocumentPartPaths). They get their OWN table in the partition's schema so the high-volume
+        // rows (every job log, transcript and indexed file is split into them) never land in mesh_nodes.
+        // 🚨 The segment is deliberately LONGER than every satellite a document may hang under
+        // (_Activity, _Thread, _Comment …): ResolveTable picks the LONGEST mapped segment in the path,
+        // so `X/_Activity/j/logs/_Documents/run.log/_DocumentPart/000000` resolves to document_parts,
+        // not activities. DocumentPartPaths.PartTableResolves guards the rest.
+        new SatelliteTableMapping(DocumentPartPaths.PartSegment, DocumentPartPaths.PartTable, DocumentPartPaths.PartNodeType),
+        // Nodes ATTACHED to a part (a person's or an agent's note/label on one chunk) at
+        // {partPath}/_PartAnnotation/{id}: longer still, so they get their own table, while
+        // OwnerOfSatellitePath (FIRST satellite segment) keeps their MainNode at the document's owner —
+        // access follows the owning partition's grants. A further attached type needs only one entry
+        // here (its segment + table); no schema surgery on existing tables.
+        new SatelliteTableMapping(DocumentPartPaths.AnnotationSegment, DocumentPartPaths.AnnotationTable, DocumentPartPaths.AnnotationNodeType),
         new SatelliteTableMapping("Source", "code"),
         new SatelliteTableMapping("Test", "code"),
     ];
