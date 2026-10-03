@@ -50,6 +50,10 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         new SatelliteTableMapping("_Approval", "annotations", "Approval", "Approvals/Approval"),
         new SatelliteTableMapping("_Comment", "annotations", "Comment"),
         new SatelliteTableMapping("_Notification", "notifications", "Notification"),
+        // Storage bindings ({partition}/_Storage/{id}) — the partition's OWN storage configuration,
+        // in its own table of the partition schema (Doc/Architecture/StorageBindings). Directly
+        // under the partition root, never nested under another satellite.
+        new SatelliteTableMapping("_Storage", "storage", "StorageBinding"),
         new SatelliteTableMapping("Source", "code"),
         new SatelliteTableMapping("Test", "code"),
     ];
