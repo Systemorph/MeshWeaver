@@ -2075,6 +2075,7 @@
   "serviceIdentities.tokensHeading": "Tokens",
   "serviceIdentities.column.token": "Token",
   "serviceIdentities.tokenRevoked": "This token is revoked already — only an active token can be rotated or revoked.",
+  "inbox.notInInbox": "That mail is not in the inbox.",
   "inbox.alreadyArchived": "This mail is archived already.",
   "inbox.empty": "Inbox is empty.",
   "inbox.listFailed": "Could not read the inbox: {0}",

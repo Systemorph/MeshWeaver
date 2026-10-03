@@ -103,7 +103,7 @@ public static class InboxSettingsTab
         {
             if (row is null)
             {
-                ctx.Host.UpdateData(ResultDataId, Error("That mail is not in the inbox."));
+                ctx.Host.UpdateData(ResultDataId, Error(host.Localize("inbox.notInInbox")));
                 return;
             }
             if (row.IsArchived)

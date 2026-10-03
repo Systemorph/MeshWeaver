@@ -2075,6 +2075,7 @@
   "serviceIdentities.tokensHeading": "Tokens",
   "serviceIdentities.column.token": "Token",
   "serviceIdentities.tokenRevoked": "Dieses Token ist bereits widerrufen — nur ein aktives Token kann erneuert oder widerrufen werden.",
+  "inbox.notInInbox": "Diese E-Mail ist nicht im Posteingang.",
   "inbox.alreadyArchived": "Diese E-Mail ist bereits archiviert.",
   "inbox.empty": "Der Posteingang ist leer.",
   "inbox.listFailed": "Der Posteingang konnte nicht gelesen werden: {0}",
