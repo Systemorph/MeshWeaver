@@ -204,17 +204,22 @@ public record DocumentPartAnnotation
 /// <param name="CollectionPath">The content collection the original belongs in (<c>{node}/{collection}</c>).</param>
 /// <param name="FilePath">The original's file path within the collection.</param>
 /// <param name="Name">Display name; defaults to the file name.</param>
-/// <param name="ChunkSize">Characters per part.</param>
-/// <param name="ChunkOverlap">Characters two consecutive parts share.</param>
-/// <param name="StoreOriginal">Write the assembled original into the collection on completion. False when the
-/// producer already stored it (a downloaded file).</param>
+/// <param name="ChunkSize">Characters per part; null = <see cref="DocumentPartPaths.DefaultChunkSize"/>.</param>
+/// <param name="ChunkOverlap">Characters two consecutive parts share; null = <see cref="DocumentPartPaths.DefaultChunkOverlap"/>.</param>
+/// <param name="ProducerStoresOriginal">True when the producer already stored the original (a downloaded file):
+/// completion then leaves the collection untouched. False (the default) writes the assembled original into
+/// the collection on completion.</param>
+/// <remarks>🚨 Every member's default is its CLR default (or a value whose omission means "the default"): the
+/// mesh serialiser omits default-valued members, so a positional parameter whose default differs from the
+/// CLR default would flip on the way to the document's hub — a <c>false</c> sent would arrive as the
+/// constructor's <c>true</c>.</remarks>
 public record DocumentLogTarget(
     string CollectionPath,
     string FilePath,
     string? Name = null,
-    int ChunkSize = DocumentPartPaths.DefaultChunkSize,
-    int ChunkOverlap = DocumentPartPaths.DefaultChunkOverlap,
-    bool StoreOriginal = true)
+    int? ChunkSize = null,
+    int? ChunkOverlap = null,
+    bool ProducerStoresOriginal = false)
 {
     /// <summary>The logical document's path for this target.</summary>
     public string DocumentPath => DocumentPaths.For(CollectionPath, FilePath);
