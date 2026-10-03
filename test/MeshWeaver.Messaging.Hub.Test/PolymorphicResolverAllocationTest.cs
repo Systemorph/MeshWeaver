@@ -49,8 +49,7 @@ public class PolymorphicResolverAllocationTest(ITestOutputHelper output) : HubTe
         registry.WithType(typeof(Probe), nameof(Probe));
         var resolver = new PolymorphicTypeInfoResolver(registry);
         var options = new JsonSerializerOptions { TypeInfoResolver = resolver };
-        resolver.GetTypeInfo(typeof(Probe), options);
-        var small = ResolutionBytes(resolver, options) - TraversalBytes(registry);
+        var small = SettledResolutionBytes(resolver, options, registry);
 
         const int candidates = 512;
         var module = AssemblyBuilder.DefineDynamicAssembly(
@@ -63,8 +62,7 @@ public class PolymorphicResolverAllocationTest(ITestOutputHelper output) : HubTe
             registry.WithType(type, type.Name);
         }
 
-        resolver.GetTypeInfo(typeof(Probe), options);
-        var large = ResolutionBytes(resolver, options) - TraversalBytes(registry);
+        var large = SettledResolutionBytes(resolver, options, registry);
         var added = large - small;
         Output.WriteLine($"Extra resolution allocation beyond registry traversal: {added:N0} bytes "
             + $"for {candidates} unrelated types (small={small:N0}, large={large:N0}).");
@@ -73,6 +71,24 @@ public class PolymorphicResolverAllocationTest(ITestOutputHelper output) : HubTe
             + "and boxed list enumerator for each registry entry");
         resolver.GetTypeInfo(typeof(Probe), options).PolymorphismOptions!.DerivedTypes
             .Should().ContainSingle().Which.DerivedType.Should().Be(typeof(Probe));
+    }
+
+    /// <summary>
+    /// The resolver's allocation per resolution beyond the registry traversal, once the JIT has
+    /// settled: the MINIMUM over repeated samples. Tier-0 code allocates what optimized code does
+    /// not (an enumerator or closure the optimizing JIT keeps on the stack), and on a loaded runner
+    /// tier-up is late — measured on CI: the same tree read 0 bytes alone and 2,460 / 55,150 bytes
+    /// while a heavy suite shared the shard. A real per-candidate allocation is present in EVERY
+    /// sample, so the minimum still shows it; a transient one is gone from at least one.
+    /// </summary>
+    private static long SettledResolutionBytes(
+        PolymorphicTypeInfoResolver resolver, JsonSerializerOptions options, ITypeRegistry registry)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var settled = long.MaxValue;
+        for (var sample = 0; sample < 10 || (settled > 0 && clock.ElapsedMilliseconds < 3000); sample++)
+            settled = Math.Min(settled, ResolutionBytes(resolver, options) - TraversalBytes(registry));
+        return settled;
     }
 
     private static long ResolutionBytes(PolymorphicTypeInfoResolver resolver, JsonSerializerOptions options)

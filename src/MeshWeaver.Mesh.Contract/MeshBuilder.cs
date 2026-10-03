@@ -1002,6 +1002,19 @@ public record MeshBuilder
                 meshTypeRegistry.WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
                 meshTypeRegistry.WithType(typeof(ExecuteScriptRequest), nameof(ExecuteScriptRequest));
                 meshTypeRegistry.WithType(typeof(ExecuteScriptResponse), nameof(ExecuteScriptResponse));
+                // Durable streams (Doc/Architecture/DurableStreams): producers and consumers on ANY hub
+                // talk to a stream node's hub, and every hub reads stream and item content — all of
+                // them need the short discriminators.
+                foreach (var durableStreamType in new[]
+                         {
+                             typeof(DurableStreamState), typeof(DurableStreamItemContent),
+                             typeof(AppendDurableStreamItemRequest), typeof(AppendDurableStreamItemResponse),
+                             typeof(ClaimDurableStreamRequest), typeof(ClaimDurableStreamResponse),
+                             typeof(AckDurableStreamRequest), typeof(AckDurableStreamResponse),
+                             typeof(ReleaseDurableStreamRequest), typeof(ReleaseDurableStreamResponse),
+                             typeof(DurableStreamWake),
+                         })
+                    meshTypeRegistry.WithType(durableStreamType, durableStreamType.Name);
 
                 // Register additional types added via WithMeshType()
                 foreach (var (type, name) in meshTypeRegs)
@@ -1053,6 +1066,8 @@ public record MeshBuilder
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
             // the mesh. See Doc/Architecture/ControlledIoPooling.md.
             .AddIoPools()
+            // Which durable-stream nodes this process has ensured (Doc/Architecture/DurableStreams).
+            .AddSingleton<DurableStreamDirectory>()
             // The deployment's declared features (Features:Flags:*) — the per-environment switch
             // that also carries what this environment pre-installs. Mesh-scoped for the same
             // reason the pools are: it holds live state (a BehaviorSubject + a configuration
