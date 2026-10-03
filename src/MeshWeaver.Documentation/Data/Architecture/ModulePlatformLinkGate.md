@@ -352,7 +352,10 @@ The answer needs the target's type surface at gate time, and the one process tha
 the bake, because the bake has the target image. Every bake therefore writes
 **`platform-surface.json`** beside `framework-mvid.txt` (`BakeOutput.WritePlatformSurface`, from
 `ModulePlatformSurface.ToJson`), `publish-bake-bundles.sh` uploads it beside `_complete` for every
-identity, and `PublishedBundleCatalogue` reads it back (`ModulePlatformSurface.FromJson`). The shape
+identity and — the copy the gate reads — to `_releases/_surface/<release-version>` for the release
+it belongs to, and `PublishedBundleCatalogue` reads that release's document back
+(`ModulePlatformSurface.FromJson`; policy `exact-release-surface`, see
+[Sealed Publication Reads](../SealedPublicationReads)). The shape
 is deliberately minimal — the identity the document is keyed to, and per assembly the full type
 names it exports, exactly the set `TypesOf` answers on a running process.
 
@@ -360,8 +363,9 @@ names it exports, exactly the set `TypesOf` answers on a running process.
 gate read a 111-assembly tester surface from `meshweaver-content` although the portal publication
 carried 531 assemblies under the same identity. It therefore reported Blazor as absent. Core CD
 now replaces the tester's surface with a measurement of the exact promoted portal image, after
-verifying its identity and before publishing the seal. The reader prefers that canonical core
-publication over a satellite's host description, regardless of source-name sort order. The
+verifying its identity and before publishing the seal. The gate reads that measurement from the
+release's own `_releases/_surface/<version>` document — never from a publication, whose shared
+`_current` names whichever bake of the same content moved it last. The
 `platform-surface` command's directory-host measurements include
 image-seeded module entries through `PlatformShippedAssemblies`, using the runtime's
 `modules/<name>/<name>.dll` witness. Private siblings are not promoted into the shared surface,
@@ -406,7 +410,7 @@ module, on a publication that simply predates the surface — which is exactly t
 2026-09-07 hold, reintroduced with a better excuse. So a release with no `platform-surface.json`,
 a document that does not parse, or landed bytes that cannot be read is written onto the verdict's
 **advisories** ("Views: whether its landed module … loads on 3.0.0-ci.8100 could not be determined
-— no sealed source publishes platform-surface.json …"), logged, recorded on `Admin/UpdatePolicy`
+— release 3.0.0-ci.8100 records no platform-surface.json of its own …"), logged, recorded on `Admin/UpdatePolicy`
 and shown on the Updates tab — and decides nothing. The safety net after such a roll is this page's
 boot-time probe (which DOES refuse), the keep-the-previous-generation fallback (MeshWeaver#3649),
 and the readiness stall.
