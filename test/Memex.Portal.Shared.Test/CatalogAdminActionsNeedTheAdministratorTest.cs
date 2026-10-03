@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -122,9 +121,9 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
     }
 
     /// <summary>
-    /// The action verifies the acting identity itself: on a page whose offers were computed for
-    /// the administrator, a click made under another identity acts on nothing, and the
-    /// administrator's own click acts.
+    /// On a page whose offers were computed for the administrator, a click made under another
+    /// identity acts on nothing — the page's stream accepts input only from its subscriber and
+    /// answers the click with a refusal — and the administrator's own click acts.
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task TheAdministratorActions_ActOnlyForTheAdministrator()
@@ -143,8 +142,10 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         var cardRow = RowOf(await Rows(adminStream, CatalogLayoutAreas.CardsDataId, Listed.Count),
             CatalogLayoutAreas.CardsDataId, Listed[0].Id);
 
-        await Click(adminStream, RemoveArea, orphanRow, Viewer);
-        await Click(adminStream, AutoArea, cardRow, Viewer);
+        (await Answer(adminStream, RemoveArea, orphanRow, Viewer)).Should().NotBeNull(
+            "the page was opened by the administrator, so a click under another identity is refused");
+        (await Answer(adminStream, AutoArea, cardRow, Viewer)).Should().NotBeNull(
+            "the page was opened by the administrator, so a click under another identity is refused");
         await records.Where(items => items.All(i => i.Id != orphan.Id) || !HasPolicyOtherThanAuto(items, Listed[0].Id))
             .Should().NotEmit(1.Seconds(),
                 "the acting identity is not the administrator, so neither action runs",
@@ -241,13 +242,23 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
     /// </summary>
     private static async Task Click(
         ISynchronizationStream<JsonElement> stream, string area, RowContext row, AccessContext actingUser)
+        => (await Answer(stream, area, row, actingUser)).Should().BeNull(
+            "the owner accepts a click made by the identity the page was opened for");
+
+    /// <summary>
+    /// Sends the click as <paramref name="actingUser"/> and returns the owner's answer:
+    /// <c>null</c> when the click was accepted (its action has run by then), the refusal sentence
+    /// otherwise.
+    /// </summary>
+    private static async Task<string?> Answer(
+        ISynchronizationStream<JsonElement> stream, string area, RowContext row, AccessContext actingUser)
     {
-        var receipt = new ReplaySubject<Unit>(1);
+        var answer = new ReplaySubject<string?>(1);
         stream.SubmitUserAction(new ClickedEvent(area, stream.StreamId) { Row = row }, actingUser,
-            onRefused: sentence => receipt.OnError(new InvalidOperationException(sentence)),
-            onAccepted: () => receipt.OnNext(Unit.Default));
-        await receipt.Should().Within(TestTimeouts.Convergence).Emit(
-            "the owner answers every click it ran", TestContext.Current.CancellationToken);
+            onRefused: answer.OnNext,
+            onAccepted: () => answer.OnNext(null));
+        return await answer.Should().Within(TestTimeouts.Convergence).Emit(
+            "the owner answers every click", TestContext.Current.CancellationToken);
     }
 
     private sealed class FixtureSource : IPackageSource
