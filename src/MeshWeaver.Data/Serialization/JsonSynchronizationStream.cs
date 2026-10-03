@@ -1568,7 +1568,13 @@ public static class JsonSynchronizationStream
             .ReduceManager
             .ReduceStream<TReduced>(
                 workspace,
-                request.Reference, config => config.WithClientId(request.StreamId).WithSubscriber(request.Subscriber)
+                // The subscriber's identity comes off the SUBSCRIBE delivery — the one identity
+                // the owner validated this subscription for. A stream that takes its subscriber's
+                // input only (StreamConfiguration.WithInputFromSubscriberOnly) compares every such
+                // input against it.
+                request.Reference, config => config.WithClientId(request.StreamId)
+                    .WithSubscriber(request.Subscriber)
+                    .WithSubscriberIdentity(delivery.AccessContext)
             );
 
         // 🚨 A REFUSAL THAT NAMES NEITHER THE HUB NOR THE SUBSCRIBER IS NOT DIAGNOSABLE (#5120). This
