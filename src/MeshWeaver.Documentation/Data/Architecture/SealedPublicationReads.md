@@ -774,5 +774,96 @@ So the verification that remains is a **live** one — a satellite gate reading 
 real mid-replace window, or through a pruned identity, which is permanent and never self-heals —
 and the instrument that records it either way is the incident node's own counter.
 
+## The release gate reads the surface of the release it gates
+
+Policy `exact-release-surface` ([Policy Not Prose](../PolicyNotProse)). The portal type surface the
+release gate links a landed module against ([Module Platform Link Gate](../ModulePlatformLinkGate))
+is a fact about ONE portal image, and every published release records its own:
+
+```
+prebuilt-bundles/_releases/<release-version>            → the release's framework identity (unchanged)
+prebuilt-bundles/_releases/_surface/<release-version>   → platform-surface.json measured on THAT release's image
+prebuilt-bundles/<identity>/<source>/…/platform-surface.json → the bake's description; read by no gate
+```
+
+### Why the publication cannot carry it
+
+A content publication is keyed by content × framework identity, and one core commit is baked
+against many portal images whose module closures differ: the image is built from a Plugins commit
+that moves independently of core, without changing the core commit or the framework identity.
+Two incidents came out of reading the surface from the publication `_current` names:
+
+- **Stale (ci.9468, 2026-09-27).** ci.9468 measured its portal surface at 15:56 UTC, but both share
+  targets skipped publication because core commit `2bb14d8` was already sealed. The live surface
+  stayed the 10:08 UTC document, whose `MeshWeaver.AI` entry omitted `MeshWeaver.AI.ProviderRouting`,
+  and the gate held the release over the landed OpenAI module — a correct hold on the document it
+  received, which described another image.
+- **Backwards (review of #5818).** The first fix republished the publication whenever the surface
+  differed. In the generation layout two same-source bakes then write disjoint generations, and
+  whichever moves `_current` LAST wins; the never-backwards guard orders source commits, and two
+  equal commits cannot be ordered, so a slower bake of the OLDER image took the pointer back. A
+  deterministic interleaving of the real publisher reproduced it: the newer surface sealed, and the
+  pointer then named the older generation.
+
+The pointer is not wrong in either case — both generations are whole and carry the same content.
+It simply cannot answer a per-image question, so nothing that gates may ask it one. The choice was
+between this contract and shared canonical surfaces with producer provenance plus an ordering over
+images; the per-release key needs no ordering at all, because every writer of one key measured the
+same image.
+
+### The contract
+
+- **The publisher** (`publish-bake-bundles.sh`, `RELEASE_SURFACE_DIR`) writes the bake's
+  `platform-surface.json` to `_releases/_surface/<release-version>` on EVERY run that names a
+  release and carries a surface — before the sealed-skip, like the marker, and before the marker
+  itself, so a reader that finds the marker finds the surface. A failed write fails that target
+  before the marker announces the release. A run that names a release but carries no surface warns
+  and writes none. The receipt counts `release-surfaces=N` on every run. Only core CD's
+  `meshweaver-content` bake passes a release version, and it measures the promoted
+  `memex-portal-ai:<version>` image itself (the identity is verified against the bake first).
+- **The shared publication is untouched by the surface.** Its skip key is content × framework
+  again: a same-content bake against a newer image SKIPS the publication and records only the new
+  release's surface. Nothing republishes over a surface difference, so there is no pointer race to
+  win or lose.
+- **`release.yml`** carries `_surface/<ci-version>` to `_surface/<clean>` byte for byte, beside
+  `_db` and the marker: the clean tag is a retag of the very image the continuous build measured.
+- **The gate** (`PublishedBundleCatalogue.Read` → `ReleaseSurfaceOf`) reads exactly
+  `_releases/_surface/<target-version>`. No fallback: a release without one is UNMEASURED — every
+  link check Indeterminate, reported on the advisories and neither a hold nor clearance, exactly as
+  a pre-#3651 publication always was. A document that does not parse, or that names a framework
+  identity other than the marker's, is the same advisory, named.
+- **"Latest" views are derived, never authoritative.** Anything that wants "the newest surface"
+  picks the newest release (`_releases` markers, SemVer-ordered by the caller) and reads that
+  release's document; nothing reads the publication's copy to decide.
+
+### Transition
+
+Releases published before this contract carry no per-release surface, so their link checks become
+advisories rather than holds — the newest release, which a roll targets, carries one from its first
+CD run on this publisher. A portal still running the previous reader keeps reading the publication's
+copy until it rolls; that copy now changes only with the content (each core commit republishes it),
+so it can be stale for a same-commit reconcile, as before the first fix, and never moves backwards.
+`_releases/_surface/*` is not yet collected by `PrebuiltBundleRetention`, which keeps no `_db` files
+either; both are one small file per release.
+
+### Evidence
+
+- `.github/scripts/test-publish-bake-overlap.py` — *exact-release surface*: for flat and
+  generation layouts, with and without a content sha, a same-content bake against a newer image
+  skips the publication and each release carries its own surface; a surface-less bake writes none
+  and warns; a node repo (no release) writes none; a failed surface write fails the target before
+  the marker. *Interleaved same-source bakes with DIFFERENT surfaces*: release A's bake is paused
+  mid-upload while B publishes and seals; A then takes `_current` (asserted — that is the race), and
+  the gate still reads B's surface for B and A's for A. Falsified two ways: `--gate-contract pointer`
+  (the read this replaced) fails exactly that assertion — B judged against A's image — and the
+  previous publisher (head `6472b7f05`) fails it under either read.
+- `ReleaseLinkGateTest` — `EachReleaseIsJudgedAgainstItsOwnSurface_NeverThePublicationsShared`
+  (two releases, one identity, one publication whose surface is the wrong answer in both
+  directions), `AReleaseWithNoSurfaceOfItsOwn_IsUnmeasured_EvenWhenThePublicationCarriesOne`,
+  `AReleaseSurfaceNamingAnotherIdentity_IsNotLinkedAgainst`. Against the previous reader the first
+  fails in both directions.
+- `PlatformBakeLaneGuard.TheExactReleaseSurface_IsWrittenCarriedAndReadUnderOneDirectoryName` pins
+  the one directory name across the publisher, `release.yml` and the reader.
+
 Related: [CI Content Bake](../CiContentBake) · [Plugin Build Contract](../PluginBuildContract) ·
 [Bake Identity Mismatch](../BakeIdentityMismatch) · [Module Build Architecture](../ModuleBuildArchitecture)

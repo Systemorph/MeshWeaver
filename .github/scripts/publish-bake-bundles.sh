@@ -22,7 +22,8 @@
 #
 # <source-sha> is the CONTENT identity — the producing repo's commit the bake was taken from
 # (what the caller passed to mw-plugin-test --source-sha). The publication key is content ×
-# framework: a sealed directory is skipped only when BOTH match (see the sealed-skip below).
+# framework: a sealed directory is skipped only when BOTH match (see the sealed-skip below). The
+# portal surface is NOT part of that key: it is published per RELEASE (see THE EXACT-RELEASE SURFACE).
 # Omitting it degrades the skip to framework-identity-only — correct for a producer whose content
 # lives in the framework repo itself, but a NODE repo must pass it: its content changes while the
 # framework identity stays put, and a framework-only skip would freeze its first publication for
@@ -1007,6 +1008,32 @@ if [ -n "${RELEASE_MARKER_LOCAL:-}" ] && [ -n "${EXPECTED_DB_VERSION:-}" ]; then
   printf '%s\n' "$EXPECTED_DB_VERSION" > "$RELEASE_SCHEMA_LOCAL"
 fi
 
+# 🚨 THE EXACT-RELEASE SURFACE (policy `exact-release-surface`; Doc/Architecture/SealedPublicationReads).
+# The portal surface the release gate links a landed module against is a property of ONE portal
+# IMAGE — memex-portal-ai:<release-version>, whose closure carries whichever Plugins commit that
+# image was built with — and NOT of the content publication: one core commit (one source sha, one
+# framework identity, one `_current`) is baked again and again against images whose module
+# closures differ. Reading it from `<identity>/<source>/_current` therefore made the gate judge
+# release X against whichever bake moved the shared pointer LAST — and two same-source bakes
+# carrying different surfaces cannot be ordered by their source sha, so the slower one won
+# (Copilot on #5818, reproduced with a deterministic interleaving). So the surface is published
+# keyed by the release it describes, at _releases/_surface/<release-version>, and the gate reads
+# the surface of the release it is gating and nothing else. Every writer of one key measured the
+# SAME image (the version is minted per run and a reconcile recovers it off the promoted digest),
+# so the write order of one key cannot matter, and there is no shared pointer left to race on.
+# A SUBDIRECTORY for the same reason as _db: every reader of _releases enumerates FILES as
+# version → identity markers. Written only when this run knows its release AND measured a surface;
+# the `platform-surface.json` inside the publication stays as a description of the bake and is
+# read by no gate.
+RELEASE_SURFACE_DIR="_surface"
+RELEASE_SURFACE_LOCAL=""
+if [ -n "${RELEASE_MARKER_LOCAL:-}" ] && [ "$HAS_SURFACE" = "true" ]; then
+  RELEASE_SURFACE_LOCAL="$(mktemp -d)/$RELEASE_VERSION"
+  cp "$SURFACE_LOCAL" "$RELEASE_SURFACE_LOCAL"
+elif [ -n "${RELEASE_MARKER_LOCAL:-}" ]; then
+  echo "::warning::release $RELEASE_VERSION is recorded without its own $SURFACE_FILE (the bake carries none), so the release gate cannot link a landed module against it: every such link is reported as 'could not be determined' for this release."
+fi
+
 ensure_directory() { # <account> <share> <dir-path>
   local account="$1" share="$2" dest="$3" path="" part
   # az storage directory create is not recursive and errors on an existing directory on some CLI
@@ -1032,14 +1059,22 @@ publish_release_marker() { # <account> <share> <base>
   local account="$1" share="$2" base="$3"
   local dir="${base:+$base/}prebuilt-bundles/$RELEASES_DIR"
   ensure_directory "$account" "$share" "$dir"
-  # The schema file lands BEFORE the marker it describes, so a reader that finds the marker finds
-  # the number with it (when this run knows one).
+  # The schema file and the release's own surface land BEFORE the marker they describe, so a
+  # reader that finds the marker finds them with it (when this run knows them).
   if [ -n "${RELEASE_SCHEMA_LOCAL:-}" ]; then
     ensure_directory "$account" "$share" "$dir/$RELEASE_SCHEMA_DIR"
     az storage file upload --account-name "$account" --share-name "$share" \
       --path "$dir/$RELEASE_SCHEMA_DIR" --source "$RELEASE_SCHEMA_LOCAL" \
       --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "release schema: $account/$share/$dir/$RELEASE_SCHEMA_DIR/$RELEASE_VERSION → ExpectedDbVersion $EXPECTED_DB_VERSION"
+  fi
+  if [ -n "${RELEASE_SURFACE_LOCAL:-}" ]; then
+    ensure_directory "$account" "$share" "$dir/$RELEASE_SURFACE_DIR"
+    az storage file upload --account-name "$account" --share-name "$share" \
+      --path "$dir/$RELEASE_SURFACE_DIR" --source "$RELEASE_SURFACE_LOCAL" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null
+    echo "release surface: $account/$share/$dir/$RELEASE_SURFACE_DIR/$RELEASE_VERSION ← this run's $SURFACE_FILE ($(wc -c < "$RELEASE_SURFACE_LOCAL" | tr -d ' ') bytes)"
+    echo release-surface >> "$OUTCOMES"
   fi
   # Same directory-as---path trick as the sentinel below: the CLI appends the source basename, and
   # the local file is already named after the version.
@@ -1593,6 +1628,9 @@ for target in $BAKE_PUBLISH_TARGETS; do
 done
 PUBLISHED=$(awk '/^published$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 MARKERS=$(awk '/^marker$/ { c++ } END { print c + 0 }' "$OUTCOMES")
+# Targets that received THIS release's own surface (_releases/_surface/<version>) — the one the gate
+# reads. Printed on every run, including zero, so "no surface reached the gate" is a number.
+RELEASE_SURFACES=$(awk '/^release-surface$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 # Targets a sibling publication of THIS content had already sealed by the time this run's
 # postcondition ran (MeshWeaver#3461). Counted separately from `published` so the summary never
 # claims a seal this run did not write — and printed on every run, including zero, so the number
@@ -1650,4 +1688,4 @@ if [ -n "${BAKE_PUBLICATION_DIR:-}" ]; then
   materialise_publication "$BAKE_PUBLICATION_DIR"
 fi
 
-echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED targets-already=$ALREADY targets-superseded=$SUPERSEDED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
+echo "bake published: identity=$IDENTITY arch=$BAKE_ARCHITECTURE source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} surface=$HAS_SURFACE targets-published=$PUBLISHED targets-converged=$CONVERGED targets-already=$ALREADY targets-superseded=$SUPERSEDED release=${RELEASE_VERSION:-none} release-markers=$MARKERS release-surfaces=$RELEASE_SURFACES"
