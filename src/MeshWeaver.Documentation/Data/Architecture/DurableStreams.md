@@ -77,6 +77,13 @@ config.WithDurableStreamConsumer<DocumentLogAppend>(
 
 On every activation the consumer:
 
+0. **Stays dormant until there is a stream.** A NodeType that consumes a family is carried by
+   *every* hub of that type, and most of them never get a stream (every uploaded document carries the
+   `DocumentLog` consumer). Activation therefore costs **one existence query**, a listing read and never
+   a point read of a node that may be absent. If the stream node does not exist, the consumer creates
+   nothing, claims nothing and arms no timer until a producer's append wakes the hub
+   (`DurableStreamWake`). Consumer requests (claim, ack, release) never create a stream node; only a
+   producer does.
 1. **Claims** the stream (`ClaimDurableStreamRequest`). The stream node's hub grants the lease when the
    stream is free or the claimant already holds it. Every grant starts a **new epoch**.
 2. **Reads** the items strictly after the acknowledged `Checkpoint`. One synced query over the items'
@@ -199,7 +206,9 @@ A stream's state is its node: `get @{Key}/_DurableStream/{Namespace}`. Its items
 
 ## Pinned by
 
-`DurableStreamConsumerTest` (Monolith, six cases) and `OrleansDurableStreamConsumerTest` (Orleans
+`DurableStreamConsumerTest` (Monolith, seven cases, including dormancy: five consumers without a stream
+create nothing until a publish wakes exactly one) and `OrleansDurableStreamConsumerTest` (Orleans
 TestCluster: grain-hosted consumer and stream hub, client producer). Both were falsified when they
 landed. Without the acknowledgement the recycle case re-processed items, and with live-only delivery
-(the memory-stream shape) every case lost items.
+(the memory-stream shape) every case lost items. When the consumer was made to claim at every
+activation, the dormancy case found five stream nodes it should never have created.
