@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -1123,7 +1124,21 @@ public static class EditorExtensions
         }
 
         var displayLabelId = $"displayLabel_{dataId}_{propName}";
+        FeedDimensionDisplayName(host, propName, dataId, collectionName, displayLabelId);
 
+        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
+            .WithStyle("padding: 8px; min-height: 32px;");
+    }
+
+    /// <summary>
+    /// The data half of <see cref="BuildDimensionReadOnlyLabel"/>: resolves the bound key against
+    /// the dimension collection and writes its display name into <c>/data/{displayLabelId}</c>,
+    /// which the label is bound to. Builds no control — the label renders at once and follows
+    /// every change of the key or the collection.
+    /// </summary>
+    private static void FeedDimensionDisplayName(
+        LayoutAreaHost host, string propName, string dataId, string collectionName, string displayLabelId)
+    {
         var dataStream = host.Stream.GetDataStream<JsonElement>(dataId);
         var collectionStream = host.Workspace.GetStream(new CollectionReference(collectionName));
 
@@ -1133,7 +1148,7 @@ public static class EditorExtensions
             // Use DistinctUntilChanged to prevent endless emissions from CombineLatest
             string? lastDisplayName = null;
             host.ReplaceDisposable(displayLabelId,
-                dataStream.CombineLatest(collectionStream, (data, collection) =>
+                host.FeedData(null, displayLabelId, dataStream.CombineLatest(collectionStream, (data, collection) =>
                 {
                     if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
                         return "";
@@ -1159,8 +1174,8 @@ public static class EditorExtensions
                     }
 
                     return keyValue.ToString() ?? "";
-                })
-                .Subscribe(displayName =>
+                }),
+                displayName =>
                 {
                     // Manual DistinctUntilChanged to avoid endless emissions
                     if (displayName == lastDisplayName)
@@ -1173,9 +1188,6 @@ public static class EditorExtensions
         {
             host.UpdateData(displayLabelId, "");
         }
-
-        return new LabelControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(displayLabelId)))
-            .WithStyle("padding: 8px; min-height: 32px;");
     }
 
     private static UiControl BuildOptionsReadOnlyLabel(
@@ -1601,12 +1613,7 @@ public static class EditorExtensions
 
         var registrationKey = $"dimensionOptions_{dataId}_{jsonPointer.Pointer}";
         var optionsId = $"dimOpts_{dataId}_{jsonPointer.Pointer}"; // Use stable ID instead of Guid
-        // Use ReplaceDisposable to prevent duplicate subscriptions when control is rebuilt
-        host.ReplaceDisposable(registrationKey,
-            host.Workspace.GetStream(new CollectionReference(collectionName))!
-                .Select(x => ConvertDimensionToOptionsForToggle(x.Value!,
-                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)!))
-                .Subscribe(opts => host.UpdateData(optionsId, opts)));
+        FeedDimensionOptions(host, collectionName, dimensionAttr, registrationKey, optionsId);
 
         var ctrl = new SelectControl(jsonPointer, new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsId)))
         {
@@ -1615,6 +1622,34 @@ public static class EditorExtensions
         return isToggleable
             ? ctrl.WithBlurAction(ctx => SwitchToReadOnlyMode(ctx, editStateId))
             : ctrl;
+    }
+
+    /// <summary>
+    /// The data half of <see cref="CreateDimensionSelectControl"/>: projects the dimension
+    /// collection into select options at <c>/data/{optionsId}</c>, which the select is bound to.
+    /// Builds no control. <c>ReplaceDisposable</c> keeps one subscription per key when the
+    /// control is rebuilt.
+    /// </summary>
+    private static void FeedDimensionOptions(
+        LayoutAreaHost host, string collectionName, DimensionAttribute dimensionAttr,
+        string registrationKey, string optionsId)
+    {
+        // A dimension whose collection has no stream, whose stream emits no collection, or whose
+        // type is not registered is a misconfigured dimension: each of these threw before (a null
+        // dereference) and still throws — now naming what is missing. The feed runs through
+        // FeedData, so a fault on a later emission reaches its error arm and is logged, never an
+        // unhandled exception on the hub.
+        var dimensions = host.Workspace.GetStream(new CollectionReference(collectionName))
+            ?? throw new InvalidOperationException(
+                $"No data stream for the dimension collection '{collectionName}'.");
+        host.ReplaceDisposable(registrationKey,
+            host.FeedData(null, optionsId, dimensions
+                .Select(x => ConvertDimensionToOptionsForToggle(
+                    x.Value ?? throw new InvalidOperationException(
+                        $"The dimension collection '{collectionName}' emitted no instances."),
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)
+                        ?? throw new InvalidOperationException(
+                            $"The dimension type '{dimensionAttr.Type.Name}' is not registered.")))));
     }
 
     /// <summary>
@@ -1702,11 +1737,8 @@ public static class EditorExtensions
                     .WithView(Controls.Button("×")
                         .WithAppearance(Appearance.Stealth)
                         .WithStyle("min-width: 18px; padding: 0 2px; height: 20px; font-size: 14px; line-height: 1;")
-                        .WithClickAction(ctx =>
-                        {
-                            RemoveCollectionItem(ctx.Host, dataId, propName, capturedIndex);
-                            return Task.CompletedTask;
-                        }));
+                        .WithReactiveClickAction(ctx =>
+                            RemoveCollectionItem(ctx.Host, dataId, propName, capturedIndex)));
                 chipStack = chipStack.WithView(chipRow);
             }
             else
@@ -1740,11 +1772,16 @@ public static class EditorExtensions
         return "(empty)";
     }
 
-    private static void RemoveCollectionItem(LayoutAreaHost host, string dataId, string propName, int indexToRemove)
+    /// <summary>
+    /// The chip's × click: reads the current data once, removes the item at
+    /// <paramref name="indexToRemove"/> and writes it back. Returned, never subscribed here — the
+    /// click owns the subscription, so a fault reaches the person as the click's refusal.
+    /// </summary>
+    private static IObservable<Unit> RemoveCollectionItem(LayoutAreaHost host, string dataId, string propName, int indexToRemove)
     {
         // Read current data, remove item at index, write back
         var current = host.Stream.GetDataStream<JsonElement>(dataId);
-        current.Take(1).Subscribe(data =>
+        return current.Take(1).Do(data =>
         {
             if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
                 return;
@@ -1757,7 +1794,7 @@ public static class EditorExtensions
                 var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
                 host.UpdateData(dataId, updated);
             }
-        });
+        }).Select(_ => Unit.Default);
     }
 
     /// <summary>
@@ -1796,27 +1833,24 @@ public static class EditorExtensions
             .WithStyle("justify-content: flex-end; gap: 8px;")
             .WithView(Controls.Button(ctx.Host.Localize("ui.add"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(addCtx =>
-                {
+                .WithReactiveClickAction(addCtx =>
                     addCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
-                        .Subscribe(formValues =>
+                        .SelectMany(formValues =>
                         {
                             var selectedValue = formValues.GetValueOrDefault("selectedItem")?.ToString()?.Trim();
                             if (string.IsNullOrEmpty(selectedValue))
                             {
                                 var errorDialog = Controls.Dialog(
                                     Controls.Markdown(ctx.Host.Localize("ui.selectItem")),
-                                    "Validation Error"
+                                    ctx.Host.Localize("dialog.validationError")
                                 ).WithSize("S").WithClosable(true);
                                 addCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                                return;
+                                return Observable.Return(Unit.Default);
                             }
                             addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                            AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
-                        });
-                    return Task.CompletedTask;
-                }))
+                            return AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                        })))
             .WithView(Controls.Button(ctx.Host.Localize("common.cancel"))
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(cancelCtx =>
@@ -1836,7 +1870,7 @@ public static class EditorExtensions
     /// Adds a new item to a collection array in the data stream.
     /// Creates a default instance of the element type with the key property set to the selected value.
     /// </summary>
-    private static void AddCollectionItem(
+    private static IObservable<Unit> AddCollectionItem(
         LayoutAreaHost host,
         string dataId,
         string propName,
@@ -1845,7 +1879,7 @@ public static class EditorExtensions
         string selectedValue)
     {
         var current = host.Stream.GetDataStream<JsonElement>(dataId);
-        current.Take(1).Subscribe(data =>
+        return current.Take(1).Do(data =>
         {
             var jsonObj = System.Text.Json.Nodes.JsonNode.Parse(data.GetRawText())!.AsObject();
 
@@ -1881,7 +1915,7 @@ public static class EditorExtensions
             jsonArr.Add(newItem);
             var updated = JsonSerializer.Deserialize<JsonElement>(jsonObj.ToJsonString());
             host.UpdateData(dataId, updated);
-        });
+        }).Select(_ => Unit.Default);
     }
 
     /// <summary>

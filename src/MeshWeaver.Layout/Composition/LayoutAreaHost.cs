@@ -184,7 +184,13 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(_ => BuildInitialization(
                     context, isDefaultArea, resolvedArea, accessService, capturedAccessContext, ctorLogger))
-                .WithExceptionCallback(FailRendering));
+                .WithExceptionCallback(FailRendering)
+                // A layout area is rendered once per subscriber, for that subscriber. A click, a
+                // blur, a dialog dismissal or an edited value on it is therefore accepted only from
+                // the identity it was rendered for — the subscribe delivery's, or (a stream opened
+                // without a subscribe) the viewer captured above. Anything else is refused by the
+                // stream before OnClick / OnBlur / OnCloseDialog or the data update can run.
+                .WithInputFromSubscriberOnly(capturedAccessContext));
         Reference = reference;
 
         // 🚨 THIS IS THE LINE THAT NRE'd IN PRODUCTION (Systemorph/MeshWeaver#3321) — the whole
@@ -650,13 +656,19 @@ public record LayoutAreaHost : IDisposable
         IObservable<System.Reactive.Unit> completion;
         try
         {
+            // Row: the row a row-scoped control was clicked in, AS THE CLIENT RENDERED IT — never
+            // re-resolved here by index, which a list changed since the render would answer with
+            // another row (Doc/GUI/DataBinding → "Row-scoped actions").
             completion = control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                {
+                    Row = request.Message.Row
+                }
             ) ?? Observable.Return(System.Reactive.Unit.Default);
         }
         catch (Exception ex)
         {
-            FailRequest(ex, request);
+            FailClick(ex, request);
             return request.Processed();
         }
 
@@ -673,7 +685,7 @@ public record LayoutAreaHost : IDisposable
         pendingClickActions.Add(subscription);
         subscription.Disposable = completion.Subscribe(
             _ => { },
-            ex => { FailRequest(ex, request); pendingClickActions.Remove(subscription); },
+            ex => { FailClick(ex, request); pendingClickActions.Remove(subscription); },
             () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
         return request.Processed();
     }
@@ -708,6 +720,9 @@ public record LayoutAreaHost : IDisposable
             {
                 blurAction.Invoke(
                     new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                    {
+                        Row = request.Message.Row
+                    }
                 );
             }
             catch (Exception ex)
@@ -730,6 +745,22 @@ public record LayoutAreaHost : IDisposable
     {
         Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// A click action that threw, or whose reactive completion errored: reported with the area and
+    /// hub it belongs to, then refused to the clicking client — whose button leaves its pending state
+    /// and shows the refusal (<c>UserActionSubmission</c>'s <c>onRefused</c>). This is the ONE surface
+    /// a click-time fault reaches the person through; a handler composes its one-off reads into the
+    /// observable it returns (<c>WithReactiveClickAction</c>) rather than subscribing them itself
+    /// with no error arm, where a fault would be rethrown on whatever thread produced it.
+    /// </summary>
+    private void FailClick(Exception exception, IMessageDelivery<ClickedEvent> request)
+    {
+        logger.LogWarning(exception,
+            "Click action on area {Area} of {Hub} failed — refused to the client: {Message}",
+            request.Message.Area, Hub.Address, exception.Message);
+        Hub.Post(new DeliveryFailure(request, exception.Message), o => o.ResponseFor(request));
     }
 
     private Task FailRequest(Exception? exception, IMessageDelivery request)

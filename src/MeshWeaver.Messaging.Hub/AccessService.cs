@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
@@ -118,17 +121,37 @@ public class AccessService
     /// Creates an access service with no logger. Hub-shaped-principal leak
     /// detection still runs but its diagnostics are silently dropped.
     /// </summary>
-    public AccessService() { }
+    public AccessService()
+    {
+        ImpersonationGuard = InMeshImpersonationGuard.FromConfiguration(null, null);
+    }
 
     /// <summary>
     /// Creates an access service that logs context transitions and leak
     /// diagnostics through the <c>MeshWeaver.AccessContext</c> category.
     /// </summary>
     /// <param name="loggerFactory">Factory used to create the diagnostic logger; may be null, in which case no logging occurs.</param>
-    public AccessService(ILoggerFactory? loggerFactory)
+    public AccessService(ILoggerFactory? loggerFactory) : this(loggerFactory, configuration: null) { }
+
+    /// <summary>
+    /// Creates an access service whose <see cref="ImpersonationGuard"/> reads its mode and trusted
+    /// code from <paramref name="configuration"/> (<see cref="InMeshImpersonationGuard.ModeKey"/>).
+    /// </summary>
+    /// <param name="loggerFactory">Factory used to create the diagnostic logger; may be null.</param>
+    /// <param name="configuration">The host configuration; null runs the guard LogOnly with nothing trusted.</param>
+    public AccessService(ILoggerFactory? loggerFactory, IConfiguration? configuration)
     {
         _logger = loggerFactory?.CreateLogger("MeshWeaver.AccessContext");
+        ImpersonationGuard = InMeshImpersonationGuard.FromConfiguration(
+            configuration, loggerFactory?.CreateLogger("MeshWeaver.InMeshImpersonation"));
     }
+
+    /// <summary>
+    /// Decides whether the caller of an impersonation surface may install a platform principal —
+    /// refuses code the mesh compiled at runtime under Enforce, logs it under LogOnly
+    /// (Doc/Architecture/InMeshImpersonation).
+    /// </summary>
+    public InMeshImpersonationGuard ImpersonationGuard { get; }
 
     /// <summary>
     /// Gets the current request-scoped access context (AsyncLocal only).
@@ -159,7 +182,17 @@ public class AccessService
     /// Sets the request-specific context (AsyncLocal).
     /// Used during message delivery to temporarily set context.
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetContext(AccessContext? accessContext)
+    {
+        // Per-message hot path: capture the caller only when a platform principal is being
+        // installed (and the guard is on) — an ordinary user's delivery pays one predicate.
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetContext), accessContext);
+        SetContextCore(accessContext);
+    }
+
+    private void SetContextCore(AccessContext? accessContext)
     {
         var prev = context.Value?.ObjectId;
         context.Value = accessContext;
@@ -185,8 +218,11 @@ public class AccessService
     /// <see cref="SetHostIdentity"/>; a hub that needs its node owner as a standing identity
     /// uses <see cref="SetStandingIdentity"/>.</para>
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetCircuitContext(AccessContext? accessContext)
     {
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetCircuitContext), accessContext);
         var prev = circuitContext.Value?.ObjectId;
         circuitContext.Value = accessContext;
 
@@ -214,8 +250,11 @@ public class AccessService
     /// <see cref="SetStandingIdentity"/>.</para>
     /// </summary>
     /// <param name="accessContext">The single user this process serves, or null to clear.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void SetHostIdentity(AccessContext? accessContext)
     {
+        if (ImpersonationGuard.Applies(accessContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SetHostIdentity), accessContext);
         var prev = hostIdentity?.ObjectId;
         hostIdentity = accessContext;
         // Keep the AsyncLocal in step for the calling flow, so a host that sets its identity
@@ -299,22 +338,30 @@ public class AccessService
     /// Temporarily switches the access context. Restores the previous value when disposed.
     /// Usage: using (accessService.SwitchAccessContext(newContext)) { ... }
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IDisposable SwitchAccessContext(AccessContext? newContext)
-        => new AccessContextScope(this, newContext);
+    {
+        if (ImpersonationGuard.Applies(newContext))
+            ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(SwitchAccessContext), newContext);
+        return new AccessContextScope(this, newContext);
+    }
 
     /// <summary>
     /// Temporarily sets the access context to the hub's identity.
     /// Restores the previous AsyncLocal value when disposed (does not affect circuitContext).
     /// Usage: using (accessService.ImpersonateAsHub(hub)) { ... }
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IDisposable ImpersonateAsHub(IMessageHub hub)
     {
-        return new AccessContextScope(this, new AccessContext
+        var principal = new AccessContext
         {
             ObjectId = hub.Address.ToFullString(),
             Name = hub.Address.ToString(),
             IsHub = true
-        });
+        };
+        ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(ImpersonateAsHub), principal);
+        return new AccessContextScope(this, principal);
     }
 
     /// <summary>
@@ -331,7 +378,9 @@ public class AccessService
     /// the user's <c>AccessContext</c> through the message-level
     /// <c>delivery.AccessContext</c>, not to bypass RLS.
     /// </remarks>
-    public IDisposable ImpersonateAsSystem() => ImpersonateAsSystemFor(governedBy: null, onBehalfOf: null);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IDisposable ImpersonateAsSystem() =>
+        OpenSystemScope(Assembly.GetCallingAssembly(), nameof(ImpersonateAsSystem), governedBy: null, onBehalfOf: null);
 
     /// <summary>
     /// <see cref="ImpersonateAsSystem"/>, stating WHY the platform writes: for ONE user acquiring
@@ -341,18 +390,24 @@ public class AccessService
     /// else, a grant to Public/Anonymous, and a partition policy pass only under an executing
     /// governed activity.
     /// </summary>
-    public IDisposable ImpersonateAsSystemFor(string? governedBy, string? onBehalfOf)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IDisposable ImpersonateAsSystemFor(string? governedBy, string? onBehalfOf) =>
+        OpenSystemScope(Assembly.GetCallingAssembly(), nameof(ImpersonateAsSystemFor), governedBy, onBehalfOf);
+
+    private AccessContextScope OpenSystemScope(Assembly caller, string surface, string? governedBy, string? onBehalfOf)
     {
         // The literal must match `MeshWeaver.Mesh.Security.WellKnownUsers.System`;
         // we don't reference that constant here because Messaging.Hub sits below
         // Mesh.Contract in the project graph and adding the dep would invert it.
-        return new AccessContextScope(this, new AccessContext
+        var principal = new AccessContext
         {
             ObjectId = SystemObjectId,
             Name = SystemObjectId,
             GovernedBy = string.IsNullOrWhiteSpace(governedBy) ? null : governedBy,
             OnBehalfOf = string.IsNullOrWhiteSpace(onBehalfOf) ? null : onBehalfOf,
-        });
+        };
+        ImpersonationGuard.Check(caller, surface, principal);
+        return new AccessContextScope(this, principal);
     }
 
     /// <summary>
@@ -402,7 +457,7 @@ public class AccessService
             previousMarker = service.scopeMarker.Value;
             openedOnThreadId = Environment.CurrentManagedThreadId;
             service.scopeMarker.Value = this;
-            service.SetContext(newContext);
+            service.SetContextCore(newContext);
         }
 
         public void Dispose()
@@ -415,7 +470,7 @@ public class AccessService
                 return;
 
             service.scopeMarker.Value = previousMarker;
-            service.SetContext(previousAsyncLocal);
+            service.SetContextCore(previousAsyncLocal);
         }
     }
 }

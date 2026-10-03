@@ -3,38 +3,14 @@
 # Convert an area to a template that BINDS its data (Doc/GUI/DataBinding → "Templates first, data
 # later"), then lower or delete its line and lower TotalBudget in the guard in the same change.
 # Never add a line: a new area is born a template.
-memex/Memex.Portal.Shared/Settings/InboxSettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/InstancesSettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/InvitationsSettingsTab.cs	1
 memex/Memex.Portal.Shared/Settings/NotificationsSettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/PrivacySettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/ServiceIdentitiesSettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/UpdatePolicySettingsTab.cs	1
-memex/Memex.Portal.Shared/Settings/WhatsNewSettingsTab.cs	1
-samples/Graph/Data/ACME/Article/Source/ArticleLayoutAreas.cs	2
 samples/Graph/Data/ACME/Project/Source/ProjectLayoutAreas.cs	5
-samples/Graph/Data/Northwind/Article/Source/ArticleLayoutAreas.cs	2
-samples/Graph/Data/Northwind/Customer/Source/CustomerNodeLayoutAreas.cs	2
-samples/Graph/Data/Northwind/Employee/Source/EmployeeNodeLayoutAreas.cs	2
-samples/Graph/Data/Northwind/Product/Source/ProductNodeLayoutAreas.cs	2
-samples/Graph/Data/Northwind/ReportsCatalog/Source/ReportsCatalogLayoutAreas.cs	1
-samples/Graph/Data/Northwind/Supplier/Source/SupplierNodeLayoutAreas.cs	2
-samples/Graph/Data/PythonDemo/PrimeReport/Source/PrimeReportLayoutAreas.cs	1
-samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	7
-src/MeshWeaver.Documentation/Data/DataMesh/SocialMedia/Post/Source/SocialMediaPostLayoutAreas.cs	1
-src/MeshWeaver.Documentation/Data/DataMesh/SocialMedia/Profile/Source/SocialMediaProfileLayoutAreas.cs	1
-src/MeshWeaver.GitSync/GitHubSyncSettingsTab.cs	1
 src/MeshWeaver.Graph/ExportLayoutArea.cs	1
-src/MeshWeaver.Graph/GlobalSettingsLayoutArea.cs	1
 src/MeshWeaver.Graph/MarkdownNotebookLayoutArea.cs	1
-src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	4
-src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	9
+src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	5
 src/MeshWeaver.Graph/OverviewLayoutArea.cs	1
-src/MeshWeaver.Graph/SettingsLayoutArea.cs	3
+src/MeshWeaver.Graph/SettingsLayoutArea.cs	2
 src/MeshWeaver.Graph/UserActivityLayoutAreas.cs	1
 src/MeshWeaver.Layout/Domain/LayoutHelperExtensions.cs	2
-src/MeshWeaver.Layout/EditorExtensions.cs	2
-src/MeshWeaver.Layout/Views/DataPathViews.cs	1
-src/MeshWeaver.PluginCatalog/CatalogLayoutAreas.cs	1
 src/MeshWeaver.PluginCatalog/CouponAdminSettingsTab.cs	1
 src/MeshWeaver.PluginCatalog/InstanceGrantAdminSettingsTab.cs	2

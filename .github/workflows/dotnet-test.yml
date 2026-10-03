@@ -2308,6 +2308,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/retry-known-transients.py --self-test
 
+    # The satellites' layout-area data-bake ratchet (node-repo-validate.yml fetches it at main).
+    # Proven HERE, on the core PR that changes it, so a broken scanner reds core before it reds
+    # every satellite PR in the fleet at once. Its planted cases are LayoutAreaDataBakeRatchetGuard's.
+    - name: "The satellites' layout-area data-bake ratchet can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-layout-area-data-bake.py --self-test
+
     # 🚨 Every job in every workflow carries a LITERAL `timeout-minutes` <= 45 (maintainer, 2026-09-02:
     # "hard cut CI runs after 45min — we pay all this"). GitHub's default is 360; one uncapped job in
     # the module-pack lane held a runner for six hours per run across 19 concurrent Plugins runs and

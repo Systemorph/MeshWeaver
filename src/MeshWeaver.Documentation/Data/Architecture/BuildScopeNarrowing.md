@@ -237,6 +237,25 @@ is an input even when it lives outside `src/`. Unknown paths, absent graphs and 
 full validation; malformed or missing inventory entries fail. Selection and execution must be
 reconciled by the caller's stable required check.
 
+Two precisions keep the selection to what a change can actually reach (2026-10-03, measured on
+MeshWeaver.Plugins#2734, which changed only a vendored Monaco bundle under
+`src/MeshWeaver.Blazor/wwwroot/` and owed 14 portal-host suites, four 22-minute Blazor legs among them):
+
+- **An input or a linked include may be a glob.** `**/` spans zero or more directories, `**` anything,
+  `*` and `?` stay inside one path segment; a pattern without a wildcard is the prefix it always was. A
+  linked `../X/**/*.razor` reads Razor markup, not `X/wwwroot/`; an input `src/**/*.cs` is a census of
+  C# files, not of every vendored asset. A linked `Include` holding several `;`-separated patterns is
+  read as each of them.
+- **A static web asset of an image-shipped project reaches no referencing project.** A file under
+  `<project>/wwwroot/` is read by no compiler; when the caller declares the project image-shipped (its
+  `project-closure.py` `platform_shipped`, from `src/platform-shipped.txt`) no module bundle carries it
+  either. Such a path selects only the owner, its sibling `<owner>.Test`, and an entry that links it or
+  declares it as an input. A caller without that helper keeps the plain closure rule.
+
+The caller's own declared selector (MeshWeaver.Plugins `scripts/ci-tests.py`) applies the same two rules
+with the same grammar, so the reconcile agrees by construction. The per-PR analysis is the caller's
+page `Hosting/CiAffectedClosure`.
+
 The module lane accepts an optional `publication-base` on main pushes. Obtain it only from
 `node-repo-publication-base.py`, naming the caller's complete publishing workflow. It reads a
 successful completed **main push**, verifies that commit is an ancestor, and otherwise supplies

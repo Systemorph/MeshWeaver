@@ -33,6 +33,21 @@ public static class UpdatePolicySettingsTab
 {
     public const string TabId = "UpdatePolicy";
     private const string ResultId = "updatePolicyResult";
+    private const string StatusId = "updatePolicyStatus";
+
+    /// <summary>
+    /// The feed half of the live status line: the policy node's status, rendered for the viewer
+    /// (their language, their time zone), on every change of the node. Builds no control.
+    /// </summary>
+    internal static IObservable<string> StatusFeed(LayoutAreaHost host)
+    {
+        var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
+        return host.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+            .Select(node => StatusMarkdown(
+                UpdatePolicyNodeType.Parse(node, host.Hub.JsonSerializerOptions),
+                (key, args) => host.Localize(key, args),
+                zoneId));
+    }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
@@ -70,13 +85,10 @@ public static class UpdatePolicySettingsTab
         // red verdict replaces the eternal "update available" with "cannot update to X" naming
         // every failing module (Doc/Architecture/CandidateReleaseProtocol → "Report the verdict
         // where an admin looks").
-        stack = stack.WithView((h, _) => h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-            .Select(node => (UiControl?)Controls.Markdown(
-                StatusMarkdown(
-                    UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions),
-                    (key, args) => h.Localize(key, args),
-                    h.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())))
-            .StartWith((UiControl?)Controls.Markdown("")));
+        // A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the markdown is declared
+        // at once and fed by StatusFeed.
+        stack = stack.WithView(StatusFeed(host)
+            .BindMarkdown(StatusId, "", ex => host.Localize("ui.updateStatusUnavailable", ex.Message)));
 
         // Manual apply — by WHOEVER applies on this install (#4098): a control-lane install hands the
         // latest tag to the control instance (the same event the poller sends, trigger "Manual"),
@@ -85,169 +97,7 @@ public static class UpdatePolicySettingsTab
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                var h = ctx.Host;
-                var updater = h.Hub.ServiceProvider.GetService<IDeploymentUpdater>();
-                var options = h.Hub.ServiceProvider.GetService<SelfUpdateOptions>() ?? new SelfUpdateOptions();
-                var handover = new SelfUpdateHandover(h.Hub);
-                var settings = handover.ReadSettings();
-                var apply = SelfUpdateHandover.ApplyModeFor(
-                    options.CanPatch, updater?.CanPatch == true, SelfUpdateHandover.RouteFor(settings));
-                if (apply == SelfUpdateApply.DetectOnly)
-                {
-                    h.UpdateData(ResultId, h.Localize("ui.updateCannotSelfPatch",
-                        SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured"));
-                    return Task.CompletedTask;
-                }
-                var pool = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
-                           ?? IoPool.Unbounded;
-                h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath).Take(1).Subscribe(node =>
-                {
-                    var content = UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions);
-                    var tag = content.LatestAvailableTag;
-                    if (string.IsNullOrEmpty(tag))
-                    {
-                        h.UpdateData(ResultId, h.Localize("ui.updateNoneDetected"));
-                        return;
-                    }
-                    // 🚨 The manual roll honours the SAME release-availability gate as the poller
-                    // (#1754). A gate only the unattended path respects is not a gate — and this
-                    // button is exactly the moment an operator, seeing an update that never
-                    // applied, would force the roll the poller refused for good reason.
-                    //
-                    // 🚨 An UNWIRED gate is a HOLD here too. It used to resolve to NotEnforced,
-                    // which is `IsUpdatable: true` — so the one host where nothing checks anything
-                    // was also the one host where this button never refused. NotEnforced is the
-                    // single stated applicability exemption (a deployment that consumes no CI
-                    // bakes); a missing registration is not an exemption, it is the absence of a
-                    // verdict, and it must not render as a pass.
-                    //
-                    // 🚨 …and the hold is SCOPED to what is actually unverifiable. On a deployment
-                    // that consumes no CI bakes a registered gate answers NotEnforced anyway, so
-                    // its absence is the same answer reached from configuration — not an
-                    // unanswered question. Holding there would freeze an install the gate was
-                    // never going to protect.
-                    var gate = h.Hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
-                    var decision = gate is not null
-                        ? gate.IsUpdatable(tag)
-                        : Observable.Return(
-                            ReleaseAvailabilityService.NotApplicableReason(
-                                h.Hub.ServiceProvider.GetService<IConfiguration>()) is { } notApplicable
-                                ? UpdatabilityVerdict.NotEnforced(notApplicable)
-                                : UpdatabilityVerdict.Unavailable(
-                                    "no release-availability gate is registered on this install, so "
-                                    + "nothing could check whether the packages it deploys have "
-                                    + "usable artifacts for this release — that is a hold, not "
-                                    + "clearance to proceed"));
-                    decision.Subscribe(verdict =>
-                    {
-                        if (!verdict.IsUpdatable)
-                        {
-                            h.UpdateData(ResultId,
-                                h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
-                            return;
-                        }
-                        // 🚨 The manual roll honours the COMBO gate as the poller does (#2274): a
-                        // candidate whose recorded verdict says a module this instance runs fails
-                        // against it is refused here too, naming the reason — the button is exactly
-                        // the moment an operator would force what the poller refused for good reason.
-                        // A pure read of what is RECORDED on the policy content, like the poller's
-                        // candidate walk; an unregistered gate grants nothing and refuses nothing.
-                        var combo = h.Hub.ServiceProvider.GetService<ComboVerificationGate>();
-                        var clearance = combo is null
-                            ? ComboVerificationGate.NotRegistered(tag)
-                            : combo.Recorded(content, tag);
-                        if (clearance.Refuses)
-                        {
-                            h.UpdateData(ResultId,
-                                h.Localize("ui.updateComboHeldManual", tag) + "\n\n> " + clearance.Reason);
-                            return;
-                        }
-                        if (apply == SelfUpdateApply.ControlLane)
-                        {
-                            // The same announcement the poller makes, so the control plane cannot
-                            // tell a click from a check — and dedupes both the same way.
-                            var installed = ShippedReleaseSeed.InstalledPlatformVersion;
-                            handover.Announce(new SelfUpdateHandover.Announcement
-                                {
-                                    Event = SelfUpdateHandover.ReleaseEvent,
-                                    CurrentVersion = installed,
-                                    NewVersion = tag,
-                                    CurrentImage = options.PortalImage(installed.Split('+')[0]),
-                                    NewImage = options.PortalImage(tag),
-                                    Policy = content.Policy.ToString(),
-                                    Pattern = UpdateChannelPattern.Normalize(content.Pattern),
-                                    Trigger = "Manual",
-                                    DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
-                                })
-                                .Subscribe(
-                                    outcome => h.UpdateData(ResultId, h.Localize("ui.updateHandedOver", tag, outcome.Destination)),
-                                    ex => h.UpdateData(ResultId, h.Localize("ui.updateHandoverFailed", ex.Message)));
-                            return;
-                        }
-                        // 🚨 THE SCHEMA MOVES FIRST HERE TOO (#4764). This button honoured the
-                        // availability gate, the combo gate and the control-lane route — and skipped
-                        // the migration entirely, so an admin click made exactly the image-only roll
-                        // across a db_version boundary that the poller had stopped making: the new
-                        // pods refuse to start on DbVersionGate, Kubernetes restarts them for ever,
-                        // and the old ReplicaSet keeps answering 200. Worse than the poller's old
-                        // blind branch, because a click leaves no verdict anywhere to inspect.
-                        //
-                        // The decision is SelfUpdateVerdict.MayPatchAfter — the same predicate the
-                        // poller's outcome is held to, so the two routes cannot drift apart when an
-                        // outcome is added to the enum.
-                        //
-                        // 🚨 …refined by the PUBLISHED schema step (#4764 (b3)): both releases'
-                        // ExpectedDbVersion markers, read off the same share the availability gate
-                        // reads, so a click across a known schema bump that this install cannot
-                        // migrate is refused naming both numbers.
-                        var fileSystem = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
-                                         ?? IoPool.Unbounded;
-                        ReleaseSchemaMarker.ObserveStep(
-                                fileSystem,
-                                h.Hub.ServiceProvider.GetService<IConfiguration>()?[
-                                    MeshWeaver.Hosting.ShippedPrebuiltBundles.PublishedRootConfigKey],
-                                ShippedReleaseSeed.InstalledPlatformVersion, tag)
-                            // No Catch: a fault on this read is NOT an absent marker (Read already
-                            // answers absent/garbled/unreadable files as UNKNOWN, logged) — it
-                            // reaches the error arm below and nothing is applied.
-                            .SelectMany(step => pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct))
-                                .Select(outcome => (outcome, step)))
-                            .Subscribe(
-                            reading =>
-                            {
-                                var (outcome, step) = reading;
-                                if (!SelfUpdateVerdict.MayPatchAfter(outcome, step))
-                                {
-                                    // The two refusals stay DIFFERENT sentences: a migration that ran
-                                    // and broke sends the operator to the Job's log, one that could
-                                    // not be created sends them to a helm upgrade. The outcome name
-                                    // renders verbatim — machine text, like the gate diagnostics
-                                    // above.
-                                    // A refusal the published schema step decided (NotSupported
-                                    // across a known bump) is a could-not-run, like the 403, and
-                                    // carries both numbers verbatim beside the outcome.
-                                    h.UpdateData(ResultId, outcome switch
-                                    {
-                                        MigrationRunOutcome.NotSupported => h.Localize(
-                                            "ui.updateSchemaAheadManual", tag, step.Describe()),
-                                        MigrationRunOutcome.Forbidden => h.Localize(
-                                            "ui.updateMigrationUnavailableManual", tag,
-                                            step.Known ? $"{outcome}; {step.Describe()}" : outcome.ToString()),
-                                        _ => h.Localize("ui.updateMigrationFailedManual", tag, outcome.ToString()),
-                                    });
-                                    return;
-                                }
-                                pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
-                                    _ => h.UpdateData(ResultId, h.Localize(
-                                        outcome == MigrationRunOutcome.NotSupported && !step.KeepsSchema
-                                            ? "ui.updateRollingUnmigrated"
-                                            : "ui.updateRolling",
-                                        tag)),
-                                    ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
-                            },
-                            ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
-                    });
-                });
+                ApplyNow(ctx.Host);
                 return Task.CompletedTask;
             }));
 
@@ -259,6 +109,176 @@ public static class UpdatePolicySettingsTab
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         return stack;
+    }
+
+    /// <summary>
+    /// The "apply now" action — by WHOEVER applies on this install (#4098). Reads the policy node
+    /// once, at the click, for the tag to apply; renders nothing.
+    /// </summary>
+    private static void ApplyNow(LayoutAreaHost h)
+    {
+            var updater = h.Hub.ServiceProvider.GetService<IDeploymentUpdater>();
+            var options = h.Hub.ServiceProvider.GetService<SelfUpdateOptions>() ?? new SelfUpdateOptions();
+            var handover = new SelfUpdateHandover(h.Hub);
+            var settings = handover.ReadSettings();
+            var apply = SelfUpdateHandover.ApplyModeFor(
+                options.CanPatch, updater?.CanPatch == true, SelfUpdateHandover.RouteFor(settings));
+            if (apply == SelfUpdateApply.DetectOnly)
+            {
+                h.UpdateData(ResultId, h.Localize("ui.updateCannotSelfPatch",
+                    SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured"));
+                return;
+            }
+            var pool = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+                       ?? IoPool.Unbounded;
+            h.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath).Take(1).Subscribe(node =>
+            {
+                var content = UpdatePolicyNodeType.Parse(node, h.Hub.JsonSerializerOptions);
+                var tag = content.LatestAvailableTag;
+                if (string.IsNullOrEmpty(tag))
+                {
+                    h.UpdateData(ResultId, h.Localize("ui.updateNoneDetected"));
+                    return;
+                }
+                // 🚨 The manual roll honours the SAME release-availability gate as the poller
+                // (#1754). A gate only the unattended path respects is not a gate — and this
+                // button is exactly the moment an operator, seeing an update that never
+                // applied, would force the roll the poller refused for good reason.
+                //
+                // 🚨 An UNWIRED gate is a HOLD here too. It used to resolve to NotEnforced,
+                // which is `IsUpdatable: true` — so the one host where nothing checks anything
+                // was also the one host where this button never refused. NotEnforced is the
+                // single stated applicability exemption (a deployment that consumes no CI
+                // bakes); a missing registration is not an exemption, it is the absence of a
+                // verdict, and it must not render as a pass.
+                //
+                // 🚨 …and the hold is SCOPED to what is actually unverifiable. On a deployment
+                // that consumes no CI bakes a registered gate answers NotEnforced anyway, so
+                // its absence is the same answer reached from configuration — not an
+                // unanswered question. Holding there would freeze an install the gate was
+                // never going to protect.
+                var gate = h.Hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
+                var decision = gate is not null
+                    ? gate.IsUpdatable(tag)
+                    : Observable.Return(
+                        ReleaseAvailabilityService.NotApplicableReason(
+                            h.Hub.ServiceProvider.GetService<IConfiguration>()) is { } notApplicable
+                            ? UpdatabilityVerdict.NotEnforced(notApplicable)
+                            : UpdatabilityVerdict.Unavailable(
+                                "no release-availability gate is registered on this install, so "
+                                + "nothing could check whether the packages it deploys have "
+                                + "usable artifacts for this release — that is a hold, not "
+                                + "clearance to proceed"));
+                decision.Subscribe(verdict =>
+                {
+                    if (!verdict.IsUpdatable)
+                    {
+                        h.UpdateData(ResultId,
+                            h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
+                        return;
+                    }
+                    // 🚨 The manual roll honours the COMBO gate as the poller does (#2274): a
+                    // candidate whose recorded verdict says a module this instance runs fails
+                    // against it is refused here too, naming the reason — the button is exactly
+                    // the moment an operator would force what the poller refused for good reason.
+                    // A pure read of what is RECORDED on the policy content, like the poller's
+                    // candidate walk; an unregistered gate grants nothing and refuses nothing.
+                    var combo = h.Hub.ServiceProvider.GetService<ComboVerificationGate>();
+                    var clearance = combo is null
+                        ? ComboVerificationGate.NotRegistered(tag)
+                        : combo.Recorded(content, tag);
+                    if (clearance.Refuses)
+                    {
+                        h.UpdateData(ResultId,
+                            h.Localize("ui.updateComboHeldManual", tag) + "\n\n> " + clearance.Reason);
+                        return;
+                    }
+                    if (apply == SelfUpdateApply.ControlLane)
+                    {
+                        // The same announcement the poller makes, so the control plane cannot
+                        // tell a click from a check — and dedupes both the same way.
+                        var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+                        handover.Announce(new SelfUpdateHandover.Announcement
+                            {
+                                Event = SelfUpdateHandover.ReleaseEvent,
+                                CurrentVersion = installed,
+                                NewVersion = tag,
+                                CurrentImage = options.PortalImage(installed.Split('+')[0]),
+                                NewImage = options.PortalImage(tag),
+                                Policy = content.Policy.ToString(),
+                                Pattern = UpdateChannelPattern.Normalize(content.Pattern),
+                                Trigger = "Manual",
+                                DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
+                            })
+                            .Subscribe(
+                                outcome => h.UpdateData(ResultId, h.Localize("ui.updateHandedOver", tag, outcome.Destination)),
+                                ex => h.UpdateData(ResultId, h.Localize("ui.updateHandoverFailed", ex.Message)));
+                        return;
+                    }
+                    // 🚨 THE SCHEMA MOVES FIRST HERE TOO (#4764). This button honoured the
+                    // availability gate, the combo gate and the control-lane route — and skipped
+                    // the migration entirely, so an admin click made exactly the image-only roll
+                    // across a db_version boundary that the poller had stopped making: the new
+                    // pods refuse to start on DbVersionGate, Kubernetes restarts them for ever,
+                    // and the old ReplicaSet keeps answering 200. Worse than the poller's old
+                    // blind branch, because a click leaves no verdict anywhere to inspect.
+                    //
+                    // The decision is SelfUpdateVerdict.MayPatchAfter — the same predicate the
+                    // poller's outcome is held to, so the two routes cannot drift apart when an
+                    // outcome is added to the enum.
+                    //
+                    // 🚨 …refined by the PUBLISHED schema step (#4764 (b3)): both releases'
+                    // ExpectedDbVersion markers, read off the same share the availability gate
+                    // reads, so a click across a known schema bump that this install cannot
+                    // migrate is refused naming both numbers.
+                    var fileSystem = h.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                                     ?? IoPool.Unbounded;
+                    ReleaseSchemaMarker.ObserveStep(
+                            fileSystem,
+                            h.Hub.ServiceProvider.GetService<IConfiguration>()?[
+                                MeshWeaver.Hosting.ShippedPrebuiltBundles.PublishedRootConfigKey],
+                            ShippedReleaseSeed.InstalledPlatformVersion, tag)
+                        // No Catch: a fault on this read is NOT an absent marker (Read already
+                        // answers absent/garbled/unreadable files as UNKNOWN, logged) — it
+                        // reaches the error arm below and nothing is applied.
+                        .SelectMany(step => pool.Invoke(ct => updater!.RunMigrationAsync(tag, ct))
+                            .Select(outcome => (outcome, step)))
+                        .Subscribe(
+                        reading =>
+                        {
+                            var (outcome, step) = reading;
+                            if (!SelfUpdateVerdict.MayPatchAfter(outcome, step))
+                            {
+                                // The two refusals stay DIFFERENT sentences: a migration that ran
+                                // and broke sends the operator to the Job's log, one that could
+                                // not be created sends them to a helm upgrade. The outcome name
+                                // renders verbatim — machine text, like the gate diagnostics
+                                // above.
+                                // A refusal the published schema step decided (NotSupported
+                                // across a known bump) is a could-not-run, like the 403, and
+                                // carries both numbers verbatim beside the outcome.
+                                h.UpdateData(ResultId, outcome switch
+                                {
+                                    MigrationRunOutcome.NotSupported => h.Localize(
+                                        "ui.updateSchemaAheadManual", tag, step.Describe()),
+                                    MigrationRunOutcome.Forbidden => h.Localize(
+                                        "ui.updateMigrationUnavailableManual", tag,
+                                        step.Known ? $"{outcome}; {step.Describe()}" : outcome.ToString()),
+                                    _ => h.Localize("ui.updateMigrationFailedManual", tag, outcome.ToString()),
+                                });
+                                return;
+                            }
+                            pool.Invoke(ct => updater!.PatchToVersionAsync(tag, ct)).Subscribe(
+                                _ => h.UpdateData(ResultId, h.Localize(
+                                    outcome == MigrationRunOutcome.NotSupported && !step.KeepsSchema
+                                        ? "ui.updateRollingUnmigrated"
+                                        : "ui.updateRolling",
+                                    tag)),
+                                ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
+                        },
+                        ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
+                });
+            });
     }
 
     /// <summary>How many caveat lines a NotVerifiable verdict renders before "… and N more".

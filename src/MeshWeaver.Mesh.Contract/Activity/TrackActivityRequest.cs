@@ -1,9 +1,12 @@
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Mesh.Activity;
 
 /// <summary>
 /// Request to track a user's activity (navigation, login, etc).
 /// Handled by the hub to persist <see cref="UserActivityRecord"/> nodes.
 /// </summary>
+[InfrastructureOnly]
 public record TrackActivityRequest(
     string NodePath,
     string UserId,

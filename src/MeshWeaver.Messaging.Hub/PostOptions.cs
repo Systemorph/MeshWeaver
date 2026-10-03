@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Messaging;
@@ -118,15 +120,36 @@ public record PostOptions(Address Sender)
     /// The post pipeline will use this identity instead of reading AsyncLocal.
     /// Use when posting from outside hub context (ContinueWith, background tasks).
     /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public PostOptions WithAccessContext(AccessContext context)
-        => this with { ImpersonateContext = context };
+        => this with
+        {
+            ImpersonateContext = context,
+            ImpersonationRequestedBy = Assembly.GetCallingAssembly(),
+            ImpersonationSurface = nameof(WithAccessContext),
+        };
+
+    /// <summary>
+    /// The assembly that asked for <see cref="ImpersonateContext"/> — read where the delivery is
+    /// posted (<see cref="MessageHub"/>), which checks it with <see cref="InMeshImpersonationGuard"/>.
+    /// Null when the framework set the context itself (a response stamped with its request's user).
+    /// </summary>
+    internal Assembly? ImpersonationRequestedBy { get; init; }
+
+    /// <summary>
+    /// Which setter stamped <see cref="ImpersonateContext"/> — <see cref="WithAccessContext"/> or
+    /// <see cref="ImpersonateAsHub()"/> — so the guard's log names the surface that was really
+    /// called. Set together with <see cref="ImpersonationRequestedBy"/>.
+    /// </summary>
+    internal string? ImpersonationSurface { get; init; }
 
     /// <summary>
     /// Instructs the post pipeline to use the hub's own address as the identity
     /// for this message, instead of the current user's context.
     /// The hub address comes from the Sender property.
     /// </summary>
-    public PostOptions ImpersonateAsHub() => ImpersonateAsHub(Sender);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public PostOptions ImpersonateAsHub() => ImpersonateAsHub(Sender, Assembly.GetCallingAssembly());
 
     /// <summary>
     /// Instructs the post pipeline to use the specified hub address as the identity
@@ -134,14 +157,19 @@ public record PostOptions(Address Sender)
     /// (e.g. a SynchronizationStream hub) but you want the workspace hub's address
     /// as the identity.
     /// </summary>
-    public PostOptions ImpersonateAsHub(Address hubAddress) => this with
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public PostOptions ImpersonateAsHub(Address hubAddress) => ImpersonateAsHub(hubAddress, Assembly.GetCallingAssembly());
+
+    private PostOptions ImpersonateAsHub(Address hubAddress, Assembly requestedBy) => this with
     {
         ImpersonateContext = new AccessContext
         {
             ObjectId = hubAddress.ToFullString(),
             Name = hubAddress.ToString(),
             IsHub = true
-        }
+        },
+        ImpersonationRequestedBy = requestedBy,
+        ImpersonationSurface = nameof(ImpersonateAsHub),
     };
 
     internal string MessageId { get; init; } = Guid.NewGuid().AsString();

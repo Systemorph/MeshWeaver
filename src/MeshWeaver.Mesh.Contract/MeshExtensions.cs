@@ -130,6 +130,16 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 
+        // Document parts (Doc/Architecture/DocumentParts). The append rides from ANY producer hub to
+        // the document's own hub, and the part / annotation content is read by every hub that lists a
+        // document — all of them need the short discriminators, or a receiving hub sees an untyped
+        // JsonElement and the request handler never matches.
+        config.TypeRegistry.WithType(typeof(AppendDocumentTextRequest), nameof(AppendDocumentTextRequest));
+        config.TypeRegistry.WithType(typeof(AppendDocumentTextResponse), nameof(AppendDocumentTextResponse));
+        config.TypeRegistry.WithType(typeof(DocumentLogTarget), nameof(DocumentLogTarget));
+        config.TypeRegistry.WithType(typeof(DocumentPart), nameof(DocumentPart));
+        config.TypeRegistry.WithType(typeof(DocumentPartAnnotation), nameof(DocumentPartAnnotation));
+
         return config;
     }
 
@@ -5480,6 +5490,19 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs the create-validator chain — every <see cref="INodeValidator"/> that takes part in a
+    /// create — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
+    /// <see cref="CreateNodeRequest"/> runs it. Emits the first refusal, or <c>null</c> when every
+    /// validator lets the create through.
+    /// <para>For create paths that do not go through <see cref="CreateNodeRequest"/> — a
+    /// <c>MeshNode</c> entering a workspace collection through a <c>DataChangeRequest</c> — so that
+    /// they are answerable to the same guards. Validators are resolved on the caller's thread.</para>
+    /// </summary>
+    internal static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidators(
+        this IMessageHub hub, MeshNode node, AccessContext? accessContext)
+        => RunCreationValidatorsObs(hub, node, new CreateNodeRequest(node), accessContext);
+
+    /// <summary>
     /// Runs the delete-validator chain — every <see cref="INodeValidator"/> that takes part in a
     /// delete — for <paramref name="node"/> under <paramref name="accessContext"/>, exactly as
     /// <see cref="DeleteNodeRequest"/> runs it for a single (non-recursive) delete. Emits the first
@@ -5797,7 +5820,8 @@ public static class MeshExtensions
     private static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
         MeshNode node,
-        CreateNodeRequest request)
+        CreateNodeRequest request,
+        AccessContext? accessContext = null)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
@@ -5805,7 +5829,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Create,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessContext ?? accessService?.Context ?? accessService?.CircuitContext
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
@@ -6535,6 +6559,15 @@ public static class MeshExtensions
                     DispatchInnerCreate();
                     return;
                 }
+                if (inboundRequest.SnapshotVersion is { } snapshotVersion)
+                {
+                    // A write that states the version its snapshot was taken at takes its own
+                    // branch: write access is established FIRST, and only then is the stored
+                    // node compared with what was offered. See ApplyUnderVersionPrecondition.
+                    hub.NoteRequestStage(request.Id, "UPSERT_READ existing → version precondition");
+                    WhenWriteAccessIsEstablished(() => ApplyUnderVersionPrecondition(existing, snapshotVersion));
+                    return;
+                }
                 if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig, inboundRequest.Folds))
                 {
                     hub.NoteRequestStage(request.Id, "UPSERT_READ existing → no-op probe");
@@ -6648,7 +6681,16 @@ public static class MeshExtensions
                             // gate compare a value against itself and pass having checked nothing —
                             // the create-race shape of the #2993 hole. Unknown means: prove the type
                             // resolves.
-                            ApplyUpdateViaStream(node, existingNodeType: null);
+                            //
+                            // A version precondition travels with it: the durable row was absent
+                            // when this handler read it, so there is no stored version to compare
+                            // up front — the write lambda compares against the node as this hub
+                            // holds it. Same rule as the existing-node branch: the precondition is
+                            // only evaluated for a caller established to hold write access.
+                            if (inboundRequest.SnapshotVersion is not null)
+                                WhenWriteAccessIsEstablished(() => ApplyUpdateViaStream(node, existingNodeType: null));
+                            else
+                                ApplyUpdateViaStream(node, existingNodeType: null);
                         }
                         // 🚨 AN OwnerDisposing NACK IS NOT RE-DRIVEN HERE, AND THE REASON IS
                         // STRUCTURAL (#3510). The obvious symmetry with the patch leg — re-enqueue
@@ -6742,6 +6784,168 @@ public static class MeshExtensions
                                 "activity.node.upsert.createCompletedEmpty", ("path", node.Path)),
                             NodeUpsertRejectionReason.Unknown);
                     });
+        }
+
+        // 🚨 THE VERSION PRECONDITION (CreateOrUpdateNodeRequest.SnapshotVersion). Full-instance
+        // mode takes Content wholesale and never looks at the incoming Version, so a snapshot
+        // written back after the node moved on puts every member it carries back to its older
+        // value and is acknowledged as a success. A caller that states the version its snapshot
+        // was taken at is refused instead when the node is past it — answered, with both versions
+        // named, never applied and never dropped.
+        //
+        // STALE means two things at once: the node carries a strictly higher version than the one
+        // offered, AND applying the snapshot would change it. The second half is not a loophole.
+        // A cross-hub `stream.Update` hands its caller the node it computed locally, at the BASE
+        // version (only the owner mints), so the common "write, then save what the write
+        // returned" idiom always offers a version one behind the row it just produced — carrying
+        // exactly what that row holds. A snapshot that would change nothing has nothing to put
+        // back, and is acknowledged as unchanged whatever its version.
+        //
+        // Two readings, because neither alone is the node's current state:
+        //   • `existing` — the DURABLE row this handler read. Trails an own-node write by the
+        //     persistence sampler's debounce.
+        //   • `live` — the node as THIS hub holds it, inside the write lambda (WriteThroughStream).
+        //     For a node this hub does not own that is its mirror, which trails the owner.
+        // Both only ever trail, so a version above the offered one on EITHER is proof the node has
+        // moved on — that verdict is right whatever the owner holds, which is what makes a guard
+        // on a mirror sound here (Doc/Architecture/ConditionalWritesAcrossHubs). When both trail,
+        // the write leaves as a merge patch carrying the base value of each changed leaf, and the
+        // owner refuses a leaf it has since changed; the re-attempt runs the lambda against newer
+        // state and lands here.
+        //
+        // Strictly greater, never "different": a snapshot AT the current version writes, and so
+        // does one carrying a higher version — the same strict-regression rule
+        // MonotonicWriteGuardStorageAdapter applies to a raw write.
+        bool IsStaleAgainst(MeshNode held, long snapshotVersion) =>
+            held.Version > snapshotVersion
+            && !IsNoOpUpsert(held, node, hub.JsonSerializerOptions, upsertMeshConfig, inboundRequest.Folds);
+
+        void ApplyUnderVersionPrecondition(MeshNode existing, long snapshotVersion)
+        {
+            if (IsStaleAgainst(existing, snapshotVersion))
+            {
+                PostStaleSnapshot(existing.Version, snapshotVersion);
+                return;
+            }
+            if (IsNoOpUpsert(existing, node, hub.JsonSerializerOptions, upsertMeshConfig, inboundRequest.Folds))
+            {
+                // Write access is already established (WhenWriteAccessIsEstablished), which is
+                // all SkipNoOpIfAuthorized would have asked.
+                logger.LogDebug(
+                    "[CreateOrUpdate] no-op upsert for {Path}: identical to persisted state; skipped",
+                    node.Path);
+                PostOk(existing, isCreate: false,
+                    $"Node at '{node.Path}' unchanged — no-op upsert skipped",
+                    "activity.node.unchanged");
+                return;
+            }
+            ApplyUpdateViaStream(existing, existing.NodeType);
+        }
+
+        void PostStaleSnapshot(long heldVersion, long snapshotVersion)
+        {
+            hub.NoteRequestStage(request.Id,
+                $"UPSERT_STALE_SNAPSHOT held={heldVersion} offered={snapshotVersion}");
+            logger.LogWarning(
+                "[CreateOrUpdate] REFUSED {Path}: the write requested by {User} carries a snapshot taken at "
+                + "Version={SnapshotVersion}, and the node is at Version={HeldVersion}. Applying it would put "
+                + "every member the snapshot carries back to its older value. Nothing was written.",
+                node.Path, requestedBy, snapshotVersion, heldVersion);
+            PostFail(
+                LocalizableText.Keyed(
+                    $"The write to '{node.Path}' carries a snapshot taken at version {snapshotVersion}, and "
+                    + $"the node is now at version {heldVersion}. Nothing was written: applying it would "
+                    + "undo the changes made since. Read the node again and apply the change to what it "
+                    + "holds now.",
+                    "activity.node.upsert.staleSnapshot",
+                    ("path", node.Path),
+                    ("offeredVersion", snapshotVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("storedVersion", heldVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+                NodeUpsertRejectionReason.Unknown, NodeUpsertFailureKind.StaleSnapshot);
+        }
+
+        // 🚨 A refusal that names the stored version is a statement ABOUT THE NODE, so the version
+        // precondition is not looked at until the requester is established to hold write access —
+        // the same predicate SkipNoOpIfAuthorized applies before it acknowledges a no-op, and the
+        // same evaluator the owner's [RequiresPermission(Update)] gate on PatchDataRequest asks.
+        // Anyone else is refused here, whatever version they offered: an answer that depended on
+        // the version would let a caller who may not read the node find its version by offering
+        // one after another.
+        //
+        // Three outcomes, never two (MeshWeaver#2454 / #3674): granted, denied, and NO VERDICT —
+        // a probe that faulted, stalled past its bound or completed empty. No verdict is refused
+        // as well, and says that it is not a denial.
+        void WhenWriteAccessIsEstablished(Action evaluate)
+        {
+            IObservable<bool> probe;
+            if (requestedBy is not { Length: > 0 } requester)
+                probe = Observable.Return(false);
+            else
+            {
+                // The evaluator snapshots the ambient AccessContext on the calling thread (the
+                // API-token clamp, the hub credential). This runs inside the persistence-read
+                // callback, where that AsyncLocal is not reliably set — restore the inbound
+                // identity around the synchronous capture, as WriteThroughStream does.
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using (inboundCtx is not null && accessService is not null
+                    ? accessService.SwitchAccessContext(inboundCtx)
+                    : null)
+                {
+                    probe = hub.GetEffectivePermissions(node.Path, requester)
+                        .TakeDecisionOutsideGate()
+                        .Timeout(NodeOpForwardTimeout)
+                        .Select(p => p.HasFlag(Permission.Update) || p.HasFlag(Permission.Sync));
+                }
+            }
+
+            DetachedReplyOutcome.Of(probe)
+                .Subscribe(
+                    outcome =>
+                    {
+                        if (outcome is { HasValue: true, Value: true })
+                        {
+                            evaluate();
+                            return;
+                        }
+                        if (outcome.HasValue)
+                        {
+                            logger.LogWarning(
+                                "[CreateOrUpdate] REFUSED {Path}: {User} does not hold Update on it, so the "
+                                + "write's version precondition was not evaluated. Nothing was written.",
+                                node.Path, requestedBy);
+                            PostFail(
+                                LocalizableText.Keyed(
+                                    $"Access denied: the write to '{node.Path}' needs Update permission on "
+                                    + "the node. Nothing was written.",
+                                    "activity.node.upsert.preconditionUnauthorized", ("path", node.Path)),
+                                NodeUpsertRejectionReason.Unauthorized);
+                            return;
+                        }
+                        if (outcome.Error is { } probeError)
+                            logger.LogWarning(probeError,
+                                "[CreateOrUpdate] REFUSED {Path}: the permission probe for {User} faulted, so "
+                                + "the write's version precondition was not evaluated. Nothing was written.",
+                                node.Path, requestedBy);
+                        else
+                            logger.LogWarning(
+                                "[CreateOrUpdate] REFUSED {Path}: the permission probe for {User} completed "
+                                + "without a verdict, so the write's version precondition was not evaluated. "
+                                + "Nothing was written.",
+                                node.Path, requestedBy);
+                        PostFail(
+                            LocalizableText.Keyed(
+                                $"The write to '{node.Path}' was not evaluated: whether the requester may "
+                                + "write the node could not be established. This is not a denial and nothing "
+                                + "was written — retry.",
+                                "activity.node.upsert.preconditionUndetermined", ("path", node.Path)),
+                            NodeUpsertRejectionReason.Unknown,
+                            NodeUpsertRejection.ClassifyFailureKind(outcome.Error));
+                    },
+                    // The subscriber's OWN contract, never the probe's: the probe's fault arrives
+                    // as `Error` on the outcome above.
+                    ex => logger.LogWarning(ex,
+                        "[CreateOrUpdate] the version-precondition gate for {Path} threw while acting on its outcome",
+                        node.Path));
         }
 
         // 🚨 THE NO-OP UPSERT GUARD — the owner-side churn breaker. An upsert whose applied fields
@@ -6977,6 +7181,13 @@ public static class MeshExtensions
                         }
                         : mergedNode;
 
+                // The version this hub held when the write lambda last ran and found the
+                // snapshot stale — 0 while it has not. Written by the lambda, which the write
+                // path may run more than once (a conflict re-attempt runs it against newer
+                // state), and read once the write has settled; the LAST run is the one whose
+                // result the write reports.
+                long staleAgainstVersion = 0;
+
                 var write = hub.GetMeshNodeStream(node.Path)
                     // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
                     // before it is ever stored; the update path has to repair it AFTERWARDS, because
@@ -6997,17 +7208,32 @@ public static class MeshExtensions
                     // name. A fold therefore always beats the incoming content for its own member,
                     // which is what makes `Content = record` plus `Sum(accessCount, 1)` mean "take
                     // my content, except the counter, which you compute".
-                    .Update(live => RepairStaleSelfDefaultMainNode(
-                        FoldOntoLive(UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions), live) with
+                    .Update(live =>
+                    {
+                        // 🚨 The version precondition's second reading (ApplyUnderVersionPrecondition
+                        // holds the first): `live` is the node as this hub holds it NOW, which the
+                        // durable row can trail. Past the offered version and changed by the
+                        // snapshot ⇒ stale ⇒ return `live` untouched, which the write path
+                        // completes as a no-op with nothing posted, and the settle arm below
+                        // answers the refusal.
+                        if (inboundRequest.SnapshotVersion is { } offered && IsStaleAgainst(live, offered))
                         {
-                            Version = Math.Max(live.Version, existing.Version),
-                            // Identity fields the merge is meant to PRESERVE — recovered from the
-                            // durable row when the live snapshot has none, so a repaired node keeps
-                            // its own lineage instead of being reborn with a default creation stamp.
-                            CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
-                            CreatedBy = live.CreatedBy ?? existing.CreatedBy,
-                        },
-                        upsertMeshConfig));
+                            Volatile.Write(ref staleAgainstVersion, live.Version);
+                            return live;
+                        }
+                        Volatile.Write(ref staleAgainstVersion, 0);
+                        return RepairStaleSelfDefaultMainNode(
+                            FoldOntoLive(UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions), live) with
+                            {
+                                Version = Math.Max(live.Version, existing.Version),
+                                // Identity fields the merge is meant to PRESERVE — recovered from the
+                                // durable row when the live snapshot has none, so a repaired node keeps
+                                // its own lineage instead of being reborn with a default creation stamp.
+                                CreatedDate = live.CreatedDate == default ? existing.CreatedDate : live.CreatedDate,
+                                CreatedBy = live.CreatedBy ?? existing.CreatedBy,
+                            },
+                            upsertMeshConfig);
+                    });
 
                 // 🚨 THREE terminal states, not two (MeshWeaver#2454 / #3674). This was the LAST
                 // two-arm subscription on the upsert's reply path — the read leg and
@@ -7034,6 +7260,12 @@ public static class MeshExtensions
                         {
                             if (outcome.HasValue)
                             {
+                                if (inboundRequest.SnapshotVersion is { } offered
+                                    && Volatile.Read(ref staleAgainstVersion) is > 0 and var heldVersion)
+                                {
+                                    PostStaleSnapshot(heldVersion, offered);
+                                    return;
+                                }
                                 PostOk(outcome.Value!, isCreate: false, $"Updated node at '{node.Path}'",
                                     "activity.node.updated");
                                 return;
@@ -7515,11 +7747,15 @@ public static class MeshExtensions
     /// <see cref="CreateNodeRequest"/>, which runs the create permission and the create-validator
     /// chain per node.</para>
     ///
-    /// <para><b>Known window.</b> The pre-flight validates the subtree as storage lists it when the
-    /// move starts; the delete leg re-enumerates after the copy. A node created under the source
-    /// in between is carried by the copy (it is <c>RequireComplete</c>) and removed by the delete
-    /// leg without having been asked. Same planning window the recursive delete closes with its
-    /// subtree write scope; not closed here.</para>
+    /// <para><b>The planning window is closed by the delete's own subtree write scope.</b> The
+    /// pre-flight validates the subtree as storage lists it when the move starts; the delete leg
+    /// re-enumerates after the copy. A node created under the source in between would be carried by
+    /// the copy (it is <c>RequireComplete</c>) and removed by the delete leg without having been
+    /// asked. So the move holds <see cref="RecentlyDeletedRegistry.BeginSubtreeDeletion"/> on the
+    /// source from BEFORE the pre-flight enumerates to the end of the delete leg — exactly the scope
+    /// <c>HandleDeleteNodeRequest</c> holds from planning to commit — and the storage write guard
+    /// refuses every in-process write at or under the source meanwhile. The scope is released
+    /// BEFORE the response is posted, so a caller acting on the answer never meets it.</para>
     /// </summary>
     private static IMessageDelivery HandleMoveNodeRequest(
         IMessageHub hub,
@@ -7619,52 +7855,22 @@ public static class MeshExtensions
         // Source-subtree enumeration is AUTHORITATIVE from storage (ListDescendantPaths),
         // never the eventually-consistent catalog query — the same stale-plan defect that
         // left recursive-delete survivors (issue #839) would leave source rows behind here.
-        sourceMayBeDeleted
-            .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
-            {
-                o = o.WithTarget(hub.NodeOperationTarget());
-                return callerContext != null ? o.WithAccessContext(callerContext) : o;
-            }))
-            .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
-                ? Observable.Return(copiedRoot)
-                : Observable.Throw<MeshNode>(
-                    new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
-            .SelectMany(copied =>
-                storage.ListDescendantPaths(sourcePath)
-                    .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .SelectMany(descendants =>
-                    {
-                        var paths = descendants
-                            .Where(p => !string.IsNullOrEmpty(p))
-                            .Append(sourcePath)
-                            .ToImmutableList();
-
-                        if (paths.IsEmpty)
-                            return Observable.Return(copied);
-
-                        // Bottom-up delete (longest path first) so parent storage entries
-                        // are removed only after their descendants. Each delete is its own
-                        // observable; Merge runs them concurrently, ToList awaits all.
-                        //
-                        // Commit-then-publish: DeleteAndPublish chains the
-                        // MeshChangeEvent.Deleted into the storage observable, so the
-                        // event for each path fires only after that path's storage
-                        // commit completes. The storage adapter's Changes feed
-                        // fires the Deleted notification from inside its Delete.
-                        // Children before parents, then ONE batch: the path set is already
-                        // authoritative and already committed to, so there is nothing to gain
-                        // from paying a round-trip per row (IStorageAdapter.DeleteMany).
-                        var ordered = paths.OrderByDescending(p => p.Length).ToList();
-                        return storage.DeleteMany(ordered)
-                            .Take(1)
-                            .Do(deleted =>
-                            {
-                                foreach (var p in deleted)
-                                    changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                            })
-                            .Select(_ => copied);
-                    }))
+        //
+        // 🚨 The whole sequence runs inside the source's SUBTREE-DELETION SCOPE — the same
+        // RecentlyDeletedRegistry.BeginSubtreeDeletion the recursive delete holds from planning
+        // to commit. It opens on Subscribe, BEFORE the pre-flight enumerates, so no in-process
+        // writer can create a node under the source that the pre-flight never validated and the
+        // delete leg would then remove. WithinSubtreeDeletion releases it BEFORE the result
+        // reaches the subscriber that posts the response — a caller acting on "moved" (or on
+        // the refusal) must never meet the scope still held, which Observable.Using alone
+        // cannot guarantee.
+        //
+        // GetRequiredService, never GetService: MeshBuilder registers the registry at the mesh
+        // ROOT unconditionally, so there is no supported host without it — and a move that ran
+        // BARE when it did not resolve would reopen exactly this window with nothing to say so.
+        // Same resolution, for the same reason, as PartitionRemovalOnRecord above.
+        hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
+            .WithinSubtreeDeletion(sourcePath, MoveWithinScope)
             .Subscribe(
                 movedNode =>
                 {
@@ -7694,6 +7900,54 @@ public static class MeshExtensions
                 });
 
         return request.Processed();
+
+        IObservable<MeshNode> MoveWithinScope() =>
+            sourceMayBeDeleted
+                .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+                {
+                    o = o.WithTarget(hub.NodeOperationTarget());
+                    return callerContext != null ? o.WithAccessContext(callerContext) : o;
+                }))
+                .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
+                    ? Observable.Return(copiedRoot)
+                    : Observable.Throw<MeshNode>(
+                        new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
+                .SelectMany(copied =>
+                    storage.ListDescendantPaths(sourcePath)
+                        .Take(1)
+                        .Timeout(TimeSpan.FromSeconds(15))
+                        .SelectMany(descendants =>
+                        {
+                            var paths = descendants
+                                .Where(p => !string.IsNullOrEmpty(p))
+                                .Append(sourcePath)
+                                .ToImmutableList();
+
+                            if (paths.IsEmpty)
+                                return Observable.Return(copied);
+
+                            // Bottom-up delete (longest path first) so parent storage entries
+                            // are removed only after their descendants. Each delete is its own
+                            // observable; Merge runs them concurrently, ToList awaits all.
+                            //
+                            // Commit-then-publish: DeleteAndPublish chains the
+                            // MeshChangeEvent.Deleted into the storage observable, so the
+                            // event for each path fires only after that path's storage
+                            // commit completes. The storage adapter's Changes feed
+                            // fires the Deleted notification from inside its Delete.
+                            // Children before parents, then ONE batch: the path set is already
+                            // authoritative and already committed to, so there is nothing to gain
+                            // from paying a round-trip per row (IStorageAdapter.DeleteMany).
+                            var ordered = paths.OrderByDescending(p => p.Length).ToList();
+                            return storage.DeleteMany(ordered)
+                                .Take(1)
+                                .Do(deleted =>
+                                {
+                                    foreach (var p in deleted)
+                                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                                })
+                                .Select(_ => copied);
+                        }));
     }
 
     /// <summary>

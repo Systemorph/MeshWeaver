@@ -705,6 +705,22 @@ public static class MemexConfiguration
                 }
             }
 
+            // The content storage as a pre-configured store for storage bindings
+            // (Doc/Architecture/StorageBindings): on a FileSystem content store every Space's
+            // collection lives under {BasePath}/content/{Space} (below), so the directories there are
+            // the store's containers and a partition's default is its own. A blob content store is
+            // registered by the host that owns the blob client.
+            if (contentStorageConfig is { BasePath: { Length: > 0 } contentBase }
+                && string.Equals(contentStorageConfig.SourceType, "FileSystem", StringComparison.OrdinalIgnoreCase))
+            {
+                var contentRoot = Path.Combine(contentBase, "content");
+                builder.ConfigureServices(services => services.AddSingleton<MeshWeaver.Mesh.Storage.IInstanceStore>(sp =>
+                    new MeshWeaver.Graph.Storage.DirectoryInstanceStore(
+                        "content", "Content storage (files)", contentRoot,
+                        [MeshWeaver.Mesh.Storage.StoragePurpose.Originals],
+                        sp.GetRequiredService<IoPoolRegistry>())));
+            }
+
             // Use partitioned persistence for FileSystem to support per-org partitions
             var usePartitioned = string.Equals(graphStorageConfig.Type, "FileSystem", StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
