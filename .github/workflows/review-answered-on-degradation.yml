@@ -26,7 +26,7 @@
 # 🛡️ No job-level `if:` and no `continue-on-error` — every event runs the step, which prints what it
 # decided (a skipped job would say nothing). This file is NOT a required context and can turn
 # nothing green on its own; a failure here is RED, named, and leaves the gate exactly where it was.
-name: Review answered (reviewer-unavailable re-evaluation)
+name: Review answered (re-evaluation on the internal review)
 
 on:
   check_run:
@@ -43,13 +43,13 @@ concurrency:
 
 jobs:
   reevaluate:
-    name: Re-evaluate the review gate on a reviewer-unavailable degradation
+    name: Re-evaluate the review gate on the internal review
     runs-on: ubuntu-latest
     # 25 = the gate job's own 20-minute cap (a run in its review wait is let finish, see below) +
     # headroom for the reads and the re-run request.
     timeout-minutes: 25
     steps:
-      - name: Re-run the gate's pull_request run for this head, iff this is the degradation
+      - name: Re-run the gate's pull_request run for this head, iff the internal reviewer completed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -65,12 +65,17 @@ jobs:
           # The SAME contract the predicate applies (check-review-answered.py DEGRADATION_*). This
           # is only a filter for when to ask again — the re-run judges provenance on its own, so a
           # drift here can cost a re-run or miss one, never turn a gate green.
-          if [ "$NAME" != "internal-review" ] || [ "$APP_ID" != "4918443" ] || [ "$APP_SLUG" != "systemorph-com" ] \
-             || [ "$CONCLUSION" != "neutral" ] || [[ "$TITLE" != "Reviewer unavailable"* ]]; then
-            echo "check run $CHECK_RUN_ID ('$NAME' from ${APP_SLUG:-?}/${APP_ID:-?}, $CONCLUSION) is not a reviewer-unavailable degradation — nothing to re-evaluate"
+          # 🚨 ANY completed `internal-review` check run of the internal reviewer re-evaluates the gate —
+          # not only the degradation. Measured 2026-10-03 on core #6014/#6017/#6018: the review was
+          # admitted late (queued behind the reviewer's capacity bound for over 75 minutes), the
+          # gate's 15-minute wait had already published RED, and the review's own arrival re-ran
+          # nothing that branch protection reads, so core sat idle. The re-run below changes no
+          # verdict — the gate judges the head itself — and a gate already green is left alone.
+          if [ "$NAME" != "internal-review" ] || [ "$APP_ID" != "4918443" ] || [ "$APP_SLUG" != "systemorph-com" ]; then
+            echo "check run $CHECK_RUN_ID ('$NAME' from ${APP_SLUG:-?}/${APP_ID:-?}, $CONCLUSION) is not the internal reviewer's — nothing to re-evaluate"
             exit 0
           fi
-          echo "::notice::reviewer-unavailable degradation on ${HEAD_SHA:0:10}: check run $CHECK_RUN_ID — \"$TITLE\""
+          echo "::notice::internal review completed on ${HEAD_SHA:0:10} ($CONCLUSION): check run $CHECK_RUN_ID — \"$TITLE\""
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the check_run event carried no head sha"; exit 1; }
 
           # 🚨 This run is SINGLE-SHOT (#5920 review): the degradation's `completed` event comes once,
