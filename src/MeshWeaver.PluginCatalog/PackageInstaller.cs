@@ -3020,6 +3020,7 @@ public static class PackageInstaller
                     HeldUpdate = null,
                     HeldUpdateDispatch = null,
                     HeldUpdateDispatchedAt = null,
+                    HeldSince = null,
                     // The per-package policy (Auto / Notify / None) — seeded once, carried
                     // forward on every re-stamp; the legacy flag is kept consistent for readers
                     // that still branch on it.

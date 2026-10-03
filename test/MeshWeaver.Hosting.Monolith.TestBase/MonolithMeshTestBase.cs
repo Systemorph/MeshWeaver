@@ -789,6 +789,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// the Autofac Reflection.Emit factory pin lives, plus any unmanaged
     /// allocations from native libraries the test pulls in.
     /// </summary>
+    /// <summary>
+    /// What this run TESTS — the platform and commit of the in-process mesh, recorded by
+    /// <see cref="InitializeAsync"/> before any test body runs and written as the run's header
+    /// (maintainer, 2026-10-04). Null only before initialisation.
+    /// </summary>
+    protected VersionsUnderTest? VersionsUnderTest { get; private set; }
+
     private long _instanceInitManagedBytes;
     private long _instanceInitRssBytes;
     private long _instanceInitRssAnonBytes;
@@ -989,6 +996,14 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
                 }
             }
             TestPhaseTrace(name, "INIT_DONE", sw.ElapsedMilliseconds);
+
+            // 🚨 THE RUN'S HEADER — the framework's first step of every test run (maintainer,
+            // 2026-10-04): what this run TESTS, named before any verdict. An in-process mesh is its
+            // own target (it runs the code compiled into this process), so — exactly as the default
+            // preflight (TestRunPreflight.Default) decides — nothing converges or refuses here; the
+            // versions are recorded.
+            VersionsUnderTest = VersionsUnderTest.OfThisProcess();
+            FileOutput.WriteLine(VersionsUnderTest.Header());
             TestMemTrace(name, "INIT_MEM", forceGc: false);
 
             // Snapshot for the per-instance DELTA line written in DisposeAsync.

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -95,6 +96,39 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
                         .Select(c => TrackedRepositories.Normalize(c!.RepositoryUrl, c.Subdirectory))))
                     .Catch<TrackedRepositories, PartitionSourceReadFailed>(_ =>
                         Observable.Return(TrackedRepositories.Unknown)));
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The importing sources' <see cref="GitHubSyncConfig.ModuleVersions"/> — the per-module content
+    /// hash each one last LANDED — read from each config node's own stream for the same reason as
+    /// <see cref="ImportingRepositories"/>: the listing's content is eventually consistent, and this
+    /// reading licenses a registry lane to adopt a package's content and land its module. One read
+    /// that does not answer makes the whole reading UNKNOWN, which licenses nothing.
+    /// </remarks>
+    public IObservable<SyncedModuleVersions> SyncedModules(string partition)
+        => sync.WatchConfigNodes(partition)
+            .Take(1)
+            .Select(nodes => nodes
+                .Select(n => n.Path)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToArray())
+            .SelectMany(paths => paths.Length == 0
+                ? Observable.Return(SyncedModuleVersions.Of([]))
+                : Observable
+                    .Zip(paths.Select(path => hub.GetWorkspace().GetMeshNodeStream(path)
+                        .Take(1)
+                        .Timeout(ReadBudget)
+                        .Select(node => node?.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions))
+                        .Catch<GitHubSyncConfig?, Exception>(_ =>
+                            Observable.Throw<GitHubSyncConfig?>(new PartitionSourceReadFailed()))))
+                    .Take(1)
+                    .Select(configs => SyncedModuleVersions.Of(configs
+                        .Where(c => c is { RepositoryUrl.Length: > 0, Direction: not SyncDirection.ExportOnly })
+                        .SelectMany(c => c!.ModuleVersions ?? ImmutableDictionary<string, string>.Empty)))
+                    .Catch<SyncedModuleVersions, PartitionSourceReadFailed>(_ =>
+                        Observable.Return(SyncedModuleVersions.Unknown)));
 
     /// <summary>How long one config node's own stream may take before this provider answers
     /// <see cref="TrackedRepositories.Unknown"/> instead of blocking the caller. Same order as the
