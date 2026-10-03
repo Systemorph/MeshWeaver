@@ -75,27 +75,93 @@ public class ReleaseLinkGateTest : IDisposable
 
     // ── the hold: measured, named ───────────────────────────────────────────────────────────────
 
+    // ── the exact-release surface (policy exact-release-surface) ────────────────────────────────
+
+    /// <summary>
+    /// 🚨 <b>Each release is judged against ITS OWN surface — never the publication's shared one.</b>
+    /// Two releases resolve ONE framework identity and therefore share ONE publication (one core
+    /// commit baked against two portal images whose module closures differ — the ci.9468 shape).
+    /// The publication's own <c>platform-surface.json</c> is whichever bake moved <c>_current</c>
+    /// last, which for two same-source bakes is unordered (the race reproduced on #5818); here it
+    /// is deliberately the WRONG answer for the release under judgement, in both directions. The
+    /// older release's image lacks <c>MeshNode</c> and must hold; the newer one carries it and must
+    /// clear — whatever the shared document says.
+    /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void TheCanonicalPortalSurfaceWinsOverAnAlphabeticallyEarlierSatellite(bool portalCarriesType)
+    public void EachReleaseIsJudgedAgainstItsOwnSurface_NeverThePublicationsShared(bool sharedSurfaceIsTheOlderImage)
     {
-        var published = PublishedRoot(Version, Identity,
-            surface: portalCarriesType ? OlderPlatformSurface(Identity) : ThisPlatformSurface(Identity));
-        // Reproduce a satellite that sorts before the core publication, with the opposite answer.
-        Directory.Move(Path.Combine(published, Identity, "plugins"), Path.Combine(published, Identity, "aaa-satellite"));
-        AddRelease(published, Version, Identity,
-            surface: portalCarriesType ? ThisPlatformSurface(Identity) : OlderPlatformSurface(Identity), bundles: []);
-        Directory.Move(Path.Combine(published, Identity, "plugins"), Path.Combine(published, Identity, "meshweaver-content"));
+        const string NewerRelease = "3.0.0-ci.8101";
+        var published = PublishedRoot(Version, Identity, surface: OlderPlatformSurface(Identity),
+            publicationSurface: sharedSurfaceIsTheOlderImage ? OlderPlatformSurface(Identity) : ThisPlatformSurface(Identity));
+        WriteReleaseSurface(published, NewerRelease, Identity, ThisPlatformSurface(Identity));
         var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+        RequiredPackage[] required =
+        [
+            new RequiredPackage("Views", "Views", HasContent: false)
+                { ModuleName = ViewPack, LandedModulePath = landed },
+        ];
+
+        var older = Judge(published, Version, required);
+        var newer = Judge(published, NewerRelease, required);
+
+        Assert.False(older.IsUpdatable, "the older image does not carry MeshNode — its own surface says so");
+        Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, Assert.Single(older.Blockers).Kind);
+        Assert.True(newer.IsUpdatable, newer.HoldReason);
+        Assert.Empty(newer.Blockers);
+        // Non-vacuous: both releases really do share one publication and one identity.
+        Assert.Equal(Identity, PublishedBundleCatalogue.Read(published, Version).Target.FrameworkIdentity);
+        Assert.Equal(Identity, PublishedBundleCatalogue.Read(published, NewerRelease).Target.FrameworkIdentity);
+    }
+
+    /// <summary>
+    /// A release that records NO surface of its own is unmeasured — even when the publication it
+    /// resolves carries one. No fallback: a surface measured on another image is the wrong answer
+    /// this contract retires, so the link check is Indeterminate (reported, not a hold), and the
+    /// detail names the missing per-release document.
+    /// </summary>
+    [Fact]
+    public void AReleaseWithNoSurfaceOfItsOwn_IsUnmeasured_EvenWhenThePublicationCarriesOne()
+    {
+        var published = PublishedRoot(Version, Identity, surface: null,
+            publicationSurface: OlderPlatformSurface(Identity));
+        var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+
+        var observation = PublishedBundleCatalogue.Read(published, Version);
+        Assert.Null(observation.Artifacts.PlatformSurface);
+        Assert.Contains($"{PublishedBundleCatalogue.ReleaseMarkerDirectoryName}/{PublishedBundleCatalogue.ReleaseSurfaceDirectoryName}/{Version}",
+            observation.Artifacts.PlatformSurfaceDetail!, StringComparison.Ordinal);
+
         var verdict = Judge(published, Version,
         [
             new RequiredPackage("Views", "Views", HasContent: false)
                 { ModuleName = ViewPack, LandedModulePath = landed },
         ]);
-        Assert.Equal(portalCarriesType, verdict.IsUpdatable);
-        if (!portalCarriesType)
-            Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, Assert.Single(verdict.Blockers).Kind);
+        Assert.True(verdict.IsUpdatable, "the publication's surface (which lacks MeshNode) must not be read");
+        Assert.Empty(verdict.Blockers);
+        Assert.Contains(verdict.Advisories, a => a.Contains("could not be determined", StringComparison.Ordinal));
+    }
+
+    /// <summary>A per-release document that names ANOTHER framework identity than the release
+    /// marker is not that release's surface — reported, never linked against.</summary>
+    [Fact]
+    public void AReleaseSurfaceNamingAnotherIdentity_IsNotLinkedAgainst()
+    {
+        var published = PublishedRoot(Version, Identity, surface: OlderPlatformSurface(OlderIdentity));
+        var landed = Land(ViewPack, ModuleBindingMeshNode(ViewPack));
+
+        var observation = PublishedBundleCatalogue.Read(published, Version);
+        Assert.Null(observation.Artifacts.PlatformSurface);
+        Assert.Contains(OlderIdentity, observation.Artifacts.PlatformSurfaceDetail!, StringComparison.Ordinal);
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false)
+                { ModuleName = ViewPack, LandedModulePath = landed },
+        ]);
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        Assert.Empty(verdict.Blockers);
     }
 
     /// <summary>
@@ -565,25 +631,43 @@ public class ReleaseLinkGateTest : IDisposable
 
     /// <summary>
     /// One release under one identity, laid out as <c>publish-bake-bundles.sh</c> writes it: the
-    /// marker, one sealed <c>plugins</c> source with a <c>Widget</c> content bundle, an empty module
-    /// set (or one declaring <paramref name="sealedModule"/>), the platform surface when given,
-    /// and <c>_complete</c> last.
+    /// marker and the release's own surface (when given), one sealed <c>plugins</c> source with a
+    /// <c>Widget</c> content bundle, an empty module set (or one declaring
+    /// <paramref name="sealedModule"/>), and <c>_complete</c> last.
     /// </summary>
     private string PublishedRoot(
-        string version, string identity, string? surface, (string Name, byte[] Bytes)? sealedModule = null)
+        string version, string identity, string? surface, (string Name, byte[] Bytes)? sealedModule = null,
+        string? publicationSurface = null)
     {
         var published = Path.Combine(root, "published");
         Directory.CreateDirectory(Path.Combine(published, PublishedBundleCatalogue.ReleaseMarkerDirectoryName));
-        AddRelease(published, version, identity, surface, ["Widget"], sealedModule);
+        AddRelease(published, version, identity, surface, ["Widget"], sealedModule, publicationSurface);
         return published;
     }
 
+    /// <summary>Records <paramref name="version"/> → <paramref name="identity"/> and that release's
+    /// OWN surface (<c>_releases/_surface/&lt;version&gt;</c>), as <c>publish-bake-bundles.sh</c>
+    /// writes them on every run — without touching any publication.</summary>
+    private static void WriteReleaseSurface(string published, string version, string identity, string? surface)
+    {
+        var markers = Path.Combine(published, PublishedBundleCatalogue.ReleaseMarkerDirectoryName);
+        Directory.CreateDirectory(markers);
+        File.WriteAllText(Path.Combine(markers, version), identity);
+        if (surface is null)
+            return;
+        var surfaces = Path.Combine(markers, PublishedBundleCatalogue.ReleaseSurfaceDirectoryName);
+        Directory.CreateDirectory(surfaces);
+        File.WriteAllText(Path.Combine(surfaces, version), surface);
+    }
+
+    /// <param name="surface">The release's OWN surface — the one the gate reads.</param>
+    /// <param name="publicationSurface">The surface inside the publication (descriptive; no gate
+    /// reads it) — a decoy for the cases that prove it is not read.</param>
     private static void AddRelease(
         string published, string version, string identity, string? surface,
-        string[] bundles, (string Name, byte[] Bytes)? sealedModule = null)
+        string[] bundles, (string Name, byte[] Bytes)? sealedModule = null, string? publicationSurface = null)
     {
-        File.WriteAllText(
-            Path.Combine(published, PublishedBundleCatalogue.ReleaseMarkerDirectoryName, version), identity);
+        WriteReleaseSurface(published, version, identity, surface);
         var source = Path.Combine(published, identity, "plugins");
         var moduleDirectory = Path.Combine(source, PublishedBundleCatalogue.ModulesDirectoryName);
         Directory.CreateDirectory(moduleDirectory);
@@ -616,8 +700,8 @@ public class ReleaseLinkGateTest : IDisposable
                     JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
             names.Add(bundle + ".zip");
         }
-        if (surface is not null)
-            File.WriteAllText(Path.Combine(source, PublishedBundleCatalogue.PlatformSurfaceFileName), surface);
+        if (publicationSurface is not null)
+            File.WriteAllText(Path.Combine(source, PublishedBundleCatalogue.PlatformSurfaceFileName), publicationSurface);
         File.WriteAllText(
             Path.Combine(source, ShippedPrebuiltBundles.CompletionSentinelFileName),
             string.Join('\n', names.Order(StringComparer.Ordinal)) + "\n");
