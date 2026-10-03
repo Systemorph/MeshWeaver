@@ -108,6 +108,7 @@ USAGE
 -----
   check-review-answered.py --self-test
   check-review-answered.py --repo O/R --pr N [--as-of 2026-09-14T14:04:21Z]
+  check-review-answered.py --repo O/R --pr N --arm-gate     (auto-arm.yml: may auto-merge be armed now?)
   check-review-answered.py --repo O/R --merge-group-ref refs/heads/gh-readonly-queue/main/pr-N-<sha>
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
@@ -265,11 +266,9 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
     degraded = ""
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
-    reported = pr.get("review_comments")
-    if not isinstance(reported, int):
-        reasons.append("the pull request did not report a `review_comments` count, so the comment listing cannot be proven complete")
-    elif len(comments) < reported:
-        reasons.append(f"the comment listing returned {len(comments)} comment(s) but the pull request reported {reported} before the listing began — the read is incomplete, so no thread can be called answered")
+    incomplete = listing_incomplete(pr, comments)
+    if incomplete:
+        reasons.append(incomplete)
 
     # 1 — has the review landed?
     mine = [r for r in reviews
@@ -308,21 +307,38 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             refused += [first_line(r.get("body")) for k, r in kinds if k == "refused"]
 
     # 2 — is every thread the reviewer started answered?
-    by_id = {c.get("id"): c for c in comments}
-
-    def root_of(c: dict) -> int | None:
-        return root_id_of(c, by_id)
-
-    visible = [c for c in comments if not_after(c.get("created_at"), as_of)]
-    roots = [c for c in visible if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))]
-    answered_roots = {root_of(c) for c in visible if c.get("in_reply_to_id") is not None and is_person(c.get("user"))}
-    unanswered = tuple(c for c in roots if c.get("id") not in answered_roots)
+    roots, unanswered = reviewer_threads(comments, as_of)
     notes.append(f"threads opened by the automatic reviewer: {len(roots)}, answered by a person: {len(roots) - len(unanswered)}")
     if unanswered:
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
                    refused=tuple(refused), degraded=degraded)
+
+
+def listing_incomplete(pr: dict, comments: list) -> str | None:
+    """Condition 3 — the reason the comment listing cannot be proven complete, or None. ONE
+    implementation, shared by the merge gate and the arm gate (`arm_readiness`)."""
+    reported = pr.get("review_comments")
+    if not isinstance(reported, int):
+        return "the pull request did not report a `review_comments` count, so the comment listing cannot be proven complete"
+    if len(comments) < reported:
+        return (f"the comment listing returned {len(comments)} comment(s) but the pull request reported {reported} "
+                "before the listing began — the read is incomplete, so no thread can be called answered")
+    return None
+
+
+def reviewer_threads(comments: list, as_of: str | None = None) -> tuple[list, tuple]:
+    """Condition 2 — (threads the automatic reviewer opened, those of them no PERSON replied to).
+    A reply is attributed to its thread by following `in_reply_to_id` to the root (`root_id_of`).
+    ONE implementation, shared by the merge gate and the arm gate, so the two can never disagree
+    about whether a finding was answered."""
+    by_id = {c.get("id"): c for c in comments}
+    visible = [c for c in comments if not_after(c.get("created_at"), as_of)]
+    roots = [c for c in visible if c.get("in_reply_to_id") is None and is_reviewer(c.get("user"))]
+    answered_roots = {root_id_of(c, by_id) for c in visible
+                      if c.get("in_reply_to_id") is not None and is_person(c.get("user"))}
+    return roots, tuple(c for c in roots if c.get("id") not in answered_roots)
 
 
 def waiver_holder(waiver: Waiver, as_of: str | None) -> tuple[bool, str]:
@@ -495,6 +511,78 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
     return (current - then).total_seconds()
 
 
+# ─────────────────────────────── the ARM gate (pure) ───────────────────────────────
+#
+# `auto-arm.yml` asks a DIFFERENT, stricter question than the merge gate above: not "may this merge"
+# but "may auto-merge be armed NOW". Measured 2026-10-03/04 on MeshWeaver.Plugins, where the review
+# is comment-only and nothing required waits for it: the lane re-armed on every push and on undraft,
+# BEFORE the internal review had run on the new head, so #2549, #2643, #2647 and Memex#641 merged
+# with findings nobody had answered or with no review at all, and agents disarmed by hand after
+# every push (#2791 twice in an hour). So the lane arms only when ALL of these hold:
+#
+#   1. not a draft;
+#   2. the internal reviewer's `internal-review` check run on the CURRENT head has COMPLETED, and it
+#      is not the neutral "Reviewer unavailable" degradation. That degradation releases the MERGE
+#      gate's review condition (so a down reviewer cannot hold every pull request), but it is not a
+#      review, and arming on it would land an unreviewed change with nobody having decided to —
+#      a person who wants that merges by hand;
+#   3. every thread the automatic reviewer opened has a reply from a person (`reviewer_threads`,
+#      the SAME predicate as the merge gate), read from a provably complete listing.
+#
+# No waiver and no Copilot review stand in for (2): the question is about THIS head's internal
+# review, which is exactly what a push invalidates.
+
+@dataclasses.dataclass(frozen=True)
+class ArmVerdict:
+    ready: bool
+    #: ONE line naming the first missing condition; empty when ready. It is what the lane writes to
+    #: its job summary, so it must say what would change the answer.
+    missing: str
+    notes: tuple[str, ...] = ()
+
+
+def internal_review_runs(check_runs, head_sha: str) -> list:
+    """The reviewer App's own `internal-review` runs on `head_sha`. Runs from any other App, under
+    any other name, or on another commit are not looked at."""
+    return [c for c in check_runs or ()
+            if c.get("name") == DEGRADATION_CHECK_NAME and is_degradation_app(c.get("app"))
+            and (not c.get("head_sha") or c.get("head_sha") == head_sha)]
+
+
+def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
+    number = pr.get("number")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    short = head[:10] or "(unknown)"
+    if pr.get("draft"):
+        return ArmVerdict(False, f"#{number} is a draft — a draft is never armed; mark it ready for review")
+    mine = internal_review_runs(check_runs, head)
+    running = [c for c in mine if c.get("status") != "completed"]
+    if running:
+        return ArmVerdict(False, f"the `{DEGRADATION_CHECK_NAME}` review of head {short} is still {running[0].get('status') or 'running'} "
+                                 f"(check run {running[0].get('id')}) — it re-evaluates when that run completes")
+    run = newest_internal_review_run(mine, None)
+    if run is None:
+        return ArmVerdict(False, f"the `{DEGRADATION_CHECK_NAME}` review has not run on the current head {short} — "
+                                 "every push needs its own review; it re-evaluates when that check run completes")
+    if degradation_of([run], None) is not None:
+        title = ((run.get("output") or {}).get("title") or "").strip()
+        return ArmVerdict(False, f"the reviewer was UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — "
+                                 "that is not a review, so auto-merge stays off; merge by hand once someone has reviewed it, "
+                                 "or push/re-kick for a real review")
+    notes = (f"`{DEGRADATION_CHECK_NAME}` completed on head {short}: {run.get('conclusion')} "
+             f"\"{((run.get('output') or {}).get('title') or '').strip()}\" (check run {run.get('id')})",)
+    incomplete = listing_incomplete(pr, comments)
+    if incomplete:
+        return ArmVerdict(False, incomplete + " — it re-evaluates on the next event", notes)
+    roots, unanswered = reviewer_threads(comments)
+    notes += (f"threads opened by the automatic reviewer: {len(roots)}, answered by a person: {len(roots) - len(unanswered)}",)
+    if unanswered:
+        first = unanswered[0]
+        return ArmVerdict(False, f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person "
+                                 f"(first: {first.get('html_url') or first.get('id')}) — reply to each (fixed, or why not)", notes)
+    return ArmVerdict(True, "", notes)
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -564,6 +652,50 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
             or len(check_runs) < listing["total_count"]:
         raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
     return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs
+
+
+def read_arm_inputs(gh: Gh, number: int):
+    """The arm gate's three reads — the pull request (its `review_comments` count FIRST, so it
+    bounds the listing), its review comments, and the `internal-review` runs on its head."""
+    pr = gh.api(f"pulls/{number}")
+    if not isinstance(pr, dict) or pr.get("number") != number:
+        raise ReadError(f"pulls/{number} did not return pull request #{number}")
+    comments = gh.api(f"pulls/{number}/comments?per_page=100", paginate=True)
+    head_sha = (pr.get("head") or {}).get("sha") or ""
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        raise ReadError(f"pulls/{number} reported no head sha")
+    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
+    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
+            or len(check_runs) < listing["total_count"]:
+        raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
+    return pr, comments, check_runs
+
+
+def run_arm_gate(repo: str, number: int) -> int:
+    """Prints the verdict, writes ONE line to the job summary and `ready=true|false` to
+    $GITHUB_OUTPUT. Exit 0 either way — not-ready is an answer, not a failure; a read that cannot
+    complete is NOT ready (never armed on a guess) and says so."""
+    try:
+        pr, comments, check_runs = read_arm_inputs(Gh(repo), number)
+        verdict = arm_readiness(pr, comments, check_runs)
+    except (ReadError, KeyError) as e:
+        verdict = ArmVerdict(False, f"cannot read #{number}'s review state, so it is not armed on a guess: {e}")
+        print(f"::warning::{verdict.missing}")
+    for n in verdict.notes:
+        print(f"  {n}")
+    line = (f"Ready to arm #{number}: internal review completed on the current head and every reviewer thread is answered."
+            if verdict.ready else f"Not armed #{number}: {verdict.missing}")
+    print(line)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"ready={'true' if verdict.ready else 'false'}\n")
+    return 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -1037,6 +1169,50 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
+    # ── the ARM gate (auto-arm.yml): arms only on a completed internal review of the CURRENT head,
+    # with every reviewer thread answered by a person, and never a draft. Each NO case names the
+    # condition it must fail ON, so a fixture cannot pass by failing for another reason.
+    HEAD = "a" * 40
+    def _ir(conclusion="success", title="No blocking findings", status="completed", sha=HEAD, crid=950,
+            at="2026-10-04T08:00:00Z"):
+        r = _check_run(conclusion=conclusion, title=title, status=status, crid=crid, at=at)
+        r["head_sha"] = sha
+        return r
+    def arm_case(name, ready, pr, comments, runs, says=""):
+        nonlocal failures
+        v = arm_readiness(pr, comments, runs)
+        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={'ARM' if ready else 'no arm: ' + says} "
+              f"got={'ARM' if v.ready else 'no arm: ' + v.missing}")
+    draft_pr = dict(_pr(0), draft=True)
+    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "has not run on the current head")
+    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "has not run on the current head")
+    arm_case("review still in progress -> no arm", False, _pr(0), [], [_ir(status="in_progress", conclusion=None)], "still in_progress")
+    arm_case("review neutral 'Reviewer unavailable' -> no arm", False, _pr(0), [], [_ir(conclusion="neutral", title=DEGRADED_TITLE)],
+             "UNAVAILABLE")
+    arm_case("another App's internal-review does not count", False, _pr(0), [],
+             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "has not run on the current head")
+    arm_case("unanswered bot thread -> no arm", False, _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
+             "1 of 1 thread(s)")
+    arm_case("a bot reply does not answer -> no arm", False, _pr(2),
+             [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, OTHER_BOT, 1)], [_ir()], "1 of 1 thread(s)")
+    arm_case("one of two threads answered -> no arm", False, _pr(3),
+             [_comment(1, INTERNAL_REVIEWER_USER), _comment(2, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1)], [_ir()],
+             "1 of 2 thread(s)")
+    arm_case("incomplete comment listing -> no arm", False, _pr(5), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
+             "listing returned")
+    arm_case("all answered (reply to a reply, via in_reply_to_id) -> ARM", True, _pr(3),
+             [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, INTERNAL_REVIEWER_USER, 1), _comment(12, PERSON, 11)], [_ir()])
+    arm_case("review completed, no findings -> ARM", True, _pr(0), [], [_ir()])
+    arm_case("findings-conclusion still counts as reviewed once answered -> ARM", True, _pr(2),
+             [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1)], [_ir(conclusion="failure", title="1 blocking finding")])
+    arm_case("a real round after a degradation -> ARM", True, _pr(0), [],
+             [_ir(conclusion="neutral", title=DEGRADED_TITLE, crid=940, at="2026-10-04T07:00:00Z"), _ir()])
+    arm_case("a degradation after a real round -> no arm", False, _pr(0), [],
+             [_ir(at="2026-10-04T07:00:00Z", crid=940), _ir(conclusion="neutral", title=DEGRADED_TITLE)], "UNAVAILABLE")
+    arm_case("draft -> no arm (even when reviewed and answered)", False, draft_pr, [], [_ir()], "is a draft")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -1068,6 +1244,9 @@ def main(argv=None) -> int:
     ap.add_argument("--repo", default=os.environ.get("GH_REPO"), help="owner/name (default: $GH_REPO)")
     ap.add_argument("--pr", help="pull request number")
     ap.add_argument("--merge-group-ref", help="a merge-queue head ref; the pull request number is read from it")
+    ap.add_argument("--arm-gate", action="store_true",
+                    help="answer auto-arm.yml's question instead — may auto-merge be armed NOW (see arm_readiness); "
+                         "writes ready=true|false to $GITHUB_OUTPUT and one line to the job summary, exit 0 either way")
     ap.add_argument("--as-of", help="evaluate as of this ISO-8601 UTC instant (e.g. a merged_at)")
     ap.add_argument("--settle-replies", type=int, default=0, metavar="SECONDS",
                     help="while unanswered threads are the ONLY complaint and a person replied less "
@@ -1087,6 +1266,14 @@ def main(argv=None) -> int:
     if bool(args.pr) == bool(args.merge_group_ref):
         print("::error::exactly one of --pr or --merge-group-ref is required — refusing to guess which pull request to judge")
         return 2
+    if args.arm_gate:
+        if not args.pr or args.merge_group_ref or args.as_of or args.wait_for_review or args.settle_replies:
+            print("::error::--arm-gate takes --repo and --pr only")
+            return 2
+        if not re.fullmatch(r"[1-9]\d*", args.pr):
+            print(f"::error::--pr must be a pull request number, got {args.pr!r}")
+            return 2
+        return run_arm_gate(args.repo, int(args.pr))
     if args.merge_group_ref:
         try:
             number = pr_from_queue_ref(args.merge_group_ref)
