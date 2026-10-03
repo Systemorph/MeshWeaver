@@ -34,6 +34,8 @@ public static class ServiceIdentitiesSettingsTab
     private const string ActDataId = "serviceIdentityAct";
     private const string ResultDataId = "serviceIdentityResult";
     private const string ListDataId = "serviceIdentityList";
+    private const string TokensDataId = "serviceIdentityTokens";
+    private const string SelectedTokenDataId = "serviceIdentitySelectedToken";
 
     /// <summary>The query every emission of the identity list is read from.</summary>
     internal const string IdentitiesQuery =
@@ -56,6 +58,8 @@ public static class ServiceIdentitiesSettingsTab
             ["scope"] = "",
             ["role"] = "Editor",
         });
+
+        host.UpdateData(SelectedTokenDataId, NoSelection(host.Localize("serviceIdentities.selectToken")));
 
         stack = stack
             .WithView(Controls.Title(host.Localize("serviceIdentities.title"), 2))
@@ -129,24 +133,15 @@ public static class ServiceIdentitiesSettingsTab
                 : Controls.Stack.WithWidth("100%").WithView(Controls.Markdown(markdown)))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
-        // The live list: every identity, then each one's tokens. A synced query — a create, a
-        // revoke or a new token re-emits it, no refresh trigger.
-        stack = stack.WithView(Controls.Title(host.Localize("serviceIdentities.listHeading"), 3));
-        stack = stack.WithView((h, _) => h.Hub.GetWorkspace()
-            .GetQuery("service-identities", IdentitiesQuery)
-            .Select(nodes => Rows(host, nodes))
-            .Select(rows => rows.Count == 0
-                ? (UiControl?)Controls.Markdown(host.Localize("serviceIdentities.none"))
-                : IdentityList(host, tokens, rows)));
-
-        return stack;
-    }
-
-    private static UiControl IdentityList(LayoutAreaHost host, ApiTokenService tokens, IReadOnlyList<IdentityRow> rows)
-    {
-        host.UpdateData(ListDataId, rows);
-        var list = Controls.Stack.WithWidth("100%")
-            .WithView(new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ListDataId)))
+        // The live lists — TEMPLATES (Doc/GUI/DataBinding → "Templates first, data later"): one grid
+        // of every identity, one grid of every identity's tokens, each declared at once and fed by a
+        // synced query (a create, a revoke or a new token re-emits it — no refresh trigger). A token
+        // is acted on by SELECTING its row, then Rotate / Revoke below the grid.
+        var failed = (Func<string, string>)(message => $"{host.Localize("serviceIdentities.error")} {message}");
+        stack = stack
+            .WithView(Controls.Title(host.Localize("serviceIdentities.listHeading"), 3))
+            .WithView(IdentityRowsFeed(host)
+                .BindGrid(ListDataId, host.Localize("serviceIdentities.none"), failed)
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.ObjectId).ToCamelCase() }
                     .WithTitle(host.Localize("serviceIdentities.column.id")))
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.Name).ToCamelCase() }
@@ -154,76 +149,146 @@ public static class ServiceIdentitiesSettingsTab
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.Status).ToCamelCase() }
                     .WithTitle(host.Localize("serviceIdentities.column.status")))
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.IssuedBy).ToCamelCase() }
-                    .WithTitle(host.Localize("serviceIdentities.column.issuedBy"))));
+                    .WithTitle(host.Localize("serviceIdentities.column.issuedBy"))))
+            .WithView(Controls.Title(host.Localize("serviceIdentities.tokensHeading"), 3))
+            .WithView(TokenRowsFeed(host, tokens)
+                .BindGrid(TokensDataId, host.Localize("serviceIdentities.noTokens"), failed)
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.ServiceId).ToCamelCase() }
+                    .WithTitle(host.Localize("serviceIdentities.column.id")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Label).ToCamelCase() }
+                    .WithTitle(host.Localize("serviceIdentities.field.label")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.HashPrefix).ToCamelCase() }
+                    .WithTitle(host.Localize("serviceIdentities.column.token")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Status).ToCamelCase() }
+                    .WithTitle(host.Localize("serviceIdentities.column.status")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Created).ToCamelCase() }
+                    .WithTitle(host.Localize("apiTokens.created")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Expires).ToCamelCase() }
+                    .WithTitle(host.Localize("apiTokens.expires")))
+                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.LastUsed).ToCamelCase() }
+                    .WithTitle(host.Localize("apiTokens.lastUsed")))
+                .WithClickAction(ctx =>
+                {
+                    if (ctx.Payload is DataGridCellClick { Item: { } item }
+                        && item.As<TokenRow>(ctx.Hub.JsonSerializerOptions, what: "service-identity token row") is { } row)
+                        ctx.Host.UpdateData(SelectedTokenDataId, row);
+                    return Task.CompletedTask;
+                }))
+            .WithView(TokenActions(host, tokens));
 
-        foreach (var row in rows)
-        {
-            var objectId = row.ObjectId;
-            list = list
-                .WithView(Controls.Title($"{row.Name} (`{objectId}`)", 4))
-                .WithView((h, _) => tokens.GetTokensForService(objectId)
-                    .Select(list => list.Count == 0
-                        ? (UiControl?)Controls.Markdown(host.Localize("serviceIdentities.noTokens"))
-                        : TokenRows(host, tokens, objectId, list)));
-        }
-        return list;
+        return stack;
     }
 
-    private static UiControl TokenRows(
-        LayoutAreaHost host, ApiTokenService tokens, string objectId, IReadOnlyList<ApiTokenInfo> list)
+    /// <summary>
+    /// Rotate / Revoke for the token selected in the grid. The selection is a bound label; the
+    /// buttons read it when clicked, and refuse — saying so — when nothing (or a revoked token) is
+    /// selected.
+    /// </summary>
+    private static UiControl TokenActions(LayoutAreaHost host, ApiTokenService tokens)
+        => Row()
+            .WithView(new LabelControl(new JsonPointerReference(
+                    LayoutAreaReference.GetDataPointer(SelectedTokenDataId, nameof(TokenRow.Display).ToCamelCase())))
+                .WithStyle("flex: 1;"))
+            .WithView(Controls.Button(host.Localize("serviceIdentities.rotate"))
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
+                {
+                    // Same term length as the token it replaces, counted from now.
+                    DateTimeOffset? expiresAt = token.ExpiresAt is { } old
+                        ? DateTimeOffset.UtcNow + (old - token.CreatedAt)
+                        : null;
+                    ServiceIdentities.Rotate(tokens, token.ServiceId, token.NodePath, token.Label, expiresAt)
+                        .Subscribe(
+                            result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
+                            ex => ctx.Host.UpdateData(ResultDataId,
+                                $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
+                })))
+            .WithView(Controls.Button(host.Localize("ui.revoke"))
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
+                    tokens.RevokeToken(token.NodePath).Subscribe(
+                        ok => ctx.Host.UpdateData(ResultDataId, ok
+                            ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
+                            : host.Localize("apiTokens.revokeFailed")),
+                        ex => ctx.Host.UpdateData(ResultDataId,
+                            $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}")))));
+
+    /// <summary>Hands the selected token to <paramref name="act"/>, or says that a live token has
+    /// to be selected first. The selection is client input, so it only says WHICH token: the token
+    /// handed on is the token feed's row as it is NOW (service id, node path and revoked flag from the
+    /// server), and a token the feed does not list, or one revoked since it was selected, is refused.</summary>
+    private static Task WithSelectedToken(
+        UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, Action<TokenRow> act)
+    {
+        // The slot is seeded with NoSelection when the tab is built, so it always holds a value.
+        ctx.Host.Stream.GetDataStream<TokenRow>(SelectedTokenDataId)
+            .Take(1)
+            .SelectMany(selected => CurrentToken(host, tokens, selected?.NodePath))
+            .Subscribe(token =>
+            {
+                if (token is null || token.IsRevoked)
+                    ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.selectToken"));
+                else
+                    act(token);
+            }, ex => ctx.Host.UpdateData(ResultDataId,
+                $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The token feed's row, as it is NOW, whose node path is <paramref name="nodePath"/>
+    /// — or null when no identity lists such a token.</summary>
+    internal static IObservable<TokenRow?> CurrentToken(LayoutAreaHost host, ApiTokenService tokens, string? nodePath)
+        => string.IsNullOrEmpty(nodePath)
+            ? Observable.Return<TokenRow?>(null)
+            : TokenRowsFeed(host, tokens).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.NodePath, nodePath, StringComparison.Ordinal)));
+
+    /// <summary>The feed half of the identity grid: the identity rows of every emission of the
+    /// synced identity query. Builds no control.</summary>
+    internal static IObservable<IReadOnlyList<IdentityRow>> IdentityRowsFeed(LayoutAreaHost host)
+        => host.Hub.GetWorkspace()
+            .GetQuery("service-identities", IdentitiesQuery)
+            .Select(nodes => Rows(host, nodes));
+
+    /// <summary>
+    /// The feed half of the token grid: every token of every identity, newest first per identity,
+    /// re-emitted when an identity or any of its tokens changes. Display values are resolved for the
+    /// viewer (their time zone, their language) when the feed is built. Builds no control.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<TokenRow>> TokenRowsFeed(LayoutAreaHost host, ApiTokenService tokens)
     {
         var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
         var never = host.Localize("apiTokens.never");
-        var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        foreach (var token in list)
-        {
-            var expired = token.ExpiresAt is { } end && end < DateTimeOffset.UtcNow;
-            var status = host.Localize(token.IsRevoked ? "apiTokens.status.revoked"
-                : expired ? "apiTokens.status.expired" : "apiTokens.status.active");
-            var row = Row().WithView(Controls.Markdown(
-                    $"**{token.Label}** · `{token.HashPrefix}` · {status}  \n"
-                    + $"{host.Localize("apiTokens.created")} {DisplayTimeExtensions.ToDisplayTime(token.CreatedAt, zoneId):yyyy-MM-dd}"
-                    + $" · {host.Localize("apiTokens.expires")} "
-                    + $"{(token.ExpiresAt is { } exp ? DisplayTimeExtensions.ToDisplayTime(exp, zoneId).ToString("yyyy-MM-dd") : never)}"
-                    + $" · {host.Localize("apiTokens.lastUsed")} "
-                    + $"{(token.LastUsedAt is { } used ? DisplayTimeExtensions.ToDisplayTime(used, zoneId).ToString("yyyy-MM-dd HH:mm") : never)}")
-                .WithStyle("flex: 1;"));
+        var revoked = host.Localize("apiTokens.status.revoked");
+        var expired = host.Localize("apiTokens.status.expired");
+        var active = host.Localize("apiTokens.status.active");
 
-            if (!token.IsRevoked)
-            {
-                var captured = token;
-                row = row
-                    .WithView(Controls.Button(host.Localize("serviceIdentities.rotate"))
-                        .WithAppearance(Appearance.Outline)
-                        .WithClickAction(ctx =>
-                        {
-                            // Same term length as the token it replaces, counted from now.
-                            DateTimeOffset? expiresAt = captured.ExpiresAt is { } old
-                                ? DateTimeOffset.UtcNow + (old - captured.CreatedAt)
-                                : null;
-                            ServiceIdentities.Rotate(tokens, objectId, captured.NodePath, captured.Label, expiresAt)
-                                .Subscribe(
-                                    result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
-                                    ex => ctx.Host.UpdateData(ResultDataId,
-                                        $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
-                            return Task.CompletedTask;
-                        }))
-                    .WithView(Controls.Button(host.Localize("ui.revoke"))
-                        .WithAppearance(Appearance.Outline)
-                        .WithClickAction(ctx =>
-                        {
-                            tokens.RevokeToken(captured.NodePath).Subscribe(
-                                ok => ctx.Host.UpdateData(ResultDataId, ok
-                                    ? $"{host.Localize("apiTokens.revoked")} **{captured.Label}**"
-                                    : host.Localize("apiTokens.revokeFailed")),
-                                ex => ctx.Host.UpdateData(ResultDataId,
-                                    $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}"));
-                            return Task.CompletedTask;
-                        }));
-            }
-            container = container.WithView(row);
+        TokenRow ToRow(IdentityRow identity, ApiTokenInfo token)
+        {
+            var isExpired = token.ExpiresAt is { } end && end < DateTimeOffset.UtcNow;
+            return new TokenRow(
+                identity.ObjectId,
+                token.Label,
+                token.HashPrefix,
+                token.IsRevoked ? revoked : isExpired ? expired : active,
+                DisplayTimeExtensions.ToDisplayTime(token.CreatedAt, zoneId).ToString("yyyy-MM-dd"),
+                token.ExpiresAt is { } exp ? DisplayTimeExtensions.ToDisplayTime(exp, zoneId).ToString("yyyy-MM-dd") : never,
+                token.LastUsedAt is { } used ? DisplayTimeExtensions.ToDisplayTime(used, zoneId).ToString("yyyy-MM-dd HH:mm") : never,
+                token.NodePath,
+                token.IsRevoked,
+                token.CreatedAt,
+                token.ExpiresAt,
+                $"{token.Label} · {token.HashPrefix} · {identity.Name} ({identity.ObjectId})");
         }
-        return container;
+
+        return IdentityRowsFeed(host)
+            .Select(identities => identities.Count == 0
+                ? Observable.Return<IReadOnlyList<TokenRow>>([])
+                : identities
+                    .Select(identity => tokens.GetTokensForService(identity.ObjectId)
+                        .Select(list => list.Select(token => ToRow(identity, token))))
+                    .CombineLatest(lists => (IReadOnlyList<TokenRow>)lists.SelectMany(l => l).ToList()))
+            .Switch();
     }
 
     /// <summary>The identity rows, ordered by object id. Pure over the query snapshot.</summary>
@@ -246,6 +311,18 @@ public static class ServiceIdentitiesSettingsTab
 
     /// <summary>One row of the identity grid — a plain record so the grid binds it directly.</summary>
     internal record IdentityRow(string ObjectId, string Name, string Status, string IssuedBy);
+
+    /// <summary>
+    /// One row of the token grid — every display column as text for the viewer, plus what Rotate and
+    /// Revoke need (<see cref="NodePath"/>, the term) and the selection label (<see cref="Display"/>).
+    /// </summary>
+    internal record TokenRow(
+        string ServiceId, string Label, string HashPrefix, string Status,
+        string Created, string Expires, string LastUsed,
+        string NodePath, bool IsRevoked, DateTimeOffset CreatedAt, DateTimeOffset? ExpiresAt, string Display);
+
+    /// <summary>The selection before a row is clicked: no token, and the hint as its label.</summary>
+    private static TokenRow NoSelection(string hint) => new("", "", "", "", "", "", "", "", false, default, null, hint);
 
     private static string TokenShownOnce(LayoutAreaHost host, TokenCreationResult result)
         => $"**{host.Localize("apiTokens.copyNow")}**\n\n```\n{result.RawToken}\n```";
