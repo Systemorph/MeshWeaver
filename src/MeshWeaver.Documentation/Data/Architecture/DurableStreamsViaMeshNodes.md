@@ -385,6 +385,7 @@ with this page; the adapter's one is corrected in its own repo.
 - [Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan) — the transport swap and the N+2 gate
 - [Event Subscriptions](/Doc/Architecture/EventSubscriptions) — the live + reconcile-on-start pattern
 - [Webhook Inbox](/Doc/Architecture/WebhookInbox) — the `_Inbox` node contract
+- [Durable Streams](/Doc/Architecture/DurableStreams) — the general form of row 4: a stream of saved item nodes, ordered and leased by its stream node's hub, consumed inside a hub with an acknowledged checkpoint
 - [Error Propagation & Wedges](/Doc/Architecture/ErrorPropagationAndWedges) — "an undeliverable
   delivery must surface as a `DeliveryFailure`, never as silence"
 - Issues: #1742, #2320, #2322, #2406, #2426, Plugins#777
