@@ -2,8 +2,10 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Reactive.Linq;
 using MeshWeaver.ContentCollections.Indexing;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
@@ -67,8 +69,14 @@ public static class DocumentPartPaths
     public static string PartId(int index)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(index);
+        // Six digits is the id's contract: ids sort in part order only while they all have the same
+        // width. 999,999 parts of 850 new characters each is ~850 million characters per document.
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(index, MaxPartIndex);
         return index.ToString("D6", CultureInfo.InvariantCulture);
     }
+
+    /// <summary>The largest part index a six-digit id can carry.</summary>
+    public const int MaxPartIndex = 999_999;
 
     /// <summary>The path of part <paramref name="index"/> of <paramref name="documentPath"/>.</summary>
     /// <param name="documentPath">The logical document's path.</param>
@@ -81,8 +89,13 @@ public static class DocumentPartPaths
     /// <param name="id">A node id from the part namespace.</param>
     /// <param name="index">The parsed index.</param>
     /// <returns>True when <paramref name="id"/> is a part id.</returns>
-    public static bool TryParsePartIndex(string? id, out int index) =>
-        int.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+    public static bool TryParsePartIndex(string? id, out int index)
+    {
+        index = 0;
+        // Canonical ids only: exactly six digits (`42` is not a part id, `000042` is).
+        return id is { Length: 6 } && id.All(char.IsAsciiDigit)
+               && int.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+    }
 
     /// <summary>The namespace holding the annotations attached to one part.</summary>
     /// <param name="partPath">The part's path.</param>
@@ -103,12 +116,15 @@ public static class DocumentPartPaths
     /// </summary>
     /// <param name="documentPath">The logical document's path.</param>
     /// <returns>Null when the placement is correct; otherwise the reason.</returns>
-    public static string? PartPlacementProblem(string documentPath)
+    /// <param name="mappings">The satellite layout of the host that stores the document; defaults to
+    /// <see cref="SatelliteTableMapping.Defaults"/>, which is also what every standard partition carries
+    /// (a host that re-maps segments passes its own list).</param>
+    public static string? PartPlacementProblem(string documentPath, IEnumerable<SatelliteTableMapping>? mappings = null)
     {
         if (string.IsNullOrWhiteSpace(documentPath))
             return "A document path is required.";
         var segments = PartPath(documentPath, 0).Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var winner = SatelliteTableMapping.Defaults
+        var winner = (mappings ?? SatelliteTableMapping.Defaults)
             .Where(m => segments.Contains(m.Segment, StringComparer.Ordinal))
             .OrderByDescending(m => m.Segment.Length)
             .ToArray();
@@ -230,6 +246,10 @@ public record DocumentLogTarget(
 /// document, so appends are serialised by the actor that owns it. Complete windows are written as
 /// <see cref="DocumentPart"/> nodes and indexed as soon as they are complete.
 /// </summary>
+/// <remarks>Gated by the framework before the handler runs: the sender needs <c>Update</c> on the
+/// document's path (<see cref="RequiresPermissionAttribute"/>), and the handler re-validates the
+/// placement and refuses a document that was never opened.</remarks>
+[RequiresPermission(Permission.Update)]
 public record AppendDocumentTextRequest : IRequest<AppendDocumentTextResponse>
 {
     /// <summary>The text to append. May be empty (an open or a completion carries no text).</summary>
@@ -311,7 +331,7 @@ public static class DocumentLogExtensions
         // existing document is success — open is idempotent.
         var create = meshService.CreateNode(node)
             .Select(_ => true)
-            .Catch((Exception ex) => IsAlreadyExists(ex)
+            .Catch((Exception ex) => ex.IsNodeAlreadyExists()
                 ? Observable.Return(true)
                 : Observable.Throw<bool>(ex));
         return create.SelectMany(_ => hub.AppendToDocument(path, new AppendDocumentTextRequest { Init = target }))
@@ -364,6 +384,4 @@ public static class DocumentLogExtensions
     public static bool SupportsDocumentLogs(this IMessageHub hub) =>
         hub.ServiceProvider.GetService<DocumentLogSupport>() is not null;
 
-    private static bool IsAlreadyExists(Exception ex) =>
-        ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase);
 }

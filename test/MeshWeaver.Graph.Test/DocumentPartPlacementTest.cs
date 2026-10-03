@@ -63,11 +63,41 @@ public class DocumentPartPlacementTest
         SatelliteTableMapping.OwnerOfSatellitePath(annotation).Should().Be(doc);
     }
 
+    [Theory]
+    // Under a main node the document is a main node.
+    [InlineData("Admin/Jobs/build-42/logs", "mesh_nodes")]
+    // Under a satellite it lives WITH that satellite — written and read by the same path resolution,
+    // so it is found — while its parts still go to their own table.
+    [InlineData("rbuergi/_Thread/t-1/transcripts", "threads")]
+    [InlineData("Admin/_Activity/build-42/logs", "activities")]
+    public void TheLogicalDocument_LivesWhereItsPathResolves(string collection, string table)
+    {
+        var doc = DocumentPaths.For(collection, "run.log");
+        Partition.ResolveTable(doc).Should().Be(table);
+        Partition.ResolveTable(DocumentPartPaths.PartPath(doc, 0)).Should().Be(DocumentPartPaths.PartTable);
+    }
+
     [Fact]
-    public void TheLogicalDocument_StaysInTheMainTable()
+    public void PartIds_AreSixDigitsOnly_SoTheySortInPartOrder()
+    {
+        DocumentPartPaths.PartId(DocumentPartPaths.MaxPartIndex).Should().Be("999999");
+        Assert.Throws<ArgumentOutOfRangeException>(() => DocumentPartPaths.PartId(DocumentPartPaths.MaxPartIndex + 1));
+        DocumentPartPaths.TryParsePartIndex("42", out _).Should().BeFalse("only the canonical six-digit id is a part id");
+        DocumentPartPaths.TryParsePartIndex("0000042", out _).Should().BeFalse();
+        DocumentPartPaths.TryParsePartIndex("000042", out var index).Should().BeTrue();
+        index.Should().Be(42);
+    }
+
+    [Fact]
+    public void APlacementGuard_ReadsTheHostsOwnLayout_WhenGiven()
     {
         var doc = DocumentPaths.For("Admin/Jobs/build-42/logs", "run.log");
-        Partition.ResolveTable(doc).Should().Be("mesh_nodes");
+        // A host that maps the part segment elsewhere: the guard must see it, not the defaults.
+        var remapped = SatelliteTableMapping.Defaults
+            .Select(m => m.Segment == DocumentPartPaths.PartSegment ? m with { Table = "elsewhere" } : m)
+            .ToArray();
+        DocumentPartPaths.PartPlacementProblem(doc).Should().BeNull();
+        DocumentPartPaths.PartPlacementProblem(doc, remapped).Should().Contain("elsewhere");
     }
 
     [Theory]
