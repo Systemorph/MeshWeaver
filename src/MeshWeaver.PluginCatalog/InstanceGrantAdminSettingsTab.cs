@@ -146,12 +146,12 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("180px"))
             .WithView(Controls.Button(host.Localize("instancePlan.promote"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(PlanFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(PlanFormDataId)
                         .Take(1)
-                        .Subscribe(data => Promote(ctx.Host, host, data));
-                    return Task.CompletedTask;
+                        .Do(data => Promote(ctx.Host, host, data))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
 
         return Controls.Stack
@@ -267,12 +267,12 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("220px"))
             .WithView(Controls.Button(host.Localize("registrationKeys.mint"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Mint(ctx.Host, host, data));
-                    return Task.CompletedTask;
+                        .Do(data => Mint(ctx.Host, host, data))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(new TextFieldControl(new JsonPointerReference("keyId"))
             {
@@ -281,21 +281,21 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("160px"))
             .WithView(Controls.Button(host.Localize("registrationKeys.revoke"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: true));
-                    return Task.CompletedTask;
+                        .Do(data => Revoke(ctx.Host, host, data, revoked: true))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(Controls.Button(host.Localize("registrationKeys.restore"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: false));
-                    return Task.CompletedTask;
+                        .Do(data => Revoke(ctx.Host, host, data, revoked: false))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
     }
 
@@ -457,21 +457,21 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("130px"))
             .WithView(Controls.Button(host.Localize("instanceGrants.grant"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
                         .Take(1)
-                        .Subscribe(data => Apply(ctx.Host, host, data, revoke: false));
-                    return Task.CompletedTask;
+                        .Do(data => Apply(ctx.Host, host, data, revoke: false))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(Controls.Button(host.Localize("instanceGrants.revoke"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
                         .Take(1)
-                        .Subscribe(data => Apply(ctx.Host, host, data, revoke: true));
-                    return Task.CompletedTask;
+                        .Do(data => Apply(ctx.Host, host, data, revoke: true))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
 
         return Controls.Stack

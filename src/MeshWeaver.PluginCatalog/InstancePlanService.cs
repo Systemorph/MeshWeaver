@@ -26,8 +26,6 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanService> logger)
 {
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
-
     /// <summary>
     /// The path of the instance node registered under <paramref name="instanceId"/>, or null.
     /// A listing query, which is the valid shape for "which node carries this id": instances live
@@ -57,7 +55,12 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
         return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
             .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(ReadTimeout)
+            // 🚨 No timer of its own (#5894). This lookup used to carry a 10 s Timeout, written when
+            // the fan-in's Initial had no bound and an unanswered provider hung its caller for ever.
+            // The fan-in now FAULTS at its own budget (QueryProviderStalledException at
+            // MeshOperationOptions.QueryInitialBudget, 15 s on the default ladder), so the local
+            // 10 s was a second, SHORTER bound on the same wait: the form gave up while the query
+            // was still legitimately inside its budget. One bound, the query's.
             .Select(change => change.Items
                 // The key-hash INDEX rows share the node type but live under the global index
                 // namespace and carry a hash prefix as their id — they never match an instance id,

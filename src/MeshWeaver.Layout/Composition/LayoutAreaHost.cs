@@ -184,7 +184,13 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(_ => BuildInitialization(
                     context, isDefaultArea, resolvedArea, accessService, capturedAccessContext, ctorLogger))
-                .WithExceptionCallback(FailRendering));
+                .WithExceptionCallback(FailRendering)
+                // A layout area is rendered once per subscriber, for that subscriber. A click, a
+                // blur, a dialog dismissal or an edited value on it is therefore accepted only from
+                // the identity it was rendered for — the subscribe delivery's, or (a stream opened
+                // without a subscribe) the viewer captured above. Anything else is refused by the
+                // stream before OnClick / OnBlur / OnCloseDialog or the data update can run.
+                .WithInputFromSubscriberOnly(capturedAccessContext));
         Reference = reference;
 
         // 🚨 THIS IS THE LINE THAT NRE'd IN PRODUCTION (Systemorph/MeshWeaver#3321) — the whole
@@ -662,7 +668,7 @@ public record LayoutAreaHost : IDisposable
         }
         catch (Exception ex)
         {
-            FailRequest(ex, request);
+            FailClick(ex, request);
             return request.Processed();
         }
 
@@ -679,7 +685,7 @@ public record LayoutAreaHost : IDisposable
         pendingClickActions.Add(subscription);
         subscription.Disposable = completion.Subscribe(
             _ => { },
-            ex => { FailRequest(ex, request); pendingClickActions.Remove(subscription); },
+            ex => { FailClick(ex, request); pendingClickActions.Remove(subscription); },
             () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
         return request.Processed();
     }
@@ -739,6 +745,22 @@ public record LayoutAreaHost : IDisposable
     {
         Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// A click action that threw, or whose reactive completion errored: reported with the area and
+    /// hub it belongs to, then refused to the clicking client — whose button leaves its pending state
+    /// and shows the refusal (<c>UserActionSubmission</c>'s <c>onRefused</c>). This is the ONE surface
+    /// a click-time fault reaches the person through; a handler composes its one-off reads into the
+    /// observable it returns (<c>WithReactiveClickAction</c>) rather than subscribing them itself
+    /// with no error arm, where a fault would be rethrown on whatever thread produced it.
+    /// </summary>
+    private void FailClick(Exception exception, IMessageDelivery<ClickedEvent> request)
+    {
+        logger.LogWarning(exception,
+            "Click action on area {Area} of {Hub} failed — refused to the client: {Message}",
+            request.Message.Area, Hub.Address, exception.Message);
+        Hub.Post(new DeliveryFailure(request, exception.Message), o => o.ResponseFor(request));
     }
 
     private Task FailRequest(Exception? exception, IMessageDelivery request)
@@ -1141,8 +1163,159 @@ public record LayoutAreaHost : IDisposable
     /// <typeparam name="T">The type of data items emitted by the stream.</typeparam>
     /// <param name="id">The key in the Data collection where each emission is stored.</param>
     /// <param name="stream">The observable source to subscribe to.</param>
+    /// <remarks>
+    /// A fault of <paramref name="stream"/> is SURFACED on this host's area (see
+    /// <see cref="FeedData{T}"/>) — it is never left to Rx's default <c>OnError</c>, which rethrows
+    /// on the producer's thread and, off a pool thread, takes the process down (#5650's shape).
+    /// </remarks>
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
-        => RegisterForDisposal(id, stream.Subscribe(x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x!))));
+        => RegisterForDisposal(id,
+            FeedData(resolvedArea, id, stream, x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x!))));
+
+    /// <summary>
+    /// 🚨 The ONE way the layout machinery subscribes a DATA FEED — a stream whose values are
+    /// written into <c>/data/{dataId}</c> for a bound control to read. It exists because every such
+    /// subscription used to be <c>feed.Subscribe(onNext)</c> with NO error arm: a feed that faulted
+    /// (a query stall, a projection throwing on an empty cube, a denied read) reached Rx's default
+    /// <c>OnError</c>, which RETHROWS on whatever thread delivered the fault — off the thread pool
+    /// that is an unhandled exception, and it took memex-cloud replicas down in #5650.
+    ///
+    /// <para>A fault now ends in exactly one of two VISIBLE outcomes, never a swallow:</para>
+    /// <list type="bullet">
+    ///   <item>DURING Subscribe (a cold feed that throws at once): it is RETHROWN to the caller,
+    ///   which is a view builder or a control's buildup — so the existing area-error path renders
+    ///   it, exactly as if the view had thrown itself.</item>
+    ///   <item>AFTER Subscribe returned (the production shape — the fault arrives later, on another
+    ///   thread): it is logged with the area and the data id, classified like a render fault, and
+    ///   the area's control is replaced by the standard localized error frame
+    ///   (<see cref="CreateRenderErrorControl"/>).</item>
+    /// </list>
+    /// <para>A faulted Rx subscription is terminal; the area RECOVERS by being rendered again (a
+    /// parent re-emission or the client's resubscribe), which re-runs the feed. There is deliberately
+    /// no retry here — re-subscribing a feed that just stalled is the storm shape.</para>
+    /// </summary>
+    /// <typeparam name="T">The feed's value type.</typeparam>
+    /// <param name="area">The area whose control reads this feed's data — where a fault is shown.
+    /// <c>null</c> only where the caller cannot name its area (a read-only label built off the host's
+    /// own data stream): a later fault is then logged, at its classified level, and not drawn.</param>
+    /// <param name="dataId">The <c>/data</c> key the feed writes; named in the fault report.</param>
+    /// <param name="feed">The data feed.</param>
+    /// <param name="onNext">What to do with each value; defaults to <see cref="UpdateData"/>.</param>
+    /// <returns>The feed subscription; the caller registers it for disposal.</returns>
+    internal IDisposable FeedData<T>(string? area, string dataId, IObservable<T> feed, Action<T>? onNext = null)
+    {
+        var subscription = SubscribeFeed(feed, area, dataId, onNext ?? (x => UpdateData(dataId, x)),
+            out var synchronousFault);
+        if (synchronousFault is null)
+            return subscription;
+        subscription.Dispose();
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(synchronousFault).Throw();
+        return subscription; // unreachable — Throw() never returns
+    }
+
+    /// <summary>
+    /// Subscribes <paramref name="feed"/> with an error arm. A fault delivered AFTER Subscribe
+    /// returned goes to <see cref="FailFeed"/>; one delivered DURING Subscribe is handed back in
+    /// <paramref name="synchronousFault"/> so the caller can render it into the store it is building
+    /// (a <c>Stream.Update</c> issued mid-render would be overwritten by the render's own result).
+    /// </summary>
+    internal IDisposable SubscribeFeed<T>(
+        IObservable<T> feed, string? area, string dataId, Action<T> onNext, out Exception? synchronousFault)
+    {
+        var latch = new FeedFaultLatch();
+        var subscription = feed.Subscribe(onNext, ex =>
+        {
+            if (!latch.TryClaimForSubscriber(ex))
+                FailFeed(ex, area, dataId);
+        });
+        synchronousFault = latch.CloseSubscribePhase();
+        return subscription;
+    }
+
+    /// <summary>
+    /// Renders a feed fault that arrived while a control's buildup was still subscribing: the
+    /// control the buildup just wrote at <paramref name="context"/>'s area (and its child views)
+    /// is replaced by the error frame, in the store being built, so the render's own result
+    /// carries it.
+    /// </summary>
+    internal EntityStoreAndUpdates RenderFeedFault(
+        Exception ex, RenderingContext context, EntityStore store, string dataId)
+    {
+        var ownScopeDisposed = Hub.IsServiceScopeDisposed();
+        LogFeedFault(ex, context.Area, dataId, ownScopeDisposed);
+        if (ownScopeDisposed)
+            return new(store, [], Stream.StreamId);
+        var removed = RemoveViews(store, context.Area);
+        var rendered = removed.Store.UpdateControl(context.Area, CreateRenderErrorControl(ex));
+        return new(rendered.Store, removed.Updates.Concat(rendered.Updates), Stream.StreamId);
+    }
+
+    /// <summary>A feed fault that arrived after its subscription was live: report it, show it.</summary>
+    private void FailFeed(Exception ex, string? area, string dataId)
+    {
+        var ownScopeDisposed = Hub.IsServiceScopeDisposed();
+        LogFeedFault(ex, area, dataId, ownScopeDisposed);
+        // 🚨 This runs INSIDE the feed's OnError, on the producer's thread: anything thrown while
+        // building or posting the error frame (a teardown racing past the scope probe, the frame's
+        // localisation faulting) would rethrow at the producer — the very crash this arm removes.
+        // The fault itself is already reported above; a failure to DRAW it is reported here, at
+        // Error, the same way RenderRenderingError guards its placeholder.
+        try
+        {
+            SurfaceRenderError(ex, area, ownScopeDisposed);
+        }
+        catch (Exception surfaceEx)
+        {
+            logger.LogError(surfaceEx,
+                "Could not surface the fault of data feed {DataId} on area {Area} on {Hub}",
+                dataId, area ?? "(default)", (object?)Stream.TryGetHub()?.Address ?? "(stream torn down)");
+        }
+    }
+
+    private void LogFeedFault(Exception ex, string? area, string dataId, bool ownScopeDisposed)
+    {
+        var areaName = area ?? "(default)";
+        if (AreaErrorClassifier.IsHubDisposalRace(ex, () => ownScopeDisposed))
+            // Routine lifecycle, not a fault (#2255) — same classification as a render.
+            logger.LogDebug(ex,
+                "Data feed {DataId} of area {Area} on {Hub} raced a hub disposal — transient",
+                dataId, areaName, Hub.Address);
+        else if (AreaErrorClassifier.IsAccessDenied(ex) || AreaErrorClassifier.IsNodeGoneNotFound(ex))
+            // A user-action / content outcome, not an engineering fault — must not file an incident.
+            logger.LogWarning(ex,
+                "Data feed {DataId} of area {Area} on {Hub} was refused: {Message}",
+                dataId, areaName, Hub.Address, ex.Message);
+        else
+            logger.LogError(ex,
+                "Data feed {DataId} of area {Area} on {Hub} faulted — the area shows the error and "
+                + "re-binds when it is rendered again",
+                dataId, areaName, Hub.Address);
+    }
+
+    /// <summary>
+    /// Phase latch for <see cref="SubscribeFeed{T}"/>: tells a fault raised INSIDE Subscribe (handed
+    /// back to the subscriber) from one raised after it (surfaced through the stream). A flag, not a
+    /// gate — nothing ever waits on it.
+    /// </summary>
+    private sealed class FeedFaultLatch
+    {
+        private const int Subscribing = 0;
+        private const int Live = 1;
+        private const int FaultedWhileSubscribing = 2;
+        private int phase;
+        private Exception? fault;
+
+        /// <summary>True when the fault arrived during Subscribe and the subscriber now owns it.</summary>
+        internal bool TryClaimForSubscriber(Exception ex)
+        {
+            fault = ex;
+            return Interlocked.CompareExchange(ref phase, FaultedWhileSubscribing, Subscribing) == Subscribing;
+        }
+
+        /// <summary>Ends the Subscribe phase; returns the fault raised during it, if any.</summary>
+        internal Exception? CloseSubscribePhase()
+            => Interlocked.CompareExchange(ref phase, Live, Subscribing) == Subscribing ? null : fault;
+    }
 
     /// <summary>
     /// Applies <paramref name="update"/> to the specified <paramref name="collection"/> in the
@@ -1530,6 +1703,17 @@ public record LayoutAreaHost : IDisposable
                 area ?? "(default)", Hub.Address);
         else
             logger.LogWarning(ex, "Rendering failed for area {Area} on {Hub}", area ?? "(default)", Hub.Address);
+        SurfaceRenderError(ex, area, ownScopeDisposed);
+    }
+
+    /// <summary>
+    /// Replaces the control at <paramref name="area"/> with the localized error frame for
+    /// <paramref name="ex"/> and stops the progress spinner. The visible half of
+    /// <see cref="FailRendering(Exception, string?)"/> and of a faulted data feed; the caller has
+    /// already logged. Nothing to do on a dead scope (see <see cref="RenderRenderingError"/>).
+    /// </summary>
+    private void SurfaceRenderError(Exception ex, string? area, bool ownScopeDisposed)
+    {
         if (string.IsNullOrEmpty(area) || ownScopeDisposed)
             return;
 

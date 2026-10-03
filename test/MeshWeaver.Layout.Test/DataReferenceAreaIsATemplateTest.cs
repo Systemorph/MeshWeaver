@@ -55,19 +55,19 @@ public class DataReferenceAreaIsATemplateTest(ITestOutputHelper output) : HubTes
             CreateHostAddress(), reference);
 
         // 1. The template arrives while the data source has not emitted anything.
-        var root = await stream.GetControlStream(reference.Area!)
+        var root = await stream.GetControlStream(DataPathViews.DataAreaName)
             .Should().Within(10.Seconds()).Match(c => c is StackControl,
                 "the $Data area is a template: its controls do not wait for the data");
-        var areas = ((StackControl)root!).Areas;
+        var areas = root.Should().BeOfType<StackControl>().Subject.Areas;
         areas.Should().HaveCount(2, "a markdown block and the 'Load all' button");
 
-        var markdown = await stream.GetControlStream(areas[0].Area.ToString()!)
+        var markdown = await stream.GetControlStream(areas[0].Area.ToString() ?? "")
             .Should().Within(10.Seconds()).Match(c => c is MarkdownControl);
-        var slot = ((MarkdownControl)markdown!).Markdown.Should().BeOfType<JsonPointerReference>(
+        var slot = markdown.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().BeOfType<JsonPointerReference>(
             "the block's text is a POINTER into /data, never the JSON baked in on the hub").Subject;
-        var button = await stream.GetControlStream(areas[1].Area.ToString()!)
+        var button = await stream.GetControlStream(areas[1].Area.ToString() ?? "")
             .Should().Within(10.Seconds()).Match(c => c is ButtonControl);
-        ((ButtonControl)button!).Style.Should().BeOfType<JsonPointerReference>(
+        button.Should().BeOfType<ButtonControl>().Subject.Style.Should().BeOfType<JsonPointerReference>(
             "the button's visibility is bound — it appears only when the projection truncates");
 
         var view = stream.GetDataStream<JsonElement>(
@@ -86,7 +86,7 @@ public class DataReferenceAreaIsATemplateTest(ITestOutputHelper output) : HubTes
         await view.Where(v => Markdown(v)?.Contains("Renamed Task") == true)
             .Should().Within(10.Seconds()).Emit("a later change of the data reaches the same slot");
 
-        var current = await stream.GetControlStream(reference.Area!)
+        var current = await stream.GetControlStream(DataPathViews.DataAreaName)
             .Should().Within(10.Seconds()).Emit();
         current.Should().BeOfType<StackControl>()
             .Which.Areas.Select(a => a.Area.ToString()).Should().Equal(areas.Select(a => a.Area.ToString()),

@@ -2596,37 +2596,115 @@ public partial class MeshOperations
     }
 
     /// <summary>
-    /// Attempts to repair common JSON issues from LLM output:
-    /// - Truncated strings (unclosed quotes/braces)
-    /// - Unescaped control characters inside strings
+    /// Repairs the two JSON defects model-written tool payloads actually carry, and nothing else:
+    /// <list type="number">
+    /// <item><b>Missing closers at the END.</b> A payload one or two <c>}</c>/<c>]</c> short
+    /// (<c>{"content":{"policy":"None"}</c>) fails <c>System.Text.Json</c> with
+    /// <i>"Expected depth to be zero at the end of the JSON payload"</i>. The containers still open
+    /// when the text ends — counted OUTSIDE string literals, honouring <c>\"</c> and <c>\\</c>
+    /// escapes — are closed in reverse order of opening.</item>
+    /// <item><b>Trailing junk after a complete value</b> (a stray fence or a sentence): the longest
+    /// prefix ending in a closer that parses.</item>
+    /// </list>
+    /// <para><b>It never changes what a parseable payload means</b>, and never guesses inside one:
+    /// valid JSON is returned untouched; text that ends INSIDE a string (a truncated value), has a
+    /// closer of the wrong kind or one too many, is left alone by the closer step. A candidate is
+    /// accepted only when it parses; otherwise the ORIGINAL text is returned, so the caller's parse
+    /// reports the original error, never one about a repair the caller did not write.</para>
+    /// <para>Internal (not private) so the repair rules are measured directly
+    /// (<c>RepairJsonTest</c>); every JSON-taking tool body — <c>create</c>, <c>update</c>,
+    /// <c>patch</c>, <c>delete</c> — routes its payload through it, whether it arrived over MCP or
+    /// as an agent tool call.</para>
     /// </summary>
-    private static string RepairJson(string json)
+    internal static string RepairJson(string json)
     {
         if (string.IsNullOrEmpty(json))
             return json;
 
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
+        if (Parses(json))
             return json;
-        }
-        catch (JsonException) { }
+
+        var closed = AppendMissingClosers(json);
+        if (closed is not null && Parses(closed))
+            return closed;
 
         for (var i = json.Length - 1; i > 0; i--)
         {
             if (json[i] is '}' or ']')
             {
                 var candidate = json[..(i + 1)];
-                try
-                {
-                    using var doc = JsonDocument.Parse(candidate);
+                if (Parses(candidate))
                     return candidate;
-                }
-                catch (JsonException) { }
             }
         }
 
         return json;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="json"/> outside string literals and returns it with the closers of the
+    /// containers still open at the end appended (innermost first), or <c>null</c> when nothing is
+    /// open or the text cannot be balanced by appending alone — it ends inside a string, a closer
+    /// does not match its opener, or there are more closers than openers.
+    /// </summary>
+    private static string? AppendMissingClosers(string json)
+    {
+        var open = ImmutableStack<char>.Empty;
+        var inString = false;
+        var escaped = false;
+
+        foreach (var c in json)
+        {
+            if (inString)
+            {
+                if (escaped)
+                    escaped = false;
+                else if (c == '\\')
+                    escaped = true;
+                else if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    open = open.Push('}');
+                    break;
+                case '[':
+                    open = open.Push(']');
+                    break;
+                case '}' or ']':
+                    if (open.IsEmpty || open.Peek() != c)
+                        return null;
+                    open = open.Pop();
+                    break;
+            }
+        }
+
+        if (inString || open.IsEmpty)
+            return null;
+
+        var builder = new System.Text.StringBuilder(json.TrimEnd());
+        foreach (var closer in open)
+            builder.Append(closer);
+        return builder.ToString();
+    }
+
+    private static bool Parses(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -2884,7 +2962,7 @@ public partial class MeshOperations
             List<string>? pathList;
             try
             {
-                pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
+                pathList = JsonSerializer.Deserialize<List<string>>(RepairJson(paths), hub.JsonSerializerOptions);
             }
             catch (JsonException ex)
             {

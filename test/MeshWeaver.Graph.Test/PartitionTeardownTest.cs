@@ -51,6 +51,9 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
 
         public string? FaultDropFor { get; set; }
 
+        /// <summary>Observes each drop as it starts — a probe of what holds while the store is dropped.</summary>
+        public Action<string>? OnDrop { get; set; }
+
         public bool IsProvisioned(string ns) => provisioned.ContainsKey(ns);
 
         public IObservable<System.Reactive.Unit> EnsurePartitionProvisioned(string ns) => Observable.Defer(() =>
@@ -64,6 +67,7 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
 
         public IObservable<System.Reactive.Unit> DeletePartition(string ns) => Observable.Defer(() =>
         {
+            OnDrop?.Invoke(ns);
             if (string.Equals(ns, FaultDropFor, StringComparison.OrdinalIgnoreCase))
             {
                 events.Enqueue($"drop-faulted:{ns}");
@@ -186,6 +190,49 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// 🚨 THE OUTCOME IS DELIVERED AFTER THE CLAIM IS RELEASED. The outcome is the caller's "torn down"
+    /// signal, and a caller may act on it at once — the live <c>DeleteSpace</c> probe's cleanup issues a
+    /// second, idempotent teardown of the same partition. Under <c>Observable.Using</c> the claim was
+    /// released only after the subscriber had processed the outcome, so that follow-up was refused with
+    /// "a deletion … is already in flight — one teardown at a time" (MeshWeaver.Plugins#2651, Gate shard
+    /// 1/3, intermittent because the probe hops through an inventory read first). Here the follow-up is
+    /// subscribed SYNCHRONOUSLY inside the outcome's delivery, which is the race with the hop removed:
+    /// it fails every time if the claim is still held there.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AFollowUpTeardownIssuedOnTheOutcome_IsNotRefusedAsInFlight()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = await Seed(ct, descendants: 3);
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        var heldDuringDrop = false;
+        Store.OnDrop = ns => heldDuringDrop |= string.Equals(ns, partition, StringComparison.OrdinalIgnoreCase)
+                                             && registry.IsUnderActiveDeletion(ns, out _);
+        try
+        {
+            var result = await Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: first teardown")
+                    .Select(first => (first, inFlightAtDelivery: registry.IsUnderActiveDeletion(partition, out _)))
+                    .SelectMany(r => Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: follow-up on the outcome"))
+                        .Select(second => (r.first, r.inFlightAtDelivery, second: (PartitionTeardownOutcome?)second, failure: (Exception?)null))
+                        .Catch((Exception ex) => Observable.Return((r.first, r.inFlightAtDelivery, second: (PartitionTeardownOutcome?)null, failure: (Exception?)ex)))))
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+            Output.WriteLine($"first={result.first} inFlightAtDelivery={result.inFlightAtDelivery} second={result.second} failure={result.failure?.Message}");
+
+            heldDuringDrop.Should().BeTrue("CONTROL: the claim IS held while the store is dropped — the scope is armed");
+            result.inFlightAtDelivery.Should().BeFalse("the claim is released before the outcome reaches the caller");
+            result.failure.Should().BeNull("a follow-up teardown issued on the outcome is idempotent and must not be refused as in flight");
+            var second = result.second;
+            Assert.NotNull(second);
+            second.RecordDeleted.Should().BeFalse("the follow-up finds the record already gone — it is a no-op, not a second teardown");
+            await AssertNothingLeft(partition, ct);
+        }
+        finally
+        {
+            Store.OnDrop = null;
+        }
+    }
+
+    /// <summary>
     /// A drop that faults keeps the record (the retry handle), lifts the tombstone (the partition is still
     /// there) and propagates the cause.
     /// </summary>
@@ -197,10 +244,17 @@ public class PartitionTeardownTest(ITestOutputHelper output) : MonolithMeshTestB
         Store.FaultDropFor = partition;
         try
         {
+            var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+            var inFlightAtFailure = true;
             var failure = await Access.RunAsSystem(() => Mesh.TearDownPartition(partition, "test: faulted drop"))
                 .Select(_ => (Exception?)null)
-                .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+                .Catch((Exception ex) =>
+                {
+                    inFlightAtFailure = registry.IsUnderActiveDeletion(partition, out _);
+                    return Observable.Return<Exception?>(ex);
+                })
                 .Timeout(TestTimeouts.Convergence).Await(ct);
+            inFlightAtFailure.Should().BeFalse("the claim is released before the failure reaches the caller, so a retry on it is not refused");
             failure.Should().NotBeNull();
             failure!.Message.Should().Contain("unreachable");
             var record = await Persistence.Read($"{PartitionNodeType.Namespace}/{partition}", Mesh.JsonSerializerOptions)
