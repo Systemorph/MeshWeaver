@@ -244,38 +244,64 @@ public static class CouponAdminSettingsTab
 
     /// <summary>
     /// The coupon list — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid
-    /// is declared at once and fed by <see cref="CouponRowsFeed"/>. A click on a coupon's row opens
-    /// its node page, where the Store/Coupon type's own Edit / Delete actions live.
+    /// is declared at once and fed by <see cref="CouponRowsFeed"/>. Each row's Code cell is a button
+    /// labelled with its code that opens that coupon's node page, where the Store/Coupon type's own
+    /// Edit / Delete actions live — the per-row button of the baked list, restored as a ROW-SCOPED
+    /// ACTION (Doc/GUI/DataBinding → "Row-scoped actions"): ONE button declared in a template
+    /// column, and the click says which row it came from.
     /// </summary>
     private static UiControl CouponList(LayoutAreaHost host)
         => Controls.Stack
-            .WithView(CouponRowsFeed(host)
-                .BindGrid(CouponListDataId, host.Localize("coupons.none"),
-                    message => host.Localize("coupons.listFailed", message))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnCode")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemableOn")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnPrice")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnValid")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemed")))
-                .WithColumn(new PropertyColumnControl<string>
-                    { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
-                .Resizable()
-                .WithClickAction(ctx =>
-                {
-                    if (ctx.Payload is DataGridCellClick { Item: { } item }
-                        && item.As<CouponRow>(ctx.Hub.JsonSerializerOptions, what: "coupon row") is { Code.Length: > 0 } row)
-                        ctx.NavigateTo($"/{CouponsNamespace}/{row.Code}");
-                    return Task.CompletedTask;
-                }))
+            .WithView(CouponGrid(host, CouponRowsFeed(host)))
             .WithView(Controls.Body(host.Localize("coupons.openHint"))
                 .WithStyle("color: var(--neutral-foreground-hint); margin-top: 8px;"));
+
+    /// <summary>The coupon grid over <paramref name="rows"/> — the template half of
+    /// <see cref="CouponList"/>, separate from the feed so its row-scoped action is testable.</summary>
+    internal static DataGridControl CouponGrid(LayoutAreaHost host, IObservable<IEnumerable<CouponRow>> rows)
+        => rows
+            .BindGrid(CouponListDataId, host.Localize("coupons.none"),
+                message => host.Localize("coupons.listFailed", message))
+            .WithColumn(new TemplateColumnControl(OpenCouponButton())
+                .WithTitle(host.Localize("ui.couponColumnCode")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Unlocks).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemableOn")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Price).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnPrice")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Valid).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnValid")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Redeemed).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnRedeemed")))
+            .WithColumn(new PropertyColumnControl<string>
+                { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
+            .Resizable();
+
+    /// <summary>
+    /// The Code column's cell: a button showing the row's code (bound to the grid row through
+    /// <see cref="ContextProperty"/>) whose click opens THAT coupon. Declared once; the row arrives
+    /// with the click (<see cref="OpenCoupon"/>).
+    /// </summary>
+    internal static ButtonControl OpenCouponButton()
+        => Controls.Button(new ContextProperty(JsonNamingPolicy.CamelCase.ConvertName(nameof(CouponRow.Code))))
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(OpenCoupon);
+
+    /// <summary>
+    /// Opens the coupon whose row the click came from — the row as the person saw it, never one
+    /// re-read by position, so a list that refreshed since the render still opens the coupon that
+    /// was clicked. A click with no row (or a row with no code) opens nothing.
+    /// The code is client input, so it is escaped as ONE path segment: it can only name a node
+    /// directly under the coupons namespace, and opening it is still gated by the viewer's own read
+    /// of that node — a navigation grants nothing.
+    /// </summary>
+    internal static Task OpenCoupon(UiActionContext ctx)
+    {
+        if (ctx.RowAs<CouponRow>() is { Code.Length: > 0 } row)
+            ctx.NavigateTo($"/{CouponsNamespace}/{Uri.EscapeDataString(row.Code)}");
+        return Task.CompletedTask;
+    }
 
     /// <summary>
     /// The feed half of the LIVE coupon list: accumulates the chunked query over
