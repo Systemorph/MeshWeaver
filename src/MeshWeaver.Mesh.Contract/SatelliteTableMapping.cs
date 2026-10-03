@@ -64,6 +64,10 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // access follows the owning partition's grants. A further attached type needs only one entry
         // here (its segment + table); no schema surgery on existing tables.
         new SatelliteTableMapping(DocumentPartPaths.AnnotationSegment, DocumentPartPaths.AnnotationTable, DocumentPartPaths.AnnotationNodeType),
+        // Storage bindings ({partition}/_Storage/{id}) — the partition's OWN storage configuration,
+        // in its own table of the partition schema (Doc/Architecture/StorageBindings). Directly
+        // under the partition root, never nested under another satellite.
+        new SatelliteTableMapping("_Storage", "storage", "StorageBinding"),
         new SatelliteTableMapping("Source", "code"),
         new SatelliteTableMapping("Test", "code"),
     ];
