@@ -544,6 +544,8 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(TrackedChangeType), nameof(TrackedChangeType));
         typeRegistry.WithType(typeof(TrackedChangeStatus), nameof(TrackedChangeStatus));
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
+        // StorageBinding — the content of {partition}/_Storage/{id} (StorageBindingNodeType).
+        typeRegistry.WithType(typeof(MeshWeaver.Mesh.Storage.StorageBinding), nameof(MeshWeaver.Mesh.Storage.StorageBinding));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
         // App — the per-user installed-app record ({user}/_App/{appId}, AppNodeType). Read by the
         // home's Apps grid on the USER hub (a cross-hub GetQuery), so without this registration the

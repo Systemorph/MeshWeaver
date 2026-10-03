@@ -191,7 +191,7 @@ public static class ServiceIdentitiesSettingsTab
                 .WithStyle("flex: 1;"))
             .WithView(Controls.Button(host.Localize("serviceIdentities.rotate"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx => WithSelectedToken(ctx, host, token =>
+                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
                 {
                     // Same term length as the token it replaces, counted from now.
                     DateTimeOffset? expiresAt = token.ExpiresAt is { } old
@@ -205,7 +205,7 @@ public static class ServiceIdentitiesSettingsTab
                 })))
             .WithView(Controls.Button(host.Localize("ui.revoke"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx => WithSelectedToken(ctx, host, token =>
+                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
                     tokens.RevokeToken(token.NodePath).Subscribe(
                         ok => ctx.Host.UpdateData(ResultDataId, ok
                             ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
@@ -214,15 +214,19 @@ public static class ServiceIdentitiesSettingsTab
                             $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}")))));
 
     /// <summary>Hands the selected token to <paramref name="act"/>, or says that a live token has
-    /// to be selected first.</summary>
-    private static Task WithSelectedToken(UiActionContext ctx, LayoutAreaHost host, Action<TokenRow> act)
+    /// to be selected first. The selection is client input, so it only says WHICH token: the token
+    /// handed on is the token feed's row as it is NOW (service id, node path and revoked flag from the
+    /// server), and a token the feed does not list, or one revoked since it was selected, is refused.</summary>
+    private static Task WithSelectedToken(
+        UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, Action<TokenRow> act)
     {
         // The slot is seeded with NoSelection when the tab is built, so it always holds a value.
         ctx.Host.Stream.GetDataStream<TokenRow>(SelectedTokenDataId)
             .Take(1)
+            .SelectMany(selected => CurrentToken(host, tokens, selected?.NodePath))
             .Subscribe(token =>
             {
-                if (token is null || string.IsNullOrEmpty(token.NodePath) || token.IsRevoked)
+                if (token is null || token.IsRevoked)
                     ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.selectToken"));
                 else
                     act(token);
@@ -230,6 +234,14 @@ public static class ServiceIdentitiesSettingsTab
                 $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
         return Task.CompletedTask;
     }
+
+    /// <summary>The token feed's row, as it is NOW, whose node path is <paramref name="nodePath"/>
+    /// — or null when no identity lists such a token.</summary>
+    internal static IObservable<TokenRow?> CurrentToken(LayoutAreaHost host, ApiTokenService tokens, string? nodePath)
+        => string.IsNullOrEmpty(nodePath)
+            ? Observable.Return<TokenRow?>(null)
+            : TokenRowsFeed(host, tokens).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.NodePath, nodePath, StringComparison.Ordinal)));
 
     /// <summary>The feed half of the identity grid: the identity rows of every emission of the
     /// synced identity query. Builds no control.</summary>

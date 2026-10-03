@@ -162,6 +162,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Postgres Schema Architecture](PostgresSchemaArchitecture)
 - [Partition Storage Routing](PartitionStorageRouting)
+- [Storage Bindings](StorageBindings) — where a partition keeps its data: zero bindings = the instance default; a binding at `{partition}/_Storage` (global: `Admin/_Storage`) picks or creates a container in one of the instance's pre-configured stores, validated on the node; the resolver every storage consumer asks; the Storage settings section
 - [Partition Teardown](PartitionTeardown) — deleting a partition ROOT drops its backing store; keyed on the node's SHAPE, never its NodeType
 - [Partition Storage Hubs](PartitionStorageHubs)
 - [Partitioned Persistence](PartitionedPersistence)
@@ -226,6 +227,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [End Vision — Jobs, Durable Streams and Document Ingestion](DocumentIngestionEndVision) — the architecture decided on 2026-10-03 (every activity a job in a queue on control, streams as nodes, triage that acts, document ingestion) and THE plan, with its executable e2e specs
 - [Thread Supervision](ThreadSupervision) — a round ends stamped, whatever failed; the one death the hub cannot cover is its own, and the supervisor, dispatch pool and `Admin/Threads` queue page that cover it
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
@@ -388,6 +390,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Hub Initialization Failure](HubInitializationFailure)
 - [Orleans Stream Pub-Sub Durability](OrleansStreamPubSubDurability) — a publish with no subscriber succeeds, so a cross-silo reply can vanish with nothing logged
 - [Durable Streams Are Mesh Nodes](DurableStreamsViaMeshNodes) — the design that retires the memory stream without a provider
+- [Durable Streams](DurableStreams) — a stream of saved mesh nodes consumed inside a hub: ordered appends, a lease that is the subscription, an acknowledged checkpoint, takeover, orphan and wake
 - [The Pod-Hub Claim Must Be Re-Asserted](PodHubClaimReassertion) — a claim asserted once into a directory that is re-partitioned on every membership change is lost silently, and forever
 - [Oversized Delivery Refusal](OversizedDeliveryRefusal) — a message too large for its transport destroys the connection carrying it; refuse at the producer, never raise the limit
 - [Content Sync Visibility](ContentSyncVisibility) — a Space whose assets the transport refuses says so, on the Space itself, naming the file, its size and the limit

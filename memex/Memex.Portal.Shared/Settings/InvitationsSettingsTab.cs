@@ -166,10 +166,14 @@ public static class InvitationsSettingsTab
 
     /// <summary>Revokes the PENDING invitation selected in the grid, or says that one has to be
     /// selected first.</summary>
+    /// <remarks>The selection is client input; the target is re-derived from the invitation query,
+    /// read now, so only a listed invitation that is STILL pending is revoked.</remarks>
     private static void RevokeSelected(UiActionContext ctx, LayoutAreaHost host, InvitationService invitationService)
-        => ctx.Host.Stream.GetDataStream<InvitationRow>(SelectedDataId).Take(1).Subscribe(row =>
+        => ctx.Host.Stream.GetDataStream<InvitationRow>(SelectedDataId).Take(1)
+            .SelectMany(selected => CurrentInvitation(host, selected?.Path))
+            .Subscribe(row =>
         {
-            if (row is null || string.IsNullOrEmpty(row.Path) || !row.IsPending)
+            if (row is null || !row.IsPending)
             {
                 ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.selectInvitation"))));
                 return;
@@ -184,6 +188,14 @@ public static class InvitationsSettingsTab
                     _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
                     ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
         }, ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+
+    /// <summary>The row of the invitation query, as it is NOW, whose path is
+    /// <paramref name="path"/> — or null when the query lists no such invitation.</summary>
+    internal static IObservable<InvitationRow?> CurrentInvitation(LayoutAreaHost host, string? path)
+        => string.IsNullOrEmpty(path)
+            ? Observable.Return<InvitationRow?>(null)
+            : InvitationRowsFeed(host).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.Ordinal)));
 
     /// <summary>
     /// The feed half: every invitation as a row, newest first, re-emitted by the synced query on
@@ -200,10 +212,11 @@ public static class InvitationsSettingsTab
         return host.Hub.GetWorkspace()
             .GetQuery("invite:list", $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType}")
             .Select(nodes => (IReadOnlyList<InvitationRow>)nodes
-                .Select(n => (node: n, inv: InvitationService.TryGetInvitation(n, options)))
-                .Where(x => x.inv is not null)
-                .OrderByDescending(x => x.inv!.InvitedAt)
-                .Select(x => InvitationRow.Of(x.node, x.inv!, statusText.GetValueOrDefault(x.inv!.Status, x.inv!.Status.ToString())))
+                .SelectMany(n => InvitationService.TryGetInvitation(n, options) is { } inv
+                    ? [(node: n, inv)]
+                    : Array.Empty<(MeshNode node, Invitation inv)>())
+                .OrderByDescending(x => x.inv.InvitedAt)
+                .Select(x => InvitationRow.Of(x.node, x.inv, statusText.GetValueOrDefault(x.inv.Status, x.inv.Status.ToString())))
                 .ToList());
     }
 

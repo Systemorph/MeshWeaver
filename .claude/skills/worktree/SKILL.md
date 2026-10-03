@@ -69,7 +69,8 @@ reaches main.
 
 ### 1. The bar is MERGEABLE, not merged
 
-A branch that is merely *behind* main merges fine — do NOT re-sync and re-run CI just to catch up.
+A branch that is merely *behind* main merges fine — do NOT push just to catch up. But every push you
+DO make merges the latest main first (AGENTS.md `merge-latest-before-push`).
 The `main pr protection` ruleset has **`strict_required_status_checks_policy: false`** and exactly
 ONE required check, `Consolidate test results`. Verify rather than trust this line:
 

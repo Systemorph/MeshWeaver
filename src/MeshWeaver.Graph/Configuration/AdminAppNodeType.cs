@@ -310,6 +310,8 @@ public static class AdminAppNodeType
             .WithSettingsTitle((host, _) => InstanceName(host.Hub.ServiceProvider))
             .AddAdminAppTab(GlobalAdministrationTab.Definition)
             .AddAdminAppTab(GlobalSettingsLayoutArea.DataSourcesAdminTab)
+            // Not relocated: a partition root carries a Storage tab of the SAME id (its own bindings).
+            .AddAdminAppTab(Storage.StorageSettingsTab.AdminDefinition, relocated: false)
             // The Admin node's own grants ARE the administrators: one tab, not two.
             .AliasSettingsTab(SettingsLayoutArea.AccessControlTab, GlobalAdministrationTab.TabId)
             .AliasSettingsTab(SettingsLayoutArea.EffectiveAccessTab, GlobalAdministrationTab.TabId)

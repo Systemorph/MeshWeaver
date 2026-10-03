@@ -377,11 +377,15 @@ with this page; the adapter's one is corrected in its own repo.
 
 ## Related
 
+- [End Vision — Jobs, Durable Streams and Document Ingestion](/Doc/Architecture/DocumentIngestionEndVision) —
+  the decision (2026-10-03) that streams are saved nodes with checkpoints, lease = a live
+  subscription, park = waiting for the unblocking event; plan items G3 and G24
 - [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the defect,
   the durable `PubSubStore`, and the two residuals this page answers
 - [Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan) — the transport swap and the N+2 gate
 - [Event Subscriptions](/Doc/Architecture/EventSubscriptions) — the live + reconcile-on-start pattern
 - [Webhook Inbox](/Doc/Architecture/WebhookInbox) — the `_Inbox` node contract
+- [Durable Streams](/Doc/Architecture/DurableStreams) — the general form of row 4: a stream of saved item nodes, ordered and leased by its stream node's hub, consumed inside a hub with an acknowledged checkpoint
 - [Error Propagation & Wedges](/Doc/Architecture/ErrorPropagationAndWedges) — "an undeliverable
   delivery must surface as a `DeliveryFailure`, never as silence"
 - Issues: #1742, #2320, #2322, #2406, #2426, Plugins#777
