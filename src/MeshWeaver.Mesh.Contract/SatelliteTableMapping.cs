@@ -56,7 +56,7 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // 🚨 The segment is deliberately LONGER than every satellite a document may hang under
         // (_Activity, _Thread, _Comment …): ResolveTable picks the LONGEST mapped segment in the path,
         // so `X/_Activity/j/logs/_Documents/run.log/_DocumentPart/000000` resolves to document_parts,
-        // not activities. DocumentPartPaths.PartTableResolves guards the rest.
+        // not activities. DocumentPartPaths.PartPlacementProblem guards the rest.
         new SatelliteTableMapping(DocumentPartPaths.PartSegment, DocumentPartPaths.PartTable, DocumentPartPaths.PartNodeType),
         // Nodes ATTACHED to a part (a person's or an agent's note/label on one chunk) at
         // {partPath}/_PartAnnotation/{id}: longer still, so they get their own table, while
