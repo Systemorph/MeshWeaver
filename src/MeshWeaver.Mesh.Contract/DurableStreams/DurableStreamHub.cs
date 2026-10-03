@@ -124,6 +124,7 @@ public static class DurableStreamHub
             })
             .Do(saved =>
             {
+                runtime.ResetWake();
                 if (tookOverFrom is not null)
                     runtime.Logger.LogWarning(
                         "[DurableStreams] {Stream}: {Claimant} TOOK OVER the lease from {Holder}, which did not answer within {Budget}; "
@@ -211,6 +212,7 @@ public static class DurableStreamHub
                             hub.Address, sender, saved.Checkpoint, saved.LastSequence);
                         hub.Post(new ReleaseDurableStreamResponse(true), o => o.ResponseFor(request));
                         // Items the leaver did not acknowledge are waiting: bring the owner back for them.
+                        runtime.ResetWake();
                         if (saved.LastSequence > saved.Checkpoint)
                             runtime.WakeOwner(saved);
                     })
@@ -239,6 +241,10 @@ public static class DurableStreamHub
         private DurableStreamState? state;
         private long? nextSequence;
         private int waking;
+        private int woken;
+
+        /// <summary>A lease was granted or released: the next orphaned append wakes the owner again.</summary>
+        public void ResetWake() => Interlocked.Exchange(ref woken, 0);
 
         public Runtime(IMessageHub hub)
         {
@@ -353,7 +359,10 @@ public static class DurableStreamHub
         /// </summary>
         public void WakeOwner(DurableStreamState current)
         {
-            if (Interlocked.Exchange(ref waking, 1) == 1)
+            // ONE wake per orphan period: a stream with a producer and nobody consuming it (or an
+            // owner whose NodeType has no consumer) would otherwise read the owner on every append.
+            // The period ends when a lease is granted or released (ResetWake).
+            if (Volatile.Read(ref woken) == 1 || Interlocked.Exchange(ref waking, 1) == 1)
                 return;
             var access = hub.ServiceProvider.GetService<AccessService>();
             access.RunAsSystem(() => hub.GetMeshNodeOutcome(current.Key))
@@ -361,6 +370,8 @@ public static class DurableStreamHub
                 .Subscribe(
                     outcome =>
                     {
+                        if (outcome.Status == NodeReadStatus.Present)
+                            Interlocked.Exchange(ref woken, 1);
                         if (outcome.Status == NodeReadStatus.Present)
                             hub.NodeOperationIssuingHub().Post(new DurableStreamWake(current.Namespace, current.Key), o => o.WithTarget(new Address(current.Key)));
                         else
