@@ -272,6 +272,33 @@ jobs:
             else
               echo "release schema: $CI_VERSION published no ExpectedDbVersion (a build before the field) — $VERSION carries none either"
             fi
+            # The release's OWN surface (_releases/_surface/<version>, policy exact-release-surface)
+            # travels with the marker too, byte for byte: <clean> is a retag of the very image
+            # <ci> measured, so it is the same document — never re-derived, never borrowed from the
+            # shared publication. Absent stays absent (a build before the field); the gate reports
+            # that release's link checks as undetermined rather than reading another image's surface.
+            mkdir -p "$tmp/_surface"; rm -f "$tmp/_surface/$CI_VERSION" "$tmp/_surface/$VERSION"
+            surface_exists=$(az storage file exists --account-name "$account" --share-name "$share" \
+              --path "$dir/_surface/$CI_VERSION" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors)
+            if [ "$surface_exists" = "true" ]; then
+              az storage file download --account-name "$account" --share-name "$share" \
+                --path "$dir/_surface/$CI_VERSION" --dest "$tmp/_surface/$CI_VERSION" \
+                --auth-mode login --backup-intent --only-show-errors > /dev/null
+              [ -s "$tmp/_surface/$CI_VERSION" ] || { echo "::error::$account/$share/$dir/_surface/$CI_VERSION is empty — refusing to promote a surface nobody can read."; exit 1; }
+              cp "$tmp/_surface/$CI_VERSION" "$tmp/_surface/$VERSION"
+              exists_dir=$(az storage directory exists --account-name "$account" --share-name "$share" \
+                --name "$dir/_surface" --auth-mode login --backup-intent --query exists -o tsv --only-show-errors)
+              [ "$exists_dir" = "true" ] || az storage directory create --account-name "$account" --share-name "$share" \
+                --name "$dir/_surface" --auth-mode login --backup-intent --only-show-errors > /dev/null
+              az storage file upload --account-name "$account" --share-name "$share" \
+                --path "$dir/_surface" --source "$tmp/_surface/$VERSION" \
+                --auth-mode login --backup-intent --only-show-errors > /dev/null
+              echo "release surface: $account/$share/$dir/_surface/$VERSION ← _surface/$CI_VERSION"
+            elif [ "$surface_exists" = "false" ]; then
+              echo "release surface: $CI_VERSION published no surface of its own (a build before the field) — $VERSION carries none either"
+            else
+              echo "::error::could not determine whether $account/$share/$dir/_surface/$CI_VERSION exists — refusing to promote without knowing"; exit 1
+            fi
             # Directory-as-path: the CLI appends the source basename, which is the version.
             az storage file upload --account-name "$account" --share-name "$share" \
               --path "$dir" --source "$tmp/$VERSION" \

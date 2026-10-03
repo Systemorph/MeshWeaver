@@ -180,6 +180,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Cross-Schema Fan-Out Elimination](CrossSchemaFanOutElimination) — an unanchored query is a lock bomb; the census and the per-caller plan
 - [Addressed Notifications](AddressedNotifications) — plan 1 worked out: deliver a notification to its addressee so the bell reads two schemas, not 199
 - [Content Indexing Activation](ContentIndexingActivation)
+- [Document Parts](DocumentParts) — logs, transcripts and files as one Document node plus indexed DocumentPart nodes in their own partition table, written chunk by chunk
 - [Cross-Instance Mirror](CrossInstanceMirror)
 - [Data Synchronization and CRDT](DataSyncAndCrdt)
 - [Setting Up Data Sync](DataSyncSetup)
