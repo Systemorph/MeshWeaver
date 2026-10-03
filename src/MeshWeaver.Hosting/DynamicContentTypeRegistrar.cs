@@ -181,7 +181,7 @@ public static class DynamicContentTypeRegistrar
 
         // 🚨 The store lookup is file I/O too — FileSystemAssemblyStore probes the directory and
         // reads timestamps when SUBSCRIBED — so it runs inside the pool, never on the emitting thread.
-        return pool.InvokeObservable(_ => store.TryGetAssemblyPath(path, version).Take(1))
+        return pool.InvokeObservable(_ => store.TryGetBuildPath(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
             .SelectMany(localPath =>
             {
                 if (string.IsNullOrEmpty(localPath))
