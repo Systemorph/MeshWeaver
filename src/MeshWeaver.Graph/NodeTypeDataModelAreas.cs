@@ -221,7 +221,7 @@ internal static class NodeTypeDataModelAreas
                 ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                 : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
 
-            return store.TryGetAssemblyPath(node.Path, version)
+            return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
                 .SelectMany(localPath =>
                 {
                     if (string.IsNullOrEmpty(localPath))

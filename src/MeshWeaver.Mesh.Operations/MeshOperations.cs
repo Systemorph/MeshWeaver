@@ -3159,7 +3159,7 @@ public partial class MeshOperations
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                     : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-                return store.TryGetAssemblyPath(node.Path, version)
+                return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
                     .SelectMany(localPath => string.IsNullOrEmpty(localPath)
                         ? Observable.Return<NodeCompilationResult?>(null)
                         : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));

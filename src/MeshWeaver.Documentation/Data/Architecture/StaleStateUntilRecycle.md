@@ -1,7 +1,7 @@
 ---
 Name: Stale State Until a Recycle
 Category: Architecture
-Description: A per-node hub binds its configuration once and is then pinned by address, so merged, sealed, rolled and restarted do not make a fix live at an address that is already up. What a DisposeRequest changes, what it provably does not, the four automatic recyclers, and the one sanctioned surface.
+Description: A per-node hub binds its configuration once and is then pinned by address, so merged, sealed, rolled and restarted do not make a fix live at an address that is already up. The update contract — after a DisposeRequest the next activation binds the newest build the record names, and the old one keeps working until then — the suite that proves it, the four automatic recyclers, and the one sanctioned surface.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.7 3"/><path d="M21 3v6h-6"/><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.7-3"/><path d="M3 21v-6h6"/></svg>
 ---
 
@@ -273,25 +273,93 @@ with it" — so an **Orleans deactivation**, a direct `Dispose()` of an address 
 told its live subscribers nothing and every click they sent afterwards was discarded (#3986,
 [Refusing a Lost User Action](/Doc/Architecture/RefusingALostUserAction)).
 
-## 🚨 A dispose makes the activation RE-READ. It does not change what the re-read FINDS
+## ✅ The next activation binds the NEWEST build — the update contract
 
-This is the half that turns a recycle into a ritual. **A recycle is never itself a fix, and a second
-one proves nothing the first did not.**
+> *"After disposerequest, new version must be loaded"* and *"old version must continue working"*
+> — maintainer, 2026-10-03
 
-**The same bytes come back.** The assembly store is keyed `(nodeTypePath, LastCompiledVersion)`, a
-recompile of an already-`Ok` type does not rewrite its node, and each pod resolves those bytes
-through its own local cache:
+Since 2026-10-03 this is a **guarantee**, proven by a dedicated suite rather than hoped for:
+
+1. **A live activation keeps serving the build it activated on** until a `DisposeRequest` reaches
+   it. Nothing re-binds it mid-flight — a publication, an unrelated write, a pin edit all leave it
+   exactly as it was (unless `Modules:AutoRecycleOnStaleBuild` posts that dispose for it — see the
+   recyclers below).
+2. **The activation after the dispose binds the newest build the type's record names** — the
+   newest that is published, installed and loadable for THIS framework identity — for a node-native
+   compile and for an adopted prebuilt bundle alike. It is resolved by **identity** (the record's
+   content-hashed `LatestAssemblyPath` and its `LatestAssemblyMvid`), never by whichever file
+   happens to answer for the store key: `IAssemblyStore.TryGetBuildPath`.
+3. **A same-key byte change counts as new.** The store is content-addressed: different bytes for
+   the same `(nodeTypePath, version)` get their own content-hashed name, so the record's path moves
+   with the bytes and every path-keyed reader — the stale-build watcher included — sees a new build.
+   The old file is never overwritten, so a hub still holding it keeps serving.
+4. **When nothing newer can be loaded yet, the old build keeps serving and the record says why** —
+   never a park, never an overlay over a working build: a source edit not yet released reads
+   `IsDirty`; a compile that failed reads `CompilationStatus = Error` + `CompilationError` with the
+   last good build still named; a build for another framework identity is refused with
+   `NodeTypeBuildIdentity.RefusalReason` naming both identities, and the type rebuilds for this
+   one.
+
+**What was wrong before, and why "a recycle re-binds the same local copy" was true.** The
+filesystem assembly store — the one every AKS replica shares at `/data/assembly-cache` — was
+**first-write-wins per `(nodeTypePath, version)`**: a second publication of DIFFERENT bytes at the
+same key (a prebuilt bundle adopted at the node version a compile already used, a second platform
+generation compiling the same version, any recompile that did not move the version) wrote nothing
+and handed back the FIRST build's path, while the publisher stamped the NEW build's MVID from the
+bytes it held. Every later activation resolved the old file, the bind-time identity check
+(#2471) refused it and rebuilt from the mesh's source, the rebuild's own `Put` was handed the old
+file again, and once the retry budget was spent the activation bound the old bytes for its
+lifetime. On a `Modules:RequirePrebuilt` mesh, or for a bundle-only update whose source the mesh
+does not hold, no rebuild could ever produce the new build — so no number of `DisposeRequest`s
+loaded it. That is the state measured on memex on 2026-08-26 over 30+ minutes and six recycles
+with every surface reporting success, and it is why a same-path build mismatch
+(`StaleBuildKind.ServedBuildIsNotPublished`) still carries no recycle link: on a LEGACY record —
+one stamped before the fix, whose path names the old bytes and whose MVID names the new — the
+named bytes are not in the store at all, and the remedy is a rebuild or a republish, not a re-bind.
 
 > *"A PATH is not an identity … so the path can match perfectly while the bytes behind it differ per
-> replica. **That is why a recycle is inert: it re-binds the same path from the same local copy.**"*
-> — `ServedBuildIdentity`
+> replica."* — `ServedBuildIdentity`. The fix makes the path an identity again (content hash) and
+> resolves by the MVID besides.
 
-That is why a **same-path** build mismatch (`StaleBuildKind.ServedBuildIsNotPublished`) is reported
-as a mismatch and deliberately carries **no** recycle link, while only a genuine path advance
-(`NewerBuildAvailable`) earns one (#2471). It was measured on memex on 2026-08-26 over 30+ minutes
-and six recycles, with every surface reporting success.
+### Where it is proven — `test/MeshWeaver.Updates.Test`
 
-**And an UNFORCED trigger can re-choose the same bundle.** A release request that is *not* forced
+One suite whose whole job is updates, booting a real mesh (Monolith, and a two-silo Orleans cluster
+for the mixed-replica case). Each scenario is one test, falsified against the defect it guards; the
+suite references the loading, compilation, adoption and disposal projects directly, so
+`affected-tests.py` owes it on every change to any of them.
+
+| # | Scenario | Test |
+|---|---|---|
+| 1 | node-native N → N+1: live hub keeps N, dispose binds N+1 | `NodeTypeUpdateTest.ANewBuild_IsBound_AfterTheDispose_AndNotBefore` |
+| 2 | prebuilt bundle N → N+1 at the SAME store key | `BundleUpdateTest.ABundleAdoptedAtTheSameKey_IsBound_AfterTheDispose` — **red on main before the fix** |
+| 3 | a same-key byte change moves the path; the old bytes stay in place | `BundleUpdateTest.ASameKeyByteChange_MovesThePath_AndLeavesTheOldBytesInPlace` — **red before the fix** |
+| 4 | N+1 fails to compile: N keeps serving, the record says why | `NodeTypeUpdateTest.AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy` |
+| 5 | N+1 unpublished, or built for another framework identity | `NodeTypeUpdateTest.AnUnpublishedNewBuild_IsNamed_AndTheOldOneKeepsServing`, `ForeignIdentityUpdateTest` |
+| 6 | N reads N+1-shaped content, N+1 reads N-shaped content | `ShapeCompatibilityTest.EachBuild_ReadsTheOtherBuildsShape` |
+| 7 | two builds serve side by side on a two-silo cluster | `MixedReplicaUpdateTest` |
+| 8 | rollback N+1 → N, including to a build sharing N+1's key | `NodeTypeUpdateTest.ARollback_…`, `BundleUpdateTest.ARollbackToABuildSharingItsKey_…` — the latter **red with a version-keyed lookup** |
+| 9 | content written under N survives N+1 and the rollback | `NodeTypeUpdateTest.ARollback_RebindsTheOldBuild_AndTheDataSurvivesBothWays` |
+| 10 | no dispose, no change | `NodeTypeUpdateTest.WithoutADispose_ALiveHubNeverSwitchesBuilds` |
+
+The store-level half is pinned in `FileSystemAssemblyStoreTest`
+(`Put_same_version_different_bytes_publishes_the_new_bytes_under_their_own_name`,
+`TryGetBuildPath_*`).
+
+### A dispose is still not a fix by itself
+
+The contract says what the re-read binds; it cannot make a build exist. **A recycle is never
+itself a fix, and a second one proves nothing the first did not**: if the address still answers
+the old way after one dispose, the newest build the record names IS the old one — read the
+NodeType's record (`IsDirty`, `CompilationStatus`, `CompilationError`, the adoption refusal,
+`LatestAssemblyPath`) instead of recycling again.
+
+🚨 **Two things the contract does not cover.** A compiled MODULE assembly (`content.module`,
+loaded from `/data/modules`) is pinned to the PROCESS, not to an activation — a dispose cannot
+swap an assembly the default load context holds; the module lane's own refresh (which restarts the
+instance) is its only lane, as the table at the top of this page says. And the contract decides
+which build an activation BINDS, not which build gets PUBLISHED:
+
+**an UNFORCED trigger can re-choose the same bundle.** A release request that is *not* forced
 runs *adopt-before-compile*: the deployment's prebuilt bundle sources get one bounded chance to
 supply the assembly first, and an adopted type then satisfies its release request without Roslyn
 ever running. `Modules:VersionStrictness` decides what counts as a candidate, and its default is
@@ -386,8 +454,9 @@ each reading is wrong about the other's portals:
 - **True** — which is what `deploy/aks/values.aks.yaml` sets **fleet-wide**, so the portals this
   repository deploys converge by themselves and no viewer has to click.
 
-On **neither** setting does it fire for a same-path byte change: a path that did not move is a build
-*mismatch* to report, not a build to converge on, because re-binding it lands the same bytes (#2471).
+A same-key byte change now MOVES the path (the store is content-addressed), so it converges like
+any other new build. A path that did not move while the MVIDs disagree is a LEGACY record (stamped
+before 2026-10-03) — a build *mismatch* to report, not one to converge on (#2471).
 
 ## Where this bites, and what to do about it
 

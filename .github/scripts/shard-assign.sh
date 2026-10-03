@@ -141,6 +141,7 @@ WEIGHTS=$(cat <<'EOF'
 74 MeshWeaver.PluginTester.Test
 480 MeshWeaver.Graph.Test 2
 50 MeshWeaver.FaultInjection.Test
+60 MeshWeaver.Updates.Test
 365 MeshWeaver.Hosting.Test 2
 26 MeshWeaver.Layout.Test
 7 MeshWeaver.ContentCollections.Test

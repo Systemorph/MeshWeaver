@@ -657,7 +657,11 @@ controls: [Disposed Scopes and Dying Hubs](../DisposedScopeAndDyingHubs), R2.
 A routed `DisposeRequest` is a **recycle**, not an end: the address comes back on the next
 access. *Why* anyone sends one — a hub binds its configuration once at activation and is then pinned
 by address, so it serves that state until it is torn down — is
-[Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle). The automatic ones exist
+[Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle). **What the address comes
+back ON is a guarantee since 2026-10-03:** the re-activation binds the newest build its NodeType's
+record names — resolved by content hash and MVID, never by whichever file answers for the store
+key — and until the dispose reaches it the old activation keeps serving the build it holds (the
+update contract on that page, proven by `test/MeshWeaver.Updates.Test`). The automatic ones exist
 *for* the people currently looking at a page —
 `NodeTypeEnrichmentHelpers.WithOverlaySelfHeal` recycles an instance hub the moment its NodeType
 reaches a usable build, so the compile-progress overlay is replaced by the real page;
