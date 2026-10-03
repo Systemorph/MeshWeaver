@@ -182,7 +182,7 @@ to go **red** if the marker rule is restored.
 | `pull_request_review` | submitted, dismissed | the reviewer's review; a person's reply also creates a review |
 | `pull_request_review_comment` | created, deleted | a finding or a reply arriving, or a reply going |
 | `merge_group` | checks_requested | the queue entry is judged again; the number comes from `gh-readonly-queue/main/pr-<N>-<sha>` |
-| `check_run` (in `review-answered-on-degradation.yml`) | completed | the reviewer's "Reviewer unavailable" check run — this file **re-runs** the gate's newest `pull_request` run for that head rather than judging itself; see [the degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody) for why |
+| `check_run` (in `review-answered-on-degradation.yml`) | completed | ANY `internal-review` check run of the internal reviewer (since 2026-10-03; before, only its "Reviewer unavailable" degradation) — this file **re-runs** the gate's newest `pull_request` run for that head rather than judging itself; see [the degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody) for why |
 
 There is no job-level `if:`, no path or branch filter and no `continue-on-error`: a skipped required
 context counts as satisfied, so every event evaluates the predicate in full. The script's self-test
@@ -372,6 +372,10 @@ triggers fires when a check run completes. Measured and read, in order:
   is the one branch protection reads (#4649), and re-running it is the remedy this page already
   names as legitimate. The listener is single-shot — the degradation completes once — so each of
   its API calls gets three attempts before it goes RED, naming the head it could not re-evaluate.
+  Since 2026-10-03 it re-evaluates on ANY completed `internal-review` check run of the internal
+  reviewer, not only the degradation: core #6014, #6017 and #6018 were reviewed after the gate's
+  15-minute wait had already published red (the review queued behind the reviewer's capacity bound
+  for over 75 minutes), and nothing re-ran the gate when the review arrived.
   The listener decides nothing: the re-run applies the whole predicate,
   provenance included, so a drift in its filter can cost or miss a re-run but never turn a gate
   green.

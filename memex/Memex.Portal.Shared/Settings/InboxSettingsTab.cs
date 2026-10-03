@@ -91,29 +91,53 @@ public static class InboxSettingsTab
                     }))
                 .WithTitle(host.Localize("ui.archive")));
 
-    /// <summary>Archives the mail of the clicked row — the row as the person saw it — or says it is
-    /// archived already.</summary>
+    /// <summary>
+    /// Archives the mail of the clicked row, or says it is archived already. The row is client
+    /// input, so it only says WHICH mail: the target is re-derived from the inbox query itself, read
+    /// now (<see cref="CurrentMail"/>), and the write — which runs as System — only ever reaches a
+    /// mail that query lists, in its CURRENT state. A path outside the inbox is refused.
+    /// </summary>
     private static void Archive(
-        UiActionContext ctx, LayoutAreaHost host, MailRow row, IMeshService meshService, AccessService? accessService)
-    {
-        if (string.IsNullOrEmpty(row.Path) || row.IsArchived)
+        UiActionContext ctx, LayoutAreaHost host, MailRow clicked, IMeshService meshService, AccessService? accessService)
+        => CurrentMail(host, clicked.Path).Subscribe(row =>
         {
-            ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.alreadyArchived"))));
-            return;
-        }
-        ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
-        // The node itself, read once for the write (it exists: the row came from it).
-        ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
-            .SelectMany(node => Observable.Using(
-                () => accessService!.ImpersonateAsSystem(),
-                _ => meshService.UpdateNode(node with
-                {
-                    Content = EmailOf(node, ctx.Hub.JsonSerializerOptions)! with { Status = EmailStatus.Archived }
-                })))
-            .Subscribe(
-                _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
-                ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
-    }
+            if (row is null)
+            {
+                ctx.Host.UpdateData(ResultDataId, Error("That mail is not in the inbox."));
+                return;
+            }
+            if (row.IsArchived)
+            {
+                ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.alreadyArchived"))));
+                return;
+            }
+            if (accessService is null)
+            {
+                ctx.Host.UpdateData(ResultDataId, Error("No access service is registered; the mail cannot be archived."));
+                return;
+            }
+            ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
+            // The node itself, read once for the write (it exists: the inbox query just listed it).
+            ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
+                .SelectMany(node => EmailOf(node, ctx.Hub.JsonSerializerOptions) is { } email
+                    ? Observable.Using(
+                        () => accessService.ImpersonateAsSystem(),
+                        _ => meshService.UpdateNode(node with { Content = email with { Status = EmailStatus.Archived } }))
+                    : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no email.")))
+                .Subscribe(
+                    _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+
+    /// <summary>
+    /// The row of the inbox query, as it is NOW, whose path is <paramref name="path"/> — or null when
+    /// the query lists no such mail. One read of the feed; the action's trust boundary.
+    /// </summary>
+    internal static IObservable<MailRow?> CurrentMail(LayoutAreaHost host, string? path)
+        => string.IsNullOrEmpty(path)
+            ? Observable.Return<MailRow?>(null)
+            : InboxRowsFeed(host).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.Ordinal)));
 
     /// <summary>
     /// The feed half: the inbound mail in <c>Admin/Inbox</c> as rows, newest first, re-emitted by
@@ -130,10 +154,11 @@ public static class InboxSettingsTab
         return host.Hub.GetWorkspace()
             .GetQuery("inbox:list", $"namespace:{EmailNodeType.AdminInboxNamespace} nodeType:{EmailNodeType.NodeType}")
             .Select(nodes => (IReadOnlyList<MailRow>)nodes
-                .Select(n => (node: n, email: EmailOf(n, options)))
-                .Where(x => x.email is { Direction: EmailDirection.Inbound })
-                .OrderByDescending(x => x.email!.ReceivedAt)
-                .Select(x => MailRow.Of(x.node, x.email!, statusText.GetValueOrDefault(x.email!.Status, x.email!.Status.ToString())))
+                .SelectMany(n => EmailOf(n, options) is { Direction: EmailDirection.Inbound } email
+                    ? [(node: n, email)]
+                    : Array.Empty<(MeshNode node, MeshWeaver.Mesh.Email email)>())
+                .OrderByDescending(x => x.email.ReceivedAt)
+                .Select(x => MailRow.Of(x.node, x.email, statusText.GetValueOrDefault(x.email.Status, x.email.Status.ToString())))
                 .ToList());
     }
 

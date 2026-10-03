@@ -165,25 +165,36 @@ public static class InvitationsSettingsTab
                     }))
                 .WithTitle(host.Localize("ui.revoke")));
 
-    /// <summary>Revokes the clicked row's invitation — the row as the person saw it — or says that
-    /// only a pending invitation can be revoked.</summary>
-    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, InvitationRow row, InvitationService invitationService)
-    {
-        if (string.IsNullOrEmpty(row.Path) || !row.IsPending)
+    /// <summary>Revokes the clicked row's invitation, or says that only a pending invitation can
+    /// be revoked. The row is client input: the invitation is re-derived from the invitation query,
+    /// read now (<see cref="CurrentInvitation"/>), so only a listed invitation that is STILL pending
+    /// is revoked.</summary>
+    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, InvitationRow clicked, InvitationService invitationService)
+        => CurrentInvitation(host, clicked.Path).Subscribe(row =>
         {
-            ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.notPending"))));
-            return;
-        }
-        ctx.Host.UpdateData(ResultDataId, PendingHtml($"Revoking {Esc(row.Email)}…"));
-        // The node itself, read once for the write (it exists: the row came from it).
-        ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
-            .SelectMany(node => InvitationService.TryGetInvitation(node, ctx.Hub.JsonSerializerOptions) is { } inv
-                ? invitationService.Revoke(node, inv)
-                : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no invitation.")))
-            .Subscribe(
-                _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
-                ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
-    }
+            if (row is null || !row.IsPending)
+            {
+                ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.notPending"))));
+                return;
+            }
+            ctx.Host.UpdateData(ResultDataId, PendingHtml($"Revoking {Esc(row.Email)}…"));
+            // The node itself, read once for the write (it exists: the invitation query just listed it).
+            ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
+                .SelectMany(node => InvitationService.TryGetInvitation(node, ctx.Hub.JsonSerializerOptions) is { } inv
+                    ? invitationService.Revoke(node, inv)
+                    : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no invitation.")))
+                .Subscribe(
+                    _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+
+    /// <summary>The row of the invitation query, as it is NOW, whose path is
+    /// <paramref name="path"/> — or null when the query lists no such invitation.</summary>
+    internal static IObservable<InvitationRow?> CurrentInvitation(LayoutAreaHost host, string? path)
+        => string.IsNullOrEmpty(path)
+            ? Observable.Return<InvitationRow?>(null)
+            : InvitationRowsFeed(host).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.Path, path, StringComparison.Ordinal)));
 
     /// <summary>
     /// The feed half: every invitation as a row, newest first, re-emitted by the synced query on
@@ -200,10 +211,11 @@ public static class InvitationsSettingsTab
         return host.Hub.GetWorkspace()
             .GetQuery("invite:list", $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType}")
             .Select(nodes => (IReadOnlyList<InvitationRow>)nodes
-                .Select(n => (node: n, inv: InvitationService.TryGetInvitation(n, options)))
-                .Where(x => x.inv is not null)
-                .OrderByDescending(x => x.inv!.InvitedAt)
-                .Select(x => InvitationRow.Of(x.node, x.inv!, statusText.GetValueOrDefault(x.inv!.Status, x.inv!.Status.ToString())))
+                .SelectMany(n => InvitationService.TryGetInvitation(n, options) is { } inv
+                    ? [(node: n, inv)]
+                    : Array.Empty<(MeshNode node, Invitation inv)>())
+                .OrderByDescending(x => x.inv.InvitedAt)
+                .Select(x => InvitationRow.Of(x.node, x.inv, statusText.GetValueOrDefault(x.inv.Status, x.inv.Status.ToString())))
                 .ToList());
     }
 

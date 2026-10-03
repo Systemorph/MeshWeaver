@@ -203,45 +203,56 @@ public static class ServiceIdentitiesSettingsTab
                 }))
             .WithTitle(label);
 
-    /// <summary>Rotates the clicked row's token — the row as the person saw it — or says that only a
-    /// live token can be rotated.</summary>
-    private static void Rotate(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow token)
-    {
-        if (!IsLive(ctx, host, token))
-            return;
-        // Same term length as the token it replaces, counted from now.
-        DateTimeOffset? expiresAt = token.ExpiresAt is { } old
-            ? DateTimeOffset.UtcNow + (old - token.CreatedAt)
-            : null;
-        ServiceIdentities.Rotate(tokens, token.ServiceId, token.NodePath, token.Label, expiresAt)
-            .Subscribe(
-                result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
+    /// <summary>Rotates the clicked row's token, or says that only a live token can be rotated.
+    /// The row only says WHICH token: service id, node path, term and revoked flag come from the
+    /// token feed as it is NOW (<see cref="CurrentToken"/>).</summary>
+    private static void Rotate(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked)
+        => WithLiveToken(ctx, host, tokens, clicked, token =>
+        {
+            // Same term length as the token it replaces, counted from now.
+            DateTimeOffset? expiresAt = token.ExpiresAt is { } old
+                ? DateTimeOffset.UtcNow + (old - token.CreatedAt)
+                : null;
+            ServiceIdentities.Rotate(tokens, token.ServiceId, token.NodePath, token.Label, expiresAt)
+                .Subscribe(
+                    result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
+                    ex => ctx.Host.UpdateData(ResultDataId,
+                        $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
+        });
+
+    /// <summary>Revokes the clicked row's token, or says that only a live token can be revoked.
+    /// The token is the feed's row as it is NOW (<see cref="CurrentToken"/>).</summary>
+    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked)
+        => WithLiveToken(ctx, host, tokens, clicked, token =>
+            tokens.RevokeToken(token.NodePath).Subscribe(
+                ok => ctx.Host.UpdateData(ResultDataId, ok
+                    ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
+                    : host.Localize("apiTokens.revokeFailed")),
                 ex => ctx.Host.UpdateData(ResultDataId,
-                    $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
-    }
+                    $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}")));
 
-    /// <summary>Revokes the clicked row's token — the row as the person saw it — or says that only a
-    /// live token can be revoked.</summary>
-    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow token)
-    {
-        if (!IsLive(ctx, host, token))
-            return;
-        tokens.RevokeToken(token.NodePath).Subscribe(
-            ok => ctx.Host.UpdateData(ResultDataId, ok
-                ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
-                : host.Localize("apiTokens.revokeFailed")),
-            ex => ctx.Host.UpdateData(ResultDataId,
-                $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}"));
-    }
+    /// <summary>Hands the token feed's CURRENT row for the clicked token to <paramref name="act"/>;
+    /// a token the feed does not list, or one revoked since the render, is refused on the result
+    /// line.</summary>
+    private static void WithLiveToken(
+        UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked, Action<TokenRow> act)
+        => CurrentToken(host, tokens, clicked.NodePath).Subscribe(
+            token =>
+            {
+                if (token is null || token.IsRevoked)
+                    ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.tokenRevoked"));
+                else
+                    act(token);
+            },
+            ex => ctx.Host.UpdateData(ResultDataId, $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
 
-    /// <summary>True for a live token; otherwise says so on the result line.</summary>
-    private static bool IsLive(UiActionContext ctx, LayoutAreaHost host, TokenRow token)
-    {
-        if (!string.IsNullOrEmpty(token.NodePath) && !token.IsRevoked)
-            return true;
-        ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.tokenRevoked"));
-        return false;
-    }
+    /// <summary>The token feed's row, as it is NOW, whose node path is <paramref name="nodePath"/>
+    /// — or null when no identity lists such a token.</summary>
+    internal static IObservable<TokenRow?> CurrentToken(LayoutAreaHost host, ApiTokenService tokens, string? nodePath)
+        => string.IsNullOrEmpty(nodePath)
+            ? Observable.Return<TokenRow?>(null)
+            : TokenRowsFeed(host, tokens).Take(1)
+                .Select(rows => rows.FirstOrDefault(r => string.Equals(r.NodePath, nodePath, StringComparison.Ordinal)));
 
     /// <summary>The feed half of the identity grid: the identity rows of every emission of the
     /// synced identity query. Builds no control.</summary>
