@@ -64,6 +64,13 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // access follows the owning partition's grants. A further attached type needs only one entry
         // here (its segment + table); no schema surgery on existing tables.
         new SatelliteTableMapping(DocumentPartPaths.AnnotationSegment, DocumentPartPaths.AnnotationTable, DocumentPartPaths.AnnotationNodeType),
+        // A durable stream's ITEMS — one node per appended item at
+        // {owner}/_DurableStream/{family}/_DurableStreamItem/{seq:D12} (Doc/Architecture/DurableStreams).
+        // Their own table in the OWNER's partition schema, so a busy stream never lands in mesh_nodes.
+        // 🚨 The segment is deliberately LONGER than every satellite a stream owner may sit under
+        // (_Activity, _DocumentPart, _ThreadMessage …): ResolveTable picks the LONGEST mapped segment in
+        // the path, so an item of a stream owned by a thread message still resolves here.
+        new SatelliteTableMapping(DurableStreamPaths.ItemSegment, DurableStreamPaths.ItemTable, DurableStreamNodeTypes.Item),
         // Storage bindings ({partition}/_Storage/{id}) — the partition's OWN storage configuration,
         // in its own table of the partition schema (Doc/Architecture/StorageBindings). Directly
         // under the partition root, never nested under another satellite.
