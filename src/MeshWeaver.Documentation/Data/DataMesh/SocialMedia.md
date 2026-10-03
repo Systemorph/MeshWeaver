@@ -24,7 +24,7 @@ Doc/DataMesh/SocialMedia/
     Source/                              # C# compiled at startup
       Platform.cs                        # Reference-data record
       SocialMediaPost.cs                 # Content record
-      SocialMediaPostLayoutAreas.cs      # List + Detail layout areas
+      SocialMediaPostLayoutAreas.cs      # List + Row + Detail layout areas
     Post-001.json                        # Instance (nodeType: "Doc/DataMesh/SocialMedia/Post")
   Profile.json                           # Second NodeType
   Profile/
@@ -163,24 +163,41 @@ public record SocialMediaPost
 
 ## 3. Layout Areas — `SocialMediaPostLayoutAreas.cs`
 
-Layout areas are the **views** for instances of the type. They return `IObservable<UiControl?>` — never `Task<…>`, never `async`. Compose with Rx operators:
+Layout areas are the **views** for instances of the type, and every one of them is a **template** ([Templates first, data later](/Doc/GUI/DataBinding)): it is on screen at the first render and BINDS its data instead of loading it on the hub — never `Task<…>`, never `async`, and never a `GetMeshNodeStream()`/query `.Select(… => Controls…)` that waits for the data and bakes it in.
+
+- **A list** is a query the GUI runs — `Controls.MeshSearch` — and each result renders through the post's OWN `Row` area, so the list's hub reads no post at all.
+- **A stored field** is a `JsonPointerReference` into the node, resolved by the GUI through the node stream: `DataContext = LayoutAreaReference.GetMeshNodeDataContext(path)` for the content, `…(path, bindContent: false)` for the node's own `name`.
+- **A derived value** (the Published / Scheduled / Draft status) comes from a FEED — a function that builds no control — bound into a control declared up front with `Template.Bind`.
 
 ```csharp
-public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext _)
+public static UiControl List(LayoutAreaHost host, RenderingContext _) =>
+    Controls.Stack
+        .WithView(Controls.H2("Posts"))
+        .WithView(Controls.MeshSearch
+            .WithHiddenQuery("namespace:Doc/DataMesh/SocialMedia/Post nodeType:Doc/DataMesh/SocialMedia/Post sort:content.scheduledAt-desc")
+            .WithShowSearchBox(false)
+            .WithItemArea("Row"));
+
+public static UiControl Detail(LayoutAreaHost host, RenderingContext _)
 {
-    var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-    return meshService
-        .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
-        .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyChanges)
-        .Select(dict => (UiControl?)BuildList(dict.Values.ToImmutableList()));
+    var path = host.Hub.Address.ToString();
+    var content = LayoutAreaReference.GetMeshNodeDataContext(path);
+    return Controls.Stack
+        .WithView(Controls.H1(new JsonPointerReference("name")) with
+            { DataContext = LayoutAreaReference.GetMeshNodeDataContext(path, bindContent: false) })
+        .WithView(Controls.Badge(new JsonPointerReference("platform")) with { DataContext = content })
+        .WithView(StatusFeed(host).Bind(text => Controls.Badge(text), "postStatus"))
+        .WithView(Controls.Markdown(new JsonPointerReference("body")) with { DataContext = content });
 }
 ```
+
+Each type's `Test/` folder asserts this on the mesh: the template is built from a path (with a feed that never emits) and `LayoutTemplate.DeferredViews(template)` must be empty.
 
 The extension method below is how the layout areas get wired into the NodeType configuration:
 
 ```csharp
 public static LayoutDefinition AddSocialMediaPostLayoutAreas(this LayoutDefinition layout) =>
-    layout.WithView("List", List).WithView("Detail", Detail);
+    layout.WithView("List", List).WithView("Row", Row).WithView("Detail", Detail);
 ```
 
 ---
@@ -263,7 +280,7 @@ When building a new model node type "as code", work through this list in order:
 1. ☐ Create a namespace folder under your target location.
 2. ☐ Add one `.cs` per content record in `Source/`, each with the `<meshweaver>` frontmatter.
 3. ☐ Add reference-data `.cs` files with `[Key]`, static instances, and `All[]`.
-4. ☐ Add a `XxxLayoutAreas.cs` with `List`/`Detail` views returning `IObservable<UiControl?>`.
+4. ☐ Add a `XxxLayoutAreas.cs` with `List`/`Detail` views that are TEMPLATES — a `UiControl` built from the node's path, values bound by pointer, lists as `Controls.MeshSearch` — never a view that loads the node and bakes its values in.
 5. ☐ Write the `Type.json` with `nodeType: "NodeType"` and a configuration lambda.
 6. ☐ Write **at least one** instance JSON with `nodeType` set to the namespace-qualified path.
 7. ☐ **Do not** substitute a Markdown node for a typed view — Markdown is for documents, not structured data.

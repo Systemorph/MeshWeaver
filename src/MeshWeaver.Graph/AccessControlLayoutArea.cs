@@ -112,17 +112,18 @@ public static class AccessControlLayoutArea
                     cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!))))
             .WithView(Controls.Button(ctx.Host.Localize("menu.create"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction((Action<UiActionContext>)(saveCtx =>
+                .WithReactiveClickAction(saveCtx =>
                 {
                     // 🚨 Captured on the click's delivery turn: the upsert below runs in the form
                     // stream's callback, where the AsyncLocal AccessContext may already be gone.
                     var access = saveCtx.Hub.ServiceProvider.GetService<AccessService>();
                     var caller = access?.Context ?? access?.CircuitContext;
                     // Subscribe to the form data stream (synchronous emission via Take(1) —
-                    // one-shot read for a click action, per DataBinding doc rule).
-                    saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    // one-shot read for a click action, per DataBinding doc rule). RETURNED to
+                    // the click, so a fault reading the form is the click's visible refusal.
+                    return saveCtx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
-                        .Subscribe(formValues =>
+                        .Do(formValues =>
                         {
                             var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
                             var selectedRole = formValues.GetValueOrDefault("role")?.ToString()?.Trim();
@@ -174,8 +175,8 @@ public static class AccessControlLayoutArea
                                 .Subscribe(
                                     _ => { },
                                     ex => ShowValidationError(saveCtx, $"{saveCtx.Host.Localize("error.saveFailed")}: {ex.Message}"));
-                        });
-                })));
+                        }).Select(_ => System.Reactive.Unit.Default);
+                }));
 
         var dialog = Controls.Dialog(formContent, "Add Assignment")
             .WithSize("M")

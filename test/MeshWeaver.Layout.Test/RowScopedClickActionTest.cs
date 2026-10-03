@@ -30,6 +30,8 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
     private const string ListArea = "RowList";
     private const string ListDataId = "fruits";
     private const string GridArea = "RowGrid";
+    private const string BlurArea = "RowBlurList";
+    private const string BlurDataId = "blurFruits";
 
     /// <summary>The row record the templates bind to. A node-like <see cref="Path"/> so the node-row
     /// accessor is exercised too.</summary>
@@ -50,6 +52,15 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
         return Task.CompletedTask;
     }
 
+    /// <summary>Every row-scoped blur the owner ran, in order.</summary>
+    private readonly Subject<UiActionContext> blurs = new();
+
+    private Task RecordBlur(UiActionContext ctx)
+    {
+        blurs.OnNext(ctx);
+        return Task.CompletedTask;
+    }
+
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
@@ -58,6 +69,9 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
                 // A bound list: ONE template, one button per row on the client.
                 .WithView(ListArea, fruits.BindMany(ListDataId,
                     fruit => Controls.Button(fruit.Label).WithClickAction(ctx => Record(ctx))))
+                // A bound list of inputs: ONE template, one field per row, each with a blur action.
+                .WithView(BlurArea, fruits.BindMany(BlurDataId,
+                    fruit => new TextFieldControl(fruit.Label).WithBlurAction(ctx => RecordBlur(ctx))))
                 // A data grid whose template column holds the per-row button.
                 .WithView(GridArea, new DataGridControl(Initial)
                     .WithColumn(new PropertyColumnControl<string> { Property = "label" })
@@ -85,8 +99,42 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
 
             ctx.RowAs<Fruit>().Should().Be(Initial[k], $"the button in row {k} was clicked");
             ctx.RowPath().Should().Be(Initial[k].Path, "a node row names its node");
-            ctx.Row!.Pointer.Should().Be($"{ListPointer}/{k}");
+            Assert.NotNull(ctx.Row);
+            ctx.Row.Pointer.Should().Be($"{ListPointer}/{k}");
             ctx.Row.Index.Should().Be(k);
+        }
+    }
+
+    /// <summary>
+    /// The BLUR twin of the test above. A form control declared inside a bound row template also
+    /// exists ONCE on the owner, so its <see cref="BlurEvent"/> names only the template's area; the
+    /// owner relays the event's <see cref="BlurEvent.Row"/> to the blur action exactly as it does for a
+    /// click. Every row is blurred, in an order that is not the render order, and each handler must
+    /// see its OWN row — a relay that dropped the row, or handed every blur the same one, fails here.
+    /// </summary>
+    [HubFact]
+    public async Task EachRowsFieldBlursWithItsOwnRow()
+    {
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), new LayoutAreaReference(BlurArea));
+        var templateArea = $"{BlurArea}/{ItemTemplateControl.ViewArea}";
+        var pointer = LayoutAreaReference.GetDataPointer(BlurDataId);
+        await stream.GetControlStream(templateArea).Should().Within(10.Seconds()).Match(
+            control => control is TextFieldControl,
+            "the row template's field is rendered once, at the template's area",
+            TestContext.Current.CancellationToken);
+        var rendered = await RenderedRows(stream, pointer, Initial.Count);
+
+        foreach (var k in new[] { 2, 0, 3, 1 })
+        {
+            var row = new RowContext { Pointer = $"{pointer}/{k}", Index = k, Value = rendered[k].Clone() };
+            var ctx = await Blur(stream, templateArea, row);
+
+            Assert.NotNull(ctx.Row);
+            ctx.Row.Pointer.Should().Be($"{pointer}/{k}", $"the field in row {k} lost focus");
+            ctx.Row.Index.Should().Be(k);
+            ctx.RowAs<Fruit>().Should().Be(Initial[k], $"the field in row {k} lost focus");
+            ctx.RowPath().Should().Be(Initial[k].Path);
         }
     }
 
@@ -160,7 +208,8 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
         {
             var row = new RowContext
             {
-                Value = JsonSerializer.SerializeToNode(Initial[k], GetClient().JsonSerializerOptions)!.AsObject()
+                Value = Assert.IsType<JsonObject>(
+                    JsonSerializer.SerializeToNode(Initial[k], GetClient().JsonSerializerOptions))
             };
             var ctx = await Click(stream, columnArea, row);
             ctx.RowAs<Fruit>().Should().Be(Initial[k], $"the Open button in grid row {k} was clicked");
@@ -195,10 +244,16 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>The rows as the client's mirror holds them, once it holds <paramref name="count"/>.</summary>
-    private static async Task<ImmutableArray<JsonElement>> RenderedRows(
+    private static Task<ImmutableArray<JsonElement>> RenderedRows(
         ISynchronizationStream<JsonElement> stream, int count)
+        => RenderedRows(stream, ListPointer, count);
+
+    /// <summary>The rows under <paramref name="pointer"/> as the client's mirror holds them, once it
+    /// holds <paramref name="count"/>.</summary>
+    private static async Task<ImmutableArray<JsonElement>> RenderedRows(
+        ISynchronizationStream<JsonElement> stream, string pointer, int count)
     {
-        var rows = await stream.GetDataStream<JsonElement>(new JsonPointerReference(ListPointer))
+        var rows = await stream.GetDataStream<JsonElement>(new JsonPointerReference(pointer))
             .Should().Within(10.Seconds()).Match(
                 rows => rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() == count,
                 $"the client mirror holds the {count} rows it renders",
@@ -215,7 +270,24 @@ public class RowScopedClickActionTest(ITestOutputHelper output) : HubTestBase(ou
         stream.SubmitUserAction(
             new ClickedEvent(area, stream.StreamId) { Row = row },
             actingUser: null, onRefused: null, onAccepted: null);
-        return (await ran.Should().Within(10.Seconds()).Emit(
-            "the clicked button's action runs on the owner", TestContext.Current.CancellationToken))!;
+        var ctx = await ran.Should().Within(10.Seconds()).Emit(
+            "the clicked button's action runs on the owner", TestContext.Current.CancellationToken);
+        Assert.NotNull(ctx);
+        return ctx;
+    }
+
+    /// <summary>Submits a blur the way a client does and returns the context the action ran with.</summary>
+    private async Task<UiActionContext> Blur(
+        ISynchronizationStream<JsonElement> stream, string area, RowContext? row)
+    {
+        var ran = new ReplaySubject<UiActionContext>(1);
+        using var _ = blurs.Subscribe(ran);
+        stream.SubmitUserAction(
+            new BlurEvent(area, stream.StreamId) { Row = row },
+            actingUser: null, onRefused: null, onAccepted: null);
+        var ctx = await ran.Should().Within(10.Seconds()).Emit(
+            "the blurred field's action runs on the owner", TestContext.Current.CancellationToken);
+        Assert.NotNull(ctx);
+        return ctx;
     }
 }

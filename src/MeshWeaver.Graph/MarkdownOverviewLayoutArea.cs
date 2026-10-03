@@ -433,13 +433,13 @@ public static class MarkdownOverviewLayoutArea
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
     /// <returns>The view for the Thumbnail layout area.</returns>
+    /// <remarks>
+    /// A TEMPLATE: the card is declared by path and its view binds the node through
+    /// <c>IMeshNodeStreamCache</c>, so the area emits at once instead of waiting on the node's
+    /// owning hub (Doc/GUI/DataBinding → "Templates first, data later").
+    /// </remarks>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        return Controls.Stack
-            .WithView((h, c) => host.Workspace.GetMeshNodeStream()
-                .Select(node => MeshNodeThumbnailControl.FromNode(node, hubPath)));
-    }
+        => MeshNodeThumbnailControl.ForPath(host.Hub.Address.ToString());
 
     /// <summary>
     /// How a node's content answered <see cref="ReadMarkdownContent"/>.

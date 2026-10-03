@@ -22,8 +22,9 @@
          cache / refresh-floor / fail-closed rules are exercised without reaching GitHub over the
          network. Same white-box grant, same reason, as the three above. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
-    <!-- The coupon list's row-scoped Open action (CouponAdminSettingsTab.CouponGrid) is pinned there,
-         next to the platform half it exercises (RowScopedClickActionTest). -->
+    <!-- The row-scoped actions of the catalog's cards (CatalogLayoutAreas.RenderFromSource) and of the
+         coupon list's Open button (CouponAdminSettingsTab.CouponGrid) are pinned there, next to the
+         platform half they exercise (RowScopedClickActionTest). -->
     <InternalsVisibleTo Include="MeshWeaver.Layout.Test" />
   </ItemGroup>
 

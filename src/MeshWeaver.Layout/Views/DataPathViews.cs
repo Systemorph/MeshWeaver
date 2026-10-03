@@ -136,6 +136,18 @@ public static class DataPathViews
 
         // DataPathReference handles both entity and collection paths. A path the workspace cannot
         // open is reported in the slot (data.streamUnavailable), not thrown.
+        //
+        // 🚨 Ask the map the read itself uses (the #5065 rule in DomainLayoutAreas.Catalog). A first
+        // segment that is neither a virtual path nor a collection a data source maps does not
+        // return null from GetStream — it throws `ArgumentException: Collections X are not mapped
+        // to any source` three frames down, out of the render, and the viewer got the framework's
+        // render-failure sentence instead of this area's own line.
+        var dataContext = host.Workspace.DataContext;
+        var prefix = localPath.Split('/', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (prefix is null
+            || (!dataContext.VirtualPaths.ContainsKey(prefix) && dataContext.GetTypeSource(prefix) is null))
+            return null;
+
         ISynchronizationStream? stream;
         try
         {

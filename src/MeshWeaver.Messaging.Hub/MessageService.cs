@@ -1871,8 +1871,10 @@ public class MessageService : IMessageService
                 logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     name, Address, delivery.Id);
 
+            // The classification the unpack recorded (Forbidden for a participant's
+            // infrastructure-only message) travels with the NACK; Unknown when none was recorded.
             if (delivery.State == MessageDeliveryState.Failed)
-                return Observable.Return(ReportFailure(delivery));
+                return Observable.Return(ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unknown)));
         }
 
 
@@ -2385,7 +2387,7 @@ public class MessageService : IMessageService
             delivery = UnpackIfNecessary(delivery);
 
             if (delivery.State == MessageDeliveryState.Failed)
-                return Observable.Return(ReportFailure(delivery));
+                return Observable.Return(ReportFailure(delivery, delivery.GetFailureErrorType(ErrorType.Unknown)));
         }
 
         delivery = hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
@@ -2887,6 +2889,20 @@ public class MessageService : IMessageService
             logger.LogWarning(ex, "Failed to deserialize delivery {MessageType} (ID: {MessageId}) in {Address} - marking as failed to prevent endless propagation",
                 delivery.Message.GetType().Name, delivery.Id, Address);
             return delivery.Failed($"Deserialization failed: {ex.Message}");
+        }
+
+        // 🚨 A participant connection never posts mesh infrastructure. The ingress stamps every
+        // delivery it accepts (ParticipantIngress); here — on the target, with the message typed,
+        // which is the first point a type that crossed the wire as raw JSON can be named — a
+        // stamped delivery of an [InfrastructureOnly] type is refused before any handler runs.
+        // Its handler trusts the message (a raw storage write, a compile from a payload, a hub's
+        // own lifecycle), and the client wrote the whole envelope, the Sender included, so no
+        // handler could tell this delivery from its own hub's post.
+        if (delivery.State != MessageDeliveryState.Failed
+            && ParticipantIngress.Refuses(delivery) is { } refusal)
+        {
+            logger.LogWarning("Refused a participant delivery in {Address}: {Refusal}", Address, refusal);
+            return delivery.Failed(refusal, ErrorType.Forbidden);
         }
 
         return delivery;

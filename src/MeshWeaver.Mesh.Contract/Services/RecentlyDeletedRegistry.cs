@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Threading;
 using MeshWeaver.Messaging;
 
@@ -206,6 +208,37 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         _activeSubtreeDeletions.AddOrUpdate(rootPath, 1, (_, count) => count + 1);
         return new SubtreeDeletionScope(this, rootPath);
     }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> inside a <see cref="BeginSubtreeDeletion"/> scope on
+    /// <paramref name="rootPath"/>, and RELEASES the scope BEFORE anything the body produced reaches
+    /// the subscriber — its values, its completion and its error alike. Cold: the scope opens on
+    /// Subscribe, before the body is subscribed.
+    ///
+    /// <para>🚨 <b>Why not <c>Observable.Using</c> alone.</b> Rx disposes a <c>Using</c> resource only
+    /// once the subscription is torn down, which is AFTER the result has propagated downstream. The
+    /// result is the "done" signal, so a caller that acts on it — a follow-up teardown of the same
+    /// partition, a create under the path just moved away — runs while the scope is still held, and
+    /// is refused as if the operation it was waiting for were still in flight ("a deletion … is
+    /// already in flight — one teardown at a time"). <c>HandleDeleteNodeRequest</c> releases its scope
+    /// by hand before posting its response for the same reason; this is that ordering as one
+    /// primitive. The body's notifications are held until it terminates, the scope is released, and
+    /// they are then delivered in order. <c>Using</c> stays underneath for unsubscribe, and the scope's
+    /// Dispose is idempotent, so the early release and the safety net are one decrement.</para>
+    /// </summary>
+    /// <typeparam name="T">The body's element type.</typeparam>
+    /// <param name="rootPath">The subtree being deleted (or moved away, or torn down).</param>
+    /// <param name="body">The work the scope protects. Subscribed once, inside the scope.</param>
+    /// <returns>The body's notifications, delivered after the scope is released.</returns>
+    public IObservable<T> WithinSubtreeDeletion<T>(string rootPath, Func<IObservable<T>> body) =>
+        Observable.Using(
+            () => BeginSubtreeDeletion(rootPath),
+            scope => Observable.Defer(body)
+                .Materialize()
+                .ToList()
+                .Do(_ => scope.Dispose())
+                .SelectMany(notifications => notifications.ToObservable(ImmediateScheduler.Instance))
+                .Dematerialize());
 
     /// <summary>
     /// True when <paramref name="path"/> equals — or lies under — a subtree root whose
