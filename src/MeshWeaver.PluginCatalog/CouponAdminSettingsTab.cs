@@ -292,7 +292,7 @@ public static class CouponAdminSettingsTab
     /// Opens the coupon whose row the click came from — the row as the person saw it, never one
     /// re-read by position, so a list that refreshed since the render still opens the coupon that
     /// was clicked. A click with no row (or a row with no code) opens nothing.
-    /// The code is client input, so it is escaped as ONE path segment (<see cref="Uri.EscapeDataString"/>):
+    /// The code is client input, so it is escaped as ONE path segment (<see cref="Uri.EscapeDataString(string)"/>):
     /// it cannot add a separator, a query or a fragment to the URI it builds. Opening it is still gated
     /// by the viewer's own read of the node the URI resolves to — a navigation grants nothing.
     /// </summary>
