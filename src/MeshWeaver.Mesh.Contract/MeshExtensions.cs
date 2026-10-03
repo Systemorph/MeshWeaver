@@ -130,6 +130,16 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 
+        // Document parts (Doc/Architecture/DocumentParts). The append rides from ANY producer hub to
+        // the document's own hub, and the part / annotation content is read by every hub that lists a
+        // document — all of them need the short discriminators, or a receiving hub sees an untyped
+        // JsonElement and the request handler never matches.
+        config.TypeRegistry.WithType(typeof(AppendDocumentTextRequest), nameof(AppendDocumentTextRequest));
+        config.TypeRegistry.WithType(typeof(AppendDocumentTextResponse), nameof(AppendDocumentTextResponse));
+        config.TypeRegistry.WithType(typeof(DocumentLogTarget), nameof(DocumentLogTarget));
+        config.TypeRegistry.WithType(typeof(DocumentPart), nameof(DocumentPart));
+        config.TypeRegistry.WithType(typeof(DocumentPartAnnotation), nameof(DocumentPartAnnotation));
+
         return config;
     }
 
