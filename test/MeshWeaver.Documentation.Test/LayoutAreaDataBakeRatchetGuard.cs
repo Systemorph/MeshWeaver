@@ -44,7 +44,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     private const string AllowFileName = "LayoutAreaDataBakeSites.allow";
 
     /// <summary>The seeded inventory's size. Lower it in the same change that lowers a line.</summary>
-    private const int TotalBudget = 22;
+    private const int TotalBudget = 19;
 
     /// <summary>Reads that make a unit wait on data.</summary>
     internal static readonly Regex LoadPattern = new(

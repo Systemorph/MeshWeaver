@@ -2102,5 +2102,8 @@
   "invitations.status.revoked": "Revoked",
   "privacy.loadFailed": "_Could not load the privacy statement: {0}_",
   "privacy.placeholder": "Write the privacy statement in markdown…",
-  "ui.updateStatusUnavailable": "_The update status could not be read: {0}_"
+  "ui.updateStatusUnavailable": "_The update status could not be read: {0}_",
+  "coupons.none": "No coupons yet — create the first one above.",
+  "coupons.listFailed": "Could not read the coupons: {0}",
+  "coupons.openHint": "Click a coupon to open it."
 }
