@@ -636,7 +636,6 @@
   "ui.notYetRun": "Not yet run.",
   "ui.activityEarlierMessages": "… {0} earlier messages archived",
   "ui.activityNoOutput": "This run produced no output.",
-  "ui.activityResult": "Result",
   "ui.running": "Running…",
   "ui.statusDone": "Done",
   "ui.statusFailed": "Failed",
