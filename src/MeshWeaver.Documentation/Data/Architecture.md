@@ -388,6 +388,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Hub Initialization Failure](HubInitializationFailure)
 - [Orleans Stream Pub-Sub Durability](OrleansStreamPubSubDurability) — a publish with no subscriber succeeds, so a cross-silo reply can vanish with nothing logged
 - [Durable Streams Are Mesh Nodes](DurableStreamsViaMeshNodes) — the design that retires the memory stream without a provider
+- [Durable Streams](DurableStreams) — a stream of saved mesh nodes consumed inside a hub: ordered appends, a lease that is the subscription, an acknowledged checkpoint, takeover, orphan and wake
 - [The Pod-Hub Claim Must Be Re-Asserted](PodHubClaimReassertion) — a claim asserted once into a directory that is re-partitioned on every membership change is lost silently, and forever
 - [Oversized Delivery Refusal](OversizedDeliveryRefusal) — a message too large for its transport destroys the connection carrying it; refuse at the producer, never raise the limit
 - [Content Sync Visibility](ContentSyncVisibility) — a Space whose assets the transport refuses says so, on the Space itself, naming the file, its size and the limit
