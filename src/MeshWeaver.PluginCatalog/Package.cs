@@ -585,6 +585,16 @@ public record PackageManifest
     public DateTimeOffset? HeldUpdateDispatchedAt { get; init; }
 
     /// <summary>
+    /// When the CURRENT hold began — stamped the first time <see cref="HeldUpdate"/> is set and kept
+    /// while it stays set, whatever the sentence says (it names the running platform, so it changes
+    /// on every roll while the package stays held). Cleared with the hold. The fleet version view's
+    /// "held since" and the "not in prod for too long" rule read it (maintainer, 2026-10-04: a hold
+    /// on the control instance went unseen from 09-18 until a manual refresh on 10-03).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? HeldSince { get; init; }
+
+    /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF
     /// (<see cref="ModuleManifest.Files"/>) — the candidate side of the diff, where
     /// <see cref="InstalledFiles"/> is the installed side. Set by the source while listing; never

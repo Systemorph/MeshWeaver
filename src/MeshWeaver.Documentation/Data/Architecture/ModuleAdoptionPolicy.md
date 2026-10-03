@@ -113,10 +113,21 @@ the pack-time lint's parity oracle.
 | Compiled module (`ModuleUpdateDecision`, via `PluginBundleClient.AdoptModule`) | `SkipPlatformBelowFloor`. The bundle is not even downloaded, and the landed generation keeps running. The floor applies to a `Land` answer only, so it never hides a more specific skip. |
 | Source content: an update (`PackageUpdateReconciler`, `CatalogLayoutAreas.InstallOrUpdate`) | Held before any file is fetched. The installed version keeps running. The install record carries `heldUpdate` (*"held: 1.16.0 needs platform ≥ 3.0.0-ci.9494, running 3.0.0-ci.9412 — updates when the platform rolls"*), and the update applies on the first reconcile after the platform rolls. A record already at the candidate's hash is not held: re-landing what is already there replaces nothing. |
 | Source content: a fresh install (`InstallOrUpdate`, `PackageInstaller.Install`) | Refused with `PackagePlatformFloorException`, which names both versions. Nothing is fetched or written. |
+| Source content: any other caller of the installer over an EXISTING record (a maintenance `RefreshModules`) | Refused the same way unless it re-installs the content already recorded (`AllowedOverExistingRecord`, 2026-10-04). Before, an existing record waved any version through. |
 | GitSync (`ModuleSyncDecision`) | That one module is declined through the same `PlatformFloor` decision. Its siblings still sync. |
 | Prebuilt adoption (`PrebuiltAdoptionPolicy`) | Declined through the same decision, and the content compiles instead. This path used to hold a private SemVer copy, which kept the 2026-09-07 trap live. |
 
 The self-update roll gate (`ReleaseAvailability`) is unchanged, and no roll waits on a floor.
+
+**A hold ends by itself (2026-10-04).** "Updates when the platform rolls" is kept: every roll is a
+boot, the boot reconcile re-decides each held candidate, and the safety-net timer and every
+module-published broadcast do the same. The first pass on which the floor is met CLEARS the record's
+`heldUpdate`/`heldSince` and decides the update again. Tonight's AI hold did not apply after the
+roll for a SECOND reason the sentence never named: its partition is sync-owned, so the decision then
+degraded to the reminder, and no lane ever landed a sync-owned package's module — see
+[One Partition, One Bookkeeping](../OnePartitionOneBookkeeping), gate 1e, for how that now converges.
+The target such a hold converges to is defined once in [One Promotion Gate](../OnePromotionGate) →
+*The target set*.
 
 ### Blocking tickets
 

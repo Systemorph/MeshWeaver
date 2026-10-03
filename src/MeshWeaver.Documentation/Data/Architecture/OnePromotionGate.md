@@ -202,6 +202,57 @@ Every armed set carries its pair — the tag `<core7>-p<plugins7>`, the promotio
 against the record's core commit (P against its Plugins commit) — Systemorph/Memex
 `scripts/image-contains.py`, which also resolves the tag an instance runs.
 
+## The target set — one definition for CI, the fleet and every test run
+
+> *"We must know which version we want to test and update everyone to latest."* — maintainer,
+> 2026-10-04, after a night in which `Plugins/AI` stayed held at 1.18.1 on the control instance
+> although the platform had rolled past its floor, and `Plugins/Hosting` had been held since 09-18.
+
+**The target set is what CI tested AND the fleet can run — and every instance converges to it.**
+
+| half | definition | read in CI | read in the mesh |
+|---|---|---|---|
+| **platform** `T` | the newest set that is **sealed** (promote + verify + platform bake succeeded) **and armed** (its portal carries the version tag `<version>-ci.<n>`, which only `arm` writes) | `resolve-platform.py --armed` | `Admin/UpdatePolicy.latestAvailableTag` — the self-updater lists exactly the armed version tags |
+| **modules** `M*` | for each package, the version the registry serves, when its floor is ≤ `T`; a served version above `T` is *awaiting arming*, not a target | the registry's served feed | the reconcile ledger's `served` rows (`MeshWeaver.PluginCatalog.TargetSet`) |
+
+**Why armed, not merely sealed — measured 2026-10-04.** Set `3.0.0-ci.9898` was the newest SEALED set;
+a roll of an instance to it failed at the mirror because `memex-portal-ai:3.0.0-ci.9898` did not
+exist — it was not armed yet. A set the fleet cannot run is not a target.
+
+**The candidate and the target are one pipeline, not two definitions.** Without `--armed` the
+resolver returns the newest sealed set — the CANDIDATE every CI run (and `stamp-floors`, which writes
+it onto each package as `minMeshVersion`) tests, so that `promotion-candidate.yml`'s verdict can ARM
+it. Arming is what turns the candidate into the target. A host that cannot read an armed tag (no
+self-update) falls back to the newest served floor, which is still the resolver's own answer.
+
+**An instance has CONVERGED** when its running platform is at or above `P*` and every installed
+package is at its served version. Each instance computes this about itself (`DeploymentReportService`
+carries `targetPlatform` and, per module, the installed version, the served version and any hold
+with its since-when) and reports it to the control instance, whose fleet view (MeshWeaver.Plugins
+`Hosting/ModuleInventory` → `Fleet`) renders every instance against the target set.
+
+**Converging is automatic** (`PackageUpdateReconciler`, `RegistryUpdateReconciler`):
+
+- a module HELD by its platform floor re-evaluates on boot (every roll is a boot), on every
+  module-published broadcast and on the safety-net timer; the moment the floor is met the hold is
+  CLEARED from the record and the update is decided again;
+- a module whose partition a `_GitSync` owns converges the moment that sync has LANDED exactly the
+  served content (`IPartitionSourceTracking.SyncedModules`): the install record adopts it without
+  writing a node and the module lane lands the matching code — still one writer per partition
+  ([One Partition, One Bookkeeping](../OnePartitionOneBookkeeping)). Until then the record says why
+  it is held and since when;
+- the installer refuses a version above the running platform's floor even over an existing record,
+  so a maintenance refresh can never land what the floor holds.
+
+**Every test run starts from it** (`ITestRunPreflight`, maintainer 2026-10-04: *"should be always
+beginning of each test run", "done by framework"*): resolve the target set, read what the mesh runs,
+converge it (or FAIL fast naming the skew where the run may not change the mesh — and always for a
+platform behind the target, because a test run never rolls an image), and record the versions under
+test as the run's header. `MeshOperations.RunTests` — every in-mesh Tests-area run, the CI gate's,
+an agent's and the PR steward's production validation alike — runs it first and logs the header
+into the run's activity; the monolith test base records the in-process mesh's versions before any
+test body. No test opts in.
+
 ## Content-neutral pushes do not restart a Plugins pull-request run
 
 A push that only merges `main` into a pull request, or regenerates `manifest.lock` files, changes
