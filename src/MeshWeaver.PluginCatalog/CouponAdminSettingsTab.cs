@@ -284,7 +284,7 @@ public static class CouponAdminSettingsTab
     /// with the click (<see cref="OpenCoupon"/>).
     /// </summary>
     internal static ButtonControl OpenCouponButton()
-        => Controls.Button(new ContextProperty(nameof(CouponRow.Code).ToCamelCase()!))
+        => Controls.Button(new ContextProperty(JsonNamingPolicy.CamelCase.ConvertName(nameof(CouponRow.Code))))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(OpenCoupon);
 
@@ -292,11 +292,14 @@ public static class CouponAdminSettingsTab
     /// Opens the coupon whose row the click came from — the row as the person saw it, never one
     /// re-read by position, so a list that refreshed since the render still opens the coupon that
     /// was clicked. A click with no row (or a row with no code) opens nothing.
+    /// The code is client input, so it is escaped as ONE path segment: it can only name a node
+    /// directly under the coupons namespace, and opening it is still gated by the viewer's own read
+    /// of that node — a navigation grants nothing.
     /// </summary>
     internal static Task OpenCoupon(UiActionContext ctx)
     {
         if (ctx.RowAs<CouponRow>() is { Code.Length: > 0 } row)
-            ctx.NavigateTo($"/{CouponsNamespace}/{row.Code}");
+            ctx.NavigateTo($"/{CouponsNamespace}/{Uri.EscapeDataString(row.Code)}");
         return Task.CompletedTask;
     }
 

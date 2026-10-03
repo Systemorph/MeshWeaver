@@ -111,7 +111,7 @@ public class CouponListOpensTheClickedCouponTest(ITestOutputHelper output) : Hub
             c => c is ButtonControl,
             "the Code column's button is rendered into the template column's area",
             TestContext.Current.CancellationToken);
-        ((ButtonControl)button!).Data.Should().Be(new ContextProperty("code"),
+        button.Should().BeOfType<ButtonControl>().Subject.Data.Should().Be(new ContextProperty("code"),
             "each row's button is labelled with that row's code, bound to the grid row");
         return (stream, buttonArea);
     }
@@ -144,6 +144,8 @@ public class CouponListOpensTheClickedCouponTest(ITestOutputHelper output) : Hub
         Submit(stream, area, row);
         var request = await next.Should().Within(10.Seconds()).Emit(
             "the Open button navigates to the coupon", TestContext.Current.CancellationToken);
-        return request!.Uri;
+        return request is { } navigation
+            ? navigation.Uri
+            : throw new InvalidOperationException("The Open button navigated nowhere.");
     }
 }
