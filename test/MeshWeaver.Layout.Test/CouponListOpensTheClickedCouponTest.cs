@@ -83,6 +83,22 @@ public class CouponListOpensTheClickedCouponTest(ITestOutputHelper output) : Hub
             "the person clicked BRAVO; the row that has since moved into its slot is not theirs to open");
     }
 
+    /// <summary>The code is client input and is escaped as ONE path segment: a code carrying a
+    /// separator and a space opens that single escaped segment, never a deeper path.</summary>
+    [HubFact]
+    public async Task ACodeThatNeedsEscapingOpensOneEscapedSegment()
+    {
+        var (stream, buttonArea) = await OpenGrid();
+        await RenderedRows(stream, Initial.Count);
+
+        rows.OnNext([Row("A/B C")]);
+        var rendered = await RenderedRows(stream, 1, first: "A/B C");
+
+        var uri = await ClickAndReadNavigation(stream, buttonArea, AsTheGridRendersIt(rendered[0]));
+        uri.Should().Be($"/{CouponAdminSettingsTab.CouponsNamespace}/A%2FB%20C",
+            "the code's '/' and ' ' are escaped inside its one segment, so it cannot name a deeper path");
+    }
+
     /// <summary>NEGATIVE CONTROL: the same button clicked with no row opens nothing — the coupon comes
     /// from the row on the click and from nothing else.</summary>
     [HubFact]
