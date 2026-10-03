@@ -1396,8 +1396,11 @@ internal static class NodeTypeEnrichmentHelpers
                     // Use the persisted integer version the IAssemblyStore.Put used,
                     // not a parse of the display Version string.
                     var releaseVersion = release.AssemblyStoreVersion ?? 0;
+                    // The release names its own content path: a pinned (rolled-back) release
+                    // resolves to ITS bytes, never to a newer build sharing the version key.
                     return ResolveAssembly(
-                            meshHub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
+                            meshHub, release.AssemblyCollection, release.NodeTypePath, releaseVersion,
+                            release.AssemblyContentPath)
                         .SelectMany(localPath =>
                         {
                             if (string.IsNullOrEmpty(localPath))
@@ -1491,7 +1494,8 @@ internal static class NodeTypeEnrichmentHelpers
             // points at are valid. If the store has since lost them,
             // TriggerRecompileAndRetry kicks a fresh compile below.
             var compileVersion = def.LastCompiledVersion ?? typeNode.Version;
-            return ResolveAssembly(meshHub, def.LatestAssemblyCollection, typeNode.Path, compileVersion)
+            return ResolveAssembly(meshHub, def.LatestAssemblyCollection, typeNode.Path, compileVersion,
+                    def.LatestAssemblyPath, def.LatestAssemblyMvid)
                 .SelectMany(localPath =>
                 {
                     if (string.IsNullOrEmpty(localPath))
@@ -2169,13 +2173,16 @@ internal static class NodeTypeEnrichmentHelpers
     }
 
     private static IObservable<string?> ResolveAssembly(
-        IMessageHub meshHub, string? collection, string nodeTypePath, long version)
+        IMessageHub meshHub, string? collection, string nodeTypePath, long version,
+        string? contentPath = null, string? assemblyMvid = null)
     {
         if (string.IsNullOrEmpty(collection)) return Observable.Return<string?>(null);
         var store = string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
             ? (IAssemblyStore)FrameworkAssemblyStore.Instance
             : meshHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-        return store.TryGetAssemblyPath(nodeTypePath, version);
+        // 🚨 By IDENTITY, not by key: the record names the content path and MVID it published,
+        // and several builds can share one version key (see IAssemblyStore.TryGetBuildPath).
+        return store.TryGetBuildPath(nodeTypePath, version, contentPath, assemblyMvid);
     }
 
     /// <summary>

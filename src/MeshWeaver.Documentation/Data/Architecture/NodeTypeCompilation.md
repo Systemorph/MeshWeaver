@@ -2238,8 +2238,9 @@ old and new assemblies serving side by side (`$type` registration mismatches), p
 the type and instance hubs were recycled by hand.
 
 The missing piece is **convergence**, and it is policy, not plumbing. What that default costs a
-reader who has just rolled a fix — and what a recycle can and cannot change about the bytes an
-instance binds — is [Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle).
+reader who has just rolled a fix — and the update contract for what a recycle binds (the newest
+build the record names, by content hash and MVID; the old build keeps serving until the dispose) —
+is [Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle).
 `Modules:AutoRecycleOnStaleBuild` (#2192, default **off**) turns the banner's offer into an
 automatic self-recycle — when a NodeType publishes a usable build whose assembly differs from the
 one an instance bound, the instance posts its own `DisposeRequest`, re-activates on the new
@@ -2361,10 +2362,12 @@ path.
 *without bound* is the per-emit `{nodeName}_{ticks}_{guid}/` directory set, and every emit
 publishes, so that half is evicted exactly as before. What is no longer evicted the moment it
 appears is a generation a process only **hydrated**: an `IAssemblyStore` path is keyed
-`v{version}-{frameworkTag}-{hash}.dll` and is first-write-wins per version, so a silo reading a
-version another silo compiled keeps the previous version's context until the NodeType hub disposes
+`v{version}-{frameworkTag}-{hash}.dll` and is content-addressed (one file per distinct build — it
+was first-write-wins per version until 2026-10-03, see
+[Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle) → "The next activation binds
+the newest build"), so a silo reading a build another silo compiled keeps the previous build's context until the NodeType hub disposes
 (`UnloadNodeContexts`, which `Modules:AutoRecycleOnStaleBuild` drives on a stale build). That
-residue is bounded by the number of VERSIONS one hub outlives, not by recompiles — and it is the
+residue is bounded by the number of distinct BUILDS one hub outlives — a same-version recompile of different bytes is its own build and counts — not by the emit count — and it is the
 deliberate price of the correctness clause. A read that superseded would evict the CURRENT
 generation's context and then re-create one under the same path, putting **two live ALCs behind one
 file**: the two-generations split the section below is about, manufactured by the reclaim itself.
