@@ -190,7 +190,6 @@
         "Systemorph/MeshWeaver",
         "Systemorph/MeshWeaver.Plugins",
         "Systemorph/MeshWeaver.Education",
-        "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex"
@@ -233,8 +232,9 @@
         "TEXT CHANGE LANDED (2026-10-03/04, the update contract: after a DisposeRequest the next",
         "activation binds the NEWEST build, the old one keeps serving until then). Step 1 is this",
         "change: the hub carries the new text and `required-in` is narrowed to the hub alone, per",
-        "SharedRuleBlocks.md (core#6032). Step 2: Plugins#2761, Education#385, Reinsurance#247,",
-        "SocialMedia#235, Manufacturing#126, Memex#645. Step 3: this widening."
+        "SharedRuleBlocks.md (core#6028). Step 2: Plugins#2761, Education#385, Reinsurance#247,",
+        "SocialMedia#235, Manufacturing#126, Memex#645. Step 3: widened to every repo carrying it;",
+      "Reinsurance is added when #247 lands (its gate is down fleet-wide, not for this text)."
       ]
     },
     {
