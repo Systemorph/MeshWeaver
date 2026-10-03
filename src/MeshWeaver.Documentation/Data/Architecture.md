@@ -225,6 +225,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Threads, activities & AI
 
 - **Start here:** [Thread Operations](ThreadOperations)
+- [End Vision — Jobs, Durable Streams and Document Ingestion](DocumentIngestionEndVision) — the architecture decided on 2026-10-03 (every activity a job in a queue on control, streams as nodes, triage that acts, document ingestion) and THE plan, with its executable e2e specs
 - [Thread Supervision](ThreadSupervision) — a round ends stamped, whatever failed; the one death the hub cannot cover is its own, and the supervisor, dispatch pool and `Admin/Threads` queue page that cover it
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
