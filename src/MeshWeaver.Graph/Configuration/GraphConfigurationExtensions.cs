@@ -92,6 +92,8 @@ public static class GraphConfigurationExtensions
                 .AddActivityType()
                 .AddActivityLogSegmentType()
                 .AddUserActivityType()
+                // Durable streams = saved mesh nodes — Doc/Architecture/DurableStreams.
+                .AddDurableStreamTypes()
                 .AddHomeTabType()
                 .AddHomeConfigType()
                 .AddAppType()
