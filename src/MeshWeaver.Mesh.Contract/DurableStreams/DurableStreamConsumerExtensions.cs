@@ -21,7 +21,12 @@ namespace MeshWeaver.Mesh;
 ///         .Select(_ =&gt; Unit.Default));
 /// </code>
 ///
-/// <para><b>The lease IS the subscription.</b> On activation the consumer CLAIMS the stream from the
+/// <para><b>Dormant until there is a stream.</b> Activation costs one existence query: a consumer
+/// whose stream node does not exist creates nothing, claims nothing and arms no timer until a
+/// producer's append wakes its hub (<see cref="DurableStreamWake"/>) — so a NodeType that consumes
+/// a family can be carried by thousands of hubs that never get a stream.</para>
+///
+/// <para><b>The lease IS the subscription.</b> Once there is a stream the consumer CLAIMS it from the
 /// stream node's hub. Granted, it reads the items strictly after the stream's acknowledged
 /// <see cref="DurableStreamState.Checkpoint"/> and processes them one at a time, in order; after an
 /// item's handler observable COMPLETED it acknowledges the sequence (fenced by its lease epoch) and
@@ -166,7 +171,8 @@ public static class DurableStreamConsumerExtensions
         work.IgnoreElements()
             .Select(_ => (AckDurableStreamResponse?)null)
             .Concat(Observable.Defer(() => hub.ToStreamHub<AckDurableStreamResponse>(
-                item.Stream, new AckDurableStreamRequest(hub.Address.ToString(), turn.Message.Epoch, item.Sequence))))
+                item.Stream, new AckDurableStreamRequest(hub.Address.ToString(), turn.Message.Epoch, item.Sequence),
+                createIfMissing: false)))
             .LastAsync()
             .Subscribe(
                 ack => Reply(ack is { Accepted: true } ? null : ack?.Reason ?? "the acknowledgement was not answered",
@@ -201,7 +207,20 @@ public static class DurableStreamConsumerExtensions
         {
             logger.LogDebug("Durable stream consumer {Hub} starting on {Stream}", hub.Address, stream);
 
-            subscriptions.Add(Observable.Defer(Lifecycle)
+            // 🚨 DORMANT until there is a stream. A NodeType that consumes a family is carried by EVERY
+            // hub of that type, most of which never get a stream (every uploaded document carries the
+            // DocumentLog consumer). So activation costs ONE existence query and nothing else: no
+            // create, no claim, no timer. A stream that exists is claimed; one that does not is
+            // claimed only when a producer's append wakes this hub (DurableStreamWake).
+            var started = hub.StreamExists(stream)
+                .Do(exists => logger.LogDebug("Durable stream consumer {Hub}: {Stream} {State}", hub.Address, stream,
+                    exists ? "exists — claiming" : "does not exist — dormant until a wake"))
+                .Where(exists => exists)
+                .Select(_ => Unit.Default)
+                .Merge(wakes)
+                .Take(1);
+
+            subscriptions.Add(started.SelectMany(_ => Observable.Defer(Lifecycle)
                 .RetryWhen(failures => failures
                     .Select((failure, attempt) => (failure, attempt))
                     .TakeWhile(_ => !hub.IsShuttingDown)
@@ -218,7 +237,7 @@ public static class DurableStreamConsumerExtensions
                             "Durable stream consumer {Hub} stopped on {Stream}; the item was NOT acknowledged and is "
                             + "retried from the checkpoint in {Delay}", hub.Address, stream, delay);
                         return Observable.Timer(delay);
-                    }))
+                    })))
                 .Subscribe(
                     _ => { },
                     ex => logger.LogError(ex, "Durable stream consumer {Hub} on {Stream} ended with an error", hub.Address, stream)));
@@ -231,7 +250,7 @@ public static class DurableStreamConsumerExtensions
                 {
                     var held = Interlocked.Read(ref epoch);
                     if (held > 0)
-                        hub.ToStreamHub<ReleaseDurableStreamResponse>(stream, new ReleaseDurableStreamRequest(hub.Address.ToString(), held))
+                        hub.ToStreamHub<ReleaseDurableStreamResponse>(stream, new ReleaseDurableStreamRequest(hub.Address.ToString(), held), createIfMissing: false)
                             .Subscribe(
                                 released => logger.LogDebug("Durable stream consumer {Hub} released {Stream}: {Released}", hub.Address, stream, released.Released),
                                 ex => logger.LogWarning(ex,
@@ -241,7 +260,7 @@ public static class DurableStreamConsumerExtensions
         }
 
         private IObservable<Unit> Lifecycle()
-            => hub.ToStreamHub<ClaimDurableStreamResponse>(stream, new ClaimDurableStreamRequest(hub.Address.ToString()))
+            => hub.ToStreamHub<ClaimDurableStreamResponse>(stream, new ClaimDurableStreamRequest(hub.Address.ToString()), createIfMissing: false)
                 .SelectMany(claim => claim.Granted
                     ? Consume(claim)
                     : WaitToClaimAgain(claim).SelectMany(_ => Observable.Defer(Lifecycle)));

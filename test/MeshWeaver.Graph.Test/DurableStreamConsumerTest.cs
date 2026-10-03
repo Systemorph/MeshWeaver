@@ -95,6 +95,45 @@ public class DurableStreamConsumerTest(ITestOutputHelper output) : MonolithMeshT
         items.Select(n => n.Id).OrderBy(id => id).Should().Equal(Enumerable.Range(1, 5).Select(i => DurableStreamPaths.ItemId(i)));
     }
 
+    /// <summary>
+    /// 🚨 DORMANCY. A NodeType that consumes a family is carried by every hub of that type — most of
+    /// which never get a stream (every uploaded document carries the DocumentLog consumer). Five
+    /// active consumer hubs with no stream create NO stream node (and therefore claim nothing) over a
+    /// window; then a publish to ONE of them wakes exactly that one, and the other four stay dormant.
+    /// </summary>
+    [Fact]
+    public async Task ConsumersWithoutAStream_StayDormant_UntilAPublishWakesExactlyThatOne()
+    {
+        var owners = new List<string>();
+        for (var i = 0; i < 5; i++)
+        {
+            var owner = await Seed($"dormant-{i}", ConsumerType);
+            await Activate(owner);
+            owners.Add(owner);
+        }
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        IObservable<int> StreamNodes() => owners
+            .Select(owner => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{DurableStreamPaths.StreamPath(new DurableStreamId(Family, owner))}"))
+                .Where(c => c.ChangeType == QueryChangeType.Initial).Take(1).Select(c => c.Items.Count))
+            .Merge()
+            .Sum();
+
+        // A negative wait: there is no positive signal for "did nothing" — the window is the claim.
+        await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        (await StreamNodes().Should().Emit("the stream-node census")).Should().Be(0,
+            "an activated consumer whose stream does not exist creates nothing and claims nothing");
+
+        await PublishRange(owners[2], 1, 3);
+        var log = await QuietAfter(owners[2], 3);
+        log.Should().Equal(Sequence(1, 3), "the publish wakes exactly the hub it was for");
+        foreach (var other in owners.Where(o => o != owners[2]))
+            processed.Snapshot(other).Should().BeEmpty($"{other} has no stream and stays dormant");
+        (await StreamNodes().Should().Emit("the stream-node census after the publish")).Should().Be(1,
+            "only the stream that was published to exists");
+    }
+
     // ── The stream's own hub is recycled ───────────────────────────────────────────────────────
 
     /// <summary>

@@ -158,8 +158,12 @@ public static class DurableStreamHubExtensions
     /// TestCluster). So the order is create-then-send, once per stream per process
     /// (<see cref="DurableStreamDirectory"/>); a refusal after that (the node was deleted) re-ensures
     /// and resends once.</para>
+    ///
+    /// <para>Only a PRODUCER creates a stream (<paramref name="createIfMissing"/>). A consumer never
+    /// does: it only sends to a stream it has seen exist, or one whose append woke it.</para>
     /// </summary>
-    internal static IObservable<TResponse> ToStreamHub<TResponse>(this IMessageHub hub, DurableStreamId stream, IRequest<TResponse> request)
+    internal static IObservable<TResponse> ToStreamHub<TResponse>(
+        this IMessageHub hub, DurableStreamId stream, IRequest<TResponse> request, bool createIfMissing = true)
     {
         var target = new Address(DurableStreamPaths.StreamPath(stream));
         // 🚨 Issued from the MESH's read-issuing hub, never from the caller: a consumer that is
@@ -171,6 +175,8 @@ public static class DurableStreamHubExtensions
         IObservable<TResponse> Send() => issuer.Observe(request, o => o.WithTarget(target)).Take(1).Select(d => d.Message);
         IObservable<System.Reactive.Unit> Ensure() => EnsureStreamNode(hub, stream).Do(_ => directory.MarkEnsured(stream));
 
+        if (!createIfMissing)
+            return Send();
         return (directory.IsEnsured(stream) ? Send() : Ensure().SelectMany(_ => Send()))
             .Catch<TResponse, DeliveryFailureException>(refused =>
             {
@@ -180,6 +186,23 @@ public static class DurableStreamHubExtensions
                 directory.Forget(stream);
                 return Ensure().SelectMany(_ => Send());
             });
+    }
+
+    /// <summary>
+    /// Whether the stream node exists — ONE query (a listing read, never a point read of a node that
+    /// may be absent, which would answer NotFound and arm the read path's negative cache). Its
+    /// negative may be a moment stale; that is harmless here, because a producer's first append to
+    /// a stream nobody holds WAKES the owner.
+    /// </summary>
+    internal static IObservable<bool> StreamExists(this IMessageHub hub, DurableStreamId stream)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => meshService.Query<MeshNode>(
+                    MeshQueryRequest.FromQuery($"path:{DurableStreamPaths.StreamPath(stream)}")))
+            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1)
+            .Select(change => change.Items.Any());
     }
 
     private static IObservable<System.Reactive.Unit> EnsureStreamNode(IMessageHub hub, DurableStreamId stream)
