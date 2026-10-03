@@ -603,15 +603,36 @@ def _roster_roundtrip_cases(fleet: str) -> list[tuple[str, bool]]:
                                "Systemorph/MeshWeaver") == [])]
 
     # (a) the repository LOWERS a grant the roster still records
-    lowered = copy.deepcopy(rows)
-    victim = next((r for r in lowered if isinstance(r.get("grants"), dict) and r["grants"]), None)
+    # 🚨 The lowering must be one the assertion can SEE. While a caller's grant is being RAISED the
+    # roster carries two rows for one workflow#job — the RETIRING grant and the ARRIVING one, both
+    # `pending:` — and a pending row is allowed to be absent, so lowering it proves nothing (and a
+    # throwaway checkout can hold only one of the two). The control therefore lowers a NON-pending
+    # row, to a grant nobody recorded, taking the first repository in the roster that has one.
+    victim_repo, lowered, smaller, victim = repo, None, None, None
+    for cand_repo, cand_entry in sorted((doc.get("repos") or {}).items()):
+        cand_rows = copy.deepcopy((cand_entry or {}).get("callers") or [])
+        recorded = {_row_key(r) for r in cand_rows}
+        for r in cand_rows:
+            if "pending" in r or not (isinstance(r.get("grants"), dict) and r["grants"]):
+                continue
+            for drop in list(r["grants"]):
+                candidate = {k: v for k, v in r["grants"].items() if k != drop} or "inherit"
+                if _row_key(dict(r, grants=candidate)) not in recorded:
+                    victim, smaller = r, candidate
+                    break
+            if victim is not None:
+                break
+        if victim is not None:
+            victim_repo, lowered = cand_repo, cand_rows
+            break
     if victim is None:
-        cases.append((f"{repo} has an explicit grant to lower — otherwise this control is vacuous",
+        cases.append(("the roster has a non-pending explicit grant to lower — otherwise this control is vacuous",
                       False))
     else:
-        victim["grants"] = {k: v for k, v in list(victim["grants"].items())[1:]} or "inherit"
-        cases.append((f"a repository that LOWERS a recorded grant is caught",
-                      assert_fleet_row(_materialize_row(lowered, "Systemorph/MeshWeaver"), repo,
+        victim["grants"] = smaller
+        cases.append((f"a repository that LOWERS a recorded grant is caught ({victim_repo} "
+                       f"{victim.get('workflow')}#{victim.get('job')})",
+                      assert_fleet_row(_materialize_row(lowered, "Systemorph/MeshWeaver"), victim_repo,
                                        fleet, "Systemorph/MeshWeaver") != []))
 
     # (b) the repository ADDS a caller the roster does not know
