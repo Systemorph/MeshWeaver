@@ -2080,17 +2080,13 @@
   "settings.storageColDefaultContainer": "Standard-Container hier",
   "settings.storageColContainers": "Zuordenbare Container",
   "settings.storageAdd": "Zuordnung hinzufügen",
-  "settings.storageNoBindings": "Keine Zuordnungen — jeder Zweck nutzt den Standard der Instanz.",
-  "settings.storageReadFailed": "Die Zuordnungen konnten nicht gelesen werden: {0}",
   "settings.storageCreate": "Container anlegen",
   "settings.storageValidate": "Validieren",
-  "settings.storageDelete": "Zuordnung löschen",
   "settings.storageStatus.Pending": "Validierung ausstehend",
   "settings.storageStatus.Valid": "Gültig",
   "settings.storageStatus.Invalid": "Ungültig",
   "settings.storageStatus.Unreachable": "Nicht erreichbar",
   "settings.storageStatus.Unverified": "Nicht überprüft",
-  "settings.storageRevalidating": "seither geändert — wird neu validiert",
   "settings.storageDefaultStore": "(Standard der Instanz für den Zweck)",
   "settings.storageFieldPurpose": "Zweck",
   "settings.storageFieldStore": "Speicher",
@@ -2101,5 +2097,8 @@
   "settings.storageFieldIsDefault": "Standard für diesen Zweck",
   "settings.storageFieldVaultSecret": "Separates Konto: Name des Vault-Secrets",
   "settings.storageFieldManagedIdentity": "Separates Konto: Client-ID der verwalteten Identität",
-  "settings.storageFieldEndpoint": "Separates Konto: Endpunkt"
+  "settings.storageFieldEndpoint": "Separates Konto: Endpunkt",
+  "settings.storageBinding": "Speicherzuordnung",
+  "settings.storageFieldStatus": "Status",
+  "settings.storageFieldMessage": "Befund"
 }

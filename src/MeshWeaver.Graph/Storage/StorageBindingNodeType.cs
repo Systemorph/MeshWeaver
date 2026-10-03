@@ -50,6 +50,7 @@ public static class StorageBindingNodeType
             .ApplyNodeHubContributions(NodeType)
             .AddMeshDataSource(source => source.WithContentType<StorageBinding>())
             .AddDefaultLayoutAreas()
+            .AddStorageBindingViews()
             .WithInitialization(StorageBindingValidation.Install)
     };
 }

@@ -170,13 +170,17 @@ ONE content builder, two surfaces, both framework controls bound to the binding 
 - **Partition settings** — `/{partition}/Settings/Storage` on the partition root, for whoever holds
   Update there. A platform admin gets nothing here by that role: a global admin has no data access.
 
-Each shows the pre-configured stores (a `DataGrid`: store, kind, what it is the default for, this
-partition's default container, how many containers this partition may bind — read live), then the
-bindings: each one a `MeshNodeContentEditorControl` bound **directly to its node** — the store and
-the container are dropdowns over the instance's stores and the containers of the chosen store this
-partition may use, read live — its verdict, and **Create container** / **Validate** / delete buttons.
-The buttons write `RequestedAction` on the node; the node's hub acts and records the verdict; the
-section re-renders from the node. No `/data` replica, no save loop.
+Each section is a template of framework controls: the pre-configured stores as a `DataGrid` (store,
+kind, what it is the default for, this partition's default container, how many containers this
+partition may bind — read live), an **Add binding** button, and the partition's bindings as a
+`MeshSearch` list the viewer's client runs under the viewer's own access. Each binding opens its
+OWN page (`StorageBindingLayoutArea`, the node's default and Edit area): the recorded verdict as
+read-only fields of the node, a `MeshNodeContentEditorControl` bound **directly to the node** —
+purpose, store and container are dropdowns over the instance's stores and the containers this
+partition may bind in them, read live, so a container created a moment ago is offered at once —
+and **Create container** / **Validate** buttons that write `RequestedAction` on the node. The node's
+hub acts and records the verdict; the page re-renders from the node. No `/data` replica, no save
+loop; deleting a binding is the node's own Delete.
 
 ## What is not here yet
 

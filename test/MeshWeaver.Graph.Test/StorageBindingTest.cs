@@ -226,14 +226,11 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Create a new container from the same binding.
         ActAs(AcmeAdmin);
-        await Mesh.GetWorkspace().GetMeshNodeStream(node.Path).Update(current => current with
+        await Mesh.GetWorkspace().GetMeshNodeStream(node.Path).Update<StorageBinding>(b => b with
             {
-                Content = current.ContentAs<StorageBinding>(Mesh.JsonSerializerOptions)! with
-                {
-                    NewContainerName = "acme_fresh",
-                    RequestedAction = StorageBindingAction.Create,
-                    RequestedAt = DateTimeOffset.UtcNow,
-                },
+                NewContainerName = "acme_fresh",
+                RequestedAction = StorageBindingAction.Create,
+                RequestedAt = DateTimeOffset.UtcNow,
             })
             .FirstAsync().Timeout(Budget).Await(ct);
 
@@ -416,5 +413,26 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(Budget)
             .Match(json => json.Contains("\"title\":\"Storage\"") && json.Contains("Test files") && json.Contains(StoreId),
                 "the tab is offered and lists the store", ct);
+    }
+
+    /// <summary>A binding's own page offers, as container choices, exactly the containers its
+    /// partition may bind — read live from the store — and never another partition's.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheBindingsOwnPage_OffersOnlyThePartitionsContainers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var node = await Create(AcmeAdmin, Acme, "page",
+            new StorageBinding { Purpose = StoragePurpose.DocParts, StoreId = StoreId }, ct);
+
+        ActAs(AcmeAdmin);
+        var page = await GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(node.Path),
+                new LayoutAreaReference(StorageBindingLayoutArea.AreaName))
+            .Select(change => change.Value.GetRawText())
+            .Should().Within(Budget)
+            .Match(json => json.Contains("\"acme_parts\"") && json.Contains("newContainerName"),
+                "the editor is bound to the node and offers acme's containers", ct);
+
+        page.Should().NotContain("\"globex\"", "globex's container is never offered to acme");
     }
 }

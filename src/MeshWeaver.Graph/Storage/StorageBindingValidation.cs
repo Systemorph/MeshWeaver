@@ -175,14 +175,13 @@ public static class StorageBindingValidation
         var access = hub.ServiceProvider.GetService<AccessService>();
         var now = DateTimeOffset.UtcNow;
         StorageBinding? written = null;
-        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path).Update(current =>
+        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path).Update<StorageBinding>(b =>
             {
-                var b = current.ContentAs<StorageBinding>(hub.JsonSerializerOptions) ?? new StorageBinding();
                 var answered = b.RequestedAt == asked;
                 var next = b with
                 {
-                    // A created container becomes the binding's — only while the target is still the
-                    // one decided on (an edit meanwhile wins and is validated next).
+                    // A created container becomes the binding's — only for the action answered
+                    // (an edit meanwhile wins and is validated next).
                     Container = answered && verdict.Status == StorageValidationStatus.Valid && verdict.Container is not null
                         ? verdict.Container
                         : b.Container,
@@ -195,10 +194,23 @@ public static class StorageBindingValidation
                     ValidatedTarget = decidedTarget,
                 };
                 written = next;
-                return current with { Content = next };
+                return next;
             })
             .Select(_ => written!));
     }
+
+    /// <summary>
+    /// Asks the binding's own hub to act: writes <paramref name="action"/> as
+    /// <see cref="StorageBinding.RequestedAction"/>, through the node stream, as the caller (cold;
+    /// subscribe to send). The write needs Update on the partition root like any other edit of the
+    /// binding; the hub then acts with the instance's identity.
+    /// </summary>
+    /// <param name="hub">The hub to write through.</param>
+    /// <param name="path">The binding node.</param>
+    /// <param name="action">The action (<see cref="StorageBindingAction"/>).</param>
+    public static IObservable<MeshNode> RequestAction(IMessageHub hub, string path, string action)
+        => hub.GetWorkspace().GetMeshNodeStream(path).Update<StorageBinding>(b =>
+            b with { RequestedAction = action, RequestedAt = DateTimeOffset.UtcNow });
 
     /// <summary>One verdict: the status, why, and the container to record (the created one on a
     /// successful create).</summary>

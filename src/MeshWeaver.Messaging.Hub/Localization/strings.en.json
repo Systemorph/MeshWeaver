@@ -2080,17 +2080,13 @@
   "settings.storageColDefaultContainer": "Default container here",
   "settings.storageColContainers": "Containers you may bind",
   "settings.storageAdd": "Add binding",
-  "settings.storageNoBindings": "No bindings — every purpose uses the instance default.",
-  "settings.storageReadFailed": "The bindings could not be read: {0}",
   "settings.storageCreate": "Create container",
   "settings.storageValidate": "Validate",
-  "settings.storageDelete": "Delete binding",
   "settings.storageStatus.Pending": "Pending validation",
   "settings.storageStatus.Valid": "Valid",
   "settings.storageStatus.Invalid": "Invalid",
   "settings.storageStatus.Unreachable": "Unreachable",
   "settings.storageStatus.Unverified": "Unverified",
-  "settings.storageRevalidating": "changed since — re-validating",
   "settings.storageDefaultStore": "(instance default for the purpose)",
   "settings.storageFieldPurpose": "Purpose",
   "settings.storageFieldStore": "Store",
@@ -2101,5 +2097,8 @@
   "settings.storageFieldIsDefault": "Default for this purpose",
   "settings.storageFieldVaultSecret": "Separate account: vault secret name",
   "settings.storageFieldManagedIdentity": "Separate account: managed identity client id",
-  "settings.storageFieldEndpoint": "Separate account: endpoint"
+  "settings.storageFieldEndpoint": "Separate account: endpoint",
+  "settings.storageBinding": "Storage binding",
+  "settings.storageFieldStatus": "Status",
+  "settings.storageFieldMessage": "Verdict"
 }
