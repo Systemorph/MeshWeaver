@@ -65,9 +65,10 @@ public sealed class NodeRepoPackageSource : IPackageSource
     /// The FILTERED fetch, when the caller has one — used by <see cref="ListPackages"/> so the
     /// listing transfers only the files it parses instead of the whole repository (#4222).
     ///
-    /// <para>🚨 It is deliberately separate from the plain <c>fetch</c> this type also holds, and
-    /// only the LISTING uses it: <see cref="FetchPackageFiles"/> needs a package's entire folder,
-    /// so narrowing that one would install an empty package. Absent (a test stub, a local
+    /// <para>🚨 It is deliberately separate from the plain <c>fetch</c> this type also holds. The
+    /// LISTING narrows to the manifests it parses; the INSTALL read narrows to the package's whole
+    /// folder (MeshWeaver#5826) — never to the listing's predicate, which would install an empty
+    /// package. Absent (a test stub, a local
     /// directory source) ⇒ the plain fetch, i.e. exactly the behaviour before this existed.</para>
     /// </summary>
     public Func<string, string, string?, string, Func<string, bool>, IObservable<RepoSnapshot>>?
@@ -219,22 +220,79 @@ public sealed class NodeRepoPackageSource : IPackageSource
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
-        tokenProvider().SelectMany(token => fetch(repoUrl, gitRef, null, token))
+        FetchFolder(package, gitRef, null);
+
+    /// <inheritdoc />
+    /// <remarks>An EXPLICIT implementation, so the class's public surface keeps ONE
+    /// <c>FetchPackageFiles</c> and every <c>cref</c> to it — here and in dependent repos — stays
+    /// unambiguous (CS0419 under <c>-warnaserror</c>).</remarks>
+    IObservable<IReadOnlyList<PackageFile>> IPackageSource.FetchPackageFiles(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchFolder(package, gitRef, paths);
+
+    /// <summary>
+    /// Fetches the package's files — every file of its <c>&lt;Plugin&gt;/</c> folder, or only
+    /// <paramref name="paths"/> of it (the manifest-diff fast path) — moving ONLY those blobs.
+    ///
+    /// <para>🚨 <b>The install read used to move the whole repository for one folder</b>
+    /// (MeshWeaver#5826, #2254). It called the plain fetch with no subdirectory and filtered the
+    /// snapshot to <c>&lt;Plugin&gt;/</c> afterwards — so every package a booting instance installed
+    /// cost the REGISTRY a whole-repository transfer of MeshWeaver.Plugins (measured 47.8 MB / 13 s
+    /// on its own, #4222) before the first byte of the <c>/api/plugins/files</c> answer, against the
+    /// consumer's 30 s per-attempt budget. On memex.systemorph.com the boot's fetch for
+    /// <c>Anthropic</c> (2026-09-27) and <c>AppleIntelligence</c> (2026-09-28) spent all three
+    /// attempts waiting for response headers (<c>HttpConnection.InitialFillAsync</c>) and the 90 s
+    /// pipeline failed the package. The listing was narrowed by
+    /// #4222; the install was left whole on the reasoning that narrowing it "would install an empty
+    /// package" — true of the listing's manifest-only predicate, not of a predicate that keeps the
+    /// package's whole folder.</para>
+    ///
+    /// <para>The predicate selects on the path the snapshot carries (repo-relative, no subdirectory),
+    /// so the answer is byte-identical to the old post-filter; a client without a narrow
+    /// implementation falls back to the interface's fetch-then-filter, which is that old read.</para>
+    /// </summary>
+    /// <param name="package">The package whose folder is read.</param>
+    /// <param name="gitRef">The ref to read at.</param>
+    /// <param name="paths">Repo-relative paths to restrict to, or <c>null</c> for the whole folder.</param>
+    /// <returns>The package's files, carrying binary blobs as bytes.</returns>
+    private IObservable<IReadOnlyList<PackageFile>> FetchFolder(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths)
+    {
+        var selects = PackageFileFilter(package, paths);
+        return tokenProvider().SelectMany(token => NarrowFetch is { } narrow
+                ? narrow(repoUrl, gitRef, null, token, selects)
+                : fetch(repoUrl, gitRef, null, token))
             .Select(snapshot =>
-            {
-                // The whole plugin — root included — lives under `<Plugin>/`.
-                var folderPrefix = package.Id + "/";
-                return (IReadOnlyList<PackageFile>)snapshot.Files
+                (IReadOnlyList<PackageFile>)snapshot.Files
                     // 🚨 Carry `Binary` too. A non-UTF-8 blob (a course video/poster under
                     // `<Plugin>/content/**`) has an EMPTY `Content` by design — RepoFileCodec puts
                     // its bytes on `RepoFile.Binary` so a UTF-8 round-trip cannot corrupt them.
                     // Projecting only `Content` here is what served every binary as `content = ""`
                     // and left merged course videos 404ing until someone uploaded them by hand
                     // (issue #848).
-                    .Where(f => f.Path.StartsWith(folderPrefix, StringComparison.Ordinal))
+                    // Filtered here as well: the fallback fetch returns the whole repository, and
+                    // the answer must not depend on which of the two reads served it.
+                    .Where(f => selects(f.Path))
                     .Select(f => new PackageFile(f.Path, f.Content, f.Binary))
-                    .ToList();
-            });
+                    .ToList());
+    }
+
+    /// <summary>
+    /// Which repo-relative paths belong to an install read of <paramref name="package"/>: everything
+    /// under its <c>&lt;Plugin&gt;/</c> folder (the whole plugin — root included — lives there), and,
+    /// when <paramref name="paths"/> is given, only those of it. Pure.
+    /// </summary>
+    /// <param name="package">The package.</param>
+    /// <param name="paths">The subset to keep, or <c>null</c> for the whole folder.</param>
+    /// <returns>The path predicate.</returns>
+    internal static Func<string, bool> PackageFileFilter(PackageManifest package, IReadOnlyCollection<string>? paths)
+    {
+        var folderPrefix = package.Id + "/";
+        if (paths is null)
+            return path => path.StartsWith(folderPrefix, StringComparison.Ordinal);
+        var wanted = paths.ToImmutableHashSet(StringComparer.Ordinal);
+        return path => path.StartsWith(folderPrefix, StringComparison.Ordinal) && wanted.Contains(path);
+    }
 
     private readonly record struct PeekedRoot(
         string? NodeType, string? Name, string? Description,

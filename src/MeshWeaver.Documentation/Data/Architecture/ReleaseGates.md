@@ -69,7 +69,7 @@ candidate would have loaded. The predicate is now:
 
 | Lane | What decides | What is reported, never decided |
 |---|---|---|
-| **Compiled module** | **Measured.** A module the target publishes a build of will be adopted at the roll — nothing to check. A module with no such build keeps its LANDED generation across the roll, so that generation's bytes are linked against the target's type surface — `platform-surface.json`, written by the bake inside the target image, read by [the link gate](../ModulePlatformLinkGate). **`Unlinkable` ⇒ `ModuleUnloadable`, THE hold**, naming the module and the missing type | `Linkable` clears. `Indeterminate` — no surface published, unreadable bytes — is an advisory: *"whether its landed module … loads could not be determined"*. The declared `MinMeshVersion` floor is an advisory too (MeshWeaver#3648) |
+| **Compiled module** | **Measured.** A module the target publishes a build of will be adopted at the roll — nothing to check. A module with no such build keeps its LANDED generation across the roll, so that generation's bytes are linked against the target's type surface — `platform-surface.json`, measured on the target release's own portal image and recorded at `_releases/_surface/<version>` (policy `exact-release-surface`), read by [the link gate](../ModulePlatformLinkGate). **`Unlinkable` ⇒ `ModuleUnloadable`, THE hold**, naming the module and the missing type | `Linkable` clears. `Indeterminate` — no surface published, unreadable bytes — is an advisory: *"whether its landed module … loads could not be determined"*. The declared `MinMeshVersion` floor is an advisory too (MeshWeaver#3648) |
 | **Content package** | Nothing, by default. A missing sealed bake under the target's identity means the instance Roslyn-compiles that content at boot — the same code path every pull request of it already proved green | `ContentBakeMissing` is a COST: *"would recompile at boot on …: education, crm"* (`UpdatabilityVerdict.BootCompiles`). `Modules:RequirePrebuilt` — the opt-in strict mode in which the seeder refuses a boot compile — keeps it the hold it used to be |
 | **The sealed SET** | Still a hold: two builds of one module under one identity, or a bundle built against a build the identity does not carry (`SealedSetInconsistent`, MeshWeaver#3175). A torn publication is refused whole | — |
 
@@ -143,8 +143,9 @@ Two properties are load-bearing:
   release has no resolvable identity. An availability failure is never dressed up as a
   compatibility verdict; an operator must be able to tell an outage from an incompatible release.
   🚨 The one indeterminate that does NOT hold is the *link check's* own — a release with no
-  `platform-surface.json` is a publication that predates MeshWeaver#3651, and holding every roll on
-  it would freeze the fleet exactly as the floors did. It is reported on the advisories instead.
+  surface of its own (`_releases/_surface/<version>`) predates exact-release surfaces or
+  MeshWeaver#3651, and holding every roll on it would freeze the fleet exactly as the floors did.
+  It is reported on the advisories instead.
 - `UpdatabilityVerdict.NotEnforced` — the gate does not **apply**: this deployment consumes no CI
   bakes at all, so it already compiles at every boot and holding it could only freeze it forever.
   Deliberately not the same as passing — it carries a reason the caller logs and surfaces, so

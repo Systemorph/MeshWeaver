@@ -167,10 +167,23 @@ public static class PartitionOwningTypes
     ///     ABSENT (a verdict the store gave — the existence check then refuses the type as
     ///     unregistered, which is the true reason); or the host has no storage adapter (a
     ///     configuration fact: such a host persists nothing, and refuses every non-static type).</item>
-    ///   <item><c>null</c> — the store faulted or did not answer within <see cref="ProbeTimeout"/>.
-    ///     The caller refuses as <see cref="Undetermined"/>: the same store answers the existence
-    ///     probe a moment later, so this adds no availability dependency the create did not have.</item>
+    ///   <item><c>null</c> — the store FAULTED. The caller refuses as <see cref="UnreadableDefinition"/>,
+    ///     naming the fault: the same store answers the existence probe a moment later, so this adds
+    ///     no availability dependency the create did not have.</item>
     /// </list>
+    ///
+    /// <para>🚨 <b>No budget of its own — and that is what makes the sentence above true</b>
+    /// (Systemorph/MeshWeaver#5734). This read used to carry <c>.Timeout(ProbeTimeout, null)</c>;
+    /// the existence check it claims parity with (<see cref="NodeTypeResolution.Resolve"/>) reads
+    /// the SAME row through the SAME seam and carries none. The durable read is admitted through the
+    /// store's shared read pool (<c>pg-read</c>, cap 16, measured mean 342 ms with tens of thousands
+    /// of admissions over a second), and a 10 s clock started at SUBSCRIBE counts the queue wait,
+    /// so under read-pool contention this probe alone gave up — refusing a create the existence
+    /// check would have let through, and doing so permanently for the caller that recorded it
+    /// (1–5 of every ~100 <c>Hosting/LogEntry</c> rows in a Logs action). The read is bounded where
+    /// every other store read is bounded — by the pool and the store's own command budget — and a
+    /// fault that DOES arrive is surfaced with its cause (<see cref="ProbeWithoutActivating"/>),
+    /// never folded into a sentence that cannot say what happened.</para>
     ///
     /// <para>Unlike <see cref="OwnsPartition"/> the type is never matched against
     /// <see cref="IsLiteralTypePath"/>: it is not interpolated into a query here, only handed to the
@@ -182,18 +195,33 @@ public static class PartitionOwningTypes
     /// <returns>The tri-state: owns / does not own / could not be established.</returns>
     public static IObservable<bool?> OwnsPartitionWithoutActivating(IMessageHub hub, string? nodeType)
     {
+        return ProbeWithoutActivating(hub, nodeType).Select(answer => answer.Owns);
+    }
+
+    /// <summary>
+    /// <see cref="OwnsPartitionWithoutActivating"/> with the FAULT kept: <c>Owns == null</c> always
+    /// carries the exception the durable read failed with, so the refusal can name it and the
+    /// validator can log it. The form the create-path validator uses.
+    /// </summary>
+    /// <param name="hub">The hub whose services resolve the declaration.</param>
+    /// <param name="nodeType">The created node's NodeType.</param>
+    /// <returns>One answer: owns / does not own / could not be read, and why.</returns>
+    public static IObservable<PartitionOwnershipAnswer> ProbeWithoutActivating(IMessageHub hub, string? nodeType)
+    {
         if (string.IsNullOrEmpty(nodeType)
             || string.Equals(nodeType, MeshNode.NodeTypePath, StringComparison.Ordinal))
-            return Observable.Return<bool?>(false);
+            return Observable.Return(PartitionOwnershipAnswer.DoesNotOwn);
 
         var options = hub.JsonSerializerOptions;
         if (hub.ServiceProvider.FindStaticNode(nodeType) is { } staticType)
-            return Observable.Return<bool?>(
-                staticType.ContentAs<NodeTypeDefinition>(options) is { OwnsPartition: true });
+            return Observable.Return(
+                staticType.ContentAs<NodeTypeDefinition>(options) is { OwnsPartition: true }
+                    ? PartitionOwnershipAnswer.OwnsIt
+                    : PartitionOwnershipAnswer.DoesNotOwn);
 
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
-            return Observable.Return<bool?>(false);
+            return Observable.Return(PartitionOwnershipAnswer.DoesNotOwn);
 
         // 🚨 ReadMany, NOT Read — the seam that carries no repair (review on #4589). Where partition
         // storage hubs are configured, IStorageAdapter is RoutingProxyAdapter and its `Read` is
@@ -204,13 +232,17 @@ public static class PartitionOwningTypes
         // the same question with no side effect; a path the store does not hold is simply absent.
         return Observable.Defer(() => storage.ReadMany([nodeType], options))
             .Take(1)
-            .Select(row => (bool?)DeclaresOwnership(row, options))
+            .Select(row => DeclaresOwnership(row, options)
+                ? PartitionOwnershipAnswer.OwnsIt
+                : PartitionOwnershipAnswer.DoesNotOwn)
             // ABSENT is the store's verdict, not a missing answer: there is no row, so nothing
             // declares ownership, and the create's own existence check refuses an unregistered type
-            // next — with the true reason. A FAULT is the other case and is caught below.
-            .DefaultIfEmpty(false)
-            .Timeout(ProbeTimeout, Observable.Return<bool?>(null))
-            .Catch<bool?, Exception>(_ => Observable.Return<bool?>(null));
+            // next — with the true reason. A FAULT is the other case and is KEPT below.
+            .DefaultIfEmpty(PartitionOwnershipAnswer.DoesNotOwn)
+            // 🚨 No .Timeout here — see OwnsPartitionWithoutActivating (#5734). A fault is an
+            // answer with its cause attached, never a bare null: the refusal names it.
+            .Catch<PartitionOwnershipAnswer, Exception>(ex =>
+                Observable.Return(PartitionOwnershipAnswer.Unreadable(ex)));
     }
 
     /// <summary>Whether a durable row is a NodeType definition that declares ownership. Pure.</summary>
@@ -244,9 +276,27 @@ public static class PartitionOwningTypes
         && path.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '/' or '.' or '_' or '-');
 
     /// <summary>
-    /// The result when <see cref="OwnsPartition"/> answered <c>null</c>: an availability failure,
-    /// NOT a decision — the create was not evaluated and may be retried. Fail-closed all the same.
-    /// Worded in the CALLER's language (<see cref="AccessContext.Locale"/>).
+    /// The result when the NESTED-create read (<see cref="ProbeWithoutActivating"/>) faulted: an
+    /// availability failure, NOT a decision — the create was not evaluated and may be retried.
+    /// Fail-closed all the same, and it NAMES the fault, so nobody reaches for a bound that the
+    /// read no longer has. Worded in the CALLER's language (<see cref="AccessContext.Locale"/>);
+    /// the fault's own text is data and is not translated.
+    /// </summary>
+    /// <param name="context">The create being refused.</param>
+    /// <param name="fault">The exception the durable read failed with.</param>
+    /// <returns>The refusal.</returns>
+    public static NodeValidationResult UnreadableDefinition(NodeValidationContext context, Exception fault) =>
+        NodeValidationResult.Unavailable(LocalizationCatalog.Get(
+            "access.partitionCreate.undeterminedFault", context.AccessContext?.Locale,
+            context.Node.NodeType,
+            $"{fault.GetType().Name}: {fault.Message}",
+            context.Node.Path));
+
+    /// <summary>
+    /// The result when the TOP-LEVEL resolver (<see cref="OwnsPartition"/>) answered <c>null</c>:
+    /// an availability failure, NOT a decision — the create was not evaluated and may be retried.
+    /// That resolver folds a fault and its activation budget into one answer, so the sentence
+    /// names both. Worded in the CALLER's language (<see cref="AccessContext.Locale"/>).
     /// </summary>
     public static NodeValidationResult Undetermined(NodeValidationContext context) =>
         NodeValidationResult.Unavailable(LocalizationCatalog.Get(
@@ -254,4 +304,43 @@ public static class PartitionOwningTypes
             context.Node.NodeType,
             ProbeTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture),
             context.Node.Path));
+}
+
+/// <summary>
+/// What the nested-create ownership read found: <see cref="Owns"/> is <c>true</c> / <c>false</c> when
+/// the store answered, <c>null</c> when the read FAULTED — and then <see cref="Fault"/> is that
+/// fault, so the refusal can say what happened instead of guessing between a fault and a budget.
+///
+/// <para>The constructor is private and the only way to build an undetermined answer is
+/// <see cref="Unreadable"/>, which requires the fault — so "could not be read, for no reason" is
+/// not a value this type can hold (review on #5930).</para>
+/// </summary>
+public sealed record PartitionOwnershipAnswer
+{
+    private PartitionOwnershipAnswer(bool? owns, Exception? fault)
+    {
+        Owns = owns;
+        Fault = fault;
+    }
+
+    /// <summary>The tri-state verdict: owns / does not own / could not be read.</summary>
+    public bool? Owns { get; }
+
+    /// <summary>The read's exception when <see cref="Owns"/> is <c>null</c>; otherwise <c>null</c>.</summary>
+    public Exception? Fault { get; }
+
+    /// <summary>The definition declares <c>ownsPartition: true</c>.</summary>
+    public static PartitionOwnershipAnswer OwnsIt { get; } = new(true, null);
+
+    /// <summary>The store answered, and nothing declares ownership.</summary>
+    public static PartitionOwnershipAnswer DoesNotOwn { get; } = new(false, null);
+
+    /// <summary>The durable read faulted with <paramref name="fault"/>.</summary>
+    /// <param name="fault">The read's exception — required.</param>
+    /// <returns>The undetermined answer carrying its cause.</returns>
+    public static PartitionOwnershipAnswer Unreadable(Exception fault)
+    {
+        ArgumentNullException.ThrowIfNull(fault);
+        return new(null, fault);
+    }
 }

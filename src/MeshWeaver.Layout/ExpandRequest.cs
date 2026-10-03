@@ -16,6 +16,14 @@ public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamI
     /// </summary>
     public object? Payload { get; init; }
 
+    /// <summary>
+    /// The row the clicked control belongs to, when it is declared inside a bound row template
+    /// (a <c>BindMany</c> list, a data grid's template column). The client fills it with the row it
+    /// rendered; the owner hands it to the action as <see cref="UiActionContext.Row"/>. Null for a
+    /// control outside any row. See <see cref="RowContext"/>.
+    /// </summary>
+    public RowContext? Row { get; init; }
+
     /// <inheritdoc />
     string IUserAction.ActionArea => Area;
 }
@@ -31,6 +39,12 @@ public record BlurEvent(string Area, string StreamId) : StreamMessage(StreamId),
     /// Gets or initializes the payload associated with the blur event.
     /// </summary>
     public object? Payload { get; init; }
+
+    /// <summary>
+    /// The row the control belongs to, when it is declared inside a bound row template — the same
+    /// contract as <see cref="ClickedEvent.Row"/>.
+    /// </summary>
+    public RowContext? Row { get; init; }
 
     /// <inheritdoc />
     string IUserAction.ActionArea => Area;

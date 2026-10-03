@@ -3,220 +3,161 @@
 // DisplayName: Social Media Post Views
 // </meshweaver>
 
-using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Text.Json;
-using System.Web;
-using MeshWeaver.Data;
+using System.Globalization;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
-/// Workspace projection of a sibling Post node: the display order plus the raw
-/// <see cref="MeshNode"/> the List view formats. Keyed by <see cref="Path"/> so
-/// the virtual collection stays deduplicated as the query result set evolves.
+/// The Post's views — all TEMPLATES (Doc/GUI/DataBinding → "Templates first, data later"): each is
+/// on screen at the first render and binds its data instead of loading it on the hub.
+///
+/// <para><b>List</b> is a <see cref="MeshSearchControl"/>: the GUI runs the query, and every result
+/// renders through that post's OWN <b>Row</b> area — so the list's hub reads no post at all.
+/// <b>Row</b> and <b>Detail</b> bind the post's stored fields by pointer; the one value the hub has
+/// to DERIVE — the Published / Scheduled / Draft status — comes from <see cref="StatusFeed"/>, a
+/// function that builds no control, bound into a badge declared up front.</para>
 /// </summary>
-public record PostNode
-{
-    [Key]
-    public string Path { get; init; } = string.Empty;
-    public MeshNode Node { get; init; } = null!;
-}
-
 public static class SocialMediaPostLayoutAreas
 {
+    /// <summary>The list view.</summary>
     public const string ListArea = "List";
+
+    /// <summary>One post as a list row — what <see cref="ListArea"/> renders per result.</summary>
+    public const string RowArea = "Row";
+
+    /// <summary>The post's detail view.</summary>
     public const string DetailArea = "Detail";
 
+    /// <summary>Where the posts live.</summary>
+    public const string PostsNamespace = "Doc/DataMesh/SocialMedia/Post";
+
+    /// <summary>The <c>/data</c> id the status feed writes to.</summary>
+    public const string StatusDataId = "postStatus";
+
+    /// <summary>Registers the post views.</summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <returns>The layout definition with the views added.</returns>
     public static LayoutDefinition AddSocialMediaPostLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(ListArea, List)
+            .WithView(RowArea, Row)
             .WithView(DetailArea, Detail);
 
-    private static ImmutableDictionary<string, MeshNode> ApplyChanges(
-        ImmutableDictionary<string, MeshNode> current, QueryResultChange<MeshNode> change)
+    /// <summary>Every post, newest schedule first.</summary>
+    /// <param name="host">The area host; nothing of it is read.</param>
+    /// <param name="_">The rendering context.</param>
+    /// <returns>The list template.</returns>
+    public static UiControl List(LayoutAreaHost host, RenderingContext _) => ListTemplate();
+
+    /// <summary>One post as a row: title, platform, dates and counts.</summary>
+    /// <param name="host">The area host; the status feed reads its node.</param>
+    /// <param name="_">The rendering context.</param>
+    /// <returns>The row template.</returns>
+    public static UiControl Row(LayoutAreaHost host, RenderingContext _)
+        => RowTemplate(host.Hub.Address.ToString(), StatusFeed(host));
+
+    /// <summary>The post: title, platform and status, dates, counts and body.</summary>
+    /// <param name="host">The area host; the status feed reads its node.</param>
+    /// <param name="_">The rendering context.</param>
+    /// <returns>The detail template.</returns>
+    public static UiControl Detail(LayoutAreaHost host, RenderingContext _)
+        => DetailTemplate(host.Hub.Address.ToString(), StatusFeed(host));
+
+    /// <summary>The list: a query the GUI runs, each result drawn by the post's own <see cref="RowArea"/>.</summary>
+    /// <returns>The complete control tree — it never waits on data.</returns>
+    public static UiControl ListTemplate() =>
+        Controls.Stack
+            .WithStyle("padding: 16px; gap: 12px;")
+            .WithView(Controls.H2("Posts"))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery(PostsQuery)
+                .WithShowSearchBox(false)
+                .WithItemArea(RowArea)
+                .WithGridBreakpoints(xs: 12, sm: 12, md: 12, lg: 12));
+
+    /// <summary>The query the list runs: the posts, newest schedule first.</summary>
+    public const string PostsQuery = $"namespace:{PostsNamespace} nodeType:{PostsNamespace} sort:content.scheduledAt-desc";
+
+    /// <summary>The post at <paramref name="nodePath"/> as one row, bound by path.</summary>
+    /// <param name="nodePath">The post node.</param>
+    /// <param name="status">The derived status (<see cref="Status"/>), as it changes.</param>
+    /// <returns>The complete control tree — it never waits on data.</returns>
+    public static UiControl RowTemplate(string nodePath, IObservable<string> status)
     {
-        var result = change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset
-            ? ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase)
-            : current;
-        foreach (var item in change.Items)
-            result = change.ChangeType == QueryChangeType.Removed
-                ? result.Remove(item.Path)
-                : result.SetItem(item.Path, item);
-        return result;
+        var content = LayoutAreaReference.GetMeshNodeDataContext(nodePath);
+        return Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 16px; align-items: center; flex-wrap: wrap;")
+            .WithView(Controls.Label(new JsonPointerReference("name")) with
+            {
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false)
+            })
+            .WithView(Controls.Badge(new JsonPointerReference("platform")) with { DataContext = content })
+            .WithView(status.Bind(text => Controls.Badge(text), StatusDataId))
+            .WithView(Field("Scheduled", "scheduledAt", content))
+            .WithView(Field("Likes", "likes", content))
+            .WithView(Field("Impressions", "impressions", content));
     }
 
-    private static string? GetProp(MeshNode node, string prop)
+    /// <summary>The post at <paramref name="nodePath"/>, bound by path.</summary>
+    /// <param name="nodePath">The post node.</param>
+    /// <param name="status">The derived status (<see cref="Status"/>), as it changes.</param>
+    /// <returns>The complete control tree — it never waits on data.</returns>
+    public static UiControl DetailTemplate(string nodePath, IObservable<string> status)
     {
-        if (node.Content is not JsonElement json) return null;
-        if (json.TryGetProperty(prop, out var p) && p.ValueKind == JsonValueKind.String) return p.GetString();
-        var pascal = char.ToUpperInvariant(prop[0]) + prop.Substring(1);
-        return json.TryGetProperty(pascal, out var pp) && pp.ValueKind == JsonValueKind.String ? pp.GetString() : null;
-    }
-
-    private static int GetInt(MeshNode node, string prop)
-    {
-        if (node.Content is not JsonElement json) return 0;
-        if (!json.TryGetProperty(prop, out var p))
-        {
-            var pascal = char.ToUpperInvariant(prop[0]) + prop.Substring(1);
-            if (!json.TryGetProperty(pascal, out p)) return 0;
-        }
-        return p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v) ? v : 0;
-    }
-
-    private static DateTimeOffset? GetDate(MeshNode node, string prop)
-    {
-        if (node.Content is not JsonElement json) return null;
-        if (!json.TryGetProperty(prop, out var p))
-        {
-            var pascal = char.ToUpperInvariant(prop[0]) + prop.Substring(1);
-            if (!json.TryGetProperty(pascal, out p)) return null;
-        }
-        return p.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(p.GetString(), out var dt) ? dt : null;
+        var content = LayoutAreaReference.GetMeshNodeDataContext(nodePath);
+        return Controls.Stack
+            .WithStyle("padding: 16px; gap: 8px;")
+            .WithView(Controls.H1(new JsonPointerReference("name")) with
+            {
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false)
+            })
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 12px;")
+                .WithView(Controls.Badge(new JsonPointerReference("platform")) with { DataContext = content })
+                .WithView(status.Bind(text => Controls.Badge(text), StatusDataId)))
+            .WithView(Field("Scheduled", "scheduledAt", content))
+            .WithView(Field("Published", "publishedAt", content))
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 24px;")
+                .WithView(Field("Likes", "likes", content))
+                .WithView(Field("Impressions", "impressions", content)))
+            .WithView(Controls.Markdown(new JsonPointerReference("body")) with { DataContext = content });
     }
 
     /// <summary>
-    /// Virtual-source loader: the <c>namespace:Doc/DataMesh/SocialMedia/Post</c>
-    /// mesh query, folded to a path-keyed snapshot and projected to
-    /// <see cref="PostNode"/>. Registered in <c>Post.json</c>'s configuration
-    /// via <c>WithVirtualDataSource</c> so the framework subscribes it ONCE at
-    /// hub initialization on a managed scheduler — never from inside a view
-    /// render (a query subscription in a layout-area render runs on the grain's
-    /// activation thread and deadlocks the hub — see AsynchronousCalls). The
-    /// List view then composes only the hub's OWN workspace stream.
+    /// Published once it has a publish time; Scheduled while its schedule lies ahead; else Draft.
+    /// Pure. <c>now</c> is UTC: the stored times are instants, so comparing them to a local clock
+    /// would flip the status by the host's offset.
     /// </summary>
-    public static IObservable<IEnumerable<PostNode>> LoadPosts(IWorkspace workspace)
-        => workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:Doc/DataMesh/SocialMedia/Post"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), ApplyChanges)
-            .Select(dict => dict.Values
-                .Select(n => new PostNode { Path = n.Path, Node = n })
-                .ToImmutableList()
-                .AsEnumerable());
+    /// <param name="post">The post, or <c>null</c> when the node carries none.</param>
+    /// <param name="now">The current instant.</param>
+    /// <returns>The status text.</returns>
+    public static string Status(SocialMediaPost? post, DateTimeOffset now) =>
+        post is null ? "Draft"
+        : post.PublishedAt.HasValue ? "Published"
+        : post.ScheduledAt > now ? "Scheduled"
+        : "Draft";
 
-    public static IObservable<UiControl?> List(LayoutAreaHost host, RenderingContext _)
-    {
-        var postsStream = host.Workspace.GetStream<PostNode>()
-            ?? Observable.Return<PostNode[]?>(null);
-
-        return postsStream.Select(posts => (UiControl?)BuildList(
-            host,
-            (posts ?? Enumerable.Empty<PostNode>())
-                .Select(p => p.Node)
-                .ToImmutableList()));
-    }
-
-    private static UiControl BuildList(LayoutAreaHost host, ImmutableList<MeshNode> posts)
-    {
-        var ordered = posts
-            .OrderByDescending(p => GetDate(p, "scheduledAt") ?? DateTimeOffset.MinValue)
-            .ToImmutableList();
-
-        if (ordered.Count == 0)
-            return Controls.Stack
-                .WithStyle("padding: 16px;")
-                .WithView(Controls.Markdown(host.Localize("ui.mdNoPosts")));
-
-        var rows = string.Join("", ordered.Select(p =>
-        {
-            var title = p.Name ?? GetProp(p, "title") ?? "(untitled)";
-            var platformId = GetProp(p, "platform") ?? "LinkedIn";
-            var platform = Platform.GetById(platformId);
-            var scheduled = GetDate(p, "scheduledAt")?.ToString("yyyy-MM-dd HH:mm") ?? "\u2014";
-            var published = GetDate(p, "publishedAt") is { } d ? d.ToString("yyyy-MM-dd HH:mm") : "\u2014";
-            var likes = GetInt(p, "likes");
-            var impressions = GetInt(p, "impressions");
-            return $"""
-                <tr>
-                  <td style="padding:8px 12px;"><a href="/{HttpUtility.HtmlAttributeEncode(p.Path)}">{HttpUtility.HtmlEncode(title)}</a></td>
-                  <td style="padding:8px 12px;"><span style="background:{platform.Color};color:white;padding:2px 8px;border-radius:10px;font-size:12px;">{platform.Emoji} {HttpUtility.HtmlEncode(platform.Name)}</span></td>
-                  <td style="padding:8px 12px;color:#666;">{scheduled}</td>
-                  <td style="padding:8px 12px;color:#666;">{published}</td>
-                  <td style="padding:8px 12px;text-align:right;">{likes:N0}</td>
-                  <td style="padding:8px 12px;text-align:right;">{impressions:N0}</td>
-                </tr>
-                """;
-        }));
-
-        var table = $"""
-            <table style="border-collapse:collapse;width:100%;font-family:var(--body-font);">
-              <thead>
-                <tr style="text-align:left;border-bottom:2px solid #e5e5e5;">
-                  <th style="padding:8px 12px;">Title</th>
-                  <th style="padding:8px 12px;">Platform</th>
-                  <th style="padding:8px 12px;">Scheduled</th>
-                  <th style="padding:8px 12px;">Published</th>
-                  <th style="padding:8px 12px;text-align:right;">Likes</th>
-                  <th style="padding:8px 12px;text-align:right;">Impressions</th>
-                </tr>
-              </thead>
-              <tbody>{rows}</tbody>
-            </table>
-            """;
-
-        return Controls.Stack
-            .WithStyle("padding: 16px; gap: 12px;")
-            .WithView(Controls.Html($"<h2 style=\"margin:0;\">Posts</h2>"))
-            .WithView(Controls.Html(table));
-    }
-
-    public static IObservable<UiControl?> Detail(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        return host.Workspace.GetStream<MeshNode>()!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
-            .Select(node =>
+    /// <summary>
+    /// The FEED half: the post's <see cref="Status"/> on every emission of its node. Builds no
+    /// control. A failure is logged and shown as text — reported, never swallowed.
+    /// </summary>
+    /// <param name="host">The area host whose node is read.</param>
+    /// <returns>The status text.</returns>
+    public static IObservable<string> StatusFeed(LayoutAreaHost host) =>
+        host.Workspace.GetMeshNodeStream()
+            .Select(node => Status(node.ContentAs<SocialMediaPost>(host.Hub.JsonSerializerOptions), DateTimeOffset.UtcNow))
+            .DistinctUntilChanged()
+            .Catch<string, Exception>(ex =>
             {
-                if (node is null)
-                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdPostNotFound"));
-
-                var title = node.Name ?? GetProp(node, "title") ?? "(untitled)";
-                var body = GetProp(node, "body");
-                var platformId = GetProp(node, "platform") ?? "LinkedIn";
-                var platform = Platform.GetById(platformId);
-                var scheduled = GetDate(node, "scheduledAt");
-                var published = GetDate(node, "publishedAt");
-                var status = published.HasValue ? "Published"
-                    // UtcNow, not Now: scheduledAt is a stored UTC instant, so comparing it to the
-                    // server's local clock flips the badge by the host offset.
-                    : (scheduled.HasValue && scheduled.Value > DateTimeOffset.UtcNow ? "Scheduled" : "Draft");
-                var statusColor = published.HasValue ? "#2e7d32" : "#ed6c02";
-                var impressions = GetInt(node, "impressions");
-                var likes = GetInt(node, "likes");
-
-                var header = $$"""
-                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 0;">
-                      <span style="background:{{platform.Color}};color:white;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600;">{{platform.Emoji}} {{HttpUtility.HtmlEncode(platform.Name)}}</span>
-                      <span style="background:{{statusColor}};color:white;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600;">{{status}}</span>
-                    </div>
-                    """;
-
-                var dates = $$"""
-                    <table style="border-collapse:collapse;margin:4px 0;font-size:14px;">
-                      <tr><td style="color:#666;padding:2px 12px 2px 0;">Scheduled</td><td>{{HttpUtility.HtmlEncode(scheduled?.ToString("yyyy-MM-dd HH:mm") ?? "\u2014")}}</td></tr>
-                      <tr><td style="color:#666;padding:2px 12px 2px 0;">Published</td><td>{{HttpUtility.HtmlEncode(published?.ToString("yyyy-MM-dd HH:mm") ?? "\u2014")}}</td></tr>
-                    </table>
-                    """;
-
-                var stats = $$"""
-                    <div style="display:flex;gap:24px;padding:12px;background:#f5f7fa;border-radius:6px;">
-                      <div><div style="font-size:11px;color:#666;text-transform:uppercase;">Likes</div><div style="font-size:20px;font-weight:600;">{{likes:N0}}</div></div>
-                      <div><div style="font-size:11px;color:#666;text-transform:uppercase;">Impressions</div><div style="font-size:20px;font-weight:600;">{{impressions:N0}}</div></div>
-                    </div>
-                    """;
-
-                var stack = Controls.Stack
-                    .WithStyle("padding: 16px; gap: 8px;")
-                    .WithView(Controls.Html($"<h1 style=\"margin:0;\">{HttpUtility.HtmlEncode(title)}</h1>"))
-                    .WithView(Controls.Html(header))
-                    .WithView(Controls.Html(dates))
-                    .WithView(Controls.Html(stats));
-                if (!string.IsNullOrWhiteSpace(body))
-                    stack = stack.WithView(Controls.Markdown(body));
-                return (UiControl?)stack;
+                host.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(nameof(SocialMediaPostLayoutAreas))
+                    .LogWarning(ex, "The status of post {Path} could not be read", host.Hub.Address);
+                return Observable.Return("Status could not be read");
             });
-    }
+
+    /// <summary>A caption over a value bound into the content.</summary>
+    private static UiControl Field(string caption, string pointer, string content) =>
+        Controls.Stack
+            .WithView(Controls.Label(caption).WithStyle("font-size: 11px; color: var(--neutral-foreground-hint);"))
+            .WithView(Controls.Label(new JsonPointerReference(pointer)) with { DataContext = content });
 }
