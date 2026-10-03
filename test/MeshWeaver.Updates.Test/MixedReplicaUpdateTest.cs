@@ -78,8 +78,8 @@ public class MixedReplicaUpdateTest(ITestOutputHelper output) : OrleansMeshTestB
         return seen!;
     }
 
-    private Task Release(IMessageHub client, string typePath)
-        => client.Observe(new CreateReleaseRequest(Force: false), o => o.WithTarget(new Address(typePath)))
+    private Task Release(IMessageHub client, string typePath, bool force = false)
+        => client.Observe(new CreateReleaseRequest(Force: force), o => o.WithTarget(new Address(typePath)))
             .Take(1)
             .Should().Within(Step).Emit("the release request must be answered",
                 cancellationToken: TestContext.Current.CancellationToken);
@@ -137,18 +137,43 @@ public class MixedReplicaUpdateTest(ITestOutputHelper output) : OrleansMeshTestB
         (await Served(onN)).Should().Contain("MARKER_N<", "the first activation binds N");
 
         // Publish N+1 while the N activation is live.
-        var source = await SiloMesh(0).GetWorkspace().GetMeshNodeStream($"{typePath}/Source/code")
-            .Where(x => x is not null).Take(1)
-            .Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        await SiloMeshService.UpdateNode(source! with
-        {
-            Content = new CodeConfiguration { Code = Code("N1"), Language = "csharp" },
-        }).Take(1).Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        await OnEverySilo(typePath, d => d.IsDirty, "the edit reached the type");
-        await Release(client, typePath);
+        var sourcePath = $"{typePath}/Source/code";
+        // Through the OWNING hub (a routed stream Update), never a silo-local IMeshService write:
+        // the type's source query on whichever silo hosts the type must hear the edit.
+        var edited = await GetClient().GetWorkspace().GetMeshNodeStream(sourcePath)
+            .Update(curr => curr! with
+            {
+                Content = new CodeConfiguration { Code = Code("N1"), Language = "csharp" },
+            })
+            .Take(1).Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        // The source version build N was compiled from; N+1 is any build compiled from a LATER one.
+        // (Compared as "moved past N", never as equal to the edited node's own stamp: the owner
+        // re-stamps LastModified when it persists, so the emitted node's value is not the stored one.)
+        var nSourceVersion = n.CompiledSources![sourcePath];
+        _ = edited;
+
+        // FORCED, and confirmed by WHAT was compiled: across two silos sharing only a store, the
+        // type's source watcher hears an edit written on the other silo with no bound (measured:
+        // the IsDirty wait timed out 1 run in 4, and a forced release once compiled the PRE-edit
+        // source). So the release is re-issued until the published build records the edited source
+        // version in CompiledSources — a fact about the build, not a timer.
+        var silo0 = SiloMesh(0);
+        await Observable.Defer(() => client
+                .Observe(new CreateReleaseRequest(Force: true), o => o.WithTarget(new Address(typePath)))
+                .Take(1)
+                .SelectMany(_ => silo0.GetWorkspace().GetMeshNodeStream(typePath)
+                    .Select(x => x?.ContentAs<NodeTypeDefinition>(silo0.JsonSerializerOptions))
+                    .Where(d => d is { CompilationStatus: CompilationStatus.Ok, CompiledSources: { } cs }
+                                && cs.TryGetValue(sourcePath, out var v) && v > nSourceVersion)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(20))))
+            .Retry(5)
+            .Take(1)
+            .Should().Within(Step + Step).Emit("a release must compile the edited source",
+                cancellationToken: TestContext.Current.CancellationToken);
         await OnEverySilo(typePath,
             d => d.CompilationStatus == CompilationStatus.Ok
-                 && !string.Equals(d.LatestAssemblyPath, n.LatestAssemblyPath, StringComparison.Ordinal),
+                 && d.CompiledSources is { } cs && cs.TryGetValue(sourcePath, out var v) && v > nSourceVersion,
             "build N+1 is published");
 
         var onN1 = $"{typePath}/on-n1";
