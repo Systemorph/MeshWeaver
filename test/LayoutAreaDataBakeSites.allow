@@ -12,7 +12,6 @@ memex/Memex.Portal.Shared/Settings/ServiceIdentitiesSettingsTab.cs	1
 memex/Memex.Portal.Shared/Settings/UpdatePolicySettingsTab.cs	1
 memex/Memex.Portal.Shared/Settings/WhatsNewSettingsTab.cs	1
 samples/Graph/Data/ACME/Project/Source/ProjectLayoutAreas.cs	5
-src/MeshWeaver.GitSync/GitHubSyncSettingsTab.cs	1
 src/MeshWeaver.Graph/ExportLayoutArea.cs	1
 src/MeshWeaver.Graph/MarkdownNotebookLayoutArea.cs	1
 src/MeshWeaver.Graph/NodeTypeLayoutAreas.cs	5
@@ -20,7 +19,5 @@ src/MeshWeaver.Graph/OverviewLayoutArea.cs	1
 src/MeshWeaver.Graph/SettingsLayoutArea.cs	2
 src/MeshWeaver.Graph/UserActivityLayoutAreas.cs	1
 src/MeshWeaver.Layout/Domain/LayoutHelperExtensions.cs	2
-src/MeshWeaver.Layout/EditorExtensions.cs	2
-src/MeshWeaver.Layout/Views/DataPathViews.cs	1
 src/MeshWeaver.PluginCatalog/CouponAdminSettingsTab.cs	1
 src/MeshWeaver.PluginCatalog/InstanceGrantAdminSettingsTab.cs	2
