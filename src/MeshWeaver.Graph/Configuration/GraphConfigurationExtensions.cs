@@ -1,4 +1,6 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Graph.Storage;
+using MeshWeaver.Mesh.Storage;
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -108,7 +110,10 @@ public static class GraphConfigurationExtensions
                 .AddPartitionType()
                 .AddGlobalSettingsType()
                 // The Admin partition root as the Admin app (never an empty Space).
-                .AddAdminAppType();
+                .AddAdminAppType()
+                // Storage bindings ({partition}/_Storage, Admin/_Storage for the instance) + the
+                // resolver every storage consumer asks — Doc/Architecture/StorageBindings.
+                .AddStorageBindingType();
 
             // Data-contributed menu entries (UiContribution nodes, #1645) + the mesh-scoped live
             // catalog the menu aggregation maps (one query subscription per silo).
@@ -193,6 +198,7 @@ public static class GraphConfigurationExtensions
                         "UserActivity" => "user_activities",
                         "Comment" => "annotations",
                         "TrackedChange" or "Approval" => "annotations",
+                        StorageBindingPaths.NodeType => StorageBindingPaths.Table,
                         _ => null
                     };
                     return table != null ? new QueryRoutingHints { Table = table } : null;
@@ -219,6 +225,8 @@ public static class GraphConfigurationExtensions
             builder.ConfigureDefaultNodeHub(config => config
                 .WithGraphTypes()
                 .AddDefaultLayoutAreas()
+                // The Storage settings tab of a partition root (Update on the root).
+                .AddPartitionStorageSettingsTab()
                 // "Invite people" node-menu item on a Space + the invite form area it opens. The
                 // provider self-gates (Space + Update), so it's inert on non-Space nodes.
                 .AddLayout(layout => layout
