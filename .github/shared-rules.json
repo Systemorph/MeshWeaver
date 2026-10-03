@@ -309,6 +309,29 @@
         "(2) the six spokes copy the hub's text; (3) required-in widened back to all seven. The window",
         "between (1) and (3) is the one moment this block is compared nowhere; close it the same day."
       ]
+    },
+    {
+      "id": "merge-latest-before-push",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [],
+      "why": [
+        "Maintainer directive, 2026-10-03: 'always merge with latest before push ==> as general rule in",
+        "all the agents' / 'also in our agents.md incl partner re'. The occasion: nine pull requests were",
+        "DIRTY at once, each pushed on a base main had since moved past. GitHub runs no checks on a DIRTY",
+        "pull request, so each kept rendering the green it earned before the conflict and nothing drained.",
+        "",
+        "No slots: `<default branch>` and 'this repo's local gates' are written generically so the text",
+        "reads identically in every repo, including client estates outside this register.",
+        "",
+        "It names its interplay with 'never push onto an in-flight PR run' and 'a push during review goes",
+        "STALE' on purpose: merging first is a precondition of a push, never a reason for one.",
+        "",
+        "Landing in the three change sets this register's header describes: step 1 (this entry) names the",
+        "hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
+      ]
     }
   ]
 }
