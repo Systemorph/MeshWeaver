@@ -324,6 +324,30 @@ public class PlatformBakeLaneGuard
     }
 
     /// <summary>
+    /// 🚨 The EXACT-RELEASE surface (policy <c>exact-release-surface</c>) has three hands and none
+    /// sees the others: the publisher writes <c>_releases/_surface/&lt;version&gt;</c>, the gate reads
+    /// <see cref="PublishedBundleCatalogue.ReleaseSurfaceDirectoryName"/>, and <c>release.yml</c>
+    /// carries the document from the continuous version to the clean one. A rename on any one of
+    /// them makes every release UNMEASURED — the link check silently becomes an advisory — with
+    /// nothing red, so the pairing is pinned here.
+    /// </summary>
+    [Fact]
+    public void TheExactReleaseSurface_IsWrittenCarriedAndReadUnderOneDirectoryName()
+    {
+        var root = FindRepoRoot();
+        var script = File.ReadAllText(Path.Combine(root, ".github", "scripts", "publish-bake-bundles.sh"));
+        Assert.Contains(
+            $"RELEASE_SURFACE_DIR=\"{PublishedBundleCatalogue.ReleaseSurfaceDirectoryName}\"", script,
+            StringComparison.Ordinal);
+        var release = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml")));
+        Assert.True(
+            release.Contains($"$dir/{PublishedBundleCatalogue.ReleaseSurfaceDirectoryName}/$CI_VERSION", StringComparison.Ordinal)
+            && release.Contains($"--path \"$dir/{PublishedBundleCatalogue.ReleaseSurfaceDirectoryName}\"", StringComparison.Ordinal),
+            "release.yml must carry _releases/_surface/<ci-version> to the clean version beside the marker — "
+            + "a Stable install gates the CLEAN version, and without its own surface every link check is unmeasured.");
+    }
+
+    /// <summary>
     /// 🚨 The platform's main build BUILDS EVERYTHING and publishes it atomically: core, every
     /// plugin, the portal host, and the bake — one run, one framework identity. Maintainer decision
     /// 2026-08-26 ("we want to run full plugin build in main memex build"; "plugins should not have

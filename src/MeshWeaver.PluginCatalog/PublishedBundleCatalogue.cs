@@ -21,8 +21,9 @@ namespace MeshWeaver.PluginCatalog;
 /// <para>The layout is the publisher's contract, mirrored here exactly once:</para>
 /// <code>
 /// &lt;root&gt;/_releases/&lt;platform-version&gt;          → a file holding that release's framework identity
+/// &lt;root&gt;/_releases/_surface/&lt;platform-version&gt; → THAT release's portal type surface (#3651, exact-release-surface)
 /// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/&lt;bundle&gt;.zip       → the bundles
-/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/platform-surface.json → the target platform's type surface (#3651)
+/// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/platform-surface.json → the bake's surface — descriptive, read by no gate
 /// &lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/_complete          → the seal, written strictly LAST
 /// </code>
 ///
@@ -65,6 +66,28 @@ public static class PublishedBundleCatalogue
     /// to link a landed module against a platform not running anywhere it can reach.
     /// </summary>
     public const string PlatformSurfaceFileName = ModulePlatformSurface.PublishedFileName;
+
+    /// <summary>
+    /// 🚨 <b>The EXACT-RELEASE surface (policy <c>exact-release-surface</c>).</b> The subdirectory of
+    /// <see cref="ReleaseMarkerDirectoryName"/> holding one file per platform release, named by
+    /// version, whose content is the <see cref="PlatformSurfaceFileName"/> document measured on THAT
+    /// release's portal image. It is the ONLY surface the gate links a landed module against.
+    ///
+    /// <para><b>Why not the surface inside the publication.</b> A publication is keyed by content ×
+    /// framework identity and one core commit is baked against many portal images whose module
+    /// closures differ; the shared <c>_current</c> pointer names whichever bake moved it last, and
+    /// two same-source bakes carrying different surfaces cannot be ordered by their source commit —
+    /// so the gate judged release X against a surface measured on some OTHER image (the stale
+    /// <c>MeshWeaver.AI.ProviderRouting</c> hold of ci.9468, and the backwards race reproduced on
+    /// #5818). Keyed by the release, every writer of one key measured the same image and there is
+    /// no pointer left to race on.</para>
+    ///
+    /// <para>A SUBDIRECTORY for the reason <see cref="ReleaseSchemaMarker.DirectoryName"/> is one:
+    /// every reader of <see cref="ReleaseMarkerDirectoryName"/> enumerates FILES as version →
+    /// identity markers. Mirrored in <c>publish-bake-bundles.sh</c> (<c>RELEASE_SURFACE_DIR</c>)
+    /// and carried to the clean version by <c>release.yml</c>.</para>
+    /// </summary>
+    public const string ReleaseSurfaceDirectoryName = "_surface";
 
     /// <summary>
     /// Reads the catalogue for one target release. Synchronous and total — every failure becomes a
@@ -110,6 +133,8 @@ public static class PublishedBundleCatalogue
                     ReleaseArtifacts.Unreadable(
                         $"the release marker for {targetVersion} is empty"));
 
+            var (surface, surfaceDetail) = ReleaseSurfaceOf(publishedRoot, targetVersion, identity, logger);
+
             if (!Directory.Exists(Path.Combine(publishedRoot, identity)))
             {
                 logger?.LogInformation(
@@ -117,12 +142,14 @@ public static class PublishedBundleCatalogue
                     + "but nothing is published under it — every package would be recompiled",
                     targetVersion, identity);
                 return new ReleaseObservation(
-                    new ReleaseTarget(targetVersion, identity), ReleaseArtifacts.Of([]));
+                    new ReleaseTarget(targetVersion, identity),
+                    ReleaseArtifacts.Of([]) with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
             }
 
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, identity),
-                ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger));
+                ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger)
+                    with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
         }
         catch (Exception ex)
         {
@@ -443,13 +470,10 @@ public static class PublishedBundleCatalogue
         var producedBy = new Dictionary<string, SealedCopy>(StringComparer.Ordinal);
         var conflicts = ImmutableArray.CreateBuilder<string>();
         var refusals = new List<string>();
-        // Core CD measures the promoted portal image and publishes that canonical host surface
-        // with meshweaver-content. Equal framework identities do not imply equal host closures:
-        // satellite bakes can describe smaller hosts. Prefer the portal measurement; retain the
-        // first-readable-source fallback for publications predating the canonical measurement.
-        ModulePlatformSurface? surface = null;
-        var surfaceNotes = new List<string>();
-
+        // 🚨 No platform surface is read here (policy exact-release-surface): the surface belongs
+        // to a RELEASE, not to an identity's publications, and Read attaches the one recorded for
+        // the release being judged. The meshweaver-content-first order is kept for the module
+        // conflict attribution below, which names the first source that sealed a copy.
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
                      .OrderBy(d => string.Equals(Path.GetFileName(d), "meshweaver-content", StringComparison.Ordinal) ? 0 : 1)
                      .ThenBy(d => d, StringComparer.Ordinal))
@@ -468,14 +492,6 @@ public static class PublishedBundleCatalogue
                 if (range is not null)
                     ranges[StripZip(bundle)] = range;
             }
-            if (surface is null)
-            {
-                var (read, note) = PlatformSurfaceOf(publication, source, logger);
-                surface = read;
-                if (note is not null)
-                    surfaceNotes.Add(note);
-            }
-
             var modules = SealedModulesOf(sourceDirectory, logger);
             if (modules.Modules is null)
             {
@@ -526,41 +542,54 @@ public static class PublishedBundleCatalogue
                 refusals.Count == 0 ? null : string.Join("; ", refusals)),
             DependencyRecords = records.ToImmutable(),
             BundleRanges = ranges.ToImmutable(),
-            PlatformSurface = surface,
-            PlatformSurfaceDetail = surface is not null
-                ? null
-                : surfaceNotes.Count == 0
-                    ? $"no sealed source under framework identity '{Path.GetFileName(identityDirectory)}' "
-                      + $"publishes {PlatformSurfaceFileName} (the publication predates #3651), so "
-                      + "the target's type surface is unknown here"
-                    : string.Join("; ", surfaceNotes),
         };
     }
 
     /// <summary>
-    /// One sealed source's <see cref="PlatformSurfaceFileName"/>, parsed — or the reason it yields
-    /// none. Absent is the ordinary state of a publication sealed before #3651 and is NOT logged as
-    /// a problem; a document that is there and does not parse IS, because a producer wrote
-    /// something the reader cannot use.
+    /// The surface recorded for EXACTLY <paramref name="version"/> —
+    /// <c>&lt;root&gt;/_releases/_surface/&lt;version&gt;</c> — parsed, or the reason it yields none.
+    /// Never a fallback to another release's surface or to a publication's: a release with no
+    /// surface of its own is UNMEASURED (every link check Indeterminate — reported, neither a hold
+    /// nor clearance), because a surface measured on a different image is exactly the wrong answer
+    /// this read exists to retire (policy <c>exact-release-surface</c>).
     /// </summary>
-    private static (ModulePlatformSurface? Surface, string? Note) PlatformSurfaceOf(
-        string publication, string source, ILogger? logger)
+    internal static (ModulePlatformSurface? Surface, string? Note) ReleaseSurfaceOf(
+        string publishedRoot, string version, string identity, ILogger? logger)
     {
-        var path = Path.Combine(publication, PlatformSurfaceFileName);
+        var relative = $"{ReleaseMarkerDirectoryName}/{ReleaseSurfaceDirectoryName}/{version}";
+        var path = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, ReleaseSurfaceDirectoryName, version);
         if (!File.Exists(path))
-            return (null, $"source '{source}' publishes no {PlatformSurfaceFileName} (sealed before #3651)");
+            return (null,
+                $"release {version} records no {PlatformSurfaceFileName} of its own ({relative} is absent — "
+                + "the release predates exact-release surfaces, or its bake carried none), so its type "
+                + "surface is unknown here; no other release's or publication's surface stands in for it");
+        ModulePlatformSurface surface;
         try
         {
-            return (ModulePlatformSurface.FromJson(File.ReadAllText(path)), null);
+            surface = ModulePlatformSurface.FromJson(File.ReadAllText(path));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             logger?.LogWarning(ex,
-                "ReleaseAvailability: {Path} is present but unusable — the target's type surface "
+                "ReleaseAvailability: {Path} is present but unusable — release {Version}'s type surface "
                 + "cannot be read from it, so no landed module can be linked against this release",
-                path);
-            return (null, $"source '{source}': {PlatformSurfaceFileName} could not be read ({ex.Message})");
+                path, version);
+            return (null, $"release {version}: {relative} ({PlatformSurfaceFileName}) could not be read ({ex.Message})");
         }
+        // The document names the identity it was measured under. A surface of another identity is
+        // not this release's, whatever its file name says — reported, never linked against.
+        if (!string.IsNullOrWhiteSpace(surface.Identity)
+            && !string.Equals(surface.Identity, identity, StringComparison.Ordinal))
+        {
+            logger?.LogWarning(
+                "ReleaseAvailability: {Path} describes framework identity {SurfaceIdentity}, but release "
+                + "{Version} resolves {Identity} — not linking against a surface of another platform",
+                path, surface.Identity, version, identity);
+            return (null,
+                $"release {version}: {relative} describes framework identity '{surface.Identity}', but the "
+                + $"release marker names '{identity}' — a surface of another platform is not linked against");
+        }
+        return (surface, null);
     }
 
     /// <summary>

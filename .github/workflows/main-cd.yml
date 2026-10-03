@@ -2973,7 +2973,8 @@ jobs:
             --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
             framework-identity /portal --expect "$BAKED"
           # Equal framework identities do NOT imply equal host closures. The tester carries
-          # fewer assemblies than the portal, and the release gate reads this source first.
+          # fewer assemblies than the portal, and the release gate links against THIS measurement
+          # as the release's own surface (_releases/_surface/<version>, policy exact-release-surface).
           # Publish the measured PORTAL surface, including its seeded module entry assemblies,
           # using the same image and architecture whose identity was just verified above.
           docker cp "$cid:/usr/share/dotnet/shared" "$STAGE/shared"

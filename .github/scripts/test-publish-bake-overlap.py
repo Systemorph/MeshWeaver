@@ -104,6 +104,16 @@ SURFACE = "platform-surface.json"
 # bundles + modules + modules/_index + source-commit.txt + platform-surface.json + architecture.txt
 # + repository.txt
 EXPECTED_FILES = len(BUNDLES) + len(MODULES) + 5
+# 🚨 THE EXACT-RELEASE SURFACE (policy exact-release-surface): the surface the release gate links a
+# landed module against lives at _releases/_surface/<release-version>, one per RELEASE — never in
+# the publication `_current` names. Mirrors PublishedBundleCatalogue.ReleaseSurfaceDirectoryName.
+RELEASES = "prebuilt-bundles/_releases"
+RELEASE_SURFACES = f"{RELEASES}/_surface"
+# Which read the GATE makes, for the cases that ask "what would the gate link against for release
+# X". `release` is the contract (PublishedBundleCatalogue.ReleaseSurfaceOf); `pointer` is the read
+# it replaced — the surface inside the generation `_current` names — kept ONLY so the interleaved
+# different-surface regression can be shown to FAIL on it (`--gate-contract pointer`).
+GATE_CONTRACT = "release"
 
 
 # ────────────────────────────── the stub `az` ──────────────────────────────
@@ -223,8 +233,6 @@ if action == "upload":
     sys.exit(0)
 
 if action == "download":
-    if os.environ.get("MOCK_AZ_FAIL_DOWNLOAD_OF") == Path(path).name:
-        sys.stderr.write("stub-az: simulated download failure\n"); sys.exit(1)
     src = share_root() / path
     dest = Path(flag("--dest"))
     if not src.is_file():
@@ -471,6 +479,12 @@ class Bake:
                     f"{SURFACE} produced by bake {name} at {source_sha}\n")
 
 
+def surface_text(release: str) -> str:
+    """A portal surface fixture: a property of ONE release's image, identical across every bake
+    of that image (no "produced by bake" phrase, so the shelf counts it as a marker)."""
+    return f"{SURFACE} measured on the portal image of release {release}\n"
+
+
 class Shelf:
     """The fake Azure Files share, read as a consumer would: by the bytes, not by the log."""
 
@@ -536,6 +550,30 @@ class Shelf:
             counts[who] = counts.get(who, 0) + 1
         return counts
 
+    def release_marker(self, release: str) -> str | None:
+        f = self.root / ACCOUNT / SHARE / RELEASES / release
+        return f.read_text().strip() if f.is_file() else None
+
+    def release_surface(self, release: str) -> str | None:
+        """The document at _releases/_surface/<release>, or None — what the gate reads now."""
+        f = self.root / ACCOUNT / SHARE / RELEASE_SURFACES / release
+        return f.read_text() if f.is_file() else None
+
+    def gate_surface(self, release: str) -> str | None:
+        """What the release gate links a landed module against for <release>, under GATE_CONTRACT.
+
+        `release`: exactly that release's own document (PublishedBundleCatalogue.ReleaseSurfaceOf) —
+        no fallback. `pointer`: the read it replaced — the marker's identity, then the surface in the
+        publication `_current` names (or the flat copy without a pointer).
+        """
+        if GATE_CONTRACT == "release":
+            return self.release_surface(release)
+        if self.release_marker(release) != IDENTITY:
+            return None
+        live = self.under(self.pointer()) if self.pointer() else self
+        f = live.dest / SURFACE
+        return f.read_text() if live.sealed() and f.is_file() else None
+
     def sealed_mix(self) -> bool:
         """A sentinel over bytes from more than one bake — the defect, stated as a fact."""
         if not self.sealed():
@@ -576,7 +614,8 @@ class Harness:
             "GITHUB_RUN_ATTEMPT": "1",
         }
 
-    def publish(self, bake: Bake, publisher: str, run_id: str, env_extra: dict | None = None):
+    def publish(self, bake: Bake, publisher: str, run_id: str, env_extra: dict | None = None,
+                release: str | None = None):
         env = dict(os.environ)
         env["PATH"] = f"{self.bin}{os.pathsep}{env['PATH']}"
         env.update(self.base_env())
@@ -587,7 +626,6 @@ class Harness:
         env.pop("RUNNER_TEMP", None)
         for k in ("MOCK_AZ_HOOK_ON", "MOCK_AZ_HOOK_CMD", "MOCK_AZ_HOOK_ONCE", "MOCK_AZ_HOOK_WHEN",
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
-                  "MOCK_AZ_FAIL_DOWNLOAD_OF",
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
                   "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
@@ -598,12 +636,13 @@ class Harness:
             else:
                 env[k] = str(v)
         return subprocess.run(
-            ["bash", str(self.script), str(bake.dir), SOURCE, bake.source_sha],
+            ["bash", str(self.script), str(bake.dir), SOURCE, bake.source_sha]
+            + ([release] if release else []),
             capture_output=True, text=True, env=env,
         )
 
     def publish_command(self, bake: Bake, publisher: str, run_id: str,
-                        env_extra: dict | None = None) -> str:
+                        env_extra: dict | None = None, release: str | None = None) -> str:
         """The same publication, as a shell command a backend hook can run mid-upload."""
         assigns = {"PATH": f"{self.bin}:$PATH"}
         assigns.update(self.base_env())
@@ -613,8 +652,11 @@ class Harness:
         })
         assigns.update({k: str(v) for k, v in (env_extra or {}).items()})
         prefix = " ".join(f'{k}="{v}"' for k, v in assigns.items())
-        return (f'{prefix} bash "{self.script}" "{bake.dir}" {SOURCE} {bake.source_sha}'
-                f' > "{self.work}/inner-{run_id}.log" 2>&1')
+        # The content sha may be EMPTY (the framework-producer shape); quoted, so a release
+        # version after it stays the FOURTH argument rather than sliding into the third.
+        return (f'{prefix} bash "{self.script}" "{bake.dir}" {SOURCE} "{bake.source_sha}"'
+                + (f' "{release}"' if release else "")
+                + f' > "{self.work}/inner-{run_id}.log" 2>&1')
 
     def reset(self):
         if self.shelf_root.exists():
@@ -860,45 +902,66 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
           "receipt: " + (next((line for line in r.stdout.splitlines() if line.startswith("bake published:")),
                               "<no final receipt>")))
 
-    # Equal source and framework identities do not imply equal portal surfaces: the image
-    # can incorporate a newer plugin commit while core is unchanged. Read the shelf bytes.
+    # ── 🚨 THE EXACT-RELEASE SURFACE (policy exact-release-surface). ─────────────────────────────
+    # One core commit is baked against many portal images whose module closures differ (ci.9468:
+    # same core commit, same framework identity, a newer Plugins closure in the image). The
+    # publication is keyed by content × framework, so its surface cannot say which image a release
+    # carries; each RELEASE therefore records its own, and the shared publication is left exactly
+    # as the content key decides — a same-content bake still SKIPS it.
+    print("\nexact-release surface — every release records its own surface; the shared publication keeps its key:")
     for source_sha, layout in ((sha, layout) for sha in ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "")
                                for layout in ("flat", "generation")):
         h.reset()
+        tag = f"sha={bool(source_sha)}, layout={layout}"
         old_host = Bake(work, "old-host-" + (source_sha or "none") + layout, source_sha, surface_shared=True)
         new_host = Bake(work, "new-host-" + (source_sha or "none") + layout, source_sha, surface_shared=True)
-        (new_host.dir / SURFACE).write_text('{"assemblies":{"MeshWeaver.AI":["MeshWeaver.AI.ProviderRouting"]}}\n')
-        r = h.publish(old_host, "Systemorph/MeshWeaver", "4051", {"BAKE_PUBLICATION_LAYOUT": layout})
+        (old_host.dir / SURFACE).write_text(surface_text("3.0.0-ci.9400"))
+        (new_host.dir / SURFACE).write_text(surface_text("3.0.0-ci.9468"))
+        r1 = h.publish(old_host, "Systemorph/MeshWeaver", "4051", {"BAKE_PUBLICATION_LAYOUT": layout},
+                       release="3.0.0-ci.9400")
         s = h.shelf()
         incumbent = s.under(s.pointer()) if s.pointer() else s
-        check("the earlier portal surface sealed (non-vacuous same-content control)",
-              r.returncode == 0 and incumbent.sealed(), f"rc={r.returncode}")
-        r = h.publish(new_host, "Systemorph/MeshWeaver", "4052", {"BAKE_PUBLICATION_LAYOUT": layout})
+        check(f"the earlier release publishes and seals (non-vacuous control, {tag})",
+              r1.returncode == 0 and incumbent.sealed(), f"rc={r1.returncode}")
+        r = h.publish(new_host, "Systemorph/MeshWeaver", "4052", {"BAKE_PUBLICATION_LAYOUT": layout},
+                      release="3.0.0-ci.9468")
         s = h.shelf()
         live = s.under(s.pointer()) if s.pointer() else s
-        check(f"same content with changed surface republishes (sha={bool(source_sha)}, layout={layout})",
-              r.returncode == 0 and live.sealed()
-              and (live.dest / SURFACE).read_bytes() == (new_host.dir / SURFACE).read_bytes()
-              and "targets-already=0" in r.stdout,
+        check(f"same content, newer image: the shared publication is SKIPPED, not republished ({tag})",
+              r.returncode == 0 and "targets-already=1" in r.stdout and live.sealed()
+              and (live.dest / SURFACE).read_text() == surface_text("3.0.0-ci.9400"),
               f"rc={r.returncode}, {denominator(live)}")
+        check(f"…and each release carries ITS OWN surface, byte for byte ({tag})",
+              s.release_surface("3.0.0-ci.9400") == surface_text("3.0.0-ci.9400")
+              and s.release_surface("3.0.0-ci.9468") == surface_text("3.0.0-ci.9468")
+              and s.release_marker("3.0.0-ci.9468") == IDENTITY,
+              f"9400={s.release_surface('3.0.0-ci.9400')!r}, 9468={s.release_surface('3.0.0-ci.9468')!r}")
+        check(f"…and the receipt counts the release surface on every run ({tag})",
+              "release-surfaces=1" in r1.stdout and "release-surfaces=1" in r.stdout,
+              next((l for l in r.stdout.splitlines() if l.startswith("bake published:")), "<no receipt>"))
 
     h.reset()
-    no_surface = Bake(work, "same-content-no-surface", core.source_sha, surface=False)
-    r = h.publish(no_surface, "Systemorph/MeshWeaver", "4061")
-    check("the same-content publication without a surface is sealed first",
-          r.returncode == 0 and h.shelf().sealed(), f"rc={r.returncode}")
-    r = h.publish(core, "Systemorph/MeshWeaver", "4062")
-    check("a missing surface is replaced rather than skipped on matching content",
-          r.returncode == 0 and h.shelf().sealed()
-          and (h.shelf().dest / SURFACE).read_bytes() == (core.dir / SURFACE).read_bytes(),
+    no_surface = Bake(work, "release-no-surface", core.source_sha, surface=False)
+    r = h.publish(no_surface, "Systemorph/MeshWeaver", "4061", release="3.0.0-ci.9500")
+    s = h.shelf()
+    check("a release whose bake carries no surface records the marker and NO surface — and says so",
+          r.returncode == 0 and s.release_marker("3.0.0-ci.9500") == IDENTITY
+          and s.release_surface("3.0.0-ci.9500") is None
+          and "release-surfaces=0" in r.stdout and "::warning::release 3.0.0-ci.9500" in r.stdout,
           f"rc={r.returncode}")
-    before = h.shelf().files()
-    r = h.publish(core, "Systemorph/MeshWeaver", "4063", {"MOCK_AZ_FAIL_DOWNLOAD_OF": SURFACE})
-    check("an unreadable existing surface fails without changing the sealed publication",
-          r.returncode != 0 and "the live surface was never compared" in r.stdout
-          and h.shelf().sealed() and h.shelf().files() == before
-          and "already published; skipping" not in r.stdout,
-          f"rc={r.returncode}")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver.Plugins", "4062")
+    check("a publisher that names no release (a node repo) writes no release surface at all",
+          r.returncode == 0 and not (h.shelf_root / ACCOUNT / SHARE / RELEASE_SURFACES).exists()
+          and "release-surfaces=0" in r.stdout, f"rc={r.returncode}")
+    h.reset()
+    r = h.publish(core, "Systemorph/MeshWeaver", "4063", {"MOCK_AZ_FAIL_UPLOAD_OF": "3.0.0-ci.9501"},
+                  release="3.0.0-ci.9501")
+    s = h.shelf()
+    check("a release surface that cannot be written fails the target BEFORE the marker that would announce it",
+          r.returncode != 0 and s.release_marker("3.0.0-ci.9501") is None
+          and s.release_surface("3.0.0-ci.9501") is None and "FAILED" in r.stdout,
+          f"rc={r.returncode}, marker={s.release_marker('3.0.0-ci.9501')!r}")
 
     # ── THE SECOND `already` BRANCH: a producer that gives NO content sha. ─────────────────────
     # 🚨 Copilot on #4335, and it was right: every case above publishes WITH a source sha
@@ -1670,6 +1733,52 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               and set(s.bakes_present()) - {"<marker>"} == {"newer-content"},
               f"flat: {denominator(s)} — a run that lost the pointer race owns nothing at this prefix")
 
+    # ── 🚨 TWO SAME-SOURCE BAKES CARRYING DIFFERENT SURFACES, INTERLEAVED (Copilot on #5818). ────
+    # ── One core commit, one framework identity, two portal images: release A's image predates a
+    # ── type that release B's carries. A is slower — paused mid-upload — while B publishes, seals
+    # ── its generation and moves `_current`; A then resumes and moves the pointer onto its own
+    # ── generation, because two equal source shas cannot be ordered. That is not a defect of the
+    # ── pointer (either generation is whole and the content is the same) — it is why the pointer
+    # ── cannot carry a per-IMAGE fact. The gate reading the shared surface judged B against A's
+    # ── image; under the exact-release contract each release is judged against its own.
+    # ── `--gate-contract pointer` runs this case against the read it replaced, and it FAILS.
+    print(f"\ngeneration layout — interleaved same-source bakes with DIFFERENT surfaces (gate contract: {GATE_CONTRACT}):")
+    h.reset()
+    same_sha = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+    rel_a, rel_b = "3.0.0-ci.9601", "3.0.0-ci.9602"
+    slow_a = Bake(work, "surface-a", same_sha, surface_shared=True)
+    fast_b = Bake(work, "surface-b", same_sha, surface_shared=True)
+    (slow_a.dir / SURFACE).write_text(surface_text(rel_a))
+    (fast_b.dir / SURFACE).write_text(surface_text(rel_b))
+    tok_a, tok_b = "Systemorph-MeshWeaver-3801-1", "Systemorph-MeshWeaver-3802-1"
+    inner = h.publish_command(fast_b, "Systemorph/MeshWeaver", "3802", {
+        **gen, "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver", "GH_TOKEN": "stub",
+    }, release=rel_b)
+    r = h.publish(slow_a, "Systemorph/MeshWeaver", "3801", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/{tok_a}/{BUNDLES[1]}",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-surface-race",
+        "MOCK_AZ_HOOK_CMD": inner,
+        "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver", "GH_TOKEN": "stub",
+        **gen,
+    }, release=rel_a)
+    s = h.shelf()
+    check("the interleaving really happened: both generations sealed, B's FIRST (not vacuous)",
+          sorted(s.generations()) == sorted([tok_a, tok_b]) and s.under(tok_a).sealed()
+          and s.under(tok_b).sealed() and inner_run_succeeded(work, "3802") and r.returncode == 0,
+          f"generations={s.generations()}, rc={r.returncode}, inner: {inner_receipt(work, '3802')!r}")
+    check("…and the shared pointer was left on the SLOWER bake's generation — the surface it holds "
+          "is release A's, which is exactly why no gate may read it",
+          s.pointer() == tok_a
+          and (s.under(tok_a).dest / SURFACE).read_text() == surface_text(rel_a),
+          f"_current={s.pointer()!r}")
+    check("the gate judges release B against B's OWN surface — not the one the pointer names",
+          s.gate_surface(rel_b) == surface_text(rel_b),
+          f"gate read for {rel_b}: {s.gate_surface(rel_b)!r}")
+    check("…and release A against A's own — the faster publication did not overwrite it",
+          s.gate_surface(rel_a) == surface_text(rel_a),
+          f"gate read for {rel_a}: {s.gate_surface(rel_a)!r}")
+
     # ── The writer must decide "already published" from the POINTED-TO directory, not the prefix.
     # Getting this wrong is the silent one: the writer would read the flat compatibility copy while
     # portals served the generation, and republish (or skip) against a publication nobody serves.
@@ -1876,7 +1985,14 @@ def main() -> int:
     ap.add_argument("--expect-defect", action="store_true",
                     help="assert the PRE-FIX behaviour instead: overlaps seal a mix. Used to "
                          "falsify the guard by running these same cases against the old script.")
+    ap.add_argument("--gate-contract", choices=("release", "pointer"), default="release",
+                    help="which surface read the gate model makes: `release` (the contract — "
+                         "_releases/_surface/<version>) or `pointer` (the read it replaced — the "
+                         "surface `_current` names). `pointer` exists only to falsify the "
+                         "interleaved different-surface regression; CI always runs `release`.")
     args = ap.parse_args()
+    global GATE_CONTRACT
+    GATE_CONTRACT = args.gate_contract
 
     if not args.script.is_file():
         print(f"::error::{args.script} does not exist — nothing to execute. A harness that cannot "

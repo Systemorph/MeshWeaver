@@ -38,7 +38,8 @@ namespace MeshWeaver.PluginCatalog;
 /// check. A module with no such build keeps its landed generation across the roll, so that
 /// generation's bytes are linked against the TARGET's type surface
 /// (<see cref="ModulePlatformLink.Check(string, ModulePlatformSurface)"/> over the
-/// <see cref="ReleaseArtifacts.PlatformSurface"/> the publication carries): <c>Unlinkable</c> is
+/// <see cref="ReleaseArtifacts.PlatformSurface"/> recorded for EXACTLY that release — policy
+/// <c>exact-release-surface</c>, never a publication's shared surface): <c>Unlinkable</c> is
 /// <see cref="PackageAvailabilityKind.ModuleUnloadable"/> — THE hold, naming the module and the
 /// missing type; <c>Linkable</c> clears; <c>Indeterminate</c> (no surface published, unreadable
 /// bytes) is REPORTED on <see cref="UpdatabilityVerdict.Advisories"/> and is neither clearance nor
@@ -57,8 +58,8 @@ namespace MeshWeaver.PluginCatalog;
 /// is never dressed up as a compatibility verdict: <see cref="PackageAvailabilityKind.Indeterminate"/>
 /// and <see cref="PackageAvailabilityKind.ModuleUnloadable"/> are different answers to different
 /// questions, and a caller that cannot tell them apart cannot tell an outage from an incompatible
-/// release. The one Indeterminate that does NOT hold is the LINK check's — a missing
-/// <c>platform-surface.json</c> is a publication that predates #3651, and holding every roll on it
+/// release. The one Indeterminate that does NOT hold is the LINK check's — a release with no
+/// surface of its own predates exact-release surfaces (or #3651), and holding every roll on it
 /// would freeze the fleet exactly as the floors did; it is reported instead.</para>
 ///
 /// <para>Everything here is PURE: the caller supplies the target, the packages, and an
@@ -708,18 +709,21 @@ public sealed record ReleaseArtifacts(
     public ImmutableArray<BundleDependencyRecord> DependencyRecords { get; init; } = [];
 
     /// <summary>
-    /// 🚨 The TARGET platform's type surface (#3651) — <c>platform-surface.json</c>, written by the
-    /// bake inside the target image and published beside <c>_complete</c>, read back through
-    /// <see cref="ModulePlatformSurface.FromJson"/>. What a landed module's bytes are linked
-    /// against to answer "would it load there" without the target running anywhere. Null when no
-    /// sealed source under the identity carries one, or none parses — then
+    /// 🚨 The TARGET release's type surface (#3651) — the <c>platform-surface.json</c> measured on
+    /// THAT release's portal image and recorded at <c>_releases/_surface/&lt;version&gt;</c>
+    /// (policy <c>exact-release-surface</c>; <see cref="PublishedBundleCatalogue.ReleaseSurfaceDirectoryName"/>),
+    /// read back through <see cref="ModulePlatformSurface.FromJson"/>. What a landed module's bytes
+    /// are linked against to answer "would it load there" without the target running anywhere.
+    /// Never the surface inside a publication: one publication serves many images. Null when the
+    /// release records none, it does not parse, or it names another identity — then
     /// <see cref="PlatformSurfaceDetail"/> says which, and every link check is Indeterminate:
     /// reported, never a hold and never clearance.
     /// </summary>
     public ModulePlatformSurface? PlatformSurface { get; init; }
 
-    /// <summary>Why <see cref="PlatformSurface"/> is null, in one sentence — a publication that
-    /// predates #3651, or a document that did not parse. Null when the surface was read.</summary>
+    /// <summary>Why <see cref="PlatformSurface"/> is null, in one sentence — a release that records
+    /// no surface of its own, a document that did not parse, or one naming another identity. Null
+    /// when the surface was read.</summary>
     public string? PlatformSurfaceDetail { get; init; }
 
     /// <summary>
