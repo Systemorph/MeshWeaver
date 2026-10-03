@@ -161,7 +161,8 @@ internal static class NodeTypeContractHandler
                             // Use the persisted integer version the IAssemblyStore.Put
                             // used, not a parse of the display Version string.
                             var releaseVersion = release.AssemblyStoreVersion ?? 0;
-                            return ResolveAssembly(hub, release.AssemblyCollection, release.NodeTypePath, releaseVersion)
+                            return ResolveAssembly(hub, release.AssemblyCollection, release.NodeTypePath, releaseVersion,
+                                    release.AssemblyContentPath)
                                 .SelectMany(localPath =>
                                 {
                                     if (string.IsNullOrEmpty(localPath))
@@ -218,7 +219,8 @@ internal static class NodeTypeContractHandler
                                 BuildResponse(hubPath, node, result), true));
                     }
                     var compileVersion = def.LastCompiledVersion ?? node.Version;
-                    return ResolveAssembly(hub, def.LatestAssemblyCollection, node.Path, compileVersion)
+                    return ResolveAssembly(hub, def.LatestAssemblyCollection, node.Path, compileVersion,
+                            def.LatestAssemblyPath, def.LatestAssemblyMvid)
                         .SelectMany(localPath =>
                         {
                             if (string.IsNullOrEmpty(localPath))
@@ -850,13 +852,16 @@ internal static class NodeTypeContractHandler
     /// other value routes to the registered <see cref="IAssemblyStore"/>.
     /// </summary>
     private static IObservable<string?> ResolveAssembly(
-        IMessageHub hub, string? collection, string nodeTypePath, long version)
+        IMessageHub hub, string? collection, string nodeTypePath, long version,
+        string? contentPath = null, string? assemblyMvid = null)
     {
         if (string.IsNullOrEmpty(collection)) return Observable.Return<string?>(null);
         var store = string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
             ? (IAssemblyStore)FrameworkAssemblyStore.Instance
             : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-        return store.TryGetAssemblyPath(nodeTypePath, version);
+        // 🚨 By IDENTITY, not by key: the record names the content path and MVID it published,
+        // and several builds can share one version key (see IAssemblyStore.TryGetBuildPath).
+        return store.TryGetBuildPath(nodeTypePath, version, contentPath, assemblyMvid);
     }
 
     /// <summary>

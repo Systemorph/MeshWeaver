@@ -259,11 +259,12 @@ internal interface ICompilationCacheService
     /// (<c>EmitToDiskWithRetry</c>) — is still evicted, because every emit publishes. What is no
     /// longer evicted at the moment it appears is a generation this process only HYDRATED: an
     /// <c>IAssemblyStore</c> path is keyed <c>v{version}-{frameworkTag}-{hash}.dll</c>
-    /// (first-write-wins per version), so a silo that reads a version another silo compiled now
-    /// keeps the previous version's context until the NodeType hub disposes
+    /// (content-addressed: one file per distinct build, never first-write-wins since the updates
+    /// fix of 2026-10-03), so a silo that reads a build another silo compiled now
+    /// keeps the previous build's context until the NodeType hub disposes
     /// (<see cref="UnloadNodeContexts"/>, which <c>Modules:AutoRecycleOnStaleBuild</c> drives on a
-    /// stale build). That residue is bounded by the number of VERSIONS a hub outlives, not by
-    /// recompiles, and it is the deliberate price of the correctness clause: a read that
+    /// stale build). That residue is bounded by the number of distinct BUILDS a hub outlives — a
+    /// same-version recompile of different bytes is its own build and counts — not by the emit count, and it is the deliberate price of the correctness clause: a read that
     /// superseded would re-create the CURRENT generation's context under its own path, putting two
     /// live ALCs behind one file — the two-generations split #3911 describes, manufactured by the
     /// reclaim itself.</para>
