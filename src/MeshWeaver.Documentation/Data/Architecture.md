@@ -162,6 +162,7 @@ Each theme starts with its introductory page, followed by related architecture t
 
 - **Start here:** [Postgres Schema Architecture](PostgresSchemaArchitecture)
 - [Partition Storage Routing](PartitionStorageRouting)
+- [Storage Bindings](StorageBindings) — where a partition keeps its data: zero bindings = the instance default; a binding at `{partition}/_Storage` (global: `Admin/_Storage`) picks or creates a container in one of the instance's pre-configured stores, validated on the node; the resolver every storage consumer asks; the Storage settings section
 - [Partition Teardown](PartitionTeardown) — deleting a partition ROOT drops its backing store; keyed on the node's SHAPE, never its NodeType
 - [Partition Storage Hubs](PartitionStorageHubs)
 - [Partitioned Persistence](PartitionedPersistence)
