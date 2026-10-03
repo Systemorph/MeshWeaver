@@ -184,7 +184,13 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(_ => BuildInitialization(
                     context, isDefaultArea, resolvedArea, accessService, capturedAccessContext, ctorLogger))
-                .WithExceptionCallback(FailRendering));
+                .WithExceptionCallback(FailRendering)
+                // A layout area is rendered once per subscriber, for that subscriber. A click, a
+                // blur, a dialog dismissal or an edited value on it is therefore accepted only from
+                // the identity it was rendered for — the subscribe delivery's, or (a stream opened
+                // without a subscribe) the viewer captured above. Anything else is refused by the
+                // stream before OnClick / OnBlur / OnCloseDialog or the data update can run.
+                .WithInputFromSubscriberOnly(capturedAccessContext));
         Reference = reference;
 
         // 🚨 THIS IS THE LINE THAT NRE'd IN PRODUCTION (Systemorph/MeshWeaver#3321) — the whole
