@@ -47,11 +47,19 @@ The document's own hub is the **one writer** of the document. A producer — any
 
 ```csharp
 // open once (idempotent), then append as text arrives, then seal
-hub.OpenDocumentLog(new DocumentLogTarget("Admin/Jobs/build-42/logs", "run.log"))
+hub.OpenDocumentLog(new DocumentLogTarget("Admin/content", "logs/jobs/build-42.log"))
    .SelectMany(path => hub.AppendToDocument(path, chunkOfText, offset))   // offset = producer's char offset
    ...
 hub.CompleteDocument(path);                                               // writes the trailing part
 ```
+
+`DocumentLogTarget` fixes the document's windows when it opens (`ChunkSize`/`ChunkOverlap`, null =
+1000/150) and says whether the producer already stored the original (`ProducerStoresOriginal`).
+🚨 Every member's default is its CLR default on purpose: the mesh serialiser omits default-valued
+members, so a positional parameter whose default differs from the CLR default arrives flipped at the
+document's hub (a `StoreOriginal: false` once arrived as `true` and rewrote a producer's original).
+A best-effort producer checks `hub.SupportsDocumentLogs()` first — it is true only where the
+content-indexing module (which owns the `Document` hub) is installed.
 
 As soon as a window is **complete** (the document holds `Start + 1000` characters) the hub writes that
 part node, embeds it and upserts it into the vector index — right then, not at the end. The unsealed
@@ -91,3 +99,16 @@ The vector index is the existing content chunk index (`content_chunks`, the stor
 `search_chunks` / `get_chunk`). A part is upserted under its `(collectionPath, filePath, index)`, so
 `search_chunks` finds a running job's log while it is still being written and `get_chunk` steps through
 it like any indexed file.
+
+## Consumers
+
+| Producer | Document | Original |
+|---|---|---|
+| A job / queue run (the queue work) | `DocumentPaths.For("{partition}/content", "logs/jobs/{job}.log")`; `Admin/content` for instance-wide jobs | stored on completion |
+| An agent round (`RoundTranscript`) | `DocumentPaths.For("{threadPath}/transcripts", "{responseMessageId}.md")` | the response cell is the record (`ProducerStoresOriginal`) |
+| A CI job log the PR babysitter downloads | `DocumentPaths.For("Admin/content", "logs/ci/{owner}/{repo}/{jobId}.log")` | stored on completion |
+| An uploaded file (the content indexer) | `DocumentPaths.For(collection, file)` — parts written after the summary; pruned on a shorter re-upload, removed on delete | the uploaded file |
+
+A round transcript is best effort: it never fails or holds the round, and an instance turns it off
+with `DocumentLogs:ThreadTranscripts=false`.
+
