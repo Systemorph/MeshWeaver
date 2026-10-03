@@ -2367,7 +2367,7 @@ was first-write-wins per version until 2026-10-03, see
 [Stale State Until a Recycle](/Doc/Architecture/StaleStateUntilRecycle) → "The next activation binds
 the newest build"), so a silo reading a build another silo compiled keeps the previous build's context until the NodeType hub disposes
 (`UnloadNodeContexts`, which `Modules:AutoRecycleOnStaleBuild` drives on a stale build). That
-residue is bounded by the number of VERSIONS one hub outlives, not by recompiles — and it is the
+residue is bounded by the number of distinct BUILDS one hub outlives — a same-version recompile of different bytes is its own build and counts — not by the emit count — and it is the
 deliberate price of the correctness clause. A read that superseded would evict the CURRENT
 generation's context and then re-create one under the same path, putting **two live ALCs behind one
 file**: the two-generations split the section below is about, manufactured by the reclaim itself.
