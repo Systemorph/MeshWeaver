@@ -1148,7 +1148,7 @@ public static class EditorExtensions
             // Use DistinctUntilChanged to prevent endless emissions from CombineLatest
             string? lastDisplayName = null;
             host.ReplaceDisposable(displayLabelId,
-                dataStream.CombineLatest(collectionStream, (data, collection) =>
+                host.FeedData(null, displayLabelId, dataStream.CombineLatest(collectionStream, (data, collection) =>
                 {
                     if (data.ValueKind == JsonValueKind.Undefined || collection?.Value == null)
                         return "";
@@ -1174,8 +1174,8 @@ public static class EditorExtensions
                     }
 
                     return keyValue.ToString() ?? "";
-                })
-                .Subscribe(displayName =>
+                }),
+                displayName =>
                 {
                     // Manual DistinctUntilChanged to avoid endless emissions
                     if (displayName == lastDisplayName)
@@ -1636,19 +1636,20 @@ public static class EditorExtensions
     {
         // A dimension whose collection has no stream, whose stream emits no collection, or whose
         // type is not registered is a misconfigured dimension: each of these threw before (a null
-        // dereference) and still throws — now naming what is missing.
+        // dereference) and still throws — now naming what is missing. The feed runs through
+        // FeedData, so a fault on a later emission reaches its error arm and is logged, never an
+        // unhandled exception on the hub.
         var dimensions = host.Workspace.GetStream(new CollectionReference(collectionName))
             ?? throw new InvalidOperationException(
                 $"No data stream for the dimension collection '{collectionName}'.");
         host.ReplaceDisposable(registrationKey,
-            dimensions
+            host.FeedData(null, optionsId, dimensions
                 .Select(x => ConvertDimensionToOptionsForToggle(
                     x.Value ?? throw new InvalidOperationException(
                         $"The dimension collection '{collectionName}' emitted no instances."),
                     host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttr.Type)
                         ?? throw new InvalidOperationException(
-                            $"The dimension type '{dimensionAttr.Type.Name}' is not registered.")))
-                .Subscribe(opts => host.UpdateData(optionsId, opts)));
+                            $"The dimension type '{dimensionAttr.Type.Name}' is not registered.")))));
     }
 
     /// <summary>
