@@ -2065,5 +2065,10 @@
   "todo.reminder.assigned": "**Assigned to:** {0}",
   "todo.reminder.due": "**Due:** {0} ({1} days overdue)",
   "todo.reminder.emailText": "**Email Text:**",
-  "todo.reminder.body": "Hi {0},\n\nThis is a reminder that the following task is overdue:\n\nTask: {1}\nDescription: {2}\nDue Date: {3}\n\nPlease complete this task as soon as possible.\n\nThanks!"
+  "todo.reminder.body": "Hi {0},\n\nThis is a reminder that the following task is overdue:\n\nTask: {1}\nDescription: {2}\nDue Date: {3}\n\nPlease complete this task as soon as possible.\n\nThanks!",
+  "data.noDefaultReference": "_No default data reference configured._",
+  "data.streamUnavailable": "_Unable to get a data stream for `{0}`._",
+  "data.none": "_No data._",
+  "data.loadAll": "Load all ({0} lines)",
+  "data.failed": "_Could not read the data: {0}_"
 }
