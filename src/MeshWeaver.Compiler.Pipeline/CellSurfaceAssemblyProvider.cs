@@ -189,7 +189,8 @@ internal sealed class CellSurfaceAssemblyProvider(
         var pool = serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
             ?? IoPool.Unbounded;
 
-        return store.TryGetAssemblyPath(node.Path, definition.LastCompiledVersion.Value)
+        return store.TryGetBuildPath(node.Path, definition.LastCompiledVersion.Value,
+                definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
             .Take(1)
             .SelectMany(localPath =>
             {

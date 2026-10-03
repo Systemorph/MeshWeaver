@@ -65,22 +65,104 @@ public class FileSystemAssemblyStoreTest : IDisposable
     }
 
     [Fact]
-    public async Task Put_same_version_is_idempotent_and_preserves_first_write()
+    public async Task Put_same_version_identical_bytes_is_idempotent()
     {
-        // Idempotent put (6e909188f): a second Put for an existing (path, version)
-        // does NOT overwrite — it returns the existing path. Reason: per
-        // (path, version) the bytes are deterministic (same source + framework
-        // produces equivalent assembly), and overwriting a DLL the current
-        // process has already ALC-loaded throws IOException, which bubbles up
-        // as CompilationStatus.Error and poisons the NodeType forever. Skip
-        // is the self-heal: if FrameworkVersion rolled, the version key rolls
-        // with it and we land on a fresh dllPath.
-        var v1 = Encoding.UTF8.GetBytes("first-compile");
-        var v2 = Encoding.UTF8.GetBytes("second-compile-of-same-version");
-        var p1 = (await store.Put("X/Y", version: 4, v1, null).Should().Emit())!;
-        var p2 = (await store.Put("X/Y", version: 4, v2, null).Should().Emit())!;
-        p2.Should().Be(p1, "same version must resolve to the same filesystem path");
-        File.ReadAllBytes(p2).Should().BeEquivalentTo(v1, System.Text.Json.JsonSerializerOptions.Default, because: "second put is a no-op — first-write-wins for ALC safety");
+        var bytes = Encoding.UTF8.GetBytes("deterministic-compile");
+        var p1 = (await store.Put("X/Y", version: 4, bytes, null).Should().Emit())!;
+        var p2 = (await store.Put("X/Y", version: 4, bytes, null).Should().Emit())!;
+        p2.Should().Be(p1, "the content hash is the name, so identical bytes land on the same file");
+    }
+
+    /// <summary>
+    /// 🚨 THE DEFECT behind "a recycle re-binds the same local copy" (#2471; maintainer 2026-10-03:
+    /// "after disposerequest, new version must be loaded"). A second Put of DIFFERENT bytes at the
+    /// same (path, version) — a bundle N+1 adopted at the version a build N already used — used to
+    /// return N's path (first-write-wins), so the caller stamped N+1's identity over N's bytes and
+    /// no recycle could ever load N+1. Falsified: restoring the first-write-wins short-circuit makes
+    /// p2 == p1 and the bytes N.
+    /// </summary>
+    [Fact]
+    public async Task Put_same_version_different_bytes_publishes_the_new_bytes_under_their_own_name()
+    {
+        var n = Encoding.UTF8.GetBytes("build-N");
+        var n1 = Encoding.UTF8.GetBytes("build-N-plus-1");
+        var p1 = (await store.Put("X/Y", version: 4, n, null).Should().Emit())!;
+        var p2 = (await store.Put("X/Y", version: 4, n1, null).Should().Emit())!;
+
+        p2.Should().NotBe(p1, "new bytes are a new build, so they get their own content-hashed name");
+        File.ReadAllBytes(p2).Should().BeEquivalentTo(n1, System.Text.Json.JsonSerializerOptions.Default);
+        // The old build is never overwritten — an activation that loaded it keeps serving it.
+        File.ReadAllBytes(p1).Should().BeEquivalentTo(n, System.Text.Json.JsonSerializerOptions.Default);
+        (await store.TryGetAssemblyPath("X/Y", version: 4).Should().Emit()).Should().Be(p2,
+            "the version-only lookup answers the latest publication");
+    }
+
+    /// <summary>A rollback republishes bytes an older sibling already holds; the version-only
+    /// lookup must then answer THAT file, not the newer sibling.</summary>
+    [Fact]
+    public async Task Put_republishing_older_bytes_makes_them_the_versions_latest()
+    {
+        var n = Encoding.UTF8.GetBytes("build-N");
+        var n1 = Encoding.UTF8.GetBytes("build-N-plus-1");
+        var p1 = (await store.Put("X/Y", version: 4, n, null).Should().Emit())!;
+        var p2 = (await store.Put("X/Y", version: 4, n1, null).Should().Emit())!;
+        File.SetLastWriteTimeUtc(p2, DateTime.UtcNow.AddMinutes(-1));
+        File.SetLastWriteTimeUtc(p1, DateTime.UtcNow.AddMinutes(-2));
+
+        var back = (await store.Put("X/Y", version: 4, n, null).Should().Emit())!;
+
+        back.Should().Be(p1);
+        (await store.TryGetAssemblyPath("X/Y", version: 4).Should().Emit()).Should().Be(p1);
+    }
+
+    /// <summary>
+    /// The identity lookup resolves the build the record NAMES, even when a newer file shares its
+    /// version key. Falsified: answering by version alone returns the newer sibling.
+    /// </summary>
+    [Fact]
+    public async Task TryGetBuildPath_resolves_the_named_content_path_over_a_newer_sibling()
+    {
+        var n = Encoding.UTF8.GetBytes("build-N");
+        var n1 = Encoding.UTF8.GetBytes("build-N-plus-1");
+        var named = (await store.PutWithLocation("X/Y", version: 4, n, null).Should().Emit())!;
+        var newer = (await store.Put("X/Y", version: 4, n1, null).Should().Emit())!;
+        File.SetLastWriteTimeUtc(named.LocalPath, DateTime.UtcNow.AddMinutes(-5));
+
+        (await store.TryGetAssemblyPath("X/Y", version: 4).Should().Emit()).Should().Be(newer);
+        (await store.TryGetBuildPath("X/Y", 4, named.ContentPath, assemblyMvid: null).Should().Emit())
+            .Should().Be(named.LocalPath, "the record's content path is the identity, not the write time");
+    }
+
+    /// <summary>A content path from another framework generation, or outside the root, is never
+    /// answered — the version's own lookup decides instead.</summary>
+    [Fact]
+    public async Task TryGetBuildPath_ignores_a_foreign_or_escaping_content_path()
+    {
+        var bytes = Encoding.UTF8.GetBytes("build-N");
+        var put = (await store.Put("X/Y", version: 4, bytes, null).Should().Emit())!;
+        var foreign = Path.Combine(root, "X_Y", "v4-zzzzzzzz-aaaaaaaaaaaa.dll");
+        File.WriteAllBytes(foreign, bytes);
+
+        (await store.TryGetBuildPath("X/Y", 4, "X_Y/v4-zzzzzzzz-aaaaaaaaaaaa.dll", null).Should().Emit())
+            .Should().Be(put);
+        (await store.TryGetBuildPath("X/Y", 4, "../../etc/passwd", null).Should().Emit())
+            .Should().Be(put);
+    }
+
+    /// <summary>With a real PE, the MVID picks the published build among same-version siblings.</summary>
+    [Fact]
+    public async Task TryGetBuildPath_picks_the_sibling_carrying_the_published_mvid()
+    {
+        var older = File.ReadAllBytes(typeof(FileSystemAssemblyStore).Assembly.Location);
+        var newer = File.ReadAllBytes(typeof(Xunit.FactAttribute).Assembly.Location);
+        var olderPath = (await store.Put("X/Y", version: 4, older, null).Should().Emit())!;
+        var newerPath = (await store.Put("X/Y", version: 4, newer, null).Should().Emit())!;
+        File.SetLastWriteTimeUtc(olderPath, DateTime.UtcNow);
+        File.SetLastWriteTimeUtc(newerPath, DateTime.UtcNow.AddMinutes(-5));
+        var publishedMvid = ServedBuildIdentity.OfBytes(newer);
+
+        (await store.TryGetBuildPath("X/Y", 4, contentPath: null, publishedMvid).Should().Emit())
+            .Should().Be(newerPath, "the MVID is the identity; the write time is not");
     }
 
     [Fact]
