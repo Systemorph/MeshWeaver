@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -765,7 +766,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             capturedContext = InfrastructureContext;
         hub.Post(
             new UpdateStreamRequest(update, exceptionCallback, applied),
-            opt => capturedContext is null ? opt : opt.WithAccessContext(capturedContext));
+            opt =>
+            {
+                // The proof that the stream posted this write to itself (AcceptInputFromSubscriberOnly).
+                opt = opt.WithProperty(OwnWriteProperty, ownWriteToken);
+                return capturedContext is null ? opt : opt.WithAccessContext(capturedContext);
+            });
     }
 
     /// <summary>
@@ -1274,7 +1280,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // delivery.AccessContext naturally. No ImpersonateAsHub stamping
             // here — hub addresses were polluting CreatedBy on user-driven
             // writes via the AsyncLocal leak (fixed 2026-05-22).
-            hub.Post(new SetCurrentRequest(value));
+            // Stamped as the stream's own write (AcceptInputFromSubscriberOnly).
+            hub.Post(new SetCurrentRequest(value), o => o.WithProperty(OwnWriteProperty, ownWriteToken));
         }
         catch (Exception ex)
         {
@@ -1511,18 +1518,30 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     }
 
     /// <summary>
-    /// The ONE place a stream decides whether a delivery carrying its subscriber's input — a
-    /// person's action (<see cref="IUserAction"/>: a click, a blur, a dialog dismissal) or a value
-    /// the subscriber edited (<see cref="PatchDataChangeRequest"/>) — is accepted. It is accepted
-    /// only when the delivery carries the identity this stream was opened for
-    /// (<see cref="StreamConfiguration{TStream}.SubscriberIdentity"/>); otherwise it is refused: no
-    /// handler runs, the sender is answered with a <see cref="ErrorType.Forbidden"/>
-    /// <see cref="DeliveryFailure"/>, and the refusal is logged at Warning.
+    /// The ONE place a stream that takes its subscriber's input only decides whether a delivery on
+    /// its hub is accepted. Every message type the hub handles has a role in the closed
+    /// classification <see cref="StreamInputRule"/>, and the role decides who may send it:
+    /// <list type="bullet">
+    /// <item><see cref="StreamDeliveryRole.SubscriberInput"/> — a person's action
+    /// (<see cref="IUserAction"/>), an edited value (<see cref="PatchDataChangeRequest"/>), a data
+    /// write (<see cref="DataChangeRequest"/>), a frame (<see cref="DataChangedEvent"/>) or an error
+    /// (<see cref="StreamErrorEvent"/>): accepted only when the delivery carries the identity this
+    /// stream was opened for (<see cref="StreamConfiguration{TStream}.SubscriberIdentity"/>).</item>
+    /// <item><see cref="StreamDeliveryRole.OwnWrite"/> — <see cref="UpdateStreamRequest"/> and
+    /// <see cref="SetCurrentRequest"/>: accepted only when this stream posted it to itself, which
+    /// it proves with a token no other party holds (<see cref="ownWriteToken"/>).</item>
+    /// <item><see cref="StreamDeliveryRole.ReleaseOrAnswer"/> — <see cref="UnsubscribeRequest"/>,
+    /// <see cref="GetDataResponse"/>, <see cref="DeliveryFailure"/>: accepted from the subscriber's
+    /// identity, or from the mesh's own hubs; refused from any other participant connection.</item>
+    /// </list>
+    /// A refused delivery reaches no handler; its sender is answered with a
+    /// <see cref="ErrorType.Forbidden"/> <see cref="DeliveryFailure"/> (an answer is not answered
+    /// again), and the refusal is logged at Warning.
     ///
     /// <para>It fails closed. A stream with no recorded subscriber identity, and a delivery with
     /// no identity, are both refused: an input is accepted because the two identities are known
-    /// and equal, never because one of them is missing. There is no exemption by sender — a
-    /// platform principal is held to the same rule as a person.</para>
+    /// and equal, never because one of them is missing. There is no exemption by sender for input
+    /// — a platform principal is held to the same rule as a person.</para>
     ///
     /// <para>Only streams that opted in are checked
     /// (<see cref="StreamConfiguration{TStream}.WithInputFromSubscriberOnly"/>): a layout area is
@@ -1534,21 +1553,35 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <returns>The refused delivery, or <c>null</c> when the delivery may proceed.</returns>
     private IObservable<IMessageDelivery>? AcceptInputFromSubscriberOnly(IMessageDelivery delivery)
     {
-        if (delivery.Message is not (IUserAction or PatchDataChangeRequest))
+        if (StreamInputRule.RoleOf(delivery.Message.GetType()) is not { } role)
             return null;
 
         var subscriber = Configuration.SubscriberIdentity?.ObjectId;
         var sender = delivery.AccessContext?.ObjectId;
-        if (!string.IsNullOrEmpty(subscriber) && string.Equals(subscriber, sender, StringComparison.Ordinal))
+        var fromSubscriber = !string.IsNullOrEmpty(subscriber)
+            && string.Equals(subscriber, sender, StringComparison.Ordinal);
+        var accepted = role switch
+        {
+            StreamDeliveryRole.SubscriberInput => fromSubscriber,
+            StreamDeliveryRole.OwnWrite => delivery.Properties.TryGetValue(OwnWriteProperty, out var token)
+                && ReferenceEquals(token, ownWriteToken),
+            StreamDeliveryRole.ReleaseOrAnswer => fromSubscriber || !delivery.IsFromParticipant(),
+            _ => false,
+        };
+        if (accepted)
             return null;
 
         var area = (delivery.Message as IUserAction)?.ActionArea;
         logger.LogWarning(
-            "Refused {MessageType} on stream {StreamId} of {Owner} (area {Area}): the stream accepts "
-            + "input only from its subscriber '{Subscriber}', and the delivery carries '{Identity}'. "
-            + "Nothing ran. Sender: {Sender}.",
-            delivery.Message.GetType().Name, ClientId, Host.Address, area ?? "(data)",
-            string.IsNullOrEmpty(subscriber) ? "(none recorded)" : subscriber,
+            "Refused {MessageType} ({Role}) on stream {StreamId} of {Owner} (area {Area}): the stream "
+            + "accepts it only from {Rule}; the delivery carries '{Identity}'. Nothing ran. Sender: {Sender}.",
+            delivery.Message.GetType().Name, role, ClientId, Host.Address, area ?? "(data)",
+            role switch
+            {
+                StreamDeliveryRole.OwnWrite => "the stream itself",
+                StreamDeliveryRole.ReleaseOrAnswer => "its subscriber or the mesh's own hubs",
+                _ => "its subscriber '" + (string.IsNullOrEmpty(subscriber) ? "(none recorded)" : subscriber) + "'",
+            },
             string.IsNullOrEmpty(sender) ? "(none)" : sender, delivery.Sender);
 
         var locale = delivery.AccessContext?.Locale;
@@ -1557,15 +1590,38 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             : LocalizationCatalog.Get("error.userActionNotFromSubscriber", locale, area);
         // Answered from the HOST, as the accepted action's receipt is: a view submits its action
         // from its own end of this stream, whose hub carries the same sync/{id} address as this
-        // one, so an answer posted from here would be taken as addressed to this hub itself.
-        Host.Post(
-            new DeliveryFailure(delivery) { ErrorType = ErrorType.Forbidden, Message = sentence },
-            o => o.ResponseFor(delivery));
+        // one, so an answer posted from here would be taken as addressed to this hub itself. An
+        // answer is never answered: that would only bounce between the two parties.
+        if (delivery.Message is not (DeliveryFailure or GetDataResponse))
+            Host.Post(
+                new DeliveryFailure(delivery) { ErrorType = ErrorType.Forbidden, Message = sentence },
+                o => o.ResponseFor(delivery));
         return Observable.Return(delivery.FailedAndNacked(sentence));
     }
 
+    /// <summary>
+    /// The delivery property a stream stamps on its own writes (<see cref="UpdateStreamRequest"/>,
+    /// <see cref="SetCurrentRequest"/>) — the proof, read by
+    /// <see cref="AcceptInputFromSubscriberOnly"/>, that the stream posted the write to itself.
+    /// </summary>
+    private const string OwnWriteProperty = "SynchronizationStream.OwnWrite";
+
+    /// <summary>
+    /// This stream's own-write token: a fresh object per stream, compared by reference, so no other
+    /// party — not another stream, not the other end of this one, whose hub shares this hub's
+    /// address — can present it.
+    /// </summary>
+    private readonly object ownWriteToken = new();
+
+    /// <summary>The message types this stream's hub registered handlers for, in registration order.</summary>
+    internal ImmutableArray<Type> HandledMessageTypes { get; private set; } = [];
+
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
+        // Every handler is registered through WithStreamHandler, which records its type: the
+        // input rule classifies by type, so a handler for a type it does not classify is refused
+        // below rather than left unchecked.
+        var handled = ImmutableArray.CreateBuilder<Type>();
         config = config
             // 🚨 FIRST, and the SYNCHRONOUS overload on purpose (#2625): SyncBuildupActions run
             // inside Build() BEFORE StartMessageProcessing posts InitializeHubRequest, so this
@@ -1592,22 +1648,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             config = config.AddDeliveryPipeline(pipeline => pipeline.AddPipeline(
                 (delivery, ct, next) => AcceptInputFromSubscriberOnly(delivery) ?? next.Invoke(delivery, ct)));
         config = config
-            .WithHandler<DataChangedEvent>((hub, delivery) =>
+            .WithStreamHandler<DataChangedEvent>(handled, (hub, delivery) =>
                 {
                     UpdateStream(delivery, hub);
                     return delivery.Processed();
                 }
-            ).WithHandler<PatchDataChangeRequest>((hub, delivery) =>
+            ).WithStreamHandler<PatchDataChangeRequest>(handled, (hub, delivery) =>
                 {
                     UpdateStream(delivery, hub);
                     return delivery.Processed();
                 }
-            ).WithHandler<DataChangeRequest>((hub, delivery) =>
+            ).WithStreamHandler<DataChangeRequest>(handled, (hub, delivery) =>
                 {
                     _ = hub.GetWorkspace().RequestChange(delivery.Message);
                     return delivery.Processed();
                 }
-            ).WithHandler<GetDataResponse>((_, delivery) =>
+            ).WithStreamHandler<GetDataResponse>(handled, (_, delivery) =>
                 {
                     var response = delivery.Message;
                     if (response.Error is { } error)
@@ -1618,7 +1674,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     }
                     return delivery.Processed();
                 }
-            ).WithHandler<DeliveryFailure>((_, delivery) =>
+            ).WithStreamHandler<DeliveryFailure>(handled, (_, delivery) =>
                 {
                     var failure = delivery.Message;
                     // 🚨 A TRANSIENT shutdown reject is NOT terminal for a sync stream. It
@@ -1658,21 +1714,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // only gate needed. An UN-awaited failure — the subscribe protocol, an RLS denial,
                 // a NotFound — still faults the stream, unchanged.
                 (_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
-            ).WithHandler<StreamErrorEvent>((_, delivery) =>
+            ).WithStreamHandler<StreamErrorEvent>(handled, (_, delivery) =>
                 {
                     var evt = delivery.Message;
                     logger.LogWarning("Stream {StreamId} received StreamErrorEvent: {Message}", StreamId, evt.Message);
                     OnError(new InvalidOperationException(evt.Message));
                     return delivery.Processed();
                 }
-            ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
+            ).WithStreamHandler<UnsubscribeRequest>(handled, (hub, delivery) =>
             {
                 // The subscriber asked for this end, so the owner must not announce it back
                 // (#5532) — recorded BEFORE the dispose, whose registrations read it.
                 MarkSubscriberEnded();
                 hub.Dispose();
                 return delivery.Processed();
-            }).WithHandler<UpdateStreamRequest>((hub, request) =>
+            }).WithStreamHandler<UpdateStreamRequest>(handled, (hub, request) =>
             {
                 // Fully synchronous — the update func is a pure in-memory transform
                 // (IO-producing callers pool their IO FIRST and pass only the result,
@@ -1723,7 +1779,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                     }
                 }
                 return request.Processed();
-            }).WithHandler<SetCurrentRequest>((hub, request) =>
+            }).WithStreamHandler<SetCurrentRequest>(handled, (hub, request) =>
             {
                 try
                 {
@@ -1753,6 +1809,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // fresh Full instead of applying onto a missing snapshot.
                 || d.Message is DataChangedEvent
                 || d.Message is UpdateStreamRequest);
+
+        // 🚨 Every handled type is classified by the input rule, or the stream is not built. The
+        // rule decides by type (StreamInputRule), so an unclassified handler would be a way onto
+        // an input-checked stream that nothing checks — refused here, for every stream, so the
+        // first test that opens one names it.
+        HandledMessageTypes = handled.ToImmutable();
+        foreach (var type in HandledMessageTypes)
+            if (StreamInputRule.RoleOf(type) is null)
+                throw new InvalidOperationException(
+                    $"The synchronization hub handles {type.Name}, which StreamInputRule does not classify. "
+                    + "Add it to StreamInputRule.Roles with the party it must come from.");
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
@@ -2714,11 +2781,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal bool AcceptsInputOnlyFromSubscriber { get; init; }
 
     /// <summary>
-    /// Makes the stream accept its subscriber's input — a person's action
-    /// (<see cref="IUserAction"/>) and the values the subscriber edits
-    /// (<see cref="PatchDataChangeRequest"/>) — only from the identity it was opened for. A
-    /// delivery carrying any other identity, or none, is refused before a handler runs and the
-    /// sender is told. For a stream that is produced once per subscriber, such as a layout area.
+    /// Makes the stream accept every input that changes it — a person's action
+    /// (<see cref="IUserAction"/>), an edited value (<see cref="PatchDataChangeRequest"/>), a data
+    /// write, a frame, an error — only from the identity it was opened for, its own writes only
+    /// from itself, and its release and answers only from that identity or the mesh's own hubs
+    /// (the classification is <see cref="StreamInputRule"/>). A delivery that does not qualify is
+    /// refused before a handler runs and the sender is told. For a stream that is produced once per
+    /// subscriber, such as a layout area.
     /// </summary>
     /// <param name="openedFor">
     /// The identity the stream is produced for, used when no subscribe-time identity
@@ -2880,4 +2949,30 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
             RunsAsInfrastructure,
             DeferredInitialization,
             DeferredGateName);
+}
+
+/// <summary>
+/// Registration helper for the synchronization hub's handlers.
+/// </summary>
+internal static class SynchronizationHubHandlerExtensions
+{
+    /// <summary>
+    /// Registers a handler on a synchronization hub and records its message type, so the stream can
+    /// check that the input rule classifies every type it handles (<see cref="StreamInputRule"/>).
+    /// </summary>
+    /// <typeparam name="TMessage">The handled message type.</typeparam>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="handled">Collects the handled types.</param>
+    /// <param name="handler">The handler.</param>
+    /// <param name="filter">Optional filter, as for <see cref="MessageHubConfiguration.WithHandler{TMessage}(Func{IMessageHub, IMessageDelivery{TMessage}, IMessageDelivery}, Func{IMessageHub, IMessageDelivery, bool})"/>.</param>
+    /// <returns>The configuration with the handler registered.</returns>
+    internal static MessageHubConfiguration WithStreamHandler<TMessage>(
+        this MessageHubConfiguration config,
+        ImmutableArray<Type>.Builder handled,
+        Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> handler,
+        Func<IMessageHub, IMessageDelivery, bool>? filter = null)
+    {
+        handled.Add(typeof(TMessage));
+        return config.WithHandler(handler, filter);
+    }
 }

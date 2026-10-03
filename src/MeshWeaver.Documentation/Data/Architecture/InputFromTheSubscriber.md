@@ -12,29 +12,49 @@ A layout area is rendered **once per subscription**: every `SubscribeRequest` fo
 closures, rendered under the identity that subscribed. The input that stream receives belongs to
 the same identity.
 
-**The rule: a layout stream accepts its subscriber's input only from the identity the stream was
-subscribed under.** Input is
+**The rule: every input that changes a layout stream is accepted only from its subscriber.**
+Every message type the stream's synchronization hub handles has a role in one explicit, closed
+classification (`StreamInputRule`), and the role says who may send it:
 
-| Message | What it is |
-|---|---|
-| `ClickedEvent`, `BlurEvent`, `CloseDialogEvent` — every `IUserAction` | a person's action on a control |
-| `PatchDataChangeRequest` | a value the subscriber edited (a data-bound field) |
+| Message | Role | Accepted from |
+|---|---|---|
+| `ClickedEvent`, `BlurEvent`, `CloseDialogEvent` — every `IUserAction` | input: a person's action on a control | the subscriber's identity |
+| `PatchDataChangeRequest` | input: a value the subscriber edited (a data-bound field) | the subscriber's identity |
+| `DataChangeRequest` | input: a data write handed to the workspace | the subscriber's identity |
+| `DataChangedEvent` | input: a frame applied as the stream's state — frames flow from an owner to its mirrors, and a layout stream has no upstream | the subscriber's identity |
+| `StreamErrorEvent` | input: ends the stream in error — like a frame, it flows from an owner to its mirrors | the subscriber's identity |
+| `UpdateStreamRequest`, `SetCurrentRequest` | the stream's own write path (`Update`, `OnNext`) | the stream itself only — every own write carries a per-stream token no other party holds |
+| `UnsubscribeRequest` | the end of the subscription | the subscriber's identity, or the mesh's own hubs |
+| `GetDataResponse`, `DeliveryFailure` | answers to deliveries the stream's hub sent | the subscriber's identity, or the mesh's own hubs |
 
-A delivery of one of these whose `AccessContext.ObjectId` is not the subscriber's is **refused**:
+Why the last two rows are not held to the subscriber's identity alone: a subscribing hub releases
+its subscription while it is tearing down, as a system message that need not carry the
+subscriber's identity, and that release is the only thing that frees the owner's per-subscriber
+stream; an answer is issued by whichever hub answers. Both are still refused when they arrive
+through a participant connection (`ParticipantIngress`) under any identity but the subscriber's.
 
-- no handler runs — not `LayoutAreaHost.OnClick` / `OnBlur` / `OnCloseDialog`, not the data update;
+A delivery that does not meet its row is **refused**:
+
+- no handler runs — not `LayoutAreaHost.OnClick` / `OnBlur` / `OnCloseDialog`, not the data
+  update, not the write;
 - the sender is answered with a `DeliveryFailure` carrying `ErrorType.Forbidden` and a localized
   sentence (`error.userActionNotFromSubscriber`, `error.inputNotFromSubscriber`), which a view shows
-  through `SubmitUserAction`'s `onRefused`;
-- the owner logs one Warning naming the stream, the area, the subscriber and the identity the
-  delivery carried.
+  through `SubmitUserAction`'s `onRefused` (an answer that is refused is not answered again);
+- the owner logs one Warning naming the stream, the message's role, the area, the subscriber and
+  the identity the delivery carried.
+
+**The classification is closed.** The stream registers each of its handlers through one helper
+that records the type, and a stream whose hub handles a type the classification does not name is
+not built — the construction fails, naming the type. A new handler therefore reaches no stream
+until it has been given a role. `StreamInputRuleClassifiesEveryHandledTypeTest` pins the set.
 
 ## It fails closed
 
 An input is accepted because both identities are **known and equal**. A delivery with no identity
 is refused; a stream with no recorded subscriber identity refuses every input. There is no
-exemption by sender: the platform identity is held to the same rule as a person, and there is no
-per-action or per-control opt-out.
+exemption by sender for input: the platform identity is held to the same rule as a person, and
+there is no per-action or per-control opt-out. A message type the classification does not name
+cannot be handled by the stream at all.
 
 ## Where the check sits
 
