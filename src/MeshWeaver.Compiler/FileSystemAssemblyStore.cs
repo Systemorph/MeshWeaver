@@ -112,9 +112,128 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     }
 
     /// <summary>
+    /// 🚨 <b>Resolves the build the record NAMES, not merely the newest file under its version.</b>
+    /// In order: the exact <paramref name="contentPath"/> (the record's
+    /// <c>LatestAssemblyPath</c>) when it is this generation's, openable and — when
+    /// <paramref name="assemblyMvid"/> is known — carries that MVID; else the openable file of
+    /// <paramref name="version"/> whose MVID is <paramref name="assemblyMvid"/>; else the
+    /// version-only answer of <see cref="TryGetAssemblyPath(string, long)"/>, unchanged.
+    ///
+    /// <para><b>Why.</b> The version key alone is not an identity: several builds can share it (a
+    /// bundle adopted at the node version a compile already used, a recompile that did not move the
+    /// version, a rollback). Answering "newest by write time" re-bound whichever file happened to be
+    /// newest on this volume, so a dispose could land on the OLD bytes while the record named the
+    /// new ones. The record carries the content-hashed path and the MVID of what it published;
+    /// resolving by them is what makes "the next activation binds the newest published build" a
+    /// guarantee instead of a likelihood.</para>
+    ///
+    /// <para>The fall-through is deliberate: a record that names bytes this volume does not hold
+    /// still gets the version's newest file, and the caller's bind-time identity check
+    /// (<c>ServedBuildIdentity.Mismatch</c>) refuses it and rebuilds — a named, logged outcome,
+    /// never a silent stale bind.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The mesh path of the node type whose assembly is requested.</param>
+    /// <param name="version">The store version the record names (<c>LastCompiledVersion</c>).</param>
+    /// <param name="contentPath">The record's content path, relative to this store's root; may be null.</param>
+    /// <param name="assemblyMvid">The record's published MVID ("N" hex); may be null.</param>
+    /// <returns>An observable emitting the local DLL path, or null on a miss.</returns>
+    public IObservable<string?> TryGetBuildPath(
+        string nodeTypePath, long version, string? contentPath, string? assemblyMvid)
+        => Observable.Defer(() =>
+        {
+            var named = NamedBuild(contentPath, assemblyMvid);
+            if (named is not null)
+                return Observable.Return<string?>(named);
+            if (!string.IsNullOrEmpty(assemblyMvid))
+            {
+                var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
+                if (Directory.Exists(dir))
+                {
+                    var byIdentity = new DirectoryInfo(dir)
+                        .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
+                        .OrderByDescending(f => f.LastWriteTimeUtc)
+                        .FirstOrDefault(f => CanOpen(f.FullName)
+                            && string.Equals(MvidOf(f.FullName), assemblyMvid, StringComparison.OrdinalIgnoreCase));
+                    if (byIdentity is not null)
+                        return Observable.Return<string?>(byIdentity.FullName);
+                }
+                logger.LogInformation(
+                    "Assembly cache: no file of {NodeTypePath}@v{Version} carries the published MVID "
+                    + "{Mvid} — answering the version's newest file; the bind-time identity check "
+                    + "decides whether it may be bound", nodeTypePath, version, assemblyMvid);
+            }
+            return TryGetAssemblyPath(nodeTypePath, version);
+        });
+
+    /// <summary>The file <paramref name="contentPath"/> names under this root, when it is this
+    /// generation's, openable, and (if <paramref name="assemblyMvid"/> is known) those bytes.</summary>
+    private string? NamedBuild(string? contentPath, string? assemblyMvid)
+    {
+        if (string.IsNullOrWhiteSpace(contentPath))
+            return null;
+        string full;
+        try
+        {
+            full = Path.GetFullPath(Path.Combine(rootDirectory, contentPath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+        var rootFull = Path.GetFullPath(rootDirectory);
+        if (!full.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal))
+            return null;
+        // Another generation's bytes are not loadable here (BadImageFormat — prod 2026-06-20).
+        if (!string.Equals(AssemblyCacheFileName.TagOf(Path.GetFileName(full)), FrameworkTag,
+                StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!File.Exists(full) || !CanOpen(full))
+            return null;
+        if (!string.IsNullOrEmpty(assemblyMvid)
+            && MvidOf(full) is { } mvid
+            && !string.Equals(mvid, assemblyMvid, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return full;
+    }
+
+    /// <summary>The MVID of the PE at <paramref name="path"/> ("N" hex), or null when unreadable.
+    /// Metadata only — nothing is loaded (the same read as <c>ServedBuildIdentity.OfFile</c>).</summary>
+    private static string? MvidOf(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            if (!pe.HasMetadata)
+                return null;
+            var md = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
+        }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException
+                                       or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private void TryTouch(string path)
+    {
+        try
+        {
+            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogDebug(ex, "Assembly cache: could not refresh the write time of {Path}", path);
+        }
+    }
+
+    /// <summary>
     /// Writes the compiled assembly (and optional PDB) into the cache for the given
-    /// (node-type path, version) pair, returning the local DLL path. First-write-wins:
-    /// an existing DLL for the same key is returned without overwriting.
+    /// (node-type path, version) pair, returning the local DLL path. Content-addressed: the
+    /// same bytes land on the same name (a no-op), different bytes on their own name — an
+    /// existing build is never returned in place of the bytes handed in.
     /// </summary>
     /// <param name="nodeTypePath">The mesh path of the node type the assembly belongs to.</param>
     /// <param name="version">The MeshNode version the assembly was compiled for.</param>
@@ -135,8 +254,8 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// <summary>
     /// Writes the compiled assembly (and optional PDB) into the cache and returns its full
     /// store location (local path, collection name, and relative content path).
-    /// First-write-wins for ALC safety: an existing DLL for the same (node-type path,
-    /// version) is returned without overwriting.
+    /// Content-addressed: different bytes for the same (node-type path, version) land on their
+    /// own name and are returned; nothing already published is overwritten.
     /// </summary>
     /// <param name="nodeTypePath">The mesh path of the node type the assembly belongs to.</param>
     /// <param name="version">The MeshNode version the assembly was compiled for.</param>
@@ -155,44 +274,32 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
         Directory.CreateDirectory(dir);
 
-        // First-write-wins for (nodeTypePath, version): if any v{version}-*.dll
-        // already exists in the directory, return its path WITHOUT writing the
-        // new bytes. The content-hash suffix is a tie-breaker for distinct
-        // historical compiles, NOT a way to fork a single (path, version) into
-        // multiple concurrent files. Two compiles for the same (path, version)
-        // happen for two reasons, both of which must resolve to the existing
-        // file:
-        //   1. Identical bytes — the hashed name collides, File.Exists short-
-        //      circuits, no IO. Optimal.
-        //   2. Different bytes — happens when a recompile lands on the same
-        //      hub-version key but the source-tree state shifted (test re-run
-        //      with an in-memory edit, framework patch version drift). The
-        //      first DLL is already ALC-loaded; overwriting it throws
-        //      IOException → CompilationStatus.Error → the NodeType is poisoned
-        //      until process restart. Skip the write and return the existing
-        //      path so the loaded ALC keeps serving consistent bytes.
+        // 🚨 CONTENT-ADDRESSED, NEVER FIRST-WRITE-WINS (maintainer, 2026-10-03: "after
+        // disposerequest, new version must be loaded"). This used to return ANY existing
+        // v{version}-*.dll without writing the new bytes. Identical bytes were never the problem —
+        // they land on the identical content-hash name below and the publication is a no-op. The
+        // problem was DIFFERENT bytes at the same (path, version): a prebuilt bundle N+1 adopted at
+        // the node version a bundle N (or a compile) already used, or a recompile that did not move
+        // the node version. The store kept N and handed N's path back, while the caller stamped
+        // N+1's MVID from the bytes it had in hand. Every activation after that resolved N, the
+        // bind-time identity check refused it and recompiled, the recompile's Put handed N back
+        // AGAIN, and once the retry budget was spent the activation bound N for its lifetime — the
+        // #2471 state: "a recycle re-binds the same local copy". A DisposeRequest could therefore
+        // never load the new version, by construction.
         //
-        // Lookup mirrors TryGetAssemblyPath above (newest v{version}-*.dll).
-        // 🚨 An existing name that cannot be OPENED does not win (#4528): returning it would hand
-        // the compile a dead path, and — since first-write-wins keeps returning it — no recompile
-        // of this version could ever replace it.
-        var existing = NewestOpenable(dir, nodeTypePath, version);
-        if (existing is not null)
-        {
-            var existingRel = Path.GetRelativePath(rootDirectory, existing.FullName).Replace('\\', '/');
-            logger.LogDebug(
-                "Assembly already at {DllPath} — skipping write (idempotent put, first-write-wins for ALC safety)",
-                existing.FullName);
-            return new AssemblyStoreLocation(existing.FullName, FileSystemCollectionName, existingRel);
-        }
-
+        // The old reason for first-write-wins — "the first DLL is already ALC-loaded; overwriting
+        // it throws IOException and poisons the NodeType" — does not apply to a DIFFERENT name:
+        // nothing is overwritten. The loaded file stays exactly where it is and keeps serving the
+        // activation that holds it ("old version must continue working"); the new bytes get their
+        // own name, so the path itself now changes whenever the bytes do, and the stale-build
+        // watcher's path comparison sees a same-version byte change as the new build it is.
         var dllPath = GetDllPath(nodeTypePath, version, assemblyBytes);
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
 
         // 🚨 ATOMIC PUBLICATION — never File.WriteAllBytes on dllPath (MeshWeaver#1387).
-        // The DLL's NAME is its publication: both TryGetAssemblyPath above and the
-        // first-write-wins probe a few lines up discover it by globbing
+        // The DLL's NAME is its publication: TryGetAssemblyPath and TryGetBuildPath above
+        // discover it by globbing
         // `v{version}-{tag}-*.dll`, and the winner's path goes straight to
         // AssemblyLoadContext.LoadFromAssemblyPath. FileMode.Create (what WriteAllBytes uses)
         // creates the target FIRST and streams the bytes afterwards, so a reader that globs
@@ -226,12 +333,20 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogInformation(
                 "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
         else
+        {
             // Another writer (or another replica through the shared volume) published the same
             // content-hashed name first. The bytes are identical by construction — the hash IS
             // the name — so this is a no-op, not a conflict.
             logger.LogDebug(
                 "Assembly already published at {DllPath} by a concurrent writer — kept theirs "
                 + "(identical bytes: the content hash is the file name)", dllPath);
+            // 🚨 …but it is now the version's LATEST publication, and the version-only lookup
+            // (TryGetAssemblyPath without an identity) answers by write time. A rollback that
+            // republishes bytes an older sibling of this version already holds must not leave the
+            // newer sibling looking current. Touching the time changes no bytes, so an ALC mapping
+            // of this file is unaffected; a failure is housekeeping and never fails the Put.
+            TryTouch(dllPath);
+        }
 
         // 🚨 EVICTION AT WRITE (#2086). The pass that just added a version is the only one that
         // knows, without a second directory walk from somewhere else, that this type's directory

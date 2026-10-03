@@ -38,6 +38,27 @@ public interface IAssemblyStore
     IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version);
 
     /// <summary>
+    /// 🚨 Looks up the build a NodeType record NAMES — its content path and the MVID of the bytes
+    /// it published — rather than whatever file currently answers for its version. A version key
+    /// is not an identity: a prebuilt bundle adopted at the version a compile already used, a
+    /// recompile that did not move the version, or a rollback all put several builds under one
+    /// key, and "the newest file for the version" then re-binds the OLD build after a
+    /// <c>DisposeRequest</c>. Activation resolves through this member so that the next activation
+    /// binds the build the record names (maintainer, 2026-10-03: <i>"after disposerequest, new
+    /// version must be loaded"</i>).
+    ///
+    /// <para>The default implementation answers the version-only lookup, so a store that keeps one
+    /// build per key keeps its behaviour; a content-addressed store overrides it. Either way the
+    /// caller still checks the bound bytes' MVID against the record before binding.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType path.</param>
+    /// <param name="version">The store version the record names (<c>LastCompiledVersion</c>).</param>
+    /// <param name="contentPath">The record's content path inside the store; null when unknown.</param>
+    /// <param name="assemblyMvid">The record's published MVID; null when unknown (a legacy record).</param>
+    IObservable<string?> TryGetBuildPath(string nodeTypePath, long version, string? contentPath, string? assemblyMvid)
+        => TryGetAssemblyPath(nodeTypePath, version);
+
+    /// <summary>
     /// Persists a freshly-compiled assembly under the given key. Emits the local filesystem
     /// path where the caller can load from. Overwriting is a no-op when the bytes match
     /// (two replicas compiling the same version → same source inputs → same output), so
