@@ -1510,6 +1510,60 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         }
     }
 
+    /// <summary>
+    /// The ONE place a stream decides whether a delivery carrying its subscriber's input — a
+    /// person's action (<see cref="IUserAction"/>: a click, a blur, a dialog dismissal) or a value
+    /// the subscriber edited (<see cref="PatchDataChangeRequest"/>) — is accepted. It is accepted
+    /// only when the delivery carries the identity this stream was opened for
+    /// (<see cref="StreamConfiguration{TStream}.SubscriberIdentity"/>); otherwise it is refused: no
+    /// handler runs, the sender is answered with a <see cref="ErrorType.Forbidden"/>
+    /// <see cref="DeliveryFailure"/>, and the refusal is logged at Warning.
+    ///
+    /// <para>It fails closed. A stream with no recorded subscriber identity, and a delivery with
+    /// no identity, are both refused: an input is accepted because the two identities are known
+    /// and equal, never because one of them is missing. There is no exemption by sender — a
+    /// platform principal is held to the same rule as a person.</para>
+    ///
+    /// <para>Only streams that opted in are checked
+    /// (<see cref="StreamConfiguration{TStream}.WithInputFromSubscriberOnly"/>): a layout area is
+    /// rendered once per subscriber, so its input belongs to that subscriber. A data stream is
+    /// shared by design — one mirror serves many writers, each write is authorized under the
+    /// writer's own identity — and is left alone.</para>
+    /// </summary>
+    /// <param name="delivery">The delivery about to be handled.</param>
+    /// <returns>The refused delivery, or <c>null</c> when the delivery may proceed.</returns>
+    private IObservable<IMessageDelivery>? AcceptInputFromSubscriberOnly(IMessageDelivery delivery)
+    {
+        if (delivery.Message is not (IUserAction or PatchDataChangeRequest))
+            return null;
+
+        var subscriber = Configuration.SubscriberIdentity?.ObjectId;
+        var sender = delivery.AccessContext?.ObjectId;
+        if (!string.IsNullOrEmpty(subscriber) && string.Equals(subscriber, sender, StringComparison.Ordinal))
+            return null;
+
+        var area = (delivery.Message as IUserAction)?.ActionArea;
+        logger.LogWarning(
+            "Refused {MessageType} on stream {StreamId} of {Owner} (area {Area}): the stream accepts "
+            + "input only from its subscriber '{Subscriber}', and the delivery carries '{Identity}'. "
+            + "Nothing ran. Sender: {Sender}.",
+            delivery.Message.GetType().Name, ClientId, Host.Address, area ?? "(data)",
+            string.IsNullOrEmpty(subscriber) ? "(none recorded)" : subscriber,
+            string.IsNullOrEmpty(sender) ? "(none)" : sender, delivery.Sender);
+
+        var locale = delivery.AccessContext?.Locale;
+        var sentence = area is null
+            ? LocalizationCatalog.Get("error.inputNotFromSubscriber", locale)
+            : LocalizationCatalog.Get("error.userActionNotFromSubscriber", locale, area);
+        // Answered from the HOST, as the accepted action's receipt is: a view submits its action
+        // from its own end of this stream, whose hub carries the same sync/{id} address as this
+        // one, so an answer posted from here would be taken as addressed to this hub itself.
+        Host.Post(
+            new DeliveryFailure(delivery) { ErrorType = ErrorType.Forbidden, Message = sentence },
+            o => o.ResponseFor(delivery));
+        return Observable.Return(delivery.FailedAndNacked(sentence));
+    }
+
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
         config = config
@@ -1528,7 +1582,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             .WithTypes(
                 typeof(EntityStore),
                 typeof(JsonElement)
-            )
+            );
+        // A stream that takes its subscriber's input only (a layout area: one render per
+        // subscriber) refuses that input from any other identity BEFORE a handler sees it. A
+        // delivery-pipeline step, not a handler: every rule of a hub's chain runs for a delivery,
+        // so only a step in front of the chain can keep the handlers from running. See
+        // AcceptInputFromSubscriberOnly.
+        if (Configuration.AcceptsInputOnlyFromSubscriber)
+            config = config.AddDeliveryPipeline(pipeline => pipeline.AddPipeline(
+                (delivery, ct, next) => AcceptInputFromSubscriberOnly(delivery) ?? next.Invoke(delivery, ct)));
+        config = config
             .WithHandler<DataChangedEvent>((hub, delivery) =>
                 {
                     UpdateStream(delivery, hub);
@@ -2632,6 +2695,39 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <returns>A copy with the subscriber set.</returns>
     public StreamConfiguration<TStream> WithSubscriber(Address subscriber) =>
         this with { Subscriber = subscriber };
+
+    /// <summary>
+    /// The identity this stream was opened for: on an owner-side stream, the
+    /// <see cref="AccessContext"/> the <c>SubscribeRequest</c> was delivered under. <c>null</c>
+    /// when none was recorded.
+    /// </summary>
+    public AccessContext? SubscriberIdentity { get; init; }
+
+    /// <summary>
+    /// Records the identity the stream's subscriber subscribed under.
+    /// </summary>
+    /// <param name="identity">The identity carried by the subscribe delivery.</param>
+    /// <returns>A copy with the subscriber identity set.</returns>
+    public StreamConfiguration<TStream> WithSubscriberIdentity(AccessContext? identity) =>
+        this with { SubscriberIdentity = identity };
+
+    internal bool AcceptsInputOnlyFromSubscriber { get; init; }
+
+    /// <summary>
+    /// Makes the stream accept its subscriber's input — a person's action
+    /// (<see cref="IUserAction"/>) and the values the subscriber edits
+    /// (<see cref="PatchDataChangeRequest"/>) — only from the identity it was opened for. A
+    /// delivery carrying any other identity, or none, is refused before a handler runs and the
+    /// sender is told. For a stream that is produced once per subscriber, such as a layout area.
+    /// </summary>
+    /// <param name="openedFor">
+    /// The identity the stream is produced for, used when no subscribe-time identity
+    /// (<see cref="SubscriberIdentity"/>) has been recorded. When both are absent every input is
+    /// refused.
+    /// </param>
+    /// <returns>A copy that accepts input from its subscriber only.</returns>
+    public StreamConfiguration<TStream> WithInputFromSubscriberOnly(AccessContext? openedFor) =>
+        this with { AcceptsInputOnlyFromSubscriber = true, SubscriberIdentity = SubscriberIdentity ?? openedFor };
 
     internal bool NullReturn { get; init; }
 
