@@ -127,8 +127,10 @@ public static class StorageBindingPaths
     public static string PartitionOf(string? path)
         => string.IsNullOrEmpty(path) ? "" : path.Trim('/').Split('/', 2)[0];
 
-    /// <summary>True when <paramref name="partition"/> is the Admin (global) partition.</summary>
+    /// <summary>True when <paramref name="partition"/> is the Admin (global) partition — exactly
+    /// <c>Admin</c>, case-sensitively, like the path its bindings live under: every use of this widens
+    /// what a binding may name, so a case variant must never qualify.</summary>
     /// <param name="partition">The partition.</param>
     public static bool IsAdmin(string? partition)
-        => string.Equals(partition, AdminPartition, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(partition, AdminPartition, StringComparison.Ordinal);
 }

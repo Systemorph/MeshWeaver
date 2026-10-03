@@ -124,6 +124,37 @@ public static class StorageContainerOwnership
                        && container[own.Length] is '_' or '-'));
     }
 
+    /// <summary>
+    /// <see cref="MayUse(IInstanceStore, string, string?)"/> AND not ANOTHER partition's default
+    /// container — the hole the prefix rule alone leaves (a partition <c>acme_x</c> next to a partition
+    /// <c>acme</c>). <paramref name="knownPartitions"/> is the partition catalog; <c>null</c> means it
+    /// could not be read, and then only the partition's own default container is allowed (fail closed).
+    /// </summary>
+    /// <param name="store">The store.</param>
+    /// <param name="partition">The partition holding the binding.</param>
+    /// <param name="container">The container.</param>
+    /// <param name="knownPartitions">Every partition of the mesh, or <c>null</c> when unknown.</param>
+    public static bool MayUse(IInstanceStore store, string partition, string? container, IEnumerable<string>? knownPartitions)
+    {
+        if (!MayUse(store, partition, container))
+            return false;
+        if (StorageBindingPaths.IsAdmin(partition)
+            || string.Equals(container, store.DefaultContainerFor(partition), StringComparison.OrdinalIgnoreCase))
+            return true;
+        return knownPartitions is not null
+               && OwnerOfDefault(store, partition, container!, knownPartitions) is null;
+    }
+
+    /// <summary>The partition other than <paramref name="partition"/> whose default container in
+    /// <paramref name="store"/> is <paramref name="container"/>, or <c>null</c>. Pure.</summary>
+    /// <param name="store">The store.</param>
+    /// <param name="partition">The partition holding the binding.</param>
+    /// <param name="container">The container.</param>
+    /// <param name="knownPartitions">Every partition of the mesh.</param>
+    public static string? OwnerOfDefault(IInstanceStore store, string partition, string container, IEnumerable<string> knownPartitions)
+        => knownPartitions.FirstOrDefault(p => !string.Equals(p, partition, StringComparison.OrdinalIgnoreCase)
+                                               && string.Equals(store.DefaultContainerFor(p), container, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The containers of <paramref name="all"/> that <paramref name="partition"/> may bind.</summary>
     /// <param name="store">The store.</param>
     /// <param name="partition">The partition.</param>

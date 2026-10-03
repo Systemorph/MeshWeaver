@@ -160,10 +160,7 @@ public static class StorageBindingValidation
                 .Complete())
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
-            .Select(c => c.Items
-                .Select(n => n.Id)
-                .FirstOrDefault(id => !string.Equals(id, partition, StringComparison.OrdinalIgnoreCase)
-                                      && string.Equals(store.DefaultContainerFor(id), name, StringComparison.OrdinalIgnoreCase)))
+            .Select(c => StorageContainerOwnership.OwnerOfDefault(store, partition, name, c.Items.Select(n => n.Id)))
             .DefaultIfEmpty(null);
     }
 
@@ -174,7 +171,6 @@ public static class StorageBindingValidation
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
         var now = DateTimeOffset.UtcNow;
-        StorageBinding? written = null;
         return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path).Update<StorageBinding>(b =>
             {
                 var answered = b.RequestedAt == asked;
@@ -193,10 +189,11 @@ public static class StorageBindingValidation
                     ValidatedAt = now,
                     ValidatedTarget = decidedTarget,
                 };
-                written = next;
                 return next;
             })
-            .Select(_ => written!));
+            // The recorded binding, read back from what the write produced — never a captured local.
+            .Select(node => node.ContentAs<StorageBinding>(hub.JsonSerializerOptions))
+            .OfType<StorageBinding>());
     }
 
     /// <summary>

@@ -112,8 +112,12 @@ So (`StorageContainerOwnership`):
   catalog;
 - `Admin` — written only by platform admins — may bind any container.
 
-The resolver re-applies the prefix rule before it honours a binding, so a verdict written onto a
-node by hand cannot widen what a partition may bind.
+The resolver re-applies the WHOLE rule — the prefix and "not another partition's default",
+against the partition catalog read live — on every answer, before it honours a binding. So neither a
+verdict written onto a node by hand nor a partition created after the binding was validated can
+route one partition's data into another's container; with the catalog unreadable, only the
+partition's own default container is trusted. `Admin` is matched case-sensitively, like the path
+its bindings live under.
 
 ## Validation — on every save
 

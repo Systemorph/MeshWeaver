@@ -41,6 +41,7 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
     private const string Acme = "acme";
     private const string Globex = "globex";
     private const string StoreId = "files";
+    private const string Shadow = "acme_shadow";
 
     private readonly string root = Path.Combine(Path.GetTempPath(), "mw-storage-" + Guid.NewGuid().ToString("N")[..8]);
 
@@ -54,6 +55,8 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
         Directory.CreateDirectory(Path.Combine(root, "acme"));
         Directory.CreateDirectory(Path.Combine(root, "acme_parts"));
         Directory.CreateDirectory(Path.Combine(root, "globex"));
+        // A partition whose NAME passes acme's prefix rule: its default container is acme_shadow.
+        Directory.CreateDirectory(Path.Combine(root, "acme_shadow"));
         return ConfigureMeshBase(builder)
             .ConfigureServices(services => services.AddSingleton<IInstanceStore>(sp => new DirectoryInstanceStore(
                 StoreId, "Test files", root, [StoragePurpose.DocParts, StoragePurpose.DurableStream],
@@ -62,6 +65,12 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
                 UserNode(PlatformAdmin), UserNode(AcmeAdmin), UserNode(Ordinary),
                 new MeshNode(Acme) { Name = "Acme", NodeType = "Space" },
                 new MeshNode(Globex) { Name = "Globex", NodeType = "Space" },
+                new MeshNode(Shadow, PartitionNodeType.Namespace)
+                {
+                    NodeType = PartitionNodeType.NodeType,
+                    Name = Shadow,
+                    Content = new PartitionDefinition { Namespace = Shadow },
+                },
                 AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", AdminAppNodeType.Path),
                 AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", PlatformAdmin),
                 AssignmentNodeFactory.UserRole(AcmeAdmin, "Admin", Acme),
@@ -139,11 +148,14 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var ct = TestContext.Current.CancellationToken;
         var all = await Store.ListContainers().Timeout(Budget).Await(ct);
-        all.Should().Equal("acme", "acme_parts", "globex");
+        all.Should().Equal("acme", "acme_parts", "acme_shadow", "globex");
 
-        StorageContainerOwnership.Usable(Store, Acme, all).Should().Equal("acme", "acme_parts");
+        StorageContainerOwnership.Usable(Store, Acme, all).Should().Equal(["acme", "acme_parts", "acme_shadow"],
+            "the prefix rule alone — what the page offers");
+        all.Where(c => StorageContainerOwnership.MayUse(Store, Acme, c, [Acme, Globex, Shadow]))
+            .Should().Equal(["acme", "acme_parts"], "the full rule also refuses the partition acme_shadow's default");
         StorageContainerOwnership.Usable(Store, StorageBindingPaths.AdminPartition, all)
-            .Should().Equal(["acme", "acme_parts", "globex"], "the instance's own bindings may use any container");
+            .Should().Equal(["acme", "acme_parts", "acme_shadow", "globex"], "the instance's own bindings may use any container");
     }
 
     /// <summary>Creating a container creates it once; the second call for the same name finds it and
@@ -290,15 +302,53 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = StorageBindingPaths.NodeType,
             Content = forged,
         });
-        var picked = StorageBindingResolver.Pick(Mesh, [Store], StoragePurpose.Originals, Acme, null, nodes, []);
+        IReadOnlySet<string> known = new HashSet<string> { Acme, Globex, Shadow };
+        var picked = StorageBindingResolver.Pick(Mesh, [Store], StoragePurpose.Originals, Acme, null, nodes, [], known);
         picked.IsDefault.Should().BeTrue("globex is not acme's container, whatever the node claims");
 
         // The control: the same forged verdict on a container acme owns IS honoured.
         var owned = forged with { Container = "acme_parts" };
         owned = owned with { ValidatedTarget = owned.TargetKey() };
         StorageBindingResolver.Pick(Mesh, [Store], StoragePurpose.Originals, Acme, null,
-                [nodes[0] with { Content = owned }], [])
+                [nodes[0] with { Content = owned }], [], known)
             .Container.Should().Be("acme_parts");
+
+        // A forged verdict on a container that passes the PREFIX rule but is ANOTHER partition's
+        // default (the partition acme_shadow) is not honoured either.
+        var shadow = forged with { Container = Shadow };
+        shadow = shadow with { ValidatedTarget = shadow.TargetKey() };
+        StorageBindingResolver.Pick(Mesh, [Store], StoragePurpose.Originals, Acme, null,
+                [nodes[0] with { Content = shadow }], [], known)
+            .IsDefault.Should().BeTrue("acme_shadow is the partition acme_shadow's own container");
+        // And with the catalog unreadable, only acme's own default container is trusted (fail closed).
+        StorageBindingResolver.Pick(Mesh, [Store], StoragePurpose.Originals, Acme, null,
+                [nodes[0] with { Content = owned }], [], null)
+            .IsDefault.Should().BeTrue("without the catalog, a prefixed container cannot be proven acme's");
+    }
+
+    /// <summary>
+    /// The live resolver re-applies the whole ownership rule on every answer: a binding written by the
+    /// partition admin ALREADY reading Valid — so its own hub never re-validates it — for a container
+    /// that is another partition's default does not override.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APreValidatedBindingOnAnotherPartitionsDefault_DoesNotOverride()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var forged = new StorageBinding { Purpose = StoragePurpose.VectorIndex, StoreId = StoreId, Container = Shadow };
+        forged = forged with
+        {
+            ValidationStatus = StorageValidationStatus.Valid,
+            ValidatedTarget = forged.TargetKey(),
+            ValidatedAt = DateTimeOffset.UtcNow,
+        };
+        var node = await Create(AcmeAdmin, Acme, "forged", forged, ct);
+
+        var stored = await Binding(node.Path, _ => true, ct);
+        stored.ValidationStatus.Should().Be(StorageValidationStatus.Valid,
+            "the precondition: the hub had nothing to re-validate, so the forged verdict stands on the node");
+        (await Resolve(StoragePurpose.VectorIndex, Acme, _ => true, ct)).IsDefault.Should().BeTrue(
+            "the resolver must not route acme's index into the partition acme_shadow's container");
     }
 
     // ── Global (Admin) bindings ─────────────────────────────────────────────────────────────────
