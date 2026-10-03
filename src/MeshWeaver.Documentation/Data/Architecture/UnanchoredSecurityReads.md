@@ -72,7 +72,7 @@ about the router, not about the data: a `_`-prefixed first segment is resolved t
 REGISTERED global-satellite definitions (`DefaultPartitionProvider`: `_Access` → schema
 `system_access`), so the grants leg (`SecurityQueries.RootAssignments`) was always served by ONE
 schema. The policy leg had no first segment at all and DID fan out — 179 `[CrossSchema] SLOW` lines
-in five minutes on memex-cloud, for a row that cannot exist on Postgres (an unregistered `_` first
+in five minutes on the public instance, for a row that cannot exist on Postgres (an unregistered `_` first
 segment is unroutable for writes too). It is now `SecurityQueries.RootPolicy` = `path:_Policy …`:
 the same node, with a first segment, so the router never UNIONs for it. Neither move anchors a read
 to the VIEWER — the root scope has exactly one home — so neither is the truncation this page is

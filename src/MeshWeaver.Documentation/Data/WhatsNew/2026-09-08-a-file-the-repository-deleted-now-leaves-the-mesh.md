@@ -8,7 +8,7 @@ Order: -20260908
 
 # A file the repository deleted now leaves the mesh
 
-On `memex.systemorph.com`, three `Crm/Source/Mail*` code nodes deleted from `MeshWeaver.Crm` on
+On the control instance, three `Crm/Source/Mail*` code nodes deleted from `MeshWeaver.Crm` on
 2026-09-06 were still in the partition — and still compiled into every Crm type — two days later.
 `Edu/Course` had been deleted upstream for **53 days**. Six retired nodes across two of the portal's
 fourteen synced partitions; two of them parked at `compilationStatus: Error`, recompiled on every

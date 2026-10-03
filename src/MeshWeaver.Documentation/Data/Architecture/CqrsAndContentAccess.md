@@ -170,7 +170,7 @@ The advice above is written for the **untyped** query surface, where a `select:`
 a `Dictionary<string, object>`. `workspace.GetQuery` / `hub.GetQuery` are **typed on `MeshNode`**, and
 there the projection behaves differently: the row stays a `MeshNode` (the object-level projection is
 deliberately skipped — handing a dictionary to a `MeshNode`-typed caller is what wedged every
-`select:`-carrying query on memex, 2026-08-05), but the **SQL** is still narrowed.
+`select:`-carrying query on the control instance, 2026-08-05), but the **SQL** is still narrowed.
 
 On that path exactly one column is conditional: **`content`**. Everything else — `path`, `name`,
 `nodeType`, `icon`, `order`, `lastModified`, `version`, `state`, `mainNode` — is projected whether or
@@ -348,7 +348,7 @@ The `DeleteNodeRequest` / `MoveNodeRequest` / `CopyNodeRequest` types are define
 
 The rule above is usually stated as "the query row is stale". It is also **incomplete**: a query row is not the node. A provider is free to omit fields, and the production provider does — `PostgreSqlSqlGenerator.GenerateSelectQuery` projects `id, namespace, name, node_type, description, category, icon, display_order, last_modified, version, state, content, desired_id, main_node, sync_behavior, exclude_from_context` and nothing else. `created_by`, `created_date` and `last_modified_by` are real columns — the storage adapter reads them on a point read and writes them on INSERT — but **no query projects them**, so every node a query hands back on Postgres carries `CreatedBy = null` and `CreatedDate = default`.
 
-That is harmless for a listing and destructive for a re-create, because `CreateNodeRequest` fills a blank stamp with "now, by the caller" (`CreatedDate == default ? now : node.CreatedDate`). `Move` is implemented as copy-to-target + delete-the-source, so a move that fed the create path a query row **rewrote the authorship of the whole subtree** and, with no version history behind it, destroyed the originals (issue #3263: one subtree move on memex re-stamped ~80 nodes).
+That is harmless for a listing and destructive for a re-create, because `CreateNodeRequest` fills a blank stamp with "now, by the caller" (`CreatedDate == default ? now : node.CreatedDate`). `Move` is implemented as copy-to-target + delete-the-source, so a move that fed the create path a query row **rewrote the authorship of the whole subtree** and, with no version history behind it, destroyed the originals (issue #3263: one subtree move on the control instance re-stamped ~80 nodes).
 
 So a lifecycle operation that re-creates a node reads it from **storage**, exactly as the move's delete leg enumerates its paths from storage rather than the catalog (#839):
 
@@ -592,6 +592,14 @@ nothing at all" on a **usage** wait, never on the thread/cell waits carrying the
 the same test methods. #2001's fix widened every budget from 10 s to 20 s and the same assertion
 failed at 20 s — widening a wait is not a repair for an unbounded lag.
 
+🚨 **A TOP-LEVEL path is the exception to "list its parent".** Its parent is the mesh root, and
+`path: scope:children` names no partition: on a partitioned store it is one `UNION ALL` over every
+partition schema — the lock-bomb shape the Postgres planner reports as `[FanOut] UNANCHORED` — run
+to find one row that lives in exactly one schema. Read the path itself instead: `path:{space}
+select:path` anchors to the partition its first segment names and is empty-on-absent just like the
+listing. `SpaceDeletion.ParentListingQuery` does this for the control lane's space-root and recycle
+reads (#5508).
+
 **Creating it anyway?** Then you need no existence check at all — use
 [`CreateOrUpdateNodeRequest`](#upserts-createorupdatenoderequest--single-verb-no-delete-then-create),
 which reads persistence itself.
@@ -605,7 +613,7 @@ still says a node-bound editor should have its node created first, and that advi
 cannot do is make the node STAY there.
 
 #3517 is the proof, and it is worth stating exactly because the obvious reading of it is wrong. 473
-`fail:` lines over four days, on all five `memex-cloud` pods, 3–5 within a 4 ms window per render
+`fail:` lines over four days, on all five public-instance pods, 3–5 within a 4 ms window per render
 pass, from two unrelated spaces:
 
 | The sample | What it looked like | What it actually was |

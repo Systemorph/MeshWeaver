@@ -54,6 +54,29 @@ costs nothing structural: the chart takes any GGML file, so swapping to a permis
 (`ggml-large-v3-turbo`, MIT) is a rebuild, at the price of the Swiss-German dialect accuracy that is the
 whole reason for the fine-tune.
 
+## The commercial default — Apache-2.0, built from public inputs (2026-09-30)
+
+The commercial question above now has an answer for the container: **the default image bakes
+[`Flix-AI/flix-swissgerman-full`](https://huggingface.co/Flix-AI/flix-swissgerman-full)**, a
+whisper-large-v3 Swiss-German fine-tune under **Apache-2.0** (`cardData.license`, measured 2026-09-30),
+converted to GGML and quantized to **q8_0** inside `deploy/whisper/Dockerfile`, and CI
+(`.github/workflows/whisper-image.yml`) pushes it as `whisper-swiss-german:1.7.4-flix-large-v3-q8-<sha>`.
+
+| | |
+|---|---|
+| **Inputs** | HF revision `a9c347a904af5d31b28c537ac732e0618aed6136` (`model.safetensors` sha256 `cd5bf4fd…31de6`, config, tokenizer) + `mel_filters.npz` from `openai/whisper@v20240930` — every one pinned by sha256 in the Dockerfile |
+| **Conversion** | whisper.cpp v1.7.4 `convert-h5-to-ggml.py` → `quantize … q8_0`; the vocab files are derived from the model's own `tokenizer.json` (identical to `openai/whisper-large-v3`'s) |
+| **Output** | ~1,656 MB `/models/model.bin` (a local build printed `sha256 104d18a3…118b`; the build log prints it every time) |
+| **Proof in the build** | the model stage transcribes whisper.cpp's `jfk.wav`; an empty transcript fails the build |
+
+Because the model is permissively licensed and its inputs are public, **this build needs no credential
+at all** — no private release, no storage SAS, no Entra grant on a blob. Before this, the Apache-2.0 model
+reached memex-cloud through an initContainer that downloaded a hand-converted blob with a storage SAS URL
+committed to git (Memex#609), on a hand-built image that carried no model (`1.7.4`, `1.7.4-static`).
+
+The CC BY-NC Flurin17 model below remains available as `MODEL_SOURCE=context`, **non-commercial only**,
+never built by CI; everything this page says about it still holds.
+
 ## The standing rule
 
 > **The model is distributed only through channels that already authenticate their reader.** It is never
@@ -121,7 +144,7 @@ For completeness, the two anonymous URLs that already exist were both measured o
 **404**: the old core release asset, and the portal content route
 `/api/content/MeshWeaver/static/Speech/ggml-swiss-german-turbo-q5_0.bin` documented in
 [On-device voice](/Doc/Architecture/OnDeviceVoice). The second is *expected* to 404 — that page's own
-serving caveat says the `static-assets` share is not yet mounted on the memex-cloud portal — and it is an
+serving caveat says the `static-assets` share is not yet mounted on the public instance's portal — and it is an
 **access-controlled** route in any case, so it was never an anonymous channel to begin with.
 
 ### ✅ 3. Stage the model into the image
@@ -167,12 +190,12 @@ Anything that names this asset is a consumer, and a move must visit all of them 
 | `deploy/whisper/docker-compose.yml` | the same file — it is a **build** input, not a runtime mount |
 | `deploy/whisper/helm/templates/deployment.yaml` | nothing at run time; the model is in the image |
 | `deploy/whisper/helm/values.yaml` | an `image.tag` whose image was built **with** a model |
-| `Systemorph/Memex` → `deployments/aks/memex-cloud/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
+| `Systemorph/Memex` → `deployments/aks/<env>/whisper/helm/` | a **verbatim vendored copy** of the chart above — it drifts silently and must be mirrored |
 | `clients/voice-gateway/run-local.sh` + README | `gh release download` into `$WHISPER_MODEL` |
 | `.gitignore` | keeps `deploy/whisper/models/` untracked (GitHub rejects any blob over 100 MB) |
 | MAUI `VoiceModelCatalog` | its own catalog URL — see [On-device voice](/Doc/Architecture/OnDeviceVoice) |
 
-🚨 **The Memex overlay is a COPY, not a dependency.** `deployments/aks/memex-cloud/whisper/helm` in the
+🚨 **The Memex overlay is a COPY, not a dependency.** `deployments/aks/<env>/whisper/helm` in the
 private Memex repo is a byte-for-byte fork of this chart, including its values. Nothing makes the two agree,
 and a fix applied only here leaves the deployed one broken — which is the same half-fix shape #2593
 committed, one repository over.

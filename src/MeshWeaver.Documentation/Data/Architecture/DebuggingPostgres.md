@@ -14,7 +14,7 @@ The deployed clusters (`prod`, `test`) provision **Azure Postgres Flexible Serve
 | Mode | FQDN |
 |---|---|
 | prod | `<pg-server>.postgres.database.azure.com` |
-| test | look up: `az postgres flexible-server list -g test-memex --query "[].fullyQualifiedDomainName" -o tsv` |
+| test | look up: `az postgres flexible-server list -g <test-resource-group> --query "[].fullyQualifiedDomainName" -o tsv` |
 
 ```bash
 # Verify which AAD identity you're signed in as — your user must be granted
@@ -26,7 +26,7 @@ PGPASSWORD=$(az account get-access-token \
   --resource-type oss-rdbms --query accessToken -o tsv)
 
 psql "host=<pg-server>.postgres.database.azure.com \
-      port=5432 dbname=memex user=$(az account show --query user.name -o tsv) \
+      port=5432 dbname=<database> user=$(az account show --query user.name -o tsv) \
       sslmode=require"
 ```
 
@@ -46,8 +46,8 @@ using Azure.Identity;
 using Npgsql;
 
 const string Host = "<pg-server>.postgres.database.azure.com";
-const string Db   = "memex";
-const string User = "rbuergi@systemorph.com"; // your AAD UPN
+const string Db   = "<database>";
+const string User = "you@example.com"; // your AAD UPN
 
 var token = await new DefaultAzureCredential().GetTokenAsync(
     new TokenRequestContext(new[] { "https://ossrdbms-aad.database.windows.net/.default" }));
@@ -107,9 +107,9 @@ END $$;
 The migration runs as an Aspire `db-migration` resource that completes **before** the portal starts. Logs are in Container Apps:
 
 ```bash
-az containerapp logs show -n db-migration -g prod-memex --tail 200
+az containerapp logs show -n db-migration -g <resource-group> --tail 200
 # follow live:
-az containerapp logs show -n db-migration -g prod-memex --follow
+az containerapp logs show -n db-migration -g <resource-group> --follow
 ```
 
 If migration crashed mid-run, you'll see the `Unhandled exception` at the bottom and the partial schema state in the DB. The `db_version` row is only written **after** all migrations complete cleanly — so a missing `db_version` plus a non-empty schema set means the runner crashed mid-flight.
@@ -125,11 +125,11 @@ If migration crashed mid-run, you'll see the `Unhandled exception` at the bottom
 
 | Resource | Value |
 |---|---|
-| Resource Group | `prod-memex` |
+| Resource Group | `<resource-group>` |
 | Server | `<pg-server>.postgres.database.azure.com` |
-| Database | `memex` |
+| Database | `<database>` |
 | Auth | Azure AD only (password disabled) |
 | Tenant | your AAD tenant — `az account show --query tenantId -o tsv` |
 | Logs | Loki (via Promtail scraping pod stdout); metrics/traces via OTLP → Prometheus/Grafana |
 
-For test cluster, swap `prod-memex` → `test-memex` and discover the FQDN with the `az postgres flexible-server list` command above.
+For test cluster, swap `<resource-group>` → `<test-resource-group>` and discover the FQDN with the `az postgres flexible-server list` command above.

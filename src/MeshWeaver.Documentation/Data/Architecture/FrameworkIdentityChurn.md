@@ -215,7 +215,7 @@ canonical resolver on 2026-09-12T14:14Z (`39caeed993`), for callers that pass em
            source=the newest sealed platform set — 1 newer run(s) passed over, see the log
 03:41:56Z  job "test-repos / Gate shard 1/1"
            framework-identity: MATCH — '/portal' resolves sc7894b5af0202eca75c4394987c96477
-03:41:58Z  ##[error]upstream 'plugins' has no SEALED publication at https://memex.meshweaver.cloud
+03:41:58Z  ##[error]upstream 'plugins' has no SEALED publication at https://registry.example.com
            for framework identity sc7894b5af0202eca75c4394987c96477 … This run's event was schedule.
 ```
 

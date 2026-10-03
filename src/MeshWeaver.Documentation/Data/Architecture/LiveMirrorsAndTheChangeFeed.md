@@ -64,7 +64,7 @@ that [#2776](https://github.com/Systemorph/MeshWeaver/issues/2776) was filed on.
 > It still fires for the ends it was built for — an idle release or an explicit owner-side disposal
 > (`Workspace.EvictClientSubscriptions`). One wasted message per release was invisible here; a
 > subscriber that releases thousands of mirrors at once (a cache hub going down) put thousands of
-> them on ONE router turn loop inside a second, and memex-cloud tripped its aggregate watermark 454
+> them on ONE router turn loop inside a second, and the public instance tripped its aggregate watermark 454
 > times in 36 s shedding exactly this traffic. A stream id is also reused across a re-subscribe, so a
 > late echo could land on the NEXT incarnation and read as an owner-side end. Test:
 > `SubscriberReleaseIsNotAnnouncedBackTest`, with the owner-side end as its control.

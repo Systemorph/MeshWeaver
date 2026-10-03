@@ -14,13 +14,14 @@ name: Node repo validate (reusable)
 #   validate:
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@<40-char platform commit sha>
 #
-# 🔒 PIN THE REF — `@main` is wrong here. The image is pinned by digest so CI is reproducible;
-# the CI logic is pinned for the same reason and with a wider blast radius, since one edit here
-# would otherwise change EVERY satellite's gates at once and make "did my change break this, or
-# did the shared workflow move?" unanswerable. A mutable TAG does not fix that — only a commit
-# sha makes the bump a commit in the CALLER. GitHub forbids an expression in `uses:`, so the sha
-# is literal in each caller and they are bumped together. Procedure: CiContentBake.md ->
-# "Node repos run the same lane" -> "The workflow ref is PINNED".
+# REF CONTRACT DEPENDS ON THE CALLER. Reproducible callers pin `uses:` and the script refs to a
+# commit sha and bump them together (CiContentBake.md -> "The workflow ref is PINNED"). The
+# platform-resolved node-repo callers instead intentionally follow shared CI logic at `@main` and
+# pass `scripts-ref: main`: their tested platform is resolved separately, while central policy
+# updates reach the next run without a manual pin. A fetched helper script follows that caller's
+# `scripts-ref`; it does not add a new trust root beyond the reusable workflow ref the caller has
+# already selected. The fetch step alone gets the caller-scoped token; the checker runs in a later
+# step without that token.
 
 on:
   workflow_call:
@@ -146,6 +147,41 @@ jobs:
       - name: The workspace and the tools are present — the ONE prerequisite every guard shares
         id: ready
         run: echo "ok=true" >> "$GITHUB_OUTPUT"
+      # 🚨 A satellite PR body can close an issue in core even though this reusable lane runs in
+      # the satellite repository (#5011). The canonical checker is fetched at the lane's scripts
+      # ref, self-tested, then given ONLY explicit Systemorph/MeshWeaver references from the PR
+      # body in this event payload. The caller must trigger this workflow on pull_request.edited as
+      # well as opened/synchronize/reopened, or a post-check body edit is not observed. This gate
+      # does not inspect commit messages or a merge message edited at merge time. Its public issue
+      # reads are anonymous and positively/negatively controlled; a GITHUB_TOKEN scoped to this
+      # caller is not used to read another repository's labels.
+      - name: Fetch the platform's closing-keyword gate at the lane's scripts ref
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the closing-keyword gate has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/scripts/check-closing-keywords.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-closing-keywords.py" \
+            || { echo "::error::could not fetch scripts/check-closing-keywords.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the gate needs the older lane"; exit 1; }
+          grep -q "check-closing-keywords" "$RUNNER_TEMP/check-closing-keywords.py" || { echo "::error::the fetched check-closing-keywords.py at ${SCRIPTS_REF} does not contain the gate marker"; exit 1; }
+      - name: "Cross-repository closing-keyword gate can fail (self-test)"
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
+        run: python3 "$RUNNER_TEMP/check-closing-keywords.py" --self-test
+      - name: "Satellite PR bodies do not merge core sev:B/sev:H issues unseen"
+        if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CORE_PR_BODY_FILE: ${{ runner.temp }}/satellite-pr-body.md
+        run: |
+          set -euo pipefail
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$CORE_PR_BODY_FILE"
+          python3 "$RUNNER_TEMP/check-closing-keywords.py" \
+            --repo "$CALLER_REPOSITORY" \
+            --protect-public-repo Systemorph/MeshWeaver \
+            --only-protected-repos \
+            --pr-body-file "$CORE_PR_BODY_FILE"
       # GitSync accepts a BuildCompletion only from this exact repository-level path (#3978).
       # If a maintainer renames content CI, the renamed workflow still runs this reusable lane;
       # this gate then fails RED instead of letting every installation silently freeze on its
@@ -203,6 +239,44 @@ jobs:
       - name: "No cover is a wall of text, and every heroCta pill is legible on the page"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-covers.py" --root .
+      # ── NO LAYOUT AREA LOADS DATA ON THE HUB AND BAKES IT INTO CONTROLS ──
+      # Every view is a TEMPLATE that emits at once and BINDS its data (Doc/GUI/DataBinding →
+      # "Templates first, data later"). Core holds that with LayoutAreaDataBakeRatchetGuard; this is
+      # the satellite half — the same scanner, ported line for line, fetched at the lane's scripts
+      # ref like every guard above. The allow-file is the CALLER's (`layout-area-data-bake.allow` at
+      # its root) and is SHRINK-ONLY: a NEW baking file or a count ABOVE its line is red; on a pull
+      # request the base tree is scanned too, so ADDED units (even with their line), a GROWN or RAISED
+      # allow-file, and a file the PR converted while leaving its line (STALE) are red. A stale line
+      # the PR did not cause is a ::warning — it must never red unrelated PRs for someone else's merge.
+      # A missing allow-file is RED, never skipped: an unadopted repo is unguarded.
+      - name: Fetch the platform's layout-area data-bake ratchet at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the data-bake ratchet has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-layout-area-data-bake.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-layout-area-data-bake.py" \
+            || { echo "::error::could not fetch .github/scripts/check-layout-area-data-bake.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the ratchet needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-layout-area-data-bake.py" | grep -q "check-layout-area-data-bake" || { echo "::error::the fetched check-layout-area-data-bake.py at ${SCRIPTS_REF} does not look like the ratchet"; exit 1; }
+      - name: "A layout area that bakes data is caught — the ratchet can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-layout-area-data-bake.py" --self-test
+      - name: "No layout area loads data on the hub and bakes it into controls (shrink-only allow-file)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          # A pull request's base: the allow-file is also held to the base's copy (GREW / RAISED).
+          # Expressed on the EVENT, never on whether the value is set — an empty base on a PR is red.
+          IS_PR: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PR" = "true" ]; then
+            python3 "$RUNNER_TEMP/check-layout-area-data-bake.py" --root . --base "${BASE_SHA}"
+          else
+            python3 "$RUNNER_TEMP/check-layout-area-data-bake.py" --root .
+          fi
       # 🚨 THE 45-MINUTE CAP, fleet-wide (maintainer, 2026-09-02: "hard cut CI runs after 45min — we pay all
       # this"). GitHub's default job timeout is 360 minutes; an uncapped job that hangs bills a runner for six
       # hours and, when a required check `needs:` it, blocks every merge behind it (the Plugins Mcp bundle,

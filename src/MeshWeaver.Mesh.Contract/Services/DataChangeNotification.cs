@@ -41,6 +41,32 @@ public record DataChangeNotification(
     /// </summary>
     public long? Version { get; init; }
 
+    /// <summary>
+    /// True when the publisher KNOWS what the path held before this commit, so
+    /// <see cref="PreviousNodeType"/> is authoritative: <see langword="null"/> there then means
+    /// "there was no row". False (the default) means the prior state is unknown — every backend
+    /// whose feed cannot see the row it replaced — and a consumer must not reason about it.
+    /// </summary>
+    public bool PriorStateKnown { get; init; }
+
+    /// <summary>
+    /// The node type the path held BEFORE this commit — meaningful only when
+    /// <see cref="PriorStateKnown"/> is true. A retype (a package root installed as a placeholder
+    /// Space, then written as its package type) changes a node's membership in a
+    /// <c>nodeType:</c>-constrained query in BOTH directions, so a consumer that prunes change
+    /// triggers by node type needs the type the row is leaving as well as the one it arrives with.
+    /// </summary>
+    public string? PreviousNodeType { get; init; }
+
+    /// <summary>
+    /// Stamps the prior state onto this notification. <paramref name="previous"/> is the row the
+    /// commit replaced, or <see langword="null"/> when the commit inserted a new row.
+    /// </summary>
+    /// <param name="previous">The replaced row, or <see langword="null"/> for an insert.</param>
+    /// <returns>The notification with <see cref="PriorStateKnown"/> set.</returns>
+    public DataChangeNotification WithPriorState(MeshNode? previous) =>
+        this with { PriorStateKnown = true, PreviousNodeType = previous?.NodeType };
+
     /// <summary>Factory for a Create commit notification.</summary>
     public static DataChangeNotification Created(string path, object? entity) =>
         WithEntityMetadata(new(

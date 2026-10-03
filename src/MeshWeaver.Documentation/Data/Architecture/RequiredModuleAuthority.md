@@ -32,7 +32,7 @@ The record's `requiredModules` is rendered as `Modules__Required__0`, `__1`, …
 The last row is the one an operator hits first, and it is the opposite of what they meant: **emptying
 `requiredModules` does not relax the requirement, it restores it.**
 
-Measured on `pearl.meshweaver.cloud`, 2026-09-16 (#4476). `Deployments/pearl` named five modules and
+Measured on an SME client instance, 2026-09-16 (#4476). Its `Deployments/<id>` record named five modules and
 never named `Social`; the portal demanded `Social` anyway, because the image's index 5 was never
 overridden. The record was then edited to `requiredModules: []` at 06:08:24Z, and the pod created by
 the re-provision that followed reported at 06:18:28Z that **five** required modules were still
@@ -47,7 +47,7 @@ grows.
 
 It has grown. The list was **seven** entries when the shadow check was written and is **nine** today
 (`Social`, `Blazor.Chat`, `Markdown.Collaboration` and `AI` were each added because losing one
-silently is a measured outage). `Deployments/memex-cloud` still names slot 7 for
+silently is a measured outage). The public instance's record still names slot 7 for
 `MeshWeaver.Mcp.dll` — and index 7 of today's image is `MeshWeaver.Markdown.Collaboration.dll`, so
 Memex#131 has silently recurred on the public instance (measured on the control instance, record
 v85, 2026-09-16; tracked as Systemorph/Memex#378). A free slot is not a property of the deployment;
@@ -175,7 +175,7 @@ Fluent: `record.WithRequiredModules(…).WithRequiredModulesAuthoritative()`.
 | Test | Holds |
 |---|---|
 | `ConfiguredModuleActivationTest` (`test/MeshWeaver.Compiler.Pipeline.Test`) | the reading, over a real two-provider configuration — the short list, the empty claim, the explicit slot, blanking, the no-claim default, the non-root section |
-| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it — plus the POSITIONAL rule on the live `memex-cloud` shape (slot 7, no claim → reported; the same record with the claim → silent), the two surfaces' independence, and one normalization across entries and problems |
+| `RequiredModuleAuthorityTest` (`test/MeshWeaver.Deployment.Contract.Test`) | the rendering — both routes agreeing slot for slot, never-`false`, the JSON round-trip, the ceiling read back out of the chart, and a slot above it reported rather than dropped — scoped to the chart, since the Aspire route delivers it — plus the POSITIONAL rule on the live public-instance shape (slot 7, no claim → reported; the same record with the claim → silent), the two surfaces' independence, and one normalization across entries and problems |
 
 🚨 **The cross-assembly key assertion is in the FIRST of those, not the second, and deliberately.**
 The record renders from `MeshWeaver.Deployment.Contract` (zero MeshWeaver references by design — it
@@ -196,13 +196,13 @@ record today — the two readings are identical. The core half lands first becau
 compiles against a pinned core. Tracked as MeshWeaver.Plugins#1963, to be done with the pin bump
 that carries this change.
 
-And no fleet record states a complete set yet: `memex`, `memex-cloud` and `pearl` each name five
-against the image's nine, and `memex-cloud` additionally shadows one. Restating them is an operator
+And no fleet record states a complete set yet: the control instance, the public instance and the SME client instance each name five
+against the image's nine, and the public instance additionally shadows one. Restating them is an operator
 change on the records in `Systemorph/Memex`, tracked as Systemorph/Memex#378 — the claim makes it
 expressible; it does not make it happen.
 
 🚨 **The restatement is safe BEFORE the instance runs an image that reads the claim, and that is
-what makes it the one edit to make.** Re-measured 2026-09-17: `Deployments/memex-cloud` is at v92
+what makes it the one edit to make.** Re-measured 2026-09-17: the public instance's record is at v92
 with the same slot 7, and the instance runs `3.0.0-ci.8411` — an image from before this change, so
 it has no reader for the claim and its deployed chart has the old ceiling. A record that restates
 the image's nine entries at their own indices and adds MCP at 9 renders `Modules__Required__0..9`,

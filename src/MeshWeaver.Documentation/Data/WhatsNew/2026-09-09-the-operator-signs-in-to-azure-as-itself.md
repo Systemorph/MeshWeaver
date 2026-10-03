@@ -6,7 +6,7 @@ Icon: Wrench
 Order: -20260909
 ---
 
-On 2026-09-09 the first `Provision` of a new instance (pearl) was filed through the control
+On 2026-09-09 the first `Provision` of a new instance (an SME client instance) was filed through the control
 portal, on an operator that had by then made it through every earlier wall. It rendered its
 fourteen steps and stopped at the first:
 
@@ -22,7 +22,7 @@ cluster's workload-identity webhook projects a token into the job and sets the `
 variables for it. The Azure **SDKs** read those on their own; the Azure **CLI** does not. Nothing
 in the job ever ran `az login`, so every step that touches Azure — the database, the Key Vault
 secrets, the federation, DNS, TLS — had never worked through the lane. No earlier run had reached
-one: memex's reconciles are kubectl and helm only, which authenticate in-cluster.
+one: the control instance's reconciles are kubectl and helm only, which authenticate in-cluster.
 
 ## What it does now
 

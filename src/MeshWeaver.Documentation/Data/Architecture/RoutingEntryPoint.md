@@ -46,7 +46,7 @@ The instant a silo begins graceful shutdown it leaves `Active`, so every placeme
 `OrleansException: No active nodes are compatible with grain routing`. The silo is still running and
 still processing; it simply may no longer take new activations.
 
-Measured on memex, 2026-08-10: on all three pod shutdowns the first such exception landed **within
+Measured on the control instance, 2026-08-10: on all three pod shutdowns the first such exception landed **within
 half a second** of the host logging *"Application is shutting down…"* — 11:44:31.341 → 11:44:31.750
 — and then repeated **52, 838 and 944 times** until the process exited. Every one was an
 `Orleans.Messaging[100071]` error AND a **terminal** `DeliveryFailure` to the sender. The traffic was
@@ -95,7 +95,7 @@ as transient until the 30 s `Orleans.Placement` budget expires, and every messag
 placement work item is rejected together — which is why the failure arrives as a burst of hundreds inside
 milliseconds.
 
-**Measured on memex-cloud, 2026-09-23** (image `9a61fed964`, before #5571): the 18:11:19Z burst (26
+**Measured on the public instance, 2026-09-23** (image `9a61fed964`, before #5571): the 18:11:19Z burst (26
 placements timing out at the same millisecond on `7d7f4d84f9-wl8mv`, more on `-mvzb5`) follows twelve
 minutes in which a THIRD silo, `-n7g6b`, logged `LocalSiloHealthMonitor` warnings every 10–13 s
 (17:58:43 → 18:10:27Z) and then went silent. The pods that dropped traffic were not the pod that was
@@ -117,6 +117,39 @@ timeouts are downstream of the stalled silo, not of placement — see #5388 for 
 Also note the in-process `TestCluster` runs Orleans' *distributed* directory (TestingHost adds
 `ConfigureDistributedGrainDirectory`), whereas the portal runs the DHT `LocalGrainDirectory`; the test
 therefore stands in for "the owner cannot answer" rather than reproducing the DHT's own timing.
+
+### Production verification, 2026-09-27
+
+The governed `Logs` actions `Ops/Actions/verify-5037-memex-20260927-placement` and
+`Ops/Actions/verify-5037-memexcloud-20260927-placement` requested `sinceMinutes: 1440`,
+`Grain placement operation timed out`, limit 200. The query stages ran on 2026-09-27 at
+11:56:55–11:56:56Z (control instance) and 11:57:04–11:57:05Z (public instance). Each lower bound is
+24 hours before its query's end. The action records retain these second-resolution stage
+bounds, **not the exact start/end sent to Loki**, so these are bounded observations rather
+than independently reproducible fixed UTC windows.
+
+Both actions completed without truncation or landing failures. The control instance returned **0** lines.
+The public instance returned **35**: **28 explicitly name `messagehub/*`; seven are unclassified**
+because they omit the grain identity. Those seven occur within 100 ms of named failures on
+the same pod, but proximity does not establish attribution. **Zero lines name `routing/*`; this
+is not proof that all remaining placement failures belong to other grain types.** Issue #5037
+remains open pending complete production verification.
+
+The positive control `Ops/Actions/verify-5037-memex-20260927-startup` requested the same
+1,440-minute duration and read and landed **126** `PlatformStartup` lines, with no truncation
+or failures; its query stage ran at 11:58:55–11:58:56Z. It includes 39 version-bearing starts,
+from `ci.9406` through `ci.9445`, establishing repeated rolls and a populated log source.
+Attempts to pin 2026-09-26T12:00:00Z through 2026-09-27T12:00:00Z using `__timestamp__`
+failed because the deployed Loki rejects that function in both `label_format` and `line_format`.
+The failed actions are not zero-result measurements and do not establish that fixed window.
+
+The window includes the serving generation's roll: the control instance's replicas started at 07:09–07:28Z on
+`3.0.0-ci.9445` (core `db9f332bf3d9fa9935799ccbfda4ef0f7fed221e`); the public instance's image is
+`3.0.0-ci.9443` (core `311108bf16a70eee39a6618b36456cf82c58a85f`), with replicas starting at
+06:15–06:18Z and further same-image starts later in the window. Both commits descend from
+#5675's `4028fd6468`. Fresh reads of this documentation node on both portals returned typed
+`MarkdownContent`. Those reads prove that nodes were serving; they do not distinguish the
+router's local-stream fast path from a grain dispatch.
 
 ## 🚨 The observation this page exists for
 

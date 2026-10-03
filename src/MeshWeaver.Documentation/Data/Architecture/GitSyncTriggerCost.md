@@ -48,7 +48,7 @@ Measured on `Systemorph/MeshWeaver` for the 24 h ending
 | Continuous Delivery (main) | `schedule` | 19 |
 | Arm credential / Shared rule blocks / Pinned image digests / Lock pinned image digests / Homebrew | `schedule`, `push` | 8 |
 
-`Admin/_Build/Systemorph.MeshWeaver` on `memex.meshweaver.cloud` read **version 4778** at
+`Admin/_Build/Systemorph.MeshWeaver` on the public instance read **version 4778** at
 2026-09-10T17:21Z, first written 2026-08-06T07:38:37Z — **4,775 recorded deliveries in 35 days**,
 256 of them in the last 24 h (10.7/h, one every 5.6 minutes). The version series matches the run
 census above, which is what makes the model checkable rather than inferred.
@@ -112,7 +112,7 @@ StaticRepoImporter.ImportSource(…, changedNodePaths)        ← the diff scope
 ```
 
 🚨 **The git-diff scope is a WRITE scope, never a fetch scope.** It exists to stop a routine push
-re-materialising a whole partition into the live compiler (the memex-cloud loop of 2026-07-23), and
+re-materialising a whole partition into the live compiler (the public instance's loop of 2026-07-23), and
 it does that. It does not, and cannot, avoid the transfer: the diff is computed against
 `snapshot.CommitSha`, which only exists once the snapshot has been fetched. So **fetch + parse is
 the floor cost of any delivery that is not skipped** — and for a source with no `subdirectory`, that
@@ -202,7 +202,7 @@ reconcile — which is `MayAdvanceBaseline` returning false, which holds `lastSy
 > branch tip is normal: the webhook imports **at the commit the build proved**, not at the tip, so
 > the recorded sha is the last delivered green commit, not `HEAD`.
 
-Measured across all 67 readable `_GitSync` nodes on `memex.meshweaver.cloud` (search returned 67,
+Measured across all 67 readable `_GitSync` nodes on the public instance (search returned 67,
 `truncated:false`; 67 read, 0 unreadable), 2026-09-10T17:30–17:39Z:
 
 | Source | Repo / subdir | `lastSyncedAt` | `lastSyncAttemptAt` | Outcome | Gap |
@@ -226,7 +226,7 @@ carry `twoWay`, so its preservation is the *bidirectional prune* protecting serv
 
 `Deployments/_GitSync` is the only source in the set carrying `twoWay: true`, i.e. the
 kept-not-overwritten half of the same arm — and the **independent** node of the same path on
-`memex.systemorph.com` reads
+the control instance reads
 `lastSyncedAt: 2026-08-19T20:06:37Z` against a `lastSyncAttemptAt` of 2026-09-10T15:27:00Z: **22
 days** of attempts that never reconciled. (The two portals hold two independent nodes here, not a
 replica and its lag — read both before concluding anything about either.)
@@ -286,7 +286,7 @@ Space's **content tree**. Point one at a repository whose tree is *code* — a f
 
 Every one of those refusals is permanent, so the source never converges, so — by section 4 — it pays
 the full clone on **every** delivery of that repository, for ever. `Systemorph/Memex#237` is the
-live instance: a `MeshWeaver/_GitSync` on `memex.meshweaver.cloud` pointing at
+live instance: a `MeshWeaver/_GitSync` on the public instance pointing at
 `https://github.com/Systemorph/MeshWeaver` with no subdirectory, 389 refused nodes per pass.
 
 **The fix for that shape is the configuration, not the engine**: give the source a `subdirectory`
@@ -361,7 +361,7 @@ deliberate price of not re-cloning a repository ten times an hour to discover th
 
 ### 🚨 Final for the CONFIGURATION too — and asked by BOTH unattended triggers (#4499)
 
-**Measured on memex.systemorph.com, 2026-09-16**, through the control instance's `Logs` action: 64
+**Measured on the control instance, 2026-09-16**, through its own `Logs` action: 64
 refusal lines in one hour, not truncated — **~32 refusals/hour** — for two Spaces whose configured
 subdirectory matched nothing (`DeepSign` in MeshWeaver.Plugins, `UWDeepfield` in
 MeshWeaver.Reinsurance), always at the commit this instance's seal named. Each was a full fetch of the

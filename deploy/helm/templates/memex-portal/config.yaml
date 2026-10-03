@@ -465,6 +465,130 @@ data:
   AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
   AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
   AzureFoundry__Models__3: "{{ .Values.config.memex_portal.AzureFoundry__Models__3 }}"
+  # ── EU-only processing: the instance switch and each section's declared route ───────────────
+  # Policy `ai-eu-only-processing` (and `code-review-eu-only` for the PR review model); manual
+  # Doc/AI/ModelDataResidency in MeshWeaver.Plugins. The catalog seeder (BuiltInLanguageModelProvider)
+  # reads `{Section}:DataResidency` / `{Section}:DataRetention` and marks every model it seeds from
+  # that section; an UNDECLARED section is marked from its endpoint host where the host implies it
+  # (eu.openrouter.ai → Eu, a known global host such as openrouter.ai → Global), otherwise Unknown —
+  # never Eu. `AI:RequiredDataResidency=Eu` makes the instance EU-only: the picker, tier resolution,
+  # Auto and the round refuse every model not marked Eu, failing closed. Blank/absent = no
+  # requirement.
+  #
+  # 🚨 EMITTED ONLY WHEN NON-BLANK (and TRIMMED, like Auth__GlobalAdmins__N), never `default ""`.
+  # A whitespace-only value renders no key at all. For these keys blank and absent mean the SAME
+  # thing to the consumer ("not declared"), so rendering "" would only add noise — and for the
+  # Endpoint keys below it would be WRONG: the seeder does `endpoint ??= source.DefaultEndpoint`, and
+  # an empty string is not null, so a rendered "" would replace the section's default endpoint with
+  # nothing. Declaring nothing on a record therefore renders none of these keys, and every portal
+  # keeps exactly the configuration it has today.
+  {{- if (.Values.config.memex_portal.AI__RequiredDataResidency | default "" | trim) }}
+  AI__RequiredDataResidency: "{{ .Values.config.memex_portal.AI__RequiredDataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.Anthropic__DataResidency | default "" | trim) }}
+  Anthropic__DataResidency: "{{ .Values.config.memex_portal.Anthropic__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.Anthropic__DataRetention | default "" | trim) }}
+  Anthropic__DataRetention: "{{ .Values.config.memex_portal.Anthropic__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureFoundry__DataResidency | default "" | trim) }}
+  AzureFoundry__DataResidency: "{{ .Values.config.memex_portal.AzureFoundry__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureFoundry__DataRetention | default "" | trim) }}
+  AzureFoundry__DataRetention: "{{ .Values.config.memex_portal.AzureFoundry__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouter__DataResidency | default "" | trim) }}
+  OpenRouter__DataResidency: "{{ .Values.config.memex_portal.OpenRouter__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouter__DataRetention | default "" | trim) }}
+  OpenRouter__DataRetention: "{{ .Values.config.memex_portal.OpenRouter__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__DataResidency | default "" | trim) }}
+  OpenRouterEU__DataResidency: "{{ .Values.config.memex_portal.OpenRouterEU__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__DataRetention | default "" | trim) }}
+  OpenRouterEU__DataRetention: "{{ .Values.config.memex_portal.OpenRouterEU__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureOpenAI__DataResidency | default "" | trim) }}
+  AzureOpenAI__DataResidency: "{{ .Values.config.memex_portal.AzureOpenAI__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.AzureOpenAI__DataRetention | default "" | trim) }}
+  AzureOpenAI__DataRetention: "{{ .Values.config.memex_portal.AzureOpenAI__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAI__DataResidency | default "" | trim) }}
+  OpenAI__DataResidency: "{{ .Values.config.memex_portal.OpenAI__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAI__DataRetention | default "" | trim) }}
+  OpenAI__DataRetention: "{{ .Values.config.memex_portal.OpenAI__DataRetention | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAICompatible__DataResidency | default "" | trim) }}
+  OpenAICompatible__DataResidency: "{{ .Values.config.memex_portal.OpenAICompatible__DataResidency | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenAICompatible__DataRetention | default "" | trim) }}
+  OpenAICompatible__DataRetention: "{{ .Values.config.memex_portal.OpenAICompatible__DataRetention | trim }}"
+  {{- end }}
+  # OpenRouter's endpoint was rendered by nothing until now, so every portal used the section's
+  # default (openrouter.ai). Same guard, same reason as above.
+  {{- if (.Values.config.memex_portal.OpenRouter__Endpoint | default "" | trim) }}
+  OpenRouter__Endpoint: "{{ .Values.config.memex_portal.OpenRouter__Endpoint | trim }}"
+  {{- end }}
+  # ── OpenRouterEU: OpenRouter's EU region (https://eu.openrouter.ai/api/v1) ─────────────────
+  # A SECOND OpenRouter catalog section, shaped like OpenRouter above: an endpoint and a model list,
+  # written INDEX BY INDEX per this ConfigMap's contract (0..15, the same ceiling as OpenRouter;
+  # extending it is one guarded pair per index). It has NO ApiKey key of its own, deliberately: an
+  # OpenRouter key is account-level, and the Provider/OpenRouterEU node takes it from
+  # Provider/OpenRouter through `credentialFrom` — so there is no secret companion to deliver.
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Endpoint | default "" | trim) }}
+  OpenRouterEU__Endpoint: "{{ .Values.config.memex_portal.OpenRouterEU__Endpoint | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__0 | default "" | trim) }}
+  OpenRouterEU__Models__0: "{{ .Values.config.memex_portal.OpenRouterEU__Models__0 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__1 | default "" | trim) }}
+  OpenRouterEU__Models__1: "{{ .Values.config.memex_portal.OpenRouterEU__Models__1 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__2 | default "" | trim) }}
+  OpenRouterEU__Models__2: "{{ .Values.config.memex_portal.OpenRouterEU__Models__2 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__3 | default "" | trim) }}
+  OpenRouterEU__Models__3: "{{ .Values.config.memex_portal.OpenRouterEU__Models__3 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__4 | default "" | trim) }}
+  OpenRouterEU__Models__4: "{{ .Values.config.memex_portal.OpenRouterEU__Models__4 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__5 | default "" | trim) }}
+  OpenRouterEU__Models__5: "{{ .Values.config.memex_portal.OpenRouterEU__Models__5 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__6 | default "" | trim) }}
+  OpenRouterEU__Models__6: "{{ .Values.config.memex_portal.OpenRouterEU__Models__6 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__7 | default "" | trim) }}
+  OpenRouterEU__Models__7: "{{ .Values.config.memex_portal.OpenRouterEU__Models__7 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__8 | default "" | trim) }}
+  OpenRouterEU__Models__8: "{{ .Values.config.memex_portal.OpenRouterEU__Models__8 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__9 | default "" | trim) }}
+  OpenRouterEU__Models__9: "{{ .Values.config.memex_portal.OpenRouterEU__Models__9 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__10 | default "" | trim) }}
+  OpenRouterEU__Models__10: "{{ .Values.config.memex_portal.OpenRouterEU__Models__10 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__11 | default "" | trim) }}
+  OpenRouterEU__Models__11: "{{ .Values.config.memex_portal.OpenRouterEU__Models__11 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__12 | default "" | trim) }}
+  OpenRouterEU__Models__12: "{{ .Values.config.memex_portal.OpenRouterEU__Models__12 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__13 | default "" | trim) }}
+  OpenRouterEU__Models__13: "{{ .Values.config.memex_portal.OpenRouterEU__Models__13 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__14 | default "" | trim) }}
+  OpenRouterEU__Models__14: "{{ .Values.config.memex_portal.OpenRouterEU__Models__14 | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.OpenRouterEU__Models__15 | default "" | trim) }}
+  OpenRouterEU__Models__15: "{{ .Values.config.memex_portal.OpenRouterEU__Models__15 | trim }}"
+  {{- end }}
   # 🚨 A values key this template omits reaches NO container, with no error anywhere: the
   # ConfigMap names every key explicitly, there is no catch-all range over config.memex_portal,
   # and the Deployment's only env path is envFrom on this ConfigMap. Both keys below were set in
@@ -575,6 +699,89 @@ data:
   # inbox carries nothing (config-key-coverage).
   {{- if .Values.config.memex_portal.Hosting__Triage__Repositories }}
   Hosting__Triage__Repositories: "{{ .Values.config.memex_portal.Hosting__Triage__Repositories }}"
+  {{- end }}
+  # The PR steward's SELF-HEAL SWEEP on the triage inbox (MeshWeaver.Plugins Hosting PullRequestSweep,
+  # EnabledKey). It arms wherever the triage inbox is, so a control instance that is the inbox but must
+  # not review its repositories' pull requests sets it "false". Rendered only when set.
+  {{- $prSweep := .Values.config.memex_portal.Hosting__Triage__PullRequestSweep__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled") (not (kindIs "invalid" $prSweep)) (ne ($prSweep | toString | trim) "") }}
+  Hosting__Triage__PullRequestSweep__Enabled: "{{ $prSweep | toString | trim }}"
+  {{- end }}
+  # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
+  # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on
+  # Hosting/_Access, so the triage items and their threads are readable (a global admin has no data
+  # access by definition). Rendered only when set.
+  {{- $hostingMirror := .Values.config.memex_portal.Hosting__MirrorHostingReadFromAdmins }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__MirrorHostingReadFromAdmins") (not (kindIs "invalid" $hostingMirror)) (ne ($hostingMirror | toString | trim) "") }}
+  Hosting__MirrorHostingReadFromAdmins: "{{ $hostingMirror | toString | trim }}"
+  {{- end }}
+  # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
+  # ONE instance of a fleet: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
+  # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
+  # fallback cadence. Rendered whenever the key is PRESENT (hasKey), so an explicit `false` reaches
+  # the container and switches it off; absent on every other portal (config-key-coverage).
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Enabled" }}
+  Hosting__PrBabysitter__Enabled: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__AgentHandoff" }}
+  Hosting__PrBabysitter__AgentHandoff: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Heal" }}
+  Hosting__PrBabysitter__Heal: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Heal }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interval" }}
+  Hosting__PrBabysitter__Interval: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interval }}"
+  {{- end }}
+  # Interrupt and fix-on-red (MeshWeaver.Plugins#2607, Hosting/Deployment/Source/PrFixer.cs):
+  # Interrupt=false stops the cancel of a code red's own pull_request run (on by default), Fix=true
+  # lets the pr-fixer agent push ONE validated commit for a code red (off by default), FixerModel
+  # and ValidatorModel pin the two agents' threads to a model node. Same rule as above: rendered
+  # whenever PRESENT, so a record that declares one is a pod that reads it (config-key-coverage).
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Interrupt" }}
+  Hosting__PrBabysitter__Interrupt: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Interrupt }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Fix" }}
+  Hosting__PrBabysitter__Fix: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Fix }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__FixerModel" }}
+  Hosting__PrBabysitter__FixerModel: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__FixerModel }}"
+  {{- end }}
+  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__ValidatorModel" }}
+  Hosting__PrBabysitter__ValidatorModel: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__ValidatorModel }}"
+  {{- end }}
+  # ---- The bug-fix pool (MeshWeaver.Plugins Hosting/BugFix, Essentials/BugTriage) ----------------
+  # Enabled=false stops an instance's pool entirely (no re-drive sweep, no new bug thread; bugs wait
+  # QUEUED with that reason — Plugins #2635). It moves to the control instance: memex sets false,
+  # control true. Rendered whenever PRESENT (hasKey), so an explicit `false` reaches the container.
+  {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
+  Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
+  {{- end }}
+  # Control instance only: the deployments the ONE org webhook's pull-request and check events are
+  # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
+  {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
+  Hosting__PrEvents__ForwardTo: "{{ .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}"
+  {{- end }}
+  # The triage ISSUE sweep's off-switch (MeshWeaver.Plugins Hosting TriageIssueSweep.EnabledKey). The
+  # sweep arms wherever the triage inbox is (Hosting:PlatformWebhookSecret held, no
+  # Hosting:ControlInbox:Url), so an instance that holds the secret but must not triage yet — a control
+  # instance before its cut-over — sets it "false". Rendered only when set.
+  # 🚨 Tested with `ne … ""` over toString, never `default ""`: an UNQUOTED `false` in an overlay is a
+  # YAML boolean, `default` treats false as empty, and the one value this key exists to carry would
+  # be dropped.
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__IssueSweep__Enabled") (ne (.Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim) "") }}
+  Hosting__Triage__IssueSweep__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim }}"
+  {{- end }}
+  # Where the triage scope comes from (MeshWeaver.Plugins Hosting TriageIntake.ScopeSourceKey). Absent
+  # = the CRM. "Configuration" DECLARES an instance with no CRM by design (the operations instance,
+  # whose type set is compiled into its image): Hosting:Triage:Repositories is then its whole scope.
+  # Without it such an instance's scope is UNKNOWN and triage does nothing there. Rendered only when set.
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__ScopeSource") (ne (.Values.config.memex_portal.Hosting__Triage__ScopeSource | toString | trim) "") }}
+  Hosting__Triage__ScopeSource: "{{ .Values.config.memex_portal.Hosting__Triage__ScopeSource | toString | trim }}"
+  {{- end }}
+  # A control-lane TARGET's declared inbox for forwarded events (Doc/Architecture/ControlLane →
+  # "Forwarded events"): the ONLY local inbox the lane may store an event into. Absent = none.
+  {{- if .Values.config.memex_portal.ControlLane__EventTargets__0 }}
+  ControlLane__EventTargets__0: "{{ .Values.config.memex_portal.ControlLane__EventTargets__0 }}"
   {{- end }}
   # ---- Feedback hand-over to the control instance (MeshWeaver.Plugins#1713) -----------------
   # The URL of the control instance's signed inbox that the Feedback plugin hands a technical
@@ -814,6 +1021,13 @@ data:
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouter" }}
   Features__Ai__Providers__OpenRouter: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouter }}"
+  {{- end }}
+  # The EU-region OpenRouter section (OpenRouterEU, above) — same opt-in gate shape. Delivered here so
+  # a record can declare it; it takes effect once the host reads it when registering that section.
+  # Bound as a Boolean, so a blank value must not reach the binder: hasKey keeps an explicit `false`,
+  # the trimmed-non-blank test drops "" and "   " (they render no key), and the value renders trimmed.
+  {{- if and (hasKey .Values.config.memex_portal "Features__Ai__Providers__OpenRouterEU") (.Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim) }}
+  Features__Ai__Providers__OpenRouterEU: "{{ .Values.config.memex_portal.Features__Ai__Providers__OpenRouterEU | toString | trim }}"
   {{- end }}
   # The co-hosted CLI harnesses (Claude Code, GitHub Copilot) — same gate shape, same reasoning.
   {{- if hasKey .Values.config.memex_portal "Features__Ai__Clis__ClaudeCode" }}

@@ -793,10 +793,19 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
-## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)`)
+## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins, advisory)`)
 
-**Policy [`dependent-suites-gate`](../PolicyNotProse): a core change reaches `main` only after
-MeshWeaver.Plugins' suites that can reach it pass against the CANDIDATE commit.**
+> 🚨 **ADVISORY since policy `core-merge-never-blocked`** ([Policy Not Prose](../PolicyNotProse)).
+> The run below no longer blocks a core merge: `Consolidate test results` does not need it, and the
+> merge queue on `main` is off. It is requested on a pull request by the `dependent-suites` label or
+> a declared `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>` (then against that pull request's head —
+> [Paired Change Sets](../PairedChangeSets)). The verdict that DECIDES something is the promotion
+> one — the same machinery, run against each promoted core+Plugins pair, gating only the fleet's
+> arming ([One Promotion Gate](../OnePromotionGate)). The rest of this section is the mechanism's
+> account and its history; where it says "blocks" or "merge-queue entry", read "reports".
+
+**Was policy `dependent-suites-gate` (retired): a core change reached `main` only after
+MeshWeaver.Plugins' suites that can reach it passed against the CANDIDATE commit.**
 
 ### Why it exists
 
@@ -816,9 +825,9 @@ interface and pin gates above were right to be silent.
 | candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
 | control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base) or on ANY missing evidence; written as a root commit at `refs/core-candidate/<key>` in Plugins |
-| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red |
+| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), which the merge-queue steward re-queues as `infra`, capped per head — a red verdict fails the wait step and is rejected |
 
-It is a `needs:` of `Consolidate test results` with an explicit fail step, so it blocks.
+It WAS a `needs:` of `Consolidate test results` with an explicit fail step, so it blocked — until MeshWeaver#5807 sat four hours green in the queue and was ejected on a 42-minute silence (2026-09-27). It is neither now.
 
 **Where it runs.** Every merge-queue entry — the only road to `main`, and the entry's commit is the
 combination that actually lands — plus a pull request labelled `dependent-suites` (read live, so

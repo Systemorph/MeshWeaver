@@ -87,7 +87,7 @@ still rides along (below).
 The same list ADDS. A declared path that no query returned is offered anyway, resolved from the
 static registry when it is there and synthesised from the path when it is not. **This is the half
 that no namespace-scoped query can reach**: in `Systemorph/MeshWeaver.Crm`, `Crm/Offer` declares
-`Crm/Question` while the instances live in a different partition (`PearlTechnology/Commercials`), so
+`Crm/Question` while the instances live in a different partition (`Fabrikam/Commercials`), so
 `Crm/Question` is in no ancestor chain of the node being created under. The declaration is the only
 thing that puts it in the menu.
 

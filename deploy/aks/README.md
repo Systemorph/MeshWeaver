@@ -431,7 +431,7 @@ Everything below runs **inside the cluster** via `az aks command invoke` (Step 2
 ["Or run `scripts/deploy.sh`"](#or-run-scriptsdeploysh) at the end of this step.
 
 ```bash
-NS=memex
+NS=<namespace>
 kubectl create namespace $NS
 
 # 0) Custom StorageClass for the non-root portal (uid 1654) — cluster-scoped,
@@ -656,7 +656,7 @@ SA=$(az deployment sub show --name memex-aks-infra \
 RG=$(az deployment sub show --name memex-aks-infra \
   --query "properties.outputs.resourceGroupName.value" -o tsv)
 KEY=$(az storage account keys list -g $RG -n $SA --query "[0].value" -o tsv)
-kubectl create secret generic azure-files-creds -n memex \
+kubectl create secret generic azure-files-creds -n $NS \
   --from-literal=azurestorageaccountname=$SA \
   --from-literal=azurestorageaccountkey=$KEY
 ```
@@ -683,11 +683,11 @@ spec:
       shareName: content          # the pre-created share from files.bicep
     nodeStageSecretRef:
       name: azure-files-creds
-      namespace: memex
+      namespace: <namespace>
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: memex-content, namespace: memex }
+metadata: { name: memex-content, namespace: <namespace> }
 spec:
   accessModes: [ReadWriteMany]
   storageClassName: ""
@@ -861,7 +861,7 @@ not for "every distinct error gets a ticket".
 ### Apply it
 
 ```bash
-NS=memex
+NS=<namespace>
 kubectl apply -f manifests/storageclass-azurefile.yaml         # if not already applied
 kubectl apply -n $NS -f manifests/observability/otel-pvc.yaml
 kubectl apply -n $NS -f manifests/observability/otel-collector-config.yaml
@@ -894,7 +894,7 @@ az aks get-credentials -g <rg> -n <cluster>                      # VPN connected
 kubectl -n monitoring port-forward svc/loki-grafana 3000:80      # http://localhost:3000 (admin / $GRAFANA_PW)
 ```
 
-In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (add
+In Grafana → Explore → Loki, the portal logs are `{namespace="<namespace>"}` (add
 `|= "error"` or `|~ "signin-microsoft"` to narrow).
 
 ### Read / download the archived logs
@@ -902,8 +902,8 @@ In Grafana → Explore → Loki, the portal logs are `{namespace="memex"}` (add
 The archive lives on the `otel-logs` Azure Files share. Inspect from a pod:
 
 ```bash
-kubectl exec -n memex ds/otel-collector -- ls -lh /mnt/otel-logs
-kubectl exec -n memex ds/otel-collector -- tail -n 50 /mnt/otel-logs/logs-<node>.json
+kubectl exec -n $NS ds/otel-collector -- ls -lh /mnt/otel-logs
+kubectl exec -n $NS ds/otel-collector -- tail -n 50 /mnt/otel-logs/logs-<node>.json
 ```
 
 …or download straight from the Files share with the account key (Option B account,
@@ -1105,7 +1105,7 @@ clients with redirect URIs `https://portal.example.com/signin-google` and
 ### Wire it up
 
 ```bash
-NS=memex
+NS=<namespace>
 # Workload-Identity SA — put the pgBackRestIdentityClientId output in the SA
 kubectl apply -n $NS -f manifests/pgbackrest/serviceaccount.yaml   # edit the client-id first
 kubectl apply -n $NS -f manifests/pgbackrest/configmap.yaml
@@ -1139,7 +1139,7 @@ How it works:
 ### Backup runbook
 
 ```bash
-NS=memex; POD=memex-postgres-statefulset-0
+NS=<namespace>; POD=memex-postgres-statefulset-0
 # Ad-hoc full backup (zero contention — runs in the sidecar):
 kubectl exec -n $NS $POD -c pgbackrest -- \
   pgbackrest --config=/etc/pgbackrest/pgbackrest.conf --stanza=memex --type=full backup
@@ -1157,7 +1157,7 @@ Restore is **destructive** to the live data dir — it replaces cluster files,
 so the database must be stopped during the restore.
 
 ```bash
-NS=memex
+NS=<namespace>
 # 1) Scale the portal down (no writers) and stop Postgres.
 kubectl scale deployment memex-portal-deployment -n $NS --replicas=0
 kubectl scale statefulset memex-postgres-statefulset -n $NS --replicas=0
@@ -1220,7 +1220,7 @@ Postgres endpoint.
 
 ```bash
 # a) The manifest MUST carry every arch leg. A partial manifest list = ImagePullBackOff on the
-#    missing arch, which presents as "the deploy hung" (memex-cloud V46 outage, 2026-07-19).
+#    missing arch, which presents as "the deploy hung" (the public instance's V46 outage, 2026-07-19).
 az acr manifest show -r <acrName> -n memex-portal-ai:<tag> \
   | jq -r '.manifests[]?.platform | "\(.os)/\(.architecture)"'   # expect linux/amd64 AND linux/arm64
 
@@ -1239,7 +1239,7 @@ Fresh pods invalidate every dynamic NodeType's cached assembly (the framework MV
 changed), so they all need a recompile. Left lazy, that compile happens on user
 requests after the pod is already serving — and a type nothing happens to touch
 stays **"no definition"** until its pages hang with *"No response received …
-`SubscribeRequest` → target X"* (SocialMedia/Post on memex-cloud, 2026-07-30:
+`SubscribeRequest` → target X"* (SocialMedia/Post on the public instance, 2026-07-30:
 every post page burned the 60 s timeout all morning while the portal looked
 healthy). **Managed envs therefore run the bake ON — these three knobs travel
 together** (`values.aks.yaml` carries them; keep them in every env overlay so a
@@ -1250,7 +1250,7 @@ together** (`values.aks.yaml` carries them; keep them in every env overlay so a
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
 | `config.memex_portal.PreWarm__GateReadiness: "true"` | **readiness (`/ready`)** stays red until the sweep is green — never the startup probe (policy `bake-gate-readiness-only`, MeshWeaver#5544: a refusal keeps the pod alive and out of the Service, it kills nothing); with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **⚠️ Depends on the sweep, and `values.aks.yaml` currently sets BOTH to `"false"` — read the namespace, not this table (#1981).** The two keys are ONE setting: the gate reads state only the sweep writes, so gate-without-sweep is disarmed at startup (it used to register and stay permanently green) and logged at Critical. Turning the gate on means turning `PreWarm__DynamicTypes` on in the same change. It was tried 2026-08-02 and reverted the same day on 7 FALSE regressions — all cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue). The gate no longer reads "no answer" as "it broke": a `TimedOut` outcome is filed as *unevaluated* and can never gate, and that leniency now survives the cascade (a dependent of an unevaluated upstream is `UpstreamUnevaluated`, also non-gating). Only a `CompileError` — or an `UpstreamFailed` cascading from one — on a **previously-healthy** type stalls a roll |
 | `config.memex_portal.PreWarm__AllowUnprovenBake: "false"` | **✅ OFF (strict).** The gate also refuses readiness when the sweep *errored* — enumeration threw or timed out — because such a pod verified **nothing** and a gate that certifies "I verified nothing" is worse than no gate. That guard used to live in the pre-run bake Job (*"FINDING NOTHING IS NOT PASSING"*, exit 3, `Bake__AllowEmpty`) and was lost when #1357 retired the Job; it is now enforced on the surviving path as `BakePhase.Faulted`. ⚠️ **"Empty" is not "unproven"** — a mesh that genuinely has no dynamic NodeTypes enumerates fine, completes and serves; only the *inability to get an answer* gates. Set `"true"` only to roll forward past an environment that cannot answer the enumeration, accepting lazy compilation. It can never waive a real regression, and `/health` keeps reporting the bake as unproven |
-| `probes.startup: {periodSeconds: 10, failureThreshold: 60}` (= 10 min) | A plain cold boot ONLY. 🚨 **No longer paired with the gate** (MeshWeaver#5544): the gate's verdict is read by `/ready`, so a bake never rides this budget. Until that change the gate held `/health` red, and a startup budget that ran out KILLED the container — on 2026-09-25/26 every memex container of both images at the three-hour mark (`failureThreshold: 1080`). The bake's time (**~2.4 s/type**, sequential, *measured 2026-08-10* — ~10 min on the largest mesh) is on `progressDeadlineSeconds`, which the chart derives as startup budget + 600 s + `probes.rollGate.bakeSeconds` (1800 s); running out of it reports a stalled roll and kills nothing |
+| `probes.startup: {periodSeconds: 10, failureThreshold: 60}` (= 10 min) | A plain cold boot ONLY. 🚨 **No longer paired with the gate** (MeshWeaver#5544): the gate's verdict is read by `/ready`, so a bake never rides this budget. Until that change the gate held `/health` red, and a startup budget that ran out KILLED the container — on 2026-09-25/26 every container of both images on the control instance at the three-hour mark (`failureThreshold: 1080`). The bake's time (**~2.4 s/type**, sequential, *measured 2026-08-10* — ~10 min on the largest mesh) is on `progressDeadlineSeconds`, which the chart derives as startup budget + 600 s + `probes.rollGate.bakeSeconds` (1800 s); running out of it reports a stalled roll and kills nothing |
 
 **🚨 Before you trust the gate, verify the namespace actually reads it.** The gate
 protects a portal through exactly two deployment facts, and on 2026-08-10 two of
@@ -1268,7 +1268,7 @@ which is how the drift happened.
 
 🪦 **There is no pre-run bake Job any more (#1347) — the CI bake replaced it
 (#1660 WS3).** The separate `memex-bake` image was removed after two weeks of
-running in zero namespaces. On its only AKS run (memex-cloud, 2026-07-30)
+running in zero namespaces. On its only AKS run (the public instance, 2026-07-30)
 `memex-bake:3.0.0-ci.1565` computed a **different framework fingerprint** than the
 running `portal-ai:3.0.0-ci.1565` — same version, same commit, separately
 published — so its framework-stale kickoff started flipping CURRENT NodeType
@@ -1286,7 +1286,7 @@ its sweep.
 
 **The pod-side sweep remains the enforcement.** It runs in the serving process,
 adopts whatever CI published, and compiles the remainder — 76 s for 280 types cold
-(memex-cloud, batch direct-compile), seconds when the CI bake covered the shipped
+(the public instance, batch direct-compile), seconds when the CI bake covered the shipped
 content. The "fail before prod" contract is given by `PreWarm__GateReadiness` +
 `maxSurge:1` / `maxUnavailable:0`: the new pod refuses readiness until its OWN bake
 is green while the old image keeps serving.
@@ -1303,7 +1303,7 @@ kubectl -n <env> logs "$NEW" | grep "DynamicTypePreWarmer: warm-up complete"
 kubectl -n <env> get pods   # new pod 0/1 while baking is CORRECT; investigate only a Regressed log line
 ```
 
-Live-env equivalent without a helm apply (what enabled memex-cloud on 2026-07-30):
+Live-env equivalent without a helm apply (what enabled the public instance on 2026-07-30):
 
 ```bash
 kubectl -n <env> patch configmap memex-portal-config --type merge \
@@ -1330,7 +1330,7 @@ kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
   targeted subscribe rides the SAME cross-silo routing, so it completes reliably
   only in a single-silo window — delete the baking pod and use the ~2 minutes before
   its replacement joins), then let the replacement's re-sweep find the fixed types
-  `alreadyBaked`. (Observed live on the first gated roll, memex-cloud 2026-07-30:
+  `alreadyBaked`. (Observed live on the first gated roll, the public instance 2026-07-30:
   the gate caught 2 types with stale-green records whose newest assemblies were 6
   days old — real, invisible breakage — plus sweep failures on shared-source types
   that compiled clean when triggered individually in a single-silo window.)
@@ -1354,7 +1354,7 @@ the HPA**, and makes `minReplicaCount` inert. Nothing in any chart sets it,
 
 **Nobody applies it for fun.** It is the most direct way to say "stop making new
 silos", so assume it is suppressing a multi-silo defect until you have evidence
-otherwise. `memex-cloud` carried one for **16 days** (2026-07-29 → 2026-08-14): it
+otherwise. The public instance carried one for **16 days** (2026-07-29 → 2026-08-14): it
 was applied 87 minutes after the second fix for **#694 — *cross-silo posts lose
 AccessContext: static content 500s on ~50% of requests with 2 replicas*** — and 29
 seconds after KEDA scaled the namespace back up. Removing it without reading that
@@ -1498,8 +1498,8 @@ stitches the platform around it. All config flows from deploy parameters → env
 ## Teardown
 
 ```bash
-helm uninstall memex -n memex
-kubectl delete namespace memex                 # also deletes the PVCs (Azure Files/Disk)
+helm uninstall memex -n $NS
+kubectl delete namespace $NS                    # also deletes the PVCs (Azure Files/Disk)
 az group delete --name <rg> --yes --no-wait    # cluster, VPN, ACR, storage, VNet
 ```
 

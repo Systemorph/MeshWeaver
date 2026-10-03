@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -45,6 +46,72 @@ public static class SettingsMenuItemsExtensions
         }).ToArray();
         return config.AddSettingsMenuItems(providers);
     }
+
+    /// <summary>
+    /// Hides the named tabs on this hub's settings page, whoever registered them. For a node type
+    /// whose settings page is an APP rather than node management (the Admin app hides the default
+    /// Metadata / Files / … tabs): the defaults are registered on every node hub, so the only
+    /// order-independent way to leave them out is to filter them where the page collects its tabs.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="tabIds">The tab ids to hide.</param>
+    public static MessageHubConfiguration HideSettingsTabs(
+        this MessageHubConfiguration config, params string[] tabIds)
+    {
+        var existing = config.Get<HiddenSettingsTabs>()
+            ?? new HiddenSettingsTabs(System.Collections.Immutable.ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase));
+        return config.Set(existing with { Ids = existing.Ids.Union(tabIds) });
+    }
+
+    /// <summary>
+    /// Restricts the named tabs to a PARTITION ROOT — a hub whose path is a single segment (a Space,
+    /// a person's partition, the Admin app). A tab that acts on a whole Space (its node types, its
+    /// groups, its GitHub sync, its working tree) means nothing on a descendant's settings page, where
+    /// it used to be offered on every node below the root. The tab is filtered out wherever the page
+    /// is not a root, whoever registered it, and a link to it on a descendant redirects to the same
+    /// tab on the root (<see cref="SettingsRedirect"/>).
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="tabIds">The tab ids that belong to the partition root only.</param>
+    public static MessageHubConfiguration RestrictSettingsTabsToPartitionRoot(
+        this MessageHubConfiguration config, params string[] tabIds)
+    {
+        var existing = config.Get<PartitionRootSettingsTabs>() ?? PartitionRootSettingsTabs.Empty;
+        return config.Set(existing with { Ids = existing.Ids.Union(tabIds) });
+    }
+
+    /// <summary>
+    /// On THIS hub's settings page, a request for <paramref name="fromTabId"/> opens
+    /// <paramref name="toTabId"/> instead (a redirect, so the address bar shows the tab that is
+    /// rendered). For tabs merged into one: the retired id keeps answering.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="fromTabId">The retired tab id.</param>
+    /// <param name="toTabId">The tab that now carries its content.</param>
+    public static MessageHubConfiguration AliasSettingsTab(
+        this MessageHubConfiguration config, string fromTabId, string toTabId)
+    {
+        var existing = config.Get<SettingsTabAliases>() ?? SettingsTabAliases.Empty;
+        return config.Set(existing with { Map = existing.Map.SetItem(fromTabId, toTabId) });
+    }
+
+    /// <summary>
+    /// The title of this hub's settings page — the name of the APP the page is, shown at the top of
+    /// its navigation. Without one the page is titled with the node's own name. The Admin app is
+    /// titled with the instance's name, the person app with the person's name: every settings page
+    /// says whose things it changes.
+    /// </summary>
+    /// <param name="config">The hub configuration.</param>
+    /// <param name="title">The title, given the page's host and node; <c>null</c> falls back to the
+    /// node's name.</param>
+    public static MessageHubConfiguration WithSettingsTitle(
+        this MessageHubConfiguration config, Func<LayoutAreaHost, MeshNode?, string?> title)
+        => config.Set(new SettingsTitle(title));
+
+    /// <summary>True when <paramref name="hubPath"/> is a partition root (a single path segment).</summary>
+    /// <param name="hubPath">The hub path.</param>
+    internal static bool IsPartitionRoot(string? hubPath)
+        => !string.IsNullOrEmpty(hubPath) && !hubPath.Contains('/');
 
     /// <summary>
     /// The live, UNFILTERED settings-tab set: every registered provider subscribed once
@@ -87,13 +154,42 @@ public static class SettingsMenuItemsExtensions
             .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
 
+        // Data-contributed PERSON-APP tabs (UiContribution nodes with Context = PersonApp): the
+        // lane an in-app extension appears on inside the viewer's own settings app
+        // (Doc/Architecture/InAppExtensions). Only on the person-app hub — never on a Space's, a
+        // node's or another person's settings page. Seeded empty so a slow access probe never
+        // holds the built-in tabs back.
+        // The lane is added LAST, and the fold below never lets one of its tabs shadow a tab the
+        // compiled providers or the NodeSettings lane already registered under the same id — a
+        // contribution must not swap a surface like Sharing in under a familiar label.
+        var personAppLane = -1;
+        if (host.IsPersonAppHub())
+        {
+            personAppLane = streams.Count;
+            streams.Add(ContributedPersonAppTabs(host)
+                .StartWith([])
+                .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(
+                    _ => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([])));
+        }
+
+        var hidden = config.Get<HiddenSettingsTabs>()?.Ids;
+        // Space-root-only tabs leave every page that is not a partition root.
+        var rootOnly = IsPartitionRoot(host.Hub.Address.ToString())
+            ? null
+            : config.Get<PartitionRootSettingsTabs>()?.Ids;
         return Observable.CombineLatest(streams)
             .Select(lists =>
             {
                 var items = new List<SettingsMenuItemDefinition>();
-                foreach (var list in lists)
-                    if (list is not null)
-                        items.AddRange(list);
+                for (var lane = 0; lane < lists.Count; lane++)
+                {
+                    var list = lists[lane];
+                    if (list is null)
+                        continue;
+                    var visible = list.Where(i =>
+                        !(hidden?.Contains(i.Id) ?? false) && !(rootOnly?.Contains(i.Id) ?? false)).ToList();
+                    items.AddRange(lane == personAppLane ? WithoutShadowingTabs(items, visible) : visible);
+                }
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
@@ -129,12 +225,26 @@ public static class SettingsMenuItemsExtensions
 
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var viewer = accessService?.Context ?? accessService?.CircuitContext;
-        var isAuthenticated = !string.IsNullOrEmpty(viewer?.ObjectId) && viewer?.IsVirtual != true;
-        if (!isAuthenticated)
+        // The pattern binds the viewer's id for the admin verdict below, so "no authenticated
+        // viewer" and "no id to evaluate" are one test — never a null-forgiven dereference.
+        if (viewer is not { ObjectId: { Length: > 0 } viewerObjectId, IsVirtual: false })
             return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
 
         var viewerId = accessService.ViewerId();
         var menuPath = host.Hub.Address.ToString();
+        // 🚨 The admin verdict is bound to the viewer resolved HERE, on the render turn — never
+        // inside the Defer below. The parameterless IsGlobalAdmin() reads the ambient
+        // AccessService context at the moment it is called; inside the Defer that is SUBSCRIBE
+        // time, which on a distributed mesh runs off the viewer's delivery with no context, so the
+        // viewer read as anonymous and AdminOnly never passed.
+        // AdminAppTest.SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery.
+        // 🚨 And it is the ANSWERED verdict, not one seeded false: this lane is combined into a
+        // page that already waits for the viewer's permissions, so a seed painted "not an admin"
+        // into the first frame while the compiled Admin-app tabs (their own verdicts) had already
+        // answered — every seeded Admin-app tab (Invitations, Privacy, Published, Updates, Control
+        // lane, Inbox) missing from the frame an MCP read or a first paint takes.
+        // AdminAppFirstFrameTest.
+        var adminVerdict = AdminAppNodeType.AnsweredAdminVerdict(host.Hub, viewerObjectId);
 
         // Deferred so a hub without a MeshDataSource — where GetMeshNodeStream() throws
         // SYNCHRONOUSLY — surfaces as OnError into the caller's Catch rather than as a throw out
@@ -144,10 +254,121 @@ public static class SettingsMenuItemsExtensions
             var ownNode = host.Workspace.GetMeshNodeStream()
                 .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
             return catalog.Contributions
-                .CombineLatest(ownNode, host.Hub.IsGlobalAdmin().StartWith(false),
+                .CombineLatest(ownNode, adminVerdict,
                     (contributions, node, isAdmin) => UiContributionProjection
                         .ProjectNodeSettingsTabs(contributions, menuPath, node, isAdmin, viewerId));
         });
+    }
+
+    /// <summary>
+    /// The DATA-contributed PERSON-APP tabs: every <see cref="UiContribution"/> in the shared
+    /// catalog declaring <see cref="UiContribution.PersonAppContext"/>, projected through the closed
+    /// gate vocabulary (<see cref="UiContributionProjection.ProjectPersonAppTabs"/>). The caller adds
+    /// this lane on the viewer's own user root only. Fails closed for an anonymous or virtual viewer.
+    ///
+    /// <para><see cref="UiContributionGates.RequireAddressAccess"/> is applied HERE, live: for each
+    /// tab that demands it, the viewer's Read verdict on the embedded address is read
+    /// (<c>CheckPermissionOutcome</c>), folded by <see cref="ApplyAddressAccess"/> — seeded false so a
+    /// pending verdict hides the tab rather than stalling the page — and the tab passes only on a
+    /// GRANTED verdict. An undetermined verdict hides it too, and is logged as a degraded dependency
+    /// rather than read as "not held". That is what makes an in-app extension's tab appear the
+    /// moment the viewer acquires it and disappear when the grant goes — the same stream, no reload.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
+        ContributedPersonAppTabs(LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        if (viewer is not { ObjectId: { Length: > 0 } viewerObjectId, IsVirtual: false })
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+
+        var viewerId = accessService.ViewerId();
+        var userPath = host.Hub.Address.ToString();
+        // Bound on the render turn, never inside the Defer (see ContributedSettingsTabs).
+        var adminVerdict = AdminAppNodeType.LiveAdminVerdict(host.Hub, viewerObjectId);
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.Configuration.PersonAppTabs");
+
+        return Observable.Defer(() =>
+        {
+            var ownNode = host.Workspace.GetMeshNodeStream()
+                .Select(node => (MeshNode?)node)
+                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+            return catalog.Contributions
+                .CombineLatest(ownNode, adminVerdict,
+                    (contributions, node, isAdmin) => UiContributionProjection
+                        .ProjectPersonAppTabs(contributions, userPath, node, isAdmin, viewerId))
+                .Select(projected => ApplyAddressAccess(projected,
+                    address => host.Hub.CheckPermissionOutcome(address, viewerObjectId, Permission.Read),
+                    (address, reason) => logger?.LogWarning(
+                        "Person-app tab hidden: no verdict on Read of '{Address}' for viewer {Viewer} (degraded dependency): {Reason}",
+                        address, viewerObjectId, reason)))
+                .Switch();
+        });
+    }
+
+    /// <summary>
+    /// Folds the live <see cref="UiContributionGates.RequireAddressAccess"/> answers into the
+    /// projected tabs: a tab with no probe passes as is; a probed one passes only on a GRANTED
+    /// verdict for <see cref="Permission.Read"/> on its address. A pending probe hides the tab
+    /// (seeded false). An UNDETERMINED verdict — the fold faulted or never answered — also hides it
+    /// (fail closed), but as the projection of a named outcome, never a swallowed exception: the
+    /// reason goes to <paramref name="onUndetermined"/> so a degraded dependency is logged, not read
+    /// as "the viewer does not hold this extension".
+    /// </summary>
+    /// <param name="projected">The projected tabs with the address each must probe (or null).</param>
+    /// <param name="outcomeOf">The viewer's live Read verdict on an address
+    /// (<c>CheckPermissionOutcome</c>, which classifies faults and silence as undetermined).</param>
+    /// <param name="onUndetermined">Told the address and reason of every undetermined verdict.</param>
+    internal static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> ApplyAddressAccess(
+        IReadOnlyList<(SettingsMenuItemDefinition Tab, string? AccessAddress)> projected,
+        Func<string, IObservable<PermissionCheckOutcome>> outcomeOf,
+        Action<string, string>? onUndetermined = null)
+    {
+        if (projected.Count == 0)
+            return Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>([]);
+        var verdicts = projected.Select(entry => entry.AccessAddress is not { Length: > 0 } address
+                ? Observable.Return(true)
+                : Observable.Defer(() => outcomeOf(address))
+                    .Do(outcome =>
+                    {
+                        if (outcome is { UndeterminedReason: { } reason })
+                            onUndetermined?.Invoke(address, reason);
+                    })
+                    .Select(PassesAddressAccess)
+                    .StartWith(false)
+                    .DistinctUntilChanged())
+            .ToList();
+        return Observable.CombineLatest(verdicts)
+            .Select(passes => (IReadOnlyList<SettingsMenuItemDefinition>)projected
+                .Where((_, i) => passes[i])
+                .Select(entry => entry.Tab)
+                .ToList());
+    }
+
+    /// <summary>The <see cref="UiContributionGates.RequireAddressAccess"/> verdict for one outcome:
+    /// GRANTED Read on the embedded address. Denied and undetermined both hide the tab. Pure.</summary>
+    /// <param name="outcome">The viewer's Read verdict on the address.</param>
+    internal static bool PassesAddressAccess(PermissionCheckOutcome outcome) => outcome.IsGranted;
+
+    /// <summary>
+    /// The contributed person-app tabs that do NOT shadow an established tab: a tab whose id is
+    /// already on the page (a compiled person-app tab such as <c>Sharing</c> or <c>Preferences</c>,
+    /// or a NodeSettings contribution) is dropped, so a package can never swap a surface in under a
+    /// familiar label. Case-insensitive, like the settings routes. Pure.
+    /// </summary>
+    /// <param name="established">The tabs already on the page.</param>
+    /// <param name="contributed">The person-app lane's tabs.</param>
+    internal static IReadOnlyList<SettingsMenuItemDefinition> WithoutShadowingTabs(
+        IReadOnlyList<SettingsMenuItemDefinition> established,
+        IReadOnlyList<SettingsMenuItemDefinition> contributed)
+    {
+        var taken = new HashSet<string>(established.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
+        return contributed.Where(t => taken.Add(t.Id)).ToList();
     }
 
     /// <summary>
@@ -177,9 +398,15 @@ public static class SettingsMenuItemsExtensions
     }
 
     /// <summary>
-    /// Registers the default settings menu items (Metadata, NodeTypes, Files,
-    /// AccessControl, Groups, EffectiveAccess, Appearance).
-    /// Guarded to avoid double registration.
+    /// Registers the default NODE settings tabs — the ones that act on the node whose page this is:
+    /// Metadata, Access Control, Effective Access (check what a person may do on THIS node) and
+    /// Versions on every node, plus Node Types and Groups on a partition root only
+    /// (<see cref="RestrictSettingsTabsToPartitionRoot"/>).
+    ///
+    /// <para>What is deliberately NOT here: <b>Files</b> (the node's ⋯ menu opens the file browser —
+    /// a second copy on the settings page was the same browser under another name) and
+    /// <b>Appearance</b> (the theme is the viewer's own preference, not the node's — it lives in the
+    /// person app's Preferences tab, <see cref="PersonApp"/>). Guarded against double registration.</para>
     /// </summary>
     public static MessageHubConfiguration AddDefaultSettingsMenuItems(
         this MessageHubConfiguration config)
@@ -213,17 +440,6 @@ public static class SettingsMenuItemsExtensions
             { LabelKey = "settings.nodeTypes", GroupKey = "settings.groupManagement" },
 
             new SettingsMenuItemDefinition(
-                Id: SettingsLayoutArea.FilesTab,
-                Label: "Files",
-                ContentBuilder: SettingsLayoutArea.BuildFilesTab,
-                Group: "Management",
-                Icon: FluentIcons.Folder(),
-                Order: 110,
-                Keywords: ["files", "documents", "uploads", "attachments", "content",
-                    "collections", "blobs"])
-            { LabelKey = "settings.files", GroupKey = "settings.groupManagement" },
-
-            new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.AccessControlTab,
                 Label: "Access Control",
                 ContentBuilder: SettingsLayoutArea.BuildAccessControlTab,
@@ -247,26 +463,39 @@ public static class SettingsMenuItemsExtensions
 
             new SettingsMenuItemDefinition(
                 Id: SettingsLayoutArea.EffectiveAccessTab,
-                Label: "Effective Access",
+                Label: "Check access",
                 ContentBuilder: SettingsLayoutArea.BuildEffectiveAccessTab,
                 Group: "Security",
                 Icon: FluentIcons.PersonSearch(),
                 Order: 220,
-                Keywords: ["effective access", "permissions", "test", "user", "check",
+                Keywords: ["effective access", "check access", "permissions", "test", "user", "check",
                     "evaluate", "who can", "audit"])
-            { LabelKey = "settings.effectiveAccess", GroupKey = "settings.groupSecurity" },
-
-            new SettingsMenuItemDefinition(
-                Id: SettingsLayoutArea.AppearanceTab,
-                Label: "Appearance",
-                ContentBuilder: SettingsLayoutArea.BuildAppearanceTab,
-                Icon: FluentIcons.PaintBrush(),
-                Order: 900,
-                Keywords: ["appearance", "theme", "color", "dark mode", "light mode",
-                    "display", "style", "layout"])
-            { LabelKey = "settings.appearance" }
-        );
+            { LabelKey = "settings.effectiveAccess", GroupKey = "settings.groupSecurity" })
+            .AddSettingsMenuItems(new SettingsMenuItemProvider(VersionsTab))
+            // The Space's own management — never offered on the nodes below it.
+            .RestrictSettingsTabsToPartitionRoot(SettingsLayoutArea.NodeTypesTab, SettingsLayoutArea.GroupsTab);
     }
+
+    /// <summary>
+    /// The node's Versions — the history view, embedded — offered only where the Versions area has a
+    /// renderer (it rides the optional <c>MeshWeaver.Graph.Views</c> module; see
+    /// <see cref="MeshNodeLayoutAreas.CanRenderArea"/>, which fails OPEN when the definition cannot say).
+    /// </summary>
+    private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> VersionsTab(
+        LayoutAreaHost host, RenderingContext _)
+        => Observable.Return<IReadOnlyList<SettingsMenuItemDefinition>>(
+            MeshNodeLayoutAreas.CanRenderArea(host.LayoutDefinition, MeshNodeLayoutAreas.VersionsArea)
+                ? [VersionsTabDefinition]
+                : []);
+
+    private static SettingsMenuItemDefinition VersionsTabDefinition { get; } = new(
+        Id: SettingsLayoutArea.VersionsTab,
+        Label: "Versions",
+        ContentBuilder: SettingsLayoutArea.BuildVersionsTab,
+        Icon: FluentIcons.History(),
+        Order: 50,
+        Keywords: ["versions", "history", "restore", "compare", "previous", "undo"])
+    { LabelKey = "menu.versions" };
 }
 
 /// <summary>
@@ -279,3 +508,35 @@ internal record SettingsMenuProviderCollection(
         IEnumerable<SettingsMenuItemProvider> newProviders)
         => new(Providers.Concat(newProviders).ToList());
 }
+
+/// <summary>
+/// Tab ids shown only on a partition root (<see cref="SettingsMenuItemsExtensions.RestrictSettingsTabsToPartitionRoot"/>).
+/// </summary>
+/// <param name="Ids">The root-only tab ids.</param>
+internal sealed record PartitionRootSettingsTabs(System.Collections.Immutable.ImmutableHashSet<string> Ids)
+{
+    /// <summary>No root-only tabs.</summary>
+    public static PartitionRootSettingsTabs Empty { get; } =
+        new(System.Collections.Immutable.ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// Retired tab id → the tab that now carries it (<see cref="SettingsMenuItemsExtensions.AliasSettingsTab"/>).
+/// </summary>
+/// <param name="Map">The aliases.</param>
+internal sealed record SettingsTabAliases(System.Collections.Immutable.ImmutableDictionary<string, string> Map)
+{
+    /// <summary>No aliases.</summary>
+    public static SettingsTabAliases Empty { get; } =
+        new(System.Collections.Immutable.ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase));
+}
+
+/// <summary>The settings page's title (<see cref="SettingsMenuItemsExtensions.WithSettingsTitle"/>).</summary>
+/// <param name="Title">The title function.</param>
+internal sealed record SettingsTitle(Func<LayoutAreaHost, MeshNode?, string?> Title);
+
+/// <summary>
+/// Tab ids a hub's settings page leaves out (<see cref="SettingsMenuItemsExtensions.HideSettingsTabs"/>).
+/// </summary>
+/// <param name="Ids">The hidden tab ids.</param>
+internal sealed record HiddenSettingsTabs(System.Collections.Immutable.ImmutableHashSet<string> Ids);

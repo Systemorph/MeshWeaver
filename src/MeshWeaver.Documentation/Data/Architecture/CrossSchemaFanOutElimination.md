@@ -20,7 +20,7 @@ Every mesh partition (top-level space: `Store`, `Doc`, `rbuergi`, …) is its ow
 `activities`, …). A query whose `path:`/`namespace:` first segment names a partition is **pinned**
 to that one schema. A query with **no** concrete first segment cannot know where its answer lives,
 so `PostgreSqlCrossSchemaQueryProvider` generates **one `UNION ALL` over every row of
-`public.searchable_schemas`** — 188 schemas on memex-cloud as of 2026-08-31 — and pays for all of
+`public.searchable_schemas`** — 188 schemas on the public instance as of 2026-08-31 — and pays for all of
 them regardless of where the rows are.
 
 Routing detail that matters for the census: `PostgreSqlPartitionedMeshQuery.NeedsFanOut` routes
@@ -44,12 +44,12 @@ The mechanism: one 188-schema `UNION ALL` takes heavyweight locks on ~500+ relat
 plus their indexes). A backend has **16 fast-path lock slots**; everything beyond goes through the
 shared lock manager's partition LWLocks. A handful of concurrent fan-outs means thousands of
 colliding lock acquisitions — the LockManager serializes, **and every other query on the database
-queues behind it**, pinned or not. This is why "the portal is completely unresponsive" (memex,
+queues behind it**, pinned or not. This is why "the portal is completely unresponsive" (the control instance,
 2026-08-31 ~18:30Z: 399 SubscribeRequest 60 s timeouts in 40 min, `Store/Plugin` hub starved,
 instance-key resolution failing, `/api/plugins` 503) and "every page has a ~2 s floor" (#2640) are
 **one defect**. Eliminating the fan-outs removes both the direct cost and the collateral.
 
-Loki, memex-cloud, 40 min, capped sample: **2 583 × `[CrossSchema] SLOW`** — `mesh_nodes` ~1.7 s,
+Loki, the public instance, 40 min, capped sample: **2 583 × `[CrossSchema] SLOW`** — `mesh_nodes` ~1.7 s,
 `access` ~1.9 s, `notifications` ~2.0 s (2 286–4 203 rows), `threads` — each "188 of 188 partition
 schema(s)".
 
@@ -60,7 +60,7 @@ schema(s)".
 | 1 | **Notification bell + panel** — `NotificationCenter.razor` / `NotificationCenterPanel.razor` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Portal`) | was `nodeType:Notification sort:CreatedAt-desc` — unanchored, unbounded, LIVE | `notifications` | **DONE** — [Addressed Notifications](/Doc/Architecture/AddressedNotifications) (#3156/#3216/#3238). Two pinned legs, `namespace:{viewer}/_Notification` and (global admins only) `namespace:Admin/_Notification`; the grace-list line is deleted |
 | 2 | **Security fold globals** — `SecurityQueries.Roles` / `.Memberships` / `.GatedNodes(type)` (per gated type!) via `PermissionEvaluator` | `nodeType:Role scope:subtree … complete`, `nodeType:GroupMembership …`, `nodeType:{gated} …` | `mesh_nodes` | **To eliminate** — see plan 2 |
 | 3 | **Root-scope grants/policies** — `SecurityQueries.RootAssignments` / `.RootPolicy` | `namespace:_Access nodeType:AccessAssignment …` / `path:_Policy nodeType:PartitionAccessPolicy …` | `system_access.access` / — | **Done** 2026-09-02 (#2194) — the grants leg never fanned out (the router pins `_Access` to its registered schema); the policy leg was `namespace: id:_Policy`, path-less, and DID fan out 179×/5 min for a row that cannot exist on Postgres — now read by path, see below |
-| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): memex-cloud's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here. **Closed 2026-09-19**: the shape was not reported once in 12 days (0 of 114 quoted samples) and the whole log site went quiet at 05:15:30Z — see the resolution note below |
+| 4 | `node_type ILIKE $1` wildcard — **named**: MeshWeaver.SocialMedia's `ScheduledPostWatcher` (the scheduled-post watch, not the `PostStatsRefresher`/`PastPostIngestJob` the incident guessed) | was `nodeType:*Post select:…content,lastModifiedBy`, path-less | `mesh_nodes` | **Anchored** 2026-09-07 (`MeshWeaver.SocialMedia@e11bd39`, #3545) — `ScheduledPostWatcher.PostsQuery(partition)` reads `namespace:{partition} scope:descendants nodeType:*Post …`, one query per publishing partition, and its armed-timer listing is path-anchored too. **Package delivered** (measured 2026-09-16): the public instance's `Plugins/SocialMedia` package reads `1.1.13` / `moduleVersion 74a3ad3c14fa15da` — the lock at `MeshWeaver.SocialMedia@5d0be6e` (2026-09-12), a descendant of the anchoring commit, whose own lock was `1.1.8` / `18e38b37eb61779d`. Whether every pod LOADED that module build is a `[ModuleLoad]` log read, not taken here. **Closed 2026-09-19**: the shape was not reported once in 12 days (0 of 114 quoted samples) and the whole log site went quiet at 05:15:30Z — see the resolution note below |
 | 5 | `Admin/Menu/{X}` per-render route misses | point probes | `mesh_nodes` | **Fixed** 2026-08-29 (`83b1892be`, anchored existence query) |
 | 6 | **Hosting fleet pages + build broadcaster** (MeshWeaver.Plugins) — `HostingAdminLayoutAreas.Snapshot` (nine call sites on the Fleet and Fleet Console pages), `FleetConsoleLogic.*Query`, `PlatformBuildInboxWatcher.DeploymentsQuery` | was `nodeType:Hosting/Deployment[ scope:subtree]` and four siblings, bare | `mesh_nodes` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — a deployment record lives wherever its owner lives, so the set of partitions IS the answer: `MeshWideQuery.Declare`/`OfType`. On a refusing host the bare form faulted and the snapshot rendered an EMPTY fleet |
 | 7 | **Portal search box** (MeshWeaver.Plugins) — Blazor `MeshSearch`, the unbound `SearchBoxView`, portal-next `SearchBar` | was `source:accessed scope:descendants … context:search limit:N` and `*{text}* scope:descendants context:search is:main limit:50`, bare, per debounced keystroke | `mesh_nodes` + `user_activities` | **Declared** 2026-09-15 (MeshWeaver.Plugins#1918, #3545) — it searches everything the viewer can read; RLS still narrows the union. Cheaper still: narrow the accessed leg to the partitions the viewer's UserActivity rows name |
@@ -90,7 +90,7 @@ row-4 shape:
   (`nodeType:Hosting/Deployment scope:subtree -status:Decommissioned select:path,id limit:500`).
 - 2 are a bare `nodeType:Hosting/Deployment`.
 - 1 is an operator `search` (`name:*Social* …`). #4274 refuses that shape, but the incident's
-  namespace is memex-cloud, whose image (core `c84c6c05`) predates that change.
+  namespace is the public instance's, whose image (core `c84c6c05`) predates that change.
 
 None of the 75 lines the bot quoted in its 25 reopen comments since 2026-09-12 is `nodeType:*Post`
 either. Ten samples out of thousands cannot prove that one caller has gone quiet, and a pod that
@@ -111,7 +111,7 @@ the FleetWatch roster query, 10 a bare `nodeType:Hosting/Deployment`, 8 others, 
 portal began re-addressing reports) a burst would have advanced that node, after it a successor node
 with this category would exist, and `content.category:*PartitionedMeshQuery*` finds none —
 `count: 2`, `truncated: false`, `coverage.partitions: ["admin"]`, this node plus the site's bodyless
-twin. Ingest liveness over the same window is evidenced by memex-cloud lines *captured* at 06:30:42Z
+twin. Ingest liveness over the same window is evidenced by the public instance's lines *captured* at 06:30:42Z
 and 08:54:16Z. So zero unanchored fan-out lines of any shape on that portal for ~14 h.
 
 🚨 **And the prediction this page recorded — "once the watcher rolls, per-caller ids appear" — is
@@ -139,11 +139,11 @@ They are now per-PARTITION (`path:{partition} scope:descendants …`), which is 
 still fan out, and [Unanchored Security Reads](/Doc/Architecture/UnanchoredSecurityReads) says why
 they must.
 
-### The 2026-09-02 census — memex-cloud on ci.7616, after #3125 (#2194)
+### The 2026-09-02 census — the public instance on ci.7616, after #3125 (#2194)
 
 Maintainer directive (2026-09-02 19:40Z): *"profile it and improve"* — the portal was still slow
 after rolling to ci.7616, which carries #3125's per-partition fold. Measured on the new pods: the
-portal pods were **light (0.1–1.3 cores each)** while Azure Postgres `memexaks-pg`
+portal pods were **light (0.1–1.3 cores each)** while the Azure Postgres flexible server
 (Standard_D8ds_v5) ran at **94–98 % CPU with 225–292 active connections**; `[CrossSchema] SLOW`
 averaged **4.0 s (max 9.8 s), 2 917 lines in five minutes across 8 pods**. So the bottleneck had
 moved entirely into the database, and the fan-outs were what it was doing. The shapes, by count in
@@ -308,7 +308,7 @@ rows, and the panel's grouping (it already groups by source path, which survives
 
 🚨 **This plan is now worked out in full, with the write-side measurement it was missing:
 [Addressed Notifications](../AddressedNotifications) (#3156).** What it adds — the live distribution
-(of the newest 200 notifications on memex-cloud, 124 are plugin-update notices under
+(of the newest 200 notifications on the public instance, 124 are plugin-update notices under
 `Plugins/{pkg}`, 60 are startup-import failures under a space, 12 are thread completions under a
 thread's *context* partition, and **six** are in a user's own partition), the fact that
 `Notification` has **no** `SatelliteAccessRule` so visibility is path-based and not MainNode-derived,

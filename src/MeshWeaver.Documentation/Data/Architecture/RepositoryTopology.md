@@ -44,7 +44,7 @@ unchanged, for a second deployment?**
   one environment. They are the shared catalog, and duplicating them into a config repo is how two
   copies drift and the next reader follows whichever they happened to open.
 - **No → it is config, and it goes in `Memex`.** The per-environment overlays
-  (`deployments/aks/{env}/values.{env}.public.yaml` for `memex` and `memex-cloud`, plus the
+  (`deployments/aks/{env}/values.{env}.public.yaml` for each instance, plus the
   layered `gate`/`ha`/`replica` values and the Key-Vault "vault half" of secrets merged at deploy)
   are the *only* thing that differs between one instance and the next.
 
@@ -56,13 +56,13 @@ logic is not** — that logic belongs in `MeshWeaver.Plugins`, with the config r
 
 `MeshWeaver.Plugins` is **private**. The rule that follows is absolute:
 
-> **Access to private catalog content is granted *via* the registry instance
-> (`memex.meshweaver.cloud`) — never by handing a consumer direct GitHub credentials to the private
+> **Access to private catalog content is granted *via* the plugin registry instance
+> — never by handing a consumer direct GitHub credentials to the private
 > repo.**
 
 This is not a new mechanism; it is the [Plugin Registry](/Doc/Architecture/PluginRegistry) model
 applied as a general principle rather than only to plugin installs. **One** instance —
-`memex.meshweaver.cloud` — holds the source GitHub credential, reads the private
+the plugin registry instance — holds the source GitHub credential, reads the private
 [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo, and **re-serves** its contents over an
 authenticated HTTP surface. Every other installation consumes through the registry, presenting an
 instance key, and never touches git. The credential is **encapsulated in the registry**, exactly like

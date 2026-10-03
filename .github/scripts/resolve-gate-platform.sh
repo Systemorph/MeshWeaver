@@ -13,18 +13,16 @@
 #              The tester's /app and the portal's /app are already on the node; the shard runs the
 #              tester as a PROCESS on the runner's .NET and needs no Docker daemon, no registry
 #              credential and no pull.
-#   container  `<volume-root>` does not exist — a GitHub-hosted `ubuntu-latest` runner, which has a
-#              Docker daemon and no such mount. The shard pulls both images and runs the tester in
-#              a container, exactly as the lane did before #4113.
+#   container  `<volume-root>` does not exist, OR it has a complete tester set paired with a
+#              different valid portal digest. The shard pulls BOTH run-pinned images by digest and
+#              runs the tester in a container. A pair miss needs a Docker-capable runner.
 #
-# 🚨 THERE IS NO FALLBACK BETWEEN THEM, and that is the whole point. Once the mount is there, every
-# failure below is RED and NAMES `ci-platform-refresh`; a set that is absent, half-written or paired
-# with another portal must never degrade into `docker pull`. A silent fallback would turn "the
-# refresh job has been dead for a day" into "the gate is a bit slower today", which is precisely the
-# class of failure this lane exists to refuse. The mount's presence is a reliable signal rather than
-# a guess: it is a Kubernetes volumeMount in the ARC scale sets' pod template, so it is there on
-# every runner pod of both sets and on no GitHub-hosted runner (`/opt` is EMPTY in
-# ghcr.io/actions/actions-runner:2.337.0 — measured 2026-09-12).
+# 🚨 A missing, half-written or corrupt set stays RED and names `ci-platform-refresh`; a silent
+# fallback there would hide a dead refresh job. A COMPLETE set with a DIFFERENT valid portal digest
+# is a distinct fact: the cache directory is keyed only by tester digest, while a portal-only build
+# can advance the portal digest without moving the tester. The run's PAIR is absent from that cache,
+# so the loud container path takes both resolved images by exact digest. The mounted pair is never
+# passed as the run's pair, and a corrupt identity cannot take this path.
 #
 # THE LAYOUT it reads (owned by ci-platform-refresh.py; Azure Files forbids `:` in a name, so the
 # directory is the digest with the first `:` turned into `-`):
@@ -87,7 +85,7 @@ emit() {  # <key> <value>
 #     .github/scripts/resolve-gate-platform.sh --self-test
 # 🚨 THE "COULD THIS ASSERTION FAIL?" PROOF. Every refusal below is exercised against a synthetic
 # volume, and each is asserted to (a) exit non-zero, (b) NAME the refresh job, and (c) emit no
-# `mode=container` — i.e. never degrade into a pull. Deleting any one guard from the body makes
+# `mode=container`. The valid pair miss is tested separately. Deleting a guard from the body makes
 # this self-test RED; that is the property that makes the guard worth having. Run on every platform
 # PR (dotnet-test.yml preflight) beside compose-gate-host.sh's.
 if [ "${1:-}" = "--self-test" ]; then
@@ -167,8 +165,17 @@ if [ "${1:-}" = "--self-test" ]; then
   # 3e. No surface manifest in platform-refs/ — a host that resolves the fallback identity.
   noman="$tmp/nomanifest"; mdir="$(make_set "$noman" "$D1" "$P1")"; rm "$mdir/platform-refs/meshweaver-surface.manifest"
   refuses "a set whose platform-refs/ has no meshweaver-surface.manifest" "$noman" "$D1" "$P1"
-  # 3f. The set pairs a DIFFERENT portal than the caller pinned — gating against another platform.
-  refuses "a set paired with another portal digest" "$good" "$D1" "$P2"
+  # 3f. A valid cached pair for the same tester, but a different portal, is a cache MISS. The
+  #     container path takes both caller digests; it never reads the cached portal as this one.
+  out="$("$self" --volume-root "$good" --tester-digest "$D1" --portal-digest "$P2" 2>&1)" \
+    || fail "a valid different portal digest must select the exact-pair container path (got: $out)"
+  grep -q '^mode=container$' <<<"$out" || fail "a pair miss must select container mode (got: $out)"
+  grep -q 'pair cache miss' <<<"$out" || fail "a pair miss must explain the cache key (got: $out)"
+  grep -q '^tester_app=' <<<"$out" && fail "a pair miss must not export the cached tester path (got: $out)"
+  # Corrupt provenance and partial sets remain refusals even when the caller wants another portal.
+  badportal="$tmp/badportal"; make_set "$badportal" "$D1" "not-a-digest" > /dev/null
+  refuses "a cached portal digest that is not valid" "$badportal" "$D1" "$P2"
+  refuses "a half-installed set paired with another portal" "$half" "$D1" "$P2"
   # 3g. `current` is absent and no pin was given — nothing names a set.
   nocur="$tmp/nocurrent"; make_set "$nocur" "$D1" "$P1" > /dev/null; rm "$nocur/current"
   refuses "an empty pin with no <root>/current" "$nocur" "" ""
@@ -293,7 +300,7 @@ number written here goes stale the first time it moves (got: $o)"
   grep -q 'either older than those three or has never been sealed' <<<"$o" \
     && fail "the old FALSE DICHOTOMY is back — it excluded the case that actually occurs (got: $o)"
 
-  echo "resolve-gate-platform.sh self-test: OK (1 container case, 2 volume cases, 8 refusals, 3 usage refusals, 7 wait cases)"
+  echo "resolve-gate-platform.sh self-test: OK (2 container cases, 2 volume cases, 9 refusals, 3 usage refusals, 7 wait cases)"
   exit 0
 fi
 
@@ -332,10 +339,8 @@ case "$WAIT_SECONDS" in
 esac
 [ -n "$VOLUME_ROOT" ] || die "--volume-root is required — it is the path the runner pod mounts the CI platform share at (/opt/platform)"
 for d in "$TESTER_DIGEST" "$PORTAL_DIGEST"; do
-  case "$d" in
-    "" | sha256:[0-9a-f][0-9a-f]* ) : ;;
-    *) die "'$d' is not a digest — pass 'sha256:<hex>' or nothing (allow-unpinned)" ;;
-  esac
+  [ -z "$d" ] || [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "'$d' is not a sha256 digest — pass 'sha256:<64 lowercase hex>' or nothing (allow-unpinned)"
 done
 
 # ── the mode ────────────────────────────────────────────────────────────────────────────────
@@ -345,8 +350,8 @@ if [ ! -d "$VOLUME_ROOT" ]; then
   exit 0
 fi
 
-# From here on the mount IS there, so every failure is RED and names the refresh job. Nothing below
-# may end in `mode=container`.
+# From here on the mount IS there. Only a COMPLETE set paired with another valid portal digest
+# may select container mode; every absent, incomplete or corrupt set remains RED.
 resolved="$TESTER_DIGEST"
 if [ -z "$resolved" ]; then
   # allow-unpinned: the lane follows the tag, so the volume follows `current` — read ONCE, because
@@ -518,15 +523,21 @@ fi
 set_name="$(sed -n 's/.*"set"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
 core_sha="$(sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
 portal_on_volume="$(sed -n 's/.*"portal-image-digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
+tester_on_volume="$(sed -n 's/.*"image-digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SET_DIR/platform.json" | head -1)"
 
-# 🚨 The set is installed as a PAIR, so pinning the tester digest already picks the portal — but a
-# caller pins both, and the two pins disagreeing is a caller error worth naming here rather than
-# discovering as a framework-identity mismatch two steps later. When the volume's platform.json
-# records no portal digest (a set laid down by the manual bootstrap rather than by the refresh),
-# say so: the pairing then rests on the lane's own framework-identity assertion, which compares the
-# two /app trees' assemblies and is STRICTLY STRONGER than this string compare. It always runs.
+# 🚨 The cache directory is keyed by TESTER digest alone, although a portal-only build can advance
+# the portal digest independently. The run pins both; a different VALID cached portal is a missing
+# pair, not evidence that either pin is wrong. A corrupt cached digest or a tester provenance that
+# disagrees with the complete marker is still RED. When platform.json records no portal digest (a
+# manual bootstrap), the lane's own framework-identity assertion compares the two /app trees.
 if [ -n "$PORTAL_DIGEST" ] && [ -n "$portal_on_volume" ] && [ "$PORTAL_DIGEST" != "$portal_on_volume" ]; then
-  die "the set on the volume for tester ${resolved} was installed paired with portal ${portal_on_volume}, but this caller pinned platform-image-digest ${PORTAL_DIGEST}. Gating the caller's portal against another set's tester is the mixed pair this lane refuses by name. Pin BOTH digests from ONE CD wave; $REFRESH_JOB installs them as a pair, so the volume's pairing is the authoritative one."
+  [[ "$portal_on_volume" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || die "'$SET_DIR/platform.json' names an invalid portal-image-digest '$portal_on_volume' — the cache cannot establish its provenance. $REFRESH_JOB must repair it."
+  [ "$tester_on_volume" = "$resolved" ] \
+    || die "'$SET_DIR/platform.json' names tester image-digest '${tester_on_volume:-missing}' but the complete set is for ${resolved} — corrupt provenance. $REFRESH_JOB must repair it."
+  echo "::warning title=Platform pair cache miss::the COMPLETE set for tester ${resolved} is cached with portal ${portal_on_volume}, but this run resolved portal ${PORTAL_DIGEST}. The cache key contains only the tester digest, so a portal-only rebuild leaves this run's pair absent. Pull BOTH run-pinned images by digest; never compile or test against the cached portal."
+  emit mode container
+  exit 0
 fi
 if [ -z "$portal_on_volume" ]; then
   echo "::notice::'$SET_DIR/platform.json' records no portal-image-digest (a set laid down before $REFRESH_JOB owned the install), so the caller's platform-image-digest could not be cross-checked here. The pairing is still asserted — by the framework-identity step below, which compares the two /app trees themselves."

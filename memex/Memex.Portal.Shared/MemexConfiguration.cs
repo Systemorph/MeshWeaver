@@ -285,7 +285,7 @@ public static class MemexConfiguration
             builder.ConfigureServices(services => services.AddPrebuiltBundleRetention(configuration));
             // On a control instance the Deployment records' pins and the registered instances'
             // reports are references too: a remote instance pulls exactly its own identity's seal
-            // over the HTTP prebuilt surface, however old that build is (pearl on 3.0.0-ci.8080).
+            // over the HTTP prebuilt surface, however old that build is (fabrikam on 3.0.0-ci.8080).
             builder.ConfigureServices(services => services.AddSingleton<PinnedPlatformReferenceSource>(
                 sp => DeploymentPinnedReferences.SourceFor(sp)));
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
@@ -790,6 +790,20 @@ public static class MemexConfiguration
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
                 .AddWebhookInbox()
+                // Secrets a global admin may ENTER in the portal instead of an operator minting
+                // them in a vault (Doc/Architecture/InstanceSecrets). Each slot is a key the code
+                // below READS: the self-updater's signing key (GENERATED at /Admin/Settings/ControlLane,
+                // on a target instance) and a deployment's own announcement key as the control inbox
+                // verifies it (REGISTERED at /Hosting/Integrations/Deployment/{id}, on the control
+                // instance, from the value the deployment generated). The fleet-wide
+                // inbox secret itself is NOT a slot, so the portal can never replace it.
+                .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.SecretKey)
+                .AddInstanceSecretSlot(SelfUpdate.SelfUpdateHandover.LocalSecretKey + ":*")
+                // A package update held on its declared minMeshVersion floor is ticketed to the
+                // control instance as ONE blocking event, on the self-update announcement's own
+                // channel (policy package-min-mesh-version) — never a silent hold.
+                .ConfigureServices(services => services
+                    .AddSingleton<MeshWeaver.PluginCatalog.IPackageHoldDispatch, SelfUpdate.PackageHoldHandover>())
                 // The control→instance lane (Doc/Architecture/ControlLane): POST /api/control-lane
                 // on a TARGET, and the signing half on the control instance. Registered on every
                 // portal and armed on none until ControlLane:Key + Hosting:Deployment are set.
@@ -974,10 +988,13 @@ public static class MemexConfiguration
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
                         // The course-shell areas (StartExercise / GoToMyCopy / CourseNav / Learn)
+                        // The three PERSONAL tabs — API tokens, Connected instances (register your
+                        // own MeshWeaver installation, get it an instance key) and Notifications
+                        // (bell/email per category) — ride every node hub but are tabs of the PERSON
+                        // APP (PersonApp.AddPersonAppTab): they show on the viewer's own
+                        // /{user}/Settings only, and an old link on any other page redirects there.
                         .AddApiTokensSettingsTab()
-                        // Register your own MeshWeaver installation and get it an instance key.
                         .AddInstancesSettingsTab()
-                        // Per-user "Notifications" tab: choose bell/email per notification category.
                         .AddNotificationsSettingsTab()
                         // The AI top-bar menu entry ("New thread") is GUI: its action is a click-time
                         // sentinel resolved in the circuit, so the portal GUI module registers it via
@@ -994,7 +1011,11 @@ public static class MemexConfiguration
                         // layout areas; the menu entries are seeded UiContribution nodes
                         // (AddPlatformSettingsTabContributions on the mesh builder above).
                         .AddPlatformSettingsTabAreas()
-                        // GitHub Sync tab — shows only on Space nodes (self-filtered).
+                        // The Admin app's landing tab (/Admin): this instance's facts + About.
+                        // Inert on every hub but the Admin app's (AdminAppNodeType.AddAdminAppTab).
+                        .AddAdminAppOverviewTab()
+                        // GitHub Sync tab — the Space ROOT's settings only (self-filtered on Space,
+                        // RestrictSettingsTabsToPartitionRoot for the descendants).
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.
                         .AddGitHubIssuesTab()

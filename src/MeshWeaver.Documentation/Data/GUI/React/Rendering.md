@@ -139,7 +139,7 @@ Browsers can't open the mesh's bidirectional gRPC `Open` stream (no HTTP/2 duple
 import { connect } from "@meshweaver/client-web";
 import { GrpcAreaSource, MeshAreaView } from "@meshweaver/react";
 
-const conn = await connect("https://memex.meshweaver.cloud", { token: "mw_..." });
+const conn = await connect("https://portal.example.com", { token: "mw_..." });
 const source = new GrpcAreaSource(conn, "ACME/MyApp", { area: "Overview" });
 void source.start();   // folds the live area stream into {areas, data}
 // <MeshAreaView source={source} rootArea="Overview" />

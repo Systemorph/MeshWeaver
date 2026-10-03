@@ -30,8 +30,8 @@ public class AccessGrantNotifierGranterTest
     [Fact]
     public void FallsBackToUserFullName_WhenNodeNameIsJustTheObjectId()
     {
-        var node = Granter("obj-123", name: "obj-123", content: new User { FullName = "Markus K." });
-        Assert.Equal("Markus K.", AccessGrantNotifier.ResolveGranterName(node, "obj-123", Options));
+        var node = Granter("obj-123", name: "obj-123", content: new User { FullName = "Alex K." });
+        Assert.Equal("Alex K.", AccessGrantNotifier.ResolveGranterName(node, "obj-123", Options));
     }
 
     [Fact]

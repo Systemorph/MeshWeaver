@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using MeshWeaver.Mesh.Persistence;
@@ -100,10 +101,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogDebug("Assembly cache miss for {NodeTypePath}@v{Version} — no dir", nodeTypePath, version);
             return Observable.Return<string?>(null);
         }
-        var candidate = new DirectoryInfo(dir)
-            .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
-            .OrderByDescending(f => f.LastWriteTimeUtc)
-            .FirstOrDefault();
+        var candidate = NewestOpenable(dir, nodeTypePath, version);
         if (candidate is null)
         {
             logger.LogDebug("Assembly cache miss for {NodeTypePath}@v{Version}", nodeTypePath, version);
@@ -175,10 +173,10 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         //      path so the loaded ALC keeps serving consistent bytes.
         //
         // Lookup mirrors TryGetAssemblyPath above (newest v{version}-*.dll).
-        var existing = new DirectoryInfo(dir)
-            .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
-            .OrderByDescending(f => f.LastWriteTimeUtc)
-            .FirstOrDefault();
+        // 🚨 An existing name that cannot be OPENED does not win (#4528): returning it would hand
+        // the compile a dead path, and — since first-write-wins keeps returning it — no recompile
+        // of this version could ever replace it.
+        var existing = NewestOpenable(dir, nodeTypePath, version);
         if (existing is not null)
         {
             var existingRel = Path.GetRelativePath(rootDirectory, existing.FullName).Replace('\\', '/');
@@ -241,6 +239,77 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         EvictSupersededVersions(dir, keep: dllPath);
 
         return new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath);
+    }
+
+    /// <summary>
+    /// 🚨 The newest <c>v{version}-{tag}-*.dll</c> this process can actually OPEN — never merely
+    /// the newest one the directory LISTS (MeshWeaver#4528, #3876).
+    ///
+    /// <para><b>Listed is not openable on the share.</b> <c>/data/assembly-cache</c> is an Azure
+    /// Files (SMB) volume shared by every replica. An evicted dll that another replica still holds
+    /// open — an <c>AssemblyLoadContext</c> maps the file it loaded for as long as it lives — is
+    /// only marked delete-pending: it stays in every directory listing, and every new open of it
+    /// fails with ENOENT until the last handle closes, which can be hours. Before this, the
+    /// lookup handed such a name out as a hit. The bundle route then failed at its open, every
+    /// time, for the same file (memex-cloud 2026-09-26: <c>MyAi_Panel/v751-…</c> four requests in
+    /// 30 s, <c>SocialMedia_Profile/v1413-…</c>, <c>LinkedIn_TileMigration/v643-…</c>) — a 500
+    /// until #5769 and a 503 + <c>Retry-After</c> since, which every consumer retried to
+    /// exhaustion on every pass (control instance, <c>Admin/_LogIncident/613ea204988e9e23</c>,
+    /// 09-26 → 09-30). A condition that lasts as long as a handle on another pod is not a
+    /// transient, and no retry budget can outlast it.</para>
+    ///
+    /// <para>So the lookup proves the candidate: a name that cannot be opened is skipped (and
+    /// said so, once per lookup), an openable sibling of the same version is taken, and none is a
+    /// MISS — which is recoverable by construction: the bundle route counts the type as a miss and
+    /// the consumer compiles it; activation recompiles; <see cref="Put"/> writes fresh bytes.</para>
+    ///
+    /// <para>🚨 Only ABSENCE is classified. A file that is present and unreadable for any other
+    /// reason (denied, locked, a share fault) is a real defect and keeps surfacing.</para>
+    /// </summary>
+    /// <param name="dir">The type's directory.</param>
+    /// <param name="nodeTypePath">The type's mesh path, for the log line.</param>
+    /// <param name="version">The MeshNode version sought.</param>
+    /// <returns>The newest openable candidate, or null when there is none.</returns>
+    private FileInfo? NewestOpenable(string dir, string nodeTypePath, long version)
+    {
+        var unopenable = ImmutableList<string>.Empty;
+        FileInfo? found = null;
+        foreach (var candidate in new DirectoryInfo(dir)
+                     .EnumerateFiles($"v{version}-{FrameworkTag}-*.dll")
+                     .OrderByDescending(f => f.LastWriteTimeUtc))
+        {
+            if (CanOpen(candidate.FullName))
+            {
+                found = candidate;
+                break;
+            }
+            unopenable = unopenable.Add(candidate.Name);
+        }
+
+        if (!unopenable.IsEmpty)
+            logger.LogWarning(
+                "Assembly cache: {NodeTypePath}@v{Version} — {Count} listed file(s) cannot be opened "
+                + "(evicted, still held open elsewhere on the share): {Names}. Not a hit; {Outcome}",
+                nodeTypePath, version, unopenable.Count, string.Join(", ", unopenable),
+                found is null ? "treated as a MISS" : $"serving {found.Name}");
+        return found;
+    }
+
+    /// <summary>Whether <paramref name="path"/> opens for reading. Absence (ENOENT — a vanished
+    /// file, a dangling link, a delete-pending name on SMB) answers false; every other fault
+    /// propagates.</summary>
+    private static bool CanOpen(string path)
+    {
+        try
+        {
+            using var handle = File.OpenHandle(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -376,10 +445,51 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// </summary>
     public static readonly string FrameworkTag = FrameworkBuildIdentity.FrameworkVersion[..8];
 
+    /// <summary>
+    /// The name a fresh publication of <paramref name="bytes"/> lands under: the content hash — or,
+    /// when a dead name already holds that exact spelling, the first name of a deterministic
+    /// sequence that does not (#4528).
+    ///
+    /// <para>🚨 A deterministic recompile of the same version produces the SAME bytes and therefore
+    /// the same content-hash name. If that name is listed but unopenable (an evicted dll another
+    /// replica still holds open on the share — see <see cref="NewestOpenable"/>), publishing onto it
+    /// fails the way every open of it fails, and the miss → recompile → <see cref="Put"/> recovery
+    /// would land exactly where it started. So a dead spelling is stepped past: the next candidate
+    /// hashes the bytes with an ordinal appended, which keeps the name in the 12-hex shape
+    /// <see cref="AssemblyCacheFileName.Parse"/> attributes (so eviction still collects it). The
+    /// hash is a tie-breaker, never verified against content. The sequence ends at the first name
+    /// that is absent or openable — there are only finitely many dead names in a directory.</para>
+    /// </summary>
     private string GetDllPath(string nodeTypePath, long version, byte[] bytes)
     {
-        var hash = ContentHash(bytes);
-        return Path.Combine(rootDirectory, Sanitize(nodeTypePath), $"v{version}-{FrameworkTag}-{hash}.dll");
+        var dir = Path.Combine(rootDirectory, Sanitize(nodeTypePath));
+        for (var ordinal = 0; ; ordinal++)
+        {
+            var hash = ordinal == 0 ? ContentHash(bytes) : ContentHash(bytes, ordinal);
+            var path = Path.Combine(dir, $"v{version}-{FrameworkTag}-{hash}.dll");
+            if (!IsListed(path) || CanOpen(path))
+                return path;
+            logger.LogWarning(
+                "Assembly cache: {DllPath} is listed but cannot be opened (evicted, still held open "
+                + "elsewhere on the share) — publishing these bytes under another name",
+                path);
+        }
+    }
+
+    /// <summary>Whether the directory LISTS <paramref name="path"/> — a dangling or delete-pending
+    /// name included. Asked of the listing, not of <see cref="File.Exists"/>: that follows the name
+    /// to what it opens, and a name that opens nothing is exactly the one this must see.</summary>
+    private static bool IsListed(string path) =>
+        Path.GetDirectoryName(path) is { } dir
+        && Directory.Exists(dir)
+        && Directory.EnumerateFileSystemEntries(dir, Path.GetFileName(path)).Any();
+
+    private static string ContentHash(byte[] bytes, int ordinal)
+    {
+        var salted = new byte[bytes.Length + sizeof(int)];
+        bytes.CopyTo(salted, 0);
+        BitConverter.GetBytes(ordinal).CopyTo(salted, bytes.Length);
+        return ContentHash(salted);
     }
 
     private static string ContentHash(byte[] bytes)

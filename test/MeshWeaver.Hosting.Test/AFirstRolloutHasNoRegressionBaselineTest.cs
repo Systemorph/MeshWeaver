@@ -8,7 +8,7 @@ namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
 /// 🚨 <b>The FIRST rollout of a brand-new instance has nothing to protect</b> — measured on
-/// <c>pearl.meshweaver.cloud</c>, 2026-09-15/16. A freshly provisioned portal served <c>503</c> at
+/// <c>fabrikam.example.com</c>, 2026-09-15/16. A freshly provisioned portal served <c>503</c> at
 /// the edge for nine hours with a RUNNING pod:
 ///
 /// <code>

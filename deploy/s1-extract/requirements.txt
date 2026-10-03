@@ -1,0 +1,6 @@
+# Runtime: GLiNER on ONNX Runtime behind FastAPI. torch is the gliner package's import dependency
+# (installed CPU-only in the Dockerfile); inference itself runs on onnxruntime.
+gliner==0.2.29
+onnxruntime==1.23.2
+fastapi==0.118.0
+uvicorn==0.37.0

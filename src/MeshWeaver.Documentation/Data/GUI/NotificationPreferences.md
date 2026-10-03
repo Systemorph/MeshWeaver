@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Managing Your Notification Preferences"
-Abstract: "Choose, for each kind of notification — approvals, inbox, triage, access grants, finished threads, system — whether it reaches you in the in-app bell, in Microsoft Teams and by email. By default everything reaches the bell and Teams."
+Abstract: "Choose, for each kind of notification — approvals, inbox, triage, access grants, finished threads, system — whether it reaches you in the in-app bell, in Microsoft Teams and by email — and, per installed app, whether it may notify you at all. By default everything reaches the bell and Teams; an app you have not configured delivers its own notifications quietly, to the bell only."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#f9a825'/><path d='M12 4a5 5 0 0 0-5 5c0 5-2 6-2 6h14s-2-1-2-6a5 5 0 0 0-5-5z' fill='white'/><path d='M10.5 18a1.5 1.5 0 0 0 3 0' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round'/></svg>"
 Thumbnail: "images/notifications.svg"
 Authors:
@@ -47,6 +47,26 @@ When an instance action waits for a second administrator, every administrator wh
 an **Approvals** notification with a link to the action — so with the default settings it reaches you
 in Teams even though you never open that portal's bell.
 
+## Per app — like on your phone
+
+Below the kinds, **Settings → Notifications** lists every **app** you have installed, each with its own
+switches:
+
+| Switch | What it does |
+|---|---|
+| **Allow notifications** | Off, and nothing from this app reaches you — not the bell, not Teams, not email. |
+| **Deliver quietly (bell only)** | While on, the app's own notifications land in the bell and nowhere else. |
+| **Notification bell / Microsoft Teams / Email** | Which channels this app may use at all. |
+
+**An app you have not configured delivers quietly.** It can put its own notifications in your bell, but it
+never messages you in Teams or by email until you switch *Deliver quietly* off — the same as an app on a
+phone that has not asked you yet. What the platform itself tells you about something in an app, such as an
+approval waiting for you, still follows the kind's settings above, unless you restrict or silence that app
+here.
+
+An app's switches can only take channels away: if a kind of notification is switched off above, no app
+switch turns it back on.
+
 ## Rules — escalation decided by an assistant
 
 **Rules** are the advanced layer on top: plain-English intent a small triage assistant applies to decide
@@ -76,6 +96,8 @@ If you'd rather manage them directly, the settings are nodes under your own spac
 
 - **Channels per kind:** `{you}/_Settings/Notifications/{kind}` (`approvals`, `inbox`, `triage`,
   `accessGranted`, `chatReady`, `system`) — `bell`, `teams`, `email`.
+- **Per app:** `{you}/_Settings/Notifications/Apps/{app}` — `allowNotifications`, `deliverQuietly`,
+  `bell`, `teams`, `email`.
 - **Rules:** `{you}/_NotificationRule/…` — write your intent in `ruleText`; optionally set a structured
   `channel`, plus `enabled` and `order` (lower runs first).
 - **Rule channels:** `{you}/_NotificationChannel/…` — `kind` (`Email` / `Teams`), an optional

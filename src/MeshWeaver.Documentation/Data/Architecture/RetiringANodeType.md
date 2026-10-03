@@ -62,7 +62,7 @@ committed back, not a stale extra (see [Static Repo Import](/Doc/Architecture/St
 
 That second assumption is false, which is why the asymmetry was never the whole story: an IMPORT
 writes those Code nodes too, and the horizon is held while anything is preserved, so the importer
-ended up preserving its own output from itself. Measured on `memex.systemorph.com` 2026-09-08, three
+ended up preserving its own output from itself. Measured on the control instance 2026-09-08, three
 `Crm/Source/Mail*` nodes deleted upstream on 09-06 were kept on exactly this rule.
 
 **The rule now asks WHO wrote it** (`ImportConflictPolicy.IsHumanEdit`): only a write carrying a real
@@ -73,12 +73,12 @@ is preserved exactly as before.
 ## 🚨 A type with instances is HELD, not pruned — since 2026-09-08
 
 The ownership rule above made the definition prunable. The same day showed what pruning it under
-live instances costs: on `memex.systemorph.com` at 20:29:14Z the Crm sync — `Skipped` since 08-30,
+live instances costs: on the control instance at 20:29:14Z the Crm sync — `Skipped` since 08-30,
 so two days behind — delivered the retirement of `Crm/Mail` (Crm `ef12089`, *"retire Crm/Mail into
 Essentials/Email"*, whose message says the one live record is retyped on the portal *before* the
 deploy) before that retype had happened here. `NodeTypeInstanceProbe` found the instance, said so
 (*"Pruned 1 NodeType(s) that still have instances — STRANDED"*), and the prune ran anyway. The record
-`PartnerRe/Esl/DueDiligenceMail` had no per-node hub, and the bake gate refused every rollout on a
+`Globex/Team/DueDiligenceMail` had no per-node hub, and the bake gate refused every rollout on a
 "regression" of a node that no longer existed.
 
 **Now the probe's answer is a decision.** A repository-driven prune — the git sync, the
@@ -89,7 +89,7 @@ has instances:
   elsewhere (`shared=@Other/Source`) belong to the partition's other types and are pruned as the
   repository directs; the held type keeps serving its last usable build.
 - The definition is stamped `pendingRetirement` — *"Retired by Crm import … at …; held for 1
-  instance(s): PartnerRe/Esl/DueDiligenceMail. Retype or delete them and the next sync removes the
+  instance(s): Globex/Team/DueDiligenceMail. Retype or delete them and the next sync removes the
   type."* The activity carries the same as a ⏸ line, and a GitHub sync source writes it to its
   `lastSyncNote`, so the settings tab reads *in-mesh content the repository does not hold*.
 - The run counts the hold as **preserved**, so it is not converged: no marker licences the next

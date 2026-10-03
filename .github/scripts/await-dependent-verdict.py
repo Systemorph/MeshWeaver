@@ -37,6 +37,13 @@ API = "https://api.github.com"
 # 🔒 The ONLY verdict fields that ever reach this PUBLIC log. The verdict is read from a private
 # repository; whatever else it might carry is dropped, not printed.
 PUBLIC_COUNTS = ("selected", "universe", "legs", "drift", "preExisting", "missingEvidence")
+# 🚦 SILENCE IS NOT A VERDICT, AND IT GETS ITS OWN EXIT CODE. Still red — never a pass — but
+# distinguishable from a verdict that says the candidate broke something: the workflow maps this
+# code to its own failing step, and the merge-queue steward reads THAT step as infrastructure (the
+# dependent's legs never got a runner inside the deadline — measured 2026-09-27: legs that ran
+# 5–14 min waited 20–50 min on a shared FIFO label), re-queueing on evidence, capped per head.
+# Every other red (a failure verdict, a mismatched or malformed one, no token) stays exit 1.
+EXIT_NO_VERDICT = 3
 
 
 def public_view(verdict: dict) -> dict:
@@ -194,7 +201,7 @@ def main() -> int:
         print(f"::error::MeshWeaver.Plugins did not answer within {a.deadline_minutes} min ({why}). "
               "Silence is not a pass: the candidate is unverified. Its run is under "
               f"https://github.com/{REPO}/actions/workflows/core-candidate.yml")
-        return 1
+        return EXIT_NO_VERDICT
     ok, text = validate(verdict, a.key, a.candidate, a.base)
     print(text if ok else f"::error::{text}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

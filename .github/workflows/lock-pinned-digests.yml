@@ -40,7 +40,7 @@ name: Lock pinned image digests
 #     🚨 THE SECOND-TO-LAST is the half that was missing until 2026-09-21, and it is why this lane
 #     was red from 2026-09-17: `instances.json`'s `registries` table was checked only for hosts the
 #     fleet pins and this file does not name, never for a line naming a host the fleet no longer
-#     pins. PartnerRe's estate was rebuilt in its own subscription on 2026-09-17, the overlay moved
+#     pins. A client's estate was rebuilt in its own subscription on 2026-09-17, the overlay moved
 #     to the new ACR the same morning, and the declaration stayed on one that no longer exists — a
 #     well-formed entry about nothing, validating green, while the run refused nightly over its
 #     replacement. Both directions now, on the same `--discover`-only denominator the repository
@@ -257,6 +257,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
           MW_ACR_RELEASE_UNPINNED: ${{ vars.MW_ACR_RELEASE_UNPINNED }}
+          MW_ACR_PRIVATE_ROSTER: ${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}
           MW_EVENT: ${{ github.event_name }}
           MW_ACR_LOCK_MODE: >-
             ${{ (github.event_name == 'push' && 'report-only')
@@ -273,6 +274,13 @@ jobs:
                exit 1 ;;
           esac
           echo "mode: $MW_ACR_LOCK_MODE (event: $MW_EVENT)"
+          # A client estate's roster lines are PRIVATE (not in this public repository): the
+          # ACR_RETENTION_PRIVATE_ROSTER secret carries them as JSON of instances.json's shape and
+          # the script merges it over the committed file. Absent, the committed fleet is all there
+          # is — and a client repository the scan reaches reds as undeclared, which is the point.
+          if [ -z "${MW_ACR_PRIVATE_ROSTER:-}" ]; then
+            echo "::notice::ACR_RETENTION_PRIVATE_ROSTER is not set — only the committed roster is declared."
+          fi
           args=(--discover --registry meshweaver)
           if [ "$MW_ACR_LOCK_MODE" = "apply" ]; then
             args+=(--apply)

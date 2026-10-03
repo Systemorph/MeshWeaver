@@ -90,4 +90,25 @@ public interface IVersionQuery
     /// </summary>
     IObservable<MeshNode> WriteVersion(MeshNode node, JsonSerializerOptions options)
         => System.Reactive.Linq.Observable.Return(node);
+
+    /// <summary>
+    /// Removes EVERY recorded version of the node at <paramref name="path"/>, then emits once and
+    /// completes. Called by the storage layer's version writer for a node whose NodeType declares
+    /// <c>NodeTypeDefinition.KeepsHistory = false</c>: after each write (a store that snapshots on
+    /// its own — the Postgres <c>mesh_node_copy_to_history</c> trigger — has already recorded one)
+    /// and after the node is deleted. See <c>Doc/Architecture/MeshNodeVersioning</c> →
+    /// "Types That Keep No History".
+    ///
+    /// <para>🚨 The emitted value is a STATEMENT, never a guess: <c>true</c> means this store holds
+    /// no history for the path any more (it purged it, or it never retains any); <c>false</c> means
+    /// this store CANNOT purge, so whatever it recorded is still there. The default answers
+    /// <c>true</c> only for a store that does not retain history at all
+    /// (<see cref="RetainsHistory"/> = <c>false</c>) and <c>false</c> otherwise — a retaining
+    /// implementation that has not implemented the purge must never be reported as having
+    /// purged.</para>
+    /// </summary>
+    /// <param name="path">The node path whose history is removed.</param>
+    /// <returns>Whether no history remains in this store for <paramref name="path"/>.</returns>
+    IObservable<bool> PurgeVersions(string path)
+        => System.Reactive.Linq.Observable.Return(!RetainsHistory);
 }

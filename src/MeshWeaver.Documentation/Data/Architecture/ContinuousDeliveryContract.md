@@ -36,6 +36,13 @@ those two can never disagree. Both now pass the same, once-resolved plugins sha 
 index that lost a leg still resolves for one architecture, and a swallowed cancellation in
 `Microsoft.NET.Build.Containers` is exactly how a leg goes missing while its job reports success.
 
+The portal's two architecture publishes run in sequence inside its one build job. The .NET
+container target otherwise starts both inner builds in parallel, while their shared project
+references write to the same non-RID `bin/Release/net10.0` directory. In run 36357110477,
+`MeshWeaver.Blazor.Portal` built twice there and `Memex.Portal.Gui` then failed with MSB3030 while
+copying the Portal XML documentation file that had disappeared. `ContainerPublishInParallel=false`
+serializes those inner builds; the other image jobs remain parallel.
+
 A partial set is worse than no set: the self-updater sees a new `memex-portal-ai` version and rolls
 the portal onto it, while the migration image or the bake certification for that commit does not
 exist. That is how a portal increment the bake gate never certified reached production.
@@ -105,20 +112,32 @@ contract.
 ### Rollback by ordering, not by compensation
 
 Tagging five repositories is not one atomic act, and a compensating delete cannot work anyway — for a
-moving pointer like `latest`, untagging *destroys* it rather than reverting it. So `promote` is
-**ordered so that a mid-flight failure is unobservable**:
+moving pointer like `latest`, untagging *destroys* it rather than reverting it. So the writes are
+**ordered so that a mid-flight failure is unobservable**, and since policy
+[`one-promotion-gate`](../PolicyNotProse) they are split across TWO jobs: `promote` makes the set
+usable by CI (phases A and B, in the run that built it), and `arm` makes it the FLEET's (phases C and D
+plus the release event, in whichever later run finds the set's MeshWeaver.Plugins verdict green —
+[The One Promotion Gate](../OnePromotionGate)):
 
-| Phase | What it writes | If it fails here |
-|---|---|---|
-| **A** | identity tags (`<version>`, `<sha>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
-| **B** | moving pointers — `main` everywhere, `latest` on `mw-plugin-test`, the GHCR mirror | same: still nothing selectable |
-| **C** | **`memex-portal-ai:<version>`** — one manifest PUT, the last thing the pipeline does | a single PUT either happened or did not; there is no half-armed state |
+| Phase | Job | What it writes | If it fails here |
+|---|---|---|---|
+| **A** | `promote` | identity tags (`<version>`, `<sha>`, the pair tag `<core7>-p<plugins7>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
+| **B** | `promote` | CI pointers — `main` everywhere, `latest` on `mw-plugin-test`, the GHCR mirror | still nothing an INSTALL selects; CI resolves the set from here on |
+| **C** | `arm` | **`memex-portal-ai:<version>`** — one manifest PUT | a single PUT either happened or did not; there is no half-armed image |
+| **D** | `arm` | the line pointers `<major>-latest` / `<major.minor>-latest` / `<patch>-latest` | the set is armed but the pointers lag — the arming is INCOMPLETE and is resumed (below) |
+| event | `notify-platform-update` | the signed release event, then the marker `memex-portal-ai:arm-complete-<version>` | the set is armed but unannounced — INCOMPLETE, resumed |
 
 Phase C is the **arming write** and nothing else is, because `SelfUpdateHostedService` lists tags for
 `memex-portal-ai` **only**, picks the newest `^\d+\.\d+\.\d+` one, and patches the portal Deployment
-to it. Everything the roll will need — the matching
-`memex-migration:<version>`, the bake image that certified these node types — is already tagged by
-phase A. **Do not move that step, and do not add anything after it.**
+to it. Everything the roll will need — the matching `memex-migration:<version>`, the bake image that
+certified these node types — is already tagged by phase A, possibly runs earlier. **Do not move phase
+C before phase A's tags exist, and do not let anything an install selects be written before it.**
+What follows phase C (D and the event) is NOT selectable by any install, so it may fail without a
+half-armed release — but it must not be FORGOTTEN: the cursor (the newest `<version>` tag) has already
+moved, so `arm` reads the `arm-complete-<version>` marker, and while the newest armed set lacks it and
+nothing newer is green, re-arms exactly that set (C is an idempotent re-tag, D and the event run
+again). `arm` is serialised across runs (job concurrency `main-cd-arm`), and the event re-checks at
+the send that no newer set was armed meanwhile, so an older set is never announced after a newer one.
 
 🚨 **The roll patches the portal and NOTHING else** — since #2797 there is no second PATCH, and a
 guard in MeshWeaver.Plugins fails the build if one comes back. The matching `memex-migration` image
@@ -637,7 +656,7 @@ Both tags are **platform-present, plugin-modules-absent** for their framework id
 one produces the half-broken state the standing availability rule forbids — *all plugins available
 for the correct platform version, else nothing goes*
 ([Release Availability Gates](/Doc/Architecture/ReleaseGates)). And note the skipped step: a failed
-seal never registers the publication with memex, so the availability predicate has no record to
+seal never registers the publication with the control instance, so the availability predicate has no record to
 read. **The number of images promoted was never the question.** The operator-facing checklist for
 choosing a target is [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) →
 "What makes a tag a safe target".
@@ -786,7 +805,8 @@ Adding a sixth image touches **three** places, and missing any one of them recre
 this contract closes:
 
 1. its own build job, pushing **only** the staging tag;
-2. the `promote` job — identity tags in phase A, pointers in phase B (never after phase C);
+2. the `promote` job — identity tags in phase A, CI pointers in phase B; an image an INSTALL selects
+   by is additionally written by `arm` (phases C/D), never by `promote`;
 3. `check-image-set.sh` — otherwise nothing ever asserts it shipped.
 
 `check-image-set.sh` identifies the set by **short SHA** and not by version tag, because the SHA is
@@ -889,7 +909,7 @@ died mid-way leaves no sentinel — the next run re-publishes wholesale, and the
 unsealed or torn directories, so a partial publication can neither freeze nor be seeded.
 Each booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
 `ShippedPrebuiltBundles.SeedPublishedRoot`) before its NodeType sweep, and compiles only what CI
-did not bake. **For satellite content this is measured, not aspirational**: on 2026-08-17 `memex`
+did not bake. **For satellite content this is measured, not aspirational**: on 2026-08-17 the control instance
 (`3.0.0-rc4.ci.4049`, identity `s377941f549f721e01ac764e0fb8db84a`) adopted 68 prebuilt assemblies
 from 31 sealed bundles in 18.9 s and compiled zero healthy types (`compiled=0`, `alreadyBaked=84`),
 against 80 compiles / 64.8 s on the comparable boot before the satellite bakes existed.
@@ -975,25 +995,25 @@ in the run knows which satellite binds what, and a matrix that guessed would ski
 should have run — if the five concurrent jobs per build ever matter against the org's job ceiling,
 that narrowing is the honest lever, not a shorter timeout.
 
-### The release EVENT — the pipeline calls memex; memex registers and publishes
+### The release EVENT — the pipeline calls the control instance; it registers and publishes
 
-**The contract (maintainer, 2026-09-03: *"end of github pipeline must call memex, which must
+**The contract (maintainer, 2026-09-03: *"end of github pipeline must call [the control instance], which must
 register release and publish event"*) is three sentences:**
 
-1. **Every publishing pipeline ENDS with one call to memex.** Core's CD, after the image set is
+1. **Every publishing pipeline ENDS with one call to the control instance.** Core's CD, after the image set is
    promoted, POSTs the signed platform build (`event: platform-build`) into the control instance's
    `Hosting/PlatformBuilds` inbox (`notify-platform-update`). Every node repository's
    `node-repo-publish-bake.yml` run, after its bundles are sealed for an identity, POSTs the signed
    publication record (`event: bundle-publication` — source, identity, commit, tester + portal image)
    into the same inbox (`register-publication`, its last job). Nothing runs after that call, and no
    pipeline sends a `repository_dispatch` to another repository.
-2. **memex REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
+2. **The control instance REGISTERS the release** as a durable node — `Hosting/PlatformBuilds/<version>` for a
    platform build, and for a bundle publication `Hosting/PlatformBuilds/<source>` (NodeType
    `Hosting/Publication`: the source, its repository, the sealed identity + digest and the
    **upstreams the record declares** — the lane's `upstream-sources`, sent as `upstreams`). That
    record is the source of truth for "what is published for which identity" and for "who depends on
    whom".
-3. **memex PUBLISHES the event** from that registration, and **the two events have DIFFERENT
+3. **The control instance PUBLISHES the event** from that registration, and **the two events have DIFFERENT
    audiences.** A platform release concerns every registry source, so `meshweaver-framework-released`
    goes to every repository the control instance's `Hosting/Deployment` records name as a registry
    source. A bundle publication concerns only what depends on it, so `meshweaver-upstream-published`
@@ -1002,25 +1022,25 @@ register release and publish event"*) is three sentences:**
    Reinsurance depends on Crm, never the reverse, and nothing depends on itself), and a re-registration
    of an identity + digest already on record is the same sealed bytes, **not an event**. The
    subscribers' CI receives it, resolves both images from the payload, builds and publishes for that
-   identity — and ends by calling memex (1).
+   identity — and ends by calling the control instance (1).
    🚨 No longer true since 2026-09-12 (phase 1) for the platform event: `meshweaver-framework-released` is broadcast only while `Hosting:PlatformBuilds:BroadcastFrameworkReleases` is `true` (default off, Plugins#1707) and no satellite lists the type; a node repo follows the platform by its daily `schedule` against the newest SEALED set. `meshweaver-upstream-published` is unchanged. See `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins).
 
    🚨 **Why the audience is a rule and not a list (2026-09-07, MeshWeaver.Plugins#1484).** Until that
-   day a publication was fanned out to the RELEASE audience. Crm published → memex woke Crm and
+   day a publication was fanned out to the RELEASE audience. Crm published → the control instance woke Crm and
    Reinsurance → both rebaked unchanged inputs, sealed the same digest and registered it again →
-   memex woke both again: one crm digest broadcast 8–10 times, a run on each satellite every 3–5 s,
+   the control instance woke both again: one crm digest broadcast 8–10 times, a run on each satellite every 3–5 s,
    100+ runs per satellite in an hour, the App's API limit exhausted, the organisation's Actions
    queue backed up behind it. A loop like that has no terminating condition, so the fix is not a
    throttle but the two pure rules above (`DependentsOf`, `IsRepeat`, pinned by `DeploymentTests`),
    plus a refusal on the receiving side: the lane reds a wake whose `client_payload.source` is its own
    `bake-source` instead of baking (a bake would re-register the same bytes and hand the sender its
    next trigger). A repository that has registered no declaration is woken by nobody's publication
-   and rebakes on its schedule poll — the warning on memex names `upstream-sources` as the input that
+   and rebakes on its schedule poll — the warning on the control instance names `upstream-sources` as the input that
    joins the wave.
 
 ```
- pipeline (core CD | a node repo's publish-bake)        memex (control instance)              subscriber CI
- ───────────────────────────────────────────────        ────────────────────────              ─────────────
+ pipeline (core CD | a node repo's publish-bake)        control instance                      subscriber CI
+ ───────────────────────────────────────────────        ────────────────                      ─────────────
  promote / seal ✅                                       WebhookInbox Hosting/PlatformBuilds
    └─ ONE signed POST ──(platform-build |──────────────▶│ verify HMAC
       bundle-publication)… and FINISH                    ├─ REGISTER  Hosting/PlatformBuilds/<version>
@@ -1034,7 +1054,7 @@ register release and publish event"*) is three sentences:**
                                                          └─ PUBLISH   repository_dispatch ─────────────▶ on: repository_dispatch:
                                                             meshweaver-framework-released |               types: [meshweaver-framework-released,
                                                             meshweaver-upstream-published                        meshweaver-upstream-published]
-                                                                                                          → bake for the version → seal → POST memex
+                                                                                                          → bake for the version → seal → POST control
 ```
 
 Where the pieces are: the POST steps in `main-cd.yml` and `node-repo-publish-bake.yml` (this repo);
@@ -1052,23 +1072,23 @@ follow-up makes the watcher REGISTER the nodes named in (2) and handle `event: b
 through the DECLARED upstreams the record carries, not the package `requires` graph, so a publication
 cannot wake its publisher or a non-dependent); each node repository passes
 `webhook-url` / `webhook-secret` to the lane when it moves its pin (the lane is RED, naming them,
-until it does — a sealed publication memex was not told about is silent drift). Once Plugins receives
+until it does — a sealed publication the control instance was not told about is silent drift). Once Plugins receives
 the platform event and publishes its own bundles on it, core CD's `plugins-bake` job is a SECOND
 producer of the same publication and is removed — a follow-up, not part of this change.
 
 **Fallback.** Each repository's `schedule` poll (`Resolve the bake target` in its ci.yml) still reads the
 registry and bakes for the identity it finds, so a lost dispatch costs one delayed wave.
 
-🚨 **The history, because the second dispatcher was justified by it.** The memex hop was designed on
+🚨 **The history, because the second dispatcher was justified by it.** The control-instance hop was designed on
 2026-08-23 and was silent until 2026-09-03 — not because a mesh hop is unreliable, but because
 **the broadcaster had no caller**: `FrameworkReleaseBroadcaster.Broadcast` was registered in DI and
 invoked by nothing in either repository (the in-mesh call site carried a comment explaining why a
 since-retired NuGet-floor lane could not compile the reference). On top of that the inbox watcher ran
 with no identity, so on the control instance every background delivery was refused
-(`AccessContext must never be null … hub=Hosting/PlatformBuilds`, memex-cloud 2026-09-03 04:22–07:41Z)
+(`AccessContext must never be null … hub=Hosting/PlatformBuilds`, the public instance 2026-09-03 04:22–07:41Z)
 and replayed at the next arm. Core meanwhile grew `notify-dependents` — twice (2026-08-22, deleted;
 2026-08-29 → 2026-09-03, deleted) — as "a second, independent path to the same event". Two emitters
-for one event is precisely the cross-repo coupling the rule forbids; both defects in the memex hop
+for one event is precisely the cross-repo coupling the rule forbids; both defects in the control-instance hop
 were fixed in MeshWeaver.Plugins before the core dispatcher was withdrawn.
 
 🚨 **The notify job is a GATE, not a reporter (#2235).** It was written reporter-class — "losing one

@@ -86,7 +86,7 @@ for three days they did not. The gating reconcile reads `preInstalled` off the r
 pass holds the **install record's** stored copy, stamped at the last install. When a package stops
 being pre-installed, the root changes (a sync, an install) and a record stamped earlier does not.
 
-Measured on memex-cloud, 2026-09-21 → 2026-09-23, package `Hosting` (pre-installed → enterprise,
+Measured on the public instance, 2026-09-21 → 2026-09-23, package `Hosting` (pre-installed → enterprise,
 MeshWeaver.Plugins#1959): `Plugins/Hosting` v110 carried `preInstalled: true` until the re-install at
 2026-09-23 17:52Z (v111, no flag), while the `Hosting` root carried no flag. `Hosting/_Policy`
 reached **version 238**, alternating between the gate's shape (`redirectOnDenied` only) and the

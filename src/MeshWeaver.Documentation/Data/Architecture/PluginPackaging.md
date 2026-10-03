@@ -8,7 +8,9 @@ icon: /static/NodeTypeIcons/box.svg
 
 # Plugin Packaging
 
-> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stops being "THE landing gate": it is carried, shown and linted at pack time, and decides nothing at landing, serving or boot. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08); the sections below describe the mechanism as it runs now.
+> 🚨 **Rule change, 2026-09-07 (maintainer) — see [Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy).** `minMeshVersion` stopped being "THE landing gate": it was carried, shown and linted at pack time, and decided nothing at landing, serving or boot. Implemented in [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661) (2026-09-08).
+>
+> 🚨 **Superseded for version SELECTION by policy `package-min-mesh-version`** (Module Adoption Policy, R2): a package version is used only when the running platform satisfies its declared floor, decided by `PlatformFloor` — only a comparable floor above the running version holds, an unorderable one stays advisory. Boot and serving still do not skip on it.
 
 C# stored in mesh nodes compiles **at runtime, in the portal** — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). This page is about compiling the same
@@ -206,9 +208,11 @@ reads from the metadata at landing and again at boot. So the consumer lands any 
 can link — one bundle serves every platform build that carries what it binds (nothing is rebundled
 per CI build), and a module can be installed **ex post** onto a platform newer than the one it was
 built with. The `minMeshVersion` a bundle declares is an authoring claim: linted at pack time
-(`check-module-platform-floor.py`), shown as an advisory ("declares platform ≥ X; running Y") when
-the running platform does not satisfy it, and decisive nowhere at runtime
-([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), rule R2).
+(`check-module-platform-floor.py`), and at runtime it HOLDS the version when it is comparable with
+the running platform and above it — the bundle is not landed and the installed generation keeps
+running; a floor that cannot be ordered is shown as an advisory ("declares platform ≥ X; running Y")
+([Module Adoption Policy](@/Doc/Architecture/ModuleAdoptionPolicy), rule R2, policy
+`package-min-mesh-version`).
 
 🚨 The bundle's built-against `frameworkMvid` is **not** diagnostic and is **not optional** — it
 stopped being either when the update decision started reading it (#3154) and #3211 made a bundle
@@ -339,7 +343,7 @@ things followed, and both were wrong:
 
 1. a package this instance had not itself installed had **no binding at all**, so it could not be
    served however plainly its content sat here — which is the permanent state of a registry that
-   provisions its packages as Spaces (memex-cloud never runs the catalog install, so it has no
+   provisions its packages as Spaces (the plugin registry instance never runs the catalog install, so it has no
    install records);
 2. "I cannot tell which source this is from" was answered as **"you are not entitled to it"** — a
    check whose inability to answer is indistinguishable from a negative answer, applied to the most

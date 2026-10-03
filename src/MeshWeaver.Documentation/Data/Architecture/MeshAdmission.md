@@ -8,7 +8,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > **"not ready should *NEVER* run" · "validate before running"** — maintainer, 2026-09-06
 
 A readiness probe takes a pod out of the load balancer. It does **not** take the process out of the
-mesh. On 2026-09-06 that difference cost `memex.systemorph.com` a two-hour client-facing outage
+mesh. On 2026-09-06 that difference cost the control instance a two-hour client-facing outage
 ([#3478](https://github.com/Systemorph/MeshWeaver/issues/3478), [#3472](https://github.com/Systemorph/MeshWeaver/issues/3472)) —
 and it did so through a protection that was working *correctly*.
 
@@ -57,7 +57,7 @@ that carry a process's own build identity are few and enumerable:
 | NodeType **prebuilt adoption** stamp | `PrebuiltAssemblySeeder` (the bundle seeding every boot runs, and on-demand adoption) | `CompiledFrameworkVersion` + assembly coordinates — the same poison, reached without a compile |
 | module-set adoption | `ModuleSetStore.RecordAdoption` | "a replica is serving set N" |
 
-🚨 **The adoption row was missing until #5544, and the gap was measured.** memex's 9260 pod
+🚨 **The adoption row was missing until #5544, and the gap was measured.** the control instance's 9260 pod
 (2026-09-23/24) never became Ready across five restarts, and each boot's bundle seeding logged
 `Prebuilt assembly ADOPTED … (framework s9e58a…)` 168 times before its sweep began. The two serving
 9218 replicas' LIVE RECORD CENSUS then read *"21 NodeType record(s) were RE-KEYED to a framework
@@ -127,7 +127,7 @@ So the retraction now has two witnesses, and takes whichever answers first:
 🚨 **The activation sweep's per-type wait needed the same second witness, and did not get it until
 #5544.** `DynamicTypePreWarmer.WarmOne` activates a type and waits for its record to show a usable
 build — and on a gated pod that record cannot move until the bake passes, which cannot happen until
-this wait answers. A deadlock by construction: memex's 9260 pod fell back to the activation path
+this wait answers. A deadlock by construction: the control instance's 9260 pod fell back to the activation path
 when its batched source discovery failed, and every one of its 107 pending types logged
 `→ TimedOut — 300.0 s`. 107 × 5 minutes outlasts the three-hour startup probe, so the pod was killed
 and restarted into the same sweep five times. `WarmOne` now merges `LocalNodeTypeBuilds` exactly as

@@ -26,7 +26,7 @@ skip concludes from it:
 
 ## What happened when it didn't
 
-Measured end to end on `memex.systemorph.com`, 2026-09-07/08.
+Measured end to end on the control instance, 2026-09-07/08.
 
 `MeshWeaver.Crm` deleted four files on 09-06. The 09-07 10:15Z import ran, computed the prune set
 correctly, and found every one of them — and then kept them all:
@@ -143,7 +143,7 @@ every entry of the per-node manifest, writes nothing, recompiles nothing, and th
 verdict. After that the skip is exactly as cheap as it was.
 
 This is deliberately not "stop trusting the marker". A change that re-imported on every trigger would
-trade this defect for #3146 — 19 complete passes in three hours on `memex-cloud`, ≈425 identical
+trade this defect for #3146 — 19 complete passes in three hours on the public instance, ≈425 identical
 failures and a NodeType compile each — which is the more expensive mistake. A **converged** run's
 marker is still a licence to skip, and `AConvergedImport_StillShortCircuits` is the falsifier that
 holds the fix to it.

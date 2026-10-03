@@ -28,7 +28,7 @@ is available from an ordinary red-log feed with no cluster access at all.
 
 ## The measured case, 2026-09-17
 
-Three issues were opened against the control instance `memex` (memex.systemorph.com) for what turned
+Three issues were opened against the control instance for what turned
 out to be one pod's crash. The deployment ran two replicas of
 `meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8710`:
 
@@ -38,7 +38,7 @@ out to be one pod's crash. The deployment ran two replicas of
 | **B** | `…-6c967c7c4c-kdff5` | `aks-silos-10171001-vmss00001x` | `10.244.3.244:11111` gen `148598327` |
 
 B logs its own address as the sender on every failure line, so **B = 10.244.3.244 is measured**.
-A's identity is one inference step, and the pod CIDRs settle it: `Ops/Status/memex` (scraped,
+A's identity is one inference step, and the pod CIDRs settle it: `Ops/Status/<control>` (scraped,
 `notScraped: false`) shows the *replacement* pods as `10.244.5.112` on node `…1u` and `10.244.3.205`
 on node `…1x`, so node `…1u` carries `10.244.5.0/24` and node `…1x` carries `10.244.3.0/24`. B on
 `…1x` is `10.244.3.244`, consistent; A on `…1u` must be a `10.244.5.x`, and with exactly two replicas
@@ -60,7 +60,7 @@ the only other silo in the namespace is `10.244.5.183`. **A = 10.244.5.183.**
 | 18:57:49 | B's container exits 139; a 12.8 GB dump lands on the data volume | measured |
 | 19:19:20 → 19:19:41 | **A crashes a SECOND time — `signo 6` (SIGABRT), not SIGSEGV**; 5.2 GB written in 22.75 s, `Target process is alive` | measured (A's own log) |
 | 19:19:50 | B's last complaint about A — 9 s after A's second dump completed | measured |
-| 19:40:23 / 19:42:16 | replacement pods start on `3.0.0-ci.8844` | measured (`Ops/Status/memex`) |
+| 19:40:23 / 19:42:16 | replacement pods start on `3.0.0-ci.8844` | measured (`Ops/Status/<control>`) |
 
 Two things in that table were not in any of the three issues. **A crashed twice**, and its second crash
 was a *different signal* — `SIGABRT`, which is a `FailFast`/abort path, not the `SIGSEGV` the issues
@@ -178,7 +178,7 @@ when any node in its `sourceVersions` set moves, and that set is wide (the `Esse
 release of 14:54:47 lists about fifty source nodes, many of them under `Store/**`), so a single
 busy source fans out across every NodeType that names it.
 
-## A second case, 2026-09-22 — one departure on memex-cloud, filed as seven issues
+## A second case, 2026-09-22 — one departure on the public instance, filed as seven issues
 
 The departed silo is `S10.244.9.90:11111:149090968`. Its generation dates its start to
 **14:09:28Z**. The two survivors that logged about it were `…-5c444645f8-8pdzb`
@@ -193,7 +193,7 @@ ReplicaSet, so a roll had begun about 45 s before the first line. Generations co
 | 14:41:30 | First `TimeoutException: Grain placement operation timed out` on xg22d (`messagehub/Doc/Architecture/PolicyNotProse`). Its innermost frame is `PlacementService.cs:602`, which is the `_grainLocator.Lookup(...)` await: the **directory lookup**, not local placement | measured (#5334) |
 | 14:41:30 | First `ConnectionFailedException: Unable to connect to S10.244.9.90:11111:149090968, will retry after …` on 8pdzb, raised from `LocalGrainDirectory.LookupAsync` | measured (#5333, #5336) |
 | 14:41:41 | First `SocketConnectionException … Error: HostUnreachable`: from these callers, the endpoint could no longer be reached at all. That is a caller-side reachability loss, not by itself proof the pod is gone | measured (#5338, #5342) |
-| 14:41:52 | Last placement timeout (8pdzb, `messagehub/mkleiner/_Install/LinkedIn`). This is within 30 s of the first refusal, so the lookup behind it was issued before the refusals began | measured (#5340) |
+| 14:41:52 | Last placement timeout (8pdzb, `messagehub/user-b/_Install/LinkedIn`). This is within 30 s of the first refusal, so the lookup behind it was issued before the refusals began | measured (#5340) |
 | 14:42:06 | Last connect failure | measured (#5338, #5342, #5343) |
 
 This is the same two-mechanism shape as the 09-17 case: first the peer is mute, then it cannot be

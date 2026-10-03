@@ -119,12 +119,16 @@ public static class ProfileSectionsExtensions
 
         var viewerId = accessService.ViewerId();
         var userPath = host.Hub.Address.ToString();
+        // Bound to the viewer resolved on the render turn, never at subscribe time inside the
+        // Defer, where the ambient context is gone on a distributed mesh (see
+        // SettingsMenuItemsExtensions.ContributedSettingsTabs).
+        var adminVerdict = AdminAppNodeType.LiveAdminVerdict(host.Hub, viewer.ObjectId);
         return Observable.Defer(() =>
         {
             var userNode = host.Workspace.GetMeshNodeStream()
                 .Catch<MeshNode, Exception>(_ => Observable.Return<MeshNode>(null!));
             return catalog.Contributions
-                .CombineLatest(userNode, host.Hub.IsGlobalAdmin().StartWith(false),
+                .CombineLatest(userNode, adminVerdict,
                     (contributions, node, isAdmin) => UiContributionProjection
                         .ProjectProfileSections(contributions, userPath, node, isAdmin, viewerId));
         });

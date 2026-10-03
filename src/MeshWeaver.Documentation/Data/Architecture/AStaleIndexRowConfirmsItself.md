@@ -24,7 +24,7 @@ disproof share a source, so absence is not merely unproven: it is **unaskable**.
 
 ## What that cost
 
-Measured on `memex.systemorph.com` during helm revision 59. The new ReplicaSet's second pod sat
+Measured on the control instance during helm revision 59. The new ReplicaSet's second pod sat
 `2/3` for 48+ minutes. Because the rollout runs `maxUnavailable: 0` the old pod could not be retired,
 so **two builds served one host** for the whole window — which users saw as dropped MCP sessions
 (`[ROUTE] … no silo in this cluster is currently serving that hub`), read timeouts, and exceptions.

@@ -130,7 +130,7 @@ refuses "unknown flags are not ignored"    "unknown argument"                   
 # ---------------------------------------------------------------------------
 # THE CERTIFICATE, end to end. A new instance is not provisioned until its own host answers over
 # its OWN certificate: an ingress without one is served the controller's fallback — another
-# instance's certificate — and pearl.meshweaver.cloud spent nine hours in exactly that state on
+# instance's certificate — and fabrikam.example.com spent nine hours in exactly that state on
 # 2026-09-15 while its portal was healthy. These assert the two halves that were missing: the TLS
 # step refuses a record that asks cert-manager for nothing, and the verify step tells a wrong
 # certificate apart from a dead application instead of blaming the pods for both.
@@ -371,6 +371,32 @@ kve() {  # kve [env…] -- <args…> — runs against a fresh state dir; sets $_
 }
 KVE_DB=(--db-connection acme-db-connection --db-host pg.postgres.database.azure.com --db-port 5432 --db-user memexadmin --db-name acmedb --db-password-secret memex-postgres-password)
 
+# The caller's plan decides whether this instance actually consumes the issued registry key. The
+# legacy direct invocation remains strict; a plan can skip the key only for a record that neither
+# maps the token, registers at a consumer registry, nor creates a pull Secret from it.
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure skips the unused registry key when the plan explicitly says so" || bad "unused registry key is skippable" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_out" in *"PluginCatalog-RegistryToken"*) bad "skip does not inspect or report the unused registry key" "said: ${_kve_out}" ;; *) ok "skip does not inspect or report the unused registry key" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme
+[ "$_kve_rc" -ne 0 ] && ok "kv-ensure remains strict unless the plan explicitly skips the registry key" || bad "legacy invocation still requires registry key" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"missing: acme-PluginCatalog-RegistryToken"*) ok "the refusal names the missing registry object" ;; *) bad "missing registry object is named" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey custom-registry-token" \
+  -- --vault Systemorph --prefix acme- --namespace acme --registry-key-vault RegistryVault --registry-key-object custom-registry-token
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure checks the registry object's declared vault and name" || bad "declared registry object is accepted" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret list --vault-name RegistryVault"*|*"secret show --vault-name RegistryVault --name custom-registry-token"*) ok "the declared registry vault and object reach the existence check" ;; *) bad "declared registry target is used" "az saw: ${_kve_log}" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "kv-ensure requires both registry target fields" "must be supplied together" \
+  hosting-kv-ensure --vault V --namespace n --registry-key-object custom
+refuses_hard "kv-ensure refuses contradictory registry requirements" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --skip-registry-key --registry-key-vault V --registry-key-object custom
+unset _kve_out _kve_rc _kve_log _kve_state
+
 # Absent: composed from the flags and the password read from the vault, written through --file.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
   -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
@@ -386,6 +412,17 @@ case "$_kve_log" in *NEVER-PRINTED*) bad "…and never puts it on an az command 
 case "$_kve_log" in *"secret set --vault-name Systemorph --name acme-db-connection --file "*) ok "the string reaches az through --file" ;; *) bad "the string reaches az through --file" "az saw: ${_kve_log}" ;; esac
 case "$_kve_out" in *"::hosting:: kv_db_connection=created"*) ok "the run reports kv_db_connection=created" ;; *) bad "the run reports created" "said: ${_kve_out}" ;; esac
 case "$_kve_out" in *"::hosting:: kv_created=1"*) ok "…and counts it among the created objects" ;; *) bad "created count" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# Existence is decided from `secret list` (metadata), never `secret show` (a value read the writer
+# identity cannot make), and a REFUSED listing is a refusal, never "absent" (policy
+# secrets-write-only-entry).
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+case "$_kve_log" in *"secret show"*"--query id"*) bad "existence is never checked with a value read" "az saw: ${_kve_log}" ;; *"secret list"*) ok "existence is checked with \`secret list\`, never \`secret show\`" ;; *) bad "existence check" "az saw: ${_kve_log}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_KVE_LIST_FAIL=1 HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "a vault that refuses the LISTING is a refusal, never 'absent'" || bad "list refused" "exited 0: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and nothing is (over)written" "az saw: ${_kve_log}" ;; *) ok "…and nothing is (over)written" ;; esac
 rm -rf "$_kve_state"
 
 # Present: KEPT — no read of the password, no write — the master-key rule, one object over.
@@ -456,6 +493,14 @@ rr() {  # rr <mode> <vault values> [env…] -- <args…>
 }
 rr_done() { rm -rf "$_rr_reg" "$_rr_kv"; }
 RR_ARGS=(--registry-url https://registry.test --instance-id acme --home-url https://acme.meshweaver.cloud --vault Systemorph --object acme-PluginCatalog-RegistryToken)
+
+# A REFUSED listing is a refusal, never "absent": nothing is registered, nothing is written.
+rr normal "" HOSTING_RRAZ_LIST_FAIL=1 -- "${RR_ARGS[@]}"
+[ "$_rr_rc" -ne 0 ] && ok "registry-register: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "registry-register list refused" "exited 0: ${_rr_out}"
+case "$_rr_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "registry-register list message" "said: ${_rr_out}" ;; esac
+case "$_rr_reglog" in *REGISTER*) bad "…and registers nothing" "registry saw: ${_rr_reglog}" ;; *) ok "…and registers nothing" ;; esac
+case "$_rr_azlog" in *"secret set"*) bad "…and writes nothing" "az saw: ${_rr_azlog}" ;; *) ok "…and writes nothing" ;; esac
+rr_done
 
 # Absent → registered on the free plan, stored, proven.
 rr normal "" -- "${RR_ARGS[@]}"
@@ -566,6 +611,13 @@ kvc() {  # kvc [env…] -- <args…>
 }
 KVC_PEM="-----BEGIN-FAKE-PEM-NEVER-PRINTED-----"
 
+# A REFUSED listing is a refusal, never "absent": nothing is copied over a target that may exist.
+kvc HOSTING_KVC_LIST_FAIL=1 HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
+[ "$_kvc_rc" -ne 0 ] && ok "kv-copy: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "kv-copy list refused" "exited 0: ${_kvc_out}"
+case "$_kvc_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "kv-copy list message" "said: ${_kvc_out}" ;; esac
+case "$_kvc_log" in *"secret set"*) bad "…and copies nothing" "az saw: ${_kvc_log}" ;; *) ok "…and copies nothing" ;; esac
+rm -rf "$_kvc_state"
+
 kvc HOSTING_KVC_VALUES="memexsystemorph-GitHub-App-PrivateKey=${KVC_PEM}" -- --vault Systemorph --copy build-GitHub-App-PrivateKey=memexsystemorph-GitHub-App-PrivateKey
 [ "$_kvc_rc" -eq 0 ] && ok "kv-copy materialises an ABSENT target from its source" || bad "kv-copy copies an absent target" "exited ${_kvc_rc}: ${_kvc_out}"
 [ "$(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)" = "$KVC_PEM" ] && ok "…byte-for-byte" || bad "the copy is byte-identical" "wrote: $(cat "$_kvc_state/set.build-GitHub-App-PrivateKey" 2>/dev/null)"
@@ -632,6 +684,13 @@ sa() {  # sa [env…] -- <args…>
 }
 SA_ARGS=(--name acme --host acme.meshweaver.cloud --vault Systemorph --object acme-Authentication-Microsoft-ClientSecret)
 SA_ID=66d36350-397d-420f-97b2-ae173fc97d05
+
+# A REFUSED listing is a refusal, never "absent": no credential is minted, nothing is written.
+sa HOSTING_SA_LIST_FAIL=1 -- "${SA_ARGS[@]}" --client-id $SA_ID
+[ "$_sa_rc" -ne 0 ] && ok "signin-app: a vault that refuses the LISTING is a refusal, never 'absent'" || bad "signin-app list refused" "exited 0: ${_sa_out}"
+case "$_sa_out" in *"could not LIST vault Systemorph"*) ok "…naming the refused listing" ;; *) bad "signin-app list message" "said: ${_sa_out}" ;; esac
+case "$_sa_log" in *"credential reset"*|*"secret set"*) bad "…and mints and writes nothing" "az saw: ${_sa_log}" ;; *) ok "…and mints and writes nothing" ;; esac
+rm -rf "$_sa_state"
 
 # Present + app readable + redirect on it → kept, verified.
 sa HOSTING_SA_EXISTING=acme-Authentication-Microsoft-ClientSecret -- "${SA_ARGS[@]}" --client-id $SA_ID
@@ -1841,7 +1900,7 @@ refuses_hard "a vault name that is not a plain name is refused before anything r
 rm -rf "$_vh_dir"
 
 # ── hosting-deploy keeps the RUNNING image when the values carry no portal.image KEY ────────────
-# 🚨 Systemorph/Memex#458, measured on pearl 2026-09-21 11:25Z. The record names an imagePullSecret
+# 🚨 Systemorph/Memex#458, measured on fabrikam 2026-09-21 11:25Z. The record names an imagePullSecret
 # and pins no tag, so HelmValues rendered `portal:` + `  imagePullSecret:` and NO image. The old
 # test (`grep -q '^portal:'`) took that block as "the values carry an image", skipped the keep-running
 # read, and helm fell through to the chart default ghcr :latest (3.0.0-rc13, 2026-08-31) — a
@@ -1857,7 +1916,7 @@ _ki_running="cr.example.test/memex-portal-ai:3.0.0-ci.9101"
 printf '%s' "$_ki_running" > "$_ki_dir/running-image"
 _ki_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_ki_dir" HOSTING_DEPLOY_STUB_LOG="$_ki_log" \
   hosting-deploy --namespace memex --release memex --database memex --values "$_ki_vals" 2>&1; }
-# pearl's shape: the pull Secret alone under portal:
+# fabrikam's shape: the pull Secret alone under portal:
 printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\nselfUpdate:\n  registry: "cr.example.test"\n' > "$_ki_vals"
 _ki_out="$(_ki_run)"; _ki_rc=$?
 _ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
@@ -2132,7 +2191,7 @@ DBR_CHART="$(mktemp -d)"
 dbr() {
   ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
            HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
-    hosting-db-release --namespace pearl --release pearl-db --database pearl )
+    hosting-db-release --namespace fabrikam --release fabrikam-db --database fabrikam )
 }
 
 refuses_hard "a Forbidden on nodes is REFUSED, not an absent node pool" \
@@ -2173,13 +2232,13 @@ esac
 # — the same `2>/dev/null`, in the same file, inside a PIPE where no `||` could have caught it.
 # Measured on main before this change, ALL THREE of Forbidden, absent-Secret and
 # present-but-no-password-key produced ONE sentence, byte for byte:
-#   "its credentials Secret pearl-db-app carries no password … Read the operator's log in
+#   "its credentials Secret fabrikam-db-app carries no password … Read the operator's log in
 #    cnpg-system."
 # So a missing ClusterRole grant sent the reader to CloudNativePG's log, and the operator stated
 # the CONTENTS of a Secret it had never read. Three states, three sentences, or this is red.
 _dbs_out() { ( export PATH="$DBR_STUBS:$PATH" HOSTING_DB_CHART="$DBR_CHART" \
                       HOSTING_DB_STUB_FORBID="$1" HOSTING_DB_STUB_ABSENT="$2"
-               hosting-db-release --namespace pearl --release pearl-db --database pearl ) 2>&1; }
+               hosting-db-release --namespace fabrikam --release fabrikam-db --database fabrikam ) 2>&1; }
 
 _dbs="$(_dbs_out "secret" "")"
 case "$_dbs" in
@@ -2192,7 +2251,7 @@ esac
 _dbs="$(_dbs_out "" "secret")"
 case "$_dbs" in
   *"REFUSED"*) bad "an ABSENT credentials Secret is ABSENT, not refused" "the discrimination points the wrong way: ${_dbs}" ;;
-  *"is ABSENT in pearl"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
+  *"is ABSENT in fabrikam"*) ok "an ABSENT credentials Secret is ABSENT, not refused" ;;
   *) bad "an ABSENT credentials Secret is ABSENT, not refused" "said neither: ${_dbs}" ;;
 esac
 
@@ -2209,7 +2268,7 @@ esac
 # reads. Without this every assertion above would pass on a command that refuses unconditionally.
 _dbs="$(_dbs_out "" "")"; _dbs_rc=$?
 case "$_dbs" in
-  *"::hosting:: db_release=pearl-db"*)
+  *"::hosting:: db_release=fabrikam-db"*)
     [ "$_dbs_rc" -eq 0 ] && ok "a healthy database release reports db_release and exits 0" \
       || bad "a healthy database release reports db_release and exits 0" "rc=${_dbs_rc}: ${_dbs}" ;;
   *) bad "a healthy database release reports db_release and exits 0" "never reported it: ${_dbs}" ;;
@@ -2260,7 +2319,7 @@ _mg_job="memex-migration-roll-3-0-0-ci-9101"
 _mg_new() { _mg_dir="$(mktemp -d)"; cp -R "$MG_FIXTURES/." "$_mg_dir/"; _mg_log="$_mg_dir/calls.log"; : > "$_mg_log"; }
 _mg_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
   HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
-  hosting-migrate --namespace pearl --release pearl --image "$_mg_img" 2>&1; }
+  hosting-migrate --namespace fabrikam --release fabrikam --image "$_mg_img" 2>&1; }
 
 # absent → created from the release's Job, retargeted, waited on, completed
 _mg_new; echo 2 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
@@ -2290,8 +2349,8 @@ if [ "$(jq -r '.spec.template.spec.imagePullSecrets[0].name' "$_mg_c")" = "regis
 else
   bad "the Job is the release's own" "$(cat "$_mg_c")"
 fi
-_mg_get="$(grep -n '^kubectl -n pearl get job' "$_mg_log" | tail -1 | cut -d: -f1)"
-_mg_create="$(grep -n '^kubectl -n pearl create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
+_mg_get="$(grep -n '^kubectl -n fabrikam get job' "$_mg_log" | tail -1 | cut -d: -f1)"
+_mg_create="$(grep -n '^kubectl -n fabrikam create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
 [ -n "$_mg_create" ] && [ -n "$_mg_get" ] && [ "$_mg_get" -gt "$_mg_create" ] \
   && ok "the Job's status is read AFTER it was created (the wait is real)" \
   || bad "the Job's status is read after it was created" "$(cat "$_mg_log")"
@@ -2372,7 +2431,7 @@ rm -rf "$_mg_dir"
 # dry run: reads, narrates the create, creates nothing, waits for nothing
 _mg_new
 _mg_out="$(_mg_run env HOSTING_DRY_RUN=true)"; _mg_rc=$?
-if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q 'DRY-RUN would run: kubectl -n pearl create -f -' \
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q 'DRY-RUN would run: kubectl -n fabrikam create -f -' \
    && [ ! -f "$_mg_dir/created.json" ] && ! printf '%s' "$_mg_out" | grep -q 'migration=completed'; then
   ok "a dry run narrates the Job, creates nothing and claims no migration"
 else
@@ -2381,17 +2440,17 @@ fi
 rm -rf "$_mg_dir"
 
 refuses_hard "hosting-migrate refuses a PORTAL image — only memex-migration runs as the migration" "not a plain memex-migration image reference" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image cr.example.test/memex-portal-ai:3.0.0-ci.9101
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image cr.example.test/memex-portal-ai:3.0.0-ci.9101
 refuses_hard "hosting-migrate refuses an image reference with a metacharacter" "not a plain memex-migration image reference" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image 'cr.example.test/memex-migration:1;rm -rf /'
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image 'cr.example.test/memex-migration:1;rm -rf /'
 refuses_hard "hosting-migrate needs --release" "missing required flag --release" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --image "$_mg_img"
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --image "$_mg_img"
 refuses_hard "hosting-migrate refuses --image AND --tag together" "both set" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl --image "$_mg_img" --tag 3.0.0-ci.9101
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam --image "$_mg_img" --tag 3.0.0-ci.9101
 refuses_hard "hosting-migrate refuses a --tag with a metacharacter" "not a plain image tag" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --tag '1;rm -rf /'
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --tag '1;rm -rf /'
 refuses_hard "hosting-migrate needs --image or --tag" "missing required flag --image (or --tag)" \
-  env HOSTING_DRY_RUN=true hosting-migrate --namespace pearl --release pearl
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --release fabrikam
 
 # ── hosting-migrate --tag: the interlock's form — release and migration repository are the RELEASE'S ──
 # run.sh's interlock knows only the namespace and the tag the plan's `set image` moves to. The
@@ -2399,11 +2458,11 @@ refuses_hard "hosting-migrate needs --image or --tag" "missing required flag --i
 # "no release"), and the image is the release's own migration repository at the new tag.
 _mg_tag_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
   HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
-  hosting-migrate --namespace pearl --tag 3.0.0-ci.9101 2>&1; }
-_mg_new; echo pearl > "$_mg_dir/release-name"; echo 1 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
+  hosting-migrate --namespace fabrikam --tag 3.0.0-ci.9101 2>&1; }
+_mg_new; echo fabrikam > "$_mg_dir/release-name"; echo 1 > "$_mg_dir/polls"; echo succeeded > "$_mg_dir/outcome"
 _mg_out="$(_mg_tag_run env)"; _mg_rc=$?
 if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' \
-   && grep -q '^helm get manifest pearl --namespace pearl' "$_mg_log" \
+   && grep -q '^helm get manifest fabrikam --namespace fabrikam' "$_mg_log" \
    && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_dir/created.json")" = "$_mg_img" ] \
    && [ "$(jq -r '.metadata.name' "$_mg_dir/created.json")" = "$_mg_job" ]; then
   ok "--tag reads the release off the Deployment and moves the release's OWN migration repository to the tag"

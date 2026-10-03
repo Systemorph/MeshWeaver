@@ -1,7 +1,7 @@
 ---
 Name: Database Migration Procedure
 Category: Architecture
-Description: The routine for moving db_version — who mints the migration Job (helm, and now the self-updater), the one-time grant each install needs, what a stuck rollout looks like from the front door (it doesn't), the exact recovery, and why a migration deadlocks under load. Written from the 2026-09-03 memex + memex-cloud wedge.
+Description: The routine for moving db_version — who mints the migration Job (helm, and now the self-updater), the one-time grant each install needs, what a stuck rollout looks like from the front door (it doesn't), the exact recovery, and why a migration deadlocks under load. Written from the 2026-09-03 wedge of the control and public instances.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/><path d="m15 15 2 2 4-4"/></svg>
 ---
 
@@ -38,7 +38,7 @@ ReplicaSet keeps serving, and `https://…/` answers 200 the whole time.
 ## 🚨 The wedge this procedure exists for (2026-09-03)
 
 Both AKS portals had been rolling images by `kubectl set image` (the self-updater) for days without
-a `helm upgrade` — memex since revision 28 (Aug 30), memex-cloud since revision 21 (Aug 30). Plugins
+a `helm upgrade` — the control instance since revision 28 (Aug 30), the public instance since revision 21 (Aug 30). Plugins
 PR #1216 added V55 (the `pg_notify` payload carries `node_type`; `DbVersion.Latest = 55`). The next
 self-update rolled `memex-portal-ai` to a build expecting 55; nothing minted a migration Job; the DB
 stayed at 54:
@@ -48,7 +48,7 @@ crit: Memex.Portal.Distributed.DbVersionGate[0]
       DB migration incomplete: admin.mesh_nodes.db_version=54 < expected 55. … Refusing to start.
 ```
 
-memex: 45 restarts over ~7 h behind a 200. memex-cloud: the same, while its eight *old* pods kept
+The control instance: 45 restarts over ~7 h behind a 200. The public instance: the same, while its eight *old* pods kept
 running pre-#1216 code — the very fan-out storm #1216 fixes (1,917 slow 201-schema UNIONs per
 30 min per pod) — so the site was up and unusable at the same time.
 
@@ -98,7 +98,7 @@ cases kept apart: a migration that RAN and broke sends you to the Job's log, one
 created sends you to the `helm upgrade`.
 
 🚨 **Why `Forbidden` is a refusal and not the same permissive case** — it read as one until #4764.
-Measured on memex-cloud 2026-09-19: a roll that patched the image with nothing established about the
+Measured on the public instance 2026-09-19: a roll that patched the image with nothing established about the
 schema put the new pod in `CrashLoopBackOff` on `DbVersionGate` 3,319 ms into its boot, restarts=2
 within three minutes, while four old pods kept answering 200 — desired 4, ready 4 all on the OLD
 ReplicaSet, updated 1, unavailable 1. Nothing converged, nothing rolled back, and the policy record
@@ -147,7 +147,7 @@ schema it `CREATE OR REPLACE`s the access trigger functions, re-installs trigger
 and re-runs `rebuild_user_effective_permissions()` (an `ACCESS EXCLUSIVE` rename-swap of the
 permission table). A live pod meanwhile holds `ACCESS SHARE` on those same tables across a
 multi-schema UNION, or a row lock on `access` inside the very trigger being replaced. Opposite
-orders ⇒ `40P01 deadlock detected`, and Postgres kills the migration. On memex-cloud it died five
+orders ⇒ `40P01 deadlock detected`, and Postgres kills the migration. On the public instance it died five
 times out of five at eight replicas, *before* it had even read `db_version`; at three replicas it
 completed in 11 minutes. Two consequences:
 
@@ -164,7 +164,7 @@ access, doc backfill, embeddings) is a loop over every partition schema, and on 
 runs for *hours*. Elapsed time therefore says nothing about health, and "it has been running all
 day, it can never finish" is a conclusion that has been reached — and been **wrong**.
 
-Measured on `memex-cloud` 2026-09-07: Job `memex-migration-28` was described as a backfill that
+Measured on the public instance 2026-09-07: Job `memex-migration-28` was described as a backfill that
 "can never finish within its own design" and slated for deletion after 9 h 50 m. Its own log said
 otherwise — `Current DB version: 55` (the schema half had completed 90 s in), **165 of the 220
 partition schemas** the run had announced, 74,246 rows embedded, and a steady 200 rows per

@@ -73,7 +73,7 @@ before the 03:00 `purge-old-images` task.
 ### Axis 3, and why the committed pin is only a proxy
 
 An overlay says what an instance *should* run. `/api/version` says what it *does*. On
-2026-09-12 those disagreed on a production instance: memex-cloud was rolled to `3.0.0-ci.8399` at
+2026-09-12 those disagreed on a production instance: the public instance was rolled to `3.0.0-ci.8399` at
 06:15Z while its committed pin still read `8372`, so that night's lock protected the manifest it was
 not running — against a purge task that filters `memex-portal-ai:.*` at `--ago 7d --keep 10`.
 
@@ -84,9 +84,9 @@ The expected set and each host come from the same overlays axis 2 already reads:
 ```yaml
 config:
   memex_portal:
-    Hosting__Deployment: "memex-cloud"     # the id, equal to its Hosting/Deployment record's
+    Hosting__Deployment: "public"          # the id, equal to its Hosting/Deployment record's
 ingress:
-  host: "memex.meshweaver.cloud"           # where to ask it
+  host: "portal.example.com"               # where to ask it
 ```
 
 🚨 **The bare short-sha tag cannot identify a build, so the axis protects a CLOSURE.** Measured
@@ -112,20 +112,20 @@ overlay declares is red — a stale exemption hides the next one.
 ### 🚨 An installation's identity is `owner/name:id`, not `id` — and a second deployments repository proved it
 
 `Hosting__Deployment` is unique inside **one** deployments repository and inside nothing larger.
-`Systemorph/PartnerRe.Memex` was created at **2026-09-14T21:30:38Z**, and its control instance is
-called `memex` too — correctly: it *is* PartnerRe's memex, at `partnerre.meshweaver.cloud`, live and
+A client's deployments repository was created at **2026-09-14T21:30:38Z**, and its control instance is
+called `control` too — correctly: it *is* the enterprise client's control instance, at `globex.example.com`, live and
 answering `/api/version`. A run keyed by the bare id has no way to tell the two apart, and from the
 next scheduled run onward this lane was red on:
 
 ```
-installation 'memex' is declared by two overlays (Systemorph/Memex deployments/aks/memex/values.memex.public.yaml
-and Systemorph/PartnerRe.Memex deployments/aks/memex/values.memex.yaml), so which host answers for it is ambiguous.
-AXIS 3 — installation 'partnerre' could not be accounted for: its overlay declares the installation but no
+installation 'control' is declared by two overlays (Systemorph/Memex deployments/aks/control/values.control.public.yaml
+and <client-deployments-repo> deployments/aks/control/values.control.yaml), so which host answers for it is ambiguous.
+AXIS 3 — installation 'globex' could not be accounted for: its overlay declares the installation but no
 ingress host, so it cannot be asked what it is running.
 ```
 
 🚨 **The cost is not the red — it is that neither installation was then asked anything.** The
-duplicate is dropped *and the first one is never probed*, so `memex` — the installation actually
+duplicate is dropped *and the first one is never probed*, so `control` — the installation actually
 exposed to the ACR purge — got no locks from that run either, on a lane whose green is
 `pause.reEnableWhen`. Two names colliding took protection off an installation that has nothing to do
 with either repository's naming.
@@ -143,7 +143,7 @@ So identity is the pair, and three things follow:
 
 ### The repository roster — the half that stops qualification becoming exemption
 
-Keying by repository is what lets two repositories each declare a `memex`. On its own it *also*
+Keying by repository is what lets two repositories each declare a `control`. On its own it *also*
 means a new deployments repository joins the fleet **silently**, its installations becoming their own
 slots with nobody having read a line about them: *"a fork reds the lane"* traded for *"a fork is
 invisible to it"*, which is the same defect in the other costume.
@@ -155,7 +155,7 @@ blocker, and a name no repository in the fleet answers to is a stale line that h
 🚨 **The population is overlay FILES, not extracted installations.** A repository whose overlays this
 reader stopped understanding would otherwise vanish from the table's reach exactly when that
 mattered. Measured 2026-09-15, the whole fleet: `Systemorph/Memex` (8 files, 4 installations),
-`Systemorph/PartnerRe.Memex` (2 files, 2 installations) and `Systemorph/MeshWeaver` (14 files, **0**
+the client's deployments repository (2 files, 2 installations) and `Systemorph/MeshWeaver` (14 files, **0**
 installations — its `deploy/` tree is the chart's own values and declares `Hosting__Deployment: ""`).
 A repository whose tree could not be **read** is skipped here and only here: `build_plan` has already
 made it a blocker, so it is never a silent pass.
@@ -222,7 +222,7 @@ manifests that no longer exist, and the pull fails exactly as if the image had b
 **Protection applied to the index alone makes its children strictly less safe than leaving it
 unprotected** — a fix that causes the failure it prevents, on a delay.
 
-Measured 2026-09-12: `memex-portal-ai@sha256:0217fd11…`, the set `memex` is RUNNING, is locked, and
+Measured 2026-09-12: `memex-portal-ai@sha256:0217fd11…`, the set the control instance is RUNNING, is locked, and
 its two children (`sha256:3296b0ba…` linux/amd64, `sha256:322de2ff…` linux/arm64) both read
 `deleteEnabled: true`. They survive today only because they still carry
 `staging-74d4c85-…-linux-x64` / `-linux-arm64` tags — which the **same** purge step deletes once
@@ -273,7 +273,7 @@ which is why the horizon is a property of the policy rather than a countdown.
 
 ### The worked case, and why it is one run rather than two
 
-`3.0.0-ci.8372` is what `memex` runs and what both overlays pinned. Its six tags cross the seven-day
+`3.0.0-ci.8372` is what the control instance runs and what both overlays pinned. Its six tags cross the seven-day
 line within **2m46s** of each other:
 
 ```
@@ -301,7 +301,7 @@ node upgrade or replacement, eviction, a new nodepool) and the migration Job, wh
 from the portal's (Memex#219's measured case: 639 `ImagePullBackOff` in 146 minutes, unalerted).
 
 🚨 **And the instance whose index is not locked at all is the more exposed one.** Measured the same
-morning, `memex-cloud` runs `3.0.0-ci.8403` / `sha256:81fe4f29…` with `deleteEnabled: true` on the
+morning, the public instance runs `3.0.0-ci.8403` / `sha256:81fe4f29…` with `deleteEnabled: true` on the
 index itself.
 
 ## The instrument is measured, not inferred from the fleet
@@ -360,12 +360,12 @@ protecting a single identity for ever while the installation moves on.
 
 ### 🚨 What this refuses on day one, and the one-off it is asking for
 
-Measured 2026-09-12 on the control instance: three `Hosting/Deployment` records — `memex`,
-`memex-cloud` and `pearl` — all `Active`, none declaring retirement. `pearl` **has never been
+Measured 2026-09-12 on the control instance: three `Hosting/Deployment` records — the control instance,
+the public instance and an SME client instance — all `Active`, none declaring retirement. The client instance **has never been
 installed**, so it files no report, so it is an expected consumer that cannot be accounted for and
 the prebuilt-bundle pass refuses.
 
-That refusal is the mechanism working, not a defect: "is `pearl` a consumer?" is exactly the question
+That refusal is the mechanism working, not a defect: "is the client instance a consumer?" is exactly the question
 retention must answer before it deletes anything, and until now it was answered by silence. It costs
 nothing operationally today — the chart disarms bundle deletion by default
 (`PreWarm:PrebuiltBundleRetention:Delete=false`, see
@@ -373,7 +373,7 @@ nothing operationally today — the chart disarms bundle deletion by default
 the question rather than wedge a live sweep.
 
 **The one-off it asks for is one field**, and it is a record write in the private deployments repo
-rather than anything this repository can do: give `pearl`'s record `retired: true` or a `retiredAt`
+rather than anything this repository can do: give the client instance's record `retired: true` or a `retiredAt`
 stamp with the reason, or install it. The registry lane already carries the same declaration in
 `.github/acr-retention/instances.json`, with the reason and the issue; the two are deliberately
 separate files because they are two different stores, and neither infers the other's answer.
@@ -384,8 +384,8 @@ separate files because they are two different stores, and neither infers the oth
 01:18Z scheduled run ended:
 
 ```
-##[error]AXIS 3 — installation `build` runs core c84c6c0 and its overlay
-(Systemorph/Memex deployments/aks/build/values.build.public.yaml) pins no image at all,
+##[error]AXIS 3 — installation `build-server` runs core c84c6c0 and its overlay
+(Systemorph/Memex deployments/aks/build-server/values.build-server.public.yaml) pins no image at all,
 so there is no repository in which to protect what it runs.
 ```
 
@@ -398,12 +398,12 @@ extractor that is working perfectly.
 
 🚨 **And the red was not free.** `pause.reEnableWhen` is *"lock-pinned-digests is green"*, so a live
 installation moving registry was standing between the fleet and re-enabling cleanup — while the
-installation that IS exposed to the ACR purge (`memex`, six pins in this ACR) got no locks either,
+installation that IS exposed to the ACR purge (the control instance, six pins in this ACR) got no locks either,
 because the run refuses as a whole. One instance's registry question was holding the other's
 protection hostage.
 
-`build` is the fleet's build server and it is the first LIVE installation on `cr.meshweaver.cloud`;
-`pearl` pins there too and is declared not-installed, so it was never asked.
+`build-server` is the fleet's build server and it is the first LIVE installation on `cr.meshweaver.cloud`;
+the SME client instance pins there too and is declared not-installed, so it was never asked.
 
 **What the mechanism now does.** Foreign references are *extracted and named*. They are never
 locked — nothing here can write to another registry — but the facts stay distinct:
@@ -440,7 +440,7 @@ question asked is whether an installation's **running set** is accounted for. Wh
 mixed and `ghcr.io` is: `systemorph/*` is ours — `main-cd.yml` mirrors twelve tags across three of
 our repositories there on every promoting run — while `distribution/*` and `oras-project/*` are not.
 A single per-host disposition is false about one half whichever value it takes, and the naive
-correction (`third-party` → `fleet-unlockable`) is not merely a loosening: it makes `memex-cloud`
+correction (`third-party` → `fleet-unlockable`) is not merely a loosening: it makes the public instance
 red as *half covered*, because that installation pins its portal images **here** and the registry
 service's own image on GHCR. See
 [FleetRegistryRetention §8](/Doc/Architecture/FleetRegistryRetention).
@@ -449,25 +449,25 @@ service's own image on GHCR. See
 
 For three weeks the `registries` table was the only one of this file's three tables checked in a
 single direction. The strict half — *an undeclared host is a blocker* — worked exactly as designed:
-on 2026-09-17 it refused, nightly, naming `memexaksacr43rzd6faaix36.azurecr.io`. What nothing
+on 2026-09-17 it refused, nightly, naming `<client-registry>.azurecr.io`. What nothing
 checked was whether a **declaration still answered to anything**, and that is where the failure
 actually began.
 
-PartnerRe's ramp-up estate — subscription `17b34cbc`, which sat in the *Systemorph* tenant — carried
-the ACR `memexaksacrqoqqdqnhlaksg.azurecr.io`, and that is the host the table declared. The estate
-was torn down on 2026-09-16 and rebuilt on 2026-09-17T09:26Z in **PartnerRe's own subscription and
+The enterprise client's ramp-up estate — subscription `<subscription-id>`, which sat in the *Systemorph* tenant — carried
+the ACR `<old-client-registry>.azurecr.io`, and that is the host the table declared. The estate
+was torn down on 2026-09-16 and rebuilt on 2026-09-17T09:26Z in **the client's own subscription and
 Entra tenant**, minting a new registry. The overlay moved to it the same morning
-(`Systemorph/PartnerRe.Memex` `25249d2f`, *"the portal pulls from PartnerRe's own registry"*). The
+(the client's deployments repository, *"the portal pulls from the client's own registry"*). The
 declaration did not.
 
 **Nothing could tell us**, and the record kept validating green the whole time: a well-formed
 `disposition`, a `reason`, an `out-of-estate` retention block naming a subscription — every field
 correct in shape and every one of them about a registry that no longer existed. Measured read-only
-on 2026-09-21: subscription `17b34cbc` is in state `Warned` and holds **zero** container registries.
+on 2026-09-21: that subscription is in state `Warned` and holds **zero** container registries.
 
 The two halves then read as one symptom with the wrong cause. A reader of the nightly log saw a
 blocker about a host `instances.json` "does not account for" — which sounds like a registry that had
-just appeared — beside a table that already carried a PartnerRe entry, spelled almost identically.
+just appeared — beside a table that already carried an entry for that client, spelled almost identically.
 The lane was red for six days across ten runs, and its green is `pause.reEnableWhen` in
 `.github/acr-retention/tasks.json`, so the stale line stood between the fleet and re-enabling
 cleanup on a registry that was at 94.3% of its included storage.
@@ -507,14 +507,14 @@ not asserted, naming the repositories that suppressed it. The strict direction i
 unreadable tree may buy a missing assertion, never a widening.
 
 🚨 **The blocker names the host it is about and no other.** The first cut of this arm embedded the
-PartnerRe incident in the generic message, including *"while the lane refused over the ACR that
+client-estate incident in the generic message, including *"while the lane refused over the ACR that
 replaced it"* — which on any other stale host is not a stale example but a false assertion that a
 replacement exists, sending an operator to a registry with nothing to do with the case. The incident
 lives here, in prose; a printed blocker says what is true of the host in front of it.
 
 #### 🚨 The report was also stating a classification that did not exist
 
-The same runs printed a second blocker: *"pins images ONLY in `memexaksacr43rzd6faaix36.azurecr.io`,
+The same runs printed a second blocker: *"pins images ONLY in `<client-registry>.azurecr.io`,
 every one of them declared `third-party`"* — about a host `instances.json` did not mention at all,
 one line below the blocker saying the record does not account for it.
 
@@ -541,8 +541,8 @@ exposure remains *mitigated by being OFF, not fixed*, and turning either back on
 decision. What this change removes is the gate's inability to answer at all.
 
 Two things it still cannot say, unchanged by this: it measures nothing about what retains
-`memexaksacr43rzd6faaix36.azurecr.io` (the `out-of-estate` rule says so in as many words — the
-registry is in PartnerRe's tenant, and the lane has no credential there and none it could be
+`<client-registry>.azurecr.io` (the `out-of-estate` rule says so in as many words — the
+registry is in the client's tenant, and the lane has no credential there and none it could be
 granted), and it locks nothing in `cr.meshweaver.cloud`, where the answer is
 [FleetRegistryRetention](/Doc/Architecture/FleetRegistryRetention)'s.
 
@@ -552,7 +552,7 @@ Across the fleet's **twelve** deployment overlays on 2026-09-13, exactly **two**
 
 | host | references | disposition |
 |---|---|---|
-| `cr.meshweaver.cloud` | 4 (`build` ×2, `pearl` ×2) | `fleet-unlockable` |
+| `cr.meshweaver.cloud` | 4 (`build-server` ×2, the SME client instance ×2) | `fleet-unlockable` |
 | `ghcr.io` | 1 (`ghcr.io/distribution/distribution` — the registry service's own image) | `third-party` |
 
 🚨 **The counts are the OVERLAYS', and the extractor has since widened.** #4315's shipped extractor
@@ -730,7 +730,7 @@ not downstream of that night's protection verdict.
 3. **The `latest`-tag question.** A moving tag is named by no file and is outside this model. Four
    of five filtered repositories have no `:latest`; the survivor survives by being quiet.
 4. **The `Container Registry Repository Writer` grant** is what lets the lane write at all.
-5. **`pearl`'s Deployment record needs its retirement declared, or `pearl` needs installing** — see
+5. **The SME client instance's Deployment record needs its retirement declared, or the instance needs installing** — see
    above. One field, in the deployments repo.
 
 Until (2) lands, what this mechanism buys is that the exposure is **visible instead of silent**: a

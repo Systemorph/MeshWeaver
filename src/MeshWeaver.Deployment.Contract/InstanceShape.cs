@@ -311,7 +311,7 @@ public sealed record IngressSpec
     /// asks cert-manager for nothing, deliberately.</para>
     ///
     /// <para>Why it is typed rather than "just an annotation": a Provision renders the values from
-    /// THIS record, never from a repository overlay. pearl.meshweaver.cloud had the issuer in its
+    /// THIS record, never from a repository overlay. fabrikam.example.com had the issuer in its
     /// overlay and not on its record, so the rendered ingress asked for no certificate and the
     /// controller served another host's for nine hours (2026-09-15).</para>
     /// </summary>
@@ -535,6 +535,20 @@ public sealed record ModelProvider
     /// <summary>Feature-flag for the provider. Null → not stated.</summary>
     [Description("Enabled")]
     public bool? Enabled { get; init; }
+
+    /// <summary>
+    /// Where this provider's endpoint PROCESSES prompts — an open vocabulary (<c>Eu</c>,
+    /// <c>Global</c>, <c>Unknown</c>, or a region a module declares). Renders
+    /// <c>{Section}__DataResidency</c>, which the catalog seeder stamps onto the section's model
+    /// nodes. Null → not stated: the endpoint host may imply it, otherwise the models read Unknown,
+    /// never EU.
+    /// </summary>
+    [Description("Processing region of the endpoint (Eu, Global, …) — blank = not stated")]
+    public string? DataResidency { get; init; }
+
+    /// <summary>What the endpoint does with prompts after answering (e.g. <c>ZDR</c>). Free text; renders <c>{Section}__DataRetention</c>. Null → not stated.</summary>
+    [Description("Retention note, e.g. ZDR — blank = not stated")]
+    public string? DataRetention { get; init; }
 }
 
 /// <summary>Which model serves each tier — keyed by RANK, not by kind: Heavy is coding, not reasoning.</summary>
@@ -575,6 +589,25 @@ public sealed record AiProviders
     /// <summary>OpenRouter — the converged frontier catalog through one funded key.</summary>
     [Description("OpenRouter")]
     public ModelProvider? OpenRouter { get; init; }
+
+    /// <summary>
+    /// OpenRouter's EU ROUTE — the same account on <c>https://eu.openrouter.ai/api/v1</c>, requests
+    /// decrypted and served in the EU only. It holds no key: the seeded <c>Provider/OpenRouterEU</c>
+    /// references <c>Provider/OpenRouter</c>'s. Renders <c>OpenRouterEU__Models__N</c>,
+    /// <c>OpenRouterEU__Endpoint</c> (an override of the EU default) and the section's
+    /// <c>DataResidency</c> / <c>DataRetention</c>. Its <c>Order</c> and <c>Enabled</c> render
+    /// nothing: the chart carries no such keys for it and nothing binds them.
+    /// </summary>
+    [Description("OpenRouter (EU route, the account key by reference)")]
+    public ModelProvider? OpenRouterEU { get; init; }
+
+    /// <summary>
+    /// The processing region EVERY model this instance serves must satisfy — an open vocabulary
+    /// (<c>Eu</c>). Renders <c>AI__RequiredDataResidency</c>; the portal then fails closed on any
+    /// model or endpoint that does not satisfy it. Null → no requirement.
+    /// </summary>
+    [Description("Required processing region for every model (e.g. Eu) — blank = none")]
+    public string? RequiredDataResidency { get; init; }
 
     /// <summary>The tier map.</summary>
     [Description("Model tiers")]

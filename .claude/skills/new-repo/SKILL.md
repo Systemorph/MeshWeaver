@@ -195,7 +195,7 @@ repos and only `allowed-tools` varies. **`pullrequest` is the one you must edit*
 repo, its own pre-flight gates and its own deploy target. No repo in the fleet has `.claude/agents/`.
 
 SocialMedia's own note says why the files are thin: each *loads the master node from the mesh*
-(`get Skill/<name>` over the `memex` MCP) and carries only this repo's delta. The test for a delta:
+(`get Skill/<name>` over the mesh MCP) and carries only this repo's delta. The test for a delta:
 *would this sentence be true in another repo?* If yes, it belongs in the master, not here.
 
 🚨 **`.claude/settings.local.json` is per-user state and must not be tracked.** Reinsurance tracks
@@ -319,6 +319,7 @@ Manufacturing — ratchets `tests=skipped`, which the gate prints *inside* a lin
 | `plugin-gate.allow` | **repo root** | not a script — passed to `mw-plugin-test` as `--allow`, and it is `node-repo-gate.yml`'s `allow-file` **default** |
 | `plugin-tests.allow` | repo root | `scripts/check-test-suites.py` (growth blocked separately via `--base-ref origin/main`) |
 | `cover-prose.allow` | repo root | `scripts/check-covers.py` |
+| `layout-area-data-bake.allow` | repo root | core's `.github/scripts/check-layout-area-data-bake.py`, fetched by `node-repo-validate.yml`. It is **REQUIRED**: a missing file is red. An empty file is correct for a repository where nothing bakes. On a PR, the tree is compared with the base (`--base`): the number of baking units may not grow, and a PR that converts an area must lower or delete its line. Doc/GUI/DataBinding has the details. |
 
 🚨 **Seed every one of them EMPTY.** They exist to grandfather debt you inherited; a new repo has
 none, and an entry added in the same diff as the hole it excuses is a trapdoor exactly one commit
@@ -632,11 +633,11 @@ credential itself ([registry-credentials-we-issue](../../../AGENTS.md)).
 |---|---|---|
 | `ACR_USERNAME` / `ACR_PASSWORD` | a per-repo ACR **token** on a per-repo **scope map** — the fleet convention is `<short>-ci-pull` on `<short>-ci-pull-scope-map` (`repositories/mw-plugin-test/content/read`): `az acr scope-map create --registry meshweaver -n <short>-ci-pull-scope-map --repository mw-plugin-test content/read metadata/read` then `az acr token create --registry meshweaver -n <short>-ci-pull --scope-map <short>-ci-pull-scope-map` | 🚨 `token create` ECHOES the password in a docker-login hint on stderr. Treat it as burned: `az acr token credential generate … --password1 --query 'passwords[0].value' -o tsv > file 2>/dev/null`, then `gh secret set … < file`. Prove it with `docker login … --password-stdin < file` |
 | `MESHWEAVER_APP_ID` / `_PRIVATE_KEY` | the org GitHub App `meshweaver-cloud`, id **4220566** (`gh api /orgs/Systemorph/installations --jq '.installations[]|select(.app_slug=="meshweaver-cloud")|.app_id'`); PEM = keyvault `meshweaverkeyvault/github-app-privatekey` | verify the pairing before trusting it: mint an RS256 app JWT with the PEM and call `GET https://api.github.com/app` — the answer's `id`/`slug` must be 4220566 / meshweaver-cloud |
-| `AZURE_CLIENT_ID` / `_TENANT_ID` | `az identity show -g memex-aks-rg -n github-actions-bake --query '{clientId:clientId,tenantId:tenantId}'` | — |
+| `AZURE_CLIENT_ID` / `_TENANT_ID` | `az identity show -g <resource-group> -n github-actions-bake --query '{clientId:clientId,tenantId:tenantId}'` | — |
 | `AZURE_SUBSCRIPTION_ID` | `az account show --query id` | — |
 | the two OIDC federated credentials | §10's two `az identity federated-credential create` calls; `REPO_ID` = `gh api repos/Systemorph/<Repo> --jq .id`, org id 77832550 | keep BOTH formats |
 | `MW_REGISTRY_URL` / `BAKE_PUBLISH_TARGETS` | the same literal every sibling carries — copy it: `gh api repos/Systemorph/MeshWeaver.Reinsurance/actions/variables --jq '.variables[]|"\(.name)=\(.value)"'` | variables are readable across repos; secrets never are |
-| `MW_REGISTRY_KEY` | mint a 20-minute `mwr_` on the registry (an executable Code node in your home, `execute_script`, calling `RegistrationKeyService.Mint(userId, name, email, description, expiresAt)` from `MeshWeaver.PluginCatalog`; the raw key lands in the activity log a second after `Succeeded`), then ONE pipeline: `curl -X POST https://memex.meshweaver.cloud/api/instances/register -d '{"bootstrapKey":…,"instanceId":"ci-<short>",…}' > file` → `python3 -c "…print(instanceKey,end='')" | gh secret set MW_REGISTRY_KEY --repo …` | registration AUTO-creates `Admin/_PluginGrant/ci-<short>` (`Plugins/*`, by `system-security`) — never create it by hand; delete the mint node afterwards |
+| `MW_REGISTRY_KEY` | mint a 20-minute `mwr_` on the registry (an executable Code node in your home, `execute_script`, calling `RegistrationKeyService.Mint(userId, name, email, description, expiresAt)` from `MeshWeaver.PluginCatalog`; the raw key lands in the activity log a second after `Succeeded`), then ONE pipeline: `curl -X POST "$MW_REGISTRY_URL/api/instances/register" -d '{"bootstrapKey":…,"instanceId":"ci-<short>",…}' > file` → `python3 -c "…print(instanceKey,end='')" | gh secret set MW_REGISTRY_KEY --repo …` | registration AUTO-creates `Admin/_PluginGrant/ci-<short>` (`Plugins/*`, by `system-security`) — never create it by hand; delete the mint node afterwards |
 
 **Dependabot store too.** `gh secret set … --app dependabot` for `ACR_*` and `MESHWEAVER_APP_*` — a
 dependabot-triggered run reads the Dependabot store, and preflight fails red on the Actions-only
@@ -675,7 +676,7 @@ goes on AFTER the first real run has produced the three contexts to require.
 EffectiveSubdirectory` appends the package id, so a request with `"subdirectory": "Crm"` for package
 `Crm` syncs `Crm/Crm` and the import refuses an empty snapshot ("No files found under subdirectory
 'Crm/Crm'"). For a repo whose package folder sits at the root, **omit `subdirectory`** (it derives
-`Crm`). Measured on systemorph, 2026-08-28; a retry is `patch` `subdirectory: null` +
+`Crm`). Measured on the control instance, 2026-08-28; a retry is `patch` `subdirectory: null` +
 `requestedAction: "Provision"` — the phases reconcile the `_GitSync` they wrote.
 
 ## 11. Make the content reachable — register the repo as a catalog source
@@ -704,7 +705,7 @@ build, and a Dependabot PR would fight the reconciler. See [`/new-deployment`](.
 ## 12. Webhooks — one per LIVE portal, or the fleet never sees the repo
 
 **Measured 2026-09-07 (MeshWeaver#3582, #3583).** `MeshWeaver.Crm` was created on 08-28 with
-everything above and **no webhooks**. Nothing checked. Its partition on `memex.systemorph.com` last
+everything above and **no webhooks**. Nothing checked. Its partition on the control instance last
 synced on 08-30; ten days later the repo was 54 commits ahead, the portal still held files the repo
 had retired, every prebuilt Crm bundle was refused by the source-fingerprint gate (#2813), and
 opening any Crm page compiled ten-day-old sources on first use — reported as *"why is bake not
@@ -722,15 +723,14 @@ error on a partition the portal does not track).
 **One hook per live portal, the portal's own secret, created at the same time as the repo:**
 
 ```bash
-# vault object → portal (names only; measured 2026-09-07)
-#   github-webhook-secret            → memex.systemorph.com   (SPC memex-kv → memex-kv-secrets)
-#   memexcloud-GitHub-Webhook-Secret → memex.meshweaver.cloud (SPC memexcloud-portal-ai-secrets)
+# vault object → portal: each portal's GitHub__Webhook__Secret is a Key Vault object named in
+# that portal's SecretProviderClass — read the name there, never guess it.
 # The value goes from the vault into the request body and nowhere else — never into a variable
 # you echo, never onto a command line. scripts/… is deliberately absent: keep it in the scratchpad.
-python3 - Systemorph/MeshWeaver.<Name> memex.systemorph.com github-webhook-secret push,workflow_run <<'PY'
+python3 - Systemorph/MeshWeaver.<Name> <portal-host> <webhook-secret-object> push,workflow_run <<'PY'
 import json, subprocess, sys, time
 repo, host, obj, events = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4].split(",")
-secret = subprocess.run(["az","keyvault","secret","show","--vault-name","Systemorph","--name",obj,
+secret = subprocess.run(["az","keyvault","secret","show","--vault-name","<vault>","--name",obj,
                          "--query","value","-o","tsv"], check=True, capture_output=True, text=True).stdout.strip()
 body = {"name":"web","active":True,"events":events,"config":{"url":f"https://{host}/webhooks/github",
         "content_type":"json","insecure_ssl":"0","secret":secret}}
@@ -742,7 +742,8 @@ d = json.loads(subprocess.run(["gh","api",f"repos/{repo}/hooks/{hook['id']}/deli
         check=True, capture_output=True, text=True).stdout)[0]
 print(f"hook {hook['id']} -> {host}: ping status={d['status']} code={d['status_code']}")
 PY
-# …and again for memex.meshweaver.cloud with memexcloud-GitHub-Webhook-Secret, events
+# …and again for every other live portal with ITS webhook-secret object — for the public
+# instance with events
 # issues,issue_comment,push,workflow_run (the two issue events feed the issue mirror; add them only
 # if the repo takes part in it — Plugins, Education, Reinsurance and SocialMedia do).
 ```

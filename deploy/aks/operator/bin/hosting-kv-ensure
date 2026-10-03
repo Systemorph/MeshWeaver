@@ -2,6 +2,7 @@
 # hosting-kv-ensure --vault <name> --prefix <prefix> --namespace <ns>
 #                   [--db-connection <vault object> --db-host <fqdn> --db-port <n> --db-user <user>
 #                    --db-name <database> --db-password-secret <vault object>]
+#                   [--skip-registry-key | --registry-key-vault <name> --registry-key-object <object>]
 #
 # Make sure the per-instance Key Vault secrets EXIST, and mint the ones only this step can mint.
 #
@@ -28,6 +29,7 @@ HOSTING_CMD="hosting-kv-ensure"
 
 vault="" prefix="" namespace=""
 db_connection="" db_host="" db_port="" db_user="" db_name="" db_password_secret=""
+skip_registry_key=false registry_key_vault="" registry_key_object=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)              vault="${2:-}";              shift 2 ;;
@@ -39,6 +41,9 @@ while [ $# -gt 0 ]; do
     --db-user)            db_user="${2:-}";            shift 2 ;;
     --db-name)            db_name="${2:-}";            shift 2 ;;
     --db-password-secret) db_password_secret="${2:-}"; shift 2 ;;
+    --skip-registry-key)   skip_registry_key=true;       shift ;;
+    --registry-key-vault)  registry_key_vault="${2:-}"; shift 2 ;;
+    --registry-key-object) registry_key_object="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -56,6 +61,15 @@ hosting::safe_name namespace "$namespace"
 [ -z "$db_user" ] || hosting::safe_name db-user "$db_user"
 [ -z "$db_name" ] || hosting::safe_name db-name "$db_name"
 [ -z "$db_password_secret" ] || hosting::safe_name db-password-secret "$db_password_secret"
+[ -z "$registry_key_vault" ] || hosting::safe_name registry-key-vault "$registry_key_vault"
+[ -z "$registry_key_object" ] || hosting::safe_name registry-key-object "$registry_key_object"
+if [ "$skip_registry_key" = true ] && { [ -n "$registry_key_vault" ] || [ -n "$registry_key_object" ]; }; then
+  hosting::die "--skip-registry-key cannot be combined with --registry-key-vault or --registry-key-object"
+fi
+if { [ -n "$registry_key_vault" ] && [ -z "$registry_key_object" ]; } \
+    || { [ -z "$registry_key_vault" ] && [ -n "$registry_key_object" ]; }; then
+  hosting::die "--registry-key-vault and --registry-key-object must be supplied together"
+fi
 if [ -n "$db_port" ] && ! [[ "$db_port" =~ ^[0-9]{1,5}$ ]]; then
   hosting::die "db-port '${db_port}' is not a port number — refusing to compose a connection string from it"
 fi
@@ -63,17 +77,22 @@ fi
 # The per-instance secrets an instance cannot boot without. Names are the vault's, dash-separated;
 # the SecretProviderClass maps each onto its config key (see secretproviderclass.reference.yaml in
 # the config repo). `generate` secrets are minted here because nothing else can; `require` secrets
-# must be supplied out-of-band and their absence is a REFUSAL, not a silent gap.
+# must be supplied out-of-band and their absence is a REFUSAL, not a silent gap. The registry key is
+# required by default for direct callers; a deployment plan names the exact mapped object when used,
+# or explicitly skips it when the record has no registry-token consumer.
 #
 #   name                          how
 GENERATED="Ai-KeyProtection-MasterKey"
-REQUIRED="PluginCatalog-RegistryToken"
 
 created=0 kept=0 missing=()
 
-kv_exists() {
-  az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1
+kv_exists_in_vault() {
+  local target_vault="$1" name="$2"
+  hosting::kv_exists "$target_vault" "$name"; local rc=$?
+  [ "$rc" -eq 2 ] && hosting::die "could not LIST vault ${target_vault} to see whether ${name} exists — refusing to read a refused listing as 'absent'. The identity needs \`list\` on ${target_vault}."
+  return "$rc"
 }
+kv_exists() { kv_exists_in_vault "$vault" "$1"; }
 
 for suffix in $GENERATED; do
   name="${prefix}${suffix}"
@@ -92,18 +111,23 @@ for suffix in $GENERATED; do
   created=$((created + 1))
 done
 
-for suffix in $REQUIRED; do
-  name="${prefix}${suffix}"
-  if kv_exists "$name"; then
-    hosting::log "found   ${name}"
+if [ "$skip_registry_key" != true ]; then
+  required_registry_vault="${registry_key_vault:-$vault}"
+  required_registry_object="${registry_key_object:-${prefix}PluginCatalog-RegistryToken}"
+  if kv_exists_in_vault "$required_registry_vault" "$required_registry_object"; then
+    hosting::log "found   ${required_registry_object} in ${required_registry_vault}"
     kept=$((kept + 1))
   else
-    missing+=("$name")
+    if [ "$required_registry_vault" = "$vault" ]; then
+      missing+=("$required_registry_object")
+    else
+      missing+=("${required_registry_vault}/${required_registry_object}")
+    fi
   fi
-done
+fi
 
 if [ ${#missing[@]} -gt 0 ]; then
-  hosting::die "vault ${vault} is missing $(IFS=,; echo "${missing[*]}"). These are ISSUED, not generated — a registry consumer key comes from the registry installation (see the plugin registry docs), and minting a random value here would produce an instance that boots, registers nothing, and shows an empty Store with no error. Create them in the vault, then re-request the action."
+  hosting::die "required Key Vault object(s) are missing: $(IFS=,; echo "${missing[*]}"). These are ISSUED, not generated — a registry consumer key comes from the registry installation (see the plugin registry docs), and minting a random value here would produce an instance that boots, registers nothing, and shows an empty Store with no error. Create the named object in its vault, then re-request the action."
 fi
 
 # ── the database connection string ────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Plugin.Packaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -162,6 +163,18 @@ internal static class PackageUpdateReconciler
         // this module changed ⇒ stay completely silent — no notification, and not one file fetched.
         if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
             return Observable.Return(Unit.Default);
+
+        // 🚨 policy package-min-mesh-version — the candidate is USABLE here only if the running
+        // platform satisfies its declared floor. A held candidate is neither applied nor offered:
+        // the installed version keeps running (R1), the record says why, and the next reconcile
+        // after the platform rolls applies it. Before the policy switch, so no lane reminds an
+        // administrator of an update this platform cannot run (2026-09-27: Store 1.16 and Hosting
+        // synced onto 3.0.0-ci.9412/9414 and left 14 NodeTypes with no usable assembly).
+        var floor = PackagePlatformFloorGate.Evaluate(hub, pkg);
+        if (floor.IsHeld)
+            return PackagePlatformFloorGate.RecordHold(hub, pkg, record, floor, logger);
+        if (floor.Kind == PlatformFloorKind.Advisory)
+            logger?.LogInformation("Package update: {Id} {Advisory}", pkg.Id, floor.Reason);
 
         var delta = DescribeDelta(pkg, record);
         var detail = Describe(delta);

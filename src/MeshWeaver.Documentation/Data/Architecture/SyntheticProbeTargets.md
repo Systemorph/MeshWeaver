@@ -18,8 +18,8 @@ The probe's matrix paired each portal with an asset of an installed package:
 
 | portal | target |
 |---|---|
-| `memex.meshweaver.cloud` | `/api/content/AgenticEngineering/content/og.png` |
-| `memex.systemorph.com` | `/api/content/AgenticPrimer/content/og.png` |
+| the public instance | `/api/content/AgenticEngineering/content/og.png` |
+| the staff (working) instance | `/api/content/AgenticPrimer/content/og.png` |
 
 `AgenticPrimer` is not installed on the staff portal and never was. So from 2026-08-31 the probe
 failed every 15 minutes, for 59 of its last 60 runs, while the portal it was pointed at was
@@ -105,8 +105,8 @@ The probe holds each portal to **its own claims** rather than to a guess made in
 `/sitemap.xml` is anonymous and is the only unauthenticated surface that says what a deployment
 serves: `SeoEndpoints` enumerates every top-level `Store/Plugin`, `Store/Catalog` and `Space` root
 that passes `AnonymousGate`, applied per node and fail-closed. Measured 2026-09-08 it already encodes
-the difference the matrix used to guess at — **79** roots on `memex.systemorph.com` (no
-`AgenticPrimer`), **101** on `memex.meshweaver.cloud` (with it).
+the difference the matrix used to guess at — **79** roots on the staff instance (no
+`AgenticPrimer`), **101** on the public instance (with it).
 
 For a public target, the probe reads that list, samples roots from it by index (first, middle, last —
 deterministic so a red is reproducible, spread so the sample is not the same three

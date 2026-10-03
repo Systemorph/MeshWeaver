@@ -7,7 +7,7 @@ Icon: CloudArrowUp
 
 # Database Backups & Disaster Recovery
 
-All portal instances on the shared AKS cluster (`memex`, `memex-cloud`, `prod` — see
+All portal instances on the shared AKS cluster (the control instance, the public instance and every working instance — see
 [Instances.md](/Doc/Architecture/Instances)) store their data in **one private Azure Database for
 PostgreSQL Flexible Server** (`<pg-server>`, swedencentral, PG 16 + pgvector). Backing up that one
 server backs up **every database on it**, so the whole platform's data is covered by a single policy.
@@ -20,7 +20,7 @@ Azure PG **Flexible Server managed backups** are on by default and cannot be tur
 |---|---|---|
 | Mechanism | Automated snapshots + continuous WAL | Point-in-time restore (PITR) to **any second** in the window |
 | Retention | `backupRetentionDays: 14` (range 7–35) | Restore to any moment in the last 14 days |
-| Scope | The whole server | Every database (`memex`, and each per-environment DB) at once |
+| Scope | The whole server | Every database (the control instance's and each per-environment DB) at once |
 | Storage | Azure-managed backup storage, **billed only above 100 % of provisioned storage** | No storage account to manage |
 
 This covers the everyday case ("someone deleted a space yesterday — restore to just before").
@@ -77,7 +77,7 @@ az postgres flexible-server show -g <aks-resource-group> -n <pg-server>-geo \
 # 3. Re-inject into the same delegated subnet + private DNS zone, re-apply pgvector allowlist
 #    (azure.extensions = VECTOR,UUID-OSSP), and re-create/verify each per-env database.
 # 4. Cut over: patch the connection string for EVERY portal namespace to the new FQDN, then restart.
-#    (memex, memex-cloud, prod — one at a time; confirm HTTP 200 before the next.)
+#    (<namespace> by <namespace> — one at a time; confirm HTTP 200 before the next.)
 # 5. Decommission the old server once the cutover is verified and a fresh geo-backup exists.
 ```
 

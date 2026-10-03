@@ -15,7 +15,7 @@ This page is a step-by-step guide for standing up a **prod-like memex portal** o
 |---|---|---|
 | Fastest inner loop — edit code, hit a browser, no Docker/k8s | **Monolith** (`dotnet run`) or Aspire local mode | [Deployment.md](/Doc/Architecture/Deployment) → Running Locally · [LocalDevWorkflow.md](/Doc/Architecture/LocalDevWorkflow) |
 | A **prod-like** stack on your Mac — real k8s, Helm chart, ingress/TLS, Postgres PVC, OAuth, local LLM | **This page** (Colima k3s) | — |
-| Ship a code update to the shared `memex` portal | AKS | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
+| Ship a code update to a shared cloud portal | AKS | [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) |
 | Deploy an Aspire `test`/`prod` environment | Azure Container Apps | [DeploymentContainerApps.md](/Doc/Architecture/DeploymentContainerApps) |
 | Understand how an install updates itself (policy-driven) | Self-update | [ReleaseStrategy.md](/Doc/Architecture/ReleaseStrategy) |
 
@@ -40,7 +40,7 @@ brew install socket_vmnet
 
 You also need the **.NET SDK** (10.0) to build the portal image — install from [dotnet.microsoft.com](https://dotnet.microsoft.com/download) or `brew install --cask dotnet-sdk`.
 
-> **Prefer one command?** `brew tap systemorph/memex && brew trust systemorph/memex && brew install memex-local` — the `memex-local` CLI automates **every step on this page**, idempotently: `up` / `down` / `status` / `logs` / `update`. The tap is published by this repository's CI on every merge to `main` (`brew upgrade memex-local` follows main). Point it at the cloud plugin registry first (**§17**, `memex-local registry https://memex.meshweaver.cloud` — no key needed, that is the free tier) and it needs neither a source checkout nor the .NET SDK. See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
+> **Prefer one command?** `brew tap systemorph/memex && brew trust systemorph/memex && brew install memex-local` — the `memex-local` CLI automates **every step on this page**, idempotently: `up` / `down` / `status` / `logs` / `update`. The tap is published by this repository's CI on every merge to `main` (`brew upgrade memex-local` follows main). Point it at the cloud plugin registry first (**§17**, `memex-local registry https://registry.example.com` — no key needed, that is the free tier) and it needs neither a source checkout nor the .NET SDK. See `deploy/homebrew/README.md`. The rest of this page is the manual reference the CLI follows 1:1.
 
 The work splits across three areas, which the rest of this page walks through in order:
 
@@ -622,10 +622,10 @@ Expected on a healthy run — the instance registers, is granted `Plugins/*` by
 
 ---
 
-## 17. Registry mode — consume memex.meshweaver.cloud (`memex-local registry`)
+## 17. Registry mode — consume the public plugin registry (`memex-local registry`)
 
 The other way round from §16: this install is a **consumer** of a remote plugin registry, exactly
-like every cloud instance is a consumer of memex.meshweaver.cloud. It runs the **CI-built
+like every cloud instance is a consumer of the plugin registry instance. It runs the **CI-built
 multi-arch image** from ACR (the native arm64 member — no source checkout, no .NET SDK, `az login`
 once), registers itself at the registry on first boot, installs the packages it is granted and
 **lands their compiled modules** from the registry's bundles into `/data`. Module bundles are
@@ -634,13 +634,13 @@ unchanged. (Prebuilt NodeType *bakes* are identity-gated and amd64-only; a local
 those on first access, which is the `PreWarm__DynamicTypes: "false"` behaviour it already has.)
 
 ```bash
-memex-local registry https://memex.meshweaver.cloud --id my-mac    # no key: an OPEN registration → the free tier
+memex-local registry https://registry.example.com --id my-mac    # no key: an OPEN registration → the free tier
 memex-local up            # a fresh install …
 memex-local update        # … or an existing self-registry one: pulls the ACR image, re-renders the chart
 memex-local registry status
 ```
 
-**No key is the default.** An un-keyed registration is an *open* one: memex.meshweaver.cloud
+**No key is the default.** An un-keyed registration is an *open* one: the registry instance
 accepts it and enrols the install into its default plan, the **free tier** — every package the
 free plan covers, plus the platform baseline. Raising it is a platform admin's edit of the
 instance's grant on the registry (Instance grants ▸ Plan); an install never asks for a plan

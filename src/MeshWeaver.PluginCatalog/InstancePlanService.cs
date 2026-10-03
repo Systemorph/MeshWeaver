@@ -26,8 +26,6 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanService> logger)
 {
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
-
     /// <summary>
     /// The path of the instance node registered under <paramref name="instanceId"/>, or null.
     /// A listing query, which is the valid shape for "which node carries this id": instances live
@@ -50,10 +48,20 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
             Query = MeshWideQuery.Declare(
                 $"nodeType:{MeshWeaverInstanceNodeType.NodeType} id:{instanceId.Trim()}"),
         };
-        return accessService.RunAsSystem(() => meshService.Query(request))
+        // 🚨 The MERGED Initial, never the first frame of the progressive fan-in: that one is seeded
+        // empty per provider, so an instance held by a provider that answers asynchronously (the
+        // Postgres store, in production) is not in it — the lookup then said "no registered
+        // instance" for every id.
+        return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(ReadTimeout)
-            .Select(results => results
+            // 🚨 No timer of its own (#5894). This lookup used to carry a 10 s Timeout, written when
+            // the fan-in's Initial had no bound and an unanswered provider hung its caller for ever.
+            // The fan-in now FAULTS at its own budget (QueryProviderStalledException at
+            // MeshOperationOptions.QueryInitialBudget, 15 s on the default ladder), so the local
+            // 10 s was a second, SHORTER bound on the same wait: the form gave up while the query
+            // was still legitimately inside its budget. One bound, the query's.
+            .Select(change => change.Items
                 // The key-hash INDEX rows share the node type but live under the global index
                 // namespace and carry a hash prefix as their id — they never match an instance id,
                 // and the filter makes that explicit rather than incidental.
@@ -67,6 +75,13 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
     /// — the promotion (or demotion) a global admin makes. The caller validates the id against the
     /// registry's own ladder (<see cref="PlanTierLadder"/>); an unknown plan stored here would
     /// license nothing (fail closed), which is why the admin tab refuses it before calling.
+    ///
+    /// <para>🚨 A GLOBAL ADMINISTRATOR's act (<c>hub.IsGlobalAdmin()</c>, read off the caller's own
+    /// identity), and the record is then read and written as System — the same shape as
+    /// <c>RevokeKey</c>. The record lives in its registrant's partition
+    /// (<c>{owner}/MeshWeaverInstance/{id}</c>), and a global administrator is a platform admin, not a
+    /// data superuser: under the caller's own identity the read is refused for every instance the
+    /// admin did not register. Anyone else is refused before anything is read.</para>
     /// </summary>
     /// <returns>The updated node. Cold — subscribe to write.</returns>
     public IObservable<MeshNode> SetPlan(string instancePath, string plan)
@@ -77,13 +92,19 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
         if (string.IsNullOrWhiteSpace(instancePath))
             return Observable.Throw<MeshNode>(new ArgumentException("An instance path is required.", nameof(instancePath)));
 
-        return hub.GetWorkspace().GetMeshNodeStream(instancePath)
-            .Update(current => current with
-            {
-                Content = current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions) is { } instance
-                    ? instance with { Plan = canonical }
-                    : current.Content,
-            })
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return hub.IsGlobalAdmin()
+            .Take(1)
+            .SelectMany(isAdmin => isAdmin
+                ? accessService.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(instancePath)
+                    .Update(current => current with
+                    {
+                        Content = current.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions) is { } instance
+                            ? instance with { Plan = canonical }
+                            : current.Content,
+                    }))
+                : Observable.Throw<MeshNode>(new UnauthorizedAccessException(
+                    $"setting the plan of '{instancePath}' is a global administrator's act on the registry")))
             .Do(node =>
             {
                 var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions);

@@ -116,7 +116,7 @@ owner's listings and re-scopes its grants (they project at `COALESCE(main_node, 
 - **#2383** — `_Policy` satellites minted with the plain constructor pointed `MainNode` at
   themselves, so *Access Policy* was listed as content on every package cover.
 - **#2939 / MeshWeaver.Plugins#1053** — every `Skill` authored as `.md` inside a plugin partition
-  imported with `MainNode = "Skill/{id}"`. **Seven** live nodes on `memex.meshweaver.cloud`
+  imported with `MainNode = "Skill/{id}"`. **Seven** live nodes on the plugin registry instance
   (`Hosting/Skill/{deployment,deployment-activity,instance,platform-update}`, `Essentials/Skill/email`,
   `RemoteControl/Skill/remote`, `Store/Skill/ci-policy`) were `Active` and absent from
   `search nodeType:Skill partitions:all` — the documented way to find skills. A reachability sweep

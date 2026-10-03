@@ -17,7 +17,7 @@ Most of the time those agree. When they did not, nothing failed loudly: the down
 archive was well formed, the module landed, and then the portal declined every compiled type in the
 package — *"dependency record mismatch — built against …, live is …"* — and quietly recompiled them
 itself, or, on a deployment that does not compile plugin content, served the plugin's pages empty.
-That is what memex.meshweaver.cloud did to one plugin's four packages on 2026-09-03, with no change
+That is what the public instance did to one plugin's four packages on 2026-09-03, with no change
 in any repository to point at.
 
 The archive already knew the answer. Every compiled type in it records which build of the module it

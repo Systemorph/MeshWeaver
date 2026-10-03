@@ -51,6 +51,8 @@
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.TestBase/MeshWeaver.Hosting.Orleans.TestBase.csproj" />
+    <Project Path="test/MeshWeaver.Testing.FaultInjection/MeshWeaver.Testing.FaultInjection.csproj" />
+    <Project Path="test/MeshWeaver.FaultInjection.Test/MeshWeaver.FaultInjection.Test.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />

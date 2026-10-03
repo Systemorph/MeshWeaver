@@ -18,7 +18,7 @@ nobody can attribute.
 
 ## What was measured
 
-memex.systemorph.com, 2026-09-17 ([#4601](https://github.com/Systemorph/MeshWeaver/issues/4601)).
+The control instance, 2026-09-17 ([#4601](https://github.com/Systemorph/MeshWeaver/issues/4601)).
 A `patch` that put a JSON object into a member declared `public string?`:
 
 ```json
@@ -147,6 +147,34 @@ preserve the raw JSON on purpose — which is why both measured cases are covere
 payload that both resolves *and* carries extra members, on a hub that knows the type. Closing it
 means judging the RAW bytes at the API boundary, before deserialisation, and that is a separate
 change with its own cost.
+
+### The MCP `patch` and `update` verbs close it for the keys the caller NAMED
+
+The blind spot bit an agent on 2026-09-29, on the control instance: a `patch` of a Crm/Counterparty
+node carrying `aliases`, `domains` and `matchCaseSensitive` — members the NodeType had gained minutes
+earlier, while the portal still had the type compiled BEFORE them bound — answered
+`Patched: <path>` twice (once after a recycle), with the node still at version 7 and none of the keys
+on read-back. The typed deserialisation dropped the three keys, and the landed-write check
+(`ProjectTouched`) read a key the serializer does not write as "expect it absent", which the live node
+satisfied on its first emission.
+
+The verbs hold the one thing the validator never sees — the caller's RAW keys — so they judge there
+(`MeshOperations.UnknownContentMembers`):
+
+- **A top-level content key the bound type does not declare is REFUSED**, naming every such key, the
+  type and the NodeType, and nothing is written — not even the declared keys beside it. The message
+  names the remedy for the stale-type case: recompile the NodeType and recycle it, then retry. It
+  judges only typed content: untyped content (`JsonElement`) keeps every key, a type with
+  `[JsonExtensionData]` keeps unknown keys by design, `$`-prefixed wire metadata is never a member,
+  and nested objects are not descended into.
+- **A `patch` that changes nothing answers `No change: <path> (vN)`**, never `Patched:` — the stored
+  node and the node the merge would write serialise identically, so nothing is written and the
+  version stays. `Patched:` is therefore always a write that landed, with its version delta.
+
+This is narrower than the write boundary on purpose, and consistent with the "extra member alongside
+real ones" rule above: that rule protects a WRITER round-tripping a whole record it did not author;
+these verbs refuse a key a caller typed and asked to be stored, which is the one case where dropping
+it is always a lie. Pinned by `PatchUnknownContentMembersTest`.
 
 ## Related
 

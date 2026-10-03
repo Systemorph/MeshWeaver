@@ -23,7 +23,7 @@ namespace MeshWeaver.Deployment;
 /// (<c>"$type": "DeploymentContent"</c>, <c>"KeyVaultSecretsSpec"</c>, …) written by the mesh's
 /// polymorphic converter. <see cref="Read"/> accepts either form — unknown members are skipped —
 /// which is what the round-trip test over the real <c>Deployments/memex</c> and
-/// <c>Deployments/pearl</c> records asserts.</para>
+/// <c>Deployments/fabrikam</c> records asserts.</para>
 /// </summary>
 public static class DeploymentRecordJson
 {

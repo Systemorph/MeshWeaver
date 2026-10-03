@@ -183,7 +183,7 @@ then request a release.** The log line says so, in those words.
 
 ## Refusal is keyed on version compatibility, not on the fingerprint (2026-09-09)
 
-Measured on memex.systemorph.com, platform `3.0.0-ci.8057`
+Measured on the control instance, platform `3.0.0-ci.8057`
 ([#3583](https://github.com/Systemorph/MeshWeaver/issues/3583)):
 
 ```

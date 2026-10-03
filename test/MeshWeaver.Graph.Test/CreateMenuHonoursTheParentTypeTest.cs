@@ -33,7 +33,7 @@ namespace MeshWeaver.Graph.Test;
 /// <see cref="NodeTypeDefinition.CreatableTypes"/>, <see cref="NodeTypeDefinition.IncludeGlobalTypes"/>
 /// and <c>MeshConfiguration.GlobalCreatableTypes</c> documented, populated and never read. Measured
 /// on memex.systemorph.com on 2026-09-11: <c>Crm/Offer</c> declares
-/// <c>"creatableTypes": ["Crm/Question"]</c>, <c>PearlTechnology/Commercials</c> is a
+/// <c>"creatableTypes": ["Crm/Question"]</c>, <c>Fabrikam/Commercials</c> is a
 /// <c>Crm/Offer</c>, and its Create area offered ~90 types, none of them <c>Crm/*</c>
 /// (<c>Systemorph/MeshWeaver.Crm#82</c> shipped green through every gate on that basis).</para>
 ///
@@ -452,7 +452,7 @@ public class CreateMenuHonoursTheParentTypeTest(ITestOutputHelper output) : Mono
     // ── fixture ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Two partitions, mirroring <c>Crm</c> + <c>PearlTechnology</c>: the TYPES live in one and the
+    /// Two partitions, mirroring <c>Crm</c> + <c>Fabrikam</c>: the TYPES live in one and the
     /// INSTANCES in the other, so a declared type is provably outside the instance's ancestor chain.
     /// </summary>
     private async Task<(string Types, string Host, string OptedOut)> Fixture(CancellationToken cancellationToken)

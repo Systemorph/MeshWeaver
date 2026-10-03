@@ -83,142 +83,35 @@ public static class ApiTokenNodeType
         IMessageHub hub,
         IMessageDelivery<ValidateTokenRequest> request)
     {
-        var rawToken = request.Message.RawToken;
-
-        if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix))
-        {
-            hub.Post(ValidateTokenResponse.Fail("Invalid token format"), o => o.ResponseFor(request));
-            return request.Processed();
-        }
-
-        var hash = ValidateTokenRequest.HashToken(rawToken);
-
-        // Read own MeshNode via one-shot GetDataRequest — true request/response, no
-        // lingering subscription. Posts to self (hub.Address); the handler's Subscribe
-        // runs on the event loop after this returns, so no deadlock.
+        // ONE verdict for every path that authenticates a token (ApiTokenVerdict) — this handler
+        // and the HTTP auth middleware's direct store read must never disagree about a token.
         //
-        // Impersonate-as-System for the lookup: token validation is the entry
-        // point that turns a raw token into a user identity, so by definition
-        // the caller is unauthenticated. Without an explicit System scope, the
-        // SecurePersistence ACL would deny the read (anonymous can't read an
-        // ApiToken node) and the validator would return "Token not found" for
-        // every request. The hash-compare further down is the actual
-        // authentication step; the System scope only covers this one read.
+        // The records are read from the AUTHORITATIVE store when this process has one, exactly as
+        // ApiTokenService.ConfirmServicePrincipal reads them: an ABSENT record reads as null → a
+        // definitive Fail, never a routing NotFound that would surface as Unavailable. Without a
+        // store the read goes through the mesh as System — token validation is the entry point
+        // that turns a raw token into an identity, so the caller is unauthenticated by definition
+        // and the SecurePersistence ACL would otherwise deny the read. The hash compare inside the
+        // verdict is the actual authentication step; the System scope covers only the reads.
         //
-        // 🚨 RunAsSystem, never Observable.Using (#1790). This handler runs ON the ApiToken hub's
-        // action block; Observable.Using would open the System scope on that thread and dispose it
-        // on whichever thread the cross-hub read terminates, leaving the action block holding
-        // `system-security` and the responder holding a foreign "previous". RunAsSystem opens and
-        // closes the scope inside one synchronous Subscribe — the whole composition below sits
-        // INSIDE the work factory, so nothing about the emission-time behaviour changes.
+        // 🚨 RunAsSystem, never Observable.Using (#1790): the scope opens and closes inside one
+        // synchronous Subscribe, so this hub's action block never keeps `system-security`.
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var hubAddress = hub.Address.ToString();
-        accessService.RunAsSystem(
-            () => hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10))
-            .SelectMany(node =>
-            {
-                if (node == null)
-                {
-                    hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-                    return Observable.Empty<Unit>();
-                }
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        Func<string, IObservable<MeshNode?>> read = storage is not null
+            ? path => storage.Read(path, hub.JsonSerializerOptions)
+            : path => accessService.RunAsSystem(() => hub.GetMeshNode(path, ApiTokenVerdict.ReadBound));
 
-                var index = node.ContentAs<ApiTokenIndex>(hub.JsonSerializerOptions) ?? ExtractApiTokenIndex(node, hub.JsonSerializerOptions);
-
-                IObservable<MeshNode?> tokenNodeObs;
-                if (index != null)
-                {
-                    if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                        return Observable.Empty<Unit>();
-                    }
-
-                    // Cross-hub one-shot read for the actual token node — GetDataRequest
-                    // routes to the owning per-node hub via the mesh. Re-impersonate
-                    // as System for this read too: the AsyncLocal context the OUTER
-                    // scope set is not alive on the thread this SelectMany continuation
-                    // re-subscribes from, and the actual token node sits at
-                    // "{userId}/ApiToken/{hashPrefix}" which RLS gates on the owning
-                    // user's identity.
-                    tokenNodeObs = accessService.RunAsSystem(
-                        () => hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10)));
-                }
-                else
-                {
-                    tokenNodeObs = Observable.Return<MeshNode?>(node);
-                }
-
-                return tokenNodeObs.Select(tokenNode =>
-                {
-                    var apiToken = tokenNode.ContentAs<ApiToken>(hub.JsonSerializerOptions) ?? ExtractApiToken(tokenNode, hub.JsonSerializerOptions);
-
-                    if (apiToken == null)
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Token not found"), o => o.ResponseFor(request));
-                        return Unit.Default;
-                    }
-
-                    if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Invalid token"), o => o.ResponseFor(request));
-                        return Unit.Default;
-                    }
-
-                    if (apiToken.IsRevoked)
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Token revoked"), o => o.ResponseFor(request));
-                        return Unit.Default;
-                    }
-
-                    if (apiToken.ExpiresAt.HasValue && apiToken.ExpiresAt.Value < DateTimeOffset.UtcNow)
-                    {
-                        hub.Post(ValidateTokenResponse.Fail("Token expired"), o => o.ResponseFor(request));
-                        return Unit.Default;
-                    }
-
-                    // Include the roles captured on the ApiToken at creation time.
-                    // 🚨 Diagnostic only — no permission decision reads them (see
-                    // ApiToken.Roles). Permissions and the Api capability are folded
-                    // live off the TARGET PATH on every request, so a token never
-                    // needs re-minting to see a grant, and a mint-time role can never
-                    // outlive the authority it was copied from.
-                    var response = ValidateTokenResponse.Ok(
-                        apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
-                    hub.Post(response, o => o.ResponseFor(request));
-                    return Unit.Default;
-                });
-            }))
+        // Decide always emits exactly one verdict — a faulted or unanswered read is UNAVAILABLE
+        // (retryable), never "invalid" (issue #637) and never a hang.
+        ApiTokenVerdict.Decide(request.Message.RawToken, read, hub.JsonSerializerOptions)
+            .Take(1)
             .Subscribe(
-                _ => { },
-                // A THROWN fault (GetMeshNode timeout, storage error, routing failure) means the
-                // validation never reached a verdict — that is UNAVAILABLE (retryable), never a
-                // definitive "invalid token". Collapsing the two into one Fail made a silo
-                // degradation answer 401 exactly like a forged token, driving clients into
-                // pointless re-authentication (issue #637). The definitive negatives above
-                // (not found / mismatch / revoked / expired) stay Fail.
+                verdict => hub.Post(verdict, o => o.ResponseFor(request)),
                 ex => hub.Post(
                     ValidateTokenResponse.Unavailable($"Validation error: {ex.Message}"),
                     o => o.ResponseFor(request)));
 
         return request.Processed();
-    }
-
-    private static ApiToken? ExtractApiToken(MeshNode? node, JsonSerializerOptions options)
-    {
-        if (node?.Content is not JsonElement jsonElement) return null;
-        try { return JsonSerializer.Deserialize<ApiToken>(jsonElement.GetRawText(), options); }
-        catch { return null; }
-    }
-
-    private static ApiTokenIndex? ExtractApiTokenIndex(MeshNode? node, JsonSerializerOptions options)
-    {
-        if (node?.Content is not JsonElement jsonElement) return null;
-        try
-        {
-            var index = JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(), options);
-            return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
-        }
-        catch { return null; }
     }
 }

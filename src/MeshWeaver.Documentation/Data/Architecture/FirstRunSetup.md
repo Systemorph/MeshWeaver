@@ -8,7 +8,7 @@ Icon: Server
 # First-Run Setup
 
 **Status: delivered. This is slice 3 of [Instance Identity and Setup](../InstanceIdentityAndSetup) —
-the setup surface. Slices 1 and 2 (the licence on the instance, memex-cloud as a record) shipped
+the setup surface. Slices 1 and 2 (the licence on the instance, the public instance as a record) shipped
 earlier.**
 
 An instance with **no `Graph:Storage` configuration and no completed `instance.json`** serves a
@@ -225,7 +225,7 @@ on opposite sides, and neither can be satisfied by the other moving:
 
 The one gap no guard can see is an environment values file in the private deployment repo that
 overrides the key to `""` — an empty value is omitted by the ConfigMap template, which reads
-identically to never stating it. Verified by hand on the shared `memex` portal
+identically to never stating it. Verified by hand on a shared portal instance
 (2026-09-03: `memex-portal-config.data.Graph__Storage__Type = "PostgreSql"`); any new environment
 should be checked the same way once, at ramp-up.
 

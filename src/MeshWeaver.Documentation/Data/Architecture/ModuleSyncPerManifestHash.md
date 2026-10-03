@@ -33,7 +33,7 @@ at or below the running one. When the newer seals all come from newer platforms,
 stays where it is — for as long as the instance is not rolled — and every Space of the repository
 stays with it.
 
-Measured on the control instance (memex.systemorph.com, 2026-09-25): image `3.0.0-ci.9218`,
+Measured on the control instance (2026-09-25): image `3.0.0-ci.9218`,
 `Hosting/_GitSync` read `lastSyncOutcome: Held` at Plugins commit `7545d355`, and every newer Plugins
 publication was sealed only by `3.0.0-ci.9321` or later, which the ladder does not adopt here. The
 migrate-first Roll planner (MeshWeaver.Plugins#2219) is **Hosting** code, so it never reached the
@@ -53,7 +53,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
-| 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformCompatibility.ProducerIsNewer`, the ladder's own comparison; unknown on either side is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
+| 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 

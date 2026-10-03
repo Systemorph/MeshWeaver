@@ -456,7 +456,12 @@ internal class UnifiedReferenceAutocompleteProvider(
         // and folds this delegated result in WHEN it arrives. A slow/unreachable node degrades to a
         // null snapshot via the Timeout fallback observable (not an error, not a block).
         var request = new AutocompleteRequest($"@{currentSegment}", nodePath);
-        return hub.Observe(request, o => o.WithTarget(new Address(nodePath)))
+        // 🚨 Issued on ReadIssuingHub() (#5900): this provider is scoped to whichever hub resolves
+        // it, and resolved from the root container that hub is the mesh ROUTER. The seam is the
+        // identity function for every other hub, so a per-node caller is unchanged — and the
+        // read hub registers no handlers, so the delegated request still cannot re-enter this
+        // provider's own aggregator.
+        return hub.ReadIssuingHub().Observe(request, o => o.WithTarget(new Address(nodePath)))
             .Select(d => d.Message as AutocompleteResponse)
             .Catch<AutocompleteResponse?, Exception>(_ => Observable.Return<AutocompleteResponse?>(null))
             .Timeout(NodeDelegationTimeout, Observable.Return<AutocompleteResponse?>(null));

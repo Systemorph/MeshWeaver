@@ -19,7 +19,7 @@ and every envelope it does return carries its **coverage**.
 
 ## The measurement
 
-memex.systemorph.com, 2026-09-14, one credential, calls seconds apart (MeshWeaver #4274):
+The control instance, 2026-09-14, one credential, calls seconds apart (MeshWeaver #4274):
 
 | query | `count` |
 |---|---|

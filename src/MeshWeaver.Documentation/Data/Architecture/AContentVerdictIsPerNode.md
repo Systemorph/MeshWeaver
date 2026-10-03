@@ -15,7 +15,7 @@ Some of those refusals are about the **moment** — a store briefly unreachable,
 answer — and some are about the **bytes**: a validator rule, an invalid path, a NodeType the mesh
 does not know, an RLS denial. The second kind is deterministic. Re-reading the same bytes at the
 same fingerprint re-derives the identical refusal, so re-issuing that write can accomplish nothing,
-and doing it anyway cost `memex-cloud` **19 full import passes in three hours** — roughly 425
+and doing it anyway cost the public instance **19 full import passes in three hours** — roughly 425
 identical failing upserts plus a NodeType compile each, on a portal already at 8/8 replicas. That is
 issue #3146, and its rule is right.
 
@@ -38,7 +38,7 @@ failed"*. Recording a per-node fact as a per-partition verdict is the entire def
 
 ## What it cost
 
-**Measured on `memex.systemorph.com`, 2026-09-15.**
+**Measured on the control instance, 2026-09-15.**
 
 One file — `Hosting/Deployment/Source/SelfUpdateRouting.cs` — contained a **literal NUL byte
 (0x00)** inside a char literal. PostgreSQL cannot store a NUL in a text column, so the write of that

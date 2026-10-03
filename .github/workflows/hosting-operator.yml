@@ -240,7 +240,7 @@ jobs:
         # 🚨 db-release/helm is why the worse half is not hypothetical: the hosting-db-release
         # happy-path case runs the command all the way to its post-install verification, so an
         # untracked or non-executable stub there means a REAL `helm upgrade --install --namespace
-        # pearl` on the runner. Both db-release stubs were absent from this list until the
+        # fabrikam` on the runner. Both db-release stubs were absent from this list until the
         # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail

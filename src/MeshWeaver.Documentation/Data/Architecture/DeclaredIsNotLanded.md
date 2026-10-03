@@ -1,7 +1,7 @@
 ---
 Name: Declared Is Not Landed
 Category: Architecture
-Description: An install record is a declaration, never an observation. Three exits can write it and until now only one of them looked at the mesh — so a node lost after an install could survive every subsequent update, each reporting success. The measured case on memex.meshweaver.cloud, the exit that was blind, and the sweep hazard that made the damage read smaller than it was.
+Description: An install record is a declaration, never an observation. Three exits can write it and until now only one of them looked at the mesh — so a node lost after an install could survive every subsequent update, each reporting success. The measured case on the public instance, the exit that was blind, and the sweep hazard that made the damage read smaller than it was.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/><path d="M8 14h5"/><path d="M8 17h3"/></svg>
 ---
 
@@ -40,7 +40,7 @@ record's **and** the install lane happens to run.
 
 ## The measured case
 
-`Plugins/Hosting` on **memex.meshweaver.cloud**, read 2026-09-14T06:0xZ. All reads through `get` /
+`Plugins/Hosting` on **the public instance**, read 2026-09-14T06:0xZ. All reads through `get` /
 `search`; nothing was mutated.
 
 **The morning: the files were there and they compiled.** The release node
@@ -171,7 +171,7 @@ compiled, in the module bundle. The delta nevertheless asked for every changed k
 shortfall guard a changed source therefore quietly failed to arrive — harmless, because the bundle
 carried it; after it, every such update answered *"the source returned 0 of the 1 file(s) asked
 for"* at Error and fell back to a full install that recompiles every type in the package. Measured on
-memex.systemorph.com at 2026-09-15T14:12Z for `Edu` (`src/MeshWeaver.Courses/CourseAssetService.cs`),
+the control instance at 2026-09-15T14:12Z for `Edu` (`src/MeshWeaver.Courses/CourseAssetService.cs`),
 on two pods. `Edu/manifest.lock` carries 273 `src/…` entries beside 117 `Edu/…` ones, 234 of them the
 AI engine's, so an engine commit reached Edu the same way.
 

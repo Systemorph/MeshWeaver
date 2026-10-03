@@ -30,7 +30,7 @@ Those two are not the same thing, and the gap between them took a production por
 
 ## What it cost, measured
 
-memex-cloud ran core `3.0.0-rc9.ci.7693` (main of 2026-09-03). It adopted the pre-installed
+The public instance ran core `3.0.0-rc9.ci.7693` (main of 2026-09-03). It adopted the pre-installed
 **DefaultViews** view pack's `MeshWeaver.Graph.Views`, whose bytes were compiled on 09-06 against a
 `MeshWeaver.Mesh.Contract` that carries `CodeOutputCurrency` — a type added to core on 09-04
 (`2dc5868b2`). The pack declared `minMeshVersion: 3.0.0-rc8`; the running version satisfied it; the
@@ -117,7 +117,7 @@ failure.
 **What happened.** On 2026-09-11 core #4012 bumped YamlDotNet 16.3.0 → 18.1.0. `MeshWeaver.AI`
 references YamlDotNet directly and versionless, was built on an image carrying 18, and landed
 through the registry on portal pods whose image shipped 16. The probe said `Linkable`. Every new
-pod crash-looped at hub construction on `FileLoadException 0x80131040` (memex-cloud, 60+ restarts;
+pod crash-looped at hub construction on `FileLoadException 0x80131040` (the public instance, 60+ restarts;
 Memex#281 carried the pin move). Two independent causes, neither of them the `MeshWeaver.` prefix
 filter — that line sits inside the *not carried* branch, and a running portal carries YamlDotNet:
 
@@ -197,7 +197,7 @@ wrote.
 
 Before this date the landing path's refusal was **one warning line in a pod log** (`PluginBundleClient`: *"landing failed — the module is unchanged"*) and nothing else: no entry is written on a refusal, so no status surface had anything to show. The marker is written by the refusing landing, cleared by the next landing of that module that lands anything, and by uninstall.
 
-**Blast radius, measured 2026-09-12** — the registry's published module set (30 module bundles on memex.meshweaver.cloud) under the new rule, each bundle's own copies in its closure, against the image's `/app` + shared frameworks as the surface: `3.0.0-ci.8372` (memex) and `3.0.0-ci.8403` (memex-cloud): **0 held**, 1 advisory (ContainerRegistry: System.Reactive 6.1.0.0 → platform 7.0.0.0, rolls forward). `3.0.0-ci.8323` — the image that crash-looped on 09-11 — **20 of 30 held**: `MeshWeaver.AI` on `YamlDotNet 18.0.0.0` vs `16.0.0.0` *and* `System.Reactive 7.0.0.0` vs `6.1.0.0`, `MeshWeaver.Publish` on YamlDotNet, eighteen others on System.Reactive (core bumped both on 09-11, after 8323 was built). The rule fires on exactly the image that failed and on nothing the fleet runs now.
+**Blast radius, measured 2026-09-12** — the registry's published module set (30 module bundles on the plugin registry instance) under the new rule, each bundle's own copies in its closure, against the image's `/app` + shared frameworks as the surface: `3.0.0-ci.8372` (the control instance) and `3.0.0-ci.8403` (the public instance): **0 held**, 1 advisory (ContainerRegistry: System.Reactive 6.1.0.0 → platform 7.0.0.0, rolls forward). `3.0.0-ci.8323` — the image that crash-looped on 09-11 — **20 of 30 held**: `MeshWeaver.AI` on `YamlDotNet 18.0.0.0` vs `16.0.0.0` *and* `System.Reactive 7.0.0.0` vs `6.1.0.0`, `MeshWeaver.Publish` on YamlDotNet, eighteen others on System.Reactive (core bumped both on 09-11, after 8323 was built). The rule fires on exactly the image that failed and on nothing the fleet runs now.
 
 **What this still does not see.** Member-level skew (below), and the publish side: nothing yet
 compares a bundle about to be published against the images the fleet actually runs (#4066). Every
@@ -305,7 +305,7 @@ the newest generation of every module that loads, and keeps the one it has until
   landed tree — onto `ModuleInstallCandidate.ImageBaseline`. Until this step existed the
   substitution happened on the DLL's existence alone, before anything was measured, so a
   refused store generation SHADOWED the image copy that loads by construction: on
-  memex.systemorph.com (2026-09-08, image `3.0.0-ci.8079`) a two-week-old store generation of
+  the control instance (2026-09-08, image `3.0.0-ci.8079`) a two-week-old store generation of
   `MeshWeaver.Blazor.Views` was refused — `requires 'MeshWeaver.Graph.AnchoredComment
   (MeshWeaver.Graph)'`, a type the platform had since removed — the entry held no previous
   generation, the image's copy was never tried, and every skinned control on the portal rendered
@@ -462,7 +462,7 @@ chrome, so it follows the **viewer's** language — see [Localization](../Locali
 with Roslyn and drives the **real** gate; nothing is mocked and no rule is re-derived locally.
 
 The repro compiles a module against a **stand-in `MeshWeaver.Mesh.Contract`** carrying a type the
-platform running the test does not have — memex-cloud's shape verbatim: same assembly simple name,
+platform running the test does not have — the public instance's shape verbatim: same assembly simple name,
 missing type — and lands it through the real `ModuleLandingService`.
 
 | Test | What it pins |

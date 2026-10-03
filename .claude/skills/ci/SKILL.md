@@ -359,14 +359,18 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **Core dispatches ONE thing to a plugin repository: a request to test a CANDIDATE** (policy
-  `dependent-suites-gate`). `Dependent suites (MeshWeaver.Plugins)` in `dotnet-test.yml` runs on every
-  merge-queue entry (and a PR labelled `dependent-suites`), sends `core-candidate-suites`, and waits
-  for the verdict Plugins writes at `refs/core-candidate/<key>` — green only when no suite that
-  passes at the base fails at the candidate. It is a `needs:` of `Consolidate test results`. The
-  same shape was withdrawn on 2026-09-03 (no receiver existed, every core PR went red); it came back
-  after #5635/#5647/#5655 held Plugins' main red for hours, with the receiver landed FIRST. The
-  release wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits this one sender.
+- **Core dispatches ONE thing to a plugin repository: an ADVISORY request to test a CANDIDATE**
+  (policy `core-merge-never-blocked`, which superseded `dependent-suites-gate` — the register carries when).
+  `Dependent suites (MeshWeaver.Plugins, advisory)` in `dotnet-test.yml` runs on a PR labelled
+  `dependent-suites` or declaring `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>` (then with that
+  PR's head — Doc/Architecture/PairedChangeSets), sends `core-candidate-suites`, and reports the
+  verdict Plugins writes at `refs/core-candidate/<key>`. It is NOT a `needs:` of `Consolidate test
+  results` and blocks nothing: MeshWeaver#5807 sat four hours green in the queue and was ejected on
+  a 42-minute silence, which is why. The verdict that decides is the PROMOTION one — main-cd `arm`
+  reads `refs/core-candidate/pair-<core7>-p<plugins7>` (requested by Plugins' own poller, so core
+  sends nothing for it) and arms the fleet only for a green pair (policy `one-promotion-gate`,
+  Doc/Architecture/OnePromotionGate). The release wave is still memex's;
+  `PlatformReleaseNotifyGuard.DispatchLedger` admits the one PR-side sender.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
   its `ApiReadLedger` enumerates the reads on that side of it (the dependent-suites verdict is one).

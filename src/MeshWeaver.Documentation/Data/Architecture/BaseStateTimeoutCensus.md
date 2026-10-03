@@ -103,7 +103,7 @@ control, and check the recorded `logQl` on the action before believing a small c
 ## What #1174 actually showed
 
 `MeshWeaver.Graph.ActivityTracking` writes `{user}/_UserActivity/{encodedPath}` on every cold page
-load. Measured 2026-09-14 on `memex-cloud`: 414 occurrences of this abort since 2026-08-10 across
+load. Measured 2026-09-14 on the public instance: 414 occurrences of this abort since 2026-08-10 across
 57 pods, latest `2026-09-14T17:45:33Z`. Two facts the issue did not have:
 
 - **It is not the deploy-roll starvation family.** The 2026-08-10 verdict closed it as a duplicate

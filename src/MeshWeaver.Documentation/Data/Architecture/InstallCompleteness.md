@@ -49,7 +49,7 @@ fetching a single file**.
 
 ## Two shapes, one mechanism
 
-Both were measured on `memex.systemorph.com` on 2026-09-07.
+Both were measured on the control instance on 2026-09-07.
 
 ### 1. A declared node that is not there
 
@@ -384,7 +384,7 @@ at, so "nothing is wrong" and "nothing was checked" cannot read the same line.
 
 ### A record that outlived its partition — `TornDown`
 
-`Plugins/ClaimsDeepfield` on memex.meshweaver.cloud was installed 2026-08-27T19:48Z (83 declared
+`Plugins/ClaimsDeepfield` on the public instance was installed 2026-08-27T19:48Z (83 declared
 nodes). The module was retired from its repository on 09-04 and the Space deleted on 09-05T09:03Z —
 ten days before the record-follows-partition handler (#3451) existed, so the record survived.
 Thirteen minutes later the boot pass re-asserted the record's declared access; that write is

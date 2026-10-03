@@ -95,13 +95,13 @@ where that answer came from**, in this order:
 
 **It is a fact about the REPOSITORY, not about one Space's source.** A field on `GitHubSyncConfig`
 would be the wrong home: several Spaces sync the same repository, and they must not be able to
-disagree about what proved it — 34 sources on memex.meshweaver.cloud point at MeshWeaver.Plugins
+disagree about what proved it — 34 sources on the public instance point at MeshWeaver.Plugins
 alone. The declaration therefore sits beside the platform, next to the `Admin/_Build/{owner}.{repo}`
 record it governs, and is keyed by `owner/repo`.
 
 **Why `Platform` exists rather than "convention plus config".** Measured 2026-09-11, with the
 denominator: **nine** repositories hold an `Admin/_Build/{owner}.{repo}` record — the same nine on
-memex.meshweaver.cloud and on memex.systemorph.com, both listings `truncated:false`. Eight satisfy
+the public instance and on the control instance, both listings `truncated:false`. Eight satisfy
 the convention or core's exception. The ninth, `Systemorph/Memex`, has **no `ci.yml` at all** (its
 workflows are `build.yml`, `config-key-coverage.yml`, `deploy-drift.yml`, `helm-release.yml`,
 `image-pins.yml`, `smoke.yml`), and two portals sync its `mesh/Deployments` tree. On the convention
@@ -181,8 +181,8 @@ Measured, on the two production portals, 2026-09-06.
            IPaymentProvider (core) and the MeshWeaver.Payments.* module bundle.
 22:38:18Z  A main run for 8d4920c93 — a commit that PREDATES #1413 — finishes.
            GitHub delivers workflow_run/completed/success for that run.
-22:38:39Z  memex.systemorph.com  imports … main's HEAD, which is now past #1413.
-22:39:32Z  memex.meshweaver.cloud imports … the same.
+22:38:39Z  control instance     imports … main's HEAD, which is now past #1413.
+22:39:32Z  public instance      imports … the same.
            Store/Catalog, Store/Order, Store/Plugin, Store/Maintenance → compile Error.
 03:50Z     Still Error. version and lastModified have not moved in five hours: the compile result
            is latched and nothing re-tries it until the source changes — and the next sync would
@@ -312,7 +312,7 @@ feature-flag packages. It listed each configured source at `PluginCatalog:Source
 every fleet record — resolved at fetch time, and stamped `installedFromRef: main` on the install
 record. That is the shape this page exists to remove, and nothing on this page named it.
 
-**Why it mattered is that a partition can have two unattended writers.** On memex.meshweaver.cloud
+**Why it mattered is that a partition can have two unattended writers.** On the public instance
 the `Hosting` partition is written by both `Hosting/_GitSync` (MeshWeaver.Plugins, `subdirectory:
 Hosting`, created 2026-08-19T10:43Z by AutoSync) and the `Plugins/Hosting` install record (created
 2026-08-19T14:27Z, three hours later, by the boot install of `preInstall: Plugins/*`).
@@ -350,7 +350,7 @@ restores a declared node that is absent — and on its own that would have turne
 every-boot flap: sync prunes, install restores, bake declines, sync prunes.
 
 🚨 **That flap is not hypothetical — it ran for eleven boots on a second partition, and it read as a
-self-heal.** Measured on memex.meshweaver.cloud 2026-09-16 (core `c84c6c05`, which predates this
+self-heal.** Measured on the public instance 2026-09-16 (core `c84c6c05`, which predates this
 section's fix): `Feedback/_GitSync` (MeshWeaver.Plugins, `subdirectory: Feedback`) imports at
 `627fb3cd`, whose `Feedback/` tree has no `Source/FeedbackHandover.cs`; `Plugins/Feedback` 1.0.16
 (module `caffd87567c65b4f`, `installedFromRef: main`) declares it. The package's module hash never
@@ -378,9 +378,9 @@ whose `Feedback` listing carries no `_GitSync`, has one writer and holds the nod
 **What closes it, and what delivers it.** `115e0a9d9c` (PR #4292) is the commit: it makes this lane
 list and install at the sealed commit, so both writers of `Feedback` land on one tree; `8b1e966985`
 (PR #4364) adds the ownership hold, and `4d5a084a8b` (PR #4257) moves the severity off the detection.
-Measured 2026-09-17, none of the three is an ancestor of memex.meshweaver.cloud's running core
-`c84c6c05`, and all three are ancestors of memex.systemorph.com's `afde4eab` — which is why only the
-former still emits it. The delivery is a **Roll of memex-cloud onto a sealed image containing
+Measured 2026-09-17, none of the three is an ancestor of the public instance's running core
+`c84c6c05`, and all three are ancestors of the control instance's `afde4eab` — which is why only the
+former still emits it. The delivery is a **Roll of the public instance onto a sealed image containing
 `e76fa9f8f2`** (the newest of the three merges); nothing else closes it, and no further code change
 is required. Its preconditions already hold on that instance: `pluginCatalog.sources[0]` carries
 `repoPath: https://github.com/Systemorph/MeshWeaver.Plugins` (not a local checkout),

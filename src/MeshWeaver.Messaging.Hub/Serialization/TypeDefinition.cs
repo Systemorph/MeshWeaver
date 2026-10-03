@@ -1,8 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using System.Reflection;
 using MeshWeaver.Domain;
-using MeshWeaver.Utils;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Messaging.Serialization;
 
@@ -20,19 +17,36 @@ public record TypeDefinition : ITypeDefinition
     /// <param name="elementType">The CLR type being described.</param>
     /// <param name="typeName">The collection / serialization name for the type.</param>
     /// <param name="keyFunctionBuilder">Builder that resolves the key function for instances of the type.</param>
+    /// <remarks>
+    /// A definition built through this constructor owns a PRIVATE <see cref="TypeDisplayMetadata"/>.
+    /// Registries use the internal overload instead, which takes the mesh's shared description.
+    /// </remarks>
     public TypeDefinition(Type elementType, string typeName, KeyFunctionBuilder keyFunctionBuilder)
+        : this(elementType, typeName, keyFunctionBuilder, new TypeDisplayMetadata(elementType))
+    {
+    }
+
+    /// <summary>
+    /// Initializes a type definition over an already-built — normally mesh-shared —
+    /// <see cref="TypeDisplayMetadata"/> (see <see cref="TypeDisplayMetadataCache"/>).
+    /// </summary>
+    /// <param name="elementType">The CLR type being described.</param>
+    /// <param name="typeName">The collection / serialization name for the type.</param>
+    /// <param name="keyFunctionBuilder">Builder that resolves the key function for instances of the type.</param>
+    /// <param name="displayMetadata">The description of <paramref name="elementType"/>.</param>
+    internal TypeDefinition(Type elementType, string typeName, KeyFunctionBuilder keyFunctionBuilder, TypeDisplayMetadata displayMetadata)
     {
         Type = elementType;
         CollectionName = typeName;
+        DisplayMetadata = displayMetadata;
 
-        var displayAttribute = Type.GetCustomAttribute<DisplayAttribute>();
-        DisplayName = displayAttribute?.GetName() ?? Type.Name.Wordify();
+        // GetName/GetGroupName resolve ResourceType properties at use time. The description shares
+        // the declaration, never its translated values, so two viewers can still receive different text.
+        DisplayName = displayMetadata.Display?.GetName() ?? displayMetadata.FallbackName;
 
-        GroupName = displayAttribute?.GetGroupName();
-        Order = displayAttribute?.GetOrder();
-        var iconAttribute = Type.GetCustomAttribute<IconAttribute>();
-        if (iconAttribute != null)
-            Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
+        GroupName = displayMetadata.Display?.GetGroupName();
+        Order = displayMetadata.Display?.GetOrder();
+        Icon = displayMetadata.Icon;
 
         Key = new(() => keyFunctionBuilder.GetKeyFunction(Type)!);
 
@@ -52,7 +66,7 @@ public record TypeDefinition : ITypeDefinition
         // what actually closes the window.
         //
         // Description is pure display metadata with a single consumer, so deferring costs nothing.
-        description = new(() => XmlDocs.Summary(Type));
+        description = displayMetadata.Description;
     }
 
     /// <summary>
@@ -71,6 +85,12 @@ public record TypeDefinition : ITypeDefinition
 
     /// <summary>The CLR type being described.</summary>
     public Type Type { get; }
+    /// <summary>
+    /// The hub-independent description of <see cref="Type"/> this definition reads its display
+    /// metadata from. Every registry of one mesh hands out the SAME instance per CLR type, while the
+    /// definition itself — collection name, key function, owning address — stays per registry.
+    /// </summary>
+    public TypeDisplayMetadata DisplayMetadata { get; }
     /// <summary>The human-readable display name, from <see cref="DisplayAttribute"/> or the wordified type name.</summary>
     public string DisplayName { get; }
     /// <summary>The collection / serialization name used to identify this type in the mesh.</summary>
@@ -96,7 +116,7 @@ public record TypeDefinition : ITypeDefinition
 
     // Backing store. `init` accepts an already-materialised value (record `with` / deserialization),
     // so an explicitly-supplied Description still wins and is never recomputed from XML docs.
-    private readonly Lazy<string> description = new(string.Empty);
+    private readonly Lazy<string> description;
 
     /// <summary>
     /// Returns the key identifying the given instance using the type's configured key function.

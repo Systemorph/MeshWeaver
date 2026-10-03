@@ -37,16 +37,16 @@ credential, no cluster, no grant and no MCP session, and it is the only read on 
 person with a browser can take.
 
 ```bash
-curl -s https://memex.meshweaver.cloud/api/version    # ALWAYS first — which portal am I reading?
-curl -s https://memex.meshweaver.cloud/health
+curl -s https://portal.example.com/api/version    # ALWAYS first — which portal am I reading?
+curl -s https://portal.example.com/health
 ```
 
 Measured 2026-09-11 06:49Z, with no credential of any kind:
 
 | Portal | `/api/version` | `/health` |
 |---|---|---|
-| memex.meshweaver.cloud (the public portal / plugin registry — MCP server `memex`) | `3.0.0+6231c4da` | HTTP 200, 671 B |
-| memex.systemorph.com (the CONTROL instance — MCP server `systemorph`) | `3.0.0+45306a33` | HTTP 200, 2570 B |
+| the public portal / plugin registry instance | `3.0.0+6231c4da` | HTTP 200, 671 B |
+| the CONTROL instance | `3.0.0+45306a33` | HTTP 200, 2570 B |
 
 🚨 **Say which portal every number came from.** The two hold same-named nodes and answer differently;
 reading the wrong one and concluding "the sync is frozen" cost two sessions an hour on 2026-09-10.
@@ -66,7 +66,7 @@ entries below can answer a question the sweep cannot.
 
 ### 🚨 Repeated calls sample DIFFERENT replicas — that is a feature, and a trap
 
-There is no session affinity on the health path. Ten consecutive calls to memex.meshweaver.cloud
+There is no session affinity on the health path. Ten consecutive calls to the public instance
 (2026-09-11 06:49Z) returned **two distinct bodies**, 7 × 671 B and 3 × 873 B, and the two readings
 were disjoint:
 
@@ -182,15 +182,15 @@ cheapest read on this page after `/health`, and all three of its traps produce a
 answer rather than an error.
 
 **1 · It lives on ONE portal, and it is not the one you are investigating.** Measured 2026-09-11:
-`namespace:Admin/_LogIncident scope:subtree` on **memex.systemorph.com** returns incidents and is
-truncated at any limit; the identical query on **memex.meshweaver.cloud** returns **0**. The control
+`namespace:Admin/_LogIncident scope:subtree` on **the control instance** returns incidents and is
+truncated at any limit; the identical query on **the public instance** returns **0**. The control
 instance is where the store is, and it covers the other portals — the `nodetype_bake` incident
-`0a24845deb486a56`, read on memex.systemorph.com, carries `"namespace": "memex-cloud"` and 400+
-memex-cloud pod names. So *"I searched the portal that had the problem and found nothing"* is the
+`0a24845deb486a56`, read on the control instance, carries the public instance's `"namespace"` and 400+
+of its pod names. So *"I searched the portal that had the problem and found nothing"* is the
 expected outcome of looking in the wrong place, not evidence.
 
 **2 · It is invisible to an unscoped query — which is now refused rather than answered.** Measured
-2026-09-11 on memex.systemorph.com:
+2026-09-11 on the control instance:
 
 ```text
 search 'nodeType:LogIncident'                              → count 0
@@ -239,8 +239,8 @@ runs your command in a pod inside the cluster — which is also what makes it th
 query in-cluster services directly:
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
-  --command "kubectl get pods -n memex-cloud -o wide" -o tsv --query "logs"
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
+  --command "kubectl get pods -n <namespace> -o wide" -o tsv --query "logs"
 ```
 
 Two properties of that pod matter. It sits **on the cluster network**, so `curl` against a
@@ -262,7 +262,7 @@ never inside `--command`.
 Always check retention **first**, and quote it in the finding:
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
   --command 'curl -s http://loki.monitoring.svc.cluster.local:3100/config | grep -A2 retention_period'
 ```
 
@@ -270,9 +270,9 @@ Then query. Counting is usually more informative than reading — a rate over ti
 happened once"* from *"it is a standing storm"*, which is exactly the judgement an issue needs:
 
 ```bash
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
  'curl -sG "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range" \
-   --data-urlencode "query=sum by (pod) (count_over_time({namespace=\"memex-cloud\"} |= \"<phrase>\" [1h]))" \
+   --data-urlencode "query=sum by (pod) (count_over_time({namespace=\"<namespace>\"} |= \"<phrase>\" [1h]))" \
    --data-urlencode "start=2026-08-31T00:00:00Z" \
    --data-urlencode "end=2026-09-01T19:45:00Z" \
    --data-urlencode "step=3600"' -o tsv --query "logs"
@@ -289,7 +289,7 @@ does not reject the parameter; it **ignores** it and falls back to the endpoint'
 **one hour**. So `since=168h` does not ask for a week and get trimmed — it asks for nothing, and
 gets the last hour:
 
-| Query over `{namespace="memex-cloud"}` | Oldest line it can see |
+| Query over `{namespace="<namespace>"}` | Oldest line it can see |
 |---|---|
 | `since=168h`, `direction=forward&limit=1` | **1.0 h** ago |
 | *no time parameters at all*, same otherwise | **1.0 h** ago — within 36 s of the line above |
@@ -312,9 +312,9 @@ selector for its *oldest* visible line and check the age against the window you 
 ```bash
 END=$(date -u +%s); START=$((END - 168*3600))          # the window you actually mean
 
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
  "curl -sG 'http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/query_range' \
-    --data-urlencode 'query={namespace=\"memex-cloud\"}' \
+    --data-urlencode 'query={namespace=\"<namespace>\"}' \
     --data-urlencode 'start=${START}000000000' \
     --data-urlencode 'end=${END}000000000' \
     --data-urlencode 'direction=forward' \
@@ -345,7 +345,7 @@ bucket and it is the window:
 
 ```bash
 curl -sG ".../loki/api/v1/query" \
-  --data-urlencode 'query=sum(count_over_time({namespace="memex-cloud"} |= "<phrase>" [72h]))' \
+  --data-urlencode 'query=sum(count_over_time({namespace="<namespace>"} |= "<phrase>" [72h]))' \
   --data-urlencode "time=$(date -u +%s)000000000"
 ```
 
@@ -393,8 +393,8 @@ shows only control-plane calls such as `runCommand`, and reads as "no infrastruc
 the node pool was being rebuilt the whole time:
 
 ```bash
-az aks show -g memex-aks-rg -n memexaks-cluster --query nodeResourceGroup -o tsv
-az monitor activity-log list --resource-group MC_memex-aks-rg_memexaks-cluster_swedencentral \
+az aks show -g <aks-resource-group> -n <aks-cluster> --query nodeResourceGroup -o tsv
+az monitor activity-log list --resource-group MC_<aks-resource-group>_<aks-cluster>_<region> \
   --start-time 2026-08-31T14:00:00Z --end-time 2026-08-31T17:00:00Z \
   --query "[].{time:eventTimestamp,op:operationName.localizedValue,status:status.value}"
 ```
@@ -405,9 +405,9 @@ Verify this before attributing any measurement, because it has already gone stal
 
 | Hostname | Served by | Notes |
 |---|---|---|
-| `memex.meshweaver.cloud` | **AKS**, namespace `memex-cloud` | |
-| `memex.systemorph.com` | **AKS**, namespace `memex` | *not* Container Apps |
-| ACA `memex-prod` (rg `prod-memex`) | nothing | `configuration.ingress: null` — no FQDN, no traffic |
+| the public instance (`portal.example.com`) | **AKS**, its own namespace | |
+| the control instance (`control.example.com`) | **AKS**, its own namespace | *not* Container Apps |
+| a leftover Container Apps app (ACA) | nothing | `configuration.ingress: null` — no FQDN, no traffic |
 
 Both hostnames resolve to the AKS ingress IP. The Container Apps deployment still exists, still runs
 and still burns resources, but it serves no request — so a remediation applied there (a revision
@@ -415,8 +415,8 @@ restart, say) cannot affect either portal, and an observability gap measured the
 app carrying no traffic. Confirm with two commands rather than memory:
 
 ```bash
-dig +short memex.systemorph.com
-az network public-ip list -g MC_memex-aks-rg_memexaks-cluster_swedencentral --query "[].ipAddress"
+dig +short control.example.com
+az network public-ip list -g MC_<aks-resource-group>_<aks-cluster>_<region> --query "[].ipAddress"
 ```
 
 The mapping is settled by `kubectl get ingress -A`, which names the host per namespace.

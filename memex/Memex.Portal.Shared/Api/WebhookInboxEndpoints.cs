@@ -41,6 +41,27 @@ public static class WebhookInboxEndpoints
         return endpoints;
     }
 
+    /// <summary>
+    /// The body of a 200 answer — the contract a signing sender reads (#3312):
+    /// <c>status</c> is <c>accepted</c> (stored) or <c>verified</c> (a verify-only test, nothing
+    /// stored); <c>signature</c> is <c>verified</c> or <c>not-required</c>; <c>sender</c> names the
+    /// per-sender key that verified (a name, never a value) or is null for the shared secret.
+    /// Pure, and public so a test can answer exactly as the endpoint does.
+    /// </summary>
+    public static WebhookAnswer AcceptedAnswer(WebhookInbox.DeliveryResult result) => new(
+        result.VerifyOnly ? "verified" : "accepted",
+        result.SignatureVerified ? "verified" : "not-required",
+        result.SenderKey);
+
+    /// <summary>The JSON body of a 200 answer (see <see cref="AcceptedAnswer"/>).</summary>
+    /// <param name="Status"><c>accepted</c> or <c>verified</c>.</param>
+    /// <param name="Signature"><c>verified</c> or <c>not-required</c>.</param>
+    /// <param name="Sender">The per-sender key's name, or null.</param>
+    public sealed record WebhookAnswer(
+        [property: System.Text.Json.Serialization.JsonPropertyName("status")] string Status,
+        [property: System.Text.Json.Serialization.JsonPropertyName("signature")] string Signature,
+        [property: System.Text.Json.Serialization.JsonPropertyName("sender")] string? Sender);
+
     // The sanctioned Task boundary (a minimal-API handler, like the MCP/registry adapters):
     // the body is reactive — read, deliver, map to a status code.
     private static async Task<IResult> Deliver(
@@ -94,6 +115,14 @@ public static class WebhookInboxEndpoints
                 ct))!;
         switch (result.Status)
         {
+            case WebhookInbox.DeliveryStatus.Accepted when result.VerifyOnly:
+                // A sender TESTING its key (WebhookInbox.VerifyOnlyHeader): verified, nothing stored.
+                // `sender` names which per-sender key verified (a name, never a value), so the sender
+                // can show its operator "accepted as 'fabrikam'" rather than a bare yes.
+                logger?.LogInformation(
+                    "Webhook verify-only test for target '{Target}' verified{Sender} — nothing stored",
+                    target, result.SenderKey is { } testedAs ? $" with the per-sender key '{testedAs}'" : "");
+                return Results.Json(AcceptedAnswer(result));
             case WebhookInbox.DeliveryStatus.Accepted:
                 // The sender key is a NAME (e.g. a deployment id), never a value: it says which
                 // per-sender key verified, so the consumer's attribution can be read from the log.
@@ -108,11 +137,7 @@ public static class WebhookInboxEndpoints
                 // the target declares no SecretConfigKey here and the signature was never looked
                 // at. Answering a bare 200 to both is how a chart value going missing would take
                 // verification away again without a single red anything (#3312).
-                return Results.Json(new
-                {
-                    status = "accepted",
-                    signature = result.SignatureVerified ? "verified" : "not-required",
-                });
+                return Results.Json(AcceptedAnswer(result));
             case WebhookInbox.DeliveryStatus.TooLarge:
                 return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
             case WebhookInbox.DeliveryStatus.SignatureInvalid:

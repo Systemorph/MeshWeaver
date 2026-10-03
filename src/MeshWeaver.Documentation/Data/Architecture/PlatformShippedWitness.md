@@ -94,7 +94,7 @@ compile-time fact about the host, and a manifest name is in the app closure by c
 
 The image-baseline fallback (#3735, merged as #3748) makes a portal *survive* the condition: when no
 landed generation of a module loads, it falls back to the copy the image ships, and the module runs.
-That is the right behaviour and it is why memex.systemorph.com's controls render again.
+That is the right behaviour and it is why the control instance's controls render again.
 
 **It does not make shipping two builds correct, and three things follow:**
 

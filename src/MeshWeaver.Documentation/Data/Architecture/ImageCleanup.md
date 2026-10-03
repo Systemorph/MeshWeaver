@@ -43,7 +43,7 @@ cleanup must not trust the record list alone ([OperatingFromThePortal](/Doc/Arch
 The cluster is private — `kubectl` only via `az aks command invoke`.
 
 **Query every namespace, never a hand-written list** — the cluster runs at least three portal
-namespaces (`portalNamespaces` in `deploy/aks/infra/main.bicep` is `memex`, `prod`, `memex-cloud`), and a
+namespaces (`portalNamespaces` in `deploy/aks/infra/main.bicep` lists them), and a
 loop that names only some of them silently omits a live image from the keeper list, which is exactly how
 you delete something in use:
 
@@ -60,7 +60,7 @@ migration ships as a **Job**, so a `get deploy`-only sweep misses the `memex-mig
 Everything that prints is a **hard keeper**. Example output shape:
 
 - `memex-portal-ai:nicepicker-09149ea0d` (a customer portal)
-- `memex-portal-ai:settingsfix-bfdd797ae` (**memex** portal — looks old, is live!)
+- `memex-portal-ai:settingsfix-bfdd797ae` (a working portal — looks old, is live!)
 - `memex-migration:settingsfix-bfdd797ae` (both envs' migration)
 
 Add to the keeper list:

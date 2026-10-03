@@ -8,12 +8,12 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # Addressed Notifications
 
 **The bell was the single largest cross-schema fan-out on the platform.** Measured twice, a day
-apart, on memex-cloud:
+apart, on the public instance:
 
 | When | What was measured | Result |
 |---|---|---|
 | 2026-09-02, 8 pods | `[CrossSchema] SLOW` unions per 5 min | **444**, avg **4.0 s** each, Postgres 94–98 % CPU |
-| 2026-09-03 16:47–16:58, ONE **idle** replica (0.13 cores, 2 GB) | one bell render | **4 476 rows across 201 of 201** schemas, **9–10 s**, filtered to **0 rows** in memory; ~60 such lines/min, on each of 7 serving replicas; `memexaks-pg` 87–91 % avg / 96–98 % max CPU |
+| 2026-09-03 16:47–16:58, ONE **idle** replica (0.13 cores, 2 GB) | one bell render | **4 476 rows across 201 of 201** schemas, **9–10 s**, filtered to **0 rows** in memory; ~60 such lines/min, on each of 7 serving replicas; `<pg-server>` 87–91 % avg / 96–98 % max CPU |
 
 The two agree on mechanism and differ only in magnitude and in what they rule out: the second was
 taken on an idle pod, so it is not a GC artefact, and time-to-first-row ≈ total, so the cost is the
@@ -87,7 +87,7 @@ which is deliberately mesh-wide and runs as system. Anchoring is the only lever 
 
 ## 2. Where notifications actually live — the 2026-09-03 measurement
 
-Sampled on memex.meshweaver.cloud via `nodeType:Notification sort:lastModified-desc limit:200` —
+Sampled on the public instance via `nodeType:Notification sort:lastModified-desc limit:200` —
 the newest 200 rows, spanning **2026-08-30 03:05Z → 2026-09-03 10:06Z**:
 
 | Rows | Path shape | Emitter | Partition it lands in |
@@ -460,14 +460,14 @@ platform bell unreadable and the fan-out in place.
 
 - ~~The other half of the Admin claim — that a NON-admin cannot read `Admin/_Notification`.~~
   **Established** (§4 ruling 2), by a two-identity test whose negative was proven able to fail.
-- **The production effect is not measured yet, and will not move on its own.** memex-cloud's
+- **The production effect is not measured yet, and will not move on its own.** The public instance's
   self-update is PAUSED (`Admin/UpdatePolicy` policy=None since 2026-09-02) and its serving image
   predates the change, so the 60 SLOW-lines/min figure stands until that deployment is unpaused.
   What is established is the mechanism and the shape: the bell's 201-of-201 union is replaced by one
   pinned schema per bell, and `ResolvePinnedPartition` is asserted to return a single partition for
   each leg. The residual per-write cost is the triage service's declared watch — one subscription
   per process, not one per circuit.
-- **Whether any deployment outside memex-cloud has a materially different distribution** — one mesh
+- **Whether any deployment outside the public instance has a materially different distribution** — one mesh
   was sampled, on 2026-09-03.
 - **The total legacy population size.** The listing API caps at 200 rows, so the class *proportions*
   are measured and the absolute count (~10⁵, estimated) is not. It no longer gates a decision: §6

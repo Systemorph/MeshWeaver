@@ -159,7 +159,7 @@ Step 2 says *served by MeshWeaver*, and that is the half still missing.
 
 - **Compiled .NET modules** (`MeshWeaver.*.dll`) already have this lane: `Plugin Catalog CI`'s
   `modules` job packs each module and POSTs it to `/api/plugins/bundles` on the registry
-  (`memex.meshweaver.cloud`). That works.
+  (the plugin registry instance). That works.
 - **NodeType assemblies** — the Roslyn output of in-mesh `Source/` — are a *different artifact*, baked
   to the portals' storage as `prebuilt-bundles/<identity>/<source>/*.zip`, sealed with `_complete`.
 - **No plugin repo fetches either one.** The consumer code exists — `RegistryPackageSource` and

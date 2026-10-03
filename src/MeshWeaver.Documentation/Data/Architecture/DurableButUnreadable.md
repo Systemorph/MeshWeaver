@@ -35,7 +35,7 @@ Run all three before concluding anything. Two of them agreeing is not enough, in
 
 ## The three confirmed instances (the first two measured 2026-09-01)
 
-**`AgenticEngineering` on memex.systemorph.com** — a Store-plugin partition, 371 nodes written by the
+**`AgenticEngineering` on the control instance** — a Store-plugin partition, 371 nodes written by the
 2026-08-28 install/import.
 
 - `search namespace:AgenticEngineering scope:descendants` → **2** results (`_GitSync`, `_Policy` —
@@ -46,7 +46,7 @@ Run all three before concluding anything. Two of them agreeing is not enough, in
 - A probe write made on 2026-08-31 by an interactive user (`AgenticEngineering/WriteLaneProbe`,
   `Markdown`) landed the same way: v1 exists, the node is invisible.
 
-**`sglauser/MeshWeaverInstance/sglauser-local-3` on memex.meshweaver.cloud** — a plain USER
+**`sglauser/MeshWeaverInstance/sglauser-local-3` on the public instance** — a plain USER
 partition, one node written by self-service instance registration.
 
 - `get_versions sglauser/MeshWeaverInstance/sglauser-local-3` → **v1, 2026-08-31T15:44:49Z,
@@ -59,17 +59,17 @@ partition, one node written by self-service instance registration.
   seconds later, same `system-security` identity, different partition — **is readable**, v1,
   `Active`.
 
-**`Deployments/pearl-provision-20260914` on memex.systemorph.com** (measured 2026-09-15, re-measured
+**`Deployments/fabrikam-provision-20260914` on the control instance** (measured 2026-09-15, re-measured
 2026-09-16) — a **system partition on the control instance**, one `Hosting/InstanceAction` created by
 an approved operation request. Filed as
 [#4513](https://github.com/Systemorph/MeshWeaver/issues/4513), from
 [MeshWeaver.Plugins#1922](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1922).
 
-- `get_versions Deployments/pearl-provision-20260914` → **53 rows, v1 … v62, every one
+- `get_versions Deployments/fabrikam-provision-20260914` → **53 rows, v1 … v62, every one
   `system-security`**, name and `nodeType` intact. v62 carried `state: Running`, step 14/18, log
   through 10:45:18Z — so the control plane ran it for half an hour against a current row it kept
   writing.
-- `get @Deployments/pearl-provision-20260914` → *Not found*, a day later, read as a **global admin**.
+- `get @Deployments/fabrikam-provision-20260914` → *Not found*, a day later, read as a **global admin**.
 - `search namespace:Deployments scope:children nodeType:Hosting/InstanceAction` → 12 siblings,
   `coverage.partitions: ["deployments"]`, the same call and the same credential. That is the
   negative control: the partition is readable, the query shape works, this one node is not in it.
@@ -259,7 +259,7 @@ turns out to be the cheapest discriminator on this page:
 
 So **a history row with a non-null `changed_by` proves a committed `mesh_nodes` row of that version**
 (the trigger runs inside the write's transaction), and a history row with `changed_by IS NULL` proves
-only that the adapter acknowledged the write. Every one of `Deployments/pearl-provision-20260914`'s
+only that the adapter acknowledged the write. Every one of `Deployments/fabrikam-provision-20260914`'s
 53 rows carries `system-security`, so its row **was** in `deployments.mesh_nodes`, at `v62`, with
 `main_node` equal to its path and `state: Active` (`get_version … 62`, measured 2026-09-17). The
 write path is exonerated by its own evidence: what #4513 has left to explain is what REMOVED or
@@ -272,7 +272,7 @@ version by design (`WHERE target.version <= EXCLUDED.version` — re-persisting 
 legitimate, common shape) while the history trigger is `ON CONFLICT (namespace, id, version) DO
 NOTHING`. A write at the same version therefore replaces the row's content, `state` and `main_node`
 and leaves the version store holding the OLD snapshot under that number. `get_version <max>` is the
-last DISTINCT version, not necessarily what the row held when it vanished — which is why the pearl
+last DISTINCT version, not necessarily what the row held when it vanished — which is why the provision-node
 measurements above bound the row's state at `v62` and not at the moment it disappeared.
 
 ## Finding the ones already out there
@@ -304,12 +304,12 @@ since — is a decision about content, not a mechanical one.
 `PostgreSqlPartitionStorageProvider.DetectUnreadableRows("<Namespace>")`, so an executable `Code`
 node resolves the provider from the mesh's services, subscribes it per partition, and writes the
 findings up. Start with the partitions that carry a known instance — `deployments` and
-`agenticengineering` on memex.systemorph.com, `sglauser` on memex.meshweaver.cloud — and compare its
+`agenticengineering` on the control instance, `sglauser` on the public instance — and compare its
 `RemovedAfterCommit` set against what was deliberately deleted.
 
 ## What the 2026-09-02 re-measurement settled, and what it falsified
 
-Re-measured read-only on memex.systemorph.com. Two hypotheses died on evidence that could have gone
+Re-measured read-only on the control instance. Two hypotheses died on evidence that could have gone
 the other way — record them so nobody spends the day again:
 
 | Probe | Answer | What it kills |
@@ -384,7 +384,7 @@ writes nothing), or an EQUAL-version overwrite (which applies, and which the his
 alone — it needs the partition schema inspected on that portal (`main_node`, `partition_access` and
 `user_effective_permissions` for `agenticengineering`, against the same three columns for
 `agenticprimer`, which works; and for `deployments`, where the control is one ROW rather than one
-partition — `pearl-provision-20260914` against a sibling that reads, [#4513](https://github.com/Systemorph/MeshWeaver/issues/4513)).
+partition — `fabrikam-provision-20260914` against a sibling that reads, [#4513](https://github.com/Systemorph/MeshWeaver/issues/4513)).
 All three instances above are still live and reproduce on demand, so the evidence has not decayed.
 Do not repair any of them by restoring versions until the read seam is understood; a restore takes
 the same path and can land the same way.

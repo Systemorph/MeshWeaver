@@ -19,7 +19,7 @@ for something under a name that was never written, found nothing, and compiled a
 types itself.
 
 That is the ten-minute window in which the covers of every course on
-[memex.meshweaver.cloud](https://memex.meshweaver.cloud) served an error card to anonymous
+the public instance served an error card to anonymous
 visitors for two hours on the evening of 2026-08-17. The card outlived the window that caused it;
 the window is now gone.
 

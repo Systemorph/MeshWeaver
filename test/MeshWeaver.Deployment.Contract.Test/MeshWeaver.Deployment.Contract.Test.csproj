@@ -14,7 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Three Hosting/Deployment records as the control instance holds them (Systemorph/Memex,
-         main, 2026-09-08): memex (40 content keys), pearl (35), memex-cloud (44). -->
+         main, 2026-09-08): memex (40 content keys), fabrikam (35), memex-cloud (44). -->
     <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

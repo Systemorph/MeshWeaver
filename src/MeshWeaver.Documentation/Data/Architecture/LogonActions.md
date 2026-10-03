@@ -206,8 +206,8 @@ node at `Admin/_LogonAction/{id}`. No code, no image roll; the id is the ledger 
 ```
 
 🚨 **Zero action nodes ship with the framework.** A portal that declares none runs none. That is the
-whole reason the pin targets are data: `memex.meshweaver.cloud` carries the agentic-engineering
-courses and `systemorph.com` does not, and a hard-coded course path would write a dangling pin onto
+whole reason the pin targets are data: one portal carries the agentic-engineering
+courses and another does not, and a hard-coded course path would write a dangling pin onto
 every user's home on every portal that lacks it.
 
 > 🚨 **A node's TYPE is not a path prefix, and this one has already been written wrong.** The three

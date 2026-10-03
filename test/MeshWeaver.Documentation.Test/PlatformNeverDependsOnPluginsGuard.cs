@@ -99,10 +99,18 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "cannot detect the missed-repo case), and `cross-repo-pair` resolves the "
                 + "`Pairs-with:` pull request a surface-removing change declares (#2689 — the "
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
-                + "read; neither checks anything out. `dependent-suites` (policy "
-                + "`dependent-suites-gate`, #2689's acceptance criterion) reads the verdict "
+                + "read; neither checks anything out. `dependent-suites` reads the verdict "
                 + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
-                + "against this candidate — a fact about the candidate, never Plugins source"),
+                + "against this candidate — a fact about the candidate, never Plugins source. Under "
+                + "policy `core-merge-never-blocked` it is ADVISORY: no required "
+                + "context reads it, so a sibling's state reports on a core PR and blocks nothing"),
+            new KeyValuePair<string, string>("main-cd.yml",
+                "`arm` (policy `one-promotion-gate`) reads the dependent-suites verdict "
+                + "MeshWeaver.Plugins writes at refs/core-candidate/pair-<core7>-p<plugins7> for a "
+                + "PROMOTED set, and arms the fleet (the portal's version tag, the line pointers, the "
+                + "release event) only for a green one. It is on no pull request and holds no platform "
+                + "delivery leg: promote, verify, the platform bake and delivery-verdict never need it "
+                + "(PlatformDeliveryNeverWaitsOnPluginsGuard). A read token, no checkout, no dispatch"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),

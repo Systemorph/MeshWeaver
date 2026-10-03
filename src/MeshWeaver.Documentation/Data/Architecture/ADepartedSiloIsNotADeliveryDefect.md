@@ -189,6 +189,12 @@ A bare `TimeoutException` is the opposite statement and stays terminal: the silo
 connection and did not answer across the whole budget, i.e. plausibly wedged rather than restarting.
 Telling a sender "transient" about a wedge is a resubscribe storm against a hub that never comes back.
 
+**One path is exempt, and it does not change this verdict:** a layout-area VIEW re-opens its stream
+after a deadline miss, at most once per 30 s per open view (policy
+`area-view-reopens-on-deadline-miss`; see [Error Propagation & Wedges](../ErrorPropagationAndWedges)
+→ *A deadline miss re-opens the view*). The router still answers `Failed`; the view's own paced
+re-open is what keeps that from being the storm described here.
+
 **And what the verdict arms is bounded, which is what makes the generous answer safe here.**
 `MeshNodeStreamCache`'s transient-fault breaker gives a transient claim three grace failures and then
 backs re-probes off exponentially (1 s base, 60 s cap), on the explicit reasoning that a *streak* is
@@ -272,7 +278,7 @@ It is left unchanged on purpose, and the reason is worth keeping:
 ## The reading traps these two incidents taught
 
 - 🚨 **A `LogIncident`'s `namespace` field is the FIRST-seen namespace, not a per-sample one.** Both
-  incidents read `memex-cloud`; their newest samples are on pod generations that portal never ran. A
+  incidents read the public instance's namespace; their newest samples are on pod generations that portal never ran. A
   closure argued on *"that portal is pinned to an older image, so it cannot carry the fix"* would be
   reading the wrong deployment.
 - 🚨 **An incident fingerprinted on a DEPENDENCY's logger counts what the dependency saw, not what we

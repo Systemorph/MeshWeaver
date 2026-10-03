@@ -24,8 +24,8 @@ closed with the mirror still running.
   change nothing.
 - **One extra grain activation per NodeType whenever the state moved.** A real update is applied
   through the satellite's own per-node hub, so each changed satellite activated a grain: placement,
-  path resolution and a storage read. A framework roll re-stamps every type, so on memex-cloud a
-  roll meant about 371 of these activations. memex-cloud had nine rolls and restarts between
+  path resolution and a storage read. A framework roll re-stamps every type, so on the public instance a
+  roll meant about 371 of these activations. The public instance had nine rolls and restarts between
   12:05Z and 14:17Z on 2026-09-23.
 
 ## What it looked like in production, after #5327 / #5375
@@ -33,7 +33,7 @@ closed with the mirror still running.
 The compile lane moved off the shared ThreadPool (#5327, #5375), and both portals were running
 images that contain those fixes. The satellites were still where the boot-time bursts landed:
 
-| instrument | reading (memex-cloud, 2026-09-23) |
+| instrument | reading (the public instance, 2026-09-23) |
 |---|---|
 | Placement timeouts, `Admin/_LogIncident/f7d8f9982b20cce5` (#5334) | 9 of the 10 retained samples at 14:22Z target `messagehub/*/_Activity/compile-state` |
 | Activation faults on a stalled path resolution, `Admin/_LogIncident/df1ef8b39a2d8601` (#5531) | 6 of the 7 retained samples at 13:33–13:35Z are compile-state satellites |

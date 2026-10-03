@@ -412,17 +412,28 @@ public static class NodeTypeBuildState
     /// <param name="releaseNamespace">This NodeType's <c>{path}/Release</c> namespace.</param>
     /// <param name="contentHash">This result's <see cref="ContentHashOf"/>.</param>
     internal static bool IsReusableAttempt(string? attemptedPath, string releaseNamespace, string contentHash)
+        => !string.IsNullOrEmpty(contentHash)
+           && string.Equals(ReleaseContentHash(attemptedPath, releaseNamespace), contentHash,
+               StringComparison.Ordinal);
+
+    /// <summary>
+    /// Reads the durable-content hash from a release id belonging to this NodeType. A legacy or
+    /// malformed id gives no evidence about its bytes, so callers must not infer a mismatch.
+    /// </summary>
+    internal static string? ReleaseContentHash(string? releasePath, string releaseNamespace)
     {
-        if (string.IsNullOrEmpty(attemptedPath) || string.IsNullOrEmpty(contentHash))
-            return false;
+        if (string.IsNullOrEmpty(releasePath))
+            return null;
         var prefix = releaseNamespace + "/";
-        if (!attemptedPath.StartsWith(prefix, StringComparison.Ordinal))
-            return false;
-        var id = attemptedPath[prefix.Length..];
+        if (!releasePath.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        var id = releasePath[prefix.Length..];
         return id.Length == ReleaseIdLength
             && id[14] == '-'
             && id.AsSpan(0, 14).IndexOfAnyExceptInRange('0', '9') < 0
-            && string.Equals(id[15..], contentHash, StringComparison.Ordinal);
+            && id[15..].All(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')
+            ? id[15..]
+            : null;
     }
 
     /// <summary>

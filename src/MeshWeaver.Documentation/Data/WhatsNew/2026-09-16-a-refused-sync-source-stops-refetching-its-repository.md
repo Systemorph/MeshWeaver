@@ -11,7 +11,7 @@ Order: -20260916
 A Space synced from a repository subdirectory refuses to import when that subdirectory matches
 nothing: an empty snapshot would prune the whole Space. Since this morning the refusal is recorded
 on the source as `lastSyncOutcome: Refused`. What it still did was **try again** — on every
-publication announcement, at the very same commit. On memex.systemorph.com that was about 32
+publication announcement, at the very same commit. On the control instance that was about 32
 refusals an hour for two Spaces, each one a full fetch of the repository and a new import Activity,
 none of which could ever succeed.
 

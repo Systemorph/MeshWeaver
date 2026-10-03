@@ -43,9 +43,12 @@ public static class GitHubSyncSettingsTab
     // panel binds to it; Cancel flips RequestedStatus on it.
     private const string ActivityPathId = "ghActivityPath";
 
-    /// <summary>Registers the GitHub Sync settings tab provider (shown on any node within a Space).</summary>
+    /// <summary>Registers the GitHub Sync settings tab provider (shown on the Space root).</summary>
     public static MessageHubConfiguration AddGitHubSyncSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab))
+            // It acts on the whole Space, so it is offered on the Space ROOT's settings only — never
+            // on every node below it; a descendant's old link redirects to the root's tab.
+            .RestrictSettingsTabsToPartitionRoot(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)
@@ -65,8 +68,8 @@ public static class GitHubSyncSettingsTab
             // we're on.
             RequiredPermission: Permission.None);
 
-        // GitHub Sync acts on the whole Space, so the tab appears on the Settings page of EVERY node
-        // within a Space, always referring to the containing Space. Spaces are top-level (a Space's
+        // GitHub Sync acts on the whole Space, so the tab appears on the Space ROOT's settings page
+        // only (RestrictSettingsTabsToPartitionRoot, above) and refers to that Space. Spaces are top-level (a Space's
         // path IS its id — see SpaceNodeType), so the first segment of the current node's path is its
         // containing partition root. Gate on (that root is a Space) AND (the user may Update it).
         var spaceRoot = SpaceRootPath(host.Hub.Address.ToString());
@@ -385,9 +388,9 @@ public static class GitHubSyncSettingsTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.addSyncSource", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId).Take(1).Subscribe(d =>
+                return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(AddSourceFormId).Take(1).Do(d =>
                 {
                     var name = Str(d, "name");
                     if (string.IsNullOrEmpty(name))
@@ -399,8 +402,7 @@ public static class GitHubSyncSettingsTab
                         node => ctx.Host.UpdateData(ResultId,
                             Ok($"Sync source '{name}' added — configure its repository and direction above.")),
                         ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }
@@ -418,9 +420,9 @@ public static class GitHubSyncSettingsTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.reimportAtCommit", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(CommitFormId).Take(1).Subscribe(d =>
+                return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(CommitFormId).Take(1).Do(d =>
                 {
                     var commit = Str(d, "commit");
                     if (string.IsNullOrEmpty(commit))
@@ -432,8 +434,7 @@ public static class GitHubSyncSettingsTab
                     ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
                             onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
                         .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }

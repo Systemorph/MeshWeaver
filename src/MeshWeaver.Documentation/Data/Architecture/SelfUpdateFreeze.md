@@ -29,10 +29,10 @@ and lives in the producing half — see *The producing half* below.
 2026-09-11T08:57:47Z, and has been frozen ever since. The instance it is on has since moved *past*
 the target it names. Nothing has re-measured it and nothing will — see *A frozen hold is history*.
 
-**"The fleet is frozen, for one reason."** Four instances, four causes. **Two are deliberate** — memex
-and pearl each carry a reviewed `pinnedImageTag`, and a candidate newer than the pin waits for an
+**"The fleet is frozen, for one reason."** Four instances, four causes. **Two are deliberate** — the control
+instance and an SME client instance each carry a reviewed `pinnedImageTag`, and a candidate newer than the pin waits for an
 approval rather than patching unattended. **Two are stuck, and for different reasons**:
-memex-cloud's policy record has lost its own policy — a live defect — and build cannot list tags on
+the public instance's policy record has lost its own policy — a live defect — and the build instance cannot list tags on
 its registry at all, which is **not** an outstanding code defect but an undeclared pairing
 (MeshWeaver#4093; the platform half merged on 2026-09-12, see below). Neither is the
 module-compatibility hold the policy nodes appear to show.
@@ -41,36 +41,36 @@ module-compatibility hold the policy nodes appear to show.
 
 Running versions are `GET /api/version` on each host; policy readings are each instance's own
 `Admin/UpdatePolicy`; pins and fleet intent are the `Deployments/<id>` records on the control
-instance **memex.systemorph.com**.
+instance.
 
 | instance | host | running | why it is not self-rolling |
 |---|---|---|---|
-| **memex-cloud** | memex.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`), pods from 2026-09-17 | 🚨 **defect** — its `Admin/UpdatePolicy` carries **no `policy` field at all**, which reads as `None`; the poller returns before listing the registry |
-| **memex** (control) | memex.systemorph.com | `fc8cd583`; record pins `3.0.0-ci.8710` | **by design** — it detects, hands the build to the control lane, and *"a newer tag waits for an approval in the mesh. This install does not patch itself."* |
-| **pearl** | pearl.meshweaver.cloud | `3.0.0-ci.8080` (`67cbbe0e`) | **by design** — `pinnedImageTag: 3.0.0-ci.8080`; and the instance-side policy node is a separate act from the record's `updatePolicy` |
-| **build** | build.meshweaver.cloud | `3.0.0-ci.8411` (`c84c6c05`) | 🚨 **stuck, but not on platform code** — its images come from `cr.meshweaver.cloud`, where the self-updater refuses to list tags because nothing on its record declares which portal validates its key (MeshWeaver#4093). The platform half shipped 2026-09-12; what is owed is a declaration and a roll — see below |
-| **partnerre** | — | — | `Ops/Status/partnerre` is `Unknown`, last written 2026-09-15 — outside this measurement |
+| **the public instance** | `portal.example.com` | `3.0.0-ci.8411` (`c84c6c05`), pods from 2026-09-17 | 🚨 **defect** — its `Admin/UpdatePolicy` carries **no `policy` field at all**, which reads as `None`; the poller returns before listing the registry |
+| **the control instance** | `control.example.com` | `fc8cd583`; record pins `3.0.0-ci.8710` | **by design** — it detects, hands the build to the control lane, and *"a newer tag waits for an approval in the mesh. This install does not patch itself."* |
+| **an SME client instance** (`fabrikam`) | `fabrikam.example.com` | `3.0.0-ci.8080` (`67cbbe0e`) | **by design** — `pinnedImageTag: 3.0.0-ci.8080`; and the instance-side policy node is a separate act from the record's `updatePolicy` |
+| **the build instance** | `build.example.com` | `3.0.0-ci.8411` (`c84c6c05`) | 🚨 **stuck, but not on platform code** — its images come from `cr.meshweaver.cloud`, where the self-updater refuses to list tags because nothing on its record declares which portal validates its key (MeshWeaver#4093). The platform half shipped 2026-09-12; what is owed is a declaration and a roll — see below |
+| **an enterprise client instance** (`globex`) | — | — | `Ops/Status/globex` is `Unknown`, last written 2026-09-15 — outside this measurement |
 
-Note also that **the images are moving**: memex-cloud and build both run `3.0.0-ci.8411`, and
-memex-cloud's pods started on 2026-09-17. The public instance took a newer image through the reviewed
-`pinnedImageTag` + helm route in the private `Systemorph/Memex` repo. "Nothing has rolled" is true of
-the **pull** mechanism and false of the **push** one, and conflating the two hides that memex and pearl
-are pinned deliberately.
+Note also that **the images are moving**: the public and build instances both run `3.0.0-ci.8411`, and
+the public instance's pods started on 2026-09-17. The public instance took a newer image through the reviewed
+`pinnedImageTag` + helm route in the private deployments repository. "Nothing has rolled" is true of
+the **pull** mechanism and false of the **push** one, and conflating the two hides that the control instance and the
+SME client instance are pinned deliberately.
 
-🚨 **A pin is not evidence of intent.** memex's and pearl's pins are reviewed decisions; build's is a
+🚨 **A pin is not evidence of intent.** the control instance's and the SME client's pins are reviewed decisions; the build instance's is a
 *workaround* for MeshWeaver#4093, recorded as such in its own deployment record — *"the self-updater
-cannot check for updates on an instance whose images come from cr.meshweaver.cloud, so rolls go through
+cannot check for updates on an instance whose images come from the fleet registry, so rolls go through
 the control instance until that lands."* The same field means "we chose this version" on one instance
 and "detection is broken here" on another, and only the record's own words tell them apart. That one
-matters more than it looks: build is the instance that compiles modules, and a build instance held
+matters more than it looks: the build instance is the one that compiles modules, and a build instance held
 behind the newest sealed platform produces bundles keyed to an identity the fleet has moved past.
 
-### build: the platform half landed on 2026-09-12; the declaration did not
+### The build instance: the platform half landed on 2026-09-12; the declaration did not
 
 🚨 **"Cannot list tags on `cr.meshweaver.cloud`" has read as an outstanding platform defect since
 2026-09-12, and it is not one.** The rule that lets an installation present its `mwi_` key to a
 container registry validated by *another* portal — the fleet's shape, where `cr.meshweaver.cloud`
-forwards the key to `memex.meshweaver.cloud` — merged that day as `830c8c402`
+forwards the key to the plugin registry instance — merged that day as `830c8c402`
 ([The Self-Update Registry Credential](../SelfUpdateRegistryCredential)), with the fleet's shape
 pinned on both sides by `OciTagListerTest`: declared, it resolves and lists; undeclared, it refuses
 and the key does not leave.
@@ -78,10 +78,10 @@ and the key does not leave.
 What is left is **two statements on a record and a roll**, in this order, and neither is a platform
 change:
 
-1. `SelfUpdate__RegistryValidationUrl: "https://memex.meshweaver.cloud/api/instances/token"` in
-   `extraPortalConfig` on `Deployments/build` and `Deployments/pearl` — the registry record's own
+1. `SelfUpdate__RegistryValidationUrl: "https://portal.example.com/api/instances/token"` in
+   `extraPortalConfig` on `Deployments/<build>` and `Deployments/fabrikam` — the registry record's own
    `validationUrl`, restated on the consumer. Measured 2026-09-18 on the control instance:
-   `Deployments/build` (v21) carries neither key.
+   `Deployments/<build>` (v21) carries neither key.
 2. A roll onto an image whose core sha has `830c8c402` as an ancestor. Both instances run
    `3.0.0-ci.8411` (`c84c6c05`), which **predates** it — so on those pods the declaration is an env
    var nothing reads. Declaring first is harmless and does not help until the roll.
@@ -113,7 +113,7 @@ is not cleared because the last real evaluation is the only diagnostic an operat
 updates back on, and `IsHoldOperative(tag)` returns `false` whenever the policy is `None` so the UI
 does not present a fossil as a live refusal.
 
-- **The staleness test is `heldAt` against `lastCheckedAt`.** On memex-cloud today: 2026-09-11T08:57:47Z
+- **The staleness test is `heldAt` against `lastCheckedAt`.** On the public instance today: 2026-09-11T08:57:47Z
   against 2026-09-18T09:55:24Z. Seven days.
 - **The discriminator is the verdict string**, a compile-time constant reachable from exactly one place:
   `updates are disabled on this install (Admin/UpdatePolicy = None); the registry was not listed.`
@@ -123,7 +123,7 @@ does not present a fossil as a live refusal.
   absence of one. *"Listing is broken"* and *"listing was never attempted"* look identical on the node
   and are told apart by this sentence alone.
 
-## memex-cloud: the record lost its own policy
+## The public instance: the record lost its own policy
 
 `UpdatePolicyContent.Policy` is a computed property over a nullable backing field:
 
@@ -137,7 +137,7 @@ public UpdatePolicyKind Policy
 
 **An absent declaration reads as `None`, never as enabled** (#3542) — and because the hub serializer
 drops default-valued members, `Continuous` (the zero member) only ever reaches the wire as an explicit
-`"policy"` property. memex-cloud's node carries neither `policy` nor `pattern`. The control instance's
+`"policy"` property. The public instance's node carries neither `policy` nor `pattern`. The control instance's
 carries both.
 
 `SelfUpdateOptions.DefaultPolicy` (`Stable`) does not rescue it: it is seed-only, consumed by
@@ -152,7 +152,7 @@ The third is named in the code's own documentation as something that has already
 instance*:
 
 > an install whose record lost its policy under its own bookkeeping writes no longer rolls itself.
-> That is how memex-cloud reached a withdrawn `3.1.0-ci` line "on a policy record that lost its own
+> That is how the public instance reached a withdrawn `3.1.0-ci` line "on a policy record that lost its own
 > policy".
 
 The mechanism is visible in every bookkeeping writer:
@@ -169,7 +169,7 @@ a default one**. The policy and the pattern are gone; `None` then suppresses the
 only re-state that updates are disabled. **It is self-latching**: the condition that erases the policy
 also removes every event that could notice.
 
-### The timeline on memex-cloud
+### The timeline on the public instance
 
 | when | what the node said |
 |---|---|
@@ -194,14 +194,14 @@ floors that decide nothing since #3648, and one package that would recompile at 
 instances share the five modules their records require (`Blazor.Radzen`, `Blazor.Analysis`,
 `Blazor.EntityViews`, `Blazor.GoogleMaps`, `Speech`).
 
-So the working hypothesis is that memex-cloud's module story **dissolves into its stale-target story**:
+So the working hypothesis is that the public instance's module story **dissolves into its stale-target story**:
 the ~25 entries were measured against a set from 09-11 and were never re-measured. It is a hypothesis
-and not a measurement — memex-cloud carries packages memex does not (RolePlay, SocialMedia, Edu), and
+and not a measurement — the public instance carries packages the control instance does not (RolePlay, SocialMedia, Edu), and
 the only instrument that can settle it is that instance evaluating a current target, which needs its
 policy back. **Restore the policy first, then read the hold it produces.** Reading today's frozen text
 as the answer is what this page exists to prevent.
 
-## memex: detecting, handing over, and waiting for an approval
+## The control instance: detecting, handing over, and waiting for an approval
 
 The control instance is the one portal whose policy is intact, and it shows what the fleet would do if
 every policy were restored. At 2026-09-18T01:02:19Z its verdict was:
@@ -212,9 +212,9 @@ every policy were restored. At 2026-09-18T01:02:19Z its verdict was:
 > approval in the mesh**). **This install does not patch itself.**
 
 So the pull mechanism is working end to end on this instance: it lists, selects, gates, hands over and
-records. What does not happen is an unattended patch — because `Deployments/memex` carries
+records. What does not happen is an unattended patch — because `Deployments/<control>` carries
 `pinnedImageTag: 3.0.0-ci.8710` and the candidate is newer. That is the intended shape for an instance
-with a reviewed pin, and it is the same routing pearl's record documents for a customer portal: one
+with a reviewed pin, and it is the same routing the SME client's record documents for a customer portal: one
 approval per release rather than an unattended roll.
 
 **Reading this as a freeze is the second version of the first mistake.** "Waiting for a human" and
@@ -240,7 +240,7 @@ The budget bounds two cold legs on the file-system `IIoPool`:
 
 1. `PublishedBundleCatalogue.EverSealedBundles(publishedRoot)` — the gate's **denominator**, which
    enumerates **every framework-identity directory and every source directory** under
-   `PreWarm:PrebuiltBundleRoot` (`/data/prebuilt-bundles`, on the `azurefile-memex` share).
+   `PreWarm:PrebuiltBundleRoot` (`/data/prebuilt-bundles`, on the `azurefile-<namespace>` share).
 2. The target's own publication — marker file, identity directory, each source's bundles, their
    dependency records, the surface manifest, every sealed module bundle opened as a zip — plus a mesh
    query for the install records and the landed-generation sidecar.
@@ -258,7 +258,7 @@ seal" to "the store". Either way the next reading decides it, and the two do not
 ### The prediction RAN, and it went the way that moves the remedy to the store
 
 The seal recovered at 10:15Z and `3.0.0-latest` moved at ~16:35Z. The timeout survived it. Measured on
-**memex.meshweaver.cloud**'s own `Admin/UpdatePolicy`, on two freshly sealed candidates, after the
+**the public instance**'s own `Admin/UpdatePolicy`, on two freshly sealed candidates, after the
 instance's policy was restored to `Continuous` / `3.0.0-ci*` at 18:17Z:
 
 | check | trigger | verdict |
@@ -343,7 +343,7 @@ sentences and the replicas' bake reports:
 |---|---|
 | `3.0.0-ci.8057` | `sf456af88e1d9c07c0d9d75de97b0800c` |
 | `3.0.0-ci.8339` | `sbb8b372062fdc895e3f80ec99ee2df3c` |
-| `3.0.0-ci.8411` | `sd608997…` (memex-cloud's bake report) |
+| `3.0.0-ci.8411` | `sd608997…` (the public instance's bake report) |
 | `3.0.0-ci.8710` (`fc8cd583`) | `saea1aea34067e4f08d37dac68091d518` |
 | `3.0.0-ci.8767` | `s5ec352bb102e5a2275e3831a08ac0c8d` |
 | `3.0.0-ci.8886` | `s72c46bad7d8e4d1647482cbf670d0e30` |
@@ -368,7 +368,7 @@ PreWarm__PrebuiltBundleRetention__Delete: "{{ … | default "false" }}"
 The chart's own note says **the code default is the opposite** (`PrebuiltBundleRetention.Delete` is
 `true`) and that it renders `false` on purpose, because the sweep removes bytes something is executing
 and must not run on unexamined defaults. Measured 2026-09-18: **no deployment record in the fleet
-overrides that key** — not memex, not memex-cloud, not pearl, not build. On every portal the retention
+overrides that key** — not the control instance, not the public instance, not the client instances, not the build instance. On every portal the retention
 pass has been scanning, planning and reporting, and deleting nothing, since the lane began.
 
 An append-only store, a monotone walk over all of it, and a fixed 60 s budget do not fail on a
@@ -458,18 +458,18 @@ skipped. Neither conclusion tells you whether a set exists.
 | thing | what it needs | kind |
 |---|---|---|
 | the seal | ✅ done — `MeshWeaver.Plugins#2059` merged 10:15:38Z; confirm on run 8916's seal JOB | **an action**, taken |
-| memex-cloud | `policy: Continuous` + `pattern: 3.0.0-ci*` restored on its own `Admin/UpdatePolicy` | **a decision**, and a repair with a known half-life |
+| the public instance | `policy: Continuous` + `pattern: 3.0.0-ci*` restored on its own `Admin/UpdatePolicy` | **a decision**, and a repair with a known half-life |
 | every instance | a bookkeeping write must never replace a record it could not materialize — refuse and log instead | **a code fix** |
-| memex, pearl | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately. 🚨 **Superseded for memex on 2026-09-19**: the pin was cleared and it still did not roll — see [the 2026-09-20 re-measurement](#2026-09-20-the-apply-half-stopped-and-the-detect-half-kept-announcing-into-it) |
+| the control instance, the SME client instance | a newer tag than `pinnedImageTag` waits for an approval | **working as designed** — approve, or clear the pin deliberately. 🚨 **Superseded for the control instance on 2026-09-19**: the pin was cleared and it still did not roll — see [the 2026-09-20 re-measurement](#2026-09-20-the-apply-half-stopped-and-the-detect-half-kept-announcing-into-it) |
 | every instance | `PreWarm__PrebuiltBundleRetention__Delete` | **an operations decision**, from a ledger line, after confirming the protected set covers every instance and every CI gate pinning an older platform build |
 | the availability gate | answer inside its budget over a store that only grows | ✅ **done** — `SealedBundleFloorCache` (#4742) remembers each SOURCE publication's declaration, so a tick lists but no longer re-opens them; `SelfUpdate__AvailabilityAnswerBudget` is the secondary knob, never the fix |
 | a timeout hold | record `heldIndeterminate: true` | **a code fix**, one call site |
-| build, pearl | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
+| the build instance, the SME client instance | MeshWeaver#4093 — `SelfUpdate__RegistryValidationUrl` on the record, then a roll onto an image carrying `830c8c402` or later | **a config change and a roll** — NOT a code fix; the platform half merged 2026-09-12 |
 
 ## 2026-09-20: the apply half stopped, and the detect half kept announcing into it
 
-**Six days after this page was written, memex.systemorph.com had still not rolled — and the reason had
-changed.** This section is the re-measurement, because the remedy table above ("memex … a newer tag
+**Six days after this page was written, the control instance had still not rolled — and the reason had
+changed.** This section is the re-measurement, because the remedy table above ("the control instance … a newer tag
 than `pinnedImageTag` waits for an approval") is no longer what the instruments say.
 
 | instrument | reading, 2026-09-20 | what it means |
@@ -479,22 +479,22 @@ than `pinnedImageTag` waits for an approval") is no longer what the instruments 
 | → `latestAvailableTag` | `3.0.0-ci.9014` | listing works |
 | → `handedOverTag` / `handedOverAt` | `3.0.0-ci.9014` / `06:12:52Z` **today** | **the hand-over webhook fires, daily** |
 | → `comboVerifications` | `[]` | no verdict for the candidate ⇒ any roll is taken UNVERIFIED |
-| `Deployments/memex` → `pinnedImageTag` | **absent** (record modified 2026-09-19T19:41Z) | 🚨 the `3.0.0-ci.8710` pin named above is GONE |
+| `Deployments/<control>` → `pinnedImageTag` | **absent** (record modified 2026-09-19T19:41Z) | 🚨 the `3.0.0-ci.8710` pin named above is GONE |
 | `Ops/Actions/*` newest `Hosting/InstanceAction` | **2026-09-14** | **no Roll opened for six days**, across ≥3 candidates (8886, 8996, 9014) |
 
 **So the deliberate-pin explanation has expired.** The pin was cleared on 2026-09-19 and the instance
 still did not roll, which rules out "waiting for an approval because the candidate is newer than the
-pin" as the current cause. Anyone reading the remedy table without re-reading `Deployments/memex`
+pin" as the current cause. Anyone reading the remedy table without re-reading `Deployments/<control>`
 will fix a pin that is not there.
 
-**What the 14th actually left behind.** `reconcile-memex-20260914-nav-rail` rolled onto
-`3.0.0-ci.8612`; `sample-memex-20260914-nav-rail` records that the replica **never became Ready**; and
-`sample-memex-20260914-rollback` records the roll back to `3.0.0-ci.8411`, 30 minutes at 1/2 updated.
+**What the 14th actually left behind.** `reconcile-<control>-20260914-nav-rail` rolled onto
+`3.0.0-ci.8612`; `sample-<control>-20260914-nav-rail` records that the replica **never became Ready**; and
+`sample-<control>-20260914-rollback` records the roll back to `3.0.0-ci.8411`, 30 minutes at 1/2 updated.
 Nothing has been opened since. **The apply half stopped after a failed roll and the detect half has
 gone on announcing into it every day** — so the daily "update available … handed to the control lane"
 line is evidence that detection works, and no evidence at all that anything consumes it.
 
-**The cause: an action orphaned in `Running`.** `Ops/Actions/selfupdate-roll-memex-3-0-0-ci-8968-e9878173`
+**The cause: an action orphaned in `Running`.** `Ops/Actions/selfupdate-roll-<control>-3-0-0-ci-8968-e9878173`
 reads `state: Running`, `phase: Verify one generation` (step 6/8), `startedAt 2026-09-19T08:10:32Z`,
 `observedUntil 2026-09-19T14:41:12Z` — and `lastModified` still 08:10:28Z. **The roll itself worked**:
 the image was set to `3.0.0-ci.8968`, `rollout_generation=779`, and the pods came up (the instance's
@@ -552,6 +552,51 @@ advances when this instance IMAGE does (a roll), NOT when another publication la
 behind, holding a CRM data migration and an unrelated invoice feature. **"Merged, green and verified on
 `origin/main`" says nothing about a portal having it**; check the seal before promising a date.
 
+## The build instance: the record said Continuous, the node said Stable
+
+Measured 2026-09-28. The fleet's build instance (build.meshweaver.cloud, record `Deployments/build`
+on the control instance: `updatePolicy: Continuous`, `updatePattern: 3.0.0-ci*`) stayed on
+`cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.9412` while the armed set was `3.0.0-ci.9564`,
+mirrored to cr.meshweaver.cloud at 15:28Z (digest verified in main-cd run 36443591670). Every check
+logged the same line:
+
+```
+[SelfUpdate] check (Startup|SafetyNet|ModuleSetProposed): no newer release: 1403 tag(s) listed,
+none newer than the installed 3.0.0-ci.9412.
+```
+
+So it never announced `self-update-available`, and the control plane never opened a Roll.
+
+**Cause.** The record's policy and pattern render as `SelfUpdate__DefaultPolicy` /
+`SelfUpdate__DefaultPattern`, and those were SEED keys only: `UpdatePolicyNodeType.EnsureExists`
+returns early for a node that exists. Build was provisioned on 2026-09-12, before the record's policy
+was rendered into the portal configuration at all (d38e790ba5, 2026-09-19). Its node was therefore
+created with the image's own default, `Stable` and no pattern, and the record's `Continuous` never
+reached it. `Stable` and "`Continuous` without a pattern" both admit clean releases only, hence
+"none newer". The contrast is pearl, created 2026-09-21 against the same registry: its
+`Admin/UpdatePolicy` reads `policy: Continuous, pattern: 3.0.0-ci*, latestAvailableTag:
+3.0.0-ci.9564`.
+
+🚨 **What was not read:** build's own `Admin/UpdatePolicy` node. No MCP server reaches the build
+instance, so the node's `Stable`/no-pattern content is INFERRED from the log line, the two creation
+dates and pearl's contrast, not observed.
+
+**Fix (policy `self-update-record-authoritative`).** When `SelfUpdate:DefaultPolicy` is SET in the
+configuration, the self-updater's seeding stage now also converges the EXISTING node's `policy` and
+`pattern` to the configured values (`UpdatePolicyNodeType.ConvergeToDeclaration`, called from
+`SelfUpdateHostedService.CreatePolicySource`). It is read off the RAW configuration key, because the
+options binder answers `Stable` for an unset key. It touches those two fields only, never
+`requireCiGreen` or any bookkeeping field. It writes nothing when they already match, and it logs
+`[SelfUpdate] converging Admin/UpdatePolicy to the deployment record: <old> → <new>` when it writes.
+With the key unset nothing changes: the node is seeded once and then belongs to the admin, which is
+what a non-fleet install relies on. While the record declares the policy, Settings → Updates says
+so, because a change made there lasts only until the next start.
+
+🚨 **An instance that is already stuck needs ONE roll to receive the fix.** Its running self-updater
+is the old one, and the old one cannot select the image that carries the new one: to it there is
+still nothing newer. File a governed `Roll` of that deployment to the armed set on the control
+instance. From that start on, the converged node selects continuous builds on its own.
+
 ## How to read these instruments
 
 - **`lastCheckVerdict` first, always.** It is the only field written on every tick. If it says
@@ -572,14 +617,14 @@ behind, holding a CRM data migration and an unrelated invoice feature. **"Merged
 - **A `Running` action past its `observedUntil` is a failed action nobody wrote down.** Check the
   window against the clock before believing `state`.
 - **Re-read `Deployments/<id>` before acting on any pin advice on this page.** The `pinnedImageTag`
-  it documented for memex was gone by 2026-09-19 and the standstill outlived it.
+  it documented for the control instance was gone by 2026-09-19 and the standstill outlived it.
 - **The record's `updatePolicy` is intent; the instance's `Admin/UpdatePolicy` is behaviour.** Setting
   the first alone changes nothing an instance runs.
 - **Read the seal JOB, never the CD run's conclusion** — run 8896 concluded `failure` and sealed; runs
   8909 and 8914 concluded `success` with every build job skipped.
 - **`GET /api/version` beats every record** for what is running; `GET /health` is the per-replica
   census, and repeated calls sample *different* replicas.
-- **`Deployments/<id>` on memex.systemorph.com is authoritative.** The copy on memex.meshweaver.cloud is
+- **`Deployments/<id>` on the control instance is authoritative.** The copy on the public instance is
   a second sync of the same folder and legitimately disagrees.
 
 ## See also

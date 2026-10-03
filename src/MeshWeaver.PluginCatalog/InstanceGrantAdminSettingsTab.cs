@@ -51,7 +51,7 @@ public static class InstanceGrantAdminSettingsTab
     /// <summary>Registers the instance-grants settings tab provider (global admins only).</summary>
     public static MessageHubConfiguration AddInstanceGrantAdminSettingsTab(
         this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(Contribute));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(Contribute)).RelocateSettingsTabsToAdminApp(TabId);
 
     /// <summary>
     /// Contributes the tab, but only once <c>IsGlobalAdmin</c> confirms POSITIVELY. Same shape as
@@ -62,39 +62,20 @@ public static class InstanceGrantAdminSettingsTab
     public static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> Contribute(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        IReadOnlyList<SettingsMenuItemDefinition> none = [];
-
-        // Same home as the other Administration tabs: the admin's OWN settings page. Without this
-        // the tab could render while viewing somebody else's settings.
-        var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
-            ? hubPath["User/".Length..]
-            : hubPath;
-
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        if (string.IsNullOrEmpty(viewerId)
-            || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(none);
-
         var tab = new SettingsMenuItemDefinition(
             Id: TabId,
             Label: "Instance grants",
             ContentBuilder: BuildContent,
-            Group: "Administration",
+            Group: AdminAppNodeType.CommercialGroup,
             Icon: FluentIcons.Shield(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 335,
+            GroupIcon: FluentIcons.Money(),
+            Order: AdminAppNodeType.CommercialOrder + 10,
             Keywords: ["instance", "grant", "plugin", "registry", "entitlement", "authorize"])
-        { LabelKey = "instanceGrants.title", GroupKey = "settings.groupAdministration" };
+        { LabelKey = "instanceGrants.title", GroupKey = AdminAppNodeType.CommercialGroupKey };
 
-        return host.Hub.IsGlobalAdmin(viewerId)
-            .Where(isAdmin => isAdmin)
-            .Take(1)
-            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab })
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
-            .StartWith(none);
+        // The Admin app is the tab's home (/Admin/Settings/InstanceGrants), for confirmed platform
+        // admins only; everywhere else — a person's own settings page included — it contributes nothing.
+        return AdminAppNodeType.AdminOnlyTab(host, tab);
     }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
@@ -165,12 +146,12 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("180px"))
             .WithView(Controls.Button(host.Localize("instancePlan.promote"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(PlanFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(PlanFormDataId)
                         .Take(1)
-                        .Subscribe(data => Promote(ctx.Host, host, data));
-                    return Task.CompletedTask;
+                        .Do(data => Promote(ctx.Host, host, data))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
 
         return Controls.Stack
@@ -286,12 +267,12 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("220px"))
             .WithView(Controls.Button(host.Localize("registrationKeys.mint"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Mint(ctx.Host, host, data));
-                    return Task.CompletedTask;
+                        .Do(data => Mint(ctx.Host, host, data))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(new TextFieldControl(new JsonPointerReference("keyId"))
             {
@@ -300,21 +281,21 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("160px"))
             .WithView(Controls.Button(host.Localize("registrationKeys.revoke"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: true));
-                    return Task.CompletedTask;
+                        .Do(data => Revoke(ctx.Host, host, data, revoked: true))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(Controls.Button(host.Localize("registrationKeys.restore"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(MintFormDataId)
                         .Take(1)
-                        .Subscribe(data => Revoke(ctx.Host, host, data, revoked: false));
-                    return Task.CompletedTask;
+                        .Do(data => Revoke(ctx.Host, host, data, revoked: false))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
     }
 
@@ -476,21 +457,21 @@ public static class InstanceGrantAdminSettingsTab
             }.WithWidth("130px"))
             .WithView(Controls.Button(host.Localize("instanceGrants.grant"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
                         .Take(1)
-                        .Subscribe(data => Apply(ctx.Host, host, data, revoke: false));
-                    return Task.CompletedTask;
+                        .Do(data => Apply(ctx.Host, host, data, revoke: false))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }))
             .WithView(Controls.Button(host.Localize("instanceGrants.revoke"))
                 .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
                         .Take(1)
-                        .Subscribe(data => Apply(ctx.Host, host, data, revoke: true));
-                    return Task.CompletedTask;
+                        .Do(data => Apply(ctx.Host, host, data, revoke: true))
+                        .Select(_ => System.Reactive.Unit.Default);
                 }));
 
         return Controls.Stack

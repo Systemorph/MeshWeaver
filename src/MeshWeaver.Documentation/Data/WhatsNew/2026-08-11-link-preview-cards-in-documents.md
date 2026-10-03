@@ -18,14 +18,14 @@ its title, its description, the whole card clickable. It is a standard layout
 area, embedded the way every layout area is:
 
 ```markdown
-@@("Your/Doc/area/OgCard?url=https://memex.meshweaver.cloud/Underwriting")
+@@("Your/Doc/area/OgCard?url=https://portal.example.com/Underwriting")
 ```
 
 And because one card is rarely the point, a comma-separated list renders a whole
 **responsive card grid** — sixteen course modules in one line of markdown:
 
 ```markdown
-@@("Your/Doc/area/OgCard?urls=https://memex.meshweaver.cloud/Underwriting,https://memex.meshweaver.cloud/Pricing,https://memex.meshweaver.cloud/Claims")
+@@("Your/Doc/area/OgCard?urls=https://portal.example.com/Underwriting,https://portal.example.com/Pricing,https://portal.example.com/Claims")
 ```
 
 For a page on another portal, the platform reads the same preview metadata a chat

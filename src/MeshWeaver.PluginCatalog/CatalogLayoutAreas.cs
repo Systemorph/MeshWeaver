@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
-using System.Buffers.Text;
 using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -43,7 +41,7 @@ namespace MeshWeaver.PluginCatalog;
 /// global-settings About tab shows the read-only installed inventory via
 /// <see cref="ObserveInstalledManifests"/>.)</para>
 /// </summary>
-public static class CatalogLayoutAreas
+public static partial class CatalogLayoutAreas
 {
     /// <summary>Area name for the catalog browse view.</summary>
     public const string CatalogArea = "Catalog";
@@ -115,23 +113,16 @@ public static class CatalogLayoutAreas
 
     /// <summary>
     /// Renders the catalog for a <c>PluginCatalog</c> node: builds the source from the node's
-    /// <see cref="PluginCatalogContent"/> and renders through <see cref="RenderFromSource"/>.
+    /// <see cref="PluginCatalogContent"/> and binds it into <see cref="CatalogTemplate"/> through <see cref="CatalogFeed"/>.
     /// </summary>
     /// <param name="host">The layout area host rendering the area.</param>
     /// <param name="_">The rendering context for the area.</param>
     /// <returns>An observable stream of the catalog view.</returns>
     [Browsable(false)]
     public static IObservable<UiControl?> Catalog(LayoutAreaHost host, RenderingContext _)
-    {
-        return host.Workspace.GetMeshNodeStream()
-            .Select(node => node.ContentAs<PluginCatalogContent>(host.Hub.JsonSerializerOptions))
-            .Select(cfg => RenderFromSource(
-                host, BuildSource(host, cfg?.SourceRepoPath, cfg?.SourceSubdir, cfg?.Format),
-                cfg?.SourceRef ?? "HEAD", cfg?.Description,
-                cfg?.SourceRepoPath is { Length: > 0 } p ? $"{p} @ {cfg.SourceRef}" : null))
-            .Switch()
-            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
-    }
+        // A TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the page is declared at
+        // once and CatalogFeed — the node's source, its listing, the install registry — binds into it.
+        => Observable.Return<UiControl?>(CatalogTemplate(host, CatalogFeed(host)));
 
     // ————————————————————————————————————————————— the page plan (pure)
 
@@ -269,42 +260,6 @@ public static class CatalogLayoutAreas
     // ————————————————————————————————————————————— the render
 
     /// <summary>
-    /// Renders the catalog from an arbitrary <paramref name="source"/>. The source's listing
-    /// decides the page (<see cref="Plan"/>): the landing renders straight off it; a card page joins
-    /// its cards against the install registry (live), the viewer's admin flag (live) and the
-    /// restart-as-activation state (live). Shared by the node Overview and every test of it.
-    /// </summary>
-    internal static IObservable<UiControl?> RenderFromSource(
-        LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel)
-    {
-        // Which page THIS render is — known synchronously off the area reference, which is what
-        // lets the landing skip every per-package read below.
-        var requestedCategory = host.Reference?.GetParameterValue(CategoryParam);
-        var requestedAll = host.Reference?.GetParameterValue(AllParam);
-        return ObserveAvailable(host, source, sourceRef)
-            .Select(feed =>
-            {
-                if (!feed.Answered)
-                    return Observable.Return((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingCatalog")));
-                var plan = Plan(requestedCategory, requestedAll, feed.Packages);
-                if (plan.Kind == CatalogPage.Landing)
-                    // The landing composes NOTHING beyond the listing it was built from: no install
-                    // record, no permission evaluation, no activation-state read. That is the whole
-                    // point of opening on categories.
-                    return Observable.Return((UiControl?)BuildLanding(host, source, description, sourceLabel, plan));
-                return ObserveInstalledFor(host, plan)
-                    .CombineLatest(ObserveInstalledIds(host, plan), ObserveViewerIsGlobalAdmin(host),
-                        ObserveActivation(host),
-                        (installed, installedIds, isAdmin, activation) => (UiControl?)BuildPackages(
-                            host, source, sourceRef, description, sourceLabel, plan, installed, installedIds,
-                            isAdmin, activation));
-            })
-            // Switch, never SelectMany: a re-listing of the source supersedes the page built from
-            // the previous listing instead of leaving two compositions pushing into one view.
-            .Switch();
-    }
-
-    /// <summary>
     /// The restart-as-activation state of THIS process, as a live leg of the catalog render (#1979).
     ///
     /// <para><b>Why the catalog is where this belongs.</b> Loading a module is restart-as-activation
@@ -373,11 +328,20 @@ public static class CatalogLayoutAreas
     /// all, because this feeds a live data-bound view.
     /// </summary>
     private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host)
+        => ObserveViewerIsGlobalAdmin(host, ResolveViewerId(host));
+
+    /// <summary>
+    /// <see cref="ObserveViewerIsGlobalAdmin(LayoutAreaHost)"/> for a viewer id the caller already
+    /// resolved — so the flag and the id it was evaluated FOR travel together (the catalog's
+    /// row-scoped actions act only for that viewer; see <c>CatalogActionContext.ViewerId</c>).
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="viewerId">The viewer the flag is evaluated for; null or empty is nobody, never an administrator.</param>
+    private static IObservable<bool> ObserveViewerIsGlobalAdmin(LayoutAreaHost host, string? viewerId)
     {
-        var viewerId = ResolveViewerId(host);
-        if (string.IsNullOrEmpty(viewerId))
+        if (viewerId is not { Length: > 0 })
             return Observable.Return(false);
-        return host.Hub.IsGlobalAdmin(viewerId!)
+        return host.Hub.IsGlobalAdmin(viewerId)
             .Catch<bool, Exception>(_ => Observable.Return(false))
             .StartWith(false)
             // After StartWith, so the evaluator's own seeded false does not re-render the view.
@@ -434,14 +398,43 @@ public static class CatalogLayoutAreas
     /// deserialized to its <see cref="PackageManifest"/> and sorted by display name. This is the
     /// read-only "what is running on this instance" view the About tab shows every user — the
     /// catalog's ALL page joins the SAME records against a package source for install status.
+    ///
+    /// <para>🚨 Two properties a consumer can rely on. A live instance's Overview said "No plugins are
+    /// installed on this instance" over dozens of installs; the first property is the reproduced
+    /// cause (<c>AdminAppFirstFrameTest</c>), the second hardens the read against losing its
+    /// viewer:</para>
+    /// <list type="bullet">
+    /// <item><description><b>It emits the registry's ANSWER, never a placeholder.</b> The first
+    /// emission is the query's Initial — so an empty list means the registry IS empty, and a view
+    /// may say so. (The catalog pages seed their own frame; this inventory does not.)</description></item>
+    /// <item><description><b>It reads as the VIEWER the page renders for</b>, stamped explicitly
+    /// (<see cref="MeshQueryRequest.ForViewer"/>) from the host's viewer rather than resolved from
+    /// the ambient context when the query subscribes — which, for a view rendered on a live
+    /// emission on a distributed mesh, is nobody: the anonymous view, and on an instance closed to
+    /// logged-out callers that is an empty registry.</description></item>
+    /// </list>
     /// </summary>
     public static IObservable<IReadOnlyList<PackageManifest>> ObserveInstalledManifests(LayoutAreaHost host)
-        => ObserveInstalled(host).Select(nodes => (IReadOnlyList<PackageManifest>)nodes
-            .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
-            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
-            .Select(m => m!)
-            .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
-            .ToList());
+    {
+        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (mesh is null)
+            return Observable.Return<IReadOnlyList<PackageManifest>>([]);
+        var request = MeshQueryRequest.FromQuery(AllInstalledQuery);
+        // The subscriber the page was opened for first; the ambient context only when the host
+        // carries none. A logged-out (virtual) visitor or a hub credential is never stamped as a
+        // signed-in viewer — those reads keep the framework's own resolution.
+        var access = host.Hub.ServiceProvider.GetService<AccessService>();
+        if ((host.ViewerContext ?? access?.Context ?? access?.CircuitContext)
+            is { ObjectId: { Length: > 0 } viewerId, IsVirtual: false, IsHub: false })
+            request = request.ForViewer(viewerId);
+        return FoldInstalledAnswers(mesh.Query<MeshNode>(request))
+            .Select(nodes => (IReadOnlyList<PackageManifest>)nodes
+                .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
+                .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
+                .Select(m => m!)
+                .OrderBy(m => m.Name ?? m.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList());
+    }
 
     // The install records a card page joins against: the whole registry for the ALL page (its
     // orphan section needs every record), and for a category page ONLY its members — one exact-path
@@ -485,6 +478,11 @@ public static class CatalogLayoutAreas
     // Folds a query's change stream into the current path-keyed set, seeded empty so the page never
     // waits on the registry's first frame.
     private static IObservable<IReadOnlyList<MeshNode>> FoldInstalled(IObservable<QueryResultChange<MeshNode>> changes) =>
+        FoldInstalledAnswers(changes).StartWith((IReadOnlyList<MeshNode>)[]);
+
+    // The same fold WITHOUT the seed: every emission is the registry's answer (its Initial, then
+    // each change), so an empty list means empty — never "not answered yet".
+    private static IObservable<IReadOnlyList<MeshNode>> FoldInstalledAnswers(IObservable<QueryResultChange<MeshNode>> changes) =>
         changes
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
@@ -499,149 +497,7 @@ public static class CatalogLayoutAreas
                     };
                 return map;
             })
-            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList())
-            .StartWith((IReadOnlyList<MeshNode>)[]);
-
-    // The page frame every catalog page opens with: title, the authored intro, the source line.
-    private static StackControl Frame(
-        LayoutAreaHost host, IPackageSource? source, string? description, string? sourceLabel, int total)
-    {
-        var container = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("width: 100%; max-width: 900px; margin: 0 auto; padding: 16px;");
-
-        container = container.WithView(
-            Controls.H1(host.Localize("ui.pluginCatalog")).WithStyle("margin: 0 0 4px 0;"), "title");
-
-        if (!string.IsNullOrWhiteSpace(description))
-            container = container.WithView(
-                Controls.Markdown(description!).WithStyle("margin-bottom: 8px;"), "description");
-
-        var sourceLine = source is null
-            ? host.Localize("ui.catalogNoSource")
-            : host.Localize("ui.catalogSourceSummary",
-                sourceLabel ?? host.Localize("ui.catalogRegistry"),
-                host.LocalizePlural("plural.package", total));
-        return container.WithView(Controls.Body(sourceLine)
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 16px; display: block;"), "source");
-    }
-
-    // The label a category key renders as: the source's own spelling, or the localized bucket name.
-    private static string CategoryLabel(LayoutAreaHost host, string key) =>
-        IsUncategorized(key) ? host.Localize("ui.catalogUncategorized") : key;
-
-    // THE LANDING: one tile per category plus the all-packages entry — a way in, not a wall. Built
-    // from the manifest listing alone.
-    private static UiControl BuildLanding(
-        LayoutAreaHost host, IPackageSource? source, string? description, string? sourceLabel, CatalogPlan plan)
-    {
-        var container = Frame(host, source, description, sourceLabel, plan.Total);
-        if (plan.Total == 0)
-            return container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")), "empty");
-
-        var grid = Controls.Stack
-            .WithStyle("display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); "
-                       + "gap: 14px; margin: 12px 0; width: 100%;");
-        var n = 0;
-        foreach (var category in plan.Categories)
-        {
-            n++;
-            grid = grid.WithView(
-                Tile(host, CategoryLabel(host, category.Key), category.Count,
-                    CategoryHref(host.Hub.Address, category.Key)),
-                $"cat-{n}");
-        }
-        grid = grid.WithView(
-            Tile(host, host.Localize("ui.catalogAllPackages"), plan.Total, AllHref(host.Hub.Address)), "all");
-        return container.WithView(grid, "categories");
-    }
-
-    // One clickable tile: the name and a package count; the click is a plain in-app navigation, so
-    // the browser's back button returns to the tiles.
-    private static UiControl Tile(LayoutAreaHost host, string label, int count, string href) =>
-        Controls.Stack
-            .WithStyle("cursor: pointer; border: 1px solid var(--neutral-stroke-rest); border-radius: 12px; "
-                       + "padding: 16px; min-height: 92px; background: var(--neutral-layer-1); "
-                       + "display: flex; flex-direction: column; justify-content: space-between; gap: 6px;")
-            .WithView(Controls.Body(label)
-                .WithStyle("font-weight: 700; font-size: 1.05rem; display: block;"), "name")
-            .WithView(Controls.Body(host.LocalizePlural("plural.package", count))
-                .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem; display: block;"), "count")
-            .WithClickAction(ctx =>
-            {
-                ctx.NavigateTo(href);
-                return Task.CompletedTask;
-            });
-
-    // A CARD page: one category's cards, or every card plus the orphan section on the ALL page.
-    private static UiControl BuildPackages(
-        LayoutAreaHost host, IPackageSource? source, string sourceRef, string? description, string? sourceLabel,
-        CatalogPlan plan, IReadOnlyList<MeshNode> installed, ImmutableHashSet<string> installedIds,
-        bool viewerIsGlobalAdmin, ModuleActivationReport activation)
-    {
-        var installedById = installed
-            .Select(n => n.ContentAs<PackageManifest>(host.Hub.JsonSerializerOptions))
-            .Where(m => m is not null && !string.IsNullOrEmpty(m!.Id))
-            .GroupBy(m => m!.Id, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First()!, StringComparer.Ordinal);
-
-        var container = Frame(host, source, description, sourceLabel, plan.Total);
-
-        container = container.WithView(Controls.Button(host.Localize("ui.catalogBackToCategories"))
-            .WithClickAction(ctx =>
-            {
-                ctx.NavigateTo(LandingHref(host.Hub.Address));
-                return Task.CompletedTask;
-            })
-            .WithStyle("align-self: flex-start; margin: 0 0 8px 0;"), "back");
-
-        container = container.WithView(Controls.H2(plan.Kind == CatalogPage.All
-                ? host.Localize("ui.catalogAllPackages")
-                : CategoryLabel(host, plan.Category!))
-            .WithStyle("margin: 8px 0 4px 0;"), "heading");
-
-        if (plan.Packages.Count == 0)
-            container = container.WithView(Controls.Markdown(host.Localize("ui.mdNoPackages")), "empty");
-
-        // The whole listing + what is already installed are what a click needs to resolve the
-        // package's dependency closure (PackageDependencyGraph.InstallClosure) — the listing is in
-        // hand; the installed set is the shell listing plus the records this page read.
-        var knownInstalled = installedIds.Union(installedById.Keys);
-
-        foreach (var pkg in plan.Packages)
-        {
-            installedById.TryGetValue(pkg.Id, out var inst);
-            container = container.WithView(
-                BuildCard(host, source, sourceRef, pkg, inst, viewerIsGlobalAdmin, plan.Available, knownInstalled,
-                    activation),
-                CardId("pkg", pkg.Id));
-        }
-
-        if (plan.Kind != CatalogPage.All)
-            return container;
-
-        var orphans = Orphaned(plan.Available, installed, host.Hub.JsonSerializerOptions);
-        if (orphans.Count > 0)
-        {
-            container = container.WithView(Controls.H2(host.Localize("ui.orphanedInstallRecords"))
-                .WithStyle("margin: 24px 0 4px 0;"));
-            container = container.WithView(Controls.Markdown(host.Localize("ui.mdOrphanedInstallRecords"))
-                .WithStyle("margin-bottom: 8px;"));
-            foreach (var orphan in orphans)
-            {
-                container = container.WithView(
-                    BuildOrphanCard(host, orphan, viewerIsGlobalAdmin), CardId("orphan", orphan.Id));
-            }
-        }
-
-        return container;
-    }
-
-    // ClickedEvent carries an area path; the owner resolves it against CURRENT controls. A row
-    // position can belong to another package after a refresh. Encode the package identity as one
-    // collision-free path segment, and name actions independently of optional card text.
-    private static string CardId(string kind, string packageId) =>
-        $"{kind}-{Base64Url.EncodeToString(Encoding.UTF8.GetBytes(packageId))}";
+            .Select(m => (IReadOnlyList<MeshNode>)m.Values.ToList());
 
     /// <summary>
     /// The install records this source no longer offers — a record whose package left the registry
@@ -670,39 +526,10 @@ public static class CatalogLayoutAreas
             .ToList();
     }
 
-    // An orphaned install record: what it says it is, and — for a global admin — the Remove action
-    // that runs the installer's system-impersonated removal (the same identity that wrote it).
-    private static UiControl BuildOrphanCard(
-        LayoutAreaHost host, PackageManifest orphan, bool viewerIsGlobalAdmin)
-    {
-        var card = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("border: 1px dashed var(--neutral-stroke-rest); border-radius: 8px; " +
-                       "padding: 14px 16px; margin-bottom: 12px;");
-
-        card = card.WithView(Controls.Body(orphan.Name ?? orphan.Id)
-            .WithStyle("font-weight: 600; font-size: 16px; display: block; margin-bottom: 4px;"));
-
-        card = card.WithView(Controls.Body(
-                $"{orphan.Id}  ·  v{orphan.Version}  ·  → {orphan.TargetPartition ?? orphan.Id}")
-            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block; margin-bottom: 10px;"));
-
-        if (!viewerIsGlobalAdmin)
-            return card.WithView(Controls.Body(host.Localize("ui.requiresGlobalAdmin"))
-                .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block;"));
-
-        return card.WithView(Controls.Button(host.Localize("ui.removeInstallRecord"))
-            .WithClickAction(ctx =>
-            {
-                RemoveInstallRecord(host, orphan.Id);
-                return Task.CompletedTask;
-            }), "remove");
-    }
-
     /// <summary>
     /// Removes an orphaned install record through the installer's sanctioned system-impersonated
     /// primitive. The AUTHORIZATION is the global-admin gate on the surface that offered the action
-    /// (<see cref="BuildOrphanCard"/>) — the same "the click authorizes, the SYSTEM executes"
+    /// (<see cref="RemoveClicked"/>) — the same "the click authorizes, the SYSTEM executes"
     /// division the install path uses; the removal itself must run as System because the
     /// <c>Plugins</c> partition policy denies delete to every user identity by design.
     /// </summary>
@@ -714,209 +541,6 @@ public static class CatalogLayoutAreas
                 removed => logger?.LogInformation(
                     "Orphaned install record {Id}: {Result}.", packageId, removed ? "removed" : "not found"),
                 ex => logger?.LogWarning(ex, "Removing orphaned install record {Id} failed.", packageId));
-    }
-
-    private static UiControl BuildCard(
-        LayoutAreaHost host, IPackageSource? source, string sourceRef, PackageManifest pkg,
-        PackageManifest? installed, bool viewerIsGlobalAdmin,
-        IReadOnlyList<PackageManifest> catalog, IReadOnlySet<string> installedIds,
-        ModuleActivationReport activation)
-    {
-        var card = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; " +
-                       "padding: 14px 16px; margin-bottom: 12px;");
-
-        card = card.WithView(Controls.Body(pkg.Name ?? pkg.Id)
-            .WithStyle("font-weight: 600; font-size: 16px; display: block; margin-bottom: 4px;"));
-
-        if (!string.IsNullOrWhiteSpace(pkg.Description))
-            card = card.WithView(Controls.Body(pkg.Description!).WithStyle("display: block; margin-bottom: 6px;"));
-
-        card = card.WithView(Controls.Body($"v{pkg.Version}  ·  {pkg.Kind}  ·  → {pkg.TargetPartition}")
-            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block; margin-bottom: 10px;"));
-
-        // ModuleVersion (the module's OWN content hash from manifest.lock) beats the whole-repo
-        // commit sha: an unrelated commit no longer flips every card to "Update". The commit-sha
-        // compare stays the fallback for manifest-less packages.
-        var upToDate = installed is not null
-            && (!string.IsNullOrEmpty(pkg.ModuleVersion) && !string.IsNullOrEmpty(installed.ModuleVersion)
-                ? string.Equals(installed.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
-                : string.Equals(installed.Version, pkg.Version, StringComparison.Ordinal));
-
-        if (pkg.Refusal is { } tier)
-        {
-            // 🚨 #4097 — the registry declares this package in the instance's default set and
-            // REFUSES it by plan tier. No button either way: the instance cannot install or
-            // update it on this plan, and a button whose click is refused is the "consequence
-            // without cause" this line replaces. Same vocabulary as the #4083 landing refusal
-            // below, with the nouns of a plan, as DATA inside a localized sentence —
-            // platform-owned chrome follows the VIEWER.
-            //
-            // Two truths, two sentences. With NO install record the package is not here. With
-            // one — a plan DOWNGRADE after an install — the package IS here and keeps working;
-            // saying "not installed" would be the catalog lying about a package that is present.
-            // That card says installed, and that the plan no longer covers it, so updates stop.
-            card = card.WithView(Controls.Body(installed is null
-                    ? "⛔ " + host.Localize("ui.packageRefusedByPlanTier",
-                        pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan)
-                    : "⚠️ " + host.Localize("ui.packageInstalledAboveThisPlan",
-                        installed.Version ?? "?", pkg.Name ?? pkg.Id, tier.RequiredTier, tier.InstancePlan))
-                .WithStyle((installed is null
-                                ? "color: var(--error-foreground, #a4262c); "
-                                : "color: var(--warning-foreground, #9d5d00); ")
-                           + "font-size: 12px; display: block; margin-top: 6px;"));
-            return card;
-        }
-
-        if (upToDate)
-        {
-            card = card.WithView(Controls.Body(host.Localize("ui.catalogInstalledVersion", installed!.Version))
-                .WithStyle("color: var(--success-foreground, #107c10); font-weight: 600;"));
-        }
-        else if (pkg.IsCommercial() && !viewerIsGlobalAdmin)
-        {
-            // A commercial package needs Global Admin to install or sync (#830). The real
-            // enforcement is on the ACTION (PackageEntitlement, inside the installer); this is only
-            // so a viewer is not offered a button whose click would be refused.
-            card = card.WithView(Controls.Body(host.Localize("ui.requiresGlobalAdmin"))
-                .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; display: block;"));
-        }
-        else if (source is not null)
-        {
-            var label = installed is null
-                ? host.Localize("ui.catalogInstall")
-                : host.Localize("ui.catalogUpdateTo", pkg.Version);
-            card = card.WithView(Controls.Button(label)
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction(ctx =>
-                {
-                    InstallPackage(host, source, sourceRef, pkg, catalog, installedIds);
-                    return Task.CompletedTask;
-                }), "install");
-        }
-
-        // The per-PACKAGE update policy (Auto / Notify / Pinned) — a global administrator's control,
-        // rendered on an INSTALLED package only. Separate from the platform's own update policy on
-        // the Settings ▸ Update policy tab (2026-09-14): that one moves the image, this one moves
-        // this package. The click authorizes; the write runs as System (SetUpdatePolicy).
-        if (installed is not null && viewerIsGlobalAdmin)
-            card = card.WithView(UpdatePolicyControl(host, pkg.Id, installed.EffectiveUpdatePolicy), "updatePolicy");
-
-        // 🚨 The LAST STEP of the install, said out loud (#1979). Loading a module is
-        // restart-as-activation by design, so for a package that declares one the install is not
-        // finished when the content lands — and until this line existed nothing anywhere said so:
-        // the card read "✓ Installed", the feature was absent, and the person who installed it had
-        // no way to learn that a restart was the missing half. Rendered UNDER the status line
-        // rather than instead of it, because both facts are true: the package IS installed, and its
-        // module is not running yet.
-        //
-        // Derived from the report the operator health check reads, so the two surfaces can never
-        // tell different stories — and matched on the install record's PATH, which is exactly what
-        // the landing recorded on the activation entry (InstallOrUpdateCore passes
-        // "{InstalledPartition}/{pkg.Id}" to AdoptModule). A blank/undetermined answer renders
-        // nothing: see ModuleActivationReport.IsPendingForPackage for why silence is the honest
-        // fallback here.
-        if (activation.IsPendingForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}"))
-            card = card.WithView(Controls.Body($"🔄 {host.Localize("ui.restartRequiredToActivate")}")
-                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        // 🚨 The FOURTH state, and the one that used to be invisible (#3538). A module whose bytes
-        // are linked against a platform this deployment is not running is refused at load: it
-        // contributes nothing, and — crucially — a restart re-runs the same measurement and
-        // refuses again, so the line above would be a promise no restart can keep. Saying it here
-        // is what turns "installed, and the feature simply is not there" into a fact the person
-        // who installed it can read. Localized like every other line on this card: it is
-        // platform-owned chrome, so it follows the VIEWER's language.
-        else if (activation.IsQuarantinedForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}"))
-            card = card.WithView(Controls.Body($"⚠️ {host.Localize("ui.moduleBuiltForNewerPlatform")}")
-                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        // 🚨 #4083 — a landing this installation REFUSED: the bytes cannot bind on this platform
-        // (a higher assembly version than the platform provides, or a missing type), nothing
-        // landed, and a restart changes nothing. It used to be one warning line in a pod log;
-        // the card says what the module needs and what this platform provides, as DATA inside a
-        // localized sentence — platform-owned chrome follows the VIEWER.
-        else if (activation.RefusalForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } refusal)
-            card = card.WithView(Controls.Body(
-                    "⛔ " + (refusal.Provides is not null
-                        ? host.Localize("ui.moduleHeldAtLanding", refusal.Needs ?? "?", refusal.Provides)
-                        : host.Localize("ui.moduleHeldAtLandingTypes", refusal.Needs ?? "?")))
-                .WithStyle("color: var(--error-foreground, #a4262c); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        // 🚨 MeshWeaver#4550 — the SEVENTH state, and the one that used to wear the restart prompt
-        // above. The landed generation was DECLINED in favour of the copy this image ships (#4161),
-        // so the module RUNS — from the image's copy — and the version this card says is installed
-        // is not the one in effect. Neither "restart required" (the next boot re-runs the same
-        // comparison) nor "not running here" (it is running). Localized like every other line on
-        // this card: platform-owned chrome follows the VIEWER.
-        else if (activation.DeclineForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } decline)
-            card = card.WithView(Controls.Body(
-                    $"ℹ️ {host.Localize("ui.moduleRunsImageCopy", decline.Version ?? "?")}")
-                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        // 🚨 #3649 — the FIFTH state, and the first that is not a fault: the newest generation
-        // does not load on this platform, so this installation runs the previous one. The module
-        // works; the line says which version that is and that the newer one is waiting on a
-        // build that loads here. Neither "restart required" (a restart falls back again) nor
-        // "not running here" (it is running). Localized: platform-owned chrome follows the VIEWER.
-        else if (activation.FallbackForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } fallback)
-            card = card.WithView(Controls.Body(
-                    $"ℹ️ {host.Localize("ui.moduleRunsPreviousVersion", fallback.PreviousVersion ?? "?", fallback.Version ?? "?")}")
-                .WithStyle("color: var(--warning-foreground, #9d5d00); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        // 🚨 #3648 — what the module DECLARES, beside whatever state it is in, never instead of
-        // it. A declared minMeshVersion above the running platform used to be a hidden hold (boot
-        // skipped the entry, the card said nothing); now the entry loads or not on what the link
-        // probe measured, and this line says what its author claimed so the two can be compared.
-        // Localized like every other line on this card: platform-owned chrome follows the VIEWER.
-        if (activation.FloorAdvisoryForPackage($"{PackageInstaller.InstalledPartition}/{pkg.Id}") is { } floor)
-            card = card.WithView(Controls.Body(
-                    $"ℹ️ {host.Localize("ui.moduleDeclaresNewerPlatform", floor.DeclaredFloor, floor.RunningVersion ?? "?")}")
-                .WithStyle("color: var(--neutral-foreground-hint, #605e5c); font-size: 12px; "
-                           + "display: block; margin-top: 6px;"));
-
-        return card;
-    }
-
-    /// <summary>
-    /// The per-package policy row: the label, the three choices as buttons with the current one
-    /// accented, and the one-line hint. A click writes the record under System and the record
-    /// stream re-emits, which re-renders the card with the new choice accented.
-    /// </summary>
-    private static UiControl UpdatePolicyControl(LayoutAreaHost host, string packageId, PackageUpdatePolicy current)
-    {
-        var logger = Logger(host);
-        UiControl Choice(PackageUpdatePolicy policy, string key) =>
-            Controls.Button(host.Localize(key))
-                .WithAppearance(policy == current ? Appearance.Accent : Appearance.Neutral)
-                .WithClickAction(_ =>
-                {
-                    if (policy != current)
-                        PackageInstaller.SetUpdatePolicy(host.Hub, packageId, policy, logger)
-                            .Subscribe(
-                                _ => { },
-                                ex => logger?.LogWarning(ex, "Setting update policy {Policy} on {Id} failed.", policy, packageId));
-                    return Task.CompletedTask;
-                });
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(6)
-            .WithStyle("align-items: center; margin-top: 8px;")
-            .WithView(Controls.Body(host.Localize("ui.catalogUpdatePolicy"))
-                .WithStyle("font-size: 12px; color: var(--neutral-foreground-hint); margin-right: 4px;"))
-            .WithView(Choice(PackageUpdatePolicy.Auto, "ui.catalogUpdatePolicyAuto"), "auto")
-            .WithView(Choice(PackageUpdatePolicy.Notify, "ui.catalogUpdatePolicyNotify"), "notify")
-            .WithView(Choice(PackageUpdatePolicy.None, "ui.catalogUpdatePolicyNone"), "none");
-        return Controls.Stack
-            .WithView(row)
-            .WithView(Controls.Body(host.Localize("ui.catalogUpdatePolicyHint"))
-                .WithStyle("font-size: 11px; color: var(--neutral-foreground-hint); display: block; margin-top: 2px;"));
     }
 
     /// <summary>
@@ -1064,7 +688,52 @@ public static class CatalogLayoutAreas
             // the Store's Provision click, the auto-update reconciler), so this is the ONE place it
             // needs to sit.
             .SelectMany(_ => PackageParameters.Require(hub, pkg, logger))
-            .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
+            // …then the PLATFORM floor (policy package-min-mesh-version): an update whose candidate
+            // declares a minMeshVersion above the running platform is HELD before a file travels —
+            // the installed version keeps running and the record says why. Every lane funnels
+            // here (the boot install, the Store's click, the auto-update apply).
+            .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
+                () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId)));
+    }
+
+    /// <summary>
+    /// 🚨 The UPDATE half of policy <c>package-min-mesh-version</c> on the one install orchestrator:
+    /// when <paramref name="pkg"/>'s declared floor is held on this platform
+    /// (<see cref="PackagePlatformFloorGate.Evaluate"/>) and an install record with a DIFFERENT
+    /// content hash exists, nothing is fetched or written — the installed version keeps running
+    /// (rule R1), the record carries <see cref="PackageManifest.HeldUpdate"/>, and the result is an
+    /// empty <see cref="InstallResult"/>. Everything else proceeds to <paramref name="proceed"/>:
+    /// a satisfied or advisory floor, and a record at the SAME hash (the skip / heal path —
+    /// re-landing what is already here replaces nothing). With no record at all the install is a
+    /// FRESH one and is refused before anything is fetched
+    /// (<see cref="PackagePlatformFloorGate.RequireForFreshInstall"/>).
+    /// </summary>
+    private static IObservable<InstallResult> HoldIfPlatformBelowFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
+    {
+        var verdict = PackagePlatformFloorGate.Evaluate(hub, pkg);
+        if (!verdict.IsHeld)
+            return proceed();
+
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (persistence is null)
+            return proceed();
+
+        return persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty()
+            .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .SelectMany(record =>
+                record is null
+                    // A FRESH install: refused here, before a single file is fetched — the
+                    // installer's own gate says the same thing to callers that reach it directly.
+                    ? PackagePlatformFloorGate.RequireForFreshInstall(hub, pkg, logger).SelectMany(_ => proceed())
+                    : !string.IsNullOrEmpty(pkg.ModuleVersion)
+                      && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
+                        ? proceed()
+                        : PackagePlatformFloorGate.RecordHold(hub, pkg, record, verdict, logger)
+                            .Select(_ => new InstallResult(0, 0)));
     }
 
     /// <summary>

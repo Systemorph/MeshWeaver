@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting;
@@ -41,6 +44,13 @@ public sealed class GitHubSyncService
     private readonly GitHubAppTokenService? appTokens;
     private readonly ILogger? logger;
     private readonly FileFormatParserRegistry parsers;
+    private readonly FileFormatParserRegistry strictImportParsers;
+
+    private sealed class SyncSnapshotParseException(string message, string commitSha)
+        : InvalidOperationException(message)
+    {
+        public string CommitSha { get; } = commitSha;
+    }
 
     /// <summary>Initializes a new instance of the <c>GitHubSyncService</c> class.</summary>
     /// <param name="hub">The message hub used for node create/update and workspace access.</param>
@@ -62,7 +72,20 @@ public sealed class GitHubSyncService
         this.credentials = credentials;
         this.appTokens = appTokens;
         this.logger = logger;
-        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
+        var contributedParsers = hub.ServiceProvider.GetServices<IFileFormatParser>().ToArray();
+        parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, contributedParsers);
+        // A newer authored record must not be materialized by an older image while silently
+        // dropping properties it does not know. Keep the normal options for hub traffic and
+        // export; only GitSync's repository read is strict. The object converter lets a strict
+        // read's JsonException escape, and ParseSnapshot refuses the whole snapshot before any
+        // node is written or the commit is acknowledged.
+        var strictOptions = new JsonSerializerOptions(hub.JsonSerializerOptions)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        };
+        strictOptions.TypeInfoResolver = new StrictImportTypeInfoResolver(
+            strictOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver());
+        strictImportParsers = new FileFormatParserRegistry(strictOptions, contributedParsers);
     }
 
     /// <summary>The sync-config node path for a Space: <c>{spacePath}/_GitSync</c>.</summary>
@@ -451,6 +474,18 @@ public sealed class GitHubSyncService
                                 // truncated tree says nothing about the repository.
                                 attemptedCommitSha: refusal.CommitSha,
                                 attemptWasFinal: refusal.ListingIsComplete,
+                                attemptedConfig: config)
+                            .SelectMany(_ => Observable
+                                .Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(refusal)))
+                    .Catch<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules), SyncSnapshotParseException>(
+                        refusal => RecordSyncResult(
+                                spacePath, RefusedOutcome,
+                                seenCommitSha: null, advanceHorizon: false, sourceId,
+                                note: refusal.Message,
+                                attemptedCommitSha: refusal.CommitSha,
+                                // The bytes are unchanged, but the running image's content types
+                                // are not: a later image must retry this SAME commit.
+                                attemptWasFinal: false,
                                 attemptedConfig: config)
                             .SelectMany(_ => Observable
                                 .Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(refusal)))
@@ -1013,10 +1048,16 @@ public sealed class GitHubSyncService
                 // trail is unchanged; it simply arrives as one entry.
                 var problems = list.Where(x => x.Problem is not null).Select(x => x.Problem!).ToArray();
                 if (problems.Length > 0)
+                {
+                    var message =
+                        $"{problems.Length} file(s) could not be parsed; refusing the snapshot without "
+                        + $"writing nodes or acknowledging its commit:{Environment.NewLine}"
+                        + string.Join(Environment.NewLine, problems);
                     progress?.Invoke(
-                        $"{problems.Length} file(s) could not be parsed and were skipped:{Environment.NewLine}"
-                        + string.Join(Environment.NewLine, problems),
+                        message,
                         LogLevel.Error);
+                    throw new SyncSnapshotParseException(message, snapshot.CommitSha);
+                }
 
                 var parsedNodes = list.Where(x => x.Node is not null).ToArray();
                 var root = parsedNodes.FirstOrDefault(x => x.IsRoot).Node;
@@ -1045,10 +1086,9 @@ public sealed class GitHubSyncService
 
         var ext = System.IO.Path.GetExtension(file.Path);
         // file.Content is already an in-memory string — the parse is pure CPU, no pool.
-        // A file whose parser(s) all THREW is a malformed node file: the node it should have
-        // become is silently missing after the import. Surface it on the owning activity as an
-        // Error (ActivityRunner.Finish rolls the terminal status up to Failed) in addition to
-        // the server log. Files with no registered parser (.yml, .py, …) stay silent — repos
+        // A file whose parser(s) all THREW is a malformed or incompatible node file. Refuse the
+        // entire snapshot before writing any nodes, and name the failure on the activity and sync
+        // config. Files with no registered parser (.yml, .py, …) stay silent — repos
         // legitimately carry non-node files.
         // The relative path handed to the parser must carry the SPACE prefix for CHILD nodes:
         // the parser derives the node path from it and bakes it into the content's
@@ -1062,10 +1102,10 @@ public sealed class GitHubSyncService
         var isRoot = NodeFileMapper.IsRootIndex(file.Path);
         var parseRelativePath = isRoot ? file.Path : $"{spaceId}/{file.Path}";
         string? problem = null;
-        var parsed = parsers.TryParse(ext, file.Path, file.Content, parseRelativePath, (path, ex) =>
+        var parsed = strictImportParsers.TryParse(ext, file.Path, file.Content, parseRelativePath, (path, ex) =>
         {
-            logger?.LogWarning(ex, "Failed to parse {Path} — file skipped on import.", path);
-            problem = $"Failed to parse '{path}': {ex.Message} — file skipped.";
+            logger?.LogWarning(ex, "Failed to parse {Path} — GitSync snapshot refused.", path);
+            problem = $"Failed to parse '{path}': {ex.Message} — snapshot refused.";
         });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false, problem));
         // #3474 — the repo→mesh half of the NodeType content ownership rule, at the seam where a

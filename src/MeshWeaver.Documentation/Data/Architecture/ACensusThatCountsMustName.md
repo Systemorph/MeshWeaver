@@ -13,7 +13,7 @@ X"* when the sweep a session can run —
 `search 'nodeType:NodeType content.compilationStatus:Error partitions:all'` — cannot, because the
 sweep is RLS-filtered and the broken type is in a partition the reader holds no grant on.
 
-Measured on memex.systemorph.com, 2026-09-14:
+Measured on the control instance, 2026-09-14:
 
 ```
 bake-report: Healthy — compiling sweep at 2026-09-12T16:51:56.4Z: framework=sd608997
@@ -64,7 +64,7 @@ bake-report: Healthy — compiling sweep at …: framework=sd608997 total=215 ba
 ```
 
 Every non-`Baked` state is covered, not only the broken one: `pending=58 frameworkstale=55` on
-memex.meshweaver.cloud had the same shape and the same "nobody can enumerate them" consequence.
+the public instance had the same shape and the same "nobody can enumerate them" consequence.
 
 ## The disclosure boundary — the PARTITION, never the node title
 
@@ -129,7 +129,7 @@ Two consequences that have each cost a session:
   from `search 'nodeType:NodeType partitions:all'`'s `count`, M from the sweep envelope's
   `coverage.partitions` ([Search Coverage and Refusal](/Doc/Architecture/SearchCoverageAndRefusal)).
 - **Repeated `/health` calls sample different replicas.** Measured 2026-09-11 on
-  memex.meshweaver.cloud: 10 calls returned 2 disjoint bodies. One call answers about one replica you
+  the public instance: 10 calls returned 2 disjoint bodies. One call answers about one replica you
   did not choose; the per-replica form with no guesswork is the `Sample` instance action, which
   carries each pod's whole `/health` body.
 

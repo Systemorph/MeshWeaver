@@ -74,7 +74,7 @@ designs.
 ## 🚨 An agent files into BUG TRIAGE, never a plain ticket
 
 **Fleet-wide rule.** Do not open a GitHub issue yourself. File the finding as a `Feedback/Feedback`
-node on the **control instance** (memex.systemorph.com); it reaches the **triage agent** and may
+node on the **control instance**; it reaches the **triage agent** and may
 become a GitHub issue *from there*, in the owning repository.
 
 **Why it is not merely a different button.** Triage decides the repository, the priority, and whether
@@ -162,7 +162,7 @@ number: it looks discharged and behaves exactly like swallowing it.
 The estate already pools this per portal rather than per repository: signed `ci-failure`, `ci-green`
 and `feedback` events land in the control instance's one inbox and become a `Hosting/TriageItem`
 under `Hosting/Triage/{kind}/{id}` plus ONE thread with the **triage** agent. Maintainer, 2026-09-12:
-*"triaging has to be done by systemorph-com ⇒ communicate via mcp, open thread with triage agent. we
+*"triaging has to be done by [the control instance] ⇒ communicate via mcp, open thread with triage agent. we
 must start pooling such connections, e.g. by portal."*
 
 So: **route the finding into triage**, and let triage decide priority and owner. What you must not do

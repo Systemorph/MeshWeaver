@@ -16,7 +16,7 @@ and nothing anywhere established either half of the equality that number was sta
 > therefore arrive as a number, and a number reads as success.
 
 The consequence is the orphan recorded in [Missing Declared Sources](../MissingDeclaredSources):
-`rbuergi/OperationRequest` on memex.meshweaver.cloud, a NodeType whose entire `Source/` subtree is
+`rbuergi/OperationRequest` on the public instance, a NodeType whose entire `Source/` subtree is
 absent — `search 'namespace:rbuergi/OperationRequest scope:subtree'` → **0**, against **21** for the
 package it was copied from — which then took the identical doomed Roslyn compile on every pod boot
 for four days and reported three missing symbols that live in nodes nobody has.

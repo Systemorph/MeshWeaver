@@ -13,9 +13,8 @@ allowed-tools:
 
 🚨 **The cluster is not the surface — the control instance is** (maintainer, 2026-09-08: *"all the
 operations through the memex api"*, *"no direct access of aks"*). On AKS, an instance is a
-`Deployments/<name>` record on the CONTROL INSTANCE, memex.systemorph.com (MCP server `systemorph`;
-the server named `memex` is memex.meshweaver.cloud, whose `Deployments/*` copy is a lagging second
-sync, not the record) and every operation is a
+`Deployments/<name>` record on the CONTROL INSTANCE (reached through that instance's own MCP server;
+any other portal's `Deployments/*` copy is a lagging second sync, not the record) and every operation is a
 `Hosting/InstanceAction` node — `Roll` (the record's image pin, or an explicit `imageTag`, then WAIT
 for the rollout), `Restart`, `Suspend`/`Reactivate`, `Audit`, `Reconcile`, `HelmRelease` — run by
 the in-cluster operator and reported on the same node. Every `az aks command invoke` / `kubectl`
@@ -26,7 +25,7 @@ other half). Policy page, with what the API does NOT answer yet:
 
 **Two deploy routes, different targets — neither deprecated. Don't mix them.**
 
-- **AKS** — the shared cluster `memex` portal. Full ref:
+- **AKS** — a portal instance on the shared cluster. Full ref:
   [DeploymentAKS.md](../../../src/MeshWeaver.Documentation/Data/Architecture/DeploymentAKS.md).
 - **Azure Container Apps** — the Aspire `test`/`prod` modes, via `tools/deploy.sh prod|test`. Full
   ref:
@@ -61,7 +60,7 @@ refuses one under `deploy/`). Full procedure and decision table: [Deploying Acro
 ## 🚨 First: the memex API, not the cluster
 
 **Maintainer directive, 2026-09-08: every operation goes through the memex API — no direct `az` /
-`kubectl` access.** The control instance (`memex.systemorph.com`, MCP server `systemorph`, module
+`kubectl` access.** The control instance (e.g. `https://control.example.com`, reached through its own MCP server, module
 `Hosting` from MeshWeaver.Plugins) exposes each of the recipes below as a `Hosting/InstanceAction` node whose
 answer is a node; the in-cluster operator and the monitoring stack hold the only credentials.
 Reach for the commands further down ONLY when the control plane itself is what is broken (the
@@ -160,7 +159,7 @@ identity but system), and its plan refuses at park when a per-node leg exceeds i
 The bake gate and `required_modules` are ROLL GATES (policies `bake-gate-readiness-only`,
 `required-modules-readiness-only`): their verdict is read by `/ready` alone, so a refusal stalls the
 roll with the previous image serving and kills nothing. The startup probe proves only that the
-process booted, and memex and memex-cloud run it at `failureThreshold: 60` (600 s). Never raise
+process booted, and the fleet's portal instances run it at `failureThreshold: 60` (600 s). Never raise
 `probes.startup` to "cover a bake" — that is the configuration that killed every container of both
 images every 3 h and took the control instance down. A container that dies at exactly
 `periodSeconds × failureThreshold` after boot is a startup-probe kill, not a crash: read `Sample`'s
@@ -179,14 +178,15 @@ dispatch; use `Reconcile`. Manual:
 ## The AKS route (break glass — the control plane is what is broken)
 
 🚨 **Pass `--subscription <subscription>` on EVERY `az` call**, as every example below does.
-`<subscription>` is the fleet's own subscription; its id is in the private Systemorph/Memex repo
-(`docs/aks-ops.md`), never in this public one. The signed-in account's default subscription may
+`<subscription>` is the fleet's own subscription; its id is in the estate's private deployments repository
+(see "Where an estate's instances are declared" in
+[Instances.md](../../../src/MeshWeaver.Documentation/Data/Architecture/Instances.md)), never in this public one. The signed-in account's default subscription may
 belong to another tenant's installation, which holds another cluster with the SAME name
 (`<aks-cluster>`); without the flag you read the wrong system and nothing says so.
 `az role assignment delete --ids …` needs it too, or it fails with `InvalidAuthenticationTokenTenant`.
 
-The `memex` portal runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
-swedencentral) — namespace `memex` — against the Postgres Flexible Server, images in ACR
+A portal instance runs on the shared **AKS cluster** `<aks-cluster>` (RG `<aks-resource-group>`,
+swedencentral) — namespace `<namespace>` — against the Postgres Flexible Server, images in ACR
 `meshweaver.azurecr.io`. **Private cluster: `kubectl` ONLY via
 `az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "…"`** — and only when
 the API above cannot answer.
@@ -205,7 +205,7 @@ dotnet publish ../MeshWeaver.Plugins/src/Memex.Portal.Distributed/Memex.Portal.D
 dotnet publish memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj -c Release \
   -t:PublishContainer -p:ContainerRegistry=meshweaver.azurecr.io \
   -p:ContainerRepository=memex-migration -p:ContainerImageTag=<tag>
-# Roll out (NS = memex). 🚨 The MIGRATION is a Job, not a Deployment — see below.
+# Roll out (NS = the instance's namespace). 🚨 The MIGRATION is a Job, not a Deployment — see below.
 az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "\
   kubectl -n <NS> set image deployment/memex-portal-deployment memex-portal=meshweaver.azurecr.io/memex-portal-ai:<tag>; \
   kubectl -n <NS> rollout restart deployment/memex-portal-deployment; \
@@ -214,8 +214,8 @@ az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <
 
 - **An env's `deploy.sh` is first-time ENV SETUP only** (helm install + PVCs + KV
   SecretProviderClass + ingress + connection-string patch). Do NOT use it for a code update — it
-  re-runs the whole chart and can reset live config. 🚨 **Env folders live in the PRIVATE
-  `Systemorph/Memex` repo**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09
+  re-runs the whole chart and can reset live config. 🚨 **Env folders live in the estate's PRIVATE
+  deployments repository**, not `deploy/aks/envs/<env>/` — they moved out 2026-08-08/09
   (`a69959165`) because their directory names are tenant identities; `deploy/aks/envs/example/` in
   this repo is the reference template only.
 - **Don't run `tools/deploy.sh` or `aspire deploy` against the AKS cluster** — those are the

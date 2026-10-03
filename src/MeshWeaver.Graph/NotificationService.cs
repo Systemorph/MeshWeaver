@@ -471,11 +471,14 @@ public static class NotificationService
         // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
         // each eager-captures its identity) and closes it on the way out of that same Subscribe.
         return access.RunAsSystem(
-            () => ReadPreference(hub, person, feature, logger).SelectMany(preference =>
+            () => ReadPreference(hub, person, feature, logger).Zip(
+                ReadAppGate(hub, request, feature, addressee, person, logger),
+                (preference, gate) => gate(preference.Channels())).SelectMany(gated =>
             {
-                var channels = person is null
-                    ? preference.Channels().Intersect([NotificationChannelKind.InApp])
-                    : preference.Channels();
+                // No person → no mailbox; a raiser-imposed BellOnly → none of the external legs.
+                var channels = person is null || request.BellOnly
+                    ? gated.Intersect([NotificationChannelKind.InApp])
+                    : gated;
                 var legs = channels
                     .OrderBy(c => c, StringComparer.Ordinal)
                     .Select(channel => Leg(hub, meshService, request, feature, addressee, person, channel, logger))
@@ -622,6 +625,48 @@ public static class NotificationService
                     + "delivering to the bell only, never to an external channel on a choice we cannot see",
                     feature, person, o.Reason ?? l.Reason);
             return effective;
+        });
+    }
+
+    /// <summary>
+    /// The recipient's APP gate for this notification — which app it belongs to
+    /// (<see cref="NotificationApps.Attribute"/> over their installed apps) and what their preference
+    /// for that app lets through (<see cref="NotificationApps.Gate"/>). A platform notification (no
+    /// person) and a notification in no installed app pass unchanged.
+    ///
+    /// <para>🚨 <b>Fail CLOSED</b>, as <see cref="ReadPreference"/>: when the installed apps or the
+    /// app's preference cannot be read, the notification may belong to an app the person silenced, so
+    /// it reaches the bell only.</para>
+    /// </summary>
+    private static IObservable<Func<ImmutableHashSet<string>, ImmutableHashSet<string>>> ReadAppGate(
+        IMessageHub hub, NotificationRequest request, string feature, string addressee, string? person, ILogger? logger)
+    {
+        if (string.IsNullOrEmpty(person))
+            return Observable.Return<Func<ImmutableHashSet<string>, ImmutableHashSet<string>>>(c => c);
+        return NotificationAppPreferenceNodeType.ReadInstalledApps(hub, person).SelectMany(installed =>
+        {
+            if (installed is null && string.IsNullOrWhiteSpace(request.App))
+            {
+                logger?.LogWarning(
+                    "Notification {Feature} for {Recipient}: the installed apps could not be read — "
+                    + "delivering to the bell only, never to an external channel on a choice we cannot see",
+                    feature, person);
+                return Observable.Return<Func<ImmutableHashSet<string>, ImmutableHashSet<string>>>(
+                    c => c.Intersect([NotificationChannelKind.InApp]));
+            }
+            var app = NotificationApps.Attribute(
+                request.App, request.TargetNodePath, request.MainNodePath, addressee, installed ?? []);
+            if (app is null)
+                return Observable.Return<Func<ImmutableHashSet<string>, ImmutableHashSet<string>>>(c => c);
+            return NotificationAppPreferenceNodeType.Read(hub, person, app).Select(read =>
+            {
+                if (read.IsUnreadable)
+                    logger?.LogWarning(
+                        "Notification {Feature} for {Recipient}: the {App} app preference could not be read ({Reason}) — "
+                        + "delivering to the bell only", feature, person, app, read.Reason);
+                return (Func<ImmutableHashSet<string>, ImmutableHashSet<string>>)(
+                    c => NotificationApps.Gate(feature, c, app, read));
+            });
         });
     }
 

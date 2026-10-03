@@ -272,6 +272,17 @@ NEVER_BLANK_CONFIG = {
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
     "AzureAIS__Order":
         "read as an Int32 — empty fails the binder. Emit \"0\", never \"\".",
+    "OpenRouter__Endpoint":
+        "read as a string, but blank is NOT inert: the catalog seeder does `endpoint ??= "
+        "source.DefaultEndpoint`, and an empty string is not null — so a rendered \"\" replaces "
+        "OpenRouter's default endpoint with nothing. Rendered only when set.",
+    "OpenRouterEU__Endpoint":
+        "the EU region's endpoint (https://eu.openrouter.ai/api/v1), and the thing that makes the "
+        "section's models Eu. Blank replaces the section's default endpoint with nothing, exactly "
+        "as for OpenRouter__Endpoint. Rendered only when set.",
+    "Features__Ai__Providers__OpenRouterEU":
+        "bound as a Boolean — a blank value fails the binder. Rendered only when set to a "
+        "non-blank value (an explicit \"false\" still renders).",
     "SelfUpdate__Registry":
         "binds to SelfUpdateOptions.Registry, whose default is the upstream ACR and whose value "
         "names the host of EVERY image the self-updater rolls to. Blank is not inert here — it is "
@@ -770,7 +781,7 @@ def _probe_coverage(kind_name, obj_kind, obj, secret_obj, label, cfg_obj=None):
                 f"('{cfg_host or 'blank'}')",
                 "the connection string then arrives from Key Vault, whose host the chart cannot read, "
                 "so MEMEX_HOST is the only rendered address of the server the process opens. Without "
-                "it the gate waits for a Service this release does not render (pearl, 2026-09-15).",
+                "it the gate waits for a Service this release does not render (fabrikam, 2026-09-15).",
             )
         for key in shadowed:
             unshadowed, opaque = _shadowing(obj, kind_name, key)
@@ -821,7 +832,7 @@ _probe_coverage(
 )
 
 # ---- 17. the in-cluster Postgres is probed ONLY when the chart renders it ----
-# 🚨 pearl, 2026-09-15: a record-driven instance (connection string in Key Vault, none in values) on
+# 🚨 fabrikam, 2026-09-15: a record-driven instance (connection string in Key Vault, none in values) on
 # chart 0a45bccfc rendered `for g in memex-postgres-service:5432` into BOTH init containers, on a
 # release that renders no such Service. `nc` never resolves it, so the gate neither passes nor
 # fails — it spins, and the rollout waits until its deadline with nothing red anywhere.

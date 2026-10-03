@@ -25,7 +25,7 @@ namespace MeshWeaver.Layout.Test;
 /// sync hub"</i> — so the incident fingerprint could not tell a DESIGNED refusal from a LIVE defect.
 /// #3986 was filed on the client-side release ordering, fixed (<c>1594bb31e4</c>), deployed, and
 /// then REOPENED on 2026-09-14 by an occurrence the fix could not reach: an owner-side per-node hub
-/// (<c>rbuergi/Requests/provision-pearl-20260914</c>) whose <c>sync/{id}</c> had never been
+/// (<c>rbuergi/Requests/provision-fabrikam-20260914</c>) whose <c>sync/{id}</c> had never been
 /// registered on the activation that received the click. Same sentence, same fingerprint, different
 /// defect — and two triages spent re-deriving which one they were looking at.</para>
 ///

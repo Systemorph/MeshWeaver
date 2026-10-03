@@ -6,8 +6,9 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// Seed-integrity contract for the settings tabs riding the <c>UiContribution</c> lane
-/// (<see cref="PlatformSettingsTabAreas"/>, WS7 slices 2 + 4). Every seed must project into the
-/// global settings menu (Context = Settings), point at an AREA the same class actually registers
+/// (<see cref="PlatformSettingsTabAreas"/>, WS7 slices 2 + 4). Every ungated seed must project into
+/// the global settings menu (Context = Settings) and every Administration seed into the ADMIN APP
+/// (Context = NodeSettings, gated to the <c>AdminApp</c> node type), point at an AREA the same class actually registers
 /// (a dangling area renders the standard not-found placeholder — silently, to every user), keep
 /// its node id equal to the tab's former compiled tab id (the <c>/GlobalSettings/{Id}</c> deep-link
 /// contract), and the admin tabs must carry <c>Gates.AdminOnly</c> — dropping the gate would list
@@ -25,6 +26,9 @@ public class PlatformSettingsTabSeedTest
         InboxSettingsTab.TabId,
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
+        ControlLaneSettingsTab.TabId,
+        // New as a seed (never a compiled tab) — its id is its deep link from the start.
+        ServiceIdentitiesSettingsTab.TabId,
     ];
 
     /// <summary>The tabs whose compiled providers gated on the platform-admin check.</summary>
@@ -35,16 +39,22 @@ public class PlatformSettingsTabSeedTest
         InboxSettingsTab.TabId,
         UpdatePolicySettingsTab.TabId,
         PublishedSettingsTab.TabId,
+        ControlLaneSettingsTab.TabId,
+        ServiceIdentitiesSettingsTab.TabId,
     ];
 
     [Fact]
-    public void Every_Seed_Targets_The_Settings_Context_And_A_Registered_Area()
+    public void Every_Seed_Targets_Its_Surface_And_A_Registered_Area()
     {
         Assert.NotEmpty(PlatformSettingsTabAreas.Seeds);
         Assert.All(PlatformSettingsTabAreas.Seeds, seed =>
         {
             var contribution = Assert.IsType<UiContribution>(seed.Content);
-            Assert.Equal(UiContribution.SettingsContext, contribution.Context);
+            // Administration tabs are tabs of the Admin app; everything else stays on the global
+            // settings page every signed-in viewer can open.
+            Assert.Equal(
+                AdminTabIds.Contains(seed.Id) ? UiContribution.NodeSettingsContext : UiContribution.SettingsContext,
+                contribution.Context);
             Assert.NotNull(contribution.Area);
             Assert.NotEqual("", contribution.Area);
             Assert.Contains(contribution.Area, PlatformSettingsTabAreas.Areas);
@@ -80,12 +90,27 @@ public class PlatformSettingsTabSeedTest
         {
             var contribution = Assert.IsType<UiContribution>(seed.Content);
             if (AdminTabIds.Contains(seed.Id))
+            {
                 Assert.True(contribution.Gates?.AdminOnly,
                     $"'{seed.Id}' was admin-gated as a compiled provider and must stay admin-only");
+                // Only the Admin app's node may carry it — not every node's settings page.
+                Assert.Equal(new[] { AdminAppNodeType.NodeType }, contribution.Gates?.NodeTypes?.ToArray() ?? []);
+            }
             else
                 Assert.NotEqual(true, contribution.Gates?.AdminOnly);
         });
     }
+
+    /// <summary>
+    /// Every Administration seed is recorded as RELOCATED, so an old
+    /// <c>/_Setting/GlobalSettings/{id}</c> link redirects into the Admin app instead of landing on
+    /// the global page's first tab.
+    /// </summary>
+    [Fact]
+    public void Admin_Tabs_Are_Recorded_As_Relocated_To_The_Admin_App()
+        => Assert.Equal(
+            AdminTabIds.OrderBy(i => i, StringComparer.Ordinal),
+            PlatformSettingsTabAreas.AdminAppTabIds.OrderBy(i => i, StringComparer.Ordinal));
 
     [Fact]
     public void Seeds_Live_In_The_Admin_UiContribution_Namespace_As_UiContribution_Nodes()
@@ -140,5 +165,41 @@ public class PlatformSettingsTabSeedTest
         Assert.NotEmpty(UiContributionSeedValidation.Validate(
             [sample with { NodeType = "Markdown" }],
             registeredAreas: PlatformSettingsTabAreas.Areas));
+    }
+
+    /// <summary>
+    /// Every Administration seed names the ADMIN APP section it belongs to — group, group key and
+    /// an order inside that section's band — so the nav groups it beside the compiled tabs of the
+    /// same section rather than in a stray group of its own. (That the page then actually RENDERS a
+    /// seeded tab in its section, for a viewer resolved on the render turn, is pinned end to end in
+    /// <c>AdminAppTest.ASeededAdminTab_ShowsInItsSection</c> and
+    /// <c>AdminAppTest.SeededAdminTabs_SurviveASubscriptionOffTheViewersDelivery</c>.)
+    /// </summary>
+    [Fact]
+    public void Every_Admin_Seed_Names_Its_Admin_App_Section()
+    {
+        var expected = new Dictionary<string, (string Group, string GroupKey, int Band)>
+        {
+            [InvitationsSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [PrivacySettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [PublishedSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+            [UpdatePolicySettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [ControlLaneSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [InboxSettingsTab.TabId] = (AdminAppNodeType.OperationsGroup, AdminAppNodeType.OperationsGroupKey, AdminAppNodeType.OperationsOrder),
+            [ServiceIdentitiesSettingsTab.TabId] = (AdminAppNodeType.PeopleGroup, AdminAppNodeType.PeopleGroupKey, AdminAppNodeType.PeopleOrder),
+        };
+        Assert.Equal(AdminTabIds.OrderBy(i => i, StringComparer.Ordinal),
+            expected.Keys.OrderBy(i => i, StringComparer.Ordinal));
+
+        var adminSeeds = PlatformSettingsTabAreas.Seeds.Where(s => AdminTabIds.Contains(s.Id)).ToList();
+        Assert.Equal(AdminTabIds.Length, adminSeeds.Count);
+        Assert.All(adminSeeds, seed =>
+        {
+            var contribution = Assert.IsType<UiContribution>(seed.Content);
+            var (group, groupKey, band) = expected[seed.Id];
+            Assert.Equal(group, contribution.Group);
+            Assert.Equal(groupKey, contribution.GroupKey);
+            Assert.InRange(contribution.Order, band, band + 99);
+        });
     }
 }

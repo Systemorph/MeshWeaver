@@ -24,7 +24,7 @@ the process dies.
 
 ## The production crash (#5649)
 
-memex-cloud, pod `…-v4txp`, 06:56:01Z on 2026-09-24, during a roll (the sibling pod `…-5hflx` died
+The public instance, pod `…-v4txp`, 06:56:01Z on 2026-09-24, during a roll (the sibling pod `…-5hflx` died
 the same way at 06:49:48Z). `createdump` reported `Unwind: exception type
 System.StackOverflowException`. The runtime's stderr trace, read with a `Logs` action filtered to
 `stream="stderr"`, shows one `MessageHub.HandleCallbacks` at the bottom (under
@@ -107,6 +107,34 @@ or a trampoline, and an unbounded `Merge()` / `SelectMany` keeps no queue.
 
 Satellite repositories (MeshWeaver.Plugins and the node repos) carry their own `Merge(n)` sites and
 are not covered by the guard; they can adopt `MergeBounded` once a sealed platform set carries it.
+
+## Production verification (2026-09-27)
+
+`Ops/Status/<public-instance>`, sampled at 10:57:54Z, reports `notScraped: false`, one generation,
+`converged: true`, and three of three replicas ready on `3.0.0-ci.9443`, core
+`311108bf16a70eee39a6618b36456cf82c58a85f`. GitHub's compare of the #5651 merge
+`af2d799301` to that commit reports ahead 253, behind zero: every sampled replica carries the fix.
+The replicas started at 06:15:30Z, 06:16:52Z and 06:18:14Z.
+
+One MCP `export @Ops/Logs` against the public instance completed at 11:04:07Z. Its ZIP contains
+`manifest.json` with **18,428 nodes**, root `Ops/Logs`, and no content-collection files; the ZIP
+CRC check reports no bad entry. This exercises the large export path on the fixed image, at a
+larger node count than the original approximately 2,200-node trigger. It was not deliberately
+overlapped with a shutdown; the deterministic pre-faulted-subject test above covers that edge.
+
+Read-only Logs actions on the control instance provide the runtime check:
+
+- `Ops/Actions/verify-5649-public-20260927-unwind`: the previous 1,440 minutes,
+  `Unwind: exception type|Stack overflow|Gathering state for process`, **zero** records,
+  `Done`, no truncation and no landing failures.
+- `Ops/Actions/verify-5649-public-20260927-startup`: the same window's positive control,
+  `\[PlatformStartup\]`, **121 read and 121 persisted**, zero failures, no truncation.
+- `Ops/Actions/verify-5649-public-20260927-postexport-unwind`: the same unwind predicate over
+  ten minutes, completed at 11:05:14Z, **zero** records, no truncation and no landing failures.
+
+This verifies #5649's core crash fix after convergence and a large production export. It does not
+establish that a satellite's remaining bare bounded merges are safe; those require their own
+conversion and guard.
 
 ## Related
 

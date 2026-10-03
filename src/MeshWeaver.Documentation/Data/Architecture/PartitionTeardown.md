@@ -9,7 +9,7 @@ Icon: /static/DocContent/Architecture/icon.svg
 > A partition is a first path segment, so a top-level node **is** its partition's root, whatever its
 > type. Deleting one drops the partition's backing store on every `IPartitionStorageProvider` and
 > removes `Admin/Partition/{id}`. Keying that on a NodeType string left four partitions on the
-> systemorph staff portal with live Postgres schemas after their roots were deleted.
+> control instance (the company's staff portal) with live Postgres schemas after their roots were deleted.
 
 This page is the deletion-side companion to [Partition Storage Routing](../PartitionStorageRouting)
 and [Postgres Schema Architecture](../PostgresSchemaArchitecture).
@@ -37,9 +37,9 @@ recursive delete removes the `mesh_nodes` rows and answers `Ok`, and only the sc
 
 It happened twice.
 
-- **2026-07-19, memex-cloud.** A `User` home was deleted and its whole partition was left behind.
+- **2026-07-19, the public instance.** A `User` home was deleted and its whole partition was left behind.
   The fix applied was a **second** hand-written registration, in `AddUserType`.
-- **2026-09-06, systemorph.** `AgenticPrimerDe`, `DataImportExport`, `DataModeling` and
+- **2026-09-06, the control instance.** `AgenticPrimerDe`, `DataImportExport`, `DataModeling` and
   `ThinkInStreams` — four partitions rooted at **`Store/Plugin`** nodes — were deleted. Their nodes
   went; their schemas and their `Admin/Partition` definitions stayed. Every `Space`-rooted partition
   in the same run (the whole Reinsurance family, `AdvancedBusinessRules`, `AgenticEngineering`) was
@@ -59,8 +59,8 @@ The obvious generalisation — "register the teardown for every NodeType whose d
    need one — `PackageInstaller` provisions the target partition itself. So a runtime scan for
    `OwnsPartition == true` would have skipped it too.
 
-The same is true of `Crm/Client` (`ATIOZ`, `HowdenRe`, `PartnerRe`, `PearlTechnology`, `Scheuchzer`,
-`VIGRe`, `PG3`) and of `Store/Catalog` (the `Store` partition itself) — three families of in-mesh
+The same is true of `Crm/Client` (the client partitions — `Globex`, `Fabrikam`, `Initech`, `Hooli`,
+`Umbrella`, …) and of `Store/Catalog` (the `Store` partition itself) — three families of in-mesh
 partition-root types on one portal, none of them visible to `src/`.
 
 The only predicate with no blind spot is the structural one:
@@ -127,9 +127,22 @@ for a partition as a whole:
 
 A drop that faults lifts the tombstone, keeps the record (the retry handle) and propagates.
 
+🚨 **The claim is released BEFORE the outcome is delivered** — success and failure alike. The outcome
+is the caller's "torn down" signal, and a caller may act on it at once: the live `DeleteSpace` probe's
+cleanup issues a second, idempotent teardown of the same partition. The claim used to ride an
+`Observable.Using`, which Rx disposes only after the subscriber has processed the outcome, so that
+follow-up met the claim still held and was refused with *"a deletion … is already in flight — one
+teardown at a time"* (intermittent on MeshWeaver.Plugins#2651, because the probe hops through an
+inventory read before its cleanup). The claim now rides `RecentlyDeletedRegistry.WithinSubtreeDeletion`,
+which holds the body's notifications until it terminates, releases the scope, and only then delivers
+them; `StrandedPartitionTeardownValidator` and the move use the same primitive, and
+`HandleDeleteNodeRequest` releases its scope by hand before posting its response for the same reason.
+Pinned by `PartitionTeardownTest.AFollowUpTeardownIssuedOnTheOutcome_IsNotRefusedAsInFlight`, which
+subscribes the follow-up synchronously inside the outcome's delivery — the race with the hop removed.
+
 🚨 **It is not a user verb.** `PartitionTeardown.Refusal` refuses unless the current identity IS system,
 and also names an invalid segment, a database-populated mirror, a static partition, a deletion already
-in flight, or a hub with no storage provider. A governed action calls `Refusal` at PLAN time, under
+in flight, or a hub with no store at all. A governed action calls `Refusal` at PLAN time, under
 the same system identity it will run with, and parks with the answer — policy
 `governed-action-preflight`: system credentials from the first step, rights and scale checked at plan
 time, refused at park, never mid-run.
@@ -335,8 +348,8 @@ A package's install record lives at `Plugins/{packageId}` — in the RECORDS par
 package's own — so deleting the installed partition left the record behind, aimed at nothing.
 `InstalledPackageRepairService` then re-drove `PackageInstaller.EnsureDeclaredAccess` at that dead
 partition on **every boot**: a permanent per-boot error for every partition anyone had ever deleted
-— and the #3436 census counted **21 partition definitions with no live root** on the systemorph
-staff portal, which is the upper bound on how many such records a single portal can be carrying —
+— and the #3436 census counted **21 partition definitions with no live root** on the control
+instance, which is the upper bound on how many such records a single portal can be carrying —
 and, before the change above, the writer that re-armed the resurrection race on every restart.
 
 Core deliberately knows nothing about `Plugins/Package`; teaching the delete pipeline about it would

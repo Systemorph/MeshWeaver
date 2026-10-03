@@ -247,7 +247,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 The registry case: pearl is pinned to 3.0.0-ci.8080, a closed line and far outside the
+    /// 🚨 The registry case: fabrikam is pinned to 3.0.0-ci.8080, a closed line and far outside the
     /// newest ten, and pulls exactly that identity's seal over the HTTP prebuilt surface. The
     /// Deployment record's pin reaches the identity through the _releases marker, and that keeps it
     /// — and its marker — whatever the line and recency rules say.
@@ -265,9 +265,9 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         // The pin is written as an IMAGE TAG, the way a Deployment record carries it.
         var plan = PlanNow(liveVersion: "4.0.0-ci.1",
-            pinned: [new PinnedPlatformReference("Deployment Deployments/pearl", "memex-portal-ai:3.0.0-ci.8080", null)]);
+            pinned: [new PinnedPlatformReference("Deployment Deployments/fabrikam", "memex-portal-ai:3.0.0-ci.8080", null)]);
 
-        plan.Protected["s-8080"].Should().Contain("pinned by Deployment Deployments/pearl at 3.0.0-ci.8080");
+        plan.Protected["s-8080"].Should().Contain("pinned by Deployment Deployments/fabrikam at 3.0.0-ci.8080");
         Ids(plan).Should().Equal("s-8081");
         plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.0.0-ci.8081");
         plan.UnresolvedPins.Should().BeEmpty();
@@ -281,7 +281,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-old", "plugins", DaysAgo(400));
         Sealed("s-u1", "plugins", DaysAgo(2));
 
-        var plan = PlanNow(pinned: [new PinnedPlatformReference("instance report Deployments/Modules/atioz", "3.0.0-ci.7000+abc", "s-remote")]);
+        var plan = PlanNow(pinned: [new PinnedPlatformReference("instance report Deployments/Modules/initech", "3.0.0-ci.7000+abc", "s-remote")]);
 
         plan.Protected["s-remote"].Should().Contain("pinned by instance report");
         plan.Protected["s-remote"].Should().Contain("3.0.0-ci.7000");

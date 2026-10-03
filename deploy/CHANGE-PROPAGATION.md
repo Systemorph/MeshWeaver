@@ -55,7 +55,7 @@ older code would mint a higher `-ci.<n>` and roll installs backwards.
 > the bake image's `MeshWeaver.Graph` and the portal image's differed in MVID even when built from
 > the same commit in the same CD run. The bake therefore wrote assemblies under a framework tag no
 > portal would ever look up — and, worse, its compile write-back flipped live NodeType records,
-> which is what stopped the one AKS attempt (memex-cloud, 2026-07-30). #1660 WS3 removed the ticks
+> which is what stopped the one AKS attempt (the public instance, 2026-07-30). #1660 WS3 removed the ticks
 > stamp and made the framework identity **commit-scoped** (`g<sha>`, see below) — the CI bake now
 > rides the Build-and-Test run's `mw-plugin-test --bake-output` artifact, which `main-cd`'s
 > `publish-bake` job copies to the portals' storage; the pod-side sweep then adopts it at boot
@@ -92,7 +92,7 @@ compile). Three consequences:
 ## b/c. A change in a plugin (`MeshWeaver.Plugins`)
 
 No image, no pod restart. A plugin is **mesh data**: node-per-file JSON plus C# the mesh compiles
-live. Merging to `main` is the deploy — the registry (`memex.meshweaver.cloud` `/api/plugins`) serves
+live. Merging to `main` is the deploy — the plugin registry instance (`/api/plugins`) serves
 this repo's `main` to every installation's Plugin Catalog.
 
 | Stage | Cost | |
@@ -113,7 +113,7 @@ means **b and c have the same CI cost**. The difference between them is blast ra
 
 - **Peripheral plugin** — one type recompiles; only that plugin's instances are affected.
 - **`Store`** — `Store/Plugin` is the type **every plugin root is an instance of**. Recompiling it
-  (**92s measured** on memex, ~30 source files) re-activates every plugin root's hub on the new
+  (**92s measured** on the control instance, ~30 source files) re-activates every plugin root's hub on the new
   assembly. Nothing else recompiles, but the fan-out is mesh-wide, so prefer a quiet window.
 
 ---
@@ -152,15 +152,15 @@ agrees to within 3% across a 10x spread in mesh size, which is what makes it tru
 
 | Portal | Types | Full warm-up (median) | Per type |
 |---|---|---|---|
-| **memex-cloud** | 237-241 | **567 s** (~9.5 min) | **~2.4 s** |
-| **memex** | 72-81 | **179 s** (~3 min) | **~2.3 s** |
+| **public instance** | 237-241 | **567 s** (~9.5 min) | **~2.4 s** |
+| **control instance** | 72-81 | **179 s** (~3 min) | **~2.3 s** |
 
 Other measurements, for context:
 
 | Observation | |
 |---|---|
 | Resident memory per compiled type | **~46 MiB** *(measured 2026-08-10)* |
-| `Store/Plugin` alone (~30 source files) | **92 s** *(measured, memex)* — an outlier, ~38x the median |
+| `Store/Plugin` alone (~30 source files) | **92 s** *(measured, control instance)* — an outlier, ~38x the median |
 | 4 small Doc types, full bake | **7.8 s** *(measured, local k3s, 2026-07-28)* |
 
 **A full bake on the largest production mesh is ~10 minutes.** Not the "~1.5-2.5 h" this page

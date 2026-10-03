@@ -188,7 +188,7 @@ the manifest the pre-fix emitter produced (2026-09-15):
 | `MeshWeaver.Blazor.AppleMaps` | 1 (1 JS module) | 0 | `AppleMapView.razor.js` |
 | `MeshWeaver.Blazor.Chat` | 5 (2 wwwroot + 2 JS modules + 1 aggregate) | 3 | `ChatMessageList.razor.js`, `ThreadChatView.razor.js` |
 
-Five files, exactly the five that answered **404** on memex.meshweaver.cloud the same day. The old
+Five files, exactly the five that answered **404** on the public instance the same day. The old
 `length > 0` check read 7, 1, *(skipped)* and 3 — four green ticks over the same bytes.
 
 ### Hop 3's harness

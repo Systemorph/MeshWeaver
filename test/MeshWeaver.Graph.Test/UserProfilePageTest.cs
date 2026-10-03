@@ -15,8 +15,8 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// The owner's profile page (<c>/{user}/EditProfile</c>): the picture control, the node-bound
-/// basics (display name on <see cref="MeshNode.Name"/>, read-only sign-in email, language and time
-/// zone), localized chrome, and the module extension point
+/// basics (display name on <see cref="MeshNode.Name"/>, read-only sign-in email — language and time
+/// zone live in the person app's Preferences tab only), localized chrome, and the module extension point
 /// (<see cref="ProfileSectionsExtensions"/>) — ordering, de-duplication and the permission gate.
 /// Pure control-tree assertions; the picture's store round trip is
 /// <see cref="ProfilePictureRoundTripTest"/>. Design: <c>Doc/GUI/ProfilePage</c>.
@@ -70,14 +70,17 @@ public class UserProfilePageTest
         email.NodePath.Should().Be(NodePath);
     }
 
+    /// <summary>
+    /// Language and time zone are preferences, edited in ONE place — the person app's Preferences
+    /// tab (<see cref="PersonApp"/>). The profile used to carry the same two fields a second time.
+    /// </summary>
     [Fact]
-    public void LanguageAndTimeZone_AreTheSameFieldsAsThePreferencesTab()
-    {
-        var prefs = Descendants(Editor()).OfType<MeshNodeContentEditorControl>()
-            .Should().ContainSingle(e => e.CanEdit).Subject;
-
-        prefs.Fields.Select(f => f.Key).Should().Equal("timeZoneId", "locale");
-    }
+    public void LanguageAndTimeZone_AreNotOnTheProfile()
+        => Descendants(Editor()).OfType<MeshNodeContentEditorControl>()
+            .SelectMany(e => e.Fields)
+            .Select(f => f.Key)
+            .Should().NotContain(["timeZoneId", "locale"],
+                "the profile no longer edits the preferences — Preferences does, alone");
 
     [Fact]
     public void Chrome_FollowsTheViewer_German()

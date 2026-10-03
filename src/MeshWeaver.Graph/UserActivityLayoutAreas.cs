@@ -169,6 +169,11 @@ public static class UserActivityLayoutAreas
             accessService?.CircuitContext != null);
 
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        // [Home] timing: how long the owner's node took to answer — the first gate of every home
+        // render (nothing below paints before it). One line per render, owner only.
+        var homeClock = isOwner ? System.Diagnostics.Stopwatch.StartNew() : null;
+        var homeLogger = isOwner ? host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home") : null;
+        var ownerFrameLogged = 0;
 
         // The composer region (@@("area/Composer")) renders its ThreadChatControl INLINE — a pure
         // layout area with no backing node (see ComposerAreaView) — so the dashboard no longer has to
@@ -180,6 +185,10 @@ public static class UserActivityLayoutAreas
             {
                 var ownerNode = t.change.Value;
                 var ownerName = ownerNode?.Name ?? nodeOwnerId;
+                if (homeClock is not null && System.Threading.Interlocked.Exchange(ref ownerFrameLogged, 1) == 0)
+                    homeLogger?.LogInformation(
+                        "[Home] server viewer={Viewer} +{ElapsedMs}ms activity: owner node first frame (found={Found})",
+                        nodeOwnerId, homeClock.ElapsedMilliseconds, ownerNode is not null);
 
                 if (isOwner)
                     return (UiControl?)BuildOwnerHome(nodePath, ownerName, ownerNode, options);
@@ -531,6 +540,11 @@ public static class UserActivityLayoutAreas
         // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
         // single-partition query inside the search control.
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        // [Home] timing: when the catalog's four legs first combined (= first catalog paint), and
+        // when the shared-targets leg delivered its REAL answer rather than its StartWith([]).
+        var homeClock = System.Diagnostics.Stopwatch.StartNew();
+        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
+        var catalogLogged = 0;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 ObserveSharedTargets(host, ownerId),
@@ -546,7 +560,14 @@ public static class UserActivityLayoutAreas
                 // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
                 // the proxy was reaching for: once per user because the ledger says so.
                 (config, shared, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen));
+                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen))
+            .Do(_ =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
+                    homeLogger?.LogInformation(
+                        "[Home] server owner={Owner} +{ElapsedMs}ms catalog: config, shared, owner and screen combined",
+                        ownerId, homeClock.ElapsedMilliseconds);
+            });
     }
 
     /// <summary>
@@ -562,6 +583,7 @@ public static class UserActivityLayoutAreas
         var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null || string.IsNullOrEmpty(ownerId))
             return Observable.Return<IReadOnlyList<string>>([]);
+        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         return mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 // A share grant lives in the GRANTING partition — that is what makes it a share —
@@ -583,7 +605,15 @@ public static class UserActivityLayoutAreas
                     return map;
                 })
             .Select(map => SharedTargetPaths(map.Values, ownerId))
-            .StartWith((IReadOnlyList<string>)[]);
+            .Do(targets => homeLogger?.LogDebug(
+                "[Home] server owner={Owner} shared targets answered: {Count}", ownerId, targets.Count))
+            .StartWith((IReadOnlyList<string>)[])
+            // 🚨 Emit only when the LIST changes. Every Updated of any of the viewer's grants re-ran
+            // the Scan and re-emitted an equal list, which rebuilt the whole home control; and the
+            // common case — the real answer is ALSO empty — re-emitted [] over the StartWith([]).
+            // A changed list still flows (it re-shapes the content section's union, which the view
+            // now re-queries without blanking — MeshSearchView.LoadResults(keepVisible)).
+            .DistinctUntilChanged(SharedTargetsComparer.Instance);
     }
 
     /// <summary>
@@ -1063,6 +1093,7 @@ public static class UserActivityLayoutAreas
             ["Store"] = ("Store", "/static/NodeTypeIcons/shopping-bag.svg"),
             ["Doc"] = ("Documentation", "/static/NodeTypeIcons/book.svg"),
             ["~/" + ChatArea] = ("Threads", ThreadsIcon),
+            ["~/" + InboxLayoutArea.AreaName] = ("Inbox", InboxIcon),
         }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -1101,8 +1132,26 @@ public static class UserActivityLayoutAreas
         path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
 
     /// <summary>The blueprint of one platform-default app record.</summary>
+    /// <summary>The Inbox tile's icon — an embedded NodeTypeIcons asset.</summary>
+    internal const string InboxIcon = "/static/NodeTypeIcons/mail.svg";
+
+    /// <summary>
+    /// The Inbox app's record for <paramref name="ownerId"/> — a <c>~/Inbox</c> app like the Threads
+    /// app, opening <see cref="InboxLayoutArea"/> on the owner's own hub. Seeded for every user by
+    /// <c>SeedInboxAppLogonAction</c>, independently of <c>Admin/HomeConfig.DefaultApps</c>.
+    /// </summary>
+    /// <param name="ownerId">The owner's partition.</param>
+    /// <param name="locale">The OWNER's language — the tile is theirs alone, so its stored name is
+    /// seeded in it; the launcher resolves <see cref="InboxLabelKey"/> for whoever views it.</param>
+    internal static AppRecordSpec InboxAppSpec(string ownerId, string? locale = null)
+        => AppRecordSpecs(new HomeConfig { DefaultApps = ["~/" + InboxLayoutArea.AreaName] }, ownerId)[0]
+            with { Name = LocalizationCatalog.Get(InboxLabelKey, locale), LabelKey = InboxLabelKey };
+
+    /// <summary>The Inbox tile's label key (<see cref="App.LabelKey"/>).</summary>
+    internal const string InboxLabelKey = "inbox.title";
+
     internal sealed record AppRecordSpec(
-        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source)
+        string Id, string Name, string Icon, string? Plugin, string? OpenPath, string Source, string? LabelKey = null)
     {
         /// <summary>The record's navigation target — the app's path, or the owner-hub area path
         /// for a <c>~/</c> app. Stamped as the record's <see cref="MeshNode.MainNode"/> so an icon
@@ -1174,6 +1223,7 @@ public static class UserActivityLayoutAreas
                 Plugin = spec.Plugin ?? "",
                 OpenPath = spec.OpenPath,
                 Source = spec.Source,
+                LabelKey = spec.LabelKey,
             },
         };
 
@@ -1344,8 +1394,9 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// The owner's profile page (<see cref="EditProfileArea"/>, <c>/{user}/EditProfile</c>) — picture,
-    /// basics (display name, sign-in email, language, time zone), bio, links and showcase, followed by
+    /// The owner's profile page (<see cref="EditProfileArea"/>, <c>/{user}/EditProfile</c>, also the
+    /// person app's Profile tab) — picture, basics (display name, sign-in email), bio, links and
+    /// showcase, followed by
     /// every section a module contributed through
     /// <see cref="ProfileSectionsExtensions.AddProfileSections(MessageHubConfiguration, ProfileSectionProvider[])"/>.
     /// Gated on <see cref="Permission.Update"/> (self-edit → the owner only; visitors get
@@ -1435,7 +1486,8 @@ public static class UserActivityLayoutAreas
     /// <item><b>Picture</b> — <see cref="NodeImageUploadControl"/>: upload/replace/remove, stored in
     /// the node's own <c>content</c> collection and referenced from <see cref="MeshNode.Icon"/>.</item>
     /// <item><b>Basics</b> — the display name (<see cref="MeshNode.Name"/>, which is what the header,
-    /// mentions and cards show), the sign-in email read-only, and the language + time zone.</item>
+    /// mentions and cards show) and the sign-in email read-only. Language and time zone live in the
+    /// person app's Preferences tab only.</item>
     /// <item><b>Bio</b>, <b>Links</b> — node-bound markdown editors.</item>
     /// <item><b>Showcase</b> — pinned cards with the inline unpin overlay.</item>
     /// <item>Then every contributed section, already rendered and permission-filtered.</item>
@@ -1510,14 +1562,9 @@ public static class UserActivityLayoutAreas
                         nameof(User.Email).ToCamelCase()!, L("profile.email"), MeshNodeEditorFieldKind.Text)),
                 })
                 .WithView(Controls.Label(L("profile.emailHint"))
-                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;"))
-                // Language + time zone — the SAME fields, control and node the Settings →
-                // Preferences tab binds, so the two surfaces can never drift apart.
-                .WithView(new MeshNodeContentEditorControl(userPath)
-                {
-                    CanEdit = true,
-                    Fields = UserNodeType.PreferenceFields(key => L(key)),
-                }),
+                    .WithStyle("color: var(--neutral-foreground-hint); font-size: 0.85rem;")),
+            // Language and time zone are NOT here: they are preferences, edited in ONE place —
+            // the person app's Preferences tab (PersonApp) — never on two surfaces at once.
             BasicsSectionId));
 
         // Bio — node-bound markdown editor (JsonPointer "bio" against the User content context).
@@ -1834,4 +1881,20 @@ public static class UserActivityLayoutAreas
         return withTitle ? search.WithTitle("Pinned") : search;
     }
 
+    /// <summary>
+    /// Order-sensitive, ORDINAL equality of two shared-target lists. Ordinal on purpose: a re-emission
+    /// of the same data is already ordinally identical, so ordinal suffices to stop the rebuild, and a
+    /// case-only change of a target still flows to the union query downstream rather than being
+    /// swallowed as "no change".
+    /// </summary>
+    internal sealed class SharedTargetsComparer : IEqualityComparer<IReadOnlyList<string>>
+    {
+        public static readonly SharedTargetsComparer Instance = new();
+
+        public bool Equals(IReadOnlyList<string>? x, IReadOnlyList<string>? y) =>
+            ReferenceEquals(x, y)
+            || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
+
+        public int GetHashCode(IReadOnlyList<string> obj) => obj.Count;
+    }
 }

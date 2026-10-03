@@ -131,6 +131,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // cannot drift the way WriteVerdictBound's prose and this path's real cost did (#3477).
     internal const int MaxOwnerDisposingReenqueues = 2;
 
+    /// <summary>
+    /// True when a patch's response wait ended with the owner REFUSING the delivery as
+    /// <see cref="ErrorType.ShuttingDown"/> — refused before any handler ran, so the patch provably
+    /// never applied. The routed twin of <see cref="MeshNodeErrorCode.OwnerDisposing"/> (#5011,
+    /// MeshWeaver.Plugins#2403). Pure.
+    /// </summary>
+    /// <param name="error">The terminal of the response wait.</param>
+    internal static bool IsShuttingDownRefusal(Exception error) =>
+        error is DeliveryFailureException { Failure: { } failure } && IsShuttingDownRefusal(failure);
+
+    /// <summary>The same classification over the failure itself — the late arm receives the
+    /// <see cref="DeliveryFailure"/> unwrapped. The ONE definition of a ShuttingDown refusal.</summary>
+    /// <param name="failure">The owner's late failure.</param>
+    internal static bool IsShuttingDownRefusal(DeliveryFailure failure) =>
+        failure.ErrorType == ErrorType.ShuttingDown;
+
     // 🚨 How long a CONFLICT re-attempt waits for this hub's mirror to carry state the owner has
     // not already refused. Not a retry interval and not a backoff — it is the bound on ONE wait
     // for a fact that is already on its way: the owner committed the winning write BEFORE it
@@ -1051,13 +1067,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 return;
             }
 
-            _lateRetype.Disposable = contentTypeRegistry.Registrations
-                // 🚨 String compares only, BEFORE any deserialization. A boot registers every
-                // content type in the mesh, and without this each one would re-deserialize this
-                // node's whole JsonElement in every degraded subscription — N×M for nothing. The
-                // predicate mirrors exactly the two routes TryRecoverForNodeType can take, so a
-                // registration it drops is one that provably could not have resolved this node.
-                .Where(r => CouldResolve(r, raw, discriminator))
+            _lateRetype.Disposable = contentTypeRegistry
+                // 🚨 String compares only, BEFORE any deserialization — and BEFORE THE HOP (#5555).
+                // Every per-node hub activation of a runtime-compiled NodeType registers here, so
+                // a filter applied after the registry's hop cost a scheduled drain in EVERY armed
+                // wait for EVERY activation in the mesh: waits × activations, nearly all of it for
+                // types this node cannot use. RegistrationsMatching evaluates the predicate on the
+                // registering thread and hops only what passes. The predicate mirrors exactly the
+                // two routes TryRecoverForNodeType can take, so a registration it drops is one
+                // that provably could not have resolved this node.
+                .RegistrationsMatching(r => CouldResolve(r, raw, discriminator))
                 .Select(_ => System.Reactive.Unit.Default)
                 // 🚨 StartWith closes the gap between the conversion above and this Subscribe: a
                 // registration landing in that window would otherwise be missed, and the wait
@@ -2605,6 +2624,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         failure.Message ?? $"Access denied updating '{_path}'"));
                                     return;
                                 }
+                                if (IsShuttingDownRefusal(failure)
+                                    && attempt < MaxOwnerDisposingReenqueues)
+                                {
+                                    // The routed OwnerDisposing, late — see IsShuttingDownRefusal.
+                                    diagLogger?.LogWarning(
+                                        "[UpdateRemote] LATE_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it; re-enqueueing against the next activation",
+                                        _workspace.Hub.Address, _path, attempt + 1, corr);
+                                    using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                        ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                        : null)
+                                    {
+                                        ChainTerminal(
+                                            UpdateRemote(update, attempt + 1, 0,
+                                                onLocalState: null,
+                                                correlationId: corr,
+                                                ownerSaidNeverApplied: true),
+                                            attachToCaller: false);
+                                    }
+                                    return;
+                                }
                                 diagLogger?.LogWarning(
                                     "[UpdateRemote] LATE_DELIVERY_FAILURE hub={Hub} target={Path} errorType={ErrorType} msg={Msg}",
                                     _workspace.Hub.Address, _path, failure.ErrorType, failure.Message);
@@ -2915,6 +2954,39 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                         + $"Request trail: {trail}")));
                                                 }));
                                         }
+                                        else if (IsShuttingDownRefusal(ex)
+                                                 && attempt < MaxOwnerDisposingReenqueues)
+                                        {
+                                            // 🚨 A ShuttingDown refusal is the ROUTED form of
+                                            // OwnerDisposing (#5011, Plugins#2403): the delivery
+                                            // was refused before any handler ran — by a hub past
+                                            // DisposeHostedHubs, or by a grain whose host is
+                                            // stopping, which hands the address off in the same
+                                            // breath (MessageHubGrain.RefuseBecauseTheHostIsLeaving).
+                                            // ErrorType.ShuttingDown's own contract is "retry-
+                                            // worthy, never terminal". This arm used to map it to
+                                            // Unknown and fault the caller, so EVERY write that
+                                            // landed on an owner during a pod roll was lost with a
+                                            // terminal error, while the same fact carried as a
+                                            // PatchDataResponse was re-driven. Same bounded
+                                            // re-enqueue, same never-applied base rule.
+                                            lateRegistry?.Complete(requestId);
+                                            diagLogger?.LogWarning(
+                                                "[UpdateRemote] OWNER_SHUTTING_DOWN_REENQUEUE hub={Hub} target={Path} attempt={Attempt} corr={Corr} — the owner refused the patch before handling it (ShuttingDown); re-enqueueing against the next activation",
+                                                _workspace.Hub.Address, _path, attempt + 1, corr);
+                                            using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
+                                                ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
+                                                : null)
+                                            {
+                                                ChainTerminal(UpdateRemote(update, attempt + 1, 0,
+                                                        onLocalState: onLocalState is null
+                                                            ? null
+                                                            : _ => onLocalState(null),
+                                                        correlationId: corr,
+                                                        ownerSaidNeverApplied: true),
+                                                    attachToCaller: true);
+                                            }
+                                        }
                                         else
                                         {
                                             lateRegistry?.Complete(requestId);
@@ -3005,8 +3077,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             updated = updated with { LastModified = DateTimeOffset.UtcNow };
             stamped = true;
         }
-        if (updated.LastModifiedBy == current.LastModifiedBy
-            && !string.IsNullOrEmpty(ctx?.ObjectId))
+        // A person or service is always the author of their own write — a lambda that sets
+        // LastModifiedBy to somebody else (or System) does not get to choose (RequestIdentity).
+        // Only the platform's own writers may carry a different stamp (imports, repairs).
+        if (!string.IsNullOrEmpty(ctx?.ObjectId)
+            && !string.Equals(updated.LastModifiedBy, ctx.ObjectId, StringComparison.Ordinal)
+            && (updated.LastModifiedBy == current.LastModifiedBy
+                || !Security.RequestIdentity.IsPlatform(ctx.ObjectId)))
         {
             updated = updated with { LastModifiedBy = ctx.ObjectId };
             stamped = true;

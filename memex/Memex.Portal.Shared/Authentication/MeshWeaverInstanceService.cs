@@ -596,14 +596,19 @@ public sealed class MeshWeaverInstanceService(
         };
         // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
         // of the identity must land on the same thread (AGENTS.md; #1790).
-        return accessService.RunAsSystem(() => meshService.Query(request))
+        // 🚨 The MERGED Initial, never the first frame of the progressive fan-in (seeded empty per
+        // provider, so it misses an instance held by a provider that answers asynchronously).
+        return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .SelectMany(results =>
+            // No timer of its own: the fan-in's Initial is bounded by its own stall terminal
+            // (MeshOperationOptions.QueryInitialBudget), and a shorter local bound gave up inside
+            // it — the inverted ladder of #1198 (#5894).
+            .SelectMany(change =>
             {
                 // The index nodes share the NodeType and use the hash prefix as id, so an instance
                 // record is the hit whose id IS the instance id and whose namespace is not the index.
-                var node = results.FirstOrDefault(n =>
+                var node = change.Items.FirstOrDefault(n =>
                     string.Equals(n.Id, instanceId, StringComparison.Ordinal)
                     && !string.Equals(n.Namespace, MeshWeaverInstanceNodeType.IndexNamespace, StringComparison.Ordinal));
                 return node?.Path is null
@@ -653,10 +658,11 @@ public sealed class MeshWeaverInstanceService(
     /// of the valid uses of the (eventually consistent) query index — reading the grant path would
     /// not do, since the claim lives on the instance nodes.
     ///
-    /// <para><see cref="IMeshService.Query(MeshQueryRequest)"/> is reactive by contract (there is no
-    /// async surface), so this needs no bridge at all — take the first live snapshot and read its
-    /// membership. Running as System: the claim is global, and a caller must not be told "available"
-    /// merely because someone else's instance is invisible to them.</para>
+    /// <para>Reads the MERGED Initial of <see cref="IMeshService.Query{T}(MeshQueryRequest)"/> — never
+    /// the first frame of the progressive fan-in, which is seeded empty per provider and therefore
+    /// answered "available" for an id a slower provider holds. Running as System: the claim is
+    /// global, and a caller must not be told "available" merely because someone else's instance is
+    /// invisible to them.</para>
     /// </summary>
     public IObservable<bool> IsIdAvailable(string instanceId)
     {
@@ -673,10 +679,13 @@ public sealed class MeshWeaverInstanceService(
         };
         // RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — store and restore
         // of the identity must land on the same thread (AGENTS.md; #1790).
-        return accessService.RunAsSystem(() => meshService.Query(request))
+        return accessService.RunAsSystem(() => meshService.Query<MeshNode>(request))
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
             .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Select(results => results.Count == 0);
+            // No timer of its own: the fan-in's Initial is bounded by its own stall terminal
+            // (MeshOperationOptions.QueryInitialBudget), and a shorter local bound gave up inside
+            // it — the inverted ladder of #1198 (#5894).
+            .Select(change => change.Items.Count == 0);
     }
 
     // The global index namespace is not user-writable — the same System-scoped write ApiTokenService

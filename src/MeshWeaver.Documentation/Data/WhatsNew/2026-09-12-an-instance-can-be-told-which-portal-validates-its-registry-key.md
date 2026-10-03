@@ -24,7 +24,7 @@ but no plugin registry … is configured on that host, so there is no key to pre
 The self-updater authenticates with the same `mwi_` instance key the installation already holds for
 its plugin registry, and it decided which key to present by matching the **host**. But the fleet's
 registry deliberately holds no credentials of its own: it decides a pull by forwarding the caller's
-key to a portal — `cr.meshweaver.cloud` asks `memex.meshweaver.cloud` whether the key is good. The
+key to a portal — `cr.meshweaver.cloud` asks the plugin registry portal whether the key is good. The
 image registry and the plugin registry are therefore two **different** hosts by design, and host
 matching could never succeed on the shape the fleet actually deploys.
 

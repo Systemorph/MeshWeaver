@@ -176,7 +176,7 @@ public class LogonActionFrameworkTest(ITestOutputHelper output) : MonolithMeshTe
     /// because onboarding is the thing that creates it and they have not filled the form in yet.
     ///
     /// <para>🚨 This is the FIRST-RUN DEADLOCK, measured on a brand-new deployment
-    /// (PartnerRe, 2026-09-18 10:04Z). The runner read the missing profile as "no action has run
+    /// (an enterprise client, 2026-09-18 10:04Z). The runner read the missing profile as "no action has run
     /// yet", <c>SeedDefaultAppsLogonAction</c> wrote <c>{user}/_App/Store</c>, creating a node
     /// inside an empty partition bootstrapped the Space root at the bare path <c>{user}</c> — and
     /// the onboarding form the same person was looking at probes <c>path:{username}</c> and refused

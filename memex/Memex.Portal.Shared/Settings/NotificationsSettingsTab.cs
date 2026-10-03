@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -32,18 +33,18 @@ public static class NotificationsSettingsTab
     public const string TabId = "Notifications";
 
     public static MessageHubConfiguration AddNotificationsSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(
+        // A tab of the PERSON APP (PersonApp.AddPersonAppTab): the preferences are the signed-in
+        // person's, so the tab shows on their own settings page only.
+        => config.AddPersonAppTab(
             new SettingsMenuItemDefinition(
                 Id: TabId,
                 Label: "Notifications",
                 ContentBuilder: BuildContent,
-                Group: "Preferences",
                 Icon: FluentIcons.Alert(),
-                GroupIcon: FluentIcons.Person(),
-                Order: 240,
+                Order: PersonApp.NotificationsOrder,
                 RequiredPermission: Permission.None,
-                Keywords: ["notifications", "teams", "email", "bell", "channels", "approvals", "inbox", "triage"])
-            { LabelKey = "settings.notifications", GroupKey = "settings.groupPreferences" });
+                Keywords: ["notifications", "teams", "email", "bell", "channels", "approvals", "inbox", "triage", "apps", "deliver quietly"])
+            { LabelKey = "settings.notifications" });
 
     /// <summary>
     /// The features the tab offers a row for: the platform's own
@@ -95,6 +96,42 @@ public static class NotificationsSettingsTab
                 .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs"))));
         }
 
+        // iOS Settings → Notifications: below the kinds, one section per INSTALLED APP — its
+        // master switch, "Deliver quietly", and which channels it may use. Listed from the same
+        // single-partition query the home's Apps grid makes; each editor binds the app's
+        // {userId}/_Settings/Notifications/Apps/{appId} node, created on first view with the default
+        // the dispatcher already applies, so opening the tab changes no delivery.
+        stack = stack.WithView(Controls.H2(host.Localize("settings.notificationsApps")).WithStyle("margin: 24px 0 8px 0;"));
+        stack = stack.WithView(Controls.Markdown(host.Localize("settings.notificationsAppsIntro")));
+        stack = stack.WithView((h, _) => h.Hub.GetWorkspace()
+            .GetQuery($"{NotificationAppPreferenceNodeType.NodeType}|tab|{userId}",
+                $"path:{userId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} sort:name")
+            .Take(1)
+            .Select(apps => (UiControl?)AppSections(host, userId!, apps ?? []))
+            .Catch((Exception _) => Observable.Return<UiControl?>(
+                Controls.Markdown(host.Localize("ui.mdNotifPrefsUnavailable"))))
+            .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs"))));
+
         return stack;
+    }
+
+    private static UiControl AppSections(LayoutAreaHost host, string userId, IEnumerable<MeshNode> apps)
+    {
+        var sections = Controls.Stack;
+        var any = false;
+        foreach (var app in apps.Where(a => NotificationApps.IsValidKey(a.Id)))
+        {
+            any = true;
+            var id = app.Id;
+            sections = sections.WithView(Controls.H3(string.IsNullOrWhiteSpace(app.Name) ? id : app.Name!)
+                .WithStyle("margin: 16px 0 4px 0;"));
+            sections = sections.WithView((h, _) => NotificationAppPreferenceNodeType
+                .EnsureExists(h.Hub, userId, id)
+                .Select(path => (UiControl?)MeshNodeContentEditorControl.ForType(path, typeof(NotificationAppPreference)))
+                .Catch((Exception _) => Observable.Return<UiControl?>(
+                    Controls.Markdown(host.Localize("ui.mdNotifPrefsUnavailable"))))
+                .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs"))));
+        }
+        return any ? sections : Controls.Markdown(host.Localize("settings.notificationsAppsNone"));
     }
 }

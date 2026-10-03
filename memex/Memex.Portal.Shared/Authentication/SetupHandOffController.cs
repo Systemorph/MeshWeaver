@@ -18,7 +18,7 @@ public sealed record SetupHandOffSecret(string ConfigKey, string Value, string V
 }
 
 /// <summary>What a provisioned instance asks the control instance to do at the end of its setup.</summary>
-/// <param name="Deployment">The deployment id, e.g. <c>pearl</c>.</param>
+/// <param name="Deployment">The deployment id, e.g. <c>fabrikam</c>.</param>
 /// <param name="Vault">The vault its record names.</param>
 /// <param name="Secrets">The values that become vault objects.</param>
 /// <param name="RecordValues">The plain values, which belong on the record.</param>

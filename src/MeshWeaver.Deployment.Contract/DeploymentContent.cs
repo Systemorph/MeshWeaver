@@ -72,14 +72,15 @@ public record DeploymentContent
     /// registry tag, e.g. <c>3.0.0-ci*</c> (the fleet's line while no clean release above 3.0.0
     /// exists). <c>Continuous</c> without a pattern is Stable (clean releases only).
     ///
-    /// <para>🚨 This and <see cref="UpdatePolicy"/> are what a NEW instance STARTS with: they render
-    /// as <c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>, which the
-    /// self-updater seeds onto <c>Admin/UpdatePolicy</c> the first time that node is created. An
-    /// EXISTING node is never touched by configuration — it is edited on the instance (Settings →
-    /// Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
+    /// <para>🚨 This and <see cref="UpdatePolicy"/> render as <c>SelfUpdate__DefaultPolicy</c> /
+    /// <c>SelfUpdate__DefaultPattern</c>. The self-updater seeds them onto <c>Admin/UpdatePolicy</c>
+    /// when that node is created and, when <see cref="UpdatePolicy"/> is set, converges an EXISTING
+    /// node's policy and pattern to them at every start (policy
+    /// <c>self-update-record-authoritative</c>). With no policy declared, the node is edited on the
+    /// instance (Settings → Updates). Maintainer, 2026-09-19: <i>"need to put this to the config where we start"</i>, after
     /// memex-cloud sat frozen for a week on a policy node that had no <c>policy</c> field at all.</para>
     /// </summary>
-    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds a NEW instance's Admin/UpdatePolicy")]
+    [Description("Version pattern the Continuous self-update follows, e.g. 3.0.0-ci* — seeds Admin/UpdatePolicy and, with a declared policy, is kept on it at every start")]
     public string? UpdatePattern { get; init; }
 
     /// <summary>
@@ -133,7 +134,7 @@ public record DeploymentContent
 
     /// <summary>
     /// Key Vault secret NAME of this deployment's OWN announcement key (MeshWeaver.Plugins#1913) —
-    /// e.g. <c>pearl-Hosting-AnnouncementKey</c>. A NAME, never a value. The same vault object is
+    /// e.g. <c>fabrikam-Hosting-AnnouncementKey</c>. A NAME, never a value. The same vault object is
     /// mounted twice: into this deployment's pod as <c>Hosting__ControlInbox__Secret</c> (so its
     /// self-updater signs with it) and into the control instance as
     /// <c>Hosting__PlatformWebhookSecret__{deploymentId}</c> (so the inbox can verify it).

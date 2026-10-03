@@ -102,7 +102,7 @@ public static class PlatformVersionLine
 /// a <c>Hosting/Deployment</c> record's <c>pinnedImageTag</c>, or a registered instance's
 /// reported platform version / framework identity. On the registry (memex-cloud) remote
 /// instances fetch their OWN identity's seal over the HTTP prebuilt surface, so such an identity
-/// is referenced however old it is — pearl pinned to <c>3.0.0-ci.8080</c> would otherwise fall
+/// is referenced however old it is — fabrikam pinned to <c>3.0.0-ci.8080</c> would otherwise fall
 /// outside the age window and lose its bundle at the next boot.
 /// </summary>
 /// <param name="Origin">Who pins it — the record or instance, for the ledger.</param>

@@ -621,7 +621,7 @@ internal class PathResolutionService : IPathResolver, IDisposable
         // target, they should see "Access denied" at content-load time (the
         // owning hub's RLS handles that), NOT "Page not found" (which suggests
         // the URL is wrong). Prod symptom 2026-05-21:
-        //   /Systemorph/_Thread/add-markus-kleiner-as-admin-to-systemorp-c578
+        //   /Systemorph/_Thread/add-a-user-as-admin-to-systemorp-c578
         // returns NotFound because the PG cross-schema query applies
         // BuildPerSchemaAccessClause; the user's portal hub posts the inbound
         // request with accessContext=(null) (Blazor → Orleans flow loses

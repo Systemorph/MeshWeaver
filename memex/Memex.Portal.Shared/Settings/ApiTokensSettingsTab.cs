@@ -30,16 +30,18 @@ public static class ApiTokensSettingsTab
     public static MessageHubConfiguration AddApiTokensSettingsTab(
         this MessageHubConfiguration config)
     {
-        return config.AddSettingsMenuItems(
+        // A tab of the PERSON APP: the tokens are the signed-in person's, so it shows on their own
+        // settings page only — never on a Space's, a node's or the instance's — and an old link on
+        // any other settings page redirects there.
+        return config.AddPersonAppTab(
             new SettingsMenuItemDefinition(
                 Id: TabId,
                 Label: "API Tokens",
                 ContentBuilder: BuildApiTokensContent,
-                Group: "Security",
                 Icon: FluentIcons.Key(),
-                Order: 230,
+                Order: PersonApp.ApiTokensOrder,
                 RequiredPermission: Permission.None)
-            { LabelKey = "settings.apiTokens", GroupKey = "settings.groupSecurity" });
+            { LabelKey = "settings.apiTokens" });
     }
 
     internal static UiControl BuildApiTokensContent(

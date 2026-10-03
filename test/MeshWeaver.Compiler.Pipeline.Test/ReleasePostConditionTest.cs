@@ -27,7 +27,11 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class ReleasePostConditionTest
 {
+    private const string NodeTypePath = "Publish/Deck";
     private static readonly DateTimeOffset Requested = new(2026, 8, 27, 21, 52, 59, TimeSpan.Zero);
+
+    private static string ReleaseFor(NodeCompilationResult build) =>
+        $"Publish/Deck/Release/20260826065548-{NodeTypeBuildState.ContentHashOf(build)}";
 
     private static ImmutableDictionary<string, long> Sources(long version) =>
         ImmutableDictionary<string, long>.Empty.Add("Publish/Deck/Source/Deck", version);
@@ -43,7 +47,8 @@ public class ReleasePostConditionTest
         LastCompiledVersion = 569,
         LatestAssemblyCollection = "assemblies",
         LatestAssemblyPath = "Publish_Deck/v569-s8929555-aadb349047af.dll",
-        LatestReleasePath = "Publish/Deck/Release/20260826065548-neI3XM25",
+        LatestReleasePath = ReleaseFor(Built(
+            version: 569, contentPath: "Publish_Deck/v569-s8929555-aadb349047af.dll")),
         CompiledSources = Sources(569),
     };
 
@@ -62,19 +67,20 @@ public class ReleasePostConditionTest
     [Fact]
     public void AConsumedRequest_WhoseReleaseNamesAnEarlierBuild_IsAViolation()
     {
-        var violation = ReleasePostCondition.Violation(Consumed(), Built(), newReleasePath: null);
+        var violation = ReleasePostCondition.Violation(Consumed(), Built(), newReleasePath: null, nodeTypePath: NodeTypePath);
 
         violation.Should().NotBeNull(
             "this is the incident: the request is spent, the compile produced build 575, and the "
             + "only release on the node was cut for 569 — nothing will ever revisit it");
-        violation.Should().Contain("20260826065548-neI3XM25", "the verdict must NAME the stale release");
+        violation.Should().Contain(Consumed().LatestReleasePath!, "the verdict must NAME the stale release");
         violation.Should().Contain("575", "…and the build it is stale against");
     }
 
     [Fact]
     public void AReleaseCutOnThisSettle_HoldsTheInvariant()
         => ReleasePostCondition.Violation(
-                Consumed(), Built(), newReleasePath: "Publish/Deck/Release/20260827215301-abcd1234")
+                Consumed(), Built(), newReleasePath: "Publish/Deck/Release/20260827215301-abcd1234",
+                nodeTypePath: NodeTypePath)
             .Should().BeNull("a release for these exact bytes just landed");
 
     [Fact]
@@ -85,7 +91,7 @@ public class ReleasePostConditionTest
         // cut a release for a build the pending request is about to supersede.
         var standing = Consumed() with { LastReleaseRequestHandledAt = Requested.AddSeconds(-30) };
 
-        ReleasePostCondition.Violation(standing, Built(), newReleasePath: null).Should().BeNull();
+        ReleasePostCondition.Violation(standing, Built(), newReleasePath: null, nodeTypePath: NodeTypePath).Should().BeNull();
     }
 
     [Fact]
@@ -95,7 +101,7 @@ public class ReleasePostConditionTest
         // matching release is inconclusive — never evidence of a lost one (#3010's rule, kept).
         var never = Consumed() with { RequestedReleaseAt = null, LastReleaseRequestHandledAt = null };
 
-        ReleasePostCondition.Violation(never, Built(), newReleasePath: null).Should().BeNull();
+        ReleasePostCondition.Violation(never, Built(), newReleasePath: null, nodeTypePath: NodeTypePath).Should().BeNull();
     }
 
     [Fact]
@@ -103,7 +109,7 @@ public class ReleasePostConditionTest
     {
         var noRelease = Consumed() with { LatestReleasePath = null };
 
-        ReleasePostCondition.Violation(noRelease, Built(), newReleasePath: null)
+        ReleasePostCondition.Violation(noRelease, Built(), newReleasePath: null, nodeTypePath: NodeTypePath)
             .Should().Contain("NO release",
                 "the request asked for a release and the compile succeeded — an empty "
                 + "latestReleasePath is the same defect with nothing to compare against");
@@ -117,7 +123,48 @@ public class ReleasePostConditionTest
         // about. This is the case that keeps the check from re-cutting a release on every compile.
         var same = Built(version: 569, contentPath: "Publish_Deck/v569-s8929555-aadb349047af.dll");
 
-        ReleasePostCondition.Violation(Consumed(), same, newReleasePath: null).Should().BeNull();
+        ReleasePostCondition.Violation(Consumed(), same, newReleasePath: null, nodeTypePath: NodeTypePath).Should().BeNull();
+    }
+
+    [Fact]
+    public void AnAlreadyAdoptedBuild_WithAConsumedRequest_StillRejectsAnOlderRelease()
+    {
+        // Production #5057: the NodeType already advertises the newly adopted build, so its
+        // previous and resulting compile coordinates are equal. The release still names the
+        // earlier bytes, and the consumed request otherwise disappears without a new release.
+        var same = Built();
+        var stale = Consumed() with
+        {
+            LastCompiledVersion = same.Version,
+            LatestAssemblyCollection = same.Collection,
+            LatestAssemblyPath = same.ContentPath,
+            LatestReleasePath = ReleaseFor(Built(
+                version: 569, contentPath: "Publish_Deck/v569-s8929555-aadb349047af.dll"))
+        };
+
+        ReleasePostCondition.Violation(stale, same, newReleasePath: null, nodeTypePath: NodeTypePath)
+            .Should().Contain("content hash",
+                "the current NodeType build and the release's durable coordinates disagree");
+    }
+
+    [Theory]
+    [InlineData("Publish/Deck/Release/legacy-cut")]
+    [InlineData("Publish/Deck/Release/20260826065548-invalid!")]
+    [InlineData("Other/Deck/Release/20260826065548-neI3XM25")]
+    public void AnUnverifiableStandingReleaseId_DoesNotAuthorizeARecut(string releasePath)
+    {
+        var same = Built();
+        var before = Consumed() with
+        {
+            LastCompiledVersion = same.Version,
+            LatestAssemblyCollection = same.Collection,
+            LatestAssemblyPath = same.ContentPath,
+            LatestReleasePath = releasePath
+        };
+
+        ReleasePostCondition.Violation(before, same, newReleasePath: null,
+                nodeTypePath: NodeTypePath)
+            .Should().BeNull("only a canonical release id owned by this NodeType proves which bytes it names");
     }
 
     [Fact]
@@ -126,7 +173,7 @@ public class ReleasePostConditionTest
         // A producer that reports coordinates but no integer store version still moved the bytes.
         var moved = Built(version: null);
 
-        ReleasePostCondition.Violation(Consumed(), moved, newReleasePath: null)
+        ReleasePostCondition.Violation(Consumed(), moved, newReleasePath: null, nodeTypePath: NodeTypePath)
             .Should().Contain("assembly path");
     }
 
@@ -137,7 +184,7 @@ public class ReleasePostConditionTest
         // always present, and a release cut from other sources is a release of another build.
         var storeless = Built(version: null, contentPath: null, collection: null, sourceVersion: 999);
 
-        ReleasePostCondition.Violation(Consumed(), storeless, newReleasePath: null)
+        ReleasePostCondition.Violation(Consumed(), storeless, newReleasePath: null, nodeTypePath: NodeTypePath)
             .Should().Contain("compiled-source snapshot");
     }
 
@@ -148,11 +195,11 @@ public class ReleasePostConditionTest
         // absence: the remedy is a WRITE (a re-cut release node), so a false positive is a write.
         var blind = Built(version: null, contentPath: null, collection: null, sourceVersion: 569);
 
-        ReleasePostCondition.Violation(Consumed(), blind, newReleasePath: null).Should().BeNull();
+        ReleasePostCondition.Violation(Consumed(), blind, newReleasePath: null, nodeTypePath: NodeTypePath).Should().BeNull();
     }
 
     [Fact]
     public void AnUnreadableDefinition_IsNotJudged()
-        => ReleasePostCondition.Violation(before: null, Built(), newReleasePath: null)
+        => ReleasePostCondition.Violation(before: null, Built(), newReleasePath: null, nodeTypePath: NodeTypePath)
             .Should().BeNull("a definition the settle could not read says nothing about releases");
 }

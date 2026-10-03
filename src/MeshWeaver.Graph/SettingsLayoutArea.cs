@@ -11,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -26,11 +27,10 @@ public static class SettingsLayoutArea
 {
     internal const string MetadataTab = "Metadata";
     internal const string NodeTypesTab = "NodeTypes";
-    internal const string FilesTab = "Files";
     internal const string AccessControlTab = "AccessControl";
     internal const string GroupsTab = "Groups";
     internal const string EffectiveAccessTab = "EffectiveAccess";
-    internal const string AppearanceTab = "Appearance";
+    internal const string VersionsTab = "Versions";
 
     /// <summary>
     /// Renders the unified Settings page with Splitter layout.
@@ -48,6 +48,12 @@ public static class SettingsLayoutArea
         // string never matches item.Id and the content pane silently falls back to the first
         // (Metadata) tab while the nav still highlights the URL tab.
         var tabId = host.Reference.Id?.ToString()?.Split('?')[0];
+
+        // A tab that moved — into the Admin app, into the person app, up to the partition root, or
+        // into another tab of this page — answers an old link with a redirect to where it lives now,
+        // rather than silently falling back to this page's first tab.
+        if (SettingsRedirect.For(host, tabId) is { } redirect)
+            return Observable.Return<UiControl?>(redirect);
 
         var ownNode = host.Workspace.GetMeshNodeStream();
         var permsStream = host.Hub.GetEffectivePermissions(hubPath);
@@ -173,6 +179,7 @@ public static class SettingsLayoutArea
         // "Datenschutz" by typing it, not only by typing "Privacy").
         var access = host.Hub.ServiceProvider.GetService<AccessService>();
         items = [.. items.Select(i => i.Localized(access))];
+        var title = Title(host, node);
 
         var searchBox = (new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Search settings…")
@@ -186,7 +193,7 @@ public static class SettingsLayoutArea
             .WithView(
                 (h, c) => h.GetDataStream<string>(searchDataId)
                     .StartWith(string.Empty)
-                    .Select(q => (UiControl)BuildNavMenu(node, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
+                    .Select(q => (UiControl)BuildNavMenu(title, hubAddress, hubPath, FilterMenuItems(items, q), selectedTab)),
                 "SettingsMenu");
     }
 
@@ -208,8 +215,31 @@ public static class SettingsLayoutArea
             .ToList();
     }
 
+    /// <summary>
+    /// The settings page's title: the hub's <see cref="SettingsMenuItemsExtensions.WithSettingsTitle"/>
+    /// when it names one, else the node's own name, else the hub path.
+    /// </summary>
+    internal static string Title(LayoutAreaHost host, MeshNode? node)
+    {
+        string? title = null;
+        if (host.Hub.Configuration.Get<SettingsTitle>() is { } custom)
+        {
+            try { title = custom.Title(host, node); }
+            catch (Exception ex)
+            {
+                host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(SettingsLayoutArea).FullName ?? nameof(SettingsLayoutArea))
+                    .LogWarning(ex, "Settings title failed for {Path}; falling back to the node name",
+                        host.Hub.Address);
+            }
+        }
+        return title is { Length: > 0 } ? title
+            : node?.Name is { Length: > 0 } name ? name
+            : host.Hub.Address.ToString();
+    }
+
     private static UiControl BuildNavMenu(
-        MeshNode? node,
+        string title,
         object hubAddress,
         string hubPath,
         IReadOnlyList<SettingsMenuItemDefinition> items,
@@ -217,11 +247,12 @@ public static class SettingsLayoutArea
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to node link (always present)
+        // Back to node link (always present). Its label is the page's TITLE — the app this settings
+        // page is: the instance's name on the Admin app, the person's name on the person app, the
+        // node's own name on a node's settings (WithSettingsTitle).
         var backHref = $"/{hubPath}";
-        var nodeName = node?.Name ?? "Back";
         navMenu = navMenu.WithView(
-            new NavLinkControl(nodeName, FluentIcons.ArrowLeft(), backHref)
+            new NavLinkControl(title, FluentIcons.ArrowLeft(), backHref)
         );
 
         // Separate top-level items from grouped items
@@ -338,51 +369,6 @@ public static class SettingsLayoutArea
         return stack;
     }
 
-    internal static UiControl BuildFilesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        stack = stack.WithView(Controls.H2(host.Localize("settings.files")).WithStyle("margin: 0 0 24px 0;"));
-
-        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var collections = contentService?.GetAllCollectionConfigs()?.ToList();
-
-        if (collections is not { Count: > 0 })
-        {
-            stack = stack.WithView(new FileBrowserControl("content"));
-            return stack;
-        }
-
-        var options = collections
-            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
-            .ToArray();
-
-        var selectDataId = "filesTabCollectionSelect";
-        var optionsDataId = "filesTabCollectionOptions";
-
-        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = collections[0].Name });
-        host.UpdateData(optionsDataId, options);
-
-        stack = stack.WithView(new ComboboxControl(
-            new JsonPointerReference("collection"),
-            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
-        {
-            Label = "Collection",
-            Autocomplete = ComboboxAutocomplete.Both,
-            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
-        });
-
-        stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
-                .Select(data =>
-                {
-                    var selected = data?.GetValueOrDefault("collection")?.ToString();
-                    if (string.IsNullOrEmpty(selected))
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
-                    return (UiControl?)new FileBrowserControl(selected);
-                }));
-
-        return stack;
-    }
-
     internal static UiControl BuildAccessControlTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         // EMBEDDED AREA, not a compiled call: the AccessControl view rides the
@@ -397,37 +383,26 @@ public static class SettingsLayoutArea
     }
 
     internal static UiControl BuildGroupsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        stack = stack.WithView(Controls.H2(host.Localize("settings.groups")).WithStyle("margin: 0 0 16px 0;"));
+        => stack
+            .WithView(Controls.H2(host.Localize("settings.groups")).WithStyle("margin: 0 0 16px 0;"))
+            .WithView(GroupsList(host.Hub.Address.ToString()));
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
-            return stack;
-        }
-
-        stack = stack.WithView((h, _) =>
-            meshQuery
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:Group"))
-                .Select(change =>
-                {
-                    var groupNodes = change.Items?.ToList() ?? [];
-                    if (groupNodes.Count == 0)
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No groups defined at this level.</p>");
-
-                    var container = Controls.Stack.WithStyle("gap: 8px;");
-                    foreach (var groupNode in groupNodes.OrderBy(n => n.Order).ThenBy(n => n.Name))
-                    {
-                        container = container.WithView(
-                            MeshNodeThumbnailControl.FromNode(groupNode, groupNode.Path));
-                    }
-                    return (UiControl?)container;
-                }));
-
-        return stack;
-    }
+    /// <summary>
+    /// The groups defined at <paramref name="hubPath"/>, listed by the GUI — the viewer's client runs
+    /// the query and draws each group as a card bound to its node, so the tab renders at once
+    /// instead of waiting on a hub-side query and baking one thumbnail per loaded node
+    /// (Doc/GUI/DataBinding → "Templates first, data later").
+    /// </summary>
+    /// <param name="hubPath">The node whose groups are listed.</param>
+    internal static MeshSearchControl GroupsList(string hubPath)
+        => Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{hubPath} nodeType:Group sort:order")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.List)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithReactiveMode(true);
 
     internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
@@ -439,9 +414,8 @@ public static class SettingsLayoutArea
         }
 
         stack = stack.WithView(Controls.H2(host.Localize("settings.effectiveAccess")).WithStyle("margin: 0 0 16px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
+        stack = stack.WithView(Controls.Markdown(host.Localize("effectiveAccess.intro"))
+            .WithStyle("font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;"));
 
         var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
         var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
@@ -462,12 +436,12 @@ public static class SettingsLayoutArea
             .WithStyle("margin-top: 12px; gap: 8px;")
             .WithView(Controls.Button(host.Localize("ui.check"))
                 .WithAppearance(Appearance.Accent)
-                .WithClickAction((Action<UiActionContext>)(ctx =>
+                .WithReactiveClickAction(ctx =>
                 {
-                    // Pure reactive — Subscribe to the form value, then SelectMany
-                    // into the permission stream and write the rendered HTML back
-                    // to the result data slot. No await, no Task bridging.
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                    // Pure reactive — read the form value, then SelectMany into the permission
+                    // stream and write the rendered HTML back to the result data slot. RETURNED
+                    // to the click, so a fault in either read is the click's visible refusal.
+                    return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
                         .SelectMany(data =>
                         {
@@ -481,9 +455,10 @@ public static class SettingsLayoutArea
                                 .Take(1)
                                 .Select(perms => (UserId: userId, Perms: perms));
                         })
-                        .Subscribe(t => ctx.Host.UpdateData(resultId,
-                            BuildPermissionResultHtml(t.UserId, t.Perms)));
-                }))));
+                        .Do(t => ctx.Host.UpdateData(resultId,
+                            BuildPermissionResultHtml(t.UserId, t.Perms)))
+                        .Select(_ => System.Reactive.Unit.Default);
+                })));
 
         stack = stack.WithView((h, _) =>
         {
@@ -496,12 +471,13 @@ public static class SettingsLayoutArea
         return stack;
     }
 
-    internal static UiControl BuildAppearanceTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
-    {
-        stack = stack.WithView(Controls.H2(host.Localize("settings.appearance")).WithStyle("margin: 0 0 24px 0;"));
-        stack = stack.WithView(new AppearanceControl());
-        return stack;
-    }
+    internal static UiControl BuildVersionsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+        // EMBEDDED AREA, like Access Control: the Versions view rides the MeshWeaver.Graph.Views
+        // module; the tab names the area and whoever serves it renders.
+        => stack.WithView(
+            Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.VersionsArea)
+                .WithShowProgress(false),
+            "VersionsContent");
 
     #endregion
 
@@ -606,7 +582,7 @@ public static class SettingsLayoutArea
                 .WithView(Controls.Button(host.Localize("ui.generate"))
                     .WithAppearance(Appearance.Neutral)
                     .WithIconStart(FluentIcons.Sparkle())
-                    .WithClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
+                    .WithReactiveClickAction(actx => RegenerateDescriptionFromNode(actx, nodePath)))));
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Category)))
         {
@@ -637,25 +613,24 @@ public static class SettingsLayoutArea
         section = section.WithView(Controls.Html(
             "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
 
-        // Live preview + Regenerate button — reads the Icon straight off the node stream (the same
-        // source the Icon Path field below binds to), so the preview tracks edits live.
+        // Live preview + Regenerate button. The preview is a TEMPLATE bound to the projected
+        // markup of the node's Icon (the same field the Icon Path box below binds to), so it is
+        // drawn at once and tracks edits live — it no longer waits for the node before it renders.
+        var previewId = $"iconPreview_{nodePath.Replace("/", "_")}";
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
-            .WithView((h, _) => h.Workspace.GetMeshNodeStream(nodePath)
-                .Select(node =>
+            .WithView((Controls.Html(new JsonPointerReference(IconPreviewMarkupPointer)) with
                 {
-                    var icon = node?.Icon ?? "";
-                    return string.IsNullOrEmpty(icon)
-                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
-                        : CreateLayoutArea.BuildIconPreview(icon);
-                }))
+                    DataContext = LayoutAreaReference.GetDataPointer(previewId)
+                })
+                .PublishingTo(previewId, IconPreviewProjection(host, nodePath)))
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
-                .WithClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
+                .WithReactiveClickAction(actx => RegenerateIconFromNode(actx, nodePath))));
 
         section = section.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
         {
@@ -687,7 +662,7 @@ public static class SettingsLayoutArea
                 }.WithStyle("flex: 1;"))
                 .WithView(Controls.Button(host.Localize("ui.useAsIcon"))
                     .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
+                    .WithReactiveClickAction(actx => UseFileAsIcon(actx, nodePath, quickPickDataId))));
         }
 
         section = section.WithView(Controls.Body(
@@ -731,17 +706,33 @@ public static class SettingsLayoutArea
         return section;
     }
 
+    /// <summary>The icon preview's markup as data, at the pointer the preview control binds to.</summary>
+    /// <param name="Markup">The 48px preview markup (<see cref="CreateLayoutArea.IconPreviewMarkup"/>).</param>
+    internal sealed record IconPreview(string Markup);
+
+    /// <summary>The pointer of <see cref="IconPreview.Markup"/> inside its data slot (camelCase on the wire).</summary>
+    private static readonly string IconPreviewMarkupPointer =
+        nameof(IconPreview.Markup).ToCamelCase() ?? nameof(IconPreview.Markup);
+
+    /// <summary>
+    /// The node's Icon, projected into preview markup — the one read behind the icon picker's
+    /// preview. A projection, not a control: the preview template binds to it and never waits for it.
+    /// </summary>
+    private static IObservable<IconPreview> IconPreviewProjection(LayoutAreaHost host, string nodePath)
+        => host.Workspace.GetMeshNodeStream(nodePath)
+            .Select(node => new IconPreview(CreateLayoutArea.IconPreviewMarkup(node?.Icon)));
+
     /// <summary>
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
     /// typed (transient form state), then writes <c>content:&lt;filename&gt;</c> straight to the
     /// node's <see cref="MeshNode.Icon"/> via the node stream. The icon resolver turns that into
     /// <c>/api/content/{nodePath}/{filename}</c> at render time.
     /// </summary>
-    private static void UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
+    private static IObservable<System.Reactive.Unit> UseFileAsIcon(UiActionContext actx, string nodePath, string quickPickDataId)
     {
-        actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
+        return actx.Host.Stream.GetDataStream<Dictionary<string, object?>>(quickPickDataId)
             .Take(1)
-            .Subscribe(data =>
+            .Do(data =>
             {
                 var fileName = data?.GetValueOrDefault("fileName")?.ToString()?.Trim() ?? "";
                 if (string.IsNullOrEmpty(fileName))
@@ -756,7 +747,7 @@ public static class SettingsLayoutArea
                 var iconRef = $"content:{fileName}";
 
                 WriteIcon(actx, nodePath, iconRef);
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>
@@ -764,19 +755,19 @@ public static class SettingsLayoutArea
     /// Description from the node stream, invokes the <see cref="IIconGenerator"/>, and writes the
     /// resulting SVG straight back to the node's <see cref="MeshNode.Icon"/> — ONE source of truth.
     /// </summary>
-    private static void RegenerateIconFromNode(UiActionContext actx, string nodePath)
+    private static IObservable<System.Reactive.Unit> RegenerateIconFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IIconGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Regenerate Icon",
                 "Icon generator service is not registered. Call AddAgentChatServices().");
-            return;
+            return Observable.Return(System.Reactive.Unit.Default);
         }
-        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+        return actx.Host.Workspace.GetMeshNodeStream(nodePath)
             .Where(n => n is not null)
             .Take(1)
-            .Subscribe(node =>
+            .Do(node =>
             {
                 var name = node!.Name ?? "";
                 var description = node.Description;
@@ -789,7 +780,7 @@ public static class SettingsLayoutArea
                 generator.GenerateSvgAsync(name, description).Subscribe(
                     svg => WriteIcon(actx, nodePath, svg),
                     ex => ShowSettingsErrorDialog(actx, "Icon Generation Failed", ex.Message));
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>
@@ -797,19 +788,19 @@ public static class SettingsLayoutArea
     /// Name + Category from the node stream, invokes the <see cref="IDescriptionGenerator"/>, and
     /// writes the resulting text straight back to the node's <see cref="MeshNode.Description"/>.
     /// </summary>
-    private static void RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
+    private static IObservable<System.Reactive.Unit> RegenerateDescriptionFromNode(UiActionContext actx, string nodePath)
     {
         var generator = actx.Host.Hub.ServiceProvider.GetService<IDescriptionGenerator>();
         if (generator == null)
         {
             ShowSettingsErrorDialog(actx, "Generate Description",
                 "Description generator service is not registered. Call AddAgentChatServices().");
-            return;
+            return Observable.Return(System.Reactive.Unit.Default);
         }
-        actx.Host.Workspace.GetMeshNodeStream(nodePath)
+        return actx.Host.Workspace.GetMeshNodeStream(nodePath)
             .Where(n => n is not null)
             .Take(1)
-            .Subscribe(node =>
+            .Do(node =>
             {
                 var name = node!.Name ?? "";
                 var category = node.Category;
@@ -826,7 +817,7 @@ public static class SettingsLayoutArea
                             .GetService<ILoggerFactory>()?.CreateLogger(typeof(SettingsLayoutArea).FullName!)
                             .LogWarning(ex, "Description write failed for {Path}", nodePath)),
                     ex => ShowSettingsErrorDialog(actx, "Description Generation Failed", ex.Message));
-            });
+            }).Select(_ => System.Reactive.Unit.Default);
     }
 
     private static void WriteIcon(UiActionContext actx, string nodePath, string icon) =>

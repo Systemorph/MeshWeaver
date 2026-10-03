@@ -54,7 +54,7 @@ The organization's repository inventory, six current `ci.yml` callers and GitHub
 (`org:Systemorph node-repo-publish-bake filename:ci.yml`, six results, not incomplete) identify
 these active plugin publishers. All six already supply `PLATFORM_WEBHOOK_URL` and
 `PLATFORM_WEBHOOK_SECRET` to the shared lane; all six repository variables point at
-`https://memex.meshweaver.cloud/api/hooks/Hosting/PlatformBuilds`, and all six expose the secret's
+the plugin registry instance's `/api/hooks/Hosting/PlatformBuilds`, and all six expose the secret's
 metadata. The secret values were not read.
 
 | Repository | Audited main | Source / upstream sources | Shared lane ref |

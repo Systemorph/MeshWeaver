@@ -23,7 +23,7 @@ an `ErrorResponse` instead of wedging; the reply is correlated back to the sende
 ```typescript
 import { connect, Hub } from "@meshweaver/client";
 
-const conn = await connect("https://memex.meshweaver.cloud", { token: "mw_…", address: "node/counter" });
+const conn = await connect("https://portal.example.com", { token: "mw_…", address: "node/counter" });
 
 let count = 0;                                              // the state the handlers own
 new Hub(conn)
@@ -47,7 +47,7 @@ Activity node — so js/ts output surfaces identically to python and C#.
 ```bash
 cd clients/typescript
 npm install && npm run build
-node dist/worker.js --url https://memex.meshweaver.cloud --token mw_… --address node/node-kernel
+node dist/worker.js --url https://portal.example.com --token mw_… --address node/node-kernel
 node dist/worker.js --demo     # self-contained smoke test: execute a JS + a TS snippet
 ```
 

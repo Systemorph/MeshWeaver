@@ -251,11 +251,53 @@ internal static class NodeUpdatePipeline
             return existing;
         }
 
-        var typed = existing.Content.As(proposedType, options, logger, existing.Path);
+        // 🚨 ADMITTED IS NOT CLAIMED (#5736, #4597's surviving half). `Admits` lets discriminator-less
+        // JSON through because it contradicts nothing — but it CLAIMS nothing either, so when it then
+        // fails to bind, the seam has learned "these bytes are not a {proposed}", the same answer the
+        // refused branch above reports at Warning. Routing that answer through As's logger filed it at
+        // Error as "could not recover value: JsonException" — for a bare-string markdown body (a
+        // SANCTIONED shape: WithMarkdownContent keeps a string a string) and for the legacy
+        // `{"markdown": …}` key (#4600's Unreadable shape) alike, on the very update that REPLACES
+        // that content. Only content that NAMES the proposed record and still will not bind is
+        // corrupt, and that one keeps As's Error: the writer that stored it is the defect.
+        var claimsItsType = NamesItsOwnType(existing.Content);
+        var typed = existing.Content.As(
+            proposedType, options, claimsItsType ? logger : null, existing.Path);
+        if (typed is null && !claimsItsType)
+        {
+            logger?.LogWarning(
+                "Update of {Path} proposes content typed '{ProposedContentType}' while the stored "
+                + "content is {ExistingShape} carrying no $type that does not bind to that record. "
+                + "It never claimed to be one, so this is not a failed recovery: the stored "
+                + "snapshot is left as it is, and Update validators will see it untyped, so a "
+                + "typed comparison will skip. The update proceeds and replaces it.",
+                existing.Path, proposedType.Name, JsonShape(existing.Content));
+            return existing;
+        }
         return typed is null || ReferenceEquals(typed, existing.Content)
             ? existing
             : existing with { Content = typed };
     }
+
+    /// <summary>
+    /// Whether <paramref name="content"/> states its own record: a live CLR instance always does; JSON
+    /// only when it carries a string <c>$type</c>. Discriminator-less JSON makes no claim, so a failed
+    /// bind of it is an answer, not a fault (see <see cref="WithExistingContentTyped(MeshNode, MeshNode, JsonSerializerOptions, ILogger?)"/>).
+    /// </summary>
+    private static bool NamesItsOwnType(object content) => content switch
+    {
+        JsonElement je => Discriminator(je) != "<none>",
+        JsonNode jn => Discriminator(jn) != "<none>",
+        _ => true,
+    };
+
+    /// <summary>The JSON KIND of discriminator-less content, for the diagnostic — never its members or values.</summary>
+    private static string JsonShape(object content) => content switch
+    {
+        JsonElement je => $"a JSON {je.ValueKind.ToString().ToLowerInvariant()}",
+        JsonNode jn => $"a JSON {jn.GetValueKind().ToString().ToLowerInvariant()}",
+        _ => content.GetType().Name,
+    };
 
     /// <summary>
     /// How the stored content NAMES ITS OWN TYPE, for the diagnostic above — the CLR type and its

@@ -15,7 +15,7 @@ repository, against its own pin. Nobody ever ran the pair.**
 
 On 2026-09-03 that pair was core `e7f1d699` (08:05Z) with Plugins `12500c9` (13:31Z), tagged
 `memex-portal-ai:3.0.0-rc9.ci.7658`, and it answered **503 to every signed-in request** on
-memex.systemorph.com for twenty minutes. This page records the property, the timeline, why every
+the control instance for twenty minutes. This page records the property, the timeline, why every
 guard missed it, the runtime fix that shipped, and the delivery gap deliberately left open.
 
 ## 🚨 The one sentence
@@ -73,11 +73,11 @@ produced. A stricter pin does not close it; only executing the pair the image la
 | 11:05 | core #3206 merges: the sign-in reads are anchored (`OnboardingMiddleware.LoadUserRoles` asks three anchored questions instead of one unanchored `nodeType:AccessAssignment content.accessObject:"<user>" scope:subtree`). |
 | 11:45 | Plugins #1263 merges: `PostgreSqlPartitionedMeshQuery` REFUSES an unanchored query unless its shape is on the shrink-only grace list `unanchored-queries.allow` — and the sign-in shape is not on it, because core had just anchored it. |
 | 13:31 | Plugins `12500c9` (#1252) is the Plugins main when run #7658's `gate` resolves it. The image `e7f1d699-p12500c9` = `ci.7658` is built, promoted, verified. |
-| 13:32 | memex's self-updater patches the deployment to `ci.7658`. `DbVersionGate` refuses — `db_version=54 < expected 55` — and the new pods crash-loop while the old `ci.7632` pods keep serving. Invisible from the front door: the URL answers 200 the whole time (see [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall)). |
+| 13:32 | The control instance's self-updater patches the deployment to `ci.7658`. `DbVersionGate` refuses — `db_version=54 < expected 55` — and the new pods crash-loop while the old `ci.7632` pods keep serving. Invisible from the front door: the URL answers 200 the whole time (see [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall)). |
 | 13:32–17:00 | Every refused boot dies as an unhandled `OperationCanceledException` → SIGABRT → a 666 MB `createdump`; 45 of them exceed the 30 Gi `memex-dumps` emptyDir and evict a pod (Plugins #1290 turns that into a clean exit 1). |
 | 17:00 | Another session runs the migration by hand (`memex-migration-v55-manual`, the helm Job template with the new tag). `Database migration completed. Version: 55` at 17:06. |
 | 17:02 | The 7658 pods pass the gate; the rollout scales the 7632 ReplicaSet to zero. From this second every signed-in request faults in `LoadUserRoles` with `UnanchoredQueryException` and the middleware answers 503 "This is a temporary problem on our side" (issue #637's designed answer for an *infrastructure* fault). The Store dies on `nodeType:PluginCatalog`; GitHub sync, instance sync, notifications, outbound mail, model-credit and free-text search fault the same way. Loki, over the six hours ending 18:34Z: **156 refusals** on the two pods that served (100 + 56), plus 32 more on the pod evicted earlier — and **18 identity 503s attributable to this cause** (4 + 14). |
-| 17:05 | Reported: "memex.systemorph.com is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
+| 17:05 | Reported: "the control instance is completely down". Anonymous `curl` of `/`, `/Doc`, `/healthz` all answer 200 — the shell renders; only the signed-in read fails. |
 | 17:20 | `kubectl set image` to `ci.7693` (core `e36f04c`, which contains #3206, with Plugins `2d32a175`). The surge pod stays `Pending`: every silos node is CPU-full, the pool is at its maximum, and the old 7632 pod is holding a node in `Terminating` at 3.5 cores. It is NOT wedged — it is draining its Blazor circuits under the chart's `preStop` hook, which blocks for up to 28 minutes and is why the pod still looks busy (see *Recorded, not fixed*). It is force-deleted, which cuts those sessions short deliberately; it was already out of the Service, and the surge pod schedules within seconds. |
 | 17:22:56 | Rollout complete. Zero refusals, zero 503s on the new pods. |
 
@@ -160,8 +160,8 @@ was declined, not the mechanism.
 ## Reading the signals next time
 
 ```
-kubectl logs <pod> -n memex -c memex-portal --since=20m | grep -c 'UNAVAILABLE for'
-kubectl logs <pod> -n memex -c memex-portal --since=20m | grep -oE "no partition could be determined from '[^']{0,100}" | sort | uniq -c
+kubectl logs <pod> -n <namespace> -c memex-portal --since=20m | grep -c 'UNAVAILABLE for'
+kubectl logs <pod> -n <namespace> -c memex-portal --since=20m | grep -oE "no partition could be determined from '[^']{0,100}" | sort | uniq -c
 az acr manifest list-metadata -r meshweaver -n memex-portal-ai --orderby time_desc --top 30 -o json   # tags read <core>-p<plugins>
 git merge-base --is-ancestor <fix sha> <core half>                                                     # is the fix in this image's half?
 ```
@@ -197,7 +197,7 @@ git merge-base --is-ancestor <fix sha> <core half>                              
   is unremarkable in every particular — `ready=true`, ordinary application work in the log, zero
   shutdown-shaped lines in 25 minutes, and high CPU — because *nothing had asked it to stop yet*.
   Its sibling on the same image sat at 238 m simply because it held fewer circuits. The chart's own
-  comment already records an earlier round of exactly this confusion (memex, 2026-08-21: "a
+  comment already records an earlier round of exactly this confusion (the control instance, 2026-08-21: "a
   terminating pod still executing application code 68 s before the ceiling").
 
   **What the CPU number is actually worth keeping for:** 5,705 m and 13 GB is the *pre-anchoring

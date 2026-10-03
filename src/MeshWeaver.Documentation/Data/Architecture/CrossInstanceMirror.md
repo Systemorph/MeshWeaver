@@ -6,7 +6,7 @@ order: 30
 
 # Cross-Instance Mirror
 
-Move a subtree of MeshNodes from one running MeshWeaver instance to another — no ZIP exports, no file uploads, no per-node back-and-forth. The most common use is **pushing from local dev to prod** so content you authored in `memex-local` appears at `https://memex.meshweaver.cloud` in a single command.
+Move a subtree of MeshNodes from one running MeshWeaver instance to another — no ZIP exports, no file uploads, no per-node back-and-forth. The most common use is **pushing from local dev to prod** so content you authored in `memex-local` appears at `https://portal.example.com` in a single command.
 
 > ⚠️ **Status: NOT WIRED END-TO-END. The mesh hub has no handler for `MirrorRequest`** — verified: nothing in `src/` or `memex/` registers one, and the `AddMirrorHandler` that several code comments point at does not exist. The contract (`MirrorRequest`/`MirrorResult` in `src/MeshWeaver.Mesh.Contract/Services/IMirrorOperations.cs`), the `mirror` MCP tool, the `POST /api/mesh/mirror` endpoint, the import-dialog caller, and the HTTP transport are all in place, but a posted `MirrorRequest` gets no response — the tool falls into its error branch and the REST endpoint answers *"No response from mirror handler"*. **Everything below the "What it does" heading is the intended contract, not observed behaviour.**
 
@@ -32,7 +32,7 @@ Move a subtree of MeshNodes from one running MeshWeaver instance to another — 
   <text x="120" y="195" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">mirror (pull)</text>
   <rect x="550" y="60" width="180" height="180" rx="12" fill="#1b5e20" opacity="0.9"/>
   <text x="640" y="92" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">Prod Portal</text>
-  <text x="640" y="112" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">memex.meshweaver.cloud</text>
+  <text x="640" y="112" font-family="sans-serif" font-size="11" fill="#a5d6a7" text-anchor="middle">portal.example.com</text>
   <rect x="575" y="130" width="130" height="32" rx="8" fill="#43a047"/>
   <text x="640" y="151" font-family="sans-serif" font-size="11" fill="#fff" text-anchor="middle">Node import (upsert)</text>
   <rect x="575" y="174" width="130" height="32" rx="8" fill="#43a047"/>
@@ -55,7 +55,7 @@ The preferred way to authenticate is a **named remote profile** in the host conf
 ```json
 "Mirror": {
   "Remotes": {
-    "prod": { "BaseUrl": "https://memex.meshweaver.cloud", "Token": "mw_…" }
+    "prod": { "BaseUrl": "https://portal.example.com", "Token": "mw_…" }
   }
 }
 ```
@@ -74,8 +74,8 @@ The tool initiates outbound HTTPS from the side it runs on, in both directions. 
 
 | You want to … | Run the tool on | Initiates outbound to | Works without a tunnel? |
 |---|---|---|---|
-| Push local → prod | `mcp__memex-local__mirror` (`direction=push`) | `https://memex.meshweaver.cloud` | ✅ public HTTPS |
-| Pull prod → local | `mcp__memex-local__mirror` (`direction=pull`) | `https://memex.meshweaver.cloud` | ✅ public HTTPS (local pulls in) |
+| Push local → prod | `mcp__memex-local__mirror` (`direction=push`) | `https://portal.example.com` | ✅ public HTTPS |
+| Pull prod → local | `mcp__memex-local__mirror` (`direction=pull`) | `https://portal.example.com` | ✅ public HTTPS (local pulls in) |
 | Push prod → local | (run on prod) `mirror direction=push` | localhost | ❌ prod can't reach localhost |
 | Pull local → prod | (run on prod) `mirror direction=pull` | localhost | ❌ same |
 
@@ -85,7 +85,7 @@ For the third and fourth cases, expose your local instance with a Cloudflare tun
 
 ### 1. Issue an ApiToken on the **destination** portal
 
-Open the destination portal (e.g. `https://memex.meshweaver.cloud`), log in as the user the import should run as, and:
+Open the destination portal (e.g. `https://portal.example.com`), log in as the user the import should run as, and:
 
 - Navigate to **Settings → API Tokens** (or `/me/Settings/ApiTokens`).
 - Click **Create token**, name it (e.g. `mirror-from-local-2026-05`), scope it to the user, and **copy** the `mw_…` value.
@@ -157,7 +157,7 @@ Example response:
 mcp__memex-prod__search query="namespace:rbuergi/Story scope:subtree"
 ```
 
-This should return the four nodes. You can also open `https://memex.meshweaver.cloud/rbuergi/Story/KernelTour` directly in a browser.
+This should return the four nodes. You can also open `https://portal.example.com/rbuergi/Story/KernelTour` directly in a browser.
 
 ## Pulling from a remote into local
 

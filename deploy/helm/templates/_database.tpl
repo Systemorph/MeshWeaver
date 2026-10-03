@@ -41,7 +41,7 @@
    connection`), mounted by a CSI SecretProviderClass whose synced Secret OUTRANKS the chart's own
    Secret in `envFrom`. Its values carry NO connection string, so "derive the host from the values'
    connection string" derived it from the chart's in-cluster DEFAULT, `Host=memex-postgres-service`,
-   a Service a `postgres.enabled: false` release does not render. Measured on pearl, 2026-09-15
+   a Service a `postgres.enabled: false` release does not render. Measured on fabrikam, 2026-09-15
    10:15–10:30Z (chart 0a45bccfc, the first provision after #4173): the migration Job and the portal
    both looped `waiting for postgres at memex-postgres-service:5432` / `nc: bad address
    'memex-postgres-service'` forever — while the record HAD rendered the right server into
@@ -208,7 +208,7 @@
 {{- /* The MESH endpoint the half's gate waits for, as a host group — see the Key Vault case in the
        header. The in-cluster Service is named ONLY when `postgres.enabled` renders it: on an
        external database a probe of `memex-postgres-service` can never succeed and never fail, it
-       just spins (pearl, 2026-09-15). */ -}}
+       just spins (fabrikam, 2026-09-15). */ -}}
 {{- define "memex.meshProbeGroup" -}}
 {{- $secrets := index .root.Values.secrets .half | default dict -}}
 {{- if or .root.Values.postgres.enabled $secrets.ConnectionStrings__memex (include "memex.dbRelease" .) -}}
@@ -217,7 +217,7 @@
 {{- $config := index .root.Values.config .half | default dict -}}
 {{- $host := trim (toString ($config.MEMEX_HOST | default "")) -}}
 {{- if or (not $host) (eq $host "memex-postgres-service") -}}
-{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but names no external database host: secrets.%s.ConnectionStrings__memex is not in values (the Key Vault case — the string arrives through a CSI SecretProviderClass) and config.%s.MEMEX_HOST is %s. The only host left would be the chart's in-cluster default memex-postgres-service, a Service this release does not render, and wait-for-postgres would spin on it forever (pearl, 2026-09-15). Set config.%s.MEMEX_HOST (the record renders it from databaseServer/databaseHost) or supply the connection string in values. The same refusal as MeshWeaver#3780: never invent a database host." .half .half .half (ternary "blank" "still the in-cluster default memex-postgres-service" (not $host)) .half) -}}
+{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but names no external database host: secrets.%s.ConnectionStrings__memex is not in values (the Key Vault case — the string arrives through a CSI SecretProviderClass) and config.%s.MEMEX_HOST is %s. The only host left would be the chart's in-cluster default memex-postgres-service, a Service this release does not render, and wait-for-postgres would spin on it forever (fabrikam, 2026-09-15). Set config.%s.MEMEX_HOST (the record renders it from databaseServer/databaseHost) or supply the connection string in values. The same refusal as MeshWeaver#3780: never invent a database host." .half .half .half (ternary "blank" "still the in-cluster default memex-postgres-service" (not $host)) .half) -}}
 {{- end -}}
 {{- printf "%s:%s" $host (trim (toString ($config.MEMEX_PORT | default "5432"))) -}}
 {{- end -}}
@@ -247,7 +247,7 @@
 {{- range $group := $targets -}}
 {{- range $h := splitList "," (regexReplaceAll ":[0-9]+$" $group "") -}}
 {{- if eq (trim $h) "memex-postgres-service" -}}
-{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but a connection string in values names the in-cluster Service memex-postgres-service, which this release does not render. wait-for-postgres would spin on it forever (pearl, 2026-09-15) and the process would die on it. Point secrets.%s.ConnectionStrings__memex (and __orleans) at the external server, or drop the values string and set config.%s.MEMEX_HOST. The same refusal as MeshWeaver#3780: never wait for a host nobody runs." $half $half $half) -}}
+{{- fail (printf "memex.dbProbeTargets: '%s' runs on an EXTERNAL database (postgres.enabled is false) but a connection string in values names the in-cluster Service memex-postgres-service, which this release does not render. wait-for-postgres would spin on it forever (fabrikam, 2026-09-15) and the process would die on it. Point secrets.%s.ConnectionStrings__memex (and __orleans) at the external server, or drop the values string and set config.%s.MEMEX_HOST. The same refusal as MeshWeaver#3780: never wait for a host nobody runs." $half $half $half) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

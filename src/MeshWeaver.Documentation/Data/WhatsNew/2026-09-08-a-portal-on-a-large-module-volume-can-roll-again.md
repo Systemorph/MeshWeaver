@@ -8,12 +8,12 @@ Order: -20260908
 
 # A portal on a large module volume can roll again
 
-On 2026-09-08 memex.meshweaver.cloud could not complete a rollout, and could not add a pod when
+On 2026-09-08 the public instance could not complete a rollout, and could not add a pod when
 load rose: every new pod failed its startup probe, while the two old pods kept serving. The
-migration had completed, the image was fine, and the same image was healthy on memex.systemorph.com.
+migration had completed, the image was fine, and the same image was healthy on the control instance.
 
 The difference was the shared module volume. Under `modules/sets` the portal keeps one small record
-per module-set proposal and adoption, and memex-cloud's volume had accumulated 687 of them, beside
+per module-set proposal and adoption, and the public instance's volume had accumulated 687 of them, beside
 843 superseded module generations that a separate fault had kept the garbage collector from
 removing. The reader that answers "which set does the mesh run" opened every one of those records
 on every call — ten seconds on Azure Files — and a health check asks it on every startup probe,

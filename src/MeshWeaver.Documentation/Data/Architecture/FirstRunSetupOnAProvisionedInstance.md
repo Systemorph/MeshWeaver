@@ -5,15 +5,17 @@ Abstract: >
   first-run wizard does not appear (it keys on "no storage"), the onboarding gate's first-user
   promotion does not fire (it keys on "no admin grant"), and the only remaining door is an
   undocumented endpoint whose secret nobody set. This page is the measurement of that gap on
-  pearl.meshweaver.cloud, and the design that closes it. A provisioned instance now starts at
+  an SME client instance, and the design that closes it. A provisioned instance now starts at
   sign-in and its first human to onboard becomes platform admin (policy
-  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421).
+  `first-sign-in-becomes-admin`, MeshWeaver.Plugins#2421). The grant that blocked it was measured on
+  2026-09-27: the image's own `Auth:GlobalAdmins: ["rbuergi"]`, seeded statically on every instance
+  (MeshWeaver.Plugins#2430, #2431).
 Thumbnail: "sitemap"
 ---
 
 # First-run setup on a PROVISIONED instance
 
-**The symptom, 2026-09-16.** `pearl.meshweaver.cloud` came up healthy, over its own certificate,
+**The symptom, 2026-09-16.** An SME client instance (`fabrikam.example.com`) came up healthy, over its own certificate,
 with `Features:Onboarding:InvitationOnly = true`. The maintainer signed in and was told the portal
 is invitation-only. Correct, and useless: *"first user should become global admin, otherwise who is
 going to attend"*. An instance nobody can administer is not provisioned, whatever the rollout says.
@@ -23,10 +25,10 @@ going to attend"*. An instance nobody can administer is not provisioned, whateve
 Three mechanisms exist. Each is sound, and each keys on a condition a provisioned instance does not
 meet.
 
-| Mechanism | Fires when | Why pearl missed it |
+| Mechanism | Fires when | Why the SME client instance missed it |
 |---|---|---|
 | The first-run **wizard** (`ISetupCatalogProvider`, `PortalSetupCatalogProvider`) — storage, sign-in, models | `MeshBuilder.IsAwaitingSetup`: no `Graph:Storage` configuration **and** no complete `instance.json` | A provisioned instance is configured by its ConfigMap, rendered from its `Hosting/Deployment` record. It has storage, so it is never awaiting setup. The wizard is for an empty image an operator installs on purpose |
-| **First-user promotion** (`OnboardingGate.Decide`) — the first visitor is admitted and made platform admin | No `AccessAssignment` under `Admin/_Access` | pearl's refusal *is* the evidence that a grant already exists there: with none, `isFirstUser` is true and the visitor is admitted even on an invitation-only portal. Whose grant it is, is not established here — but the design must not depend on that probe being empty |
+| **First-user promotion** (`OnboardingGate.Decide`) — the first visitor is admitted and made platform admin | **Since MeshWeaver.Plugins#2430:** no HUMAN administrator (`AdministratorProbeService.HasHumanAdministrator`): no undenied `Admin` grant in `Admin/_Access` whose holder is a non-platform identity with an Active `User` node, read as System. *On 2026-09-16, when the SME client instance failed:* no `AccessAssignment` at all under `Admin/_Access` | That instance's refusal *is* the evidence that a grant already exists there: with none, `isFirstUser` is true and the visitor is admitted even on an invitation-only portal. **Whose grant it was is now measured (2026-09-27, see below):** the IMAGE's own seed, `Admin/_Access/rbuergi_Access`, for a person who had not yet onboarded |
 | **`/bootstrap/first-admin`** (`BootstrapController`) — secret-gated, materialises the first admin | `Bootstrap:Secret` is configured | Provisioning never sets it. The endpoint answers `404` when unset — correct, and indistinguishable from "no such endpoint" |
 
 So the gap is not a missing mechanism. It is that **"configured" and "administered" are different
@@ -37,7 +39,7 @@ human in it.
 
 **Policy `first-sign-in-becomes-admin`** (`Doc/Architecture/PolicyNotProse`) — it supersedes "The
 rule" below for a provisioned instance. The maintainer, on
-`control.systemorph.com` (provisioned healthy, and every visitor sent to a `/setup` whose link
+the control instance (provisioned healthy, and every visitor sent to a `/setup` whose link
 nothing had minted): *"this must work after new deploy. must log in first user then take him as
 admin"*, *"setup login from start"*. As built in MeshWeaver.Plugins#2421:
 
@@ -45,21 +47,68 @@ admin"*, *"setup login from start"*. As built in MeshWeaver.Plugins#2421:
   (`SetupEntry.SignIn` → `/login`), not to `/setup`. A signed-in visitor carries on. `/setup/{link}`
   still works for a link that was actually minted; it is no longer where everybody is sent.
 - **Promotion.** The first person to complete onboarding is made platform admin by
-  `OnboardingGate` — the bootstrap rule every instance already had, which also bypasses
-  invitation-only for exactly that person. What changed is the question it asks: **is there a grant
-  held by someone other than `System`, `Anonymous` or `Public`?**
-  (`AdministratorProbeService.AnyNonPlatformGrant`), over the **unbounded System read** of
-  `Admin/_Access`. Before, it asked "is there any grant at all", and a platform identity's grant
-  switched the promotion off on an instance nobody administered (pearl, 2026-09-16). A grant whose
-  holder cannot be read still counts, so the unreadable case fails closed.
-- **Why it is still the System read.** The entry probe (`HasHumanAdministrator`) reads as the
-  VISITOR. A visitor who cannot read `Admin` sees no grants, and using that answer to promote would
-  make every sign-up the first user: the 43-root-superuser shape (#743). Onboarding keeps its own
-  System read and applies only the new holder rule to it.
+  `OnboardingGate`, the bootstrap rule every instance already had, which also bypasses
+  invitation-only for exactly that person. The question it asks is **is there a HUMAN
+  administrator?**, and there is ONE function that answers it:
+  `AdministratorProbeService.HasHumanAdministrator` (MeshWeaver.Plugins
+  `src/Memex.Portal.Gui/Setup/`, #2430). A human administrator is an undenied `Admin` grant in
+  `Admin/_Access` whose holder is (a) not `System`, `Anonymous` or `Public` **and** (b) has an
+  **Active mesh `User` node**. In other words, somebody has actually signed in and onboarded as that
+  holder.
+- **One rule, every gate.** The onboarding page load and the onboarding submit both reach the rule
+  through `OnboardingAdmissions.Read`, which is also the one write chain (`OnboardingAdmissions.Complete`).
+  The entry page asks the same function. Core's `OnboardingMiddleware` makes no admission decision,
+  and `/bootstrap/first-admin` is secret-gated, so neither holds a copy.
+- **It reads as System, both halves.** Each query is BUILT inside its own `RunAsSystem`.
+  `workspace.GetQuery` binds identity and RLS when it is called, and the User-node query is issued
+  inside `SelectMany`, after the grants' scope has closed. A visitor who may not read `Admin` sees no
+  grants, and promoting on that answer would make every sign-up the first user (the
+  43-root-superuser shape, #743). As a visitor, `nodeType:User` is pinned to the `Auth` mirror they
+  cannot read and answers 0. **It fails closed:** a timeout, a fault, no snapshot or an untyped
+  grant all answer "administered".
+
+### Measured root cause (2026-09-27): the image seeded the administrator
+
+The control instance was reset on 2026-09-27: its database was dropped, re-created and provisioned
+fresh on `memex-control:3.0.0-ci.9445`, which already contained #2421. The entry page correctly sent
+the maintainer to sign-in, and onboarding still answered "invitation-only, not invited". The grant it
+counted was **not in the database at all**:
+
+- The control image, like the portal image, is MeshWeaver.Plugins `src/Memex.Portal.Distributed`.
+  Its shipped `appsettings.json` carried `"Auth": { "GlobalAdmins": [ "rbuergi" ] }` (since
+  2026-08-25).
+- `memex/Memex.Portal.Shared/MemexConfiguration.cs` → `AddMeshNodes(GlobalAdminSeed.Build(configuration))`.
+  `GlobalAdminSeed` turns every configured id into a **static** `Admin/_Access/{id}_Access`, on every
+  instance, at every start, empty database or not.
+- #2421's `AnyNonPlatformGrant` counted any holder that is not a platform identity. `rbuergi` is
+  not, so the first-person override was off. Invitation-only then refused the very person that grant
+  names, because nobody had yet onboarded as `rbuergi`.
+
+The same shape is visible, read-only, on the public instance, the company working instance and the enterprise client's instance:
+`Admin/_Access/rbuergi_Access` with no version and no lastModified, which is the static node's
+signature. The SME client instance's 2026-09-16 refusal is the same mechanism.
+
+Proof by test, not by assertion: `FirstPersonBecomesAdminOnAFreshInstanceTest` (MeshWeaver.Plugins
+`src/Memex.Portal.Gui.Test`) boots a mesh with row-level security on an empty store. It seeds
+exactly what the image's shipped `appsettings.json` seeds, plus a record-seeded holder and a
+`system-security` grant, and drives the gate the page runs.
+- Six of its seven cases fail under #2421's rule. The first failure is "the first person … must be
+  admitted".
+- All seven pass under the human-administrator rule.
+
+The seed itself goes in MeshWeaver.Plugins#2431, a draft. The image then seeds no administrator; an
+instance that wants a configured one declares `Auth__GlobalAdmins__N` on its own record and overlay.
+That PR is a draft because on some instances the static seed may be the maintainer's only
+platform-admin grant.
+
+**What the rule does NOT change.** A grant seeded for a person counts **from the moment that person
+has onboarded**. Existing non-admin users never switch the bootstrap off. Two people completing
+onboarding in the same instant can both read "no human administrator"; that race predates this
+rule and is not closed by it.
 
 **The condition this rests on. It is the reason the older rule below said "arriving first is not a
 credential".** "First" now means *the first person the instance's sign-in admits*. On the
-**enterprise target** (Systemorph/Memex `docs/enterprise-target-architecture.md`: the client's own estate)
+**enterprise target** (the client's own estate — see "Where an estate's instances are declared" in [Instances](../Instances))
 sign-in is the client's **single-tenant** Entra application, so the first person through the door
 is someone in that organisation's directory. On an instance whose sign-in admits the public
 (Google, LinkedIn, a multi-tenant Microsoft app), the same rule would hand the instance to whoever
@@ -136,7 +185,7 @@ Maintainer, 2026-09-16: *"and we hand it out and admin the subs"*.
 | Who runs the wizard | **Systemorph.** We choose the sign-in provider, enter the model keys, select the plugins | the client's own people — the estate, the directory and the subscription are theirs |
 | What the client receives | a portal that already works, and **nothing in Azure**: no subscription role, no cluster, no vault | their own estate, which they may administer |
 | Who administers the instance | **the client's person, named during setup** | whoever they name, usually themselves |
-| The setup link | never leaves Systemorph: minted at Provision, read out of the vault by memex, used minutes later from the maintainer's machine ⇒ default lifetime **4 hours** | has to reach another organisation ⇒ longer, still bounded (3 days) |
+| The setup link | never leaves Systemorph: minted at Provision, read out of the vault by the control instance, used minutes later from the maintainer's machine ⇒ default lifetime **4 hours** | has to reach another organisation ⇒ longer, still bounded (3 days) |
 
 So **the wizard must be able to name an administrator who is not the person completing it.** A flow
 that can only crown the current session is wrong for the tier we actually operate. The named person
@@ -152,26 +201,35 @@ nobody can describe is a hand-over that comes back as a support question.
 ## What is hard-coded today, and where each key should live
 
 Maintainer: *"essentially everything you have now hard-coded in the config, e.g. that msft login is
-being used. ⇒ unhardcode and get through wizard."* Measured on `mesh/Deployments/pearl.json` and its
+being used. ⇒ unhardcode and get through wizard."* Measured on the SME client's record (`mesh/Deployments/fabrikam.json`) and its
 overlay, 2026-09-16:
 
 | Key, as it appears today | Today | Should be |
 |---|---|---|
 | `signIn.provider` = `Custom`, `signIn.microsoftClientId` | record | **wizard**, record for an instance we pre-configure. Which provider a client signs in with is theirs, not a line in our file |
-| `Authentication__Microsoft__ClientSecret` → `pearl-Authentication-Microsoft-ClientSecret` | vault object, named on the record | **wizard → vault.** The name stays derived, so a collected value lands where a provisioned one would |
+| `Authentication__Microsoft__ClientSecret` → `fabrikam-Authentication-Microsoft-ClientSecret` | vault object, named on the record | **wizard → vault.** The name stays derived, so a collected value lands where a provisioned one would |
 | `email.enabled` = `false` | record | **wizard.** Without mail an invitation-only instance cannot admit anybody |
-| model/LLM providers and keys (`pearl-OpenRouter-ApiKey`, never created) | nothing — the record deliberately states none | **wizard → vault** |
-| `pluginRepos[]` (one mount, `Plugins` → memex.meshweaver.cloud) | record | **both.** The wizard offers the catalog and can ADD a mount; the record keeps what a pre-configured instance ships with |
+| model/LLM providers and keys (`fabrikam-OpenRouter-ApiKey`, never created) | nothing — the record deliberately states none | **wizard → vault** |
+| `pluginRepos[]` (one mount, `Plugins` → the plugin registry instance) | record | **both.** The wizard offers the catalog and can ADD a mount; the record keeps what a pre-configured instance ships with |
 | `preInstall` = `["Essentials"]` | record | **both**, with the manifest's `preInstalled` flag shown for what it is (below) |
-| `ConnectionStrings__memex` → `pearl-db-connection` | vault object, operator-written | **record + platform.** On SME the database is ours: provided, never asked |
+| `ConnectionStrings__memex` → `fabrikam-db-connection` | vault object, operator-written | **record + platform.** On SME the database is ours: provided, never asked |
 | `Ai__KeyProtection__MasterKey` | vault object, operator-written, never regenerated | **platform.** It seals the instance's stored values; a wizard must not offer to change it |
-| `PluginCatalog__RegistryToken` | vault object, operator-written | **platform** |
+| `PluginCatalog__RegistryToken` | vault object, operator-written when the deployment consumes a plugin registry or image pull Secret | **platform** |
 | `Features__Onboarding__InvitationOnly`, `Hosting__Deployment`, `Hosting__ReportTo`, `PreWarm__*` | record | **record.** Fleet decisions about how the instance is operated, not about the client |
 
 The rule behind the table: **what the client's world answers goes in the wizard; what the fleet
 decides about operating the instance stays on the record; what the estate supplies is platform.** An
 instance that states none of the wizard half must be fully configurable through the wizard rather
 than refusing to start; an instance we pre-configure keeps stating them.
+
+The registry token is **not a prerequisite for every deployment**. Provision requires it when the
+record maps `PluginCatalog__RegistryToken` (or its per-registry token key), when Provision registers
+the instance at a consumer registry, or when an `imagePullSecret` will be written from it. The plan
+passes the mapped vault and object to the operator, so the check is for the same object the pod
+mounts. A record with no such mapping, no registry consumer and no pull Secret explicitly skips the
+check; direct legacy calls to `hosting-kv-ensure` still require the conventional object unless they
+opt out. This is why a catalog-less control record can provision without a key the portal does not
+mount.
 
 ## Which requirements are asked, by tier
 
@@ -199,7 +257,7 @@ wizard shows which, because a field whose source is invisible is a field somebod
 | **Registry** | issued when the instance registers at the plugin registry | read-only: a typed value boots an instance nothing trusts |
 | **Setup** | the client provides it | the field they fill, written to their vault through the control instance |
 
-Measured on PartnerRe's live instance, 2026-09-18 — vault `memexaks-kv-i6gzgik26ydg`, prefix
+Measured on the enterprise client's live instance, 2026-09-18 — vault `<vault>`, prefix
 `memex-`:
 
 - **From the repository**, created by the estate's pipeline: `memex-db-connection`,
@@ -215,7 +273,7 @@ and shorter to ask about; the tier still drives what is a question at all.
 
 ### Two things the wizard must not repeat
 
-🚨 **A config key declared TWICE is an outage.** PartnerRe's values carried
+🚨 **A config key declared TWICE is an outage.** The enterprise client's values carried
 `Authentication__Microsoft__ClientSecret: ""` beside the vault mapping for the same key. The empty
 one won: the sign-in handler threw on every request and the portal went down (2026-09-18). So a value
 whose source is GitHub shows the ONE source that wins, and the platform must not render a second
@@ -232,16 +290,16 @@ name nobody can check.
 Measured 2026-09-18. Both must be expressible in ONE dialog; the tier is what decides which pages
 exist at all.
 
-| | **PartnerRe** — enterprise | **Pearl** — SME |
+| | **Enterprise client** (`globex`) | **SME client** (`fabrikam`) |
 |---|---|---|
-| Estate | its own: tenant `e51e062f`, subscription, cluster, vault `memexaks-kv-i6gzgik26ydg` (prefix `memex-`), registry, GitHub App | none — hosted on our shared cluster, vault `Systemorph`, prefix `pearl-` |
-| Configuration lives in | `Systemorph/PartnerRe.Memex` → `deployments/aks/memex/values.memex.yaml` | the mesh record `Deployments/pearl` |
+| Estate | its own: tenant `<tenant-id>`, subscription, cluster, vault `<vault>` (prefix `memex-`), registry, GitHub App | none — hosted on our shared cluster, our shared vault, prefix `fabrikam-` |
+| Configuration lives in | `<client-deployments-repo>` → `deployments/aks/<env>/values.<release>.yaml` | the mesh record `Deployments/fabrikam` |
 | So "already provided" means | *declared in the client's repository* | *set on the deployment record* — 🚨 an SME client has no repository to be pointed at |
 | Provided (greyed, with vault object) | the two connections, `Ai__KeyProtection__MasterKey`, `Bootstrap__Secret`, `Hosting__PlatformWebhookSecret`, `PluginCatalog__RegistryToken`, `AzureFoundry__ApiKey`, `Anthropic__ApiKey`, `Authentication__Microsoft__ClientSecret`; sign-in client id, tenant, host, registries | `ConnectionStrings__memex`, `Ai__KeyProtection__MasterKey`, `Authentication__Microsoft__ClientSecret`, `PluginCatalog__RegistryToken`; sign-in client id; the `Plugins` mount |
-| Asked | the mail app (no `email` block exists there today, so invitations are undeliverable), any model key they bring | the OpenRouter key → `pearl-OpenRouter-ApiKey`, and mail |
+| Asked | the mail app (no `email` block exists there today, so invitations are undeliverable), any model key they bring | the OpenRouter key → `fabrikam-OpenRouter-ApiKey`, and mail |
 | Platform-provided, **no page at all** | — (its estate is its own) | database, storage, registry, certificates, DNS |
 
-**One vault object behind several keys is ONE field.** PartnerRe's registry token answers
+**One vault object behind several keys is ONE field.** The enterprise client's registry token answers
 `PluginCatalog__RegistryToken` and two indexed `Registries__N__Token` keys; its Foundry key also
 answers `Embedding__ApiKey`. Rendering one field per key invites three different answers, which is
 the double-declaration hazard wearing another hat.
@@ -253,7 +311,7 @@ still invites *"why can I see this"*; the rule is that the database is fixed the
 
 ### Completion is what closes the window
 
-🚨 An instance nobody can administer has to be OPEN for the first person to get in. PartnerRe runs
+🚨 An instance nobody can administer has to be OPEN for the first person to get in. The enterprise client's instance runs
 with `Features__Onboarding__InvitationOnly: "false"` today — a hole held open by hand. So the flow is:
 the setup link → the first authenticated user becomes global administrator → **completion switches
 onboarding back to invitation-only**. Not a note for somebody to remember: a window closed by the
@@ -262,7 +320,7 @@ the very invitation that carries the instance to its new administrator.
 
 ### The invite page may not appear to send
 
-Pearl's `email.enabled` is `false` deliberately — its overlay had borrowed the public instance's mail
+The SME client instance's `email.enabled` is `false` deliberately — its overlay had borrowed the public instance's mail
 app, and a customer portal must not send through that. Until the instance has a mail registration of
 its own, an invitation is **recorded and not delivered**, and the page says so rather than reporting
 a send that did not happen.
@@ -284,8 +342,8 @@ sends somebody to create an object that exists, and "exists" hides the very row 
 Missing rows sort first and say what a deploy would otherwise say: a declared-but-absent object fails
 the whole CSI mount, every new pod pending, so it is created **before** the deploy.
 
-The measured case: PartnerRe's record mapped `GitHub__App__PrivateKey → memex-GitHub-App-PrivateKey`
-until 2026-09-20, an object that never existed in `memexaks-kv-i6gzgik26ydg`, and nothing surfaced it
+The measured case: the enterprise client's record mapped `GitHub__App__PrivateKey → memex-GitHub-App-PrivateKey`
+until 2026-09-20, an object that never existed in its vault, and nothing surfaced it
 until a deploy tripped over it.
 
 ### The first administrator learns nothing here
@@ -318,7 +376,7 @@ to install, and lets them add further registry mounts — the record's `pluginRe
 not a second one invented.
 
 **`preInstalled: true` is respected and shown, never silently overridden.** A package whose manifest
-carries it installs itself whatever anyone ticks. That flag is how pearl came up with
+carries it installs itself whatever anyone ticks. That flag is how the SME client instance came up with
 `GoogleMaps/Gallery` and `MyAi/Panel` — content whose store-delivered module never arrived — and
 therefore with two NodeTypes it could not compile, a readiness gate that refused, and a 503 at the
 edge. So such a package appears as **always installed** rather than as an unticked box that installs
@@ -342,7 +400,7 @@ fills.
 - **Selection and satisfaction are separate states.** A selected plugin whose configuration is
   incomplete is visible as such — installed-but-unconfigured — in the **health surface's own
   vocabulary** (`required_modules`, the bake gate), not a second one. This is the one rule that
-  keeps the wizard from rebuilding pearl's shape: a requirement nothing could satisfy, reported
+  keeps the wizard from rebuilding that instance's shape: a requirement nothing could satisfy, reported
   Degraded from first boot, with a 503 at the edge and no explanation.
 - **"Create it for me", where we legitimately can.** On the SME tier the instance runs inside
   Systemorph's estate, so the control instance can provision such a resource through the existing
@@ -385,17 +443,17 @@ find and an instance that still does not work.
 
 🚨 **The prerequisite is a write grant — and the obvious way to give it is wrong.** The control
 instance writes with the identity its pod runs as, and that identity is *not* the control
-instance's. Measured 2026-09-16 on `memexaks-portal-mi` (subscription 7ecc5974, resource group
-memex-aks-rg): one managed identity carries **five** federated credentials —
-`system:serviceaccount:{atioz,memex,memex-cloud,build,pearl}:memex-portal-sa`. It is every portal's
-identity on that cluster. Granting it *Secrets Officer* on the `Systemorph` vault would give **write
+instance's. Measured 2026-09-16 on the shared portal identity (`<portal-identity>`, subscription `<subscription-id>`,
+resource group `<aks-resource-group>`): one managed identity carries **five** federated credentials —
+`system:serviceaccount:{<ns-1>,…,<ns-5>}:memex-portal-sa` — the control, public and build instances and two client instances. It is every portal's
+identity on that cluster. Granting it *Secrets Officer* on the shared vault would give **write
 over every object in that vault to every instance on the cluster, a client instance included** —
 the exact opposite of why the hand-off goes through the control instance at all.
 
 Two ways out:
 
 1. **A dedicated identity for the control instance** — federated only to
-   `system:serviceaccount:memex:memex-portal-sa`, holding *Secrets Officer*, with the shared identity
+   `system:serviceaccount:<control-namespace>:memex-portal-sa`, holding *Secrets Officer*, with the shared identity
    keeping read. The smaller change, and the recommended one.
 2. **Or scope the grant per secret OBJECT** rather than per vault. Key Vault RBAC supports it, but it
    does not scale past a handful of names and still lands on the shared identity.
@@ -442,7 +500,7 @@ to run at all.
 
 Each client instance gets **its own Key Vault**, the one its record already names — not a shared
 vault with per-instance prefixes. Measured 2026-09-16: one managed identity is federated into every
-namespace of the shared cluster (atioz, memex, memex-cloud, build, pearl), so a prefix is a **naming
+namespace of the shared cluster (five at the time: the control, public and build instances and two client instances), so a prefix is a **naming
 convention, not a boundary** — every instance's pod can read every other instance's objects.
 
 🚨 **A per-client vault isolates nothing on its own.** The prerequisite is the identity half: an
@@ -481,7 +539,7 @@ works, and warns.
 
 ## Open, and deliberately not decided here
 
-- **Whose grant pearl already holds.** The refusal proves one exists; its origin is unestablished.
+- **Whose grant the SME client instance already holds.** The refusal proves one exists; its origin is unestablished.
   The design is deliberately independent of that probe, so the answer changes nothing here.
 - **The transport for the hand-off.** The control inbox is a signed channel that already exists, but
   it persists events; a secret must not land in one. Either a non-persisting endpoint on the control

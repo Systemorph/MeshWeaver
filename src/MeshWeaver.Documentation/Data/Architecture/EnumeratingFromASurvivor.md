@@ -56,7 +56,7 @@ enough, because the recycle **succeeds** everywhere a caller can see it:
 - and the instance hubs — the whole reason the cascade exists — keep serving the assembly they were
   born with, with no error of their own and nothing to grep.
 
-Measured on `memex.systemorph.com`: a recycle of `Hosting/TriageItem` recycled **0** addresses with
+Measured on the control instance: a recycle of `Hosting/TriageItem` recycled **0** addresses with
 one leg incomplete. The type's dependents happened to be empty, so the one leg that failed was the
 type's own instances, and the entire point of the operation was silently skipped.
 
@@ -167,7 +167,7 @@ outstanding, its Quiescing phase waits out its budget and then cancels every pen
 That is issue #5358. After a successful compile, the NodeType hub's settle cut the release with
 `IMeshService.CreateNode` resolved from **the NodeType's own hub**; `IMeshService` is scoped per hub,
 so its issuing hub was that hub, and a compile's success is exactly what gets a NodeType hub recycled.
-On memex-cloud `Marketing/Event` compiled (644 → 648), the settle's own create and the
+On the public instance `Marketing/Event` compiled (644 → 648), the settle's own create and the
 post-condition's re-cut both failed one second apart with *"Hub Marketing/Event was disposed before
 the response arrived (request type CreateNodeRequest, target portal/nodeops-…)"*, and the node was
 left advertising a build no release names.

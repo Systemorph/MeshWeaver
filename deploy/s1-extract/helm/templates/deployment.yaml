@@ -1,0 +1,99 @@
+{{- if not .Values.image.repository }}
+{{- fail "image.repository is required (<registry>/s1-extract) — the image carries the model" }}
+{{- end }}
+{{- if not .Values.auth.allowedServiceAccounts }}
+{{- fail "auth.allowedServiceAccounts is empty — no caller could ever be admitted" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "s1.fullname" . }}
+  labels:
+    {{- include "s1.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "s1.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "s1.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "s1.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      # No /models volume: the model is BAKED INTO THE IMAGE. An empty volume there would shadow it.
+      containers:
+        - name: s1-extract
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - name: S1_AUTH
+              value: tokenreview
+            - name: S1_AUDIENCE
+              value: {{ .Values.auth.audience | quote }}
+            - name: S1_ALLOWED_SERVICEACCOUNTS
+              value: {{ join "," .Values.auth.allowedServiceAccounts | quote }}
+            - name: S1_MAX_TEXTS
+              value: {{ .Values.limits.maxTexts | quote }}
+            - name: S1_MAX_CHARS
+              value: {{ .Values.limits.maxChars | quote }}
+            - name: OMP_NUM_THREADS
+              value: {{ .Values.threads | quote }}
+            - name: HOME
+              value: /tmp
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Startup and liveness ask only whether the PROCESS is up (/healthz). The model load gates
+          # READINESS alone: a slow load holds traffic back, a failed one leaves the pod NotReady with
+          # the reason on /readyz — neither ever restarts it into a crash loop.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            {{- with .Values.startupProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            {{- with .Values.readinessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            {{- with .Values.livenessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

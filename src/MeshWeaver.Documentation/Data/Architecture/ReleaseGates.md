@@ -48,7 +48,7 @@ Two consequences people get wrong, both of which look harmless in a green pipeli
   because that outcome is indistinguishable from a correct one until the mismatch reaches a pod.
 
 **Binaries travel exactly one way: through the registry.** A released DLL is fetched from
-`memex.meshweaver.cloud/api/plugins/bundles/…`, never from a sibling checkout, a build artifact
+the plugin registry's `/api/plugins/bundles/…`, never from a sibling checkout, a build artifact
 passed between workflows, or a rebuilt `bin/`. The registry is where a release becomes a thing that
 exists for anyone other than the run that produced it — one credential model, one entitlement
 check, one set of bytes. See [Plugin Registry](../PluginRegistry).
@@ -175,7 +175,7 @@ something that works today — and since MeshWeaver#3651 only the module half ca
 
 ## The verdict as a service
 
-`ReleaseAvailabilityService` (memex) answers `IsUpdatable(targetVersion)` reactively — the
+`ReleaseAvailabilityService` (on the registry instance) answers `IsUpdatable(targetVersion)` reactively — the
 file-system leaves run on the I/O pool, never on a hub action block — and it is exposed for the
 paths that roll a version from outside the portal:
 
@@ -373,12 +373,12 @@ Why the addressed form is a trap, in the order these bite:
   `PackageGraph.Levels` already derives leaves-first order from those declarations. A YAML list of
   dependents is a SECOND copy of that graph, maintained by hand, free to disagree with the first.
 
-#### memex is the release bus, and it holds the graph
+#### The registry instance is the release bus, and it holds the graph
 
 The registry is the one place that already knows both halves — what has been released, and who
 depends on what:
 
-- **The graph** is `requires` on each package root, which memex holds for every installed package;
+- **The graph** is `requires` on each package root, which the registry instance holds for every installed package;
   `PackageGraph.Levels` / `DependencyCheck.For` already answer "who depends on this" and "in what
   order" from it. Nobody re-declares it in CI.
 - **The publication** is the release landing in the registry — the same
@@ -388,7 +388,7 @@ depends on what:
   instance does and is issued an `mwi_` key (`InstanceRegistryAuthenticator`); being woken is then a
   property of being registered and depending on the thing, not of appearing in someone's list.
 
-So the cascade reads: a publisher announces to memex → memex resolves the dependents from the graph
+So the cascade reads: a publisher announces to the registry instance → it resolves the dependents from the graph
 it already holds → the registered builds for those packages are woken → each checks its own
 upstreams are released and builds. The publisher names nobody.
 
@@ -418,7 +418,7 @@ never mistaken for the intended shape. The same applied to the removed `dependen
 `node-repo-publish-bake` and to CD's `BAKE_SUBSCRIBER_REPOS`. **Both are now GONE** — they were
 ADDRESSED notification where the design calls for a broadcast, and both needed a cross-repo write
 credential. Neither may be reintroduced: wiring a dependent into a list is not progress toward this
-design, it is one more copy of a graph memex already holds, whose missing entry fails silently.
+design, it is one more copy of a graph the registry instance already holds, whose missing entry fails silently.
 
 #### Why this is also the cure for the recompile leak
 
@@ -431,7 +431,7 @@ rebuilt — removes the recompiles rather than making each one cheaper.
 
 ## 🚨 How a fleet goes stale while every check is green (2026-08-22)
 
-memex.meshweaver.cloud sat on a day-old release and would not move. Nothing was red: CI green, CD
+The public instance sat on a day-old release and would not move. Nothing was red: CI green, CD
 green, bakes green, the portal healthy. The instance was doing exactly what this page asks of it —
 and could never stop.
 
@@ -451,7 +451,7 @@ heldReason : no sealed content bake for framework identity se3bf749… — the b
 The poller picked the NEWEST tag and stopped. Unbaked ⇒ hold. The next platform build produced
 another unbaked tag, the next bake published yet another identity, and the two never met. The head
 is always the release *least* likely to be baked, and it blocked every release behind it that was.
-A sister instance had rolled cleanly to `ci.4908` — memex should have taken that and did not.
+A sister instance had rolled cleanly to `ci.4908` — this instance should have taken that and did not.
 
 Fixed by selecting the newest **baked** release: walk candidates newest-first and take the first
 the gate accepts. Never backwards, never into a boot storm, but a not-yet-baked head no longer
@@ -550,7 +550,7 @@ the two costs a deploy.
 `MapMeshModuleEndpoints` can only scan assemblies that are actually loaded. So a module the
 activation record says is ON, whose bytes never reached the process, contributes no routes — and its
 whole HTTP surface answers 404 for the pod's entire lifetime with no exception and nothing to grep.
-That is how `/mcp` went dark on memex.systemorph while the portal was otherwise healthy and two
+That is how `/mcp` went dark on the control instance while the portal was otherwise healthy and two
 clean rolling restarts changed nothing.
 
 Startup now reports it, and `pending_module_activation` distinguishes the two cases rather than
@@ -568,8 +568,8 @@ proven baked for the packages the two share, so the cost is bounded to whatever 
 has installed.
 
 🚨 Portal and migration images must move TOGETHER; a portal tag without a matching migration tag is
-an ImagePullBackOff. And the namespaces are CROSSED — `memex` serves memex.systemorph.com,
-`memex-cloud` serves memex.meshweaver.cloud. Verify with the running image before patching, never
+an ImagePullBackOff. And a namespace's name need not match the host it serves
+(on one fleet the two were CROSSED). Verify with the running image before patching, never
 from the name.
 
 ## 🚨 A declared floor must be SATISFIABLE, and that is a build-time question

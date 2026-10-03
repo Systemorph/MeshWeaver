@@ -310,13 +310,13 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// <see href="https://github.com/Systemorph/MeshWeaver/issues/4617">#4617</see>, which are ONE
     /// defect seen from both ends.</b>
     ///
-    /// <para>Production filed three tickets, minutes apart, off one <c>PearlTechnology/CompanyProfile</c>
+    /// <para>Production filed three tickets, minutes apart, off one <c>Fabrikam/CompanyProfile</c>
     /// render on <c>memex</c> at 2026-09-17 12:58:47Z:</para>
     ///
     /// <code>
-    /// ORIGIN: SubscribeRequest  … as sender (sender: mesh/q8f5…, target: PearlTechnology/CompanyProfile)
-    /// ORIGIN: SubscribeAck      … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
-    /// ORIGIN: StreamEndedEvent  … as target (sender: PearlTechnology/CompanyProfile, target: mesh/q8f5…)
+    /// ORIGIN: SubscribeRequest  … as sender (sender: mesh/q8f5…, target: Fabrikam/CompanyProfile)
+    /// ORIGIN: SubscribeAck      … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)
+    /// ORIGIN: StreamEndedEvent  … as target (sender: Fabrikam/CompanyProfile, target: mesh/q8f5…)
     /// </code>
     ///
     /// <para>The second and third are not separate defects and cannot be fixed where they are
@@ -371,6 +371,46 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             + "be StreamSubscribingHub(), the identity function for every non-router caller");
         SubscriptionReports().Should().BeEmpty(
             "and the receiving hubs must not see the router at an end of the subscription either");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The RUNTIME pin for <see href="https://github.com/Systemorph/MeshWeaver/issues/5900">#5900</see>
+    /// — the chat input's <c>@</c> autocomplete.</b>
+    ///
+    /// <para>Production (memex-cloud, 2026-09-29) logged the pair
+    /// <c>ORIGIN: AutocompleteRequest was POSTED with the mesh hub as sender</c> from
+    /// <c>ChatCompletionOrchestrator.SendAutocompleteRequest</c>, and its echo
+    /// <c>AutocompleteResponse … target: mesh/{id}</c> from the innocent answering half. The
+    /// orchestrator is registered scoped and, resolved from the root container, holds the router as
+    /// its hub — which is exactly what resolving it from <c>Mesh.ServiceProvider</c> does here.</para>
+    ///
+    /// <para><b>The positive anchor.</b> The current-node producer issues its request only when a
+    /// namespace is given, so the call passes the seeded node's path; and the completion stream is
+    /// awaited to its end, so every producer — the request/response one included — has run.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnAutocompleteIssuedFromTheRootMeshHub_NeverPutsTheRouterOnEitherEnd()
+    {
+        var path = await SeedNode("RouterTrafficAutocompleteProbe");
+        var orchestrator = Mesh.ServiceProvider
+            .GetRequiredService<MeshWeaver.Data.Completion.IChatCompletionOrchestrator>();
+
+        await orchestrator.GetCompletions("@RouterTraffic", path)
+            .ToList()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        DumpReports();
+        Origins().Where(r => r.MessageType is "AutocompleteRequest" or "AutocompleteResponse")
+            .Should().BeEmpty(
+                "#5900: the orchestrator posted the AutocompleteRequest off the ROOT mesh hub, so "
+                + "the request left the router and the node hub's reply was addressed back at it. "
+                + "A bounded one-shot read belongs on ReadIssuingHub(), the identity function for "
+                + "every non-router caller");
+        Reports().Where(r => r.MessageType is "AutocompleteRequest" or "AutocompleteResponse"
+                             || (r.MessageType == "RawJson" && r.Target == path))
+            .Should().BeEmpty(
+                "and the receiving node hub must not see the router at an end of the exchange");
     }
 
     /// <summary>

@@ -138,6 +138,18 @@ on:
           decides bake_only.
         type: boolean
         default: false
+      arm_override:
+        description: >-
+          ONE-PROMOTION-GATE OVERRIDE (policy `one-promotion-gate`, Doc/Architecture/OnePromotionGate).
+          Arm exactly this promoted set (e.g. 3.0.0-ci.9459) for the fleet WITHOUT a green
+          MeshWeaver.Plugins dependent-suites verdict. For an incident only — the ordinary path arms
+          the newest promoted set whose verdict passed, by itself. Requires arm_reason.
+        type: string
+        default: ""
+      arm_reason:
+        description: Why the override is taken (recorded in the run summary). Required with arm_override.
+        type: string
+        default: ""
 
 # id-token: write is required for OIDC federated login to Azure (no stored client secret).
 permissions:
@@ -735,8 +747,9 @@ jobs:
           # This probe runs BEFORE `promote`: this run's `<version>` does not exist yet by
           # construction, so a version assertion would answer "incomplete" on every tick forever and
           # the reconciler would publish forever. A completeness probe must never fail on a pointer a
-          # later phase legitimately has not written. `verify-images` runs after phase C and is where
-          # the pointer set is asserted. See Doc/Architecture/ImageTagContract.
+          # later phase legitimately has not written. `verify-images` runs after promote and is where
+          # the pointer set is asserted (all but the portal's `<version>`, which is `arm`'s arming
+          # write — policy `one-promotion-gate`). See Doc/Architecture/ImageTagContract.
           #
           # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4687). Exit 2 means every image of the set is
           # present and good and ONLY the pair tag is behind — the set is DELIVERABLE, the host
@@ -1288,11 +1301,11 @@ jobs:
       # not reached at all.
       #
       # The version is not recomputable (it carries the ORIGINAL run's number), but it is RECORDED:
-      # promote's Phase C arms the release as `memex-portal-ai:<version>` on the same digest Phase A
-      # tagged `<short-sha>` — the very tags SelfUpdateHostedService rolls from. No version tag on
-      # that digest means the release was never armed, and a bake cannot make available what was
-      # never promoted: that is a loud stop, never a fallback to "identity only" or an invented
-      # version.
+      # promote's Phase A tags `memex-migration:<version>` on the same digest it tagged
+      # `<short-sha>` (the portal's `<version>` is `arm`'s arming write since policy
+      # `one-promotion-gate`, and may legitimately not exist yet). No version tag on that digest
+      # means the set was never promoted, and a bake cannot make available what was never
+      # promoted: that is a loud stop, never a fallback to "identity only" or an invented version.
       # 🚨 `id: bake_version`, NOT `release`: `publish-bake` still owns a step called `release`, and
       # `test-cd-steps.py` extracts a step by `id:` across EVERY job — two steps sharing one id
       # would hand the harness whichever it met first, silently. Distinct ids, distinct cases.
@@ -1319,14 +1332,19 @@ jobs:
           # An error that names a HEALTHY component as the culprit is worse than a silent failure;
           # it is a silent failure with directions attached. Let az fail the step with its own
           # message, so the next reader debugs the query and not promote.
-          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
+          # 🚨 Read off MEMEX-MIGRATION, which promote's phase A tags `<version>` + `<short-sha>` on
+          # one digest (CdImageVersionsShareOneSourceGuard: every leg's version is the same). NOT the
+          # portal: under policy `one-promotion-gate` the portal's version tag is the
+          # ARMING write, which `arm` makes only once the dependent suites pass — so a promoted but
+          # not-yet-armed set would read "no version" here and stop a bake that is owed regardless.
+          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-migration \
                    --query "[?tags && contains(tags, '${SHORT_SHA}')].tags[]" -o tsv)
           version=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+' <<<"$tags" | grep -vx "$SHORT_SHA" | head -1 || true)
           if [ -z "$version" ]; then
-            echo "::error::memex-portal-ai:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
+            echo "::error::memex-migration:${SHORT_SHA} carries no version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase A never tagged a version for this sha, so there is no release to make available. Fix promote; do not publish a marker for an invented version."
             exit 1
           fi
-          echo "release version $version (recovered from memex-portal-ai:${SHORT_SHA}'s tag set — bake-only reconcile)"
+          echo "release version $version (recovered from memex-migration:${SHORT_SHA}'s tag set — bake-only reconcile)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # ── IS THE `plugins` PUBLICATION ACTUALLY THERE FOR THIS SET? (MeshWeaver#4539) ─────────
@@ -1737,6 +1755,7 @@ jobs:
             if dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj \
                  -c Release --no-self-contained -t:PublishContainer -p:PublishProfile= \
                  -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"' \
+                 -p:ContainerPublishInParallel=false \
                  -p:CIRun=true \
                  -p:Version=${{ steps.vars.outputs.version }} \
                  -p:MeshWeaverRoot=${{ github.workspace }} \
@@ -2168,9 +2187,10 @@ jobs:
           --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
           ${{ steps.previous.outputs.args }}
 
-  # Tags the accepted image — `memex-control:<version>`, `:<sha>`, `:main` — on ACR and the fleet
-  # registry (digest verified). Only after `control-acceptance` is green: an image that failed it
-  # never receives a name a record or an operator could select.
+  # Tags the accepted image — `memex-control:<sha>`, `:<sha>-p<plugins>`, `:main` — on ACR and the
+  # fleet registry (digest verified). Only after `control-acceptance` is green: an image that failed it
+  # never receives a name at all. Its VERSION tag and line pointers — the names a record selects — are
+  # written by `control-arm`, only once `arm` armed this pair.
   control-promote:
     name: "Promote the control image (after its acceptance test)"
     needs: [gate, control-image, control-acceptance]
@@ -2200,22 +2220,150 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Tag memex-control:<version>, :<sha>, :main and the line pointers (ACR, then the fleet registry)
+      - name: Tag memex-control:<sha>, :<sha>-p<plugins>, :main (ACR, then the fleet registry) — identity only, never the version
+        env:
+          PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
         run: |
           set -euo pipefail
-          # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as Phase D moves them
-          # for memex-portal-ai: a NEW instance seeds from the line pointer, never a specific build
-          # (Memex AGENTS.md "NO PINS"; Plugins#2034). Without them the shadow Provision of control
-          # (Memex docs/control-instance.md §8 step 4) planned "selected tag (none)" on 2026-09-26 —
-          # memex-control carried only <version>, <sha> and main.
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # 🚨 IDENTITY TAGS ONLY — the same split `promote` makes for memex-portal-ai (policy
+          # `one-promotion-gate`). The VERSION tag (what a Continuous record with `updatePattern:
+          # 3.0.0-ci*` rolls to) and the line pointers are the ARMING write, made by `control-arm` only
+          # for a set `arm` armed — so an instance on this image follows the same release gate as the
+          # fleet instead of rolling to every promoted set. The PAIR tag `<core7>-p<plugins7>` is the
+          # join `control-arm` reads: the armed portal manifest carries the same pair tag, and unlike
+          # the bare sha a rebuild of the same core commit never re-points it.
+          # The SAME expression, from the SAME gate outputs, as `promote`'s portal pair tag — and held
+          # to the shape `control-arm` joins on (arm-promoted-set.py PAIR_TAG), so a drift in either
+          # output reds HERE instead of leaving every armed set `missing` with only a warning.
+          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7> — control-arm could never join it to the armed portal manifest"; exit 1; }
           args=(); margs=()
-          for t in "$V_CONTROL" "$SHA" main $(line_tags "$V_CONTROL"); do
+          for t in "$SHA" "$SHA-p$PLUGINS_SHORT" main; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
           done
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
-          echo "- memex-control \`$V_CONTROL\`, \`$SHA\`, \`main\`, $(line_tags "$V_CONTROL") — accepted (empty DB · broken NodeType · N−1) and promoted" >> "$GITHUB_STEP_SUMMARY"
+          echo "- memex-control \`$SHA\`, \`$SHA-p$PLUGINS_SHORT\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written by \`control-arm\` once this pair is ARMED" >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────── THE CONTROL IMAGE FOLLOWS THE ARMED SET (policy `one-promotion-gate`) ──────────
+  # `memex-control:<version>` and its line pointers are written HERE, for the set `arm` armed on
+  # memex-portal-ai and nothing else — the control instance runs this image under a Continuous
+  # policy, so a version tag written at promotion would roll it to sets the fleet gate refused.
+  # Runs in every main-cd run after `arm` (like `arm`, never waiting): it reads the newest ARMED
+  # version and its pair tag off memex-portal-ai, and tags the accepted control image of that pair.
+  #   done    → nothing to write (idempotent; control-arm writes the ACR version tag LAST, so for
+  #             its own writes presence on ACR implies the fleet registry got the same tags — a tag
+  #             written before control-arm existed was verified on cr by control-promote's mirror);
+  #   tag     → version (+ line pointers unless a newer control version exists — never backwards);
+  #   missing → no accepted control image for the armed pair: the control lane failed or has not
+  #             finished for it. NOT red here — the control lane reports its own failure
+  #             (`control-lane-report`) and must never block or re-trigger the fleet's delivery —
+  #             but said out loud: a warning and a summary line naming the version the control
+  #             image stays on. The next run re-reads and heals once the pair is accepted.
+  control-arm:
+    name: "Arm the control image: memex-control follows the armed set"
+    needs: [preflight, arm]
+    if: always() && needs.preflight.result == 'success' && needs.arm.result == 'success'
+    runs-on: ubuntu-latest
+    # ~3× the measured cr copy of a portal-sized manifest, as control-promote.
+    timeout-minutes: 25
+    concurrency:
+      group: main-cd-control-arm
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      issues: write     # a red here reports itself on the control-image issue, as the control lane does
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: "The decision can say no (self-test)"
+        run: python3 .github/scripts/arm-promoted-set.py --self-test
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: What must memex-control be told about the newest armed set?
+        id: follow
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          az acr manifest list-metadata --registry meshweaver --name memex-control --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
+          python3 .github/scripts/arm-promoted-set.py control-follow \
+            --manifests "$RUNNER_TEMP/portal-manifests.json" --control-manifests "$RUNNER_TEMP/control-manifests.json"
+      - name: Already armed — say where memex-control is
+        if: steps.follow.outputs.action == 'done'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+        run: echo "- memex-control already carries the armed set \`$V\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
+      - name: The armed set has no accepted control image — say so
+        if: steps.follow.outputs.action == 'missing'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+          PAIR: ${{ steps.follow.outputs.pair }}
+          STAYS: ${{ steps.follow.outputs.control_newest }}
+        run: |
+          echo "::warning title=Control image not armed::the armed set $V (pair $PAIR) has no accepted memex-control image — the control image stays on ${STAYS:-nothing}. Its control lane failed or has not finished for that pair (see the open \`control-image\` issue); the next main-cd run re-reads this."
+          echo "- ⚠️ memex-control NOT armed for \`$V\` (pair \`$PAIR\`): no accepted control image of that pair; stays on \`${STAYS:-none}\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: ACR login
+        if: steps.follow.outputs.action == 'tag'
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        if: steps.follow.outputs.action == 'tag'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: "Tag memex-control:<version> (+ the line pointers) — the fleet registry first, ACR's version tag LAST"
+        if: steps.follow.outputs.action == 'tag'
+        env:
+          V: ${{ steps.follow.outputs.version }}
+          PAIR: ${{ steps.follow.outputs.pair }}
+          MOVE: ${{ steps.follow.outputs.move_pointers }}
+        run: |
+          set -euo pipefail
+          # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as `arm`'s phase D
+          # moves them for memex-portal-ai: a NEW instance seeds from the line pointer, never a
+          # specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
+          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          tags=("$V")
+          if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V")"; tags+=("${pointers[@]}"); fi
+          [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V only, the line pointers stay"
+          margs=(); args=()
+          for t in "${tags[@]}"; do margs+=("${{ env.REGISTRY }}/memex-control:$t"); args+=(--tag "${{ env.ACR }}/memex-control:$t"); done
+          # cr first: `done` is decided from ACR's version tag, so ACR must be the LAST write — a
+          # mirror failure then leaves `tag` for the next run instead of a `done` that never reached cr.
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$PAIR" "${margs[@]}"
+          docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$PAIR"
+          echo "- memex-control ARMED: \`$V\` ← pair \`$PAIR\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
+      # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
+      # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
+      # the next promotion; a later green control-arm heals the tag itself.
+      - name: Report a red control-arm on the control-image issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          V: ${{ steps.follow.outputs.version }}
+        run: |
+          set -euo pipefail
+          body="control-arm failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — memex-control was not tagged for the armed set \`${V:-unknown}\`. The fleet's own delivery (memex-portal-ai) is NOT affected. The next main-cd run re-reads and re-tags; read the failed step for the cause."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-image --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh label create control-image --repo "$GITHUB_REPOSITORY" \
+              --description "The control-instance image lane (main-cd control-*) failed" \
+              --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-arm failed on main: run ${GITHUB_RUN_ID}" \
+              --label control-image --body "$body"
+          fi
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
@@ -2481,7 +2629,8 @@ jobs:
           # what that design prevents.
           #
           # Additive: it names a tag nothing else writes, so it cannot disturb an existing one.
-          # The portal's SHA tag, but NOT its version tag — see phase C.
+          # The portal's SHA tag, but NOT its version tag — that is the ARMING write, `arm`'s
+          # phase C, made only for a set whose dependent suites passed (policy `one-promotion-gate`).
           promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
@@ -2505,7 +2654,7 @@ jobs:
           #
           # 🚨 In phase B ON PURPOSE, so a GHCR outage BLOCKS the release rather than silently
           # leaving the plugins repo's `latest` stale. It is a real coupling and it is the lesser
-          # evil: check-image-set.sh only sees ACR, so a GHCR miss after phase C would never be
+          # evil: check-image-set.sh only sees ACR, so a GHCR miss after arming would never be
           # reconciled and nothing would ever notice. Here it fails CD, alerts, and the hourly
           # reconciler re-drives HEAD until it lands or the budget escalates.
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
@@ -2515,30 +2664,235 @@ jobs:
             --tag "ghcr.io/$NS/mw-plugin-test:main" \
             --tag "ghcr.io/$NS/mw-plugin-test:latest" \
             "${{ env.ACR }}/mw-plugin-test:$STAGING"
-      - name: "Phase C — arm the release: memex-portal-ai:<version>"
+      # 🚨 THE FLEET IS NOT ARMED HERE ANY MORE (policy `one-promotion-gate`).
+      # Phases A and B above promote the set for CI — every consumer that compiles, tests or bakes
+      # against a platform reads it from there on. Phases C and D (the portal's version tag, which
+      # SelfUpdateHostedService rolls to, and the `<line>-latest` pointers) and the release event
+      # moved to `arm`, which writes them only for a set whose MeshWeaver.Plugins dependent suites
+      # passed against exactly this PAIR (core + the Plugins commit gate built it with). This step
+      # hands `arm` — in this run or any later one — the facts it needs, as a record.
+      # 🚨 THE BUNDLE'S BASE IS THE NEWEST ARMED SET, not the first parent. A promoted set usually
+      # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
+      # base would diff, and control-arm, only the last one. `arm-promoted-set.py armed-base` names the
+      # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
+      # core/Plugins pair tag; the bare sha tag may have moved to a newer pair). `base_kind` records
+      # which rule produced `base`, and an UNRESOLVED base still promotes for CI but is never armed
+      # and never measured (see the script's header) — CI is never held, and
+      # the fleet never receives merges nobody measured.
+      - name: "Promotion record (what `arm` needs to arm this set later)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_SHA: ${{ needs.gate.outputs.sha }}
+          PLUGINS_SHA: ${{ needs.gate.outputs.plugins_sha }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          # 🚨 THE LAST WRITE IN CD. Until this single PUT lands, no install can see this commit:
+          parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CORE_SHA" --jq '.parents[0].sha')
+          [[ "$parent" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot read the first parent of $CORE_SHA ('$parent')"; exit 1; }
+          base="$parent"; kind=unresolved; why=""
+          if az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+               -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json" \
+             && armed=$(python3 .github/scripts/arm-promoted-set.py armed-base --manifests "$RUNNER_TEMP/portal-manifests.json"); then
+            a_short=$(printf '%s' "$armed" | jq -r '.armed_short'); a_version=$(printf '%s' "$armed" | jq -r '.armed_version')
+            if [ -z "$a_short" ]; then
+              kind=first-parent; why="no set has ever been armed"
+            elif a_full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$a_short" --jq .sha) && [[ "$a_full" =~ ^[0-9a-f]{40}$ ]]; then
+              if [ "$a_full" = "$CORE_SHA" ]; then
+                kind=first-parent; why="this commit IS the armed set $a_version"
+              elif st=$(gh api "repos/$GITHUB_REPOSITORY/compare/$a_full...$CORE_SHA" --jq .status) && [ "$st" = ahead ]; then
+                base="$a_full"; kind=armed; why="newest armed set $a_version"
+              else
+                why="the armed set $a_version ($a_short) is not an ancestor of $CORE_SHA (compare: ${st:-unreadable})"
+              fi
+            else
+              why="the armed set's commit $a_short could not be resolved"
+            fi
+          else
+            why="the newest armed set could not be read from memex-portal-ai"
+          fi
+          [ "$kind" != unresolved ] || echo "::warning title=Promotion base unresolved::$why — this set is promoted for CI but will NOT be armed or measured; the next promoted set retries"
+          echo "bundle base: $kind — ${why}; base $base"
+          mkdir -p "$RUNNER_TEMP/promotion-record"
+          jq -n --argjson n "$RUN_NUMBER" --arg c "$CORE_SHA" --arg b "$base" --arg bk "$kind" --arg p "$PLUGINS_SHA" \
+                --arg s "$SHA" --arg ps "$PLUGINS_SHORT" --arg st "$STAGING" \
+                --arg vp "$V_PORTAL" --arg vm "$V_MIGRATION" --arg vt "$V_PLUGIN" \
+            '{run_number: $n, core_sha: $c, base: $b, base_kind: $bk, plugins_sha: $p, short: $s, plugins_short: $ps,
+              staging: $st, v_portal: $vp, v_migration: $vm, v_plugin: $vt, key: ("pair-" + $s + "-p" + $ps)}' \
+            > "$RUNNER_TEMP/promotion-record/promotion-record.json"
+          cat "$RUNNER_TEMP/promotion-record/promotion-record.json"
+          echo "### Promoted \`$SHA\` for CI → $V_PORTAL (NOT armed for the fleet yet — see \`arm\`)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: promotion-record
+          path: ${{ runner.temp }}/promotion-record/promotion-record.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # ────────── ARM THE FLEET: THE ONE PROMOTION GATE (policy `one-promotion-gate`) ──────────
+  # Policies `core-merge-never-blocked`, `build-latest-green` and `one-promotion-gate`
+  # (Doc/Architecture/PolicyNotProse). Core merges on its own checks; every CI consumer builds against the
+  # newest PROMOTED set; and the ONE place a MeshWeaver.Plugins verdict decides anything is here:
+  # a set is ARMED for the fleet — `memex-portal-ai:<version>` (what SelfUpdateHostedService rolls
+  # to, pattern `3.0.0-ci*`), the `<line>-latest` pointers, and the signed release event — only
+  # when Plugins' dependent suites passed against exactly the PAIR it was built from (core sha +
+  # the Plugins sha `gate` resolved; the pair tag `<core7>-p<plugins7>`).
+  #
+  # 🚨 ASYNCHRONOUS BY CONSTRUCTION. Nothing here waits. The verdict is produced by MeshWeaver.Plugins'
+  # `promotion-candidate.yml`, which polls for the newest promoted-but-unarmed pair (this repo sends
+  # nothing — PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository stands) and writes
+  # `refs/core-candidate/pair-<core7>-p<plugins7>` in its own repository. This job runs in EVERY
+  # main-cd run — a publish, the hourly reconcile, a dispatch (Plugins' verdict job dispatches one
+  # when a pair turns green) — and arms the newest promoted set, NEWER than everything armed, whose
+  # verdict is green (`.github/scripts/arm-promoted-set.py`). A red verdict is refused; a missing
+  # one waits; a newer green one supersedes both. Never backwards.
+  #
+  # 🚨 WHAT IT DOES NOT GATE: promote, verify, the platform bake, the Plugins seal and every CI
+  # resolver. Those read the promoted set immediately; `delivery-verdict` judges PLATFORM delivery
+  # and deliberately does not need this job (policy `platform-backwards-compatibility`).
+  arm:
+    name: "Arm the fleet: the newest promoted set whose dependent suites passed"
+    needs: [preflight, gate, promote]
+    if: always() && needs.preflight.result == 'success' && needs.promote.result != 'failure' && needs.promote.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 🚨 ONE ARMING AT A TIME, ACROSS EVERY main-cd RUN. The workflow's own concurrency keeps the
+    # push lane and the reconcile lane in SEPARATE groups, so two runs can be here at once: each would
+    # read the cursor, select a different set, and the OLDER one could write phase C (and send its
+    # release event) after the NEWER one armed. A job-level group shared by every run serialises the
+    # read-select-write, so `select` always sees the previous arming's cursor. Never cancel: a
+    # half-written arming is exactly the state the resume below exists for, not something to cause.
+    concurrency:
+      group: main-cd-arm
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      actions: read     # the promotion records are run ARTIFACTS of this workflow
+      packages: write   # phase D writes the line pointers to GHCR with GITHUB_TOKEN
+    outputs:
+      armed: ${{ steps.select.outputs.armed }}
+      version: ${{ steps.select.outputs.v_portal }}
+      short: ${{ steps.select.outputs.short }}
+      core_sha: ${{ steps.select.outputs.core_sha }}
+      plugins_sha: ${{ steps.select.outputs.plugins_sha }}
+      pair: ${{ steps.select.outputs.key }}
+    env:
+      OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.arm_override || '' }}
+      OVERRIDE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.arm_reason || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: "The selection can say no (self-test)"
+        run: python3 .github/scripts/arm-promoted-set.py --self-test
+      - name: An override carries its reason
+        if: env.OVERRIDE != ''
+        run: |
+          [ -n "$OVERRIDE_REASON" ] || { echo "::error::arm_override=$OVERRIDE was given without arm_reason — an override of the promotion gate is recorded with its reason, or not taken."; exit 1; }
+          echo "### ⚠️ Promotion gate OVERRIDDEN: $OVERRIDE — $OVERRIDE_REASON" >> "$GITHUB_STEP_SUMMARY"
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # The CURSOR (the newest version tag) and whether that set's arming COMPLETED: the marker
+      # `arm-complete-<version>` is written by notify-platform-update only after the release event
+      # was delivered. An incomplete newest set is resumed below when nothing newer is green.
+      - name: The newest ARMED set, and whether its arming completed
+        id: armed
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json"
+      - name: Mint a MeshWeaver.Plugins token (read the verdicts)
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: MeshWeaver.Plugins
+          permission-contents: read
+      - name: Which promoted set may the fleet roll to?
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGINS_TOKEN: ${{ steps.token.outputs.token }}
+          ARMED_MAX: ${{ steps.armed.outputs.max }}
+          RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+            ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
+      - name: ACR login
+        if: steps.select.outputs.armed == 'true'
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to GHCR
+        if: steps.select.outputs.armed == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to the fleet registry (publisher)
+        if: steps.select.outputs.armed == 'true'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      # 🚨 The arming writes read tags that name THIS set and nothing else: the portal's PAIR tag
+      # `<core7>-p<plugins7>` (phase A) and the migration's VERSION tag (phase A). NOT the staging
+      # tag — retention may purge it before a verdict arrives — and NOT the bare `<core7>` tag,
+      # which a `rebuild` of the same core commit with a newer Plugins commit re-points: arming an
+      # older pair through it would arm the NEWER pair's image under the older version number.
+      - name: Point the arming phases at the selected set
+        if: steps.select.outputs.armed == 'true'
+        env:
+          V_PORTAL_SEL: ${{ steps.select.outputs.v_portal }}
+          V_MIGRATION_SEL: ${{ steps.select.outputs.v_migration }}
+          V_PLUGIN_SEL: ${{ steps.select.outputs.v_plugin }}
+          SHA_SEL: ${{ steps.select.outputs.short }}
+          PLUGINS_SEL: ${{ steps.select.outputs.plugins_short }}
+        run: |
+          set -euo pipefail
+          # Every variable the arming phases expand under `set -u` is exported HERE — phase C's
+          # summary names $V_PLUGIN, and an unbound one failed `arm` after the registry writes.
+          for v in V_PORTAL_SEL V_MIGRATION_SEL V_PLUGIN_SEL SHA_SEL PLUGINS_SEL; do
+            [ -n "${!v}" ] || { echo "::error::the selection gave no $v — refusing to arm half a set"; exit 1; }
+          done
+          {
+            echo "V_PORTAL=$V_PORTAL_SEL"; echo "V_MIGRATION=$V_MIGRATION_SEL"; echo "V_PLUGIN=$V_PLUGIN_SEL"; echo "SHA=$SHA_SEL"
+            echo "SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL"
+          } >> "$GITHUB_ENV"
+      - name: "Phase C — arm the release: memex-portal-ai:<version>"
+        if: steps.select.outputs.armed == 'true'
+        run: |
+          set -euo pipefail
+          # 🚨 THE ARMING WRITE. Until this single PUT lands, no install can see this set:
           # SelfUpdateHostedService reads memex-portal-ai's tags and rolls the portal AND the
           # migration Deployment to the newest ^\d+\.\d+\.\d+ one. Everything it will need — the
           # matching memex-migration:$V_MIGRATION — is already tagged by phase A. Do not move
-          # this step, and do not add anything after it — the ONE write that follows inside it is
+          # this step before phase D — the ONE write that follows inside it is
           # the same arming PUT for the fleet registry's audience: an installation consuming cr
           # lists cr's tags, and everything IT will need (phase A's migration version, phase B's
           # pointers) is already on cr by the same ordering.
           echo "→ memex-portal-ai: $V_PORTAL  (arming the self-updater)"
           docker buildx imagetools create \
             --tag "${{ env.ACR }}/memex-portal-ai:$V_PORTAL" \
-            "${{ env.ACR }}/memex-portal-ai:$STAGING"
-          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-portal-ai:$STAGING" \
+            "${{ env.ACR }}/memex-portal-ai:$SRC_PORTAL_TAG"
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-portal-ai:$SRC_PORTAL_TAG" \
             "${{ env.REGISTRY }}/memex-portal-ai:$V_PORTAL"
           {
-            echo "### Promoted \`$SHA\` → $V_PORTAL"
+            echo "### ARMED \`$SHA\` (pair \`$SRC_PORTAL_TAG\`) → $V_PORTAL"
             echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR + ${{ env.REGISTRY }})"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: "Phase D — the line pointers: <major>-latest, <major.minor>-latest, <major.minor.patch>-latest (ACR + GHCR)"
+        if: steps.select.outputs.armed == 'true'
         run: |
           set -euo pipefail
           # The three MOVING POINTERS of a line, from a version like 3.0.0-ci.8059 (or a clean
@@ -2549,16 +2903,25 @@ jobs:
           # Written here, AFTER the arming PUT, so a fresh install that resolves a pointer sees a
           # set whose migration and portal both exist (maintainer, 2026-09-08: "platform will be
           # anyway self-updating => should point to latest image to start"; "1, 2 or 3 digits").
+          # 🚨 NEVER BACKWARDS, re-checked at the write: a concurrent main-cd run (the reconcile lane
+          # and the main lane can overlap) may have armed a NEWER set since `select` read the tags.
+          n_self="${V_PORTAL##*ci.}"
+          n_max=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv \
+                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
+          if [ -n "$n_max" ] && [ "$n_max" -gt "$n_self" ]; then
+            echo "::notice::a newer set (ci.$n_max) was armed while this job ran — leaving the line pointers where it put them"
+            exit 0
+          fi
           line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
-          for pair in "memex-migration:$V_MIGRATION" "memex-portal-ai:$V_PORTAL"; do
-            repo="${pair%%:*}"; ver="${pair#*:}"
+          for pair in "memex-migration:$V_MIGRATION:$V_MIGRATION" "memex-portal-ai:$V_PORTAL:$SRC_PORTAL_TAG"; do
+            repo="${pair%%:*}"; rest="${pair#*:}"; ver="${rest%%:*}"; src="${rest#*:}"
             args=(); gargs=(); margs=()
             for t in $(line_tags "$ver"); do args+=(--tag "${{ env.ACR }}/$repo:$t"); gargs+=(--tag "ghcr.io/$NS/$repo:$t"); margs+=("${{ env.REGISTRY }}/$repo:$t"); done
             echo "→ $repo: $(line_tags "$ver")  (ACR, then GHCR — the adapter's default registry — then ${{ env.REGISTRY }})"
-            docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
-            docker buildx imagetools create "${gargs[@]}" --tag "ghcr.io/$NS/$repo:$ver" "${{ env.ACR }}/$repo:$STAGING"
-            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${margs[@]}"
+            docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$src"
+            docker buildx imagetools create "${gargs[@]}" --tag "ghcr.io/$NS/$repo:$ver" "${{ env.ACR }}/$repo:$src"
+            .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$src" "${margs[@]}"
           done
           echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
 
@@ -3005,11 +3368,11 @@ jobs:
       # exists to heal — "release X may be rolled to" — was the one thing it could not do.
       #
       # The version is not recomputable (it carries the ORIGINAL run's number), but it is RECORDED:
-      # promote's Phase C arms the release as `memex-portal-ai:<version>` on the same digest that
-      # Phase A tagged `<short-sha>` — the very tags SelfUpdateHostedService rolls from. So a
-      # reconcile reads the version back off the promoted image. No version tag on that digest
-      # means the release was never armed, and a bake cannot make available what was never
-      # promoted: that is a loud stop, never a fallback to "identity only" or an invented version.
+      # promote's Phase A tags `memex-migration:<version>` on the same digest it tagged
+      # `<short-sha>`, so a reconcile reads the version back off the promoted set (gate's
+      # `bake_version`). No version tag on that digest means the set was never promoted, and a bake
+      # cannot make available what was never promoted: that is a loud stop, never a fallback to
+      # "identity only" or an invented version.
       #
       # 🚨 THAT READ NOW LIVES IN `gate` (`bake_version`, MeshWeaver#4539) and arrives here as
       # `RECOVERED`. It moved because a SECOND consumer appeared — the seal probe, which needs the
@@ -3168,7 +3531,7 @@ jobs:
   # compiles against the IMAGE, never against a package feed (NuGet publication is retired).
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
-  # After the release is ARMED (promote's last PUT), tell the control instance's mesh that a new
+  # After the release is ARMED (`arm`'s phase C — policy `one-promotion-gate`), tell the control instance's mesh that a new
   # platform build exists: one signed POST to the WebhookInbox target the Hosting plugin watches
   # (Hosting/PlatformBuilds). The mesh side verifies the HMAC over the RAW body, runs the pin
   # updater (the MW_IMAGE_DIGEST bump PRs on the node repos) and BROADCASTS the release to every
@@ -3202,10 +3565,14 @@ jobs:
   notify-platform-update:
     name: "Notify platform-update registry"
     # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
-    needs: [preflight, gate, plugin-test-image, promote]
+    # 🚨 AFTER `arm`, never after promote (policy `one-promotion-gate`). This build fact
+    # starts the fleet's rolls and names `memex-portal-ai:<version>`, which exists only once `arm`
+    # wrote it — for a set whose dependent suites passed, possibly in a LATER run than the one that
+    # built it. So the version and commits below are the ARMED set's, read from `arm`.
+    needs: [preflight, arm]
     # The ONLY condition, and it is about the RUN, not about an input: notify when this run
-    # actually published something. Never "notify if the secret happens to be set".
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    # actually ARMED something. Never "notify if the secret happens to be set".
+    if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -3225,12 +3592,36 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # 🚨 NEVER BACKWARDS, re-checked at the send. `arm` is serialised across runs, but this job is
+      # not part of that group: a run that armed set A can reach this step after a later run armed a
+      # NEWER set B and sent B's event. Sending A's now would announce an older build as the latest.
+      # A superseded set sends nothing and needs no completion marker (B's arming passed it).
+      - name: "Is this still the newest armed set?"
+        id: current
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
+          newest=$(printf '%s' "$st" | jq -r '.version')
+          n_newest="${newest##*ci.}"; n_self="${V_SELF##*ci.}"
+          if [ "$n_newest" -gt "$n_self" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$V_SELF was superseded by $newest before its release event — sending nothing (the newer set's arming announces the line)"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: "Sign and POST the build fact"
+        if: steps.current.outputs.superseded == 'false'
         env:
           URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
-          SHA: ${{ needs.gate.outputs.short_sha }}
-          V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
+          SHA: ${{ needs.arm.outputs.short }}
+          V_PLUGIN: ${{ needs.arm.outputs.version }}
+          CORE_SHA: ${{ needs.arm.outputs.core_sha }}
+          PLUGINS_SHA: ${{ needs.arm.outputs.plugins_sha }}
         run: |
           set -euo pipefail
           # Retried login (same transport class as the step-level sites — and this one guards the
@@ -3259,7 +3650,9 @@ jobs:
           case "$PORTAL_DIGEST" in sha256:*) ;; *) echo "::error::could not resolve memex-portal-ai:$V_PLUGIN to a digest (got '$PORTAL_DIGEST') — the release event would name a portal pin that does not exist"; exit 1 ;; esac
           MIGRATION_DIGEST=$(resolve memex-migration)
           case "$MIGRATION_DIGEST" in sha256:*) ;; *) echo "::error::could not resolve memex-migration:$V_PLUGIN to a digest (got '$MIGRATION_DIGEST') — the release event would name a migration pin that does not exist"; exit 1 ;; esac
-          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s","portalImage":"meshweaver.azurecr.io/memex-portal-ai","portalDigest":"%s","migrationImage":"meshweaver.azurecr.io/memex-migration","migrationDigest":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST" "$PORTAL_DIGEST" "$MIGRATION_DIGEST")
+          # `coreSha` / `pluginsSha` (the PAIR, full commits) make "does image X contain commit Y"
+          # answerable from the mesh by ancestry, without a registry read (Doc/Architecture/OnePromotionGate).
+          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s","portalImage":"meshweaver.azurecr.io/memex-portal-ai","portalDigest":"%s","migrationImage":"meshweaver.azurecr.io/memex-migration","migrationDigest":"%s","coreSha":"%s","pluginsSha":"%s"}' "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST" "$PORTAL_DIGEST" "$MIGRATION_DIGEST" "$CORE_SHA" "$PLUGINS_SHA")
           SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
           # `|| code=000` is not defensive noise: `run:` is `bash -e`, so a curl that fails at the
           # TRANSPORT level (DNS, TLS, connection refused) would kill the step before the verdict
@@ -3335,6 +3728,7 @@ jobs:
       # all, the `not-required` branch becomes reachable and fatal, with nothing for anyone to
       # remember to switch on.
       - name: "Did the inbox VERIFY the build fact?"
+        if: steps.current.outputs.superseded == 'false'
         run: |
           set -euo pipefail
           # Overridable ONLY so a guard can execute this exact script against synthetic answers
@@ -3361,6 +3755,20 @@ jobs:
               exit 1
               ;;
           esac
+      # 🚨 THE ARMING IS COMPLETE ONLY NOW. The cursor (the `<version>` tag) moved at phase C, before
+      # the line pointers and before this event; had either failed, the next run would see the set as
+      # armed and never retry them. This NON-selectable marker (not version-shaped, so no self-updater
+      # can pick it) is what `arm-promoted-set.py armed-state` reads: until it exists, `arm` RESUMES
+      # this set whenever nothing newer is green (policy `one-promotion-gate`).
+      - name: "Mark the arming complete: memex-portal-ai:arm-complete-<version>"
+        if: steps.current.outputs.superseded == 'false'
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
+            "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
+          echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
@@ -4004,13 +4412,15 @@ jobs:
         # publish could not have written (#2622).
         #
         # 🚨 `--pointers` is passed HERE and only here in this workflow (#3670). This job
-        # `needs: promote`, so phase C — the portal's `<version>`, the arming write — is behind us
-        # and the promoted pointer set is whole: `main` on all three repositories, the tester's
-        # `latest`, and `<version>` on all three. `gate`'s reconcile probe calls the SAME script and
+        # `needs: promote`, so phases A and B are behind us and the promoted pointer set is whole:
+        # `main` on all three repositories, the tester's `latest`, and `<version>` on the tester and
+        # the migration. The PORTAL's `<version>` is not asserted: it is the arming write, made by
+        # `arm` only once the dependent suites pass (policy `one-promotion-gate`), and the script
+        # knows it. `gate`'s reconcile probe calls the SAME script and
         # must NOT pass it: that probe runs BEFORE promote, this run's version does not exist yet,
         # and a completeness probe that fails on a pointer a later phase has not written would make
-        # the reconciler publish forever. The version is the portal leg's `$(Version)` — the same
-        # value phase C tagged, and equal to the other legs' by construction (one run number, one
+        # the reconciler publish forever. The version is the portal leg's `$(Version)` — equal to
+        # the other legs' by construction (one run number, one
         # root props). If that leg died the value is empty and the script says so, RED, after it has
         # named the missing images: no `if:`, no fallback, no skip.
         run: >
@@ -4144,8 +4554,13 @@ jobs:
     # `Plugins: pack … / Module tests`) turned the PLATFORM delivery red, handed HEAD on to a
     # re-publish and filed `ci-failure` ("no deployable image") over a set every install could
     # already roll to. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds this list, transitively.
+    # 🚨 `notify-platform-update` (and `arm`, behind it) are NOT needs any more (policy
+    # `one-promotion-gate`): the fleet is armed asynchronously, when MeshWeaver.Plugins'
+    # dependent suites pass against the pair — possibly in a later run. PLATFORM delivery (build,
+    # promote for CI, verify, bake) is judged here; arming is judged by `arm` itself and alerted by
+    # `alert-on-failure`.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
-            publish-bake, notify-platform-update, verify-images]
+            publish-bake, verify-images]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -4386,7 +4801,6 @@ jobs:
             plugin-test-image=${{ needs.plugin-test-image.result }}
             promote=${{ needs.promote.result }}
             publish-bake=${{ needs.publish-bake.result }}
-            notify-platform-update=${{ needs.notify-platform-update.result }}
             verify-images=${{ needs.verify-images.result }}
         run: |
           set -euo pipefail
@@ -4861,7 +5275,7 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `plugins-modules`, so under `failure()` a Plugins red filed THIS issue
     # ("no deployable image was published") over a platform set that was delivered. A Plugins seal

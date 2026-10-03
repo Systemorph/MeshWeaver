@@ -418,6 +418,16 @@ token is how a caller drops it without writing anything. A cancelled walk surfac
 `OperationCanceledException` and is reported as the pool ending the pass, never as "seeding failed"
 or "the shelf is unreadable" — the read did not fail, the process is stopping.
 
+`SealedBundleFloorCache.Observe` follows the same contract (#5719): the filesystem pool's
+worker token reaches the floor read, directory listings check it while materializing (before
+sorting), and each publication and cache-pruning step checks it. Cancellation escapes as
+`OperationCanceledException`. The publication-pointer resolver also checks between its existence,
+pointer-file and generation probes, so those reads cannot continue as a fallback after cancellation.
+Cancellation is never converted into an unreadable-store verdict or used
+to prune entries from a walk that did not finish. The existing synchronous `Read(root, logger)`
+surface remains available for callers with no worker token; pooled callers use the overload
+whose token is required.
+
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
 stands; a blocking leaf that **walks** — a directory tree, a list of archives, a sweep — takes the
@@ -438,7 +448,7 @@ Earlier guidance carved storage and Postgres out of the pool and left them on pl
 
 ### What the caps actually cost, measured
 
-The queue-wait distribution was read for the first time on **2026-09-16**, on memex.systemorph.com,
+The queue-wait distribution was read for the first time on **2026-09-16**, on the control instance,
 after 828 minutes of uptime:
 
 | pool | cap | admissions | mean wait | max wait | ≥ 1 s | ≥ 10 s |
@@ -465,7 +475,7 @@ cap, in-flight, queue depth, distribution — and mints none. 🚨 Never read a 
 brand new, as idle. `IoPoolQueueReport.Describe` is the formatter that keeps "not measured",
 "measured, nothing queued" and "these pools had work queued" as three different sentences.
 
-**Both halves have to be wired, and reads must not be filed on the write pool.** This is not a style point — it was issues #1310/#1312/#1313/#1316. The Postgres backend resolved its cap-1 `pg:Postgres` pool, used it for provisioning, and then never passed `ioPool:` to the adapters that perform every actual write, so each per-schema adapter fell back to `IoPool.Unbounded`. Compounding it, eight read-shaped operations (`Read`, `ReadMany`, `Exists`, `FindBestPrefixMatch`, `ResolvePath`, `GetPartitionObjects`, `GetPartitionMaxTimestamp`, `ListPartitionSubPaths`) were filed on that write pool rather than the read pool. Net effect: the hottest read path in the portal — per-node-hub activation seeds, URL resolution, write-guard probes, the per-path read fan-out inside `StorageAdapterMeshQueryProvider` — ran with **no bound at all** against a 50-connection data source, and memex-cloud duly reported *"the connection pool has been exhausted (currently 50)"*. Keeping reads off the cap-1 pool is also what makes that pool safe: a read issued from inside a write would otherwise be a same-pool re-entry on a cap-1 gate, the one documented way to deadlock an `IIoPool`. `PartitionAdapterIoPoolWiringTests` pins both the wiring and the read/write filing.
+**Both halves have to be wired, and reads must not be filed on the write pool.** This is not a style point — it was issues #1310/#1312/#1313/#1316. The Postgres backend resolved its cap-1 `pg:Postgres` pool, used it for provisioning, and then never passed `ioPool:` to the adapters that perform every actual write, so each per-schema adapter fell back to `IoPool.Unbounded`. Compounding it, eight read-shaped operations (`Read`, `ReadMany`, `Exists`, `FindBestPrefixMatch`, `ResolvePath`, `GetPartitionObjects`, `GetPartitionMaxTimestamp`, `ListPartitionSubPaths`) were filed on that write pool rather than the read pool. Net effect: the hottest read path in the portal — per-node-hub activation seeds, URL resolution, write-guard probes, the per-path read fan-out inside `StorageAdapterMeshQueryProvider` — ran with **no bound at all** against a 50-connection data source, and the public instance duly reported *"the connection pool has been exhausted (currently 50)"*. Keeping reads off the cap-1 pool is also what makes that pool safe: a read issued from inside a write would otherwise be a same-pool re-entry on a cap-1 gate, the one documented way to deadlock an `IIoPool`. `PartitionAdapterIoPoolWiringTests` pins both the wiring and the read/write filing.
 
 The cost concern that originally justified the carve-out (a `SubscribeOn` hop on every hot read under a constrained CI ThreadPool) is real — the answer is to size the per-adapter pools correctly, **not** to fall back to bare `FromAsync`. The migration is finished: every query/storage leaf is pooled (see "The sweep is complete" below), and new code (e.g. `PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned`) is pooled from day one.
 
@@ -856,7 +866,7 @@ _gate.Release();
 **The ordering inverted because its original reason was removed elsewhere.** #2135 released first
 because the exit path itself called `TryFinishDisposal()`, which disposed `_gate` the instant that
 decrement took `_inFlight` to zero — the last leaf out disposed the semaphore and then released it
-(seen in prod as a failed `Comments` render on memex-cloud). #2146 then moved that decision onto the
+(seen in prod as a failed `Comments` render on the public instance). #2146 then moved that decision onto the
 **admission** counter, and `TryFinishDisposal` now runs only from `LeaveGateRegion()` and returns
 immediately unless `_gateUsers` is zero. All three callers of the exit path sit inside their own
 region whose `finally` runs strictly after it, so `_gateUsers ≥ 1` throughout and the gate cannot be

@@ -55,7 +55,7 @@ the hold below became unsatisfiable. Publications are now keyed on the platform 
   for this seal"* — and the Space's activity carries it as `activity.gitsync.seal.heldNewerPlatform`.
   An unknown producer (a bundle from before the field) or an unknown running build holds nothing.
 
-The shape this settles was measured on memex.systemorph.com on 2026-09-25: the control instance ran
+The shape this settles was measured on the control instance on 2026-09-25: it ran
 `3.0.0-ci.9218`, `Hosting/_GitSync` was Held at `7545d355`, and MeshWeaver.Plugins `1470fbf3` was
 sealed only by `3.0.0-ci.9321`. That hold was correct — the plugin was built for a newer platform —
 and its remedy was the platform roll; what the old note could not say was that the roll is the ONLY
@@ -110,7 +110,7 @@ and nothing in it is ever at `headSha` again. **Hold, on every green build, for 
 ## 3. Measured — both production portals, 2026-09-11/12
 
 - Last automatic convergence: `24c2d024` (MeshWeaver.Plugins #1663), imported 18:53:55Z on
-  memex.systemorph.com and 18:55:16Z on memex.meshweaver.cloud.
+  the control instance and 18:55:16Z on the public instance.
 - Green MeshWeaver.Plugins `main` builds after it: 20:17, 21:55, 23:58, 23:59, 00:53, 02:29, 03:39,
   03:44Z. **None** produced an import on either portal. `Hosting/v1.17.1` and `v1.18.0` were tagged
   by the 23:59Z run; `DeepSign/v1.1.0` by the 03:44Z run. Neither reached a mesh until a person ran
@@ -311,11 +311,11 @@ That is consistent with two situations whose remedies are opposite:
 | **A** | nothing has sealed recently — the publishing lane is broken | fix the lane; another publication is exactly what is needed |
 | **B** | seals are advancing under a **newer framework identity** this instance does not run | **roll the instance**; no further publication will ever release the hold |
 
-Measured on memex.meshweaver.cloud, 2026-09-16: held at `627fb3cd` under identity `sd608997…`,
+Measured on the public instance, 2026-09-16: held at `627fb3cd` under identity `sd608997…`,
 while `get @Hosting/PlatformBuilds/*` showed the live publication sealed under `s799247a…`. **Case
 B.** Two issues were open reading the same note as case A — MeshWeaver.Plugins#1823 (*"no publication
 has sealed since 2026-09-12"*) and #1798 (*"9 events queued, nothing dispatched"*) — against a lane
-that was green (77 jobs, 0 failures, `Register the publication with memex` success) and an inbox that
+that was green (77 jobs, 0 failures, `Register the publication` success) and an inbox that
 returned `[]`. Both were closed on measurement; neither was ever a lane defect.
 
 **The fact that separates them was on the instance the whole time.** The release markers under the
@@ -394,7 +394,7 @@ protective — an empty snapshot under `FullReplace` would mirror the whole Spac
 until #4499 it logged, threw, and wrote **nothing** to the config node. From outside, a source
 refusing on *every single pass* was indistinguishable from one that is working.
 
-**Measured on memex.systemorph.com, 2026-09-16.** Two Spaces — `DeepSign` and `UWDeepfield` —
+**Measured on the control instance, 2026-09-16.** Two Spaces — `DeepSign` and `UWDeepfield` —
 refusing at **~32 passes/hour**, one every two minutes, on both replicas, for an unbounded duration.
 `DeepSign` was verified absent rather than merely reported absent: `061976bc` is a valid commit in
 MeshWeaver.Plugins and no `DeepSign` path exists in that tree nor anywhere on its `main`. The sync
@@ -437,7 +437,7 @@ not inferred from the message's "check the capitalisation"): neither is a typo, 
 | Space | Repository | What happened to the folder | The source is |
 |---|---|---|---|
 | `DeepSign` | MeshWeaver.Plugins | **renamed** to `Signature` by `c3262d1e9` (2026-09-12, *"provider-neutral Electronic Signature package (renames DeepSign)"*); `DeepSign/_GitSync` last imported at `933a002f`, before the rename | **orphaned** — `Signature/_GitSync` already syncs `Signature` on the same instance, so repointing this one would import the same package into a second Space |
-| `UWDeepfield` | MeshWeaver.Reinsurance | **deleted** by `896ed23` (2026-09-04, *"retire the Deepfield workstations"*), whose message already says *"their Spaces on memex and systemorph still GitSync from folders that no longer exist; retiring those is a mesh-side action"* | **retired** — superseded by `Underwriting` |
+| `UWDeepfield` | MeshWeaver.Reinsurance | **deleted** by `896ed23` (2026-09-04, *"retire the Deepfield workstations"*), whose message already says *"their Spaces on [two portal instances] still GitSync from folders that no longer exist; retiring those is a mesh-side action"* | **retired** — superseded by `Underwriting` |
 
 So the data remedy for both is to retire the source (delete the `_GitSync` node, or clear its
 `repositoryUrl`), never to rewrite `subdirectory`. That is why the settings tab's refused line offers

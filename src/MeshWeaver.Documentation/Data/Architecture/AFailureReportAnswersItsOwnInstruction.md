@@ -146,7 +146,7 @@ System.TimeoutException: [DeleteNode:commit] the bottom-up delete of 'Hosting/Tr
 no progress for 30s — 3 path(s) removed from storage so far
 ```
 
-(memex-cloud, 2026-09-14T08:45:38Z.)
+(The public instance, 2026-09-14T08:45:38Z.)
 
 `-` is the same rendering the line uses for *"there is nothing outstanding"*. The field did not
 abstain — **it asserted the opposite of the truth**: three paths were removed, the drain was stuck
@@ -322,7 +322,7 @@ by reading the registry at expiry, and production shows the difference plainly: 
 2026-09-02, and from then on
 
 ```text
-… do not widen the budget. Stuck leg(s): dispatch → Ops/Status/partnerre (delivery nxnf1DdwRU6mG0t4iI9bwA) | …
+… do not widen the budget. Stuck leg(s): dispatch → Ops/Status/globex (delivery nxnf1DdwRU6mG0t4iI9bwA) | …
 ```
 
 Same ask, same week, two subsystems; the one that read its own state at expiry became actionable and

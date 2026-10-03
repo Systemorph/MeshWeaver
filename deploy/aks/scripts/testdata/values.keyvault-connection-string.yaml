@@ -1,5 +1,5 @@
 # FIXTURE for check-chart-invariants.sh — a RECORD-DRIVEN instance whose database connection string
-# arrives from KEY VAULT, not from the values (the pearl shape, 2026-09-15).
+# arrives from KEY VAULT, not from the values (the fabrikam shape, 2026-09-15).
 #
 # 🚨 The shape every Provision since MeshWeaver.Plugins#1721 renders, and the one no combination here
 # rendered. The record renders the database ADDRESS into config.<half>.MEMEX_HOST (the Hosting
@@ -23,21 +23,21 @@ config:
   memex_portal:
     MEMEX_HOST: "memexaks-pg.postgres.database.azure.com"
     MEMEX_PORT: "5432"
-    MEMEX_DATABASENAME: "pearl"
+    MEMEX_DATABASENAME: "fabrikam"
   memex_migration:
     MEMEX_HOST: "memexaks-pg.postgres.database.azure.com"
     MEMEX_PORT: "5432"
-    MEMEX_DATABASENAME: "pearl"
+    MEMEX_DATABASENAME: "fabrikam"
 keyVaultSecrets:
   vaultName: "example-vault"
   tenantId: "00000000-0000-0000-0000-000000000000"
   identityClientId: "00000000-0000-0000-0000-000000000001"
-  name: "pearl-portal-keyvault"
-  syncedSecret: "pearl-portal-keyvault"
+  name: "fabrikam-portal-keyvault"
+  syncedSecret: "fabrikam-portal-keyvault"
   volumeName: "kv-portal-keyvault"
   mountPath: "/mnt/kv-portal-keyvault"
   secrets:
     - key: "ConnectionStrings__memex"
-      vaultSecret: "pearl-db-connection"
+      vaultSecret: "fabrikam-db-connection"
     - key: "Ai__KeyProtection__MasterKey"
-      vaultSecret: "pearl-Ai-KeyProtection-MasterKey"
+      vaultSecret: "fabrikam-Ai-KeyProtection-MasterKey"

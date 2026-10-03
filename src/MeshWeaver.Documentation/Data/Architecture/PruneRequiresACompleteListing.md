@@ -27,7 +27,7 @@ answer was laundered into a confident one, in opposite and equally silent direct
 | The **repository tree** (`OctokitGitHubRepoClient.TreeOf`) | "what does the repo carry at this commit" | GitHub answers **HTTP 200 with a partial list**, flagged only by `truncated: true` in the body — which nothing read | Every omitted file read as a deletion. Under `FullReplace` the import mirrors the Space away |
 | The **mesh snapshot** (`StaticRepoImporter.Run`) | "what does the partition currently hold" | a bare `MeshQueryRequest.FromQuery(…)` — no completeness declaration — gating a destructive decision | A node the snapshot omits is never a prune candidate; retired files survive forever |
 
-The second one is the shape MeshWeaver#3589 was *filed* about. On `memex.systemorph.com` the `Crm`
+The second one is the shape MeshWeaver#3589 was *filed* about. On the control instance the `Crm`
 partition had synced to the built commit and still held `Crm/Source/Mail`, `Crm/Source/MailTests`
 and `Crm/Source/MailView`, which the repository had retired. Because the source-fingerprint gate
 (MeshWeaver#2813) hashes the **live** source set, those three orphans made every `Crm` bundle

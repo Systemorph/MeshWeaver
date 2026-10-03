@@ -187,7 +187,7 @@ is R1's failure wearing a success message.
 | axis | what it protects | derivable today? |
 |---|---|---|
 | **1 — committed digest pins** | every `MW_IMAGE_DIGEST` / `platform-image-digest:` the fleet's workflows carry | **yes**, and already extracted — the same extractor the ACR lane runs |
-| **2 — deployment overlay pins** | every image a `values*.yaml` in `Systemorph/Memex` pins | **yes**, and already extracted: `extract_foreign_pins` has read this host since #4221. Measured 2026-09-13: **4 references** — `build` ×2, `pearl` ×2. The nightly run now prints them as a protected set (§6) |
+| **2 — deployment overlay pins** | every image a `values*.yaml` in the private deployments repository pins | **yes**, and already extracted: `extract_foreign_pins` has read this host since #4221. Measured 2026-09-13: **4 references** — the build instance ×2, an SME client instance ×2. The nightly run now prints them as a protected set (§6) |
 | **3 — what a live installation is RUNNING** | the closure of the image set built from the commit each installation answers with at `/api/version` | **yes, and it is the same code**. The mirror pushes the *identical* manifest under the *identical* tag and proves it by read-back, so a commit maps to the same tag here as in the ACR |
 | **0 — the bootstrap exception** | `ghcr.io/distribution/distribution` and `cesanta/docker_auth` | not applicable, and worth stating so it is never "missing": **a registry cannot serve the image that boots it.** Those two are pulled from outside and are never stored here, so they are never in this registry's protected set |
 
@@ -329,7 +329,7 @@ because of what the first live run found** ([run 34852827116](https://github.com
   fleet"*, while `release.yml` mirrors three repositories there on every official release. **A count
   alone would have hidden it.** Filed as #4323 and **answered in §8**, which also measures why
   `third-party` → `fleet-unlockable` — the correction the issue proposes — is not merely a
-  loosening but a **false red** on `memex-cloud`.
+  loosening but a **false red** on the public instance.
 - A **moving tag** is flagged where it appears — against the shared `FLOATING_TAGS` set
   (`latest`, `main`, `master`, `edge`, `stable`, `nightly`), case-insensitively, **not** the string
   `latest`: the extractor preserves whichever one an overlay wrote, and the other five move exactly
@@ -396,7 +396,7 @@ lane is the *whole* of the publication, and the mirror is older and busier than 
 ### 8.2 🚨 Why the disposition was NOT flipped: the correct-sounding fix REDS the lane
 
 `third-party` → `fleet-unlockable` reads like the correction. It is not, and the reason is
-measurable rather than a matter of taste. `memex-cloud`'s overlay pins **both**:
+measurable rather than a matter of taste. The public instance's overlay pins **both**:
 
 ```yaml
 portal:   { image: "meshweaver.azurecr.io/memex-portal-ai:3.0.0-ci.8411" }
@@ -417,7 +417,7 @@ per-host disposition is false about one half whichever way it reads:
 | value | false about | consequence |
 |---|---|---|
 | `third-party` | `systemorph/*` | our own mirror declared "never published by this fleet" — #4323 |
-| `fleet-unlockable` | `distribution/*` | **`memex-cloud` reds**, and the cleanup re-enable is blocked behind it |
+| `fleet-unlockable` | `distribution/*` | **the public instance reds**, and the cleanup re-enable is blocked behind it |
 
 The host unit was justified by a measurement — *"exactly two hosts … `ghcr.io` (2, one of which was
 a line of prose)"* — that was true of the **overlays** on 2026-09-13 and is still true of them
@@ -534,9 +534,9 @@ decision, not a retention one, and changing it moves what an unconfigured instal
 
 ### 8.6 🚨 `out-of-estate` — our images in a registry outside this fleet's reach (#3438)
 
-`Systemorph/PartnerRe.Memex` joined the fleet on 2026-09-14 with a **live** control instance
-(`partnerre.meshweaver.cloud`) whose overlay pinned the portal and migration images in
-`memexaksacrqoqqdqnhlaksg.azurecr.io` — an ACR in the **`PartnerRe Memex` subscription**, which this
+An enterprise client's deployments repository (`<client-deployments-repo>`) joined the fleet on
+2026-09-14 with a **live** control instance (`globex.example.com`) whose overlay pinned the portal and
+migration images in `<registry>.azurecr.io` — an ACR in a **subscription dedicated to that client**, which this
 lane's OIDC credential does not reach at all. Every rule in the vocabulary was a *false sentence*
 about it:
 
@@ -547,8 +547,8 @@ about it:
 | `derived-protected-set` | it asserts a cleanup exists there that deletes only the complement of a derived set. Nobody here is in a position to say that |
 
 🚨 **THE HOST IN THAT PARAGRAPH IS THE ONE IT WAS DECLARED ABOUT, AND IT HAS MOVED.** That
-estate was torn down on 2026-09-16 and rebuilt on 2026-09-17 in PartnerRe's *own* subscription
-(`5896de84`) and Entra tenant (`e51e062f`), minting `memexaksacr43rzd6faaix36.azurecr.io`; the
+estate was torn down on 2026-09-16 and rebuilt on 2026-09-17 in the enterprise client's *own* subscription
+(`<subscription-id>`) and Entra tenant (`<tenant-id>`), minting a new `<registry>.azurecr.io`; the
 overlay followed the same morning and the declaration did not, which held the lock lane red from
 2026-09-17 to 2026-09-21. (The three reds before that are a different cause and worth separating: the
 ramp-up portal stopped answering `/api/version` as it was torn down, which is the axis-3 refusal

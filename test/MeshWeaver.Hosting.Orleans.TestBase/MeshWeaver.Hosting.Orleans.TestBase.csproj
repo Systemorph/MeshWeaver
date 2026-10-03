@@ -25,6 +25,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- The deterministic fault injectors; FaultInjectionCluster puts one under every silo's store. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
     <!-- The IMeshBootstrap seam. It lives in the MONOLITH test base and must stay there: that
          project must never reference Orleans (23 in-process suites would drag a cluster's worth of
          packages), so the pure fluent API is defined there and the applicator that needs Orleans is
@@ -41,6 +43,7 @@
     <!-- The tests that build on this machinery, here and in MeshWeaver.Plugins (the storage and
          transport suites that run over an Orleans cluster). -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.FaultInjection.Test" />
     <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.Test" />
     <InternalsVisibleTo Include="MeshWeaver.AI.Orleans.TestBase" />
     <!-- The collaboration module's Orleans suite, in MeshWeaver.Plugins — same shape as the AI

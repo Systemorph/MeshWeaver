@@ -159,7 +159,7 @@ profiled the stages against each other.
 
 The paragraph above ended on "nobody has profiled the stages against each other". That has now been
 done, live, on the fleet registry itself. A read-only script
-(`rbuergi/Script/bundle-index-stage-timing` on memex.meshweaver.cloud, activity
+(`rbuergi/Script/bundle-index-stage-timing` on the plugin registry instance, activity
 `rbuergi/_Activity/89bbc75a3e4f45e09b4e513ac3c061f6`, pod
 `memex-portal-deployment-7777cfc77-slvwl`, 2026-09-26 18:15Z, core `4c8530d7dd`) timed each stage
 the index runs, in the running process, against the real `/data` share:

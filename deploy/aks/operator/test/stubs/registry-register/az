@@ -19,6 +19,11 @@ lookup() {  # lookup <name> → prints the value, returns 1 when absent
   return 1
 }
 case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret list")
+    [ "${HOSTING_RRAZ_LIST_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets list permission" >&2; exit 1; }
+    for pair in ${HOSTING_RRAZ_VALUES:-}; do printf '%s\n' "${pair%%=*}"; done
+    for f in "$state"/set.*; do [ -e "$f" ] && printf '%s\n' "${f##*/set.}"; done
+    exit 0 ;;
   "keyvault secret show")
     name="" query=""
     while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --query) query="${2:-}"; shift 2 ;; *) shift ;; esac; done

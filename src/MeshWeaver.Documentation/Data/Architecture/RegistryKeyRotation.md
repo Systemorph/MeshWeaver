@@ -25,8 +25,8 @@ The first rotation ran in this order:
 Two things were wrong with it.
 
 - **Adoption went to the wrong store.** Every Memex portal registers an `IInstanceKeyRegistry`, but
-  the instances live only in the registry's store (memex.meshweaver.cloud). Instance actions run on
-  the control instance (memex.systemorph.com), whose store holds no instance, so the adoption failed,
+  the instances live only in the plugin registry instance's store. Instance actions run on
+  the control instance, whose store holds no instance, so the adoption failed,
   *after* Key Vault already held the new key.
 - **Nothing stopped the job.** The operator job is a separate Kubernetes Job. A failed adoption
   failed the *run node*, but the Job carried on: the CSI driver synced the new value into the Secret,
@@ -96,8 +96,8 @@ authenticator accepts both. The rules are in `InstanceKeyRotation`, pure and uni
 
 The registry is the one the record's key authenticates at: its single consumer `pluginRepos` mount,
 or its own host when `isPluginRegistry`. Two registries, or none, is refused. The vault object comes
-from the Key Vault class that **declares** the token, never from the prefix rule. memex maps its
-token from the un-prefixed `PluginCatalog-RegistryToken` while its prefix is `memexsystemorph-`, so
+from the Key Vault class that **declares** the token, never from the prefix rule. The control instance maps its
+token from the un-prefixed `PluginCatalog-RegistryToken` while its prefix is `<prefix>-`, so
 the old plan would have written a key into an object nothing reads.
 
 ### Failure matrix
@@ -132,9 +132,9 @@ refuses reports `key_revoked=already`.
 
 | Half | Where | Needed by |
 |---|---|---|
-| the key-lifecycle routes + the staged slot | **core** image on the **registry** (memex-cloud) | every rotation and revocation |
-| `hosting-kv-rotate` + `hosting-registry-key` | the **operator image** on the control instance (`Hosting:Operator:Image`, applied by memex's `helm-release deploy`, not by any record) | the job's steps |
-| the plan (Hosting ≥ 1.18) | the **Hosting module** on the control instance (memex.systemorph.com) | the steps it plans |
+| the key-lifecycle routes + the staged slot | **core** image on the **plugin registry instance** | every rotation and revocation |
+| `hosting-kv-rotate` + `hosting-registry-key` | the **operator image** on the control instance (`Hosting:Operator:Image`, applied by the control instance's `helm-release deploy`, not by any record) | the job's steps |
+| the plan (Hosting ≥ 1.18) | the **Hosting module** on the control instance | the steps it plans |
 
 Every mixed state refuses **before anything is minted**:
 
@@ -142,28 +142,28 @@ Every mixed state refuses **before anything is minted**:
 - a new plan on an old operator image fails at `unknown argument '--object'`;
 - a new operator image against an old registry gets a 404 on `/api/instances/self`.
 
-memex-cloud does not need Hosting 1.18. Only the control instance plans rotations.
+The plugin registry instance does not need Hosting 1.18. Only the control instance plans rotations.
 
 ## Runbook
 
-1. **Registry.** Roll memex-cloud onto a set carrying the core change. Check that it serves the
-   surface: an anonymous `GET https://memex.meshweaver.cloud/api/instances/self` answers **401**
+1. **Registry.** Roll the plugin registry instance onto a set carrying the core change. Check that it serves the
+   surface: an anonymous `GET https://registry.example.com/api/instances/self` answers **401**
    (a 404 means it has not been rolled yet).
-2. **Operator image.** Publish the operator image from core `main`, set it as memex's
-   `Hosting:Operator:Image` (the record's `operator.image` plus the Memex overlay), and run memex's
+2. **Operator image.** Publish the operator image from core `main`, set it as the control instance's
+   `Hosting:Operator:Image` (the record's `operator.image` plus its deployment overlay), and run the control instance's
    `helm-release deploy`.
-3. **Hosting 1.18** on memex.systemorph.com. A dry run of each action below must show `--registry-url`
+3. **Hosting 1.18** on the control instance. A dry run of each action below must show `--registry-url`
    and a `Retire the previous key at the registry` step.
-4. **Rotate memex-cloud**, then **rotate memex**. On the control instance, create
+4. **Rotate the plugin registry instance**, then **rotate the control instance**. On the control instance, create
    `{deployment, requestedAction: RotateRegistryKey, confirmation: <id>}`, first with `dryRun: true`.
    A Done run logs `registry_instance`, `key_staged=1` (or `key_resumed=1`), `kv_rotated=1`,
-   `key_committed=1` and `verify`. Rotating memex restarts the control instance itself; the commit
+   `key_committed=1` and `verify`. Rotating the control instance restarts it itself; the commit
    runs inside the operator Job, so it still happens. Read the result with a `Sample` if the run node
    reports the outcome as not measured.
-5. **Revoke the outranked key** on memex, after memex is rotated:
-   `{deployment: memex, requestedAction: RevokeRegistryKey, revokeSecret: memex-portal-secrets,
-   revokeSecretKey: PluginCatalog__RegistryToken, confirmation: memex}`. The run names the instance
-   that key belonged to. Afterwards, drop the dead value from memex's chart-Secret values and from the
+5. **Revoke the outranked key** on the control instance, after it is rotated:
+   `{deployment: <control>, requestedAction: RevokeRegistryKey, revokeSecret: memex-portal-secrets,
+   revokeSecretKey: PluginCatalog__RegistryToken, confirmation: <control>}`. The run names the instance
+   that key belonged to. Afterwards, drop the dead value from the control instance's chart-Secret values and from the
    record's `vaultValuesKeys`.
 6. **After each step, check the catalog loads.** Run a `Logs` action over the following 15 minutes
    for `401` and `RegistryPackageSource` (there should be none), and open the Store on the rotated

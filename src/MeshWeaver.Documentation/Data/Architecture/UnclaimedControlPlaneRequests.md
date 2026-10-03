@@ -23,11 +23,11 @@ an executed action still shows its creation time.
 
 | Node | Reading |
 |---|---|
-| `memex-restart-20260910-1140-activate-ai16` | created 11:33:56Z, **`state: Running`, `phase: Run operator job`, step 5/8, no `finishedAt`** — still, nine hours later. Log ends 11:36:54Z. |
-| `memex-sample-20260910-1207-settled` | created 12:02:03Z, `version 11`, `state: Done`, started 12:05:44Z, **finished 12:05:49Z** |
-| `Ops/Status/memex`, `Ops/Status/memex-cloud` | both written **16:01:18Z**, both `Healthy` |
-| `memex-cloud-restart-20260910-1601-activate-mail16` | created 16:00:53Z — **withdrawn by its requester at 16:05Z**; the content carries no `requestedAction` at all |
-| `memexcloud-logs-20260910-gitsync237` | created 17:32:21Z, `requestedAction: Logs`, `version 1`, `log: []`, still untouched at 18:28Z |
+| `control-restart-20260910-1140-activate-ai16` | created 11:33:56Z, **`state: Running`, `phase: Run operator job`, step 5/8, no `finishedAt`** — still, nine hours later. Log ends 11:36:54Z. |
+| `control-sample-20260910-1207-settled` | created 12:02:03Z, `version 11`, `state: Done`, started 12:05:44Z, **finished 12:05:49Z** |
+| `Ops/Status/<control>`, `Ops/Status/<public>` | both written **16:01:18Z**, both `Healthy` |
+| `public-restart-20260910-1601-activate-mail16` | created 16:00:53Z — **withdrawn by its requester at 16:05Z**; the content carries no `requestedAction` at all |
+| `public-logs-20260910-gitsync237` | created 17:32:21Z, `requestedAction: Logs`, `version 1`, `log: []`, still untouched at 18:28Z |
 
 ## Three things this falsifies
 
@@ -37,7 +37,7 @@ executed.** The observation was made at 11:57Z, while they were still slow; the 
 processed" outlived the state it described. A snapshot of a transition is not a property.
 
 **2. The stuck restart did not stop the plane.** Six actions completed *after* it froze at 11:36:54Z
-— including a **Restart** (`memex-cloud-restart-…-1150`, `version 21`) and repeated **Samples of the
+— including a **Restart** (`public-restart-…-1150`, `version 21`) and repeated **Samples of the
 very deployment it is stuck on**. Neither the action class nor the deployment is blocked, so it holds
 no lease either needs. The plane was still writing at 16:01:18Z, **4 h 24 m** after the freeze.
 
@@ -112,9 +112,9 @@ steady-state write at all.
 | withdrawn by its requester | `version 2`, `log: []` | for ever |
 
 Only **one** clean instance is in the record — the 17:32Z `Logs` request, unclaimed for 56 minutes —
-and it is one deployment, one action class. That supports *"a Logs request on memex-cloud went
+and it is one deployment, one action class. That supports *"a Logs request on the public instance went
 unclaimed for ~1 h"*. It does **not** support *"the control plane executes nothing"*: after 12:02Z
-only two `InstanceAction` nodes exist at all and **both target `memex-cloud`**, so whether `memex`'s
+only two `InstanceAction` nodes exist at all and **both target the public instance**, so whether the control instance's
 requests are being served is **unknown, because nobody has asked**.
 
 That is [Controls That Cannot Fail](/Doc/Architecture/ControlsThatCannotFail)'s *"a count over a

@@ -309,7 +309,7 @@ public record LayoutDefinition(IMessageHub Hub)
     /// stamped with a framework identity the serving replica does not run, so its areas are never
     /// registered) a reader of a customer letter got sixty framework area names in the middle of
     /// it. Measured 2026-09-17 on memex.systemorph.com,
-    /// <c>CollaborationNotus/PrereadToNotus20260918</c>.</para>
+    /// <c>CollaborationInitech/PrereadToInitech20260918</c>.</para>
     ///
     /// <para>🚨 <b>The diagnostic stays English, and stays present.</b> It is operator copy, not UI
     /// copy — <see cref="AreaFrameClassifier"/> says so and depends on it: its fallback recognises

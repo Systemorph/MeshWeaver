@@ -34,7 +34,7 @@ public class ApiTokenAuthenticationHandler(
     IServiceProvider serviceProvider)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, loggerFactory, encoder)
 {
-    public const string SchemeName = "ApiToken";
+    public const string SchemeName = MeshWeaver.Mesh.Security.ServiceIdentity.TokenAuthenticationType;
 
     /// <summary>
     /// <see cref="HttpContext.Items"/> key flagging that authentication failed because token
@@ -242,6 +242,15 @@ public class ApiTokenAuthenticationHandler(
             new(ClaimTypes.NameIdentifier, apiToken.UserId),
             new("token_label", apiToken.Label),
         };
+
+        // A SERVICE token authenticates as its service principal. The middleware reads this claim
+        // only on an identity of THIS scheme (ServiceIdentity.TokenAuthenticationType), so no other
+        // sign-in can assert it. Validation already refused the token unless its identity record
+        // exists and is not revoked (ApiTokenService.ConfirmServicePrincipal).
+        if (!string.IsNullOrEmpty(apiToken.ServiceIdentityPath))
+            claims.Add(new Claim(
+                MeshWeaver.Mesh.Security.ServiceIdentity.PrincipalKindClaim,
+                MeshWeaver.Mesh.Security.ServiceIdentity.ServicePrincipalKind));
 
         // Stamp the token's Roles list as ClaimTypes.Role claims. Without
         // this, UserContextMiddleware sets AccessContext.Roles to an empty

@@ -170,7 +170,7 @@ this:
   **destination address** while the ordering invariant it protects (`SynchronizationStream`'s
   receive-side monotonicity guard) is **per stream**, so all traffic to one process's cache hub was
   serialised whether or not any ordering relationship existed between two frames. That
-  over-broadness is what let one destination stack ~62 legs. Measured on memex-cloud 2026-09-19 in
+  over-broadness is what let one destination stack ~62 legs. Measured on the public instance 2026-09-19 in
   two independent episodes (`fcf31578#14`, `67341d12#7`) and again 2026-09-20 on both pods. Not
   addressed here — addressed in
   [Ordered Route Channels](../OrderedRouteChannels), which narrows the channel key to

@@ -1,0 +1,27 @@
+# FIXTURE for check-chart-invariants.sh — EU-only AI processing (policy `ai-eu-only-processing`).
+#
+# The instance switch, a declared route per model catalog section, OpenRouter's endpoint and the
+# OpenRouterEU section. Until the portal ConfigMap named them, a Deployments record declaring any of
+# these reached no container while helm reported success. Three shapes: set values must render
+# TRIMMED; a blank and a whitespace-only value must render NO key (an "" endpoint replaces the
+# section's default endpoint with nothing). The evidence check in the driver asserts all three, and
+# that the chart defaults render none of these keys.
+config:
+  memex_portal:
+    AI__RequiredDataResidency: " Eu "
+    Anthropic__DataResidency: "Global"
+    Anthropic__DataRetention: ""
+    AzureFoundry__DataResidency: "   "
+    OpenRouter__Endpoint: "https://openrouter.ai/api/v1"
+    OpenRouter__DataResidency: "Global"
+    OpenRouterEU__Endpoint: "https://eu.openrouter.ai/api/v1"
+    OpenRouterEU__DataResidency: "Eu"
+    OpenRouterEU__DataRetention: "ZDR"
+    OpenRouterEU__Models__0: "z-ai/glm-5.3"
+    OpenRouterEU__Models__1: ""
+    OpenRouterEU__Models__15: "mistralai/mistral-large"
+    AzureOpenAI__DataResidency: "Eu"
+    OpenAI__DataResidency: "Global"
+    OpenAICompatible__DataResidency: "Unknown"
+    OpenAICompatible__DataRetention: "self-hosted"
+    Features__Ai__Providers__OpenRouterEU: "true"

@@ -11,7 +11,7 @@ Order: -20260830
 Setting **Update policy → None** is how an operator freezes an install on the image it is running.
 It did freeze the scheduled checks — and then the install rolled anyway, on every pod start.
 
-`memex.meshweaver.cloud` had read `policy: None` all day on 2026-08-30 and still rolled twice, to
+The public instance had read `policy: None` all day on 2026-08-30 and still rolled twice, to
 `ci.6664` at 11:54 UTC and `ci.6739` at 15:03 UTC. The policy node's own history recorded both: a
 `Startup` pass that evaluated a candidate as though updates were enabled, then — seconds later — a
 `PolicyChange` pass concluding *"updates are disabled on this install (Admin/UpdatePolicy = None)"*,

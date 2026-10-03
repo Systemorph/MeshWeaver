@@ -9,7 +9,7 @@ merge to main ─▶ "Build and Test" (green) ─▶ images job builds+pushes  m
                                                                               │
         ┌─────────────────────────────────────────────────────────────────────┼──────────────── … every install in the world
         ▼                                   ▼                                   ▼
-   memex install                       prod install                      external install
+   control install                     portal install                    external install
    SelfUpdateHostedService lists the registry (its OWN workload identity or instance key), per its
    OWN Admin/UpdatePolicy, and — on the fleet — HANDS the selected release to the control instance
    (one signed `self-update-available` event; the control plane opens the Roll, MeshWeaver#4098,
@@ -32,7 +32,7 @@ so every `az aks command invoke` deploy leg failed.) Pull-based removes that fai
 Every check reports exactly one verdict — logged, and stamped on `Admin/UpdatePolicy`
 (`LastCheckedAt`/`LastCheckVerdict`/`LastCheckTrigger`) so it survives a deployment that never set
 this service's log level. "Checked and found nothing" and "never checked" are different facts;
-until #2553 they produced identical evidence, which is how memex sat three builds behind for 7 h.
+until #2553 they produced identical evidence, which is how the control instance sat three builds behind for 7 h.
 
 Code: `memex/Memex.Portal.Shared/SelfUpdate/` — `SelfUpdateHostedService` (the checker), `AcrTagLister`
 (ACR via AAD→ACR token exchange), `VersionSelect` (which tag), `KubernetesDeploymentUpdater` (in-cluster
@@ -40,7 +40,7 @@ PATCH). Wired by `AddSelfUpdate()` in `MemexConfiguration.cs`.
 
 **Every self-update roll must compile every dynamic NodeType** — the new image's framework identity
 misses the whole `/data` assembly cache by design, and a lazily-compiled mesh leaves any un-visited
-type hanging its pages ("no definition", 60 s `SubscribeRequest` timeouts — memex-cloud 2026-07-30).
+type hanging its pages ("no definition", 60 s `SubscribeRequest` timeouts — the public instance, 2026-07-30).
 The self-updater itself only patches the image; the compiling happens on the NEW pod at startup via
 `PreWarm__DynamicTypes` (see `README.md` → "Operating it — rolling a new image, and the traps"): every new pod sweeps and compiles all dynamic
 NodeTypes at start, so an un-visited type can no longer sit "no definition" until its pages hang.
@@ -54,7 +54,7 @@ roll instead of surfacing as user-facing errors. It never rides the startup prob
 `bake-gate-readiness-only`, MeshWeaver#5544): a refusing pod stays alive and out of the Service,
 and nothing is killed.
 
-It was enabled on 2026-08-02 and reverted the same day. The first gated roll on memex-cloud stalled
+It was enabled on 2026-08-02 and reverted the same day. The first gated roll on the public instance stalled
 with `7 NodeType(s) regressed on this image`, and those were **false** regressions: the pod log
 contained no `CS####` compile error at all, only the sweep timing out across the roll window —
 `No response received in hub cache/… within 00:01:00 for request SubscribeRequest → target

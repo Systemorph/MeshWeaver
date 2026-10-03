@@ -13,7 +13,7 @@ public class FluentBuilderTest
 {
     /// <summary>
     /// A new instance ASKS FOR ITS CERTIFICATE without anyone saying so. The issuer is a record
-    /// default, not something an overlay writes as an annotation: pearl.meshweaver.cloud had the
+    /// default, not something an overlay writes as an annotation: fabrikam.example.com had the
     /// annotation in its checked-in overlay and not on its record, a Provision renders from the
     /// record, and the host was served another instance's certificate for nine hours
     /// (2026-09-15). The default is what makes that shape unreachable for the next instance.
@@ -101,6 +101,71 @@ public class FluentBuilderTest
         Assert.Equal("hosting", built.Operator!.Namespace);
         Assert.Equal(60, built.StartupProbe!.FailureThreshold);
         Assert.Equal("true", built.ExtraPortalConfig["Features__Onboarding__InvitationOnly"]);
+    }
+
+    /// <summary>
+    /// The EU-only AI keys a record carries reach the portal config under exactly the names the
+    /// portal reads and the chart renders: the EU route's section (<c>OpenRouterEU__*</c>), the
+    /// instance requirement (<c>AI__RequiredDataResidency</c>) and a section's own processing marks
+    /// (<c>{Section}__DataResidency</c> / <c>__DataRetention</c>). A record that states none of
+    /// them renders none — every existing record renders byte-identically.
+    /// </summary>
+    [Fact]
+    public void TheEuAiKeysRenderUnderThePortalsNames()
+    {
+        var record = new DeploymentContent().WithAi(a => a
+            .OpenRouter(["z-ai/glm-5.3"])
+            .OpenRouterEU(["z-ai/glm-5.3", "mistralai/mistral-medium-3"])
+            .RequiredDataResidency(" Eu ")
+            .Tiers(heavy: "Provider/OpenRouterEU/z-ai/glm-5.3"));
+        record = record with
+        {
+            Ai = record.Ai! with
+            {
+                Anthropic = new ModelProvider { Models = ["claude-sonnet-5"], DataResidency = "Eu", DataRetention = "ZDR" },
+                // An Order / Enabled stated on the EU route anyway renders NOTHING — the chart has no
+                // OpenRouterEU__Order and no feature flag reader, and Memex's key coverage would red.
+                OpenRouterEU = record.Ai.OpenRouterEU! with { Order = 3, Enabled = true, DataResidency = "Eu" },
+            },
+        };
+
+        var c = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm);
+
+        Assert.Equal("z-ai/glm-5.3", c["OpenRouterEU__Models__0"]);
+        Assert.Equal("mistralai/mistral-medium-3", c["OpenRouterEU__Models__1"]);
+        Assert.False(c.ContainsKey("OpenRouterEU__Order"), "no Order key exists for the EU route");
+        Assert.False(c.ContainsKey("Features__Ai__Providers__OpenRouterEU"), "no feature flag is rendered for the EU route");
+        Assert.Equal("Eu", c["OpenRouterEU__DataResidency"]);
+        Assert.False(c.ContainsKey("OpenRouterEU__Endpoint"), "no override stated — the portal's EU default stands");
+        Assert.Equal("Eu", c["AI__RequiredDataResidency"]);
+        Assert.Equal("Eu", c["Anthropic__DataResidency"]);
+        Assert.Equal("ZDR", c["Anthropic__DataRetention"]);
+        Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", c["ModelTier__Heavy"]);
+        Assert.False(c.ContainsKey("OpenRouter__DataResidency"), "an unstated mark renders nothing");
+
+        var endpoint = new DeploymentContent().WithAi(a => a.OpenRouterEU([], endpoint: " https://eu.openrouter.example/api/v1 "));
+        Assert.Equal("https://eu.openrouter.example/api/v1",
+            DeploymentPortalConfig.PortalConfig(endpoint, PortalConfigOptions.Helm)["OpenRouterEU__Endpoint"]);
+
+        // Blank renders nothing — the chart's contract for these keys: a blank endpoint is the EU
+        // default, a blank model slot names nothing, and neither becomes an empty key.
+        var blanks = new DeploymentContent().WithAi(a => a.OpenRouterEU(["", " z-ai/glm-5.3 ", "  "], endpoint: "  "));
+        var bc = DeploymentPortalConfig.PortalConfig(blanks, PortalConfigOptions.Helm);
+        Assert.False(bc.ContainsKey("OpenRouterEU__Endpoint"), "a blank endpoint renders no key");
+        Assert.Equal("z-ai/glm-5.3", bc["OpenRouterEU__Models__0"]);
+        Assert.False(bc.ContainsKey("OpenRouterEU__Models__1"), "blank slots render no key");
+
+        var plain = DeploymentPortalConfig.PortalConfig(new DeploymentContent().WithAi(a => a.OpenRouter(["z-ai/glm-5.3"])), PortalConfigOptions.Helm);
+        Assert.DoesNotContain(plain.Keys, k => k.StartsWith("OpenRouterEU__", StringComparison.Ordinal)
+                                               || k.EndsWith("__DataResidency", StringComparison.Ordinal)
+                                               || k.EndsWith("__DataRetention", StringComparison.Ordinal)
+                                               || k == "AI__RequiredDataResidency");
+
+        // The record round-trips through its JSON form with the new fields intact.
+        var back = DeploymentRecordJson.Read(DeploymentRecordJson.Write(record))!;
+        Assert.Equal("Eu", back.Ai!.RequiredDataResidency);
+        Assert.Equal(2, back.Ai.OpenRouterEU!.Models.Count);
+        Assert.Equal("ZDR", back.Ai.Anthropic!.DataRetention);
     }
 
     [Fact]

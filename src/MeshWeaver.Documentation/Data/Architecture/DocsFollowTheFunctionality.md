@@ -59,7 +59,7 @@ on boot (see [Static Repo Import](../StaticRepoImport)). Both read the same byte
 is authored read-only: `Doc/_Policy` sets `Create/Update/Delete = false`, so a live edit is not
 merely discouraged, it is refused.
 
-Measured against `memex.meshweaver.cloud` (running `0a1eabdc0`, 12 commits behind `main`):
+Measured against the public instance (running `0a1eabdc0`, 12 commits behind `main`):
 
 | | Disk | Mesh | On mesh but not on disk |
 |---|---|---|---|

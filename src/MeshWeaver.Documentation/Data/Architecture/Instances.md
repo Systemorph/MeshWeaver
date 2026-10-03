@@ -13,16 +13,18 @@ registry and one PostgreSQL server — only the namespace, domain and database d
 merged to `main` reaches all of them via self-update. They differ in data, branding, sign-in
 configuration, and who may log in.
 
-## Where the inventory lives
+## Where an estate's instances are declared
 
-**Not here.** Which instances exist, who each is for, what they are named and which database each
-uses is operational detail about live services — it belongs with whoever runs them.
+**Not in any doc.** Every estate keeps its instances as DATA in a private configuration repository:
+one `Hosting/Deployment` record per instance, the GitSynced Spaces it serves, and the
+per-environment overlays and operations lanes that act on them. That repository is configuration —
+the actual data the instances keep — and is normally administered through the estate's control
+instance, not edited by hand. It is not a documentation source and not a module source: platform
+documentation lives here (`Doc/Architecture`) and in the module docs; code lives in the platform and
+plugin repositories. The live view is the control instance's Deployments board.
 
 - **Running an instance of your own?** Nothing on this page needs changing. Read it for the model
   (below): how versions are read, how self-update works, and how instances are created and deleted.
-- **Operating an installation Systemorph runs?** The inventory is in the private
-  [Systemorph/Memex](https://github.com/Systemorph/Memex) repo — `docs/deployments.md` for what runs
-  where, `deployments/aks/` for each one's configuration.
 
 - **What each instance actually runs** — platform build, commit, framework identity, update policy and
   every module's coordinate — is not written down anywhere: every instance **reports it** to the control
@@ -51,7 +53,7 @@ self-updater has seen. The cluster read is the break-glass form
 
 ```bash
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
-  "kubectl -n memex get deployment memex-portal-deployment \
+  "kubectl -n <namespace> get deployment memex-portal-deployment \
    -o jsonpath='{.spec.template.spec.containers[0].image}'"
 # → meshweaver.azurecr.io/memex-portal-ai:ci.<N>
 ```
@@ -71,7 +73,7 @@ of [DeploymentAKS.md](/Doc/Architecture/DeploymentAKS) for you.
 ## Instance lifecycle — creating and deleting instances
 
 **There is no "create instance" / "delete instance" button in the portal today.** An instance is
-provisioned with the deploy tooling, not from the running app — the company instance is where you
+provisioned with the deploy tooling, not from the running app — the control instance is where you
 *run* that tooling (or drive it over MCP), not a control plane that spins up other instances.
 
 **Create** a new instance — full runbook in
@@ -84,9 +86,9 @@ provisioned with the deploy tooling, not from the running app — the company in
    `selfUpdate.azureClientId`).
 4. Run the env's `deploy.sh` — helm install + PVCs + KV `SecretProviderClass` + ingress + TLS.
 
-> 🚨 **Env folders live in the PRIVATE `Systemorph/Memex` repository**, not under
-> `deploy/aks/envs/<env>/` — they moved out on 2026-08-08/09 because their directory names are
-> tenant identities. The maintained, ordered procedure is `docs/new-deployment.md` there;
+> 🚨 **Env folders live in the estate's PRIVATE configuration repository**, not under
+> `deploy/aks/envs/<env>/` — their directory names are tenant identities (see
+> [Where an estate's instances are declared](#where-an-estates-instances-are-declared)).
 > `deploy/aks/envs/example/` in this repository is the reference template only.
 5. Wire sign-in redirect URIs + invitation/email config for the new domain.
 
@@ -99,24 +101,24 @@ provisioned with the deploy tooling, not from the running app — the company in
 3. Remove the namespace from `portalNamespaces` (drops its federated credential) and delete its
    DNS record + TLS cert + git-ignored `envs/<env>/` config.
 
-> Turning the company instance into a real control plane (create / tear down instances **from the
+> Turning the control instance into a real control plane (create / tear down instances **from the
 > UI**, calling the Azure + Helm APIs behind an admin gate) is a possible future feature, not a
 > current capability.
 
-## The admin Instances tab (company instance only)
+## The admin Instances tab (control instance only)
 
-**Settings ▸ Administration ▸ Instances** lists every portal on the cluster live from the k8s API —
+**Admin app (`/Admin`) ▸ Instances** lists every portal on the cluster live from the k8s API —
 domain, namespace, running version (image tag), replica health — with per-instance Grafana/Loki log
 deep links and a guided create-instance **plan** generator (commands only; nothing deploys itself).
 
-The tab exists **only on portal.example.com**, doubly gated:
+The tab exists **only on the control instance**, doubly gated:
 
 - **`Instances:Enabled`** (config, default `false`) — the Settings menu item is not even created on
   an install that doesn't set it. In the Helm chart, `instancesAdmin.clusterRead` drives BOTH this
-  flag and the RBAC below; `deploy/aks/values.aks.yaml` (the `memex` env overlay) sets it `true`,
-  customer/public envs inherit the default.
+  flag and the RBAC below; the control instance's env overlay sets it `true`; every other
+  instance inherits the default.
 - **Cluster-read RBAC** (`instancesAdmin.clusterRead`) — reading deployments/ingresses across
-  namespaces needs a cluster-scoped grant, given only to the company instance (a tenant pod must not
+  namespaces needs a cluster-scoped grant, given only to the control instance (a tenant pod must not
   enumerate the cluster). Without it the tab (where enabled) shows "Cluster query unavailable".
 
 Log links need `Instances:GrafanaBaseUrl` (Helm: `instancesAdmin.grafanaBaseUrl`) — the Grafana

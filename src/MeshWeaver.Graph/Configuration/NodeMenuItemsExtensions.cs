@@ -188,7 +188,18 @@ public static class NodeMenuItemsExtensions
         // onboarding) — and a CombineLatest whose leg never produces stalls silently and forever,
         // outside any test's methodTimeout. "No such user node" is a defined, screened-safe value
         // (PresentationScreen.Off); it must arrive as a VALUE, not as something to wait for.
-        => GetMenuContext(host).CombineLatest(
+    {
+        // The PERSON viewing, for the ownership gate of Settings… below. Read on the render turn and
+        // never inside the projection. The request-scoped context is not always the person: on a
+        // user root the menu renders under the SYSTEM identity (measured: Context = system-security,
+        // CircuitContext = the person), so an infrastructure identity there falls back to the
+        // circuit's. This decides only whether an entry is OFFERED; the page gates itself.
+        var menuAccess = host.Hub.ServiceProvider.GetService<AccessService>();
+        var requestViewer = menuAccess?.Context?.ObjectId;
+        var renderViewerId = PresentationScreenExtensions.IsPersonalViewer(requestViewer)
+            ? requestViewer
+            : menuAccess?.CircuitContext?.ObjectId;
+        return GetMenuContext(host).CombineLatest(
             host.ViewerScreen().Seeded(), (menuCtx, screen) =>
         {
             var (menuPath, _, menuNode, perms) = menuCtx;
@@ -201,7 +212,7 @@ public static class NodeMenuItemsExtensions
             // its own without either side knowing about the other.
             //   10-18  edit / organize            ✏️ 🔖 🕶️ ➡️ 📋 🗑️
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
-            //   50     lifecycle                   ♻️
+            //   45-50  settings / lifecycle        ⚙️ ♻️
 
             // A USER partition root (the user's home) is NOT a normal editable node: Edit / Move /
             // Copy / Delete on the root would rewrite, relocate, duplicate or WIPE the entire
@@ -255,7 +266,17 @@ public static class NodeMenuItemsExtensions
             var stopSync = StopSyncLayoutArea.GetMenuItem(menuNode, menuPath, perms);
             if (stopSync != null) items.Add(stopSync with { Order = 34, Icon = "🔌" });
 
-            // ── Group 3: lifecycle ──
+            // ── Group 3: settings / lifecycle ──
+            // "Settings…" opens THIS node's settings — its metadata, access, versions (and, on a
+            // Space root, the Space's own management). It acts on the node, so it lives in the
+            // node's menu; a person's own things are in the person app, the instance's in /Admin.
+            // On a person's root it is the person app itself, which opens for its OWNER only
+            // (UserNodeType.OwnSettings) — so the entry is gated on ownership, not on Update
+            // (which an admin may also hold), and the menu never offers a page that refuses.
+            var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath,
+                isProtectedRoot && !PersonApp.IsOwnRoot(menuPath, renderViewerId) ? Permission.None : perms);
+            if (settings != null) items.Add(settings with { Icon = "⚙️" });
+
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
             if (recycle != null) items.Add(recycle with { Order = 50, Icon = "♻️" });
 
@@ -273,6 +294,7 @@ public static class NodeMenuItemsExtensions
             return (IReadOnlyCollection<NodeMenuItemDefinition>)
                 WithoutUnrenderableAreas(host.LayoutDefinition, menuPath, items.ToImmutable());
         });
+    }
 
     /// <summary>
     /// Removes the entries that point at an area THIS hub has no renderer for — the node menu must

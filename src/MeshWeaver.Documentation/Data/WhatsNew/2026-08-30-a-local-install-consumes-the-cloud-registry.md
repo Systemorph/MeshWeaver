@@ -1,7 +1,7 @@
 ---
 Name: A local install consumes the cloud registry — and Homebrew delivers it
 Category: Feature
-Description: memex-local gains a registry mode — the local portal becomes a consumer of memex.meshweaver.cloud, running the CI-built image and landing the compiled modules a source checkout could never land — and the Homebrew tap is now published by CI, so `brew upgrade memex-local` follows main.
+Description: memex-local gains a registry mode — the local portal becomes a consumer of a cloud registry instance, running the CI-built image and landing the compiled modules a source checkout could never land — and the Homebrew tap is now published by CI, so `brew upgrade memex-local` follows main.
 Icon: Sparkle
 Order: -20260830
 ---
@@ -14,7 +14,7 @@ content and silently skipped its binary: no Radzen charts, no Analysis or Entity
 speech — twenty-six of twenty-eight module packages recorded as installed with no DLL anywhere, and
 the five the image *requires* had to be blanked so the portal would report ready at all.
 
-`memex-local registry https://memex.meshweaver.cloud --key mwr_…` turns that install into what every
+`memex-local registry https://registry.example.com --key mwr_…` turns that install into what every
 cloud instance already is: a **consumer** of the registry. It pulls the CI-built multi-arch image
 (the native arm64 member — no checkout, no .NET SDK), registers itself on first boot with a key a
 platform admin minted, installs the packages it is granted and lands their compiled modules from the

@@ -319,14 +319,14 @@ these, both verified before they were written anywhere:
 
 | name | authoritative source | how the copy was proved correct |
 |---|---|---|
-| `MESHWEAVER_APP_PRIVATE_KEY` | keyvault `meshweaverkeyvault/github-app-privatekey` | minted an RS256 App JWT with it and called `GET https://api.github.com/app` — the answer was `id 4220566 / meshweaver-cloud`, the App `auto-arm.yml` names |
-| `REGISTRY_PUBLISH_TOKEN` | keyvault `Systemorph/memexcloud-Plugins-Registry-PublishToken` | `sha256` of the vault value equals `sha256` of the RUNNING registry pod's `Plugins__Registry__PublishToken` (`printenv` inside a `kubectl exec`, piped through `sha256sum`) — a byte-identity proof that prints no value |
+| `MESHWEAVER_APP_PRIVATE_KEY` | keyvault `<vault>/github-app-privatekey` | minted an RS256 App JWT with it and called `GET https://api.github.com/app` — the answer was `id 4220566 / meshweaver-cloud`, the App `auto-arm.yml` names |
+| `REGISTRY_PUBLISH_TOKEN` | keyvault `<vault>/<registry-deployment>-Plugins-Registry-PublishToken` | `sha256` of the vault value equals `sha256` of the RUNNING registry pod's `Plugins__Registry__PublishToken` (`printenv` inside a `kubectl exec`, piped through `sha256sum`) — a byte-identity proof that prints no value |
 
 🚨 **Pick the vault object by the DEPLOYMENT, never by the secret's bare name.** Both portals keep a
 publish token and an instance key, and the prefix is the only thing that tells them apart:
-`memex.meshweaver.cloud` is the **memex-cloud** deployment (the `memex` deployment serves
-`memex.systemorph.com`), so the registry every satellite's `vars.MW_REGISTRY_URL` names is fed by
-the `memexcloud-`-prefixed objects. The unprefixed `Systemorph/Plugins-Registry-PublishToken` is a
+the plugin registry instance is its own deployment, distinct from the control instance, so the
+registry every satellite's `vars.MW_REGISTRY_URL` names is fed by the objects prefixed with the
+registry deployment's name. The unprefixed `<vault>/Plugins-Registry-PublishToken` is a
 *different, equally valid-looking* token for the other portal — measured 2026-09-07, its hash does
 not match the running registry, so copying it would have installed a credential that authenticates
 against nothing and fails deep in the module lane.

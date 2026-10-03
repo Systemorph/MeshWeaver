@@ -48,7 +48,7 @@ Put those together and a mapping that is lost once is lost for the life of the p
 
 ## What was measured
 
-`memex-cloud`, 2026-09-01, via Loki (31 d retention, so the windows below are fully covered) and
+The public instance, 2026-09-01, via Loki (31 d retention, so the windows below are fully covered) and
 `kubectl get`:
 
 | Observation | Reading |
@@ -75,11 +75,11 @@ check (`ContentFileResolver.Resolve`). It is issued from `portal/nodeops-{meshId
 `ReadBudget.Default` (10 s). When the reply cannot get back, the budget is the only terminal, and the
 route answers **503 after ~10.3 s, per request, for as long as the process lives**.
 
-### The chain, measured end to end on `memex-cloud`, 2026-09-02
+### The chain, measured end to end on the public instance, 2026-09-02
 
 | # | Observation | Reading |
 |---|---|---|
-| 1 | `Content read timed out for DoublePendulum/content/og-card.png` — **33 occurrences in 24 h, every one on a single pod**, zero on the other six replicas and zero in namespace `memex` | Per-pod and persistent. Neither a settle window nor a cluster-wide transport fault can produce that distribution |
+| 1 | `Content read timed out for DoublePendulum/content/og-card.png` — **33 occurrences in 24 h, every one on a single pod**, zero on the other six replicas and zero in the control instance's namespace | Per-pod and persistent. Neither a settle window nor a cluster-wide transport fault can produce that distribution |
 | 2 | Same millisecond: `HubUnreachableException: Reading content collection config from 'DoublePendulum' gave up after 10s … Reader: Hub portal/nodeops-Gpdh… RunLevel=Started Queue(buffer=0,deferred=0,exec=0) … Target: NO LOCAL HUB` | The reader is healthy and idle. Nothing arrived — this is the reply leg, not the request leg. 🚨 **The `Target: NO LOCAL HUB` clause carried NO information when this was captured** and must not be read as evidence here: the probe behind it asked the READER's own hosted-hub collection, and a per-node hub is hosted by the MESH hub, so on this seam it printed that verdict for every read alike. Fixed in [#3931](https://github.com/Systemorph/MeshWeaver/issues/3931); rows 3 and 5 are what carry this verdict, and they are independent of it |
 | 3 | `[ROUTE] Directed delivery to pod hub 'portal/nodeops-Gpdh…' was refused: no silo in this cluster is currently serving that hub. Message RawJson (…) **from `AgenticEngineering`** was NOT posted` — logged by **four** different peer pods | The owning per-node hub DID produce the `GetDataResponse`. It had nowhere to go. Exactly the "reply produced, no route home" pair, now on the directed transport |
 | 4 | Onset: the refusals and the content timeouts start in the **same hour**, ~8 h after that pod had started clean and served fine | Lost-after-landing, not never-landed |
@@ -106,8 +106,8 @@ programme.
 Two Loki queries, no mutation, and the first one alone settles the family:
 
 ```
-sum by (namespace,pod) (count_over_time({namespace=~"memex|memex-cloud"} |= "Content read timed out" [24h]))
-sum by (pod)           (count_over_time({namespace="memex-cloud"} |= "portal/nodeops-" |= "was refused" [1h]))
+sum by (namespace,pod) (count_over_time({namespace=~"<control-ns>|<public-ns>"} |= "Content read timed out" [24h]))
+sum by (pod)           (count_over_time({namespace="<public-ns>"} |= "portal/nodeops-" |= "was refused" [1h]))
 ```
 
 🚨 The second filter is `portal/nodeops-` — the **prefix**, deliberately, with no mesh id. Every

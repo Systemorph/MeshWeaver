@@ -21,9 +21,9 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>The production line</b>, memex 2026-09-17T16:54:55Z, verbatim:</para>
 /// <code>
 /// fail: MeshWeaver.Blazor.Components.CollaborativeMarkdownView[0]
-///       Deleting comment on CollaborationNotus/PrereadToNotus20260918/_Comment/b1bbf6a2 …
+///       Deleting comment on CollaborationInitech/PrereadToInitech20260918/_Comment/b1bbf6a2 …
 ///       System.InvalidOperationException: Node not found:
-///           CollaborationNotus/PrereadToNotus20260918/_Comment/b1bbf6a2
+///           CollaborationInitech/PrereadToInitech20260918/_Comment/b1bbf6a2
 /// </code>
 ///
 /// <para><b>What the user did.</b> Clicked Delete on a comment. The comment was already gone —

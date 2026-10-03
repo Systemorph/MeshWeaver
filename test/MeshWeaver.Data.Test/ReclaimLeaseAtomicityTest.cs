@@ -183,8 +183,8 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
 
     /// <summary>
     /// 🚨 <b>THE HANDOVER.</b> Between the reclaim's claim and its taking the parking entry, the
-    /// mesh-node cache's idle release DETACHES the stream (taking ownership and dropping the lease
-    /// bookkeeping) and, having lost its own race to a re-attached consumer, PARKS it again. The
+    /// mesh-node cache's idle release DETACHES the stream (taking ownership and cancelling the
+    /// reclaim claim) and, having lost its own race to a re-attached consumer, PARKS it again. The
     /// re-parked stream is owned afresh; the reclaim whose claim was superseded must not take that
     /// new parking entry and dispose a stream a consumer has just re-attached to.
     /// </summary>
@@ -206,7 +206,7 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
         {
             if (!ReferenceEquals(stream, mirror) || Interlocked.Exchange(ref reparked, 1) != 0)
                 return;
-            // The idle release: detach (ownership moves out, lease bookkeeping dropped) ...
+            // The idle release: detach (ownership moves out, reclaim claim cancelled) ...
             var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
             detached.Any(s => ReferenceEquals(s, mirror)).Should().BeTrue("the parked mirror is what the idle release detaches");
             // ... then loses its zero-subscriber re-check and hands the stream back.
@@ -227,6 +227,103 @@ public class ReclaimLeaseAtomicityTest(ITestOutputHelper output) : HubTestBase(o
             "the stream was detached and RE-PARKED after the reclaim's claim — that is a new "
             + "ownership, and a superseded claim must not dispose it under the consumer that "
             + "re-attached");
+    }
+
+    /// <summary>
+    /// A detached mirror can be re-parked after the cache loses its release race. Existing
+    /// holders must still count when a caller that resolved the mirror before detach takes its
+    /// lease afterwards; releasing that new lease must not complete the original reader.
+    /// </summary>
+    [HubFact]
+    public async Task ALeaseTakenAfterDetachAndRePark_DoesNotEraseTheOriginalHolder()
+    {
+        var (workspace, _) = await StartAndSettleAsync();
+        var ws = (Workspace)workspace;
+        var reference = new CollectionReference(nameof(BusinessUnit));
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var (mirror, originalLease) = ws.AcquireRemoteStreamUnchecked<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), reference);
+        using var originalHolder = originalLease;
+        ReferenceEquals(originalLease, Disposable.Empty).Should().BeFalse("the original reader holds a real lease");
+        await AwaitSubscribesAsync(baselineSubscribes + 1, "the original mirror must reach the owner");
+
+        var completed = 0;
+        using var reader = mirror.Subscribe(_ => { }, () => Interlocked.Exchange(ref completed, 1));
+        var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
+        detached.Should().Contain(mirror, "detach must take the actual held mirror");
+        ws.ParkRemoteStreams(detached);
+
+        // This caller resolved the same mirror before detach, then takes its lease after re-park.
+        using var laterLease = ws.TryLeaseResolved(mirror);
+        laterLease.Should().NotBeNull("a live re-parked mirror can grant an in-flight reader's lease");
+        laterLease!.Dispose();
+
+        StreamLiveness.IsUsable(mirror).Should().BeTrue("the original holder has not released its lease");
+        Volatile.Read(ref completed).Should().Be(0, "releasing the later lease must not complete the original observer");
+
+        originalLease.Dispose();
+        StreamLiveness.IsUsable(mirror).Should().BeFalse("the last declared holder releases the parked mirror");
+        Volatile.Read(ref completed).Should().Be(1, "the observer completes when the final holder releases");
+    }
+
+    /// <summary>The reverse release order must preserve the later holder, too.</summary>
+    [HubFact]
+    public async Task AnOriginalLeaseReleasedAfterRePark_DoesNotConsumeTheLaterHolder()
+    {
+        var (workspace, _) = await StartAndSettleAsync();
+        var ws = (Workspace)workspace;
+        var reference = new CollectionReference(nameof(BusinessUnit));
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var (mirror, originalLease) = ws.AcquireRemoteStreamUnchecked<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), reference);
+        using var originalHolder = originalLease;
+        ReferenceEquals(originalLease, Disposable.Empty).Should().BeFalse("the original reader holds a real lease");
+        await AwaitSubscribesAsync(baselineSubscribes + 1, "the original mirror must reach the owner");
+
+        var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
+        detached.Should().Contain(mirror, "detach must take the held mirror");
+        ws.ParkRemoteStreams(detached);
+        using var laterLease = ws.TryLeaseResolved(mirror);
+        laterLease.Should().NotBeNull("the later holder has a live mirror");
+
+        originalLease.Dispose();
+        StreamLiveness.IsUsable(mirror).Should().BeTrue("the later holder still owns its lease");
+        laterLease!.Dispose();
+        StreamLiveness.IsUsable(mirror).Should().BeFalse("the final release reclaims the parked mirror");
+    }
+
+    /// <summary>A parking observation made before handover cannot claim the new ownership.</summary>
+    [HubFact]
+    public async Task ADetachAndRePark_BeforeTheClaim_SupersedesTheParkingObservation()
+    {
+        var (workspace, changeFeed) = await StartAndSettleAsync();
+        var ws = (Workspace)workspace;
+        var reference = new CollectionReference(nameof(BusinessUnit));
+        var baselineSubscribes = Volatile.Read(ref _subscribeCount);
+        var (mirror, lease) = ws.AcquireRemoteStreamUnchecked<InstanceCollection, CollectionReference>(
+            CreateHostAddress(), reference);
+        using var holder = lease;
+        await AwaitSubscribesAsync(baselineSubscribes + 1, "the mirror must reach the owner");
+        PublishOwnerChange(changeFeed);
+        var handedOver = 0;
+        ws.ReclaimBeforeClaim = stream =>
+        {
+            if (!ReferenceEquals(stream, mirror) || Interlocked.Exchange(ref handedOver, 1) != 0)
+                return;
+            var detached = ws.DetachRemoteStreams(CreateHostAddress(), reference);
+            detached.Should().Contain(mirror, "the handover must take the observed parking entry");
+            ws.ParkRemoteStreams(detached);
+        };
+        try { lease.Dispose(); }
+        finally { ws.ReclaimBeforeClaim = null; }
+
+        Volatile.Read(ref handedOver).Should().Be(1, "the handover must land before the claim");
+        StreamLiveness.IsUsable(mirror).Should().BeTrue("a stale parking observation cannot reclaim the new ownership");
+
+        using var nextHolder = ws.TryLeaseResolved(mirror);
+        nextHolder.Should().NotBeNull("the new ownership grants a real hold");
+        nextHolder!.Dispose();
+        StreamLiveness.IsUsable(mirror).Should().BeFalse("a reclaim of the current ownership still releases the unheld mirror");
     }
 
     /// <summary>Activates both hubs and waits for the owner's initial snapshot.</summary>

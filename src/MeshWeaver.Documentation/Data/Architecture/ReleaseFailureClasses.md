@@ -178,6 +178,15 @@ the **repair**: `ReleasePostCondition` exists because a consumed release request
 the compile just produced. That remedy can itself fail — and when it did, it reported the failure in
 the one shape nobody can act on.
 
+The check must compare against the **release**, not only the preceding NodeType record. On
+2026-09-27, `Store/Purchase` advertised build 1794 while its release named 1487;
+`Hosting/InstanceRequest` advertised 10608 while its release named 10583. Both request stamps were
+handled. A subsequent adoption of the *same* current build leaves `before.LastCompiledVersion ==
+result.Version`, so a comparison of those two records alone misses the still-stale release. For
+canonical release ids, the eight-character suffix is `SHA256(Collection/ContentPath)`; comparing it
+with the result's durable coordinates detects that case without reading another node or guessing
+from timestamps. Legacy ids or results without store coordinates give no verdict from this hash.
+
 ### What was measured
 
 `Admin/_LogIncident/a98877ee6204cad1`, category `MeshWeaver.Graph.CompileWatcher`, **8 occurrences
@@ -406,6 +415,17 @@ the stamp still names that path, and that check is the whole guard:
   that path names these bytes;
 - every later settle rewrites or clears the stamp, so a stamp that still names the path still describes
   the current build.
+
+Prebuilt adoption also retires the pending marker and its reason in the owner write when the adopted
+coordinates prove they name a different build. Same-coordinate replays retain the marker: the hash
+in the release id still names those bytes. Missing store coordinates cannot prove obsolescence and
+also retain it. An adoption is a build publication without a compile settle; leaving
+the previous build's marker in place would let its late release move the adopted build's pointer
+backwards. The existing release pointer and unspent author notes retain their usual adoption policy.
+The regression case `APrebuiltAdoption_RetiresThePreviousBuildsPendingRelease` drives the real seeder
+with PE bytes, checks that the new build landed, then creates the old pending release and checks
+that the pointer does not follow it. Before the repair, the same real seeder left the old marker
+standing despite advancing `lastCompiledVersion` and the assembly identity.
 
 A faulted write therefore faults the watcher. The hub-watcher re-establish then re-derives the
 stamp and the listing and retries the adoption, rather than logging once and never asking again.

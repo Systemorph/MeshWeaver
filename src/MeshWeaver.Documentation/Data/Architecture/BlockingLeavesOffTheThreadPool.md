@@ -1,7 +1,7 @@
 ---
 Name: Blocking Leaves Off the ThreadPool
 Category: Architecture
-Description: Every IIoPool ran its blocking leaves on borrowed ThreadPool workers under caps up to 256, so a burst of network-volume reads, bundle reads or git waits could hold every worker a silo's grain turns need; and a kernel code cell's compile ran on one. What Orleans' "Thread Pool execution stalled" readings on memex-cloud say was GC and what was blocking, the fix, and what it does not explain.
+Description: Every IIoPool ran its blocking leaves on borrowed ThreadPool workers under caps up to 256, so a burst of network-volume reads, bundle reads or git waits could hold every worker a silo's grain turns need; and a kernel code cell's compile ran on one. What Orleans' "Thread Pool execution stalled" readings on the public instance say was GC and what was blocking, the fix, and what it does not explain.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h16"/><circle cx="19" cy="12" r="2"/></svg>
 ---
 
@@ -15,9 +15,9 @@ Three things produce that line: a GC pause (every managed thread stops), a machi
 throttling, a stopped container), and genuine starvation, where every worker is busy or blocked and the
 queue waits for the pool to inject a thread.
 
-## What the readings on memex-cloud say (#5388)
+## What the readings on the public instance say (#5388)
 
-Measured with `Logs` InstanceActions on memex.meshweaver.cloud (`Ops/logs-memexcloud-20260925-5388-*`).
+Measured with `Logs` InstanceActions on the public instance (`Ops/logs-<public>-20260925-5388-*`).
 Each stall produces two lines (the stall and a `Self-monitoring … degraded` line).
 
 | window | images (core) | stall readings | longest |

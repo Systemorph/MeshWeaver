@@ -103,8 +103,14 @@ public static class PackageInstaller
         // Two gates, in order, both on the ACTION. Entitlement answers "may you" (#830); acceptance
         // answers "have you agreed to the terms" — different questions, neither substituting for
         // the other, and a licence that asks nothing costs a single null check.
+        //
+        // A third gate, on the PLATFORM (policy package-min-mesh-version): a FRESH install of a
+        // version whose declared minMeshVersion is above the running platform is refused, naming
+        // both versions — its source would compile against members this image does not have. An
+        // update is held upstream, before anything is fetched (CatalogLayoutAreas.InstallOrUpdate).
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
+            .SelectMany(_ => PackagePlatformFloorGate.RequireForFreshInstall(hub, manifest, logger))
             .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
                 hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
     }
@@ -1927,7 +1933,7 @@ public static class PackageInstaller
                     _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
                         $"path:{partition} scope:subtree limit:{QueryLimit}")))
                 .Take(1)
-                .Timeout(TimeSpan.FromSeconds(30))
+                .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"listing the children of partition '{partition}' (scoped public read)")
                 .Select(change => (IReadOnlyList<string>)change.Items.Select(n => n.Path).ToList());
 
         return currentChildren.SelectMany(children =>
@@ -3009,6 +3015,11 @@ public static class PackageInstaller
                     // alone, exactly as ManifestFiles' own doc promises (Copilot catch: a full
                     // install passes the catalog manifest through, so without this it leaked in).
                     ManifestFiles = null,
+                    // An install of the candidate is the end of any hold on it
+                    // (policy package-min-mesh-version).
+                    HeldUpdate = null,
+                    HeldUpdateDispatch = null,
+                    HeldUpdateDispatchedAt = null,
                     // The per-package policy (Auto / Notify / None) — seeded once, carried
                     // forward on every re-stamp; the legacy flag is kept consistent for readers
                     // that still branch on it.
@@ -3538,7 +3549,7 @@ public static class PackageInstaller
                         .SelectMany(_ => persistence.Exists(path))
                         .Where(exists => exists)
                         .FirstAsync()
-                        .Timeout(TimeSpan.FromSeconds(30)))
+                        .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for '{path}' to become visible in storage"))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -3769,7 +3780,7 @@ public static class PackageInstaller
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
                     .Take(1)
-                    .Timeout(TimeSpan.FromSeconds(30))
+                    .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for root '{root.Path}' to reconcile its retype to '{root.NodeType}'")
                     .Select(_ => System.Reactive.Unit.Default);
 
         // 🚨 AND the retype must be PERSISTED, not just reconciled on the stream: the owning
@@ -3791,7 +3802,7 @@ public static class PackageInstaller
                     .Where(n => n is not null
                         && string.Equals(n.NodeType, root.NodeType, StringComparison.Ordinal))
                     .FirstAsync()
-                    .Timeout(TimeSpan.FromSeconds(30))
+                    .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for root '{root.Path}' to persist its retype to '{root.NodeType}'")
                     .Select(_ => System.Reactive.Unit.Default);
 
         // Eager provisioning must also cover the package's OWN partition: with a dynamic root
@@ -4325,7 +4336,7 @@ public static class PackageInstaller
                         .SelectMany(_ => persistence.Exists(path))
                         .Where(exists => exists)
                         .FirstAsync()
-                        .Timeout(TimeSpan.FromSeconds(30)))
+                        .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for NodeType '{path}' to become visible in storage"))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
         IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>

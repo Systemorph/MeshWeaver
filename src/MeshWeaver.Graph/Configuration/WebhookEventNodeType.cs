@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -148,6 +149,12 @@ public static class WebhookInbox
         /// the stored body (MeshWeaver.Plugins#1913).
         /// </summary>
         public string? SenderKey { get; init; }
+
+        /// <summary>
+        /// True when the delivery asked only to be VERIFIED (<see cref="VerifyOnlyHeader"/>): it
+        /// verified, and nothing was stored (<see cref="NodePath"/> is null).
+        /// </summary>
+        public bool VerifyOnly { get; init; }
     }
 
     /// <summary>
@@ -208,8 +215,8 @@ public static class WebhookInbox
     /// The per-SENDER key a delivery verifies against when the target's own shared secret does not:
     /// the name of the first child of <paramref name="secretConfigKey"/>'s configuration section
     /// whose value verifies <paramref name="signatureHeader"/> over <paramref name="body"/> — e.g.
-    /// <c>Hosting:PlatformWebhookSecret:pearl</c> (env
-    /// <c>Hosting__PlatformWebhookSecret__pearl</c>) answers <c>pearl</c>. Null when none does.
+    /// <c>Hosting:PlatformWebhookSecret:fabrikam</c> (env
+    /// <c>Hosting__PlatformWebhookSecret__fabrikam</c>) answers <c>fabrikam</c>. Null when none does.
     ///
     /// <para>🚨 The same shape <c>Hosting:ModuleReportSecret:{deployment}</c> already has, and for
     /// the same reason: a secret held by every sender proves possession, not identity
@@ -223,22 +230,53 @@ public static class WebhookInbox
     /// list first. A blank child is no key. Pure over the configuration.</para>
     /// </summary>
     public static string? SenderKeyOf(
-        IConfiguration? configuration, string secretConfigKey, string? signatureHeader, string body)
+        IConfiguration? configuration, string secretConfigKey, string? signatureHeader, string body) =>
+        MatchSender(InstanceSecrets.Candidates(null, configuration, secretConfigKey), signatureHeader, body)?.Sender;
+
+    /// <summary>
+    /// Which per-sender key verified a delivery, and whether it was that sender's CURRENT key or
+    /// the previous one a rotation still accepts (<see cref="InstanceSecrets.PreviousSubKey"/>).
+    /// </summary>
+    /// <param name="Sender">The child name, e.g. a deployment id.</param>
+    /// <param name="WithCurrent">True when the current key verified; false for the rotation's previous key.</param>
+    public sealed record SenderMatch(string Sender, bool WithCurrent);
+
+    /// <summary>
+    /// The sender whose key verifies <paramref name="signatureHeader"/> over <paramref name="body"/>,
+    /// among <paramref name="candidates"/> (<see cref="InstanceSecrets.Candidates"/>: per child, the
+    /// current key first, then a rotation's previous key). Null when none does, and null when MORE
+    /// than one sender does, because then nobody can be named (see <see cref="SenderKeyOf"/>).
+    /// Pure.
+    /// </summary>
+    public static SenderMatch? MatchSender(
+        IEnumerable<(string Child, ImmutableList<string> Values)> candidates, string? signatureHeader, string body)
     {
-        if (configuration is null || string.IsNullOrWhiteSpace(signatureHeader))
+        if (string.IsNullOrWhiteSpace(signatureHeader))
             return null;
-        string? sender = null;
-        foreach (var child in configuration.GetSection(secretConfigKey).GetChildren())
+        SenderMatch? match = null;
+        foreach (var (child, values) in candidates)
         {
-            if (string.IsNullOrWhiteSpace(child.Value)
-                || !VerifyHmacSha256(signatureHeader, body, child.Value))
+            var index = values.FindIndex(v => !string.IsNullOrWhiteSpace(v) && VerifyHmacSha256(signatureHeader, body, v));
+            if (index < 0)
                 continue;
-            if (sender is not null)
+            if (match is not null)
                 return null;                    // ambiguous — two senders share one key
-            sender = child.Key;
+            match = new SenderMatch(child, index == 0);
         }
-        return sender;
+        return match;
     }
+
+    /// <summary>
+    /// The request header that asks the inbox to VERIFY a delivery without storing it
+    /// (value <c>true</c>). A sender uses it to test its key: the answer says whether the signature
+    /// verified and, for a per-sender key, as whom. Nothing is written, so a test causes nothing.
+    /// </summary>
+    public const string VerifyOnlyHeader = "X-MeshWeaver-Verify-Only";
+
+    /// <summary>Whether the headers ask for a verify-only delivery. Pure.</summary>
+    public static bool IsVerifyOnly(IEnumerable<KeyValuePair<string, string>> headers) =>
+        headers.Any(h => string.Equals(h.Key, VerifyOnlyHeader, StringComparison.OrdinalIgnoreCase)
+                         && string.Equals(h.Value?.Trim(), "true", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Registers the WebhookEvent node type on the mesh builder.</summary>
     public static TBuilder AddWebhookInbox<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
@@ -320,9 +358,18 @@ public static class WebhookInbox
                 g => string.Join(", ", g.Select(h => h.Value)),
                 StringComparer.OrdinalIgnoreCase);
 
-        var signatureVerified = false;
-        string? senderKey = null;
-        if (matched.SecretConfigKey is { Length: > 0 } secretConfigKey)
+        var verifyOnly = IsVerifyOnly(headers);
+        if (matched.SecretConfigKey is not { Length: > 0 } secretConfigKey)
+            // A verify-only request to a target that verifies nothing has nothing to test.
+            return verifyOnly
+                ? Observable.Return(new DeliveryResult(DeliveryStatus.Accepted) { VerifyOnly = true })
+                : Store(hub, normalized, contentType, kept, body, signatureVerified: false, senderKey: null);
+
+        // The portal-set sender keys (InstanceSecrets) are read from a live catalog; wait for its
+        // first listing so the first delivery after a start is not checked against configuration alone.
+        var catalog = hub.ServiceProvider.GetService<InstanceSecretCatalog>();
+        var ready = catalog?.WhenLoaded ?? Observable.Return(System.Reactive.Unit.Default);
+        return ready.SelectMany(_ =>
         {
             // Resolved per delivery, not captured once: the secret is rotatable configuration, and
             // a value read at startup would keep verifying against the retired one.
@@ -331,17 +378,41 @@ public static class WebhookInbox
             if (string.IsNullOrWhiteSpace(secret))
                 return Observable.Return(new DeliveryResult(DeliveryStatus.SecretUnavailable));
             kept.TryGetValue(SignatureHeader, out var provided);
+            SenderMatch? sender = null;
             if (!VerifyHmacSha256(provided, body, secret))
             {
                 // Not the shared secret — a sender holding its OWN key under this one (Plugins#1913)?
-                // Stored, and marked, so the consumer can hold it to what that sender may cause.
-                senderKey = SenderKeyOf(configuration, secretConfigKey, provided, body);
-                if (senderKey is null)
+                // Its key may be mounted (configuration) or set in the portal (InstanceSecrets), and
+                // during a rotation its previous key still verifies.
+                sender = MatchSender(InstanceSecrets.Candidates(catalog, configuration, secretConfigKey), provided, body);
+                if (sender is null)
                     return Observable.Return(new DeliveryResult(DeliveryStatus.SignatureInvalid));
+                // Recorded on the portal-set key (a no-op for a mounted one): when it was last
+                // verified, and — the first time the CURRENT key verifies — the end of its rotation.
+                InstanceSecrets.RecordUse(hub, $"{secretConfigKey}:{sender.Sender}", ok: true,
+                        result: verifyOnly
+                            ? LocalizableText.Keyed($"test signature verified as '{sender.Sender}'",
+                                "secret.use.testVerified", ("sender", sender.Sender))
+                            : LocalizableText.Keyed($"announcement verified as '{sender.Sender}'",
+                                "secret.use.announcementVerified", ("sender", sender.Sender)),
+                        verifiedWithCurrent: sender.WithCurrent)
+                    .Subscribe(_ => { }, _ => { });
             }
-            signatureVerified = true;
-        }
+            if (verifyOnly)
+                return Observable.Return(new DeliveryResult(DeliveryStatus.Accepted)
+                {
+                    SignatureVerified = true,
+                    SenderKey = sender?.Sender,
+                    VerifyOnly = true,
+                });
+            return Store(hub, normalized, contentType, kept, body, signatureVerified: true, senderKey: sender?.Sender);
+        });
+    }
 
+    private static IObservable<DeliveryResult> Store(
+        IMessageHub hub, string normalized, string? contentType,
+        ImmutableDictionary<string, string> kept, string body, bool signatureVerified, string? senderKey)
+    {
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null)
             return Observable.Throw<DeliveryResult>(

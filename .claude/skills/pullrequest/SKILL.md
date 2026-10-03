@@ -102,7 +102,7 @@ gh pr merge PR_NUMBER --merge
 ## 🚨🚨🚨 The one rule: main must be GREEN before you merge
 
 **The pull-based self-update deploys `main`.** The `memex-local autoroll` watches the moving
-`*-local:latest` image, and the AKS portals (memex / memex-cloud) self-roll to the latest
+`*-local:latest` image, and the AKS portals self-roll to the latest
 green CI image. So `main`'s CI is not a formality — it is the source of the image that ships.
 
 - **Red main** (build/test failure) → no valid image is produced → the self-update **cannot roll
@@ -397,6 +397,12 @@ with the harness `Monitor` `ws:` source for zero-poll delivery. Deferred — the
 enough today.
 
 ## 🚦 The merge queue — `--auto` enqueues, the steward re-queues, you never re-order
+
+> 🚨 **The queue is OFF on core `main`** (measured 2026-09-27: `enqueuePullRequest` → "No merge
+> queue found for branch 'main'"; no `merge_queue` rule on the ruleset). `--auto` ARMS auto-merge and
+> GitHub merges when the required set is green; no step of the merge waits on another repository
+> (policy `core-merge-never-blocked`, Doc/Architecture/OnePromotionGate). The section below is how
+> the queue works when it is enabled.
 
 Core `main` merges through GitHub's **merge queue** (ruleset `main pr protection`, rule
 `merge_queue`; the full manual is

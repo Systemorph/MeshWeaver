@@ -141,13 +141,18 @@ public class ObjectPolymorphicConverter(
                 {
                     // Deserialize to the specific type using cleaned JSON
                     // Normalize to ensure $type is first (required for parameterized constructor types)
-                    return JsonElementNormalizer.Deserialize(cleanedElement, typeInfo!.Type, options)!;
+                    return (options.UnmappedMemberHandling == JsonUnmappedMemberHandling.Disallow
+                            && typeInfo!.Type.IsSealed
+                        ? JsonElementNormalizer.DeserializeIgnoringDiscriminator(
+                            cleanedElement, typeInfo.Type, options)
+                        : JsonElementNormalizer.Deserialize(cleanedElement, typeInfo!.Type, options))!;
                 }
                 catch (Exception ex) when (
-                    ex is JsonException
-                    or NotSupportedException
-                    or InvalidOperationException
-                    or ArgumentException)
+                    options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
+                    && (ex is JsonException
+                        or NotSupportedException
+                        or InvalidOperationException
+                        or ArgumentException))
                 {
                     // Registered type but the stored JSON no longer fits it. Don't throw
                     // (a throw faults the node read → wedged grain); preserve the raw JSON
@@ -232,14 +237,23 @@ public class ObjectPolymorphicConverter(
         var start = reader;
         try
         {
+            if (options.UnmappedMemberHandling == JsonUnmappedMemberHandling.Disallow
+                && typeInfo!.Type.IsSealed)
+            {
+                using var document = JsonDocument.ParseValue(ref reader);
+                result = JsonElementNormalizer.DeserializeIgnoringDiscriminator(
+                    document.RootElement, typeInfo.Type, options)!;
+                return true;
+            }
             result = JsonSerializer.Deserialize(ref reader, typeInfo!.Type, options)!;
             return true;
         }
         catch (Exception ex) when (
-            ex is JsonException
-            or NotSupportedException
-            or InvalidOperationException
-            or ArgumentException)
+            options.UnmappedMemberHandling != JsonUnmappedMemberHandling.Disallow
+            && (ex is JsonException
+                or NotSupportedException
+                or InvalidOperationException
+                or ArgumentException))
         {
             // Same contract as the general path: a registered type whose stored JSON no longer fits
             // is preserved as raw JSON (a throw faults the node read → wedged grain), logged loud.

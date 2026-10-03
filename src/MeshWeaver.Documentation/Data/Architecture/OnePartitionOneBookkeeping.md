@@ -34,7 +34,7 @@ Writer 1 does not touch the install record. Writer 2 computes its next delta *fr
 after writer 1 has run, writer 2's baseline is a claim about a mesh that no longer exists — and a
 delta computed from it skips exactly the files it believes did not change.
 
-## What it cost to learn (measured, memex.systemorph.com, 2026-09-14)
+## What it cost to learn (measured, control instance, 2026-09-14)
 
 `Store` is both: a GitSync space held by `SealedSyncGate` at the sealed Plugins commit `627fb3cd`
 (Store sources 1.10.3), and the target of the registry-installed package `Plugins/Store` with
@@ -166,7 +166,7 @@ with no `RepoPath` — a remote registry, a registered `IPackageSource` — name
 answers *"no repository to attribute a seal to"* and the lane lists at the configured ref. The
 control instance's plugin source is exactly that, and its configured ref is the default, `HEAD`.
 
-#### What it cost the second time (measured, memex.systemorph.com, 2026-09-17, [#4588](https://github.com/Systemorph/MeshWeaver/issues/4588))
+#### What it cost the second time (measured, control instance, 2026-09-17, [#4588](https://github.com/Systemorph/MeshWeaver/issues/4588))
 
 1. **14:34:30Z** — the boot install stamped `Plugins/Hosting` 1.22.1 with **`installedFromRef: HEAD`**
    and a 222-file map, having written `main`'s tree into `Hosting`.
@@ -288,7 +288,7 @@ GitSync import has the identical blind spot from the other side: it is a delta b
 **commits**, so it writes what moved between the previous sealed commit and the new one, and leaves
 everything else alone. That is correct exactly while the mesh equals the previous commit's tree.
 
-**Measured on memex.systemorph.com, 2026-09-17, in two partitions of nineteen.**
+**Measured on the control instance, 2026-09-17, in two partitions of nineteen.**
 
 | partition | what its sync said | what the partition held |
 |---|---|---|
@@ -322,7 +322,7 @@ denominator, so "0 drifted" is never read without "of how many".
 
 ### Why not the other two answers
 
-- **Always re-import in full.** This is what the git-diff was introduced to stop — the memex-cloud
+- **Always re-import in full.** This is what the git-diff was introduced to stop — the public instance's
   outage loop of 2026-07-23, where a routine push re-materialised whole partitions and stormed the
   live compiler. And it would not even work, per `Crm` above: a full import at an unchanged
   fingerprint never reads the partition.

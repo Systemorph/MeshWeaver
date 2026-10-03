@@ -118,7 +118,7 @@ replacement yet is HELD with that plugin named.
   to the target's schema before the image moves, so a portal is never rolled ahead of its database
   (`DbVersionGate` would refuse to serve).
 * **A `Reconcile` keeps the rolled image and runs its migration** — the precedent is
-  `Ops/Actions/reconcile-pearl-20260921-migrate-ci9077`. It is the remedy for a roll that moved the
+  `Ops/Actions/reconcile-fabrikam-20260921-migrate-ci9077`. It is the remedy for a roll that moved the
   image without its migration (a pod crash-looping on `DbVersionGate`).
 * **An OPEN routed action blocks later announcements until it settles.** `SelfUpdateRouting.Decide`
   never opens a second Roll or Restart while one is open on the deployment; the announcer re-delivers,

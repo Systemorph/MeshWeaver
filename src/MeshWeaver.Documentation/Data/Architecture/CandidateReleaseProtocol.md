@@ -145,7 +145,7 @@ break and rolls everywhere else.
 
 The first gate a candidate meets — before the combo — is `ReleaseAvailabilityService`: does every
 installed package have a sealed bake under the candidate's framework identity? Until 2026-09-03 that
-question was answered by PRESENCE, and memex-cloud rolled to ci.7621 on it: every bundle was there,
+question was answered by PRESENCE, and the public instance rolled to ci.7621 on it: every bundle was there,
 and the portal then declined SocialMedia at adoption because its NodeTypes had been built against a
 `MeshWeaver.Markdown.Collaboration` build the same identity's sealed module set did not carry.
 
@@ -207,15 +207,15 @@ Modules reach an instance by two paths, and each records its coordinate differen
 | **GitSync / repo import** (how most modules actually arrive) | `{Space}/_GitSync`, `nodeType:GitHubSyncConfig` | `repositoryUrl` + `branch` + `subdirectory` + **`lastSyncCommitSha`** |
 | **PackageInstaller** | `Plugins/{id}`, `nodeType:Package` | `PackageManifest.ModuleVersion` |
 
-Verified live on memex-cloud — `SocialMedia/_GitSync` carries
+Verified live on the public instance — `SocialMedia/_GitSync` carries
 `repositoryUrl=…/MeshWeaver.SocialMedia`, `branch=main`, `subdirectory=SocialMedia`,
 `lastSyncCommitSha=d19534d6…`. That is a complete, exact combo coordinate.
 
 The reason the mistake was easy: `Plugins/*` holds only `_Policy` on that portal — **zero install
 records** — and it is tempting to read "no install records" as "no version recorded". But
 `ModuleDiscoveryService` documents the true state plainly: *"on real instances modules arrive through
-per-Space `{Space}/_GitSync` entries, not the plugin catalog: memex carries 37 sync configs and zero
-install records."* The information was never missing; it was in the other shape.
+per-Space `{Space}/_GitSync` entries, not the plugin catalog"* — the measured instance carried 37 sync
+configs and zero install records. The information was never missing; it was in the other shape.
 
 **So the first task is a READER, not a writer:** one query that returns an instance's full combo —
 every module with its source and pinned ref — folding both shapes into one list. A reader that
@@ -265,8 +265,8 @@ registered.**
 
 | namespace | maxSurge | maxUnavailable | surge-first? |
 |---|---|---|---|
-| memex-cloud | 1 | **0** | yes |
-| **memex** | 1 | **1** | **NO** |
+| the public instance | 1 | **0** | yes |
+| **the control instance** | 1 | **1** | **NO** |
 
 With `maxUnavailable: 1` at `replicas: 1`, Kubernetes may delete the only serving pod before the
 replacement is ready — so on that portal readiness refusal protects nothing even once the gate is

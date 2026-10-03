@@ -53,7 +53,9 @@ for pair in "${copies[@]}"; do
 done
 
 kv_exists() {
-  az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1
+  hosting::kv_exists "$vault" "$1"; local rc=$?
+  [ "$rc" -eq 2 ] && hosting::die "could not LIST vault ${vault} to see whether $1 exists — refusing to read a refused listing as 'absent'. The identity needs \`list\` on ${vault}."
+  return "$rc"
 }
 
 created=0 kept=0 drift=0

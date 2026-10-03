@@ -13,6 +13,6 @@ Blazor portal, the new Next-based portal, or both side by side — and a Next-on
 Blazor at all: no circuit, no server-side rendering pipeline, just the mesh services the modern
 shell talks to.
 
-On a portal serving both — like meshweaver.cloud — add `?gui=next` to any page to switch your
+On a portal serving both, add `?gui=next` to any page to switch your
 browser to the new shell, and `?gui=blazor` to switch back. The choice sticks per browser; every
 page keeps its address across the switch.

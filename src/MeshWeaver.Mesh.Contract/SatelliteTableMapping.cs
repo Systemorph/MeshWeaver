@@ -31,7 +31,12 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // the entry is what makes a nodeType-filtered query find them.
         new SatelliteTableMapping("_Log", "activities", "ActivityLogSegment"),
         new SatelliteTableMapping("_UserActivity", "user_activities", "UserActivity"),
-        new SatelliteTableMapping("_Thread", "threads", "Thread", "ThreadComposer"),
+        // TokenUsage: the per-model usage satellite at {ns}/_Thread/{id}/_Usage/{model}. It is PLACED
+        // by its _Thread segment, so it lives in `threads`; listing the type here is what makes a
+        // PATHLESS `nodeType:TokenUsage` read (the instance-wide usage tab) look in that table —
+        // without it the query read the primary table on Postgres and, in memory, dropped every row
+        // as a satellite path in a query that did not target satellites.
+        new SatelliteTableMapping("_Thread", "threads", "Thread", "ThreadComposer", "TokenUsage"),
         new SatelliteTableMapping("_ThreadMessage", "threads", "ThreadMessage"),
         new SatelliteTableMapping("_Access", "access", "AccessAssignment"),
         // LEGACY read-only: nothing writes _Tracking satellites any more (tracked changes are

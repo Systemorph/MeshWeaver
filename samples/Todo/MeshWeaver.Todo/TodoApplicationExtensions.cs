@@ -25,7 +25,8 @@ public static class TodoApplicationExtensions
                 // /api/content/{address}/Todo/{file} — published, still gated on Read (issue #587).
                 .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content", isStatic: true)
                 .WithTypes(
-                    typeof(TodoStatus)
+                    typeof(TodoStatus),
+                    typeof(TodoEntry)
                 )
                 .AddData(data =>
                     data.AddSource(dataSource =>

@@ -92,7 +92,7 @@ up to make the collision invisible (#1424):
   streams are per-cluster by construction, and there is no cross-process change feed running
   (see the GO section below), so a mirror can be arbitrarily far behind and never learn.
 
-On 2026-08-13 that is exactly what happened on `memex-cloud`: the ephemeral bake Job and the
+On 2026-08-13 that is exactly what happened on the public instance: the ephemeral bake Job and the
 rolling serving pod each claimed `Admin/Build` and each ran the full 268-type bake.
 
 #### The claim lives on a LOCK, not on the Build node
@@ -265,7 +265,7 @@ must mean "the cluster positively recorded this member as RUNNING", not "a row e
 because **Orleans only probes ACTIVE silos**: a process that dies before finishing its join leaves a
 row no failure detector will ever move to `Dead`. Mapping those to `Alive` made the `ClaimStaleAfter`
 fallback structurally unreachable for exactly the case it exists to cover, and on 2026-08-22 a pod
-deleted MID-BOOT held the claim on memex-cloud while every other pod sat in `FollowGo` for 25+
+deleted MID-BOOT held the claim on the public instance while every other pod sat in `FollowGo` for 25+
 minutes — with `PreWarm:GateReadiness=true` that holds the whole rollout. Note this is NOT an
 immediate steal: `Unknown` hands the decision to the heartbeat clock, so a holder that really is
 mid-join and working keeps its claim through the beat it writes.
@@ -555,7 +555,7 @@ claim handshake, and a claim handshake is a `SubscribeRequest` to `Admin/Build`.
 attempts and the driver threw `BuildCoordinationUnreachableException`, the sweep faulted, readiness
 was refused, and the rollout held the previous image.
 
-🚨 **A pod can therefore refuse a build that was already approved.** Measured on `memex-cloud`,
+🚨 **A pod can therefore refuse a build that was already approved.** Measured on the public instance,
 2026-09-06: two pods of one deployment refused at 11:44:32Z and 11:49:37Z for a fingerprint whose GO
 had been written on an already-`Ready` build root at **11:28:56Z** — sixteen minutes earlier. Their
 own hubs were healthy and idle throughout (`RunLevel=Started`, empty queue); the silence was between

@@ -1435,6 +1435,19 @@ public static class StaticRepoImporter
                 // import, or a wipe) hashes everything as changed → full import (safe). This is what makes
                 // a one-node edit re-import one node.
                 var manifest = snapshot.nodeManifest;
+                // The git diff is the normal write scope, but a parser/model upgrade can change the
+                // materialized source token for an unchanged JSON file (for example, a new typed
+                // property that an older image silently discarded). Such nodes are re-evaluated below
+                // only when the prior manifest proves their token changed.
+                //
+                // 🚨 A drifted path is only a CANDIDATE here, never a claim. Re-evaluating it can still
+                // end without a write — the two-way policy preserves a server-newer node, or the upsert
+                // fails — and recording its new source token for content that never landed is the
+                // #1326 false claim again: the next pass would read "already at this content", skip the
+                // node, and leave it divergent for good. So the manifest may claim a drifted path only
+                // once it is in the WRITTEN set (see the WriteManifest call below); a preserved one keeps
+                // its prior token, which is exactly what makes the next pass evaluate it again.
+                var driftedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 // The content-collection file paths the source owned at the LAST import (read
                 // authoritatively above from {partition}/_Activity/content-manifest). The inline content
@@ -1607,45 +1620,62 @@ public static class StaticRepoImporter
                                 continue;
                             }
 
+                            var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
+
                             // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
                             // reimport that diffed the last-synced commit against the new head), an EXISTING
-                            // node NOT in that set was not touched by any commit since the last sync — skip it
-                            // WITHOUT computing its token or re-upserting. This survives a missing/stale
-                            // manifest (the failure that made every webhook re-materialise the whole partition
-                            // → mass recompile storm, memex-cloud 2026-07-23): git, not a mesh write that can
-                            // fail under load, is the authority on "what changed". A node ABSENT from the DB is
-                            // NOT skipped even if outside the diff (first materialisation / self-heal safety),
-                            // and prune still runs over the full source set, so deletes are unaffected.
+                            // node NOT in that set is normally skipped. There is one measured exception:
+                            // its current parsed-source token differs from the prior manifest. The raw file
+                            // can be unchanged while a new platform model recognizes fields an older image
+                            // discarded, so that token drift is evidence to re-evaluate this node. A missing
+                            // manifest still skips out-of-diff nodes, preserving the guard against a stale
+                            // manifest causing every webhook to re-materialise the partition → mass recompile
+                            // storm (memex-cloud 2026-07-23). A node ABSENT from the DB is NOT skipped even if
+                            // outside the diff (first materialisation / self-heal safety), and prune still runs
+                            // over the full source set, so deletes are unaffected.
                             if (changedNodePaths is not null && target is not null
                                 && !changedNodePaths.Contains(path))
                             {
-                                // 🚨 A server-newer node OUTSIDE the diff scope is still a pending LOCAL
-                                // change: the repo copy didn't change, so there is nothing to apply — but
-                                // the mesh is AHEAD of the repo for this node (the edit isn't committed
-                                // back yet). Count it PRESERVED so the caller does not advance the
-                                // conflict horizon (LastSyncedAt) past it — otherwise a LATER repo edit
-                                // to this file would no longer see it as "newer on the server" and
-                                // silently overwrite the edit (the diff-scope shape of issue #677).
-                                if (policy?.PreservesServerCopyOf(target) == true)
+                                var hasPriorToken = manifest.TryGetValue(path, out var priorToken);
+                                var parsedSourceDrifted = hasPriorToken
+                                    && (priorToken is null
+                                        || (!string.Equals(priorToken, token, StringComparison.Ordinal)
+                                            && !IsRefusalOf(priorToken, token)));
+                                if (!parsedSourceDrifted)
                                 {
+                                    // 🚨 A server-newer node OUTSIDE the diff scope is still a pending
+                                    // LOCAL change: the repo copy didn't change, so there is nothing to
+                                    // apply — but the mesh is AHEAD of the repo for this node (the edit
+                                    // isn't committed back yet). Count it PRESERVED so the caller does
+                                    // not advance the conflict horizon (LastSyncedAt) past it — otherwise
+                                    // a LATER repo edit to this file would no longer see it as "newer on
+                                    // the server" and silently overwrite the edit (issue #677).
+                                    if (policy?.PreservesServerCopyOf(target) == true)
+                                    {
+                                        logger?.LogDebug(
+                                            "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
+                                            source.Partition, path);
+                                        settled.Add(new ImportItem(Preserved: 1));
+                                        continue;
+                                    }
                                     logger?.LogDebug(
-                                        "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
+                                        "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
                                         source.Partition, path);
-                                    settled.Add(new ImportItem(Preserved: 1));
+                                    settled.Add(new ImportItem());
                                     continue;
                                 }
+
                                 logger?.LogDebug(
-                                    "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
+                                    "[StaticRepoImport] {Partition}: {Path} is outside the git-diff scope, "
+                                    + "but its parsed source token differs from the prior import — re-evaluating.",
                                     source.Partition, path);
-                                settled.Add(new ImportItem());
-                                continue;
+                                driftedPaths.Add(path);
                             }
 
                             // Incremental skip: unchanged since the last import (same source token) AND the
                             // node is actually present (so a drifted/deleted node still re-imports). Skips the
                             // expensive cross-hub upsert + owner re-render. Token is over the RAW source node,
                             // matching what the manifest stored.
-                            var token = PartitionSourceFingerprint.ComputeNodeToken(sourceNode, hub.JsonSerializerOptions);
 
                             // 🚨 #4459/#4456 — THE REFUSAL IS REMEMBERED PER NODE, NOT PER PARTITION.
                             //
@@ -2097,10 +2127,19 @@ public static class StaticRepoImporter
                         // committed the assets can see it on their own Space rather than having to
                         // read the partition's import bookkeeping.
                         var refusedContent = content.Refused;
+                        // The effective scope the manifest may claim: the git diff, plus only those
+                        // drifted out-of-diff paths whose re-evaluation actually LANDED. A preserved
+                        // (two-way server-newer) drifted node keeps its prior token; a failed one is
+                        // settled by WriteManifest's failures clause either way.
+                        IReadOnlySet<string>? evaluatedPaths = changedNodePaths is null
+                            ? null
+                            : changedNodePaths
+                                .Concat(driftedPaths.Where(p => count.Written.Contains(p, StringComparer.OrdinalIgnoreCase)))
+                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
-                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, changedNodePaths,
+                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, evaluatedPaths,
                             heldPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
@@ -3319,19 +3358,22 @@ public static class StaticRepoImporter
     /// makes the next import non-incremental, never incorrect.
     ///
     /// <para>🚨 A SCOPED RUN MAY ONLY CLAIM WHAT IT EVALUATED (issue #1326). The map is built from the
-    /// SOURCE, but a run scoped by a git diff (<paramref name="evaluatedPaths"/>) skipped the upsert of
-    /// every existing node outside that set — so recording the source token for those nodes tells the
-    /// NEXT import "already at this content" about content that was never written. The node then stays
-    /// stale forever: each subsequent import compares it to the manifest, finds a match, and skips it.
-    /// This is the same false claim as the content-addressed marker, one layer down, and it is the one
-    /// that actually pinned the memex-cloud Spaces — a full re-import ran and still wrote 0 nodes.
-    /// Out-of-scope nodes therefore keep their PREVIOUS token (or none at all), which is exactly the
-    /// state that makes the next import look at them again.</para>
+    /// SOURCE, but a run scoped by a git diff (<paramref name="evaluatedPaths"/>) skips existing nodes
+    /// outside that set unless their parsed source token differs from the previous manifest (a parser
+    /// or model-schema change can alter materialization without changing repository bytes). Recording
+    /// the source token for an unevaluated node tells the NEXT import "already at this content" about
+    /// content that was never written. The node then stays stale forever: each subsequent import
+    /// compares it to the manifest, finds a match, and skips it. Out-of-scope nodes therefore keep
+    /// their PREVIOUS token (or none at all), except for token-drift paths whose re-evaluation was
+    /// actually written.</para>
     /// </summary>
     /// <param name="previous">The manifest this run read at its start — the tokens that are still the
     /// only evidence about nodes this run did not evaluate.</param>
-    /// <param name="evaluatedPaths">The git-diff scope; <see langword="null"/> means the run evaluated
-    /// every source node and may claim the whole map.</param>
+    /// <param name="evaluatedPaths">The effective git-diff scope, including out-of-diff nodes whose
+    /// parsed-source token differed from the previous manifest AND whose re-evaluation was written —
+    /// a drifted node the two-way policy preserved is NOT in it, so it keeps its prior token and the
+    /// next pass evaluates it again; <see langword="null"/> means the run
+    /// evaluated every source node and may claim the whole map.</param>
     /// <param name="failures">🚨 The nodes this run could NOT write (issue #4459/#4456). A run may
     /// only claim what it WROTE — the same rule as <paramref name="evaluatedPaths"/>, for the other
     /// way a node can fail to land. A DETERMINISTIC refusal is recorded as a refusal

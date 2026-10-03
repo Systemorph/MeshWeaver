@@ -66,6 +66,37 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// The tool call owns the writer identity, while its node read and validation answer later
+    /// on reactive callbacks. The final write must retain that original identity even when the
+    /// observable is subscribed after the caller's ambient scope has ended.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Patch_CarriesWriterAcrossItsReadAndWrite()
+    {
+        await Seed();
+
+        IObservable<string> patch;
+        using (Access.ImpersonateAsSystem())
+            patch = new MeshOperations(Mesh)
+                .Patch(UpdatePolicyNodeType.NodePath, """{"content":{"policy":"None"}}""");
+
+        var result = await patch.FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        result.Should().StartWith("Patched:");
+
+        var written = await Observable.Create<MeshNode>(observer =>
+            {
+                using (Access.ImpersonateAsSystem())
+                    return Mesh.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                        .Where(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions).Policy
+                                       == UpdatePolicyKind.None)
+                        .Subscribe(observer);
+            })
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        written.LastModifiedBy.Should().Be(WellKnownUsers.System,
+            "the identity at the patch call must reach the eventual node update");
+    }
+
+    /// <summary>
     /// The production shape: the self-update poller keeps ticking <c>checkedAt</c> /
     /// <c>latestAvailableTag</c> on the SAME node (as System) while the operator's patch is in
     /// flight — exactly the contention the issue names ("two fields, different writers, different

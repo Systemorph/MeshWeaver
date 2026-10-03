@@ -29,9 +29,9 @@ memex, 2026-09-17T16:54:55Z:
 
 ```text
 fail: MeshWeaver.Blazor.Components.CollaborativeMarkdownView[0]
-      Deleting comment on CollaborationNotus/PrereadToNotus20260918/_Comment/b1bbf6a2 …
+      Deleting comment on CollaborationInitech/PrereadToInitech20260918/_Comment/b1bbf6a2 …
       System.InvalidOperationException: Node not found:
-          CollaborationNotus/PrereadToNotus20260918/_Comment/b1bbf6a2
+          CollaborationInitech/PrereadToInitech20260918/_Comment/b1bbf6a2
 ```
 
 Somebody clicked Delete on a comment. The comment satellite was already gone — deleted by the

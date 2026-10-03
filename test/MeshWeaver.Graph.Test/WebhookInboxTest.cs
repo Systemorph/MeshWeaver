@@ -54,8 +54,8 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 }).Build()));
 
     /// <summary>A sender holding its OWN key under the shared one (Plugins#1913).</summary>
-    private const string SenderId = "pearl";
-    private const string SenderSecret = "pearls-own-announcement-key";
+    private const string SenderId = "fabrikam";
+    private const string SenderSecret = "fabrikams-own-announcement-key";
 
     /// <summary>The GitHub-style header a sender computes with <paramref name="secret"/>.</summary>
     private static KeyValuePair<string, string> Sign(string body, string secret)
@@ -362,12 +362,12 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 ["K"] = "shared",
                 ["K:build"] = "builds-key",
-                ["K:pearl"] = "pearls-key",
+                ["K:fabrikam"] = "fabrikams-key",
                 ["K:empty"] = "",
             }).Build();
 
-        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "pearls-key").Value, "{}")
-            .Should().Be("pearl");
+        WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "fabrikams-key").Value, "{}")
+            .Should().Be("fabrikam");
         WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "builds-key").Value, "{}")
             .Should().Be("build");
         WebhookInbox.SenderKeyOf(configuration, "K", Sign("{}", "shared").Value, "{}")
@@ -383,7 +383,7 @@ public class WebhookInboxTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 ["K"] = "shared",
                 ["K:build"] = "one-value-twice",
-                ["K:pearl"] = "one-value-twice",
+                ["K:fabrikam"] = "one-value-twice",
             }).Build();
         WebhookInbox.SenderKeyOf(shared, "K", Sign("{}", "one-value-twice").Value, "{}")
             .Should().BeNull("two senders sharing a key cannot be told apart, so neither is named");

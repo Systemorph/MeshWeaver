@@ -23,7 +23,7 @@ namespace MeshWeaver.Graph;
 /// the one live record is retyped on the portal before the deploy); memex's Crm sync had been
 /// <c>Skipped</c> since 08-30, so the retirement reached it two days later, with the instance not
 /// yet retyped; the import KNEW the type had an instance, logged the warning, and pruned anyway —
-/// <c>PartnerRe/Esl/DueDiligenceMail</c> then had no per-node hub, and the bake gate refused every
+/// <c>Globex/Team/DueDiligenceMail</c> then had no per-node hub, and the bake gate refused every
 /// rollout on the "regression". A warning nobody could act on in time is not a safeguard.</para>
 ///
 /// <para><b>The rule now:</b> a repository-driven prune never deletes a NodeType definition that

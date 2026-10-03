@@ -21,7 +21,7 @@ Issue #3395 was filed as *"two NodeType compiles in ONE boot resolved different 
 seconds apart"*. That premise is **false**, and the correction matters because it moves the fix from
 "find the race inside the process" to "there is no race inside the process".
 
-**It is three processes, sixteen minutes apart.** Measured on `memex-cloud`, 2026-09-06: one
+**It is three processes, sixteen minutes apart.** Measured on the public instance, 2026-09-06: one
 Deployment, three portal replicas, one image (`3.0.0-rc9.ci.7693`), started 11:33:39, 11:41:04 and
 12:51:21 around a landing wave at 12:18–12:27.
 
@@ -115,7 +115,7 @@ is delete the record the mesh resolves to.
 carries its sequence and set id (`<sequence:D9>-<id16>.proposed|adopted.json`), so one directory
 listing determines the newest proposal and the newest adopted set; `ModuleSetStore.Read` then opens
 the proposal files of those two sequences and the one adoption record — nothing else. 🚨 Measured
-on memex-cloud, 2026-09-08: 687 records had accumulated under `modules/sets` (the GC that prunes
+on the public instance, 2026-09-08: 687 records had accumulated under `modules/sets` (the GC that prunes
 them had been fail-closing — see [GC must see the set](#gc-must-see-the-set)), the previous reader
 opened every one on every call, and on Azure Files that took 10 s — inside
 `pending_module_activation`, the health check the startup probe asks every 10 s with a 5 s
@@ -148,7 +148,7 @@ a conflict about nothing. The cost compounded three ways:
   different generations and the NodeType stamp ping-ponged — the #3395 symptom, re-created by the
   fix's own plumbing.
 
-Measured on `memex-cloud`, 2026-09-08: **100 duplicate sequences, 687 set records, 843 generation
+Measured on the public instance, 2026-09-08: **100 duplicate sequences, 687 set records, 843 generation
 directories**.
 
 With the content address the two landings are one landing: same leaf, same activation entry, same

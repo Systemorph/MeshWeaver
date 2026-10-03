@@ -43,9 +43,12 @@ public static class GitHubIssuesTab
     private const string IssuesGridId = "ghIssuesGrid";
     private const string PrGridId = "ghPrGrid";
 
-    /// <summary>Registers the GitHub Issues &amp; PRs settings tab provider (shown on any node within a Space).</summary>
+    /// <summary>Registers the GitHub Issues &amp; PRs settings tab provider (shown on the Space root).</summary>
     public static MessageHubConfiguration AddGitHubIssuesTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab))
+            // It acts on the whole Space, so it is offered on the Space ROOT's settings only — never
+            // on every node below it; a descendant's old link redirects to the root's tab.
+            .RestrictSettingsTabsToPartitionRoot(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)
@@ -114,6 +117,10 @@ public static class GitHubIssuesTab
                 return Task.CompletedTask;
             }));
 
+        // Seeded at render: a data id that was never written emits nothing and never completes, so
+        // the button's one-off read would leave the click unanswered (and the "enter a title"
+        // message unreachable) until the person had typed into the form.
+        host.UpdateData(NewIssueFormId, new Dictionary<string, object?> { ["title"] = "", ["body"] = "" });
         stack = stack.WithView(BuildNewIssueForm(issues, spacePath, userId, locale: host.ViewerLocale()));
 
         // Live issues grid — binds to the synced query, refreshes itself as issues land.
@@ -146,6 +153,8 @@ public static class GitHubIssuesTab
                 return Task.CompletedTask;
             }));
 
+        // Seeded at render, for the same reason as the new-issue form above.
+        host.UpdateData(MergeFormId, new Dictionary<string, object?> { ["prNumber"] = "" });
         stack = stack.WithView(BuildMergeForm(spacePath, userId));
 
         // Initial PR load (live from GitHub, never persisted).
@@ -194,9 +203,9 @@ public static class GitHubIssuesTab
         }.WithWidth("320px"));
         row = row.WithView(Controls.Button(LocalizationCatalog.Get("ui.createIssue", locale))
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(c =>
+            .WithReactiveClickAction(c =>
             {
-                c.Host.Stream.GetDataStream<Dictionary<string, object?>>(NewIssueFormId).Take(1).Subscribe(d =>
+                return c.Host.Stream.GetDataStream<Dictionary<string, object?>>(NewIssueFormId).Take(1).Do(d =>
                 {
                     var title = Str(d, "title");
                     if (string.IsNullOrWhiteSpace(title))
@@ -207,8 +216,7 @@ public static class GitHubIssuesTab
                     issues.CreateIssue(spacePath, title, Str(d, "body"), null, userId).Subscribe(
                         n => c.Host.UpdateData(ResultId, Ok($"Issue created — {n.Name}.")),
                         ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
     }
@@ -230,9 +238,9 @@ public static class GitHubIssuesTab
     private static UiControl MergeButton(string label, GitHubMergeMethod method, string spacePath, string userId) =>
         Controls.Button(label)
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(c =>
+            .WithReactiveClickAction(c =>
             {
-                c.Host.Stream.GetDataStream<Dictionary<string, object?>>(MergeFormId).Take(1).Subscribe(d =>
+                return c.Host.Stream.GetDataStream<Dictionary<string, object?>>(MergeFormId).Take(1).Do(d =>
                 {
                     if (!int.TryParse(Str(d, "prNumber"), out var number) || number <= 0)
                     {
@@ -243,8 +251,7 @@ public static class GitHubIssuesTab
                     c.Host.Hub.MergePullRequestOnGitHub(spacePath, number, method, userId,
                             onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
                         .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             });
 
     // ── Mapping ──────────────────────────────────────────────────────────────

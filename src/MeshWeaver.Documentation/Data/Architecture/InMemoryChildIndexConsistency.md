@@ -190,7 +190,7 @@ is the seeded install.
   walk by construction; its change event follows and repairs a live snapshot. That is #4280's
   window, and it is closed by not judging or parking on a set that is still landing — the other
   half.
-- **The portals stay held until a Roll.** Both `memex` and `memex-cloud` run set `3.0.0-ci.8411`
+- **The portals stay held until a Roll.** Both portal instances (control and public) run set `3.0.0-ci.8411`
   (identity `sd608997…`) while publications now seal at `8539+` (`s0285c07…`); `Signature/_GitSync`
   on both reads `Held … 'plugins' is sealed at 627fb3cd` as of 2026-09-14T07:29Z. No gate fix moves
   that: it is a `Hosting/InstanceAction` Roll on the control instance to a set that carries this

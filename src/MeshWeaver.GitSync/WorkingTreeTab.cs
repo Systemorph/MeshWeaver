@@ -35,9 +35,12 @@ public static class WorkingTreeTab
     private const string SelectedFileId = "wtSelected"; // repo-relative path of the open file ("" = none)
     private const string EditorContentId = "wtContent"; // Monaco-bound editor value
 
-    /// <summary>Registers the Code-workspace settings tab provider (shown on any node within a Space).</summary>
+    /// <summary>Registers the Code-workspace settings tab provider (shown on the Space root).</summary>
     public static MessageHubConfiguration AddWorkingTreeTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab))
+            // It acts on the whole Space, so it is offered on the Space ROOT's settings only — never
+            // on every node below it; a descendant's old link redirects to the root's tab.
+            .RestrictSettingsTabsToPartitionRoot(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)
@@ -238,9 +241,9 @@ public static class WorkingTreeTab
         stack = stack.WithView(Controls.Button(LocalizationCatalog.Get("ui.commitAndPush", locale))
             .WithAppearance(Appearance.Accent)
             .WithIconStart(FluentIcons.Save())
-            .WithClickAction(ctx =>
+            .WithReactiveClickAction(ctx =>
             {
-                ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Subscribe(content =>
+                return ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Do(content =>
                 {
                     ctx.Host.UpdateData(ResultId, Pending($"Committing {path}…"));
                     wt.WriteFile(userId, repoSlug, path, content ?? "")
@@ -254,8 +257,7 @@ public static class WorkingTreeTab
                                 ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                             },
                             ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                });
-                return Task.CompletedTask;
+                }).Select(_ => System.Reactive.Unit.Default);
             }));
 
         return stack;

@@ -103,7 +103,7 @@ by scope inheritance. It looks harmless in the node tree.
 > Closing this remaining path means rescoping the harness's call sites first — a mechanical change
 > worth doing, and one that should land on its own rather than inside a boundary fix.
 
-### What it actually confers (measured, memex 2026-07-28)
+### What it actually confers (measured, the control instance 2026-07-28)
 
 Identical permission sets; only the **scope** differs:
 
@@ -170,7 +170,7 @@ Admin/_Access/{user}_Access   →   AccessObject = {user}, Roles = [ Admin ],  M
 > where node_path_prefix = 'Admin' order by user_id;
 > ```
 >
-> This is not hypothetical. On 2026-07-28 memex had **43 accounts with an empty `node_path_prefix`**
+> This is not hypothetical. On 2026-07-28 the control instance had **43 accounts with an empty `node_path_prefix`**
 > — holding `Delete`, `Update`, `Create`, `Compile`, `Execute` and `Export` on everything —
 > against exactly **one** correctly-scoped platform admin. Most were created minutes after the
 > holder first signed in, so **user onboarding was minting mesh-wide superusers**, including
@@ -207,7 +207,7 @@ hub.IsGlobalAdmin(userId)    // explicit user
 // ≡ hub.GetEffectivePermissions("Admin", userId).Select(p => p.HasFlag(Permission.All))
 ```
 
-Readers that gate on it: `AdminMenuGate` (Invitations / Inbox tabs), `UserNodeType.GetGlobalAdminTabAsync` (Global Administration tab), `UserProfile`.
+Readers that gate on it: `AdminAppNodeType.AdminOnlyTab` (every tab of the [Admin app](../AdminApp)), `AdminMenuGate` (the admin-gated settings areas), `UserProfile`.
 
 ### Asking "what may I do HERE?" — `whoami` at an address (#5189)
 
@@ -220,7 +220,7 @@ It is derived at read time from the **same evaluator the gates consult** (`GetEf
 
 ### The two type-scoped exceptions: a Space the platform itself owns
 
-"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on memex.meshweaver.cloud 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
+"Not a data superuser" holds for every partition a **person** owns — there is always somebody to ask for a grant. It has no answer for a partition **nobody** can own: a Space with a ONE-WAY `_GitSync` is **system-owned** (`AccessAssignmentGuard.IsSystemOwned`) — the repo rewrites it on every sync, `IsForbiddenOnSystemOwned` refuses every Admin/Editor grant on it and `SystemOwnedAccessRetractionHandler` retracts the ones that predate the sync. Measured on the public instance 2026-09-12: `MeshWeaver/_GitSync`, created by the platform in a Space owned by `system-security`, re-imported the whole core repository on every green build (Memex#237), and the platform admin got `Not found` on `get` and *"Delete permission denied for 'MeshWeaver/_GitSync'"* on `delete` — no human could remove it through any API.
 
 So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordinary fold and whose second leg is `hub.IsGlobalAdmin(userId)` — the same OR `GitHubActivityExtensions.TriggerAuthorizedAsSystem` already applies to every sync trigger ("triggering a sync is a platform action"):
 
@@ -230,6 +230,8 @@ So two node types carry an `INodeTypeAccessRule` whose non-admin leg is the ordi
 | `Space` (the ROOT node only) | **Read** — only while the Space is system-owned | Update, Delete, and every child node | `SpaceAccessRule.ReadAccess` (MeshWeaver.Graph) |
 
 The fold itself is untouched — `GetEffectivePermissions` still answers `None` for the admin on both paths, which is what `SystemOwnedSyncConfigIsVisibleToPlatformAdminsTest` pins: the widening comes from the rule, consulted by all three seams (`RlsNodeValidator`, the `[RequiresPermission]` delivery gate, the delete pre-flight) through `NodeTypeAccessRuleGate`, so an ordinary viewer's check is byte-for-byte what it was. A sync config carries the repo, branch and last-sync state — never a credential; that is the separate `GitHubCredential` node in the owner's own partition. Deleting the **Space** of a system-owned partition is deliberately NOT widened: a paid plugin's Space is system-owned too, and its `_Access` entitlement grants would go with it.
+
+**Issuing a grant where nobody else can (#5904).** Seeing a system-owned Space is not reading it: its records stay behind the fold, and no person holds the `Create` on `{space}/_Access` that issuing a grant demands — nor on an OWNERLESS partition (no grant, no `_Policy`), which denies everyone. Measured on partnerre-control 2026-09-29/30: Space `Deployments`, GitSynced right after it was created, carried no grant once the retraction ran; the refusal told the platform admin that *"a platform admin"* had to grant access under `Deployments/_Access`, and refused that very grant — so every `Hosting/InstanceAction` whose approval re-reads `Deployments/*` as the approver was unapprovable. So on exactly those two partition shapes a platform admin may **create an `AccessAssignment`** (`PlatformAdminGrantRepair`, consulted by `RlsNodeValidator` only after the fold denied). It is an explicit, audited grant node, never an implicit read, and every other validator still applies: on a system-owned partition `IsForbiddenOnSystemOwned` still refuses anything that confers write, so what the admin can issue there is a `Viewer`/`Commenter` entitlement. On a partition that has an owner (a grant or a policy) and no one-way sync the admin is refused as before. The platform's own partitions (`Admin`, the `User`/`Auth` mirrors, `Portal`, `Kernel`, `ApiToken`, `system-security`, `Anonymous`, every `_`-prefixed namespace) are refused outright, and the fleet's (`Deployments`, `Hosting`, `Ops`, `Store`, … — the rest of `DeleteSpaceRunner.ProtectedPartitions`) take an entitlement only, whether or not they are system-owned. Pinned by `PlatformAdminCanGrantOnAnUngrantableSpaceTest`. The denial on a system-owned, grant-less partition now says so, instead of promising that the creator "regains access on their next write" — the bootstrap never restores a creator on a system-owned partition.
 
 ### Deleting a space nobody may delete: the governed break-glass action
 
@@ -243,6 +245,34 @@ A space whose owner is gone, or a stranded partition with no root at all, refuse
 > 🚨 **Platform-admin grants live in `Admin/_Access`, never root `_Access`.** A root `_Access` grant makes a user a **data superuser** (All on every partition via scope inheritance) — which platform admins must NOT be. An `Admin/_Access` grant scopes them to platform management only. Writers (`GlobalAdminSeed`, `GrantPlatformAdmin`) and readers (`hub.IsGlobalAdmin`) both use the Admin partition — they disagreed before 2026-06-08 (writers wrote root, readers checked Admin scope), which silently locked configured admins out of every admin tab.
 
 > **Emergency / cross-partition data access** is out of scope for the standing grant — it will be a deliberate **elevation (break-glass)** flow (audited, time-boxed), not a permission a platform admin holds by default.
+
+### 🚨 Broad grants only through a governed activity (`BroadGrantGuard`)
+
+Access that reaches many people, or that the platform writes for someone else, is written **only** by an executing governed activity — never by a person's standing rights (a platform admin's included) and never by a platform sweep. Maintainer, 2026-09-30, after a new free plugin was granted to 72 users in three minutes by a System sweep, each grant mailed: *"i don't want to have this possibility in principle."*
+
+`BroadGrantGuard` sits at the create and upsert write boundaries, next to `AccessAssignmentGuard`, **ahead of the validators' System bypass**. It finds three shapes:
+
+| Shape | What it is | Passes when |
+|---|---|---|
+| `PublicSubject` | a non-denied grant to `Public` or `Anonymous` | an executing governed activity wrote it |
+| `SystemForOther` | a grant written as System whose subject is not `AccessContext.OnBehalfOf` | the user acquires it themselves (`OnBehalfOf` = subject: subscription, coupon, purchase), or a governed activity wrote it |
+| `AccessPolicy` | a `PartitionAccessPolicy` (`{scope}/_Policy`) | an executing governed activity wrote it |
+
+A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
+
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.remove`, `store.enroll`, `pr.steward.admin-access` (`Access:BroadGrantGuard:Standards` replaces it).
+
+**Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
+
+**A `governedBy` back-reference is a claim, checked where it is made — on any node type.** A control plane that ACTS on a node because it names an activity (the Store's `Admin/Provision/{package}` request is the case) would otherwise trust whatever its creator typed: a standing admin could create the request with `governedBy` pointing at some activity that happened to be executing, signed for a different package. So the create and upsert boundaries also check every node that INTRODUCES a `governedBy` (new, or changed from what the stored node carried — a claim the owner's own bookkeeping merely keeps was checked when it was introduced): its writer's context must carry the same `GovernedBy`, and that activity must be executing an allowlisted standard. The finding logs as `[BroadGrantGuard] WOULD REFUSE GovernedClaim {Path} …` and follows the same mode; under `Enforce` it refuses with `activity.node.governedClaim`.
+
+**A reader that acts LATER decides on monotone facts.** The write boundary may ask "is the activity executing" because the executor's write happens while it executes. A watcher that runs after that write must not: the activity may have moved on to `Done`, and the answer would depend on which write it saw first. `hub.ReadGovernedActivity(path)` returns the activity's `GovernedActivityFacts` — standard, state, signed inputs — and `HasStarted` (`Executing`, `Done` or `Failed`, reachable only after the signatures were consumed, never left again) is the predicate such a reader uses, together with the signed inputs naming what it is about to do.
+
+**A newly listed package waits for a governed provision.** The boot default install no longer installs a package just because a whole-source pattern (`Plugins/*`) covers it once the instance has been seeded (`InstanceAutoRegistrationService.HoldsForGovernedProvision`); it lands through a `package.provision` activity or an entry that names it. "Newly listed" means *unknown to the default-install ledger* (`KnownToTheLedger`), not merely "never seeded": a package the ledger recorded as FAILED is re-attempted on the next pass (the retry the ledger exists for), and one it recorded as SKIPPED is re-classified, exactly as before the hold. A fresh instance (empty seeded list) still seeds everything its patterns cover.
+
+**The guard does not stop anyone from becoming System.** User-authored code that the mesh compiles at runtime, and gates on the trusted gRPC port, can still act as System for everything except a broad grant. For the log-only guards that measure this and the options for closing it, see [In-Mesh Impersonation](../InMeshImpersonation).
+
+**Break-glass** once no person holds standing platform admin: a deployment pull request adds the name back to `Auth:GlobalAdmins` (applied by CD, so it is reviewed and on record), together with the Azure subscription Owner role through PIM for the infrastructure side. Nothing else is built for it.
 
 ---
 
@@ -270,6 +300,16 @@ The rest of this page covers the **internals** that back those extensions: the A
 ---
 
 # Core concepts
+
+## 🔒 A client cannot choose its own identity — `RequestIdentity`
+
+Every client ingress stamps the DELIVERY with the authenticated caller: SignalR and the public gRPC port re-stamp each delivery with the connection's validated user, and the HTTP middleware and the Blazor circuit derive it from the sign-in claims. Three things a client sends could still name another identity. They are closed in core, so no ingress has to remember them:
+
+- **Identity fields in a message body.** `CreateNodeRequest.CreatedBy`, `CreateNodesRequest.CreatedBy`, `DeleteNodeRequest.DeletedBy` and `CreateOrUpdateNodeRequest.RequestedBy` exist for the platform's own writers, whose AsyncLocal context does not survive every hop. RLS read them before the delivery's context, so a client that typed `createdBy: "system-security"` was authorised as System: measured, an identity with no grant created a node in another user's space. `RequestIdentity.Resolve` now decides. When the delivery carries an authenticated principal that is not the platform (not System, not a hub), that principal is the requester. A field may name somebody else only when the platform posted the message.
+- **The author stamps on the node.** `CreatedBy` and `LastModifiedBy` are what control planes read as "who asked" (the Store's `InvokerOf`, the Governance package's signature admission). A person or service always records itself (`RequestIdentity.Author`). On the create path the node's carried stamps are replaced. On the in-process update path (`ApplyAuditStamp`) a lambda's choice is overridden. On the owner's merge of a client patch (`DataExtensions.StampAuthorFromSender`) a `lastModifiedBy` in the patch is replaced by the sender and a `createdBy` is dropped. Only the platform keeps a carried stamp, so imports and repairs still preserve authorship. A MOVE preserves authorship too (#3263), and it does so without letting the message choose: its copy leg names the STORED source (`CreateNodeRequest.AuthorshipFrom`). The create handler then re-checks Delete on that source's namespace, which is the entitlement a move requires, and reads the four stamps from storage. This matters beyond attribution. `AccessContextScope.FromNode` impersonates a node's `CreatedBy`, so a client-chosen `CreatedBy` would make owner-scoped work run as whoever it named.
+- **A reserved id from a sign-in.** A session's id is the local part of the provider's `preferred_username` or email, and sign-in is multi-tenant. So `system-security@<any tenant>` signed in AS the System identity, and `public@…` as the pseudo-user whose grants everyone inherits. `RequestIdentity.IsReservedPrincipal` covers System, `Anonymous`, `Public` and hub-shaped principals. The middleware and `ResolveHttpCaller` resolve such a sign-in to anonymous, as they already did for a service id or a local part that collides with another person's User node.
+
+What is NOT closed here, and needs a design decision: code that runs INSIDE the portal process can call `AccessService.ImpersonateAsSystem()` / `ImpersonateAsSystemFor(...)`, and the gRPC trusted loopback port runs a gate's deliveries as System by default. Both are reachable by user-authored code: a compiled NodeType or C# Code node in-process, and a python or node Code node in a gate sidecar. The trusted port no longer passes a carried `GovernedBy` or `OnBehalfOf` (MeshWeaver.Plugins), so such code cannot satisfy the broad-grant guard. It still holds the System identity itself.
 
 ## AccessAssignment MeshNodes
 
@@ -492,6 +532,19 @@ rule that decides it is **monotonicity**:
 | `ObserveScopePolicies` | `PublicRead` | `GetPermissionCap()`, `BreaksInheritance` — and their **absence widens** | ❌ no |
 | `ObserveAllMembershipNodes` | group grants reach the viewer | the same subject set decides which **denials** match | ❌ no |
 
+**There is no whole-fold seed either.** The fold used to emit a synchronous snapshot computed from
+the STATIC assignments and policies alone (`AddMeshNodes` / `IStaticNodeProvider`), then the
+enriched fold. That snapshot is a seed of all four legs at once, so the monotonicity rule refuses it
+for the same reason: it drops every runtime subtraction. Measured in the monolith fixture: a subject
+whose Admin came from a static grant kept `Delete` on every fresh check after a runtime
+`AccessAssignment` denied Admin at the node — the deny was stored and ignored, and the long-lived fold
+emitted `[true, false]` — while a runtime grant layered on a static Viewer answered its first check
+without it. Production has the same shape wherever a static grant or a static `PublicRead` policy
+supplies the role (the `Doc` partition ships both), so a runtime deny or cap there did not bind any
+one-shot check. The seed is gone: the first emission is the enriched fold's, which already unions
+the static layer in. Pinned by `RuntimeAccessChangeIsEffectiveTest` (both directions, each with its
+sibling control).
+
 **Why the first emission is the whole story.** `AccessControlPipeline` runs
 `hub.CheckPermissionOutcome(…).TakeDecisionOutsideGate()`, and `TakeDecisionOutsideGate` is a
 `Take(1)`. The fold's **first** emission *is* the verdict for every `[RequiresPermission]` delivery. A
@@ -530,7 +583,7 @@ worked case (issue #1186) with the measurements.
 
 Making a *silent* starvation produce that error is a **query-layer** change, not a fold change, and it
 has been made: policy [`query-fanin-stall-terminal`](../PolicyNotProse). `MeshQuery`'s
-`InitialStallProbe` had **detected** this for a long time and only logged — on `memex`, over the 400
+`InitialStallProbe` had **detected** this for a long time and only logged — on the control instance, over the 400
 minutes to 2026-09-21T04:12Z, it emitted 200+ warnings whose own text reads *"the query is silently
 stalled on its all-providers Initial gate and its consumer hangs with no error"*, alongside 95
 `No MeshNode emitted for` faults (~14/hour), and nothing acted on any of them. It now **terminates**
@@ -687,6 +740,13 @@ Access control uses these shipped node types:
 - **Content**: `AccessObject` record (Id, Name, Description, Icon)
 - Used as subjects in AccessAssignment nodes
 
+## Service identity
+
+- **NodeType**: `"ServiceIdentity"`, records at `Admin/_ServiceIdentity/svc-{name}`
+- **Subject id**: the node id — always `svc-…`, a prefix no username may carry
+- A non-person principal (integration, bot, CI job) with its own `mw_` tokens; granted like any
+  subject, audited under its own id, never a global admin. See [Service Identities](../ServiceIdentities).
+
 ## Group
 
 - **NodeType**: `"Group"`
@@ -717,7 +777,7 @@ Access control uses these shipped node types:
 
 > There is no `SecurityService` class any more, and **no write surface on the evaluator**. `AddUserRole`, `RemoveUserRole`, `SetPolicy`, `RemovePolicy`, `SaveRole` do not exist. Grants are ordinary MeshNodes: create/update them with `meshService.CreateNode(...)` / `workspace.GetMeshNodeStream(path).Update(...)` like any other node, and the shared `$security-*` queries pick the change up.
 
-Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` fold the static layer in **synchronously**, unioned with the two anchored reads, so a statically declared grant resolves on the first emission without waiting for storage.
+Roles and baseline AccessAssignments follow the [Extensible Defaults](/Doc/Architecture/ExtensibleDefaults) pattern — built-ins ship via `IStaticNodeProvider` (including the read-only `_Policy` at the root namespace) and mesh-level extensions live as user-created MeshNodes. `CollectStaticAccessAssignments` / `CollectStaticPolicies` read the static layer synchronously and union it with the two anchored reads, so a statically declared grant is part of the first emission — but that emission waits for the anchored reads too, because a runtime deny or cap must be able to override a static grant (see "The convergence contract").
 
 ## The read surface
 
@@ -960,7 +1020,7 @@ write a deny for every non-public child to claw it back.
 
 ## Why not materialise it per instance
 
-Measured on memex, 2026-07-28 (issue #701), the per-instance shape failed three separate ways:
+Measured on the control instance, 2026-07-28 (issue #701), the per-instance shape failed three separate ways:
 
 - **Churn.** The reconcile pass rewrote `_Policy` until its version counter reached six figures
   (`AgenticEngineering` 254,760), every write by `system-security`, as pure bookkeeping.
@@ -1534,7 +1594,7 @@ A create is decided on its PARENT, and a top-level node has none: the standard c
 | `OwnsPartitionProvisioningValidator` | type not static → schema never provisioned | reads the declaration and provisions before the root write |
 | post-creation | no handler matched `Crm/Client` → no owner, no `Admin/Partition/{id}` | `InMeshPartitionOwnerPostCreationHandler` — the creator gets Admin and the partition definition is written, as for a Space |
 
-Measured on memex.systemorph.com, 2026-09-15: nobody — platform admins included — could create a new CRM client; the only way in was to create a Space and retype its root. The declaration is now read wherever it lives, through ONE resolver (`PartitionOwningTypes.OwnsPartition`): a static type answers synchronously with no read; an in-mesh type costs one anchored, unfiltered query of its definition, and only for a TOP-LEVEL create — the only create that can root a partition. A definition that does not answer is reported as an availability failure (`Unavailable`), never as "does not own a partition".
+Measured on the control instance, 2026-09-15: nobody — platform admins included — could create a new CRM client; the only way in was to create a Space and retype its root. The declaration is now read wherever it lives, through ONE resolver (`PartitionOwningTypes.OwnsPartition`): a static type answers synchronously with no read; an in-mesh type costs one anchored, unfiltered query of its definition, and only for a TOP-LEVEL create — the only create that can root a partition. A definition that does not answer is reported as an availability failure (`Unavailable`), never as "does not own a partition".
 
 What it grants is what any signed-in user already had — creating a partition, with themselves as its Admin. A non-owning type is still refused at the root. The logged-out caller (who arrives NAMED `Anonymous`) is refused OUTRIGHT, never handed to the permission fold where an `Anonymous` grant could decide it — and the **own-scope shortcut** ("every user owns the partition named after their id") now requires an authenticated identity: it used to accept any non-empty id, so an anonymous caller creating a root named `Anonymous` bypassed every rule. Space and User keep their own rules and handlers; the in-mesh handler matches STRUCTURALLY (a partition root whose type is not registered in `src/`), the creation-side twin of the [partition teardown](/Doc/Architecture/PartitionTeardown), and for a non-System creator it FAILS the create unless ownership is positively re-established — a quiet skip would return an ownerless partition. Pinned by `InMeshPartitionOwnerTopLevelCreateTest`.
 
@@ -1776,7 +1836,7 @@ decision has now been made, because the un-widened gate is a live defect** — a
 defect #2913 fixed one seam earlier, which is precisely the shape a rule stated as "every path that
 decides this node type's access consults it" exists to prevent.
 
-**Measured, memex 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
+**Measured, the control instance 2026-09-02 (#3061).** A recursive delete of the orphan NodeType `Edu/Course` was
 refused with
 
 ```

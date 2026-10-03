@@ -48,16 +48,17 @@ namespace MeshWeaver.Compiler;
 /// BCL / <c>System.Collections.Immutable</c> / <c>System.Reflection.Metadata</c> resolve to the
 /// default context on purpose — so a single <c>PRIVATE-COPY-EMITS</c> separates the shared copy's
 /// image, mapping and native code from the CLR heap, but not "fresh mapping" from "fresh native
-/// code" by itself. 🚨 The follow-up is NOT to call this method again: it creates its own
-/// <see cref="AssemblyLoadContext"/> per invocation and unloads it in <c>finally</c>, so every call
-/// is another COLD copy and N calls measure the same tier-0 code N times. Tiering it needs ONE
-/// private copy held loaded while the emit is repeated inside it — the unload deferred to the end —
-/// which is a different entry point, not a loop at this one
+/// code" by itself. The first successful invocation repeats the emit inside this one context
+/// before unloading it. A later <c>held=THREW</c> is positive evidence of a fault acquired
+/// inside one copy; <c>held=EMITS</c> does not prove that the JIT promoted the relevant code.
+/// Calling this method repeatedly still creates cold copies, so the <c>held=</c> suffix must
+/// come from the loop inside one invocation
 /// (<c>Doc/Architecture/NodeTypeCompilation</c>, leg 5).</para>
 ///
 /// <para><b>Cost and reach.</b> Two assembly loads (~15 MB of bytes read, two images), one tiny
-/// emit, one <see cref="AssemblyLoadContext.Unload"/> — only ever on the already-failing terminal
-/// path that runs the other legs, never on a success or an ordinary compile error. The private
+/// emit per failure and 63 additional emits only on the first successful control in a process,
+/// then one <see cref="AssemblyLoadContext.Unload"/> — only ever on the already-failing terminal
+/// path that runs the other legs, never on a successful or ordinary-error compilation. The private
 /// copy's OTHER dependencies (<c>System.Collections.Immutable</c>, <c>System.Reflection.Metadata</c>,
 /// the framework) resolve to the default context on purpose: they are the same for both copies,
 /// and varying them would make the control answer a question nobody asked.</para>
@@ -67,13 +68,27 @@ internal static class PrivateRoslynCopy
     /// <summary>The verdict token every outcome of this leg starts with.</summary>
     internal const string Prefix = "compiler=";
 
+    // A held copy is useful only once per process. Later failed compiles retain the cheap cold
+    // control, without multiplying this diagnostic work across the poisoned suite.
+    private static int heldCopyClaimed;
+    internal const int HeldEmitCount = 64;
+
     /// <summary>
     /// Emits <paramref name="source"/> through a freshly loaded private copy of Roslyn and reports
     /// the outcome as a one-line verdict. Never throws.
     /// </summary>
     /// <param name="source">The source to compile — the canary's, by default.</param>
     /// <returns>A verdict starting with <see cref="Prefix"/>.</returns>
-    internal static string Emit(string source)
+    internal static string Emit(string source) => EmitCore(source, forceHeld: false);
+
+    /// <summary>
+    /// Runs the held-copy measurement even if an earlier call claimed the process's automatic
+    /// measurement. This lets the control test prove that measurement without depending on
+    /// other tests' order; production uses <see cref="Emit"/>.
+    /// </summary>
+    internal static string EmitHeld(string source) => EmitCore(source, forceHeld: true);
+
+    private static string EmitCore(string source, bool forceHeld)
     {
         var sharedCore = typeof(Compilation).Assembly;
         var sharedCSharp = typeof(CSharpCompilation).Assembly;
@@ -100,7 +115,42 @@ internal static class PrivateRoslynCopy
                 return $"{Prefix}UNAVAILABLE(the load context handed the SHARED assembly back — "
                     + "the control would have executed the same code it is meant to control for)";
 
-            return EmitThrough(core, csharp, source, coreLib, s => stage = s);
+            var cold = EmitThrough(core, csharp, source, coreLib, s => stage = s);
+            if (!cold.StartsWith($"{Prefix}PRIVATE-COPY-EMITS", StringComparison.Ordinal))
+                return cold;
+
+            var alreadyClaimed = Interlocked.CompareExchange(ref heldCopyClaimed, 1, 0) != 0;
+            if (alreadyClaimed && !forceHeld)
+                return cold;
+
+            // Reuse BOTH private assemblies and their load context. Calling Emit again would
+            // unload this copy and measure another cold compiler, never its warm path.
+            for (var attempt = 2; attempt <= HeldEmitCount; attempt++)
+            {
+                stage = "resolve-types";
+                try
+                {
+                    var warm = EmitThrough(core, csharp, source, coreLib, s => stage = s);
+                    if (!warm.StartsWith($"{Prefix}PRIVATE-COPY-EMITS", StringComparison.Ordinal))
+                        return $"{cold} held=NON-EMIT(attempt={attempt}, {warm})";
+                }
+                catch (TargetInvocationException reflective) when (reflective.InnerException is { } inner)
+                {
+                    return stage == EmitStage
+                        ? $"{cold} held=THREW(attempt={attempt}, {inner.GetType().Name} at "
+                          + $"{EmitPipeline.ThrowSite(inner)}: {inner.Message})"
+                        : $"{cold} held=UNAVAILABLE(attempt={attempt}, stage={stage}, "
+                          + $"{inner.GetType().Name}: {inner.Message})";
+                }
+                catch (Exception probeError)
+                {
+                    return $"{cold} held=UNAVAILABLE(attempt={attempt}, stage={stage}, "
+                           + $"{probeError.GetType().Name}: {probeError.Message})";
+                }
+            }
+
+            return $"{cold} held=EMITS({HeldEmitCount}/{HeldEmitCount}; one private copy; "
+                   + "JIT promotion not independently observed, so this alone does not exclude tiering)";
         }
         catch (TargetInvocationException reflective) when (reflective.InnerException is { } inner)
         {

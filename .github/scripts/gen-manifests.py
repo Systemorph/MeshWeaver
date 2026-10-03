@@ -89,6 +89,9 @@ two agree, and the resolver is what retires the copy:
     python3 scripts/platform-script.py gen-manifests.py --check       # exit 1 if any manifest is missing/stale
     python3 scripts/platform-script.py gen-manifests.py --check-versions   # exit 1 if any version is wrong for its tree
     python3 scripts/platform-script.py gen-manifests.py --resolve     # finish a merge whose ONLY conflicts are locks
+    …and for a repo whose config declares `lockOwner: main` (see LOCK_OWNERS):
+    python3 scripts/platform-script.py gen-manifests.py --materialize # write THIS tree's locks, no network, never commit
+    python3 scripts/platform-script.py gen-manifests.py --settle      # MAIN only: write + prove the claim for its settlement PR
     …plus --no-fetch on either deriving command: still VERIFY the baseline against the remote, just
     never write to the object/tag database. It can only make the run stricter — a stale checkout
     fails instead of catching itself up.
@@ -149,10 +152,33 @@ MODULE_TAG_RE = re.compile(r"^.+/v\d+\.\d+\.\d+$")
 # Every flag this script understands. An unrecognised one is an ERROR, never a silent fall-through
 # to the writer: `--check-verisons` used to sail past both `if` arms, REWRITE the manifests and
 # exit 0 — a "check" that mutated the tree and reported success.
-KNOWN_ARGS = {"--check", "--check-versions", "--list-packages", "--no-fetch", "--resolve",
-              "--self-test"}
+KNOWN_ARGS = {"--check", "--check-versions", "--list-packages", "--materialize", "--no-fetch",
+              "--resolve", "--self-test", "--settle"}
 
 SCHEMA = "mw-manifest/1"
+
+# 🚨 WHO WRITES THE COMMITTED LOCK — declared per repo in the allow-file (`lockOwner`).
+#
+#   branch  (default) every commit carries locks that describe its own tree; a pull request
+#           regenerates and commits them and `--check` fails a stale one. The historical contract.
+#   main    the lock is a MAIN artifact. A pull request commits NO lock change (`--check` fails one
+#           that does); main's settle job (`--settle`) regenerates the locks over the merged tree
+#           and opens/refreshes the required-check settlement PR; a CI job that reads a lock off a
+#           tree main has not settled yet runs `--materialize` first (local, deterministic, never
+#           committed).
+#
+# Why `main` exists: a lock's trailer (`moduleVersion`, `sourceCommit`, `version`) changes on EVERY
+# content change to its module, and its `files` lines are neighbours, so two pull requests touching
+# one module always conflict on it — and GitHub decides mergeability on its own servers, where no
+# merge driver runs. The only state in which a merge on main cannot turn another pull request DIRTY
+# over a lock is one in which pull requests do not write locks. Measured on MeshWeaver.Plugins
+# (2026-09-27): every conflicting non-draft pull request conflicted on generated locks and nothing
+# else. Doc: Doc/Architecture/ModuleVersioning → "Who writes the lock".
+LOCK_OWNER_BRANCH = "branch"
+LOCK_OWNER_MAIN = "main"
+LOCK_OWNERS = {LOCK_OWNER_BRANCH, LOCK_OWNER_MAIN}
+SETTLEMENT_PR_BRANCH = "ci/settle-manifest-locks"
+SETTLEMENT_PR_AUTHOR = "meshweaver-cloud[bot]"
 # The caller's allow-file. Named by MW_MANIFEST_CONFIG when the lane places it elsewhere; otherwise
 # it sits beside the caller's other policy files.
 CONFIG_NAME = "gen-manifests.config.json"
@@ -192,17 +218,25 @@ def config(root: Path) -> dict:
             raise SystemExit(
                 f"✗ gen-manifests: {path} has no usable \"skip\" — it must be a list of the "
                 f"top-level directory names that are NOT node packages.")
-        unknown = set(raw) - {"skip", "hashModuleSources"}
+        unknown = set(raw) - {"skip", "hashModuleSources", "lockOwner"}
         if unknown:
             # A typo'd key is a policy that silently does not apply; `hashModulesSources: true`
             # would read as false and quietly stop hashing src/ into a mixed package's version.
             raise SystemExit(
                 f"✗ gen-manifests: {path} has unknown key(s): {', '.join(sorted(unknown))}. "
-                f"Known: hashModuleSources, skip.")
+                f"Known: hashModuleSources, lockOwner, skip.")
         if not isinstance(raw.get("hashModuleSources", False), bool):
             raise SystemExit(f"✗ gen-manifests: {path}'s \"hashModuleSources\" must be true or false.")
+        owner = raw.get("lockOwner", LOCK_OWNER_BRANCH)
+        if owner not in LOCK_OWNERS:
+            # An unknown owner must not silently read as the default: `"lockOwner": "Main"` would
+            # otherwise go on demanding committed locks from every pull request.
+            raise SystemExit(
+                f"✗ gen-manifests: {path}'s \"lockOwner\" is {owner!r}; known: "
+                f"{', '.join(sorted(LOCK_OWNERS))}.")
         _CONFIG_CACHE[key] = {"skip": set(skip),
-                              "hashModuleSources": bool(raw.get("hashModuleSources", False))}
+                              "hashModuleSources": bool(raw.get("hashModuleSources", False)),
+                              "lockOwner": owner}
     return _CONFIG_CACHE[key]
 
 
@@ -288,17 +322,25 @@ def _closure_inputs(root: Path) -> tuple[dict[str, set[str]], set[str]]:
     return _CLOSURE_INPUTS[key]
 
 
-def _project_paths(proj: Path) -> list[Path]:
-    """The files of one `src/` project directory that get hashed — ENUMERATION only.
+def _git_visible_files(root: Path, directory: Path) -> list[Path]:
+    """Files in a directory that belong to the Git-visible working tree.
 
-    Split out from the hashing so `--resolve`'s safety check can ask what the regeneration is
-    about to read WITHOUT a second copy of these rules to drift from. It drifted: the check
-    enumerated git's view (`ls-files --others --exclude-standard`) while the hashing enumerates
-    the FILESYSTEM, so every ignored-but-present file was hashed into a lock and invisible to the
-    check — Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
+    The lock describes files Git can publish: tracked and non-ignored untracked files. Ignored
+    build/test outputs must not move the version (#42).
     """
+    relative = directory.relative_to(root).as_posix()
+    listed = git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
+                        f":(literal){relative}"], preserve_output=True)
+    if listed is None:
+        raise SystemExit(f"✗ gen-manifests: could not enumerate Git-visible files under "
+                         f"{relative}")
+    return sorted(root / name for name in listed.split("\0") if name)
+
+
+def _project_paths(proj: Path, root: Path) -> list[Path]:
+    """The files of one `src/` project directory that get hashed — ENUMERATION only."""
     found: list[Path] = []
-    for path in sorted(proj.rglob("*")):
+    for path in _git_visible_files(root, proj):
         if not path.is_file() or path.name in EXCLUDE_FILES:
             continue
         rel = path.relative_to(proj)
@@ -310,7 +352,7 @@ def _project_paths(proj: Path) -> list[Path]:
 
 def _hash_project(proj: Path, root: Path, files: dict[str, str]) -> None:
     """Hash one `src/` project directory into `files`, keyed by its repo-relative POSIX path."""
-    for path in _project_paths(proj):
+    for path in _project_paths(proj, root):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -389,21 +431,22 @@ def module_source_files(plugin: Path, root: Path) -> dict[str, str]:
     return files
 
 
-def _package_paths(plugin: Path) -> list[Path]:
-    """The package's OWN files that get hashed — ENUMERATION only (see `_project_paths`)."""
-    return [p for p in sorted(plugin.rglob("*"))
-            if p.is_file() and p.name not in EXCLUDE_FILES]
+def _package_paths(plugin: Path, root: Path) -> list[Path]:
+    """The package's OWN Git-visible files that get hashed — ENUMERATION only."""
+    return [path for path in _git_visible_files(root, plugin)
+            if path.is_file() and path.name not in EXCLUDE_FILES]
 
 
 def hash_files(plugin: Path, root: Path) -> dict[str, str]:
     """POSIX path (prefixed with the plugin dir name) -> sha256 hex of the raw file bytes.
 
-    For a MIXED package this also covers the `src/` project its assembly is built from AND the
-    in-tree siblings that ride its bundle — see `module_source_files` for why, and for why the set
-    stops exactly there.
+    The package tree includes tracked files and non-ignored untracked files, but not ignored local
+    outputs. For a MIXED package this also covers the `src/` project its assembly is built from AND
+    the in-tree siblings that ride its bundle — see `module_source_files` for why, and for why the
+    set stops exactly there.
     """
     files: dict[str, str] = {}
-    for path in _package_paths(plugin):
+    for path in _package_paths(plugin, root):
         files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     files.update(module_source_files(plugin, root))
     return files
@@ -411,20 +454,15 @@ def hash_files(plugin: Path, root: Path) -> dict[str, str]:
 
 def hashed_paths(root: Path) -> set[str]:
     """Every repo-relative POSIX path `generate()` would hash, from the SAME enumerators
-    `hash_files` reads — never a re-statement of their rules.
-
-    🚨 This exists so `--resolve`'s "is anything here not part of the merge?" check and the
-    regeneration it guards can never answer about different file sets. They did: the check asked
-    git (`ls-files --others --exclude-standard`, which HIDES ignored files) while the hashing
-    walks the filesystem, so an ignored-but-present `Module/output.trx` was hashed into the lock
-    the resolver staged and named by nothing.
+    `hash_files` reads — never a re-statement of their rules. Ignored local outputs are absent from
+    both the hash and the resolver's safety check.
     """
     found: set[str] = set()
     for plugin in plugin_dirs(root):
-        for path in _package_paths(plugin):
+        for path in _package_paths(plugin, root):
             found.add(path.relative_to(root).as_posix())
         for directory in _module_source_dirs(plugin, root):
-            for path in _project_paths(directory):
+            for path in _project_paths(directory, root):
                 found.add(path.relative_to(root).as_posix())
     return found
 
@@ -438,7 +476,8 @@ def module_version(files: dict[str, str]) -> str:
     return h.hexdigest()[:16]
 
 
-def git(root: Path, args: list[str], timeout: int = 30) -> str | None:
+def git(root: Path, args: list[str], timeout: int = 30, *,
+        preserve_output: bool = False) -> str | None:
     """Run a git command, returning stdout or None when it fails (never raises).
 
     `subprocess.SubprocessError` is caught alongside `OSError` because the network commands below
@@ -448,7 +487,9 @@ def git(root: Path, args: list[str], timeout: int = 30) -> str | None:
     try:
         out = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
                              timeout=timeout)
-        return out.stdout.strip() if out.returncode == 0 else None
+        if out.returncode != 0:
+            return None
+        return out.stdout if preserve_output else out.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -807,8 +848,271 @@ def read_existing(lock: Path) -> dict | None:
         return None
 
 
+def lock_owner(root: Path) -> str:
+    """`branch` or `main` — who writes this repo's committed locks (see LOCK_OWNERS)."""
+    return config(root)["lockOwner"]
+
+
+def _current(existing: dict | None, plugin: Path, files: dict[str, str], version: str) -> bool:
+    """True when `existing` describes this tree exactly (files, content hash, identity, a version)."""
+    return existing is not None and existing.get("files") == files \
+        and existing.get("moduleVersion") == version \
+        and existing.get("module") == plugin.name and existing.get("schema") == SCHEMA \
+        and VERSION_RE.fullmatch(str(existing.get("version", ""))) is not None
+
+
+def materialized_version(plugin: Path, content_hash: str, existing: dict | None) -> str:
+    """The version `--settle` will give this tree, derived from the COMMITTED lock alone.
+
+    Under `lockOwner: main` the committed lock in any checkout is the last SETTLED claim the tree
+    descends from — a pull request never writes one — so it is the trunk witness `derive_release`
+    reads, already on disk: same patch when the content hash still matches it, +1 when it moved,
+    `.0` for a new series or a new module. The tag witness adds nothing here: tags are cut from
+    settled commits, so no published tag outranks the settled lock a tree descends from.
+
+    Pure and network-free on purpose. Every job of one run materializes independently, and each
+    must arrive at the SAME bytes — a derivation that read the live remote could move between two
+    jobs of one run (a tag published, the trunk advanced) and name one bundle two versions. The
+    settle job derives the authoritative number with the verified remote and asserts it equals this.
+    """
+    major, minor = declared_series(plugin)
+    committed = str((existing or {}).get("version", ""))
+    if not VERSION_RE.fullmatch(committed):
+        return f"{major}.{minor}.0"
+    c_major, c_minor, c_patch = (int(p) for p in committed.split("."))
+    if (c_major, c_minor) != (major, minor):
+        return f"{major}.{minor}.0"
+    if existing.get("moduleVersion") == content_hash:
+        return committed
+    return f"{major}.{minor}.{c_patch + 1}"
+
+
+def materialize(root: Path) -> int:
+    """Write every lock this tree implies, WITHOUT a network call and WITHOUT committing anything.
+
+    The step every CI job that READS a lock runs first when the repo's locks are main-owned: a pull
+    request carries no lock changes, and main's merge commit carries the locks of the commit before
+    it until the settle job lands, so the committed lock is not this tree's. An up-to-date lock is
+    left byte-untouched, so on a settled tree this is a no-op.
+
+    A branch-owned repo commits current locks and has them verified by `--check`, so there is
+    nothing to materialize there — the call says so and writes nothing.
+    """
+    if lock_owner(root) != LOCK_OWNER_MAIN:
+        print("  = locks are branch-owned here (lockOwner: branch) — every commit carries its own; "
+              "nothing to materialize")
+        return 0
+    commit = git_head(root)
+    written = 0
+    modules = plugin_dirs(root)
+    for plugin in modules:
+        lock = plugin / "manifest.lock"
+        files = hash_files(plugin, root)
+        content_hash = module_version(files)
+        existing = read_existing(lock)
+        version = materialized_version(plugin, content_hash, existing)
+        if _current(existing, plugin, files, content_hash) and existing.get("version") == version:
+            continue
+        lock.write_text(serialize({
+            "schema": SCHEMA,
+            "module": plugin.name,
+            "moduleVersion": content_hash,
+            "version": version,
+            "sourceCommit": commit,
+            "files": files,
+        }), encoding="utf-8", newline="\n")
+        was = f"v{existing.get('version')}" if existing else "no lock"
+        print(f"  ✎ {plugin.name}: v{version}, moduleVersion {content_hash}  (committed: {was})")
+        written += 1
+    print(f"✓ materialized {written} of {len(modules)} lock(s) for this tree — main-owned locks: "
+          f"these are NOT to be committed on this PR (main's settle job proposes them after the merge)")
+    return 0
+
+
+def _lock_base(root: Path) -> tuple[str | None, str | None]:
+    """`(base commit, None)` a pull request's lock diff is measured against, `(None, None)` when
+    this run is not a pull request's, or `(None, reason)` when it is and the base cannot be read.
+
+    `MW_LOCK_BASE` names it explicitly (a commit or ref). Otherwise GitHub's own environment says
+    whether this is a pull request: `actions/checkout` puts the PR's MERGE ref at HEAD, whose first
+    parent IS the base the pull request is being merged into — exactly the tree a lock diff must be
+    empty against. A pull-request run whose base cannot be read is an ERROR, never "no base": the
+    check it feeds would otherwise pass having compared nothing.
+    """
+    explicit = os.environ.get("MW_LOCK_BASE", "").strip()
+    if explicit:
+        # The MERGE BASE with it, so a branch that is merely behind `origin/main` is not charged
+        # with the locks main settled since it was cut (`MW_LOCK_BASE=origin/main` locally).
+        base = git(root, ["merge-base", explicit, "HEAD"])
+        return (base, None) if base else (None, f"MW_LOCK_BASE={explicit} has no merge base with HEAD here")
+    if os.environ.get("GITHUB_EVENT_NAME") not in ("pull_request", "pull_request_target"):
+        return None, None
+    parents = (git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]) or "").split()
+    if len(parents) >= 3:
+        return parents[1], None                    # the merge ref: HEAD^1 is the base
+    base_ref = os.environ.get("GITHUB_BASE_REF", "").strip()
+    remote = _remote_name(root)
+    if base_ref and remote:
+        base = git(root, ["merge-base", "HEAD", f"{remote}/{base_ref}"])
+        if base:
+            return base, None
+    return None, (f"this is a {os.environ.get('GITHUB_EVENT_NAME')} run, but its base cannot be read: "
+                  f"HEAD is not a merge ref and `git merge-base HEAD {remote}/{base_ref or '<base>'}` "
+                  f"answered nothing. Fetch the base branch (or set MW_LOCK_BASE) and re-run.")
+
+
+def is_manifest_lock_settlement_pr() -> bool:
+    """True only for the dedicated, same-repository App PR used to settle main-owned locks.
+
+    The author and branch are both load-bearing. A normal PR — including one that happens to use
+    the reserved branch name — still cannot commit generated locks. This is a very narrow alternate
+    check for the CI-created lock PR, not a general opt-out from the main-owned rule.
+    """
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        return False
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
+    if not event_path:
+        return False
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    pr = event.get("pull_request") if isinstance(event, dict) else None
+    if not isinstance(pr, dict):
+        return False
+    head, base = pr.get("head"), pr.get("base")
+    repository = event.get("repository")
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    repository_name = os.environ.get("GITHUB_REPOSITORY", "").casefold()
+    return bool(
+        repository_name
+        and isinstance(repository, dict)
+        and isinstance(head, dict)
+        and isinstance(base, dict)
+        and isinstance(head_repo, dict)
+        and isinstance(base_repo, dict)
+        and str(repository.get("full_name", "")).casefold() == repository_name
+        and str(head_repo.get("full_name", "")).casefold() == repository_name
+        and str(base_repo.get("full_name", "")).casefold() == repository_name
+        and head.get("ref") == SETTLEMENT_PR_BRANCH
+        and base.get("ref") == "main"
+        and isinstance(pr.get("user"), dict)
+        and pr["user"].get("login") == SETTLEMENT_PR_AUTHOR
+    )
+
+
+def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
+    """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
+    changed = git(root, ["diff", "--name-only", base, "HEAD"])
+    if changed is None:
+        return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
+    paths = sorted(p.strip() for p in changed.splitlines() if p.strip())
+    expected = {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(root)}
+    unexpected = [path for path in paths if path not in expected]
+    if not paths or unexpected:
+        details = ", ".join(unexpected[:12]) if unexpected else "the PR changes no manifest.lock files"
+        return [f"the generated settlement PR must change only existing package manifest.lock files; "
+                f"found {details}"]
+
+    # The lock claim is valid only for the exact main tree its version baseline came from. If main
+    # advanced after this PR was opened, the main push's own run will refresh the one settlement
+    # branch; this run must not bless a stale claim under loose branch protection.
+    trunk, errors = derivation_inputs(root, fetch=True)
+    if errors:
+        return [f"cannot verify the settlement PR's baseline: {error}" for error in errors]
+    if trunk is None or trunk != base:
+        return [f"main advanced after this settlement PR was based on {base[:12]} "
+                f"(current verified main: {trunk[:12] if trunk else 'unavailable'}) — "
+                "the next main run must refresh the generated lock branch"]
+
+    # `settle()` delegates its writes to `generate(..., settling=True)`, whose only write target is
+    # each enumerated plugin's manifest.lock; the postconditions are reads. The positive self-test
+    # also asserts the entire checkout is clean after this validator returns.
+    lock_files = [plugin / "manifest.lock" for plugin in plugin_dirs(root)]
+    before = {path: path.read_bytes() if path.is_file() else None for path in lock_files}
+    try:
+        if settle(root, fetch=True) != 0:
+            return ["the generated settlement does not pass gen-manifests.py --settle against current main"]
+        remaining = git(root, ["status", "--porcelain", "--untracked-files=all", "--", "*/manifest.lock"])
+        if remaining is None:
+            return ["cannot verify the generated settlement output against the PR head"]
+        if remaining.strip():
+            return ["the PR's manifest.lock files differ from the locks generated for its tree: "
+                    + ", ".join(line[3:].strip() for line in remaining.splitlines()[:12])]
+        return []
+    finally:
+        # Validation is read-only from the PR's point of view, even when a bad lock fails the
+        # generated comparison. The next checks in the shared lane must see the original checkout.
+        for path, contents in before.items():
+            if contents is None:
+                if path.exists():
+                    path.unlink()
+            else:
+                path.write_bytes(contents)
+
+
+def check_untouched(root: Path, base: str) -> list[str]:
+    """Under `lockOwner: main`, a pull request's diff must change no package's `manifest.lock`."""
+    if is_manifest_lock_settlement_pr():
+        return check_generated_lock_settlement(root, base)
+    generated = {f"{d.name}/manifest.lock" for d in plugin_dirs(root)}
+    out = git(root, ["diff", "--name-only", base, "HEAD", "--", "*/manifest.lock"])
+    if out is None:
+        return [f"cannot diff the locks against the base {base[:9]} — refusing to report them untouched"]
+    # A package's lock, or the lock of a package this diff DELETED (its folder is gone, so it is no
+    # longer enumerated — but deleting a main-owned lock is main's to do, too).
+    touched = sorted(p.strip() for p in out.splitlines()
+                     if p.strip() in generated
+                     or (p.strip().count("/") == 1 and not (root / p.strip().split("/")[0]).is_dir()))
+    if not touched:
+        return []
+    return [f"this pull request changes {len(touched)} manifest.lock file(s), and this repo's locks "
+            f"are MAIN-owned (lockOwner: main) — main's settle job proposes them after the merge, and a "
+            f"lock committed here is exactly what turns every other open pull request DIRTY: "
+            + ", ".join(touched[:12]) + (" …" if len(touched) > 12 else ""),
+            f"fix: git checkout {base[:12]} -- {' '.join(touched[:12])}"
+            + ("" if len(touched) <= 12 else " …")
+            + "   (delete a lock that path does not have there), commit, push"]
+
+
+def check_main_owned(root: Path) -> list[str]:
+    """`--check` for a main-owned repo: every committed lock is WELL-FORMED, and the tree's locks
+    MATERIALIZE consistently. Staleness against the tree is the expected state of an unsettled
+    tree, not an error — main's settle job is what makes it current, and its postcondition
+    (`--settle` runs `--check-versions` with nothing unsettled allowed) is where current is required.
+    """
+    errors: list[str] = []
+    for plugin in plugin_dirs(root):
+        existing = read_existing(plugin / "manifest.lock")
+        if (plugin / "manifest.lock").exists() and existing is None:
+            errors.append(f"{plugin.name}: manifest.lock exists but is unreadable")
+            continue
+        if existing is not None:
+            files = existing.get("files")
+            if existing.get("module") != plugin.name or existing.get("schema") != SCHEMA \
+                    or not isinstance(files, dict) \
+                    or existing.get("moduleVersion") != module_version(files) \
+                    or not VERSION_RE.fullmatch(str(existing.get("version", ""))):
+                errors.append(f"{plugin.name}: the committed manifest.lock is not self-consistent "
+                              f"(module/schema/version shape, or a moduleVersion that is not the hash "
+                              f"of its own files) — a hand edit, or a merge that mixed two locks")
+                continue
+        content_hash = module_version(hash_files(plugin, root))
+        version = materialized_version(plugin, content_hash, existing)
+        if existing is not None and _is_behind(version, str(existing.get("version"))):
+            errors.append(f"{plugin.name}: this tree would materialize v{version}, BELOW the committed "
+                          f"v{existing.get('version')} — a version never moves backwards")
+    return errors
+
+
 def check_manifests(root: Path) -> list[str]:
     """Recompute every plugin's manifest and report missing/stale ones. Never writes."""
+    if lock_owner(root) == LOCK_OWNER_MAIN:
+        errors = check_main_owned(root)
+        if errors:
+            errors.append("fix: see each line above — main-owned locks are never regenerated by hand")
+        return errors
     errors: list[str] = []
     for plugin in plugin_dirs(root):
         lock = plugin / "manifest.lock"
@@ -857,10 +1161,20 @@ def check_versions(root: Path, trunk: str | None = None) -> list[str]:
     comparison see that number; without it the check derives the very number it is checking.
     """
     errors: list[str] = []
+    main_owned = lock_owner(root) == LOCK_OWNER_MAIN
+    unsettled: list[str] = []
     for plugin in plugin_dirs(root):
         files = hash_files(plugin, root)
+        existing = read_existing(plugin / "manifest.lock")
+        if main_owned and not _current(existing, plugin, files, module_version(files)):
+            # A main-owned tree main has not settled yet (a merge commit whose settle job has not
+            # landed, or a pull request): its lock claims no version for THIS tree, so there is no
+            # claim to check. Named, never silent — and `--settle` refuses to finish while any
+            # module is in this list, so the claim that IS made is always checked.
+            unsettled.append(plugin.name)
+            continue
         expected, basis = derive_release(root, plugin, module_version(files), trunk)
-        committed = (read_existing(plugin / "manifest.lock") or {}).get("version")
+        committed = (existing or {}).get("version")
         if committed != expected:
             # The direction says WHICH mistake this is, and they have opposite fixes. Committed
             # BELOW expected means the module changed, or the trunk took this number while you were
@@ -877,6 +1191,11 @@ def check_versions(root: Path, trunk: str | None = None) -> list[str]:
                    "the manifest claims a number neither the published tags nor the trunk's "
                    "committed manifest justify. Both were verified against the remote before this "
                    "comparison, so this is a hand-edited or orphaned version, NOT missing evidence"))
+    if unsettled:
+        print(f"  ⚠ {len(unsettled)} module(s) NOT checked — their committed lock does not describe "
+              f"this tree, which under lockOwner: main means main has not settled it yet, so it "
+              f"claims no version to check: {', '.join(unsettled[:15])}"
+              + (" …" if len(unsettled) > 15 else ""))
     if errors:
         errors.append("fix: merge the trunk if it has moved, then python3 scripts/gen-manifests.py "
                       "— the tag set AND the trunk baseline were verified against the remote first, "
@@ -894,7 +1213,73 @@ def _is_behind(committed: str | None, expected: str) -> bool:
     return parts(committed) < parts(expected)
 
 
-def generate(root: Path, fetch: bool = True) -> int:
+def settle(root: Path, fetch: bool = True) -> int:
+    """MAIN's step: write the locks the merged tree implies, then PROVE they are the claim.
+
+    For a main-owned repo this is the only writer of a committed lock. It is `generate()` — both
+    witnesses verified against the remote before anything is written — plus a postcondition that
+    cannot pass on an unsettled tree: every lock must describe the tree, and `--check-versions`
+    must find nothing unsettled and nothing wrong. When the trunk this derived against IS the
+    checkout (the ordinary case: the settle job runs on the tip), the numbers must also equal what
+    `--materialize` gives every other job of the run from the committed lock alone — the property
+    that lets a pull request's bundle, named at PR time, be the one main publishes.
+    """
+    # 🚨 ONE trunk for the write AND its postcondition, resolved while the tree is still CLEAN.
+    # `_trunk_commit` derives a clean checkout that is an older trunk commit against ITSELF (#1426)
+    # and a dirty one against the live tip — and writing the locks dirties the tree. Resolving the
+    # trunk a second time after the write therefore compared the claim against a DIFFERENT baseline
+    # whenever main had moved past this checkout: measured on MeshWeaver.Plugins main run
+    # 36357560255 — generate wrote Hosting 1.33.5 against the checkout, the postcondition re-derived
+    # against a newer tip whose own lock already said 1.33.5 and demanded 1.33.6, and the settle
+    # went red over a claim that was consistent with the baseline it was written against.
+    #
+    # No trunk is handed INTO `generate` (an earlier revision did, and any such parameter is a way
+    # to skip the vouching). `generate` resolves and vouches for its own trunk, on the same clean
+    # tree and before it writes anything — so it arrives at this same commit — and only the
+    # POSTCONDITION reuses the one resolved here instead of re-resolving on a tree the write dirtied.
+    trunk, unvouchable = derivation_inputs(root, fetch)
+    if unvouchable:
+        print("✗ --settle: refusing to derive versions from a baseline that cannot be vouched for:")
+        for e in unvouchable:
+            print(f"  - {e}")
+        return 1
+    rc = generate(root, fetch, settling=True)
+    if rc != 0:
+        return rc
+    failures: list[str] = []
+    for plugin in plugin_dirs(root):
+        files = hash_files(plugin, root)
+        if not _current(read_existing(plugin / "manifest.lock"), plugin, files, module_version(files)):
+            failures.append(f"{plugin.name}: the lock does not describe the tree after settling")
+    failures += check_versions(root, trunk)
+    head = git(root, ["rev-parse", "HEAD"])
+    if lock_owner(root) == LOCK_OWNER_MAIN and trunk and trunk == head:
+        for plugin in plugin_dirs(root):
+            written = read_existing(plugin / "manifest.lock") or {}
+            before = _lock_at(root, "HEAD", plugin.name)
+            expected = materialized_version(plugin, str(written.get("moduleVersion")), before)
+            if written.get("version") != expected:
+                failures.append(
+                    f"{plugin.name}: settled v{written.get('version')} but --materialize derives "
+                    f"v{expected} from the committed lock — the two derivations disagree, so a "
+                    f"bundle named at pull-request time would not be the one main publishes")
+    if failures:
+        print("✗ --settle: the settled locks are not a claim this tree can make:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print("✓ --settle: every lock describes the merged tree and every version is its claim")
+    return 0
+
+
+def generate(root: Path, fetch: bool = True, settling: bool = False) -> int:
+    if lock_owner(root) == LOCK_OWNER_MAIN and not settling:
+        # Not an error: the post-merge hook and a habitual `gen-manifests.py` both land here, and
+        # the right outcome for both is to write NOTHING a commit could sweep up.
+        print("  = this repo's locks are MAIN-owned (lockOwner: main) — nothing written. A pull "
+              "request commits no lock; main's settle job proposes them in a required-check PR after the merge.")
+        print("    For a local view of this tree's locks (never to be committed): --materialize")
+        return 0
     # Deriving a version from a stale tag database is the ORIGINAL sin: the wrong number is written
     # into manifest.lock, and every later check — reading the same stale tags — agrees with it. So
     # both witnesses (the published tags AND the trunk's committed locks) are proven current BEFORE
@@ -1057,7 +1442,12 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None, unmerged_
     itself rather than a re-implementation of its decisions — including the case where git answers
     the opening question and then cannot answer the closing one.
     """
-    regenerate = regenerate or (lambda: generate(root, fetch))
+    if regenerate is None:
+        # Main-owned: the resolution is not a regeneration but the TRUNK's locks, every one of
+        # them — so the branch leaves the merge carrying no lock change at all, and can never
+        # conflict on one again (see LOCK_OWNERS).
+        regenerate = (lambda: _adopt_trunk_locks(root)) if lock_owner(root) == LOCK_OWNER_MAIN \
+            else (lambda: generate(root, fetch))
     unmerged_paths = unmerged_paths or _unmerged_paths
     paths = unmerged_paths(root)
     if paths is None:
@@ -1163,6 +1553,31 @@ def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None, unmerged_
     return 0
 
 
+def _adopt_trunk_locks(root: Path, trunk: str = "MERGE_HEAD") -> int:
+    """Set every package's lock to the one `trunk` carries (removing a lock `trunk` does not have).
+
+    The main-owned resolution of a lock conflict — and of a legacy branch that still carries lock
+    changes: afterwards the branch's diff against the trunk touches no lock. Stages nothing itself;
+    `resolve_conflicts` stages every lock this moved.
+    """
+    if git(root, ["rev-parse", "--verify", f"{trunk}^{{commit}}"]) is None:
+        print(f"✗ cannot read {trunk} — adopting the trunk's locks needs the commit being merged in")
+        return 2
+    for plugin in plugin_dirs(root):
+        rel = f"{plugin.name}/manifest.lock"
+        theirs = git(root, ["show", f"{trunk}:{rel}"], preserve_output=True)
+        lock = root / rel
+        if theirs is None:
+            if lock.exists():
+                lock.unlink()
+                print(f"  - {rel}: removed (the trunk has none yet — its settle job writes it)")
+            continue
+        if not lock.exists() or lock.read_text(encoding="utf-8") != theirs:
+            lock.write_text(theirs, encoding="utf-8", newline="\n")
+            print(f"  ✎ {rel}: the trunk's")
+    return 0
+
+
 def _dirty_locks(root: Path, generated: set[str]) -> list[str] | None:
     """Every GENERATED lock git currently reports as changed — staged or not — or `None` when git
     could not answer.
@@ -1194,13 +1609,10 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
     excluding the conflicted locks themselves, which are exactly what this run is about to
     rewrite. `None` when any of its git reads failed. Pure-ish: three git reads, no writes.
 
-    🚨 THE IGNORED FILES ARE THE POINT. `--exclude-standard` hides gitignored untracked files from
-    git, but `hash_files()` walks the FILESYSTEM and hashes them anyway (only `manifest.lock` and
-    `.DS_Store` are exempt) — so an ignored `Module/output.trx` went into the regenerated lock the
-    resolver staged, and CI then red on a lock hashing a file that is in nobody's commit. They are
-    filtered through `hashed_paths(root)` rather than listed wholesale, because a repo's ignored
-    set is mostly `bin/`, `obj/` and `node_modules/` that `generate()` never reads: refusing on
-    those would make `--resolve` unusable, and refusing on none of them was the defect.
+    Git-ignored untracked files are not part of `generate()`'s Git-visible hash input. Intersect
+    ignored paths with `hashed_paths(root)` anyway, so this safety check remains coupled to the
+    actual enumerator if another declared input is added later. Repositories commonly ignore large
+    build folders that do not belong in a module lock.
     Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
     """
     conflicted = set(locks)
@@ -1213,6 +1625,10 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
     loose = {p.strip() for p in unstaged.splitlines() + untracked.splitlines() if p.strip()}
     loose |= {p.strip() for p in ignored.splitlines() if p.strip() and p.strip() in hashed}
     return sorted(loose - conflicted)
+
+
+# The run context the self-test's fixtures must never inherit (see main()'s --self-test).
+_SELF_TEST_ENV_ISOLATED = ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_BASE_REF", "MW_LOCK_BASE")
 
 
 def self_test() -> int:
@@ -1422,12 +1838,10 @@ def self_test() -> int:
                 failures.append(f"{lock_path} stopped being unmerged — --resolve staged a conflict "
                                 f"the generator does not own, markers and all")
 
-        # 2d. 🚨 An IGNORED untracked file under a package is hashed by `hash_files()` (it walks the
-        #     FILESYSTEM; only EXCLUDE_FILES are exempt) and was invisible to this refusal, which
-        #     asked git with `--exclude-standard`. The lock then hashes a file that is in nobody's
-        #     commit and CI reds on it. Copilot's review of Reinsurance#225 / SocialMedia#208.
-        # `.gitignore` is COMMITTED IN THE BASE, so it is not itself a loose path — a fixture whose
-        # own ignore file tripped the refusal would pass for the wrong reason.
+        # 2d. An ignored build artifact inside a package is invisible to Git and therefore must
+        #     also be invisible to the hash. Otherwise a post-merge hook can commit a lock for
+        #     bytes absent from every commit, then the clean rerun refuses the version downward.
+        # `.gitignore` is COMMITTED IN THE BASE, so it is not itself a loose path.
         repo2d = tmp / "ignored"
         (repo2d / "Mod").mkdir(parents=True)
         g(repo2d.parent, "init", "-q", "-b", "main", str(repo2d))
@@ -1450,24 +1864,35 @@ def self_test() -> int:
         if g(repo2d, "diff", "--name-only", "--diff-filter=U").split() != ["Mod/manifest.lock"]:
             failures.append("fixture(ignored): expected only the lock unmerged, got "
                             f"{g(repo2d, 'diff', '--name-only', '--diff-filter=U').split()}")
+        clean_files2d = hash_files(repo2d / "Mod", repo2d)
         (repo2d / "Mod" / "output.trx").write_text("a build artifact, not part of this merge\n")
         if g(repo2d, "status", "--porcelain").count("Mod/output.trx"):
-            failures.append("fixture(ignored) does not reproduce the hazard — git still reports "
-                            "Mod/output.trx, so the old check would have caught it anyway")
-        if "Mod/output.trx" not in hashed_paths(repo2d):
-            failures.append("fixture(ignored) does not reproduce the hazard — hash_files() does "
-                            "not hash Mod/output.trx, so nothing would go into the lock")
+            failures.append("fixture(ignored) is invalid — Git reports Mod/output.trx even though "
+                            "the committed .gitignore excludes it")
+        if "Mod/output.trx" in hashed_paths(repo2d):
+            failures.append("an ignored build artifact must not appear in the manifest file set")
+        if hash_files(repo2d / "Mod", repo2d) != clean_files2d:
+            failures.append("an ignored build artifact changed the module hash")
         called2d = []
+
+        def regenerate_without_ignored_file():
+            called2d.append(True)
+            files = hash_files(repo2d / "Mod", repo2d)
+            (repo2d / "Mod" / "manifest.lock").write_text(serialize({
+                "schema": SCHEMA, "module": "Mod", "moduleVersion": module_version(files),
+                "version": "1.0.0", "files": files,
+            }))
+            return 0
+
         rc = resolve_conflicts(repo2d, fetch=False,
-                               regenerate=lambda: (called2d.append(True), 0)[1])
-        if rc != 1:
-            failures.append(f"an IGNORED untracked file that hash_files() hashes must be refused, "
-                            f"got {rc}")
-        if called2d:
-            failures.append("the ignored-file case still ran the regenerator")
-        # The control that keeps this from degenerating into "refuse every ignored file": a repo's
-        # ignored set is mostly bin/obj/node_modules that `generate()` never reads, and refusing on
-        # those would make --resolve unusable. `scripts/` is skipped, so nothing under it is hashed.
+                               regenerate=regenerate_without_ignored_file)
+        if rc != 0:
+            failures.append(f"an ignored build artifact must not block lock regeneration, got {rc}")
+        if not called2d:
+            failures.append("the ignored-file fixture did not exercise lock regeneration")
+        if g(repo2d, "diff", "--name-only", "--diff-filter=U").strip():
+            failures.append("lock regeneration with an ignored build artifact left a conflict")
+        # A Git-ignored file outside every package is also harmless; scripts/ is skipped.
         (repo2d / "Mod" / "output.trx").unlink()
         (repo2d / "scripts" / "scratch.trx").write_text("ignored, and hashed by nobody\n")
         if "scripts/scratch.trx" in hashed_paths(repo2d):
@@ -1851,6 +2276,8 @@ def self_test() -> int:
                 f"per line and nothing else — a caller diffs this; enumerated {enumerated}, "
                 f"printed {listed}")
 
+        failures.extend(_self_test_main_owned(tmp / "main-owned"))
+
     if failures:
         print("✗ gen-manifests self-test:")
         for f in failures:
@@ -1858,7 +2285,8 @@ def self_test() -> int:
         return 1
     print("✓ gen-manifests self-test: --resolve regenerates a lock-only conflict, ALSO stages a "
           "non-conflicted lock the regeneration moved, REFUSES a half-merged tree and an unstaged "
-          "edit, no-ops on a clean one, an older trunk commit derives against ITSELF (#1426), a "
+          "edit, ignores local build outputs in package hashes, no-ops on a clean one, an older "
+          "trunk commit derives against ITSELF (#1426), a "
           "content change whose derived version is BELOW the committed one REFUSES rather than "
           "downgrading it while the same change with nothing committed above the derivable set "
           "still moves FORWARD (#4781) — with the remedy split, since a VERIFIED remote means the "
@@ -1868,6 +2296,326 @@ def self_test() -> int:
           "--list-packages exports the EFFECTIVE enumeration (an undeclared dot-directory is not a "
           "package, a declared skip still is not, and the two real ones are)")
     return 0
+
+
+def _self_test_main_owned(repo: Path) -> list[str]:
+    """`lockOwner: main` end to end in a throwaway repo — every assertion has a negative control."""
+    import contextlib
+    import io as _io
+    failures: list[str] = []
+
+    def g(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+    def quiet(fn, *a, **kw):
+        with contextlib.redirect_stdout(_io.StringIO()):
+            return fn(*a, **kw)
+
+    def lock_text() -> str:
+        return (repo / "Mod" / "manifest.lock").read_text(encoding="utf-8")
+
+    def declare(owner: str) -> None:
+        (repo / "scripts").mkdir(parents=True, exist_ok=True)
+        (repo / "scripts" / CONFIG_NAME).write_text(json.dumps(
+            {"skip": ["scripts"], "hashModuleSources": False, "lockOwner": owner}) + "\n")
+        _CONFIG_CACHE.pop(repo.resolve(), None)
+
+    (repo / "Mod").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], capture_output=True)
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    declare(LOCK_OWNER_MAIN)
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+    (repo / "Mod" / "src.cs").write_text("base\n")
+    g("add", "-A")
+    g("commit", "-qm", "base")
+
+    # A. --settle is the one writer: no remote ⇒ tags-only derivation ⇒ the series' .0.
+    if quiet(settle, repo, False) != 0:
+        failures.append("main-owned: --settle must write and verify the base tree's lock")
+    settled = read_existing(repo / "Mod" / "manifest.lock") or {}
+    if settled.get("version") != "1.2.0":
+        failures.append(f"main-owned: a new module settles at the series' .0, got {settled.get('version')}")
+    g("add", "-A")
+    g("commit", "-qm", "settle")
+    base = g("rev-parse", "HEAD").stdout.strip()
+
+    # B. The bare generator writes NOTHING a commit could sweep up (the post-merge hook's path)…
+    (repo / "Mod" / "src.cs").write_text("feature\n")
+    before = lock_text()
+    quiet(generate, repo, False)
+    if lock_text() != before:
+        failures.append("main-owned: the bare generator rewrote a lock — a PR would commit it")
+    # …and the negative control: the same call on a BRANCH-owned repo does write.
+    declare(LOCK_OWNER_BRANCH)
+    quiet(generate, repo, False)
+    if lock_text() == before:
+        failures.append("control: a branch-owned bare generate must rewrite the stale lock — "
+                        "otherwise the main-owned no-op above proves nothing")
+    (repo / "Mod" / "manifest.lock").write_text(before, encoding="utf-8")
+    declare(LOCK_OWNER_MAIN)
+
+    # C. --materialize: stale content ⇒ patch+1, written, network-free; settled tree ⇒ byte no-op.
+    quiet(materialize, repo)
+    mat = read_existing(repo / "Mod" / "manifest.lock") or {}
+    if mat.get("version") != "1.2.1" or mat.get("moduleVersion") == settled.get("moduleVersion"):
+        failures.append(f"main-owned: a content change must materialize 1.2.1 with a new hash, got {mat}")
+    again = lock_text()
+    quiet(materialize, repo)
+    if lock_text() != again:
+        failures.append("main-owned: materializing an already-materialized tree must be a byte no-op")
+    # A new series starts at .0; an unchanged tree keeps its number.
+    plugin = repo / "Mod"
+    if materialized_version(plugin, str(settled.get("moduleVersion")), settled) != "1.2.0":
+        failures.append("main-owned: an unchanged tree must keep the committed version")
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.3"}}\n')
+    if materialized_version(plugin, "x", settled) != "1.3.0":
+        failures.append("main-owned: a newly declared series must materialize at .0")
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+
+    # D. --check on a pull request: the lock diff must be empty. First the clean branch…
+    (repo / "Mod" / "manifest.lock").write_text(before, encoding="utf-8")
+    g("checkout", "-qb", "feature")
+    g("commit", "-qam", "feature: source only")
+    if check_untouched(repo, base):
+        failures.append("main-owned: a source-only pull request must pass the untouched check")
+    if check_main_owned(repo):
+        failures.append("main-owned: a STALE but well-formed lock is the expected unsettled state, "
+                        f"not an error: {check_main_owned(repo)}")
+    # …then the legacy shape: a branch that committed a lock.
+    quiet(materialize, repo)
+    g("commit", "-qam", "feature: legacy lock commit")
+    touched = check_untouched(repo, base)
+    if not touched or "Mod/manifest.lock" not in touched[0]:
+        failures.append(f"main-owned: a committed lock change must be named, got {touched}")
+    # The explicit base reaches the same verdict through the CLI's resolver.
+    os.environ["MW_LOCK_BASE"] = base
+    try:
+        resolved, why = _lock_base(repo)
+    finally:
+        os.environ.pop("MW_LOCK_BASE", None)
+    if resolved != base or why:
+        failures.append(f"main-owned: MW_LOCK_BASE must resolve to the base commit, got {resolved} / {why}")
+
+    # D2. The reserved App-authored PR is the sole exception: it must be lock-only, current with
+    # main, and byte-for-byte what --settle generates. The same locks from a human or a stale base
+    # remain red.
+    settlement_repo = repo.parent / "settlement-pr"
+    settlement_remote = repo.parent / "settlement-remote.git"
+    settlement_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(settlement_repo)], capture_output=True)
+    def sg(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(settlement_repo), *args],
+                              capture_output=True, text=True)
+    sg("config", "user.email", "t@example.com")
+    sg("config", "user.name", "t")
+    (settlement_repo / "scripts").mkdir()
+    (settlement_repo / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "hashModuleSources": False, "lockOwner": LOCK_OWNER_MAIN}) + "\n")
+    _CONFIG_CACHE.pop(settlement_repo.resolve(), None)
+    (settlement_repo / "Mod").mkdir()
+    (settlement_repo / "Mod" / "index.json").write_text('{"content": {"version": "1.2"}}\n')
+    (settlement_repo / "Mod" / "src.cs").write_text("base\n")
+    quiet(settle, settlement_repo, False)
+    sg("add", "-A")
+    sg("commit", "-qm", "base: settled")
+    (settlement_repo / "Mod" / "src.cs").write_text("main content\n")
+    sg("commit", "-qam", "main: content awaiting settlement")
+    settlement_base = sg("rev-parse", "HEAD").stdout.strip()
+    subprocess.run(["git", "init", "-q", "--bare", str(settlement_remote)], capture_output=True)
+    subprocess.run(["git", "-C", str(settlement_remote), "symbolic-ref", "HEAD", "refs/heads/main"],
+                   capture_output=True)
+    sg("remote", "add", "origin", str(settlement_remote))
+    sg("push", "-qu", "origin", "main")
+    sg("checkout", "-qb", SETTLEMENT_PR_BRANCH)
+    quiet(settle, settlement_repo, False)
+    sg("add", "-A")
+    sg("commit", "-qm", "settle: main-owned locks")
+    settlement_event_path = settlement_repo.parent / "event.json"
+    settlement_event = {
+        "repository": {"full_name": "Systemorph/MeshWeaver.Plugins"},
+        "pull_request": {
+            "user": {"login": SETTLEMENT_PR_AUTHOR},
+            "head": {"ref": SETTLEMENT_PR_BRANCH,
+                     "repo": {"full_name": "Systemorph/MeshWeaver.Plugins"}},
+            "base": {"ref": "main", "sha": settlement_base,
+                     "repo": {"full_name": "Systemorph/MeshWeaver.Plugins"}},
+        },
+    }
+    settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+    old_env = {key: os.environ.get(key) for key in
+               ("GITHUB_EVENT_NAME", "GITHUB_EVENT_PATH", "GITHUB_REPOSITORY", "MW_LOCK_BASE")}
+    os.environ.update({
+        "GITHUB_EVENT_NAME": "pull_request",
+        "GITHUB_EVENT_PATH": str(settlement_event_path),
+        "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+        "MW_LOCK_BASE": settlement_base,
+    })
+    try:
+        if not is_manifest_lock_settlement_pr() or check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: a fresh, exact App settlement PR must pass")
+        if sg("status", "--porcelain").stdout.strip():
+            failures.append("main-owned: verifying an exact settlement PR must not modify its locks")
+
+        settlement_event["pull_request"]["user"]["login"] = "rbuergi"
+        settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+        if is_manifest_lock_settlement_pr() or not check_untouched(settlement_repo, settlement_base):
+            failures.append("control: the reserved settlement branch must not exempt a human PR")
+        settlement_event["pull_request"]["user"]["login"] = SETTLEMENT_PR_AUTHOR
+        settlement_event_path.write_text(json.dumps(settlement_event), encoding="utf-8")
+
+        sg("checkout", "-qb", "settlement-with-extra-file")
+        (settlement_repo / "README.md").write_text("not a generated lock\n")
+        sg("add", "README.md")
+        sg("commit", "-qm", "settlement: unexpected file")
+        if not check_untouched(settlement_repo, settlement_base):
+            failures.append("main-owned: the settlement PR must refuse any non-lock file")
+        sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
+
+        bad_lock = read_existing(settlement_repo / "Mod" / "manifest.lock") or {}
+        bad_lock["moduleVersion"] = "0000000000000000"
+        (settlement_repo / "Mod" / "manifest.lock").write_text(serialize(bad_lock), encoding="utf-8")
+        sg("commit", "-qam", "settlement: incorrect lock")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse a lock that --settle would change")
+        sg("checkout", "-qb", "settlement-with-deleted-lock")
+        sg("rm", "-q", "Mod/manifest.lock")
+        sg("commit", "-qm", "settlement: delete generated lock")
+        if not any("differ from the locks generated" in error
+                   for error in check_untouched(settlement_repo, settlement_base)):
+            failures.append("main-owned: the settlement PR must refuse a deleted lock recreated as untracked")
+
+        sg("checkout", "-q", "main")
+        (settlement_repo / "Other.txt").write_text("advance main\n")
+        sg("add", "Other.txt")
+        sg("commit", "-qm", "main: unrelated advance")
+        sg("push", "-q", "origin", "main")
+        sg("checkout", "-q", SETTLEMENT_PR_BRANCH)
+        stale = check_untouched(settlement_repo, settlement_base)
+        if not any("main advanced" in error for error in stale):
+            failures.append(f"main-owned: a lock settlement based on stale main must be refused, got {stale}")
+    finally:
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    # E. A hand-edited lock is refused; the unsettled module is NAMED by --check-versions, not failed.
+    good = lock_text()
+    edited = json.loads(good)
+    edited["moduleVersion"] = "0000000000000000"
+    (repo / "Mod" / "manifest.lock").write_text(serialize(edited), encoding="utf-8")
+    if not check_main_owned(repo):
+        failures.append("main-owned: a lock whose moduleVersion is not the hash of its own files "
+                        "must be refused")
+    (repo / "Mod" / "manifest.lock").write_text(good, encoding="utf-8")
+    g("reset", "-q", "--hard", "HEAD~1")               # back to the source-only feature commit
+    if quiet(check_versions, repo, None):
+        failures.append("main-owned: --check-versions must not fail a module main has not settled")
+
+    # F. --resolve under main-owned ADOPTS the trunk's locks: afterwards the branch touches none.
+    g("checkout", "-q", "main")
+    (repo / "Mod" / "src.cs").write_text("trunk\n")
+    (repo / "Other.txt").write_text("unrelated\n")
+    g("add", "-A")
+    g("commit", "-qm", "trunk: content")
+    quiet(settle, repo, False)
+    g("commit", "-qam", "trunk: settle")
+    g("checkout", "-q", "feature")
+    (repo / "Mod" / "src.cs").write_text("base\n")       # the branch's own source, non-conflicting
+    (repo / "Mod" / "Extra.cs").write_text("feature\n")
+    quiet(materialize, repo)                              # a legacy lock commit that WILL conflict
+    g("add", "-A")
+    g("commit", "-qm", "feature: legacy lock")
+    g("merge", "-q", "main")                              # conflicts on the lock (and src.cs)
+    (repo / "Mod" / "src.cs").write_text("trunk\n")       # resolve the source by hand, as an author would
+    g("add", "Mod/src.cs")
+    rc = quiet(resolve_conflicts, repo, False)
+    if rc != 0:
+        failures.append(f"main-owned: --resolve must adopt the trunk's lock, got exit {rc}")
+    g("commit", "-qm", "merge main")
+    diff = g("diff", "--name-only", "main", "HEAD", "--", "*/manifest.lock").stdout.strip()
+    if diff:
+        failures.append(f"main-owned: after --resolve the branch must touch no lock, still: {diff}")
+
+    # H. 🚨 --settle on a checkout main has ALREADY moved past (Plugins main run 36357560255): the
+    # write and its postcondition must read ONE trunk. The checkout is a clean older trunk commit,
+    # so it derives against itself (#1426); the tip's own lock already claims the next number for
+    # different content. Re-resolving the trunk after the write (a dirty tree ⇒ the tip) demanded
+    # a number the write never derived, and the settle went red over a consistent claim.
+    failures.extend(_self_test_settle_behind_tip(repo.parent / "settle-behind-tip"))
+
+    # G. An unknown owner is refused, never read as the default.
+    (repo / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "lockOwner": "Main"}) + "\n")
+    _CONFIG_CACHE.pop(repo.resolve(), None)
+    try:
+        config(repo)
+        failures.append("main-owned: lockOwner 'Main' (a typo) must be refused")
+    except SystemExit:
+        pass
+    _CONFIG_CACHE.pop(repo.resolve(), None)
+    return failures
+
+
+def _self_test_settle_behind_tip(tmp: Path) -> list[str]:
+    """`--settle` on a clean checkout that main has moved past must pass (see case H above)."""
+    import contextlib
+    import io as _io
+    failures: list[str] = []
+    origin, work = tmp / "origin.git", tmp / "work"
+    tmp.mkdir(parents=True)
+    # Setup commands CHECK their exit code, so a broken fixture names the command that broke
+    # rather than surfacing as a misleading assertion further down.
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], capture_output=True, check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], capture_output=True, check=True)
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(work), *args], capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    def quiet(fn, *a, **kw):
+        with contextlib.redirect_stdout(_io.StringIO()):
+            return fn(*a, **kw)
+
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (work / "scripts").mkdir()
+    (work / "scripts" / CONFIG_NAME).write_text(json.dumps(
+        {"skip": ["scripts"], "lockOwner": LOCK_OWNER_MAIN}) + "\n")
+    (work / "Mod").mkdir()
+    (work / "Mod" / "index.json").write_text('{"content": {"version": "1.0"}}\n')
+    (work / "Mod" / "src.cs").write_text("base\n")
+    _CONFIG_CACHE.pop(work.resolve(), None)
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    g("push", "-q", "origin", "HEAD:main")
+    if quiet(settle, work, True) != 0:                           # base: Mod 1.0.0, settled
+        failures.append("settle-behind-tip fixture: the base must settle")
+    g("add", "-A")
+    g("commit", "-qm", "base, settled")
+    g("push", "-q", "origin", "HEAD:main")
+    (work / "Mod" / "src.cs").write_text("first\n")              # M1: an unsettled merge
+    g("commit", "-qam", "M1")
+    g("push", "-q", "origin", "HEAD:main")
+    m1 = g("rev-parse", "HEAD")
+    (work / "Mod" / "src.cs").write_text("second\n")             # M2: a legacy merge whose lock
+    quiet(generate, work, True, settling=True)                   # claims the next number (1.0.1)
+    g("commit", "-qam", "M2 (legacy lock commit)")
+    g("push", "-q", "origin", "HEAD:main")
+    if (read_existing(work / "Mod" / "manifest.lock") or {}).get("version") != "1.0.1":
+        failures.append("settle-behind-tip fixture: the tip's lock should claim 1.0.1")
+    g("checkout", "-q", "--detach", m1)                          # the run of M1, behind the tip
+    rc = quiet(settle, work, True)
+    if rc != 0:
+        failures.append("--settle on a clean checkout behind the tip must derive the write AND its "
+                        "postcondition against ONE trunk — it went red over its own consistent claim")
+    elif (read_existing(work / "Mod" / "manifest.lock") or {}).get("version") != "1.0.1":
+        failures.append("--settle behind the tip must derive against ITSELF (#1426): M1 claims 1.0.1")
+    _CONFIG_CACHE.pop(work.resolve(), None)
+    return failures
 
 
 def repo_root() -> Path:
@@ -1912,13 +2660,46 @@ def main() -> int:
               f"verified against {'the published tags and the trunk' if trunk else 'the local tags'})")
         return 0
     if "--self-test" in args:
-        return self_test()
+        # 🚨 HERMETIC: the fixtures must not see the CALLER's run. `_lock_base` and
+        # `is_manifest_lock_settlement_pr` read GITHUB_EVENT_NAME / GITHUB_EVENT_PATH / MW_LOCK_BASE,
+        # so on the settlement PR's own run (MeshWeaver.Plugins#2487) every fixture took the
+        # settlement branch and the self-test went red over the environment, not the code.
+        saved = {k: os.environ.pop(k) for k in _SELF_TEST_ENV_ISOLATED if k in os.environ}
+        try:
+            return self_test()
+        finally:
+            os.environ.update(saved)
     if "--list-packages" in args:
         return list_packages(root)
     if "--resolve" in args:
         return resolve_conflicts(root, fetch)
+    if "--settle" in args:
+        return settle(root, fetch)
+    if "--materialize" in args:
+        return materialize(root)
     if "--check" in args:
         errors = check_manifests(root)
+        if lock_owner(root) == LOCK_OWNER_MAIN:
+            base, unreadable = _lock_base(root)
+            if unreadable:
+                errors.append(unreadable)
+            elif base:
+                errors = check_untouched(root, base) + errors
+            else:
+                print("  = not a pull request (no MW_LOCK_BASE, GITHUB_EVENT_NAME is not pull_request) "
+                      "— there is no lock diff to hold to zero")
+            if errors:
+                print(f"✗ {len(errors)} main-owned lock problem(s):")
+                for e in errors:
+                    print(f"  - {e}")
+                return 1
+            if is_manifest_lock_settlement_pr():
+                print("✓ generated main-owned lock settlement: only current manifest.lock files "
+                      "changed, and they exactly match --settle against the current main tree")
+            else:
+                print("✓ main-owned locks: none changed by this pull request, every committed lock is "
+                      "self-consistent, and this tree's locks materialize without moving a version back")
+            return 0
         if errors:
             print(f"✗ {len(errors) - 1} stale/missing manifest(s):")
             for e in errors:

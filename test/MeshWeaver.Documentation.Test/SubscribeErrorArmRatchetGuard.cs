@@ -81,7 +81,9 @@ public class SubscribeErrorArmRatchetGuard
     /// </summary>
 
     /// <summary>
-    /// 🚨 Seeded from the tree on 2026-08-30 (95), lowered to 94 by this change's conversion of the idle sweep. MAY ONLY DECREASE.
+    /// 🚨 Seeded from the tree on 2026-08-30 (95), lowered to 94 by the idle-sweep conversion, then to
+    /// 56 when every click handler in src/ stopped subscribing its one-off read bare (they return it
+    /// through <c>WithReactiveClickAction</c> — see <c>ClickActionSubscribeHasErrorArmGuard</c>). MAY ONLY DECREASE.
     ///
     /// <para>Unlike the timeout-literal ratchet, this one carries <b>no transitional margin</b>.
     /// There the rule post-dated the branches it would fail, so a margin protected authors from a
@@ -89,7 +91,7 @@ public class SubscribeErrorArmRatchetGuard
     /// required the error arm — so a bare subscription arriving from a branch cut yesterday is a
     /// TRUE positive, and the right outcome is that it is seen.</para>
     /// </summary>
-    private const int Baseline = 94;
+    private const int Baseline = 56;
 
     private static readonly Regex SubscribeCall = new(@"\.Subscribe\s*\(", RegexOptions.Compiled);
 

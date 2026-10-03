@@ -313,7 +313,17 @@ public record SelfUpdateOptions
     public bool AllowUnverifiedRoll { get; init; }
 
     /// <summary>
-    /// The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet.
+    /// The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet — and, when the
+    /// key is SET in configuration, the policy that node is converged to at every start.
+    ///
+    /// <para>🚨 Set ⇒ authoritative, unset ⇒ seed only (policy
+    /// <c>self-update-record-authoritative</c>). A deployment record renders its
+    /// <c>updatePolicy</c> as <c>SelfUpdate__DefaultPolicy</c>; the self-updater reads that RAW key
+    /// (this property cannot tell an unset key from an explicit <c>Stable</c>) and makes the
+    /// EXISTING node's policy and pattern match it, touching nothing else. With the key unset an
+    /// existing node is left exactly as the admin set it. A seed-only reading let an instance whose
+    /// node predated the seeding ignore its record for ever — Doc/Architecture/SelfUpdateFreeze,
+    /// "The build instance".</para>
     ///
     /// <para>🚨 <see cref="UpdatePolicyKind.Stable"/> — clean releases only (maintainer,
     /// 2026-09-08: <i>"by default we will not upgrade as long as no version without <c>-ci…</c> is
@@ -327,9 +337,11 @@ public record SelfUpdateOptions
     /// The version pattern seeded beside <see cref="DefaultPolicy"/> when the node is created —
     /// <c>null</c> (the default) seeds none. Only meaningful with
     /// <see cref="UpdatePolicyKind.Continuous"/>: a dev/test host that should stay on the current
-    /// line's continuous builds sets e.g. <c>SelfUpdate__DefaultPattern=3.0.0-ci*</c>. An EXISTING
-    /// record is never touched by this value — the pattern is edited on the record itself
-    /// (Settings → Updates).
+    /// line's continuous builds sets e.g. <c>SelfUpdate__DefaultPattern=3.0.0-ci*</c>. When
+    /// <see cref="DefaultPolicy"/> is SET in configuration this pattern is converged onto an
+    /// EXISTING node together with it (unset here then means "no pattern"); otherwise an existing
+    /// node is never touched by this value and the pattern is edited on the node itself
+    /// (Settings → Updates). Policy <c>self-update-record-authoritative</c>.
     /// </summary>
     public string? DefaultPattern { get; init; }
 

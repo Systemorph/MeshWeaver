@@ -63,8 +63,8 @@ park catches it — but the log lies, which on this platform is its own defect.
 gate refuses to arm an instance whose build was refused.
 
 It appears in **zero** configuration files — no `.json`, `.yaml`, `.yml` or `.sh` under `deploy/`
-or `memex/` sets it, and the code's own comments record it as *measured absent on memex and
-memex-cloud*. Absent or unparseable means OFF.
+or `memex/` sets it, and the code's own comments record it as *measured absent on the control
+and public instances*. Absent or unparseable means OFF.
 
 So the mandate *"error early when a pre-built DLL is missing — never fall back to compiling"* is
 **architecturally provided for and not enforced anywhere.** A new framework identity that outruns

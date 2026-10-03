@@ -14,6 +14,31 @@ internal static class JsonElementNormalizer
     private const string TypeDiscriminator = "$type";
 
     /// <summary>
+    /// A sealed concrete type has no STJ polymorphism metadata, so its legitimate wire
+    /// discriminator is otherwise an unmapped member under GitSync's strict import options.
+    /// Remove only that metadata member; every authored content member remains subject to
+    /// strict validation.
+    /// </summary>
+    public static object? DeserializeIgnoringDiscriminator(
+        JsonElement element, Type type, JsonSerializerOptions options)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(TypeDiscriminator, out _))
+            return element.Deserialize(type, options);
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var property in element.EnumerateObject())
+                if (property.Name != TypeDiscriminator)
+                    property.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+        return JsonSerializer.Deserialize(buffer.WrittenSpan, type, options);
+    }
+
+    /// <summary>
     /// Deserializes <paramref name="element"/> to <paramref name="type"/> with <c>$type</c> first,
     /// straight from UTF-8 — the element's own bytes when <c>$type</c> already leads (no copy at
     /// all), else one reordered UTF-8 buffer. Never a UTF-16 string: materialising one per read was

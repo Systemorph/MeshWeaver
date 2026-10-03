@@ -7,7 +7,7 @@
 # provisioned `reclaimPolicy: Retain`, so `kubectl delete namespace` deletes the PVCs and leaves
 # every PV `Released` with its Azure Files share fully intact and fully billed. Teardown therefore
 # LOOKED complete while the instance's entire file content survived — 128Gi across four shares in
-# the atioz case (2026-08-29), found only by listing PVs after the namespace was already gone.
+# the initech case (2026-08-29), found only by listing PVs after the namespace was already gone.
 # "The namespace is deleted" is not "the data is deleted", and Retain is the reason.
 #
 # 🚨 THE RETAIN POLICY IS DELIBERATE AND STAYS. It is what makes a mistaken teardown recoverable

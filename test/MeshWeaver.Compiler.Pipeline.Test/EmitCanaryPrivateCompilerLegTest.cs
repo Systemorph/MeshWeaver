@@ -20,7 +20,7 @@ public class EmitCanaryPrivateCompilerLegTest(ITestOutputHelper output)
     [Fact]
     public void OnAHealthyProcess_ThePrivateCopyEmits_AndIsNotTheSharedAssembly()
     {
-        var verdict = PrivateRoslynCopy.Emit(
+        var verdict = PrivateRoslynCopy.EmitHeld(
             "public class MwEmitCanary<T> { public class Inner<U> { public class Leaf<V> "
             + "{ public T A; public U B; public V C; } } }");
         output.WriteLine(verdict);
@@ -29,6 +29,10 @@ public class EmitCanaryPrivateCompilerLegTest(ITestOutputHelper output)
             "a healthy process must be able to emit through a fresh copy of Roslyn — any other "
             + "reading here means the control cannot run, and a control that cannot run answers "
             + "nothing on the occurrence it exists for");
+        verdict.Should().Contain(
+            $"held=EMITS({PrivateRoslynCopy.HeldEmitCount}/{PrivateRoslynCopy.HeldEmitCount}",
+            "the held-copy control must exercise repeated emits inside one private copy, even "
+            + "when an unrelated earlier test already claimed the automatic measurement");
 
         // The context is collectible and is unloaded after the emit; a second run must load a
         // fresh copy again rather than fail on a context that was left behind.

@@ -180,7 +180,7 @@ public class ConfiguredModuleActivationTest
     ];
 
     /// <summary>
-    /// What every fleet record names today — five, against the image's nine (the `memex`, `pearl`
+    /// What every fleet record names today — five, against the image's nine (the `memex`, `fabrikam`
     /// and `memex-cloud` fixtures in <c>MeshWeaver.Deployment.Contract.Test</c>).
     /// </summary>
     private static readonly ImmutableArray<string> TheRecordsOwnList =
@@ -286,7 +286,7 @@ public class ConfiguredModuleActivationTest
     // deployment REPLACED; nothing saw the entries a deployment never reached. A list shorter than
     // the image's leaves the image's tail standing, and an EMPTY list leaves the image's whole list
     // standing — so emptying a record's requiredModules does not relax the requirement, it restores
-    // it. Measured on pearl.meshweaver.cloud, 2026-09-16: `requiredModules: []` at 06:08:24Z, and
+    // it. Measured on fabrikam.example.com, 2026-09-16: `requiredModules: []` at 06:08:24Z, and
     // the pod created by the re-provision that followed reported five required modules at 06:18:28Z.
 
     [Fact]

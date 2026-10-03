@@ -35,7 +35,7 @@ cold-activates**. Three consequences follow, and none of them is obvious from an
 So the exposure is precisely: **a dynamic NodeType with FEW instances, all of whose instances
 happen to activate elsewhere.** A type with many instances gets activated on most replicas sooner
 or later and registers itself. A type with zero instances has nothing to read. A type with four —
-`Hosting/Deployment`, `Hosting/DeploymentStatus`, `Store/Subscription`, `PG3Reporting/Fund` — is
+`Hosting/Deployment`, `Hosting/DeploymentStatus`, `Store/Subscription`, `InitechReporting/Fund` — is
 the one that breaks, and it breaks differently on each replica.
 
 ### The premise that was false
@@ -61,7 +61,7 @@ It looks like a declined bundle, and it is not one. `content-types` on `/health`
 Both stated causes are real, and neither was what was measured. The discriminating readings, taken
 on two live portals on 2026-09-21:
 
-| instrument | memex.systemorph.com (core `746b4e48`) | memex.meshweaver.cloud (core `026442ff`) |
+| instrument | the control instance (core `746b4e48`) | the public instance (core `026442ff`) |
 |---|---|---|
 | `bake-report` | **Healthy** — 229 of 230 types carry a usable assembly | Healthy — 242–302 of 366 with a verdict, all usable |
 | the ONE / THREE types with **no** usable assembly | `BinaryClickerV2` (CompileError) | 3 × CompileError, all in partition `MeshWeaver` |
@@ -89,7 +89,7 @@ falsifies both stated causes and is the cheapest way to recognise this failure �
   CHANGED and members left it — which a counter that never decayed could not do.
 - **A GROWING count is positive evidence, and it is the reading to take.** The ×count only rises
   when a read degrades, so comparing two probes turns the weakest part of this instrument into its
-  strongest: measured on memex.meshweaver.cloud, `Hosting/DeploymentStatus` went ×260 and ×257 to
+  strongest: measured on the public instance, `Hosting/DeploymentStatus` went ×260 and ×257 to
   ×373 and ×376 across 2.7 h. Those reads are degrading NOW. A static count across two probes says
   the opposite — nothing has read that type since — and is the case where the entry may be a boot
   residue the registry has simply never been asked to clear.

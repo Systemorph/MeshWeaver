@@ -15,7 +15,7 @@ about a build it cannot load. The two compose; neither subsumes the other
 
 ## What happened
 
-`Crm/Offer` and `Crm/Opportunity` on `memex.systemorph.com` reported `compilationStatus: Ok`
+`Crm/Offer` and `Crm/Opportunity` on the control instance reported `compilationStatus: Ok`
 throughout a two-and-a-half-hour window in which every one of their per-instance hubs was dead —
 `Crm/Offer` timed out on activation, `Crm/Opportunity` answered *"Area not found"*. Their two
 healthy siblings, compiled from the same sources, differed in exactly one field:

@@ -36,7 +36,7 @@ cannot patch itself is the correct state, not a degraded one.**
 repeat the deployment id, because a person aims at a row and can aim at the wrong one. This lane
 never aims — the instance is RESOLVED from the announcement — so the id the router could type is the
 one it just resolved: a check that cannot fail, and indistinguishable from a person's answer to
-every later reader. Measured on the control instance 2026-09-17: **five routed runs on `memex`
+every later reader. Measured on the control instance 2026-09-17: **five routed runs on its own record
 refused in one day** (rolls for 8816, 8820, 8831, 8834 and one activation Restart), each within
 seconds of being filed, for exactly that field — the lane detected, routed, and could never execute,
 with nothing but a terminal state on a node nobody reads to say so. The routed run therefore
@@ -66,7 +66,7 @@ default is `true` — deliberately the opposite of the chart's `false` — so an
 member under an **older** chart, which renders no key, behaves exactly as before. The fleet moves
 when the **chart** moves, namespace by namespace, through the maintainer's Reconcile — the same act
 that deletes the Role (a `helm upgrade` removes what the previous release created). That ordering
-is what keeps a `Continuous` instance from freezing on the image that introduced this: `memex-cloud`
+is what keeps a `Continuous` instance from freezing on the image that introduced this: the public instance
 already carries `Hosting__ControlInbox__Url` (for the Feedback hand-over), and a C# default of
 `false` would have flipped it to the control lane on its next self-roll — before any control plane
 could route the event.
@@ -90,14 +90,14 @@ first thing to fail, and the image that carries the fix is the one it cannot rea
 
 This is MeshWeaver#1020's lesson, undone for one instance by #4098. #1020 had the availability
 bookkeeping write chained ahead of the patch: the `Admin/UpdatePolicy` hub was unreachable, every
-tick died in that write, and memex sat 37 h on a stale image while the registry check kept
+tick died in that write, and the control instance sat 37 h on a stale image while the registry check kept
 succeeding — *"the update it would not apply is exactly what recovers a degraded pod, so the write
 must never gate it."* The fix moved the k8s PATCH ahead of every mesh write. #4098 then replaced the
 PATCH with the hand-over, and on 2026-09-22 the control instance sat four hours behind six sealed
 builds carrying core#5151 — the fix for the router saturation it was suffering — logging
 `[SelfUpdate] the hand-over of 3.0.0-ci.9168 to the control lane FAILED; the next check announces it
 again`, `could not record available tag … on Admin/UpdatePolicy; applying the update anyway` (it
-could not: applying IS the hand-over), and `self-update-available for 'memex-cloud' could not be
+could not: applying IS the hand-over), and `self-update-available for '<public-instance>' could not be
 routed` — because the satellites' events land in the same wedged inbox, the whole fleet's
 self-update was down with it. The roll that ended it was one hand-over that happened to land on the
 one silo that could still write.
@@ -119,7 +119,7 @@ The instance → control-instance channel is the pair the Feedback hand-over int
 | key | meaning |
 |---|---|
 | `Hosting:Deployment` | this instance's `Hosting/Deployment` record id — **required on every route**; the control plane routes by it, and an event naming no record is not a hand-over |
-| `Hosting:ControlInbox:Url` | the inbox URL, `https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds` |
+| `Hosting:ControlInbox:Url` | the inbox URL, e.g. `https://control.example.com/api/hooks/Hosting/PlatformBuilds` |
 | `Hosting:ReportTo` | the control instance the inventory report goes to; when `ControlInbox:Url` is absent the inbox URL is **derived** from it (`+ /api/hooks/Hosting/PlatformBuilds`) — one declaration of "who is my control instance" |
 | `Hosting:ControlInbox:Secret` | the HMAC secret the inbox verifies — byte-identical to the control instance's `Hosting:PlatformWebhookSecret`; read at delivery time, never captured, never logged |
 
@@ -132,14 +132,14 @@ otherwise.
 🚨 **A declared control inbox is EXCLUSIVE** (#4098): an instance that names one is a
 *consumer*, whatever it also lists, so the only routes it admits are `Post` (secret present) and
 `None` (secret absent, and the missing sentence names the key). It never falls through to `Local`.
-The shape that made this load-bearing is `build`: its inbox URL is **derived** from
+The shape that made this load-bearing is the build instance: its inbox URL is **derived** from
 `Hosting:ReportTo`, it maps no `Hosting:ControlInbox:Secret`, and it legitimately **lists**
 `Hosting/PlatformBuilds` with a declared key whose secret is mounted — it owns the fleet's build
-queue. Falling through stored the release in **build's own** inbox, where
+queue. Falling through stored the release in **the build instance's own** inbox, where
 `PlatformBuildInboxWatcher.PlanFor` classifies a `self-update-available` event as a non-build event
 and **deletes** it, while the boot line read `apply=control-lane (… handed to this instance's own
 Hosting/PlatformBuilds inbox …)` with a *verified* delivery and `Missing()` named nothing: a control
-plane talking to itself, read off a step that could not fail. Mounting the secret on `build` would
+plane talking to itself, read off a step that could not fail. Mounting the secret on the build instance would
 have fixed one record and left the silent self-delivery reachable for the next instance that owns an
 inbox, so the refusal lives in the route. `Missing()` takes the **same** "a URL is declared" test, so
 an instance that declared neither URL key is never blamed for them.
@@ -165,12 +165,12 @@ always a delivery the receiver checked. (`WebhookInbox.Deliver` itself was moved
 `Observable.Using(ImpersonateAsSystem)` shape onto `RunAsSystem` in the same change: an in-process
 caller on a pool thread must not stay latched as System after delivering.)
 
-**What the fleet's records carry today** (read on the control instance, 2026-09-14): `memex-cloud`
-declares `Hosting__ControlInbox__Url` and mounts `Hosting__ControlInbox__Secret`; `build` declares
+**What the fleet's records carry today** (read on the control instance, 2026-09-14): the public instance
+declares `Hosting__ControlInbox__Url` and mounts `Hosting__ControlInbox__Secret`; the build instance declares
 `Hosting__ReportTo` + `Hosting__Deployment` and mounts the fleet secret **as** `Hosting__PlatformWebhookSecret`
-(its own inbox), not under the `ControlInbox` key; `pearl` declares `Hosting__ReportTo` +
-`Hosting__Deployment` and mounts no secret; `memex` is the control instance (`Local`). So `build` and
-`pearl` need one Key Vault mapping each — `Hosting__ControlInbox__Secret` → the vault object holding
+(its own inbox), not under the `ControlInbox` key; an SME client instance declares `Hosting__ReportTo` +
+`Hosting__Deployment` and mounts no secret; the control instance itself is `Local`. So the build instance and
+the SME client instance need one Key Vault mapping each — `Hosting__ControlInbox__Secret` → the vault object holding
 the fleet webhook secret — before they can hand over; until then they are `DetectOnly` and their
 verdict says exactly that.
 
@@ -180,7 +180,7 @@ verdict says exactly that.
 {
   "event": "self-update-available",
   "deployment": "build",
-  "instance": "https://build.meshweaver.cloud",
+  "instance": "https://build.example.com",
   "currentVersion": "3.0.0-ci.8411+c84c6c0",
   "newVersion": "3.0.0-ci.8460",
   "currentImage": "cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411",
@@ -228,7 +228,7 @@ reviewed PR already declared. The control plane must still refuse an event whose
 no record it holds.
 
 **A deployment that must not hold the fleet secret announces with its OWN key** (MeshWeaver.Plugins#1913).
-A customer-administered pod (`pearl`) handed the fleet secret could also sign build facts and triage
+A customer-administered pod (an SME client instance) handed the fleet secret could also sign build facts and triage
 events. Instead its record names a vault object of its own (`announcementKeySecret`), the pod mounts
 it as `Hosting__ControlInbox__Secret` — so the self-updater above signs with it unchanged — and the
 control instance mounts the same object as `Hosting__PlatformWebhookSecret__<deployment>`, which the
@@ -256,7 +256,7 @@ auto-roll is host-side (`deploy/homebrew/README.md`), it never used the in-pod p
 a Reconcile of each namespace against a chart pin that carries this change. That is a cluster read,
 so it is the maintainer's to take (break-glass otherwise); the portal-side reading that agrees with
 it is the boot line: `[SelfUpdate] starting … canPatch=False, apply=control-lane (a detected release
-is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the control plane rolls)`.
+is handed to https://control.example.com/api/hooks/Hosting/PlatformBuilds; the control plane rolls)`.
 
 ## What is left, in order — and who owns each step
 
@@ -278,15 +278,15 @@ is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the 
    package's pre-install of `MeshWeaver.SelfUpdate.Aks` keeps the ACR tag lister (detection on an
    ACR-based instance needs it) and its `KubernetesDeploymentUpdater` becomes inert by the chart's
    declaration; retiring the patcher half is that repo's call.
-3. **Systemorph/Memex — declarations, then the roll.** `Deployments/build` gains the
-   `Hosting__ControlInbox__Secret` vault mapping to the fleet secret (Memex#567); `Deployments/pearl`
+3. **Systemorph/Memex — declarations, then the roll.** The build instance's record gains the
+   `Hosting__ControlInbox__Secret` vault mapping to the fleet secret (Memex#567); the SME client instance's record
    gains the same KEY mapped to its OWN announcement key instead, because a customer-administered pod
    must not hold the fleet secret ([Self-Update Announcement Key](/Doc/Architecture/SelfUpdateAnnouncementKey)) (and, for #4093,
    `SelfUpdate__RegistryValidationUrl` — see below); the chart pin moves to a core commit carrying
    this change; the maintainer Reconciles each namespace, which deletes the Role and renders the
    key. Order: the router (2) first, or accept that `Continuous` deliveries on the switched
    namespaces wait for it.
-4. **Then #4093 closes** on its restated condition — `build` detects a newer image, hands it to the
+4. **Then #4093 closes** on its restated condition — the build instance detects a newer image, hands it to the
    control instance, a Roll is opened and executed — and #4098 on the `can-i … no` reading.
 
 ## #4093 and #4123 — the pairing, and where the decision about it lives
@@ -294,15 +294,15 @@ is handed to https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds; the 
 Detection on a fleet-registry instance still needs the instance key presented to
 `cr.meshweaver.cloud`, and `SelfUpdateRegistryCredential` is unchanged: the pairing is a
 **declaration** (`SelfUpdate:RegistryValidationUrl`), never host resemblance, and an absent
-declaration refuses. #4094 made the declaration possible; the config-repo declaration on `build` and
-`pearl` is step 3 above. What #4123 adds — *design, recorded here; not implemented in this change,
+declaration refuses. #4094 made the declaration possible; the config-repo declaration on the build instance and
+the SME client instance is step 3 above. What #4123 adds — *design, recorded here; not implemented in this change,
 which was scoped to P3b* — is **who writes it**:
 
 - **Derive at render time, on the control instance.** `HelmValues` (MeshWeaver.Plugins) already
   derives `selfUpdate.registry` from the image host. The same render can derive
   `selfUpdate.registryValidationUrl`: given the hosting records the control instance holds, the one
   whose `registry.host` equals the consumer's image host carries the `validationUrl`
-  (`Deployments/memex-cloud` → `https://memex.meshweaver.cloud/api/instances/token`). That needs
+  (the plugin registry instance's record → `https://registry.example.com/api/instances/token`). That needs
   `HelmValues.Render` to receive the registry records (or the resolved pairing) from
   `InstanceActionPlan`, which reads them on the control instance — a Plugins change, pure at the
   render, no network in the update path. The consumer-side key stays the wire; a hand-written
@@ -315,7 +315,7 @@ which was scoped to P3b* — is **who writes it**:
   index-level `artifactRegistry`, sourced from the registry record's `registry.host`, not from a
   publisher's bundle entry), so a compromised publisher lane cannot redirect consumer keys by
   writing a foreign artifact URL into one bundle. 🚨 It must **not** be keyed on
-  `SelfUpdate:Registry`: the control instance `memex` pulls its image from ACR and still adopts
+  `SelfUpdate:Registry`: the control instance pulls its image from ACR and still adopts
   bundles sealed on `cr.meshweaver.cloud`, so a rule tied to the image registry would refuse its
   every bundle and turn adoption into boot-time compiles. Scope: core (`PluginBundleClient`, the
   index shape) plus the registry's index endpoint — a scope call the maintainer has not made, and

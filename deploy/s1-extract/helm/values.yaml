@@ -1,0 +1,63 @@
+# Values for s1-extract (deploy/s1-extract/Dockerfile). ClusterIP only, never an Ingress.
+
+replicaCount: 1
+
+image:
+  # 🚨 The image CARRIES THE MODEL (exported to ONNX at build time):
+  #   az acr build -r <registry> -t s1-extract:gliner-multi-2.1 deploy/s1-extract
+  repository: ""        # required: <registry>/s1-extract
+  tag: "gliner-multi-2.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Who may call. A caller sends a projected ServiceAccount token for `auth.audience`; the service
+# validates it with a TokenReview and admits only these ServiceAccounts
+# (`system:serviceaccount:<namespace>:<name>`). Empty ⇒ the pod refuses to start: no caller could
+# ever be admitted, and a service nobody can call is a misconfiguration, not a safe default.
+auth:
+  audience: s1-extract
+  allowedServiceAccounts: []
+
+# The NetworkPolicy admits TCP 8080 only from these namespaces (matched by the
+# kubernetes.io/metadata.name label every namespace carries). Empty ⇒ nothing is admitted.
+networkPolicy:
+  enabled: true
+  allowedNamespaces: []
+
+limits:
+  maxTexts: 256
+  maxChars: 2000
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# GLiNER multi on ONNX: ~1.2 GB weights, measured 3.9 GB peak RSS on torch; ONNX is lighter.
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    cpu: "8"
+    memory: 8Gi
+
+threads: 4
+
+startupProbe:
+  # The PROCESS coming up (/healthz), never the model load: that gates readiness only.
+  failureThreshold: 30
+  periodSeconds: 5
+readinessProbe:
+  # /readyz: 503 "model loading" (or the load error) until the model is in; callers degrade meanwhile.
+  periodSeconds: 15
+  timeoutSeconds: 5
+livenessProbe:
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

@@ -5,66 +5,52 @@
 
 using System;
 using System.Linq;
-using System.Text.Json;
-using System.Web;
 using MeshWeaver.Layout.Composition;
 
+/// <summary>
+/// The Profile's view — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): built
+/// from the node's PATH, emitted whole on the first render, and every value a pointer into the
+/// node's <see cref="SocialMediaProfile"/> that the GUI resolves through the node stream. Nothing
+/// here reads the node on the hub — and so nothing here has to dig a value out of a
+/// <c>JsonElement</c> either.
+/// </summary>
 public static class SocialMediaProfileLayoutAreas
 {
+    /// <summary>The area name of the profile's detail view.</summary>
     public const string DetailArea = "Detail";
 
+    /// <summary>Registers the profile views.</summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <returns>The layout definition with the views added.</returns>
     public static LayoutDefinition AddSocialMediaProfileLayoutAreas(this LayoutDefinition layout) =>
         layout.WithView(DetailArea, Detail);
 
-    private static string? GetProp(MeshNode node, string prop)
-    {
-        if (node.Content is not JsonElement json) return null;
-        if (json.TryGetProperty(prop, out var p) && p.ValueKind == JsonValueKind.String) return p.GetString();
-        var pascal = char.ToUpperInvariant(prop[0]) + prop.Substring(1);
-        return json.TryGetProperty(pascal, out var pp) && pp.ValueKind == JsonValueKind.String ? pp.GetString() : null;
-    }
+    /// <summary>The profile: name, platform, owner, link and bio.</summary>
+    /// <param name="host">The area host; only its address is read.</param>
+    /// <param name="_">The rendering context.</param>
+    /// <returns>The detail template.</returns>
+    public static UiControl Detail(LayoutAreaHost host, RenderingContext _)
+        => DetailTemplate(host.Hub.Address.ToString());
 
-    public static IObservable<UiControl?> Detail(LayoutAreaHost host, RenderingContext _)
+    /// <summary>The profile at <paramref name="nodePath"/>, bound by path.</summary>
+    /// <param name="nodePath">The profile node.</param>
+    /// <returns>The complete control tree — it never waits on data.</returns>
+    public static UiControl DetailTemplate(string nodePath)
     {
-        var hubPath = host.Hub.Address.ToString();
-
-        return host.Workspace.GetStream<MeshNode>()!
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
-            .Select(node =>
+        var content = LayoutAreaReference.GetMeshNodeDataContext(nodePath);
+        return Controls.Stack
+            .WithStyle("padding: 16px; gap: 8px;")
+            .WithView(Controls.H2(new JsonPointerReference("name")) with
             {
-                if (node is null)
-                    return (UiControl?)Controls.Markdown(host.Localize("ui.mdProfileNotFound"));
-
-                var name = node.Name ?? GetProp(node, "name") ?? "Profile";
-                var platformId = GetProp(node, "platform") ?? "LinkedIn";
-                var platform = Platform.GetById(platformId);
-                var owner = GetProp(node, "owner") ?? "";
-                var profileUrl = GetProp(node, "profileUrl");
-                var bio = GetProp(node, "bio");
-
-                var link = !string.IsNullOrEmpty(profileUrl)
-                    ? $"<a href=\"{HttpUtility.HtmlAttributeEncode(profileUrl)}\" target=\"_blank\" rel=\"noopener\">Open profile \u2197</a>"
-                    : "<span style=\"color:#888;\">No profile URL</span>";
-
-                var html = $$"""
-                    <div style="display:flex;gap:24px;align-items:center;padding:16px;">
-                      <div style="width:96px;height:96px;border-radius:50%;background:{{platform.Color}};color:white;display:flex;align-items:center;justify-content:center;font-size:36px;">{{platform.Emoji}}</div>
-                      <div>
-                        <h2 style="margin:0 0 4px 0;">{{HttpUtility.HtmlEncode(name)}}</h2>
-                        <div style="color:{{platform.Color}};font-weight:600;margin-bottom:4px;">{{platform.Emoji}} {{HttpUtility.HtmlEncode(platform.Name)}}</div>
-                        <div style="color:#666;margin-bottom:8px;">Owner: {{HttpUtility.HtmlEncode(owner)}}</div>
-                        <div>{{link}}</div>
-                      </div>
-                    </div>
-                    """;
-
-                var stack = Controls.Stack
-                    .WithStyle("padding: 16px;")
-                    .WithView(Controls.Html(html));
-                if (!string.IsNullOrWhiteSpace(bio))
-                    stack = stack.WithView(Controls.Markdown(bio));
-                return (UiControl?)stack;
-            });
+                DataContext = LayoutAreaReference.GetMeshNodeDataContext(nodePath, bindContent: false)
+            })
+            .WithView(Controls.Badge(new JsonPointerReference("platform")) with { DataContext = content })
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px;")
+                .WithView(Controls.Label("Owner:").WithStyle("color: var(--neutral-foreground-hint);"))
+                .WithView(Controls.Label(new JsonPointerReference("owner")) with { DataContext = content }))
+            // A bare URL renders as a link in markdown.
+            .WithView(Controls.Markdown(new JsonPointerReference("profileUrl")) with { DataContext = content })
+            .WithView(Controls.Markdown(new JsonPointerReference("bio")) with { DataContext = content });
     }
 }
 

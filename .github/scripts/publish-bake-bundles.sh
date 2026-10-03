@@ -1229,7 +1229,7 @@ move_pointer() { # <account> <share> <dest>
 # Until phase 5 a generation publication ALSO rewrote `<identity>/<source>/` itself in place, for
 # portal images that predate pointer resolution (phase 1, a4109d422). Measured 2026-09-17 against
 # the five `Hosting/Deployment` records on the control instance, no deployed reader predates it
-# (build and memex-cloud at c84c6c055, memex at afde4eabe/43915af5c, pearl at 67cbbe0ee, partnerre
+# (build and memex-cloud at c84c6c055, memex at afde4eabe/43915af5c, fabrikam at 67cbbe0ee, globex
 # has no estate yet), and a framework identity moves on every core commit, so no older image
 # resolves a directory a current publisher writes. The copy had one remaining effect: it was
 # replaced IN PLACE, so it still raced, and it was the last reason a publish went red on an overlap.

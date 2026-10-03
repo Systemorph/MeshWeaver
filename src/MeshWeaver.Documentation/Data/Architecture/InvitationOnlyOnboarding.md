@@ -31,7 +31,7 @@ Features__Onboarding__InvitationOnly=true
 
 <svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:720px;height:auto;display:block;margin:16px auto;" font-family="sans-serif" font-size="12"><defs><marker id="iarr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="currentColor" fill-opacity=".6"/></marker></defs><rect x="20" y="30" width="150" height="56" rx="8" fill="#1e3a5f" stroke="#2563eb" stroke-width="1.5"/><text x="95" y="54" text-anchor="middle" fill="#93c5fd" font-weight="bold">Admin</text><text x="95" y="72" text-anchor="middle" fill="#60a5fa">Invitations tab</text><rect x="20" y="140" width="150" height="56" rx="8" fill="#2d1e3a" stroke="#9333ea" stroke-width="1.5"/><text x="95" y="164" text-anchor="middle" fill="#d8b4fe" font-weight="bold">Invitation node</text><text x="95" y="182" text-anchor="middle" fill="#c084fc">Admin/Invitation/{slug}</text><rect x="285" y="30" width="150" height="56" rx="8" fill="#3a2a1e" stroke="#ea580c" stroke-width="1.5"/><text x="360" y="54" text-anchor="middle" fill="#fdba74" font-weight="bold">Invitation email</text><text x="360" y="72" text-anchor="middle" fill="#fb923c">Microsoft Graph</text><rect x="285" y="140" width="150" height="56" rx="8" fill="#1e3a2f" stroke="#16a34a" stroke-width="1.5"/><text x="360" y="164" text-anchor="middle" fill="#86efac" font-weight="bold">Invitee signs in</text><text x="360" y="182" text-anchor="middle" fill="#4ade80">IdP-verified email</text><rect x="550" y="85" width="150" height="56" rx="8" fill="#1e3a2f" stroke="#16a34a" stroke-width="1.5"/><text x="625" y="109" text-anchor="middle" fill="#86efac" font-weight="bold">Onboarding gate</text><text x="625" y="127" text-anchor="middle" fill="#4ade80">Pending? → Accept</text><line x1="95" y1="86" x2="95" y2="140" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#iarr)"/><line x1="170" y1="52" x2="285" y2="55" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#iarr)"/><line x1="360" y1="86" x2="360" y2="140" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#iarr)"/><line x1="435" y1="168" x2="560" y2="130" stroke="currentColor" stroke-opacity=".5" stroke-width="1.5" marker-end="url(#iarr)"/></svg>
 
-1. An admin opens **Settings → Administration → Invitations**, enters an email, clicks **Invite**.
+1. An admin opens **Admin app (`/Admin`) → Invitations**, enters an email, clicks **Invite**.
 2. `InvitationService.CreateInvitation` writes a `Pending` `Invitation` node. **It does not send the
    email.** `InvitationEmailSender` — a hosted service — watches Pending invitations whose
    `EmailSentAt` is null, sends through `IEmailSender`, and stamps `EmailSentAt` so it never
@@ -105,7 +105,7 @@ the lookup carries its own bound. The consequence is that the request the middle
 already be dead.
 
 It therefore checks `RequestAborted` **after** the decision arrives and, when the connection is gone,
-hands nothing to the endpoint. Before that check (#4859) a burst of five requests on memex-cloud was
+hands nothing to the endpoint. Before that check (#4859) a burst of five requests on the public instance was
 passed to a JSON endpoint after Kestrel's shutdown had aborted their connections and disposed its
 transport; every response write rented from the dead pool and died on
 `ObjectDisposedException: 'MemoryPool'` at `Http1OutputProducer.GetFakeMemory`, attributed to this
@@ -221,7 +221,7 @@ enforced, but no email goes out (the admin shares the portal link out-of-band).
   (real mesh, no mocks): `CreateInvitation` writes a queryable Admin-partition node;
   `FindPendingInvitation` returns it (null when absent); `Revoke`/`MarkAccepted` flip status; the
   NoOp sender returns success without sending.
-- **Manual** — as a platform admin open **Settings → Administration → Invitations**, invite an
+- **Manual** — as a platform admin open **Admin app (`/Admin`) → Invitations**, invite an
   email, then sign in as a non-invited email (→ "Invitation Required") and as the invited email
   (→ profile form → completes → invitation shows **Accepted**).
 

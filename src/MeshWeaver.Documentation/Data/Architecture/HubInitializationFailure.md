@@ -55,9 +55,9 @@ away for a moment. Latching the activation for it turned a two-minute DNS blip i
 is broken until the process restarts": every later request answered with a terminal
 `DeliveryFailure`, the data streams errored, nothing ever re-run.
 
-Measured: memex-cloud, 2026-09-12 06:19–06:21Z — three `DataContext` initializations failed on
+Measured: the public instance, 2026-09-12 06:19–06:21Z — three `DataContext` initializations failed on
 `SocketException: Name or service not known` inside `NpgsqlConnector.ConnectAsync` and stayed
-FAILED (#4068); memex, 2026-08-23 → 2026-09-12 — 19 `sync/*` BuildupActions failed on
+FAILED (#4068); the control instance, 2026-08-23 → 2026-09-12 — 19 `sync/*` BuildupActions failed on
 `NpgsqlException: Failed to connect … ---> TimeoutException` across four pods, each leaving its
 hub refusing (#4067).
 
@@ -291,7 +291,7 @@ the absent case got its own prompt terminal (`MessageHubGrain.ComposeActivationS
 authoritative branch alone decides when the source is done), that sentence became false in every
 case that could still reach the timer. It is what the incident fingerprint is built from
 (`ActivationFaultReason` excludes the reporter's prose and keeps the exception's message), so the
-false sentence is what a human reads and what a ticket gets titled after. **Measured on memex: 95 of
+false sentence is what a human reads and what a ticket gets titled after. **Measured on the control instance: 95 of
 these faults in 400 minutes, on an instance whose path-resolution query fan-in was logging, seconds
 earlier:**
 

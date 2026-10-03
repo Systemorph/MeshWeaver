@@ -930,7 +930,7 @@ public static class DynamicTypePreWarmer
     /// 🚨 <b>The FIRST bake of a brand-new instance has NO baseline at all</b> — every type in the
     /// report has never been built here.
     ///
-    /// <para>Measured on <c>pearl.meshweaver.cloud</c> (2026-09-15/16): a freshly provisioned portal
+    /// <para>Measured on <c>fabrikam.example.com</c> (2026-09-15/16): a freshly provisioned portal
     /// served <c>503</c> at the edge for nine hours with a RUNNING pod, because two types the
     /// registry pre-installs (<c>GoogleMaps/Gallery</c>, <c>MyAi/Panel</c>) could not compile —
     /// their store-delivered modules had not arrived. Every entry was

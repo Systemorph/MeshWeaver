@@ -119,9 +119,10 @@ public static class DeploymentRecordExtensions
 
     /// <summary>
     /// The version pattern the Continuous self-update follows (<c>3.0.0-ci*</c> on the fleet's
-    /// line). Together with <see cref="WithUpdatePolicy"/> this is what a NEW instance starts with:
-    /// both render into the portal's config (<c>SelfUpdate__DefaultPolicy</c> /
-    /// <c>SelfUpdate__DefaultPattern</c>) and seed its <c>Admin/UpdatePolicy</c> on first creation.
+    /// line). Together with <see cref="WithUpdatePolicy"/> it renders into the portal's config
+    /// (<c>SelfUpdate__DefaultPolicy</c> / <c>SelfUpdate__DefaultPattern</c>), seeds its
+    /// <c>Admin/UpdatePolicy</c> on first creation and, once a policy is declared, is converged onto
+    /// the existing node at every start (policy <c>self-update-record-authoritative</c>).
     /// Null or blank clears it. See <see cref="DeploymentContent.UpdatePattern"/>.
     /// </summary>
     public static DeploymentContent WithUpdatePattern(this DeploymentContent d, string? pattern) =>
@@ -574,6 +575,14 @@ public static class DeploymentRecordExtensions
     /// <summary>OpenRouter models (and optionally an endpoint / order).</summary>
     public static AiProviders OpenRouter(this AiProviders a, IEnumerable<string> models, string? endpoint = null, int? order = null, bool? enabled = null) =>
         a with { OpenRouter = Provider(a.OpenRouter, models, endpoint, order, enabled) };
+
+    /// <summary>OpenRouter's EU route: models on the EU endpoint (optionally an endpoint override), the account key by reference.</summary>
+    public static AiProviders OpenRouterEU(this AiProviders a, IEnumerable<string> models, string? endpoint = null) =>
+        a with { OpenRouterEU = Provider(a.OpenRouterEU, models, endpoint, null, null) };
+
+    /// <summary>The processing region every model this instance serves must satisfy (e.g. <c>Eu</c>); null/blank clears it.</summary>
+    public static AiProviders RequiredDataResidency(this AiProviders a, string? region) =>
+        a with { RequiredDataResidency = string.IsNullOrWhiteSpace(region) ? null : region.Trim() };
 
     /// <summary>Anthropic models behind an endpoint (an Azure AI Foundry Anthropic endpoint, or Anthropic's own).</summary>
     public static AiProviders Anthropic(this AiProviders a, IEnumerable<string> models, string? endpoint = null, int? order = null, bool? enabled = null) =>

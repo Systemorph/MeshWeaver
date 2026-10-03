@@ -119,23 +119,23 @@ name: Node repo gate (reusable)
 # is in flight or the volume simply has not reached the set, and is RED at once only when no future
 # refresh can ever install it (#4281).
 #
-# So this lane has TWO MODES, and `.github/scripts/resolve-gate-platform.sh` decides which by
-# MEASURING whether that mount exists — never by reading a label or an input:
+# So this lane has TWO MODES. `.github/scripts/resolve-gate-platform.sh` checks the mount and
+# the run's pinned image PAIR rather than choosing from a runner label:
 #
 #   * **volume** — `/opt/platform` is there (every self-hosted ARC runner pod). The shard reads
 #     `app/` and `platform-refs/` off the share, composes the gate host into $RUNNER_TEMP, and runs
 #     the tester **as a process** on a .NET installed by `actions/setup-dotnet` under
 #     `DOTNET_INSTALL_DIR=/home/runner/.dotnet`. No daemon, no registry credential, no pull.
-#   * **container** — `/opt/platform` is absent (a GitHub-hosted `ubuntu-latest` runner: `/opt` is
-#     EMPTY in ghcr.io/actions/actions-runner and the GitHub image has no such mount). The shard
-#     takes the pre-#4113 path verbatim: login, pull both, `docker cp`, four `docker run`s. This
-#     repo's own calls (the org runner variables are invisible to a public repo) are in this mode.
+#   * **container** — `/opt/platform` is absent, or its complete tester set contains another valid
+#     portal digest. The shard takes the pre-#4113 path: login, pull BOTH run-pinned images by
+#     digest, `docker cp`, four `docker run`s. The pair miss is a loud warning and requires a
+#     Docker-capable runner. This repo's own calls use this mode when the mount is absent.
 #
-# 🚨 THERE IS NO FALLBACK BETWEEN THE MODES. Once the mount is present, a set that is missing,
-# half-written or paired with another portal is RED and NAMES `ci-platform-refresh`; it never
-# degrades into `docker pull`. A silent fallback would turn "the refresh job has been dead for a
-# day" into "the gate is a bit slower today". The mode taken is printed, and both failure paths
-# name their own fix: a runner with NEITHER the volume NOR a daemon is red naming both.
+# 🚨 A missing, half-written or corrupt mounted set is RED and NAMES `ci-platform-refresh`; it
+# never degrades into a pull. A complete set with another valid portal digest is a cache PAIR miss:
+# the volume keys on tester alone, so a portal-only rebuild can make that pair unavailable there.
+# The container path pulls both exact digests and the mode is printed. A runner that cannot serve
+# the pair from the volume and has no daemon is RED naming both conditions.
 #
 # WHAT THE VOLUME SUPPLIES, AND WHAT IT DOES NOT — measured 2026-09-12 against the images of set
 # 3.0.0-ci.8417 (tester sha256:60b2dec8…, portal sha256:bd27c33f…) and
@@ -923,6 +923,21 @@ jobs:
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
       - uses: actions/checkout@v7
+      # The tester installs this tree and stamps each install with its lock's moduleVersion; a
+      # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's —
+      # written by the generator at this lane's scripts ref (a disposable checkout the action removes).
+      - name: Check out the lock generator at the lane's scripts ref
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          path: .materialize-generator
+          sparse-checkout: .github/scripts/gen-manifests.py
+          sparse-checkout-cone-mode: false
+      - name: Materialize main-owned manifest locks
+        uses: Systemorph/MeshWeaver/.github/actions/materialize-locks@main
+        with:
+          generator: .materialize-generator/.github/scripts/gen-manifests.py
       # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
       # whatever the mount holds, so the required modules are STAGED into it, exactly like
       # production resolves the requires from the store's package sources.
@@ -1197,10 +1212,10 @@ jobs:
               echo "runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL'): VOLUME mode — the tester runs as a process from $PLATFORM_VOLUME. No Docker daemon is used, needed or asserted in this job."
               ;;
             container)
-              # The pre-#4113 contract, and the daemon is its precondition. A runner that has
-              # neither the mount nor a daemon is named for BOTH here, not for one of them later.
+              # The pre-#4113 contract, and the daemon is its precondition. The mount may exist
+              # but hold a different portal for this tester, so name either inability to serve.
               if ! docker info >/dev/null 2>&1; then
-                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') has NEITHER the CI platform volume at $PLATFORM_VOLUME NOR a reachable Docker daemon, and a gate shard needs one or the other: the volume (every runner pod of the self-hosted 'aks-silos' / 'aks-silos-dind' scale sets mounts it — Systemorph/Memex deployments/aks/ci-runners/) or a daemon to pull the tester image with. Pass runner 'aks-silos' or 'aks-silos-dind', or omit it (the default resolves through the org variable MW_RUNNER_DOCKER, and to ubuntu-latest — which has Docker — where that variable is invisible)."
+                echo "::error::runner '${RUNNER_NAME:-?}' (runs-on '$RUNNER_LABEL') cannot serve the run's tester-and-portal pair from $PLATFORM_VOLUME and has no reachable Docker daemon for the exact-digest container path. Use a Docker-capable runner or install that exact pair on the volume; do not use the cached portal from another pair."
                 docker info 2>&1 | tail -5 || true
                 exit 1
               fi

@@ -56,11 +56,11 @@ The global pass is three mesh-wide fetches (`nodeType:Code partitions:all`, and 
 `UNION ALL` over every partition schema, so **one partition that cannot answer fails every fetch** —
 and until this change that failed every pending type with it.
 
-Measured on memex-cloud (core `bf5ac85526`, 2026-09-24): on every one of eight boots between 07:12Z
+Measured on the public instance (core `bf5ac85526`, 2026-09-24): on every one of eight boots between 07:12Z
 and 08:06Z, `nodeType:Code partitions:all` settled at 1586 nodes and ~25 ms later the pod logged
 `batched source discovery did not establish the source sets — abandoning the batch and falling back
 to the activation-driven sweep for ALL N pending type(s)`, with N between 38 and 80. That cost each
-boot 5–14 minutes of per-type activations; on memex, combined with the activation wait deadlock
+boot 5–14 minutes of per-type activations; on the control instance, combined with the activation wait deadlock
 fixed in #5643, it held a pod unready for hours.
 
 So when the global pass faults, times out, reaches its ceiling or is contradicted by a type's
@@ -122,7 +122,7 @@ four regressions on a healthy image.
 
 ### The measurement
 
-`BatchBake` logs the size of every pass. On **memex.systemorph.com**, every boot in the window
+`BatchBake` logs the size of every pass. On **the control instance**, every boot in the window
 2026-09-07 22:40Z → 2026-09-08 07:37Z:
 
 | Boot (UTC) | Code nodes resolved | `compileErrors=` | Readiness |
@@ -149,15 +149,15 @@ explains the difference; the size of one query pass does.
 15-hour window, counted over the whole window on the instant endpoint:
 
 ```logql
-count_over_time({namespace="memex"}       |= "NodeType bake regressed" [15h])   →  1065, ONE stream
-count_over_time({namespace="memex-cloud"} |= "NodeType bake regressed" [15h])   →     0
+count_over_time({namespace="<control-ns>"} |= "NodeType bake regressed" [15h])   →  1065, ONE stream
+count_over_time({namespace="<public-ns>"}  |= "NodeType bake regressed" [15h])   →     0
 ```
 
 The 1065 all come from `7d5d458cc4-cbztk`'s **boot 0** and nowhere else — one line per readiness
 probe at the 10-second cadence for 2 h 58 m, which is the startup budget below, and the reason the
-`memex` count is non-zero is what makes the `memex-cloud` zero mean something. **In fifteen hours,
+control instance's count is non-zero is what makes the public instance's zero mean something. **In fifteen hours,
 across two portals, exactly one container boot ever put the bake gate into `Regressed`.** The
-simultaneous memex-cloud stall did not involve this gate at all.
+simultaneous public-instance stall did not involve this gate at all.
 
 > **The prebuilt bytes were already there.** The same boot logged
 > `ShippedPrebuiltBundles: bundle Doc.zip: adopted 4/4 prebuilt assembly(ies)` at 00:31:08 — ten
@@ -196,7 +196,7 @@ understands the defect.
   published under framework identity `sb43f9287dbd6922a7937bd24be103937`, and both the previous and
   the current set share that one publication.
 - **Not the module-set reader.** [A portal on a large module volume](/Doc/Architecture/ModuleSetConvergence)
-  is a real, separate, simultaneous stall — memex.meshweaver.cloud's startup probe timing out on a
+  is a real, separate, simultaneous stall — the public instance's startup probe timing out on a
   ten-second health check over 687 set records — and it is the one that fixed *that* portal. It
   cannot be what cleared this one: the recovery happened at 03:33Z, **47 minutes before** that fix
   merged, on an image that by construction could not contain it. Falsifiable, and falsified: had it
@@ -236,7 +236,7 @@ The measurement above was built (#3799: `ChunkTiming` on every source-discovery 
 published on `/health` as the `source-discovery` entry (#4015), which prints its reading whether
 or not it is healthy. Both live portals reached an image carrying it on 2026-09-12. Read 2026-09-13
 07:06:01–07:06:38Z, six `GET /health` calls per portal, which reached two replicas per portal (the
-bodies split 3/3 on memex.systemorph.com and 2/3 on memex.meshweaver.cloud, where one call
+bodies split 3/3 on the control instance and 2/3 on the public instance, where one call
 returned an empty body — a failed transport, excluded). Every **sampled** replica said the same
 thing:
 
@@ -247,9 +247,9 @@ node(s) from 1 change(s) (116 item(s) delivered) … largest inter-chunk gap 0ms
 completion window
 ```
 
-Per query, on memex.systemorph.com: `namespace:*/Source scope:subtree nodeType:Code` 844 nodes,
+Per query, on the control instance: `namespace:*/Source scope:subtree nodeType:Code` 844 nodes,
 `nodeType:Code partitions:all` 116, `namespace:*/Test scope:subtree nodeType:Code` 379 — each from
-**one** change, gap 0 ms, 0 % of the window; on memex.meshweaver.cloud 2507 / 1581 / 1741, likewise
+**one** change, gap 0 ms, 0 % of the window; on the public instance 2507 / 1581 / 1741, likewise
 one change each. Every discovery query on every sampled replica delivered its whole answer as a
 single `Initial`, and the fold settled on it.
 
@@ -278,7 +278,7 @@ short pass concludes nothing.
 One Loki query answers whether a pass was short, and it needs no pod to still exist:
 
 ```logql
-{namespace=~"memex|memex-cloud"} |= "source discovery resolved"
+{namespace=~"<ns-a>|<ns-b>"} |= "source discovery resolved"
 ```
 
 Read the Code-node count per boot and compare it against its neighbours **on the same portal** — the
@@ -287,7 +287,7 @@ sits below its neighbours' resolved a short set, and every compile verdict from 
 suspect. Pair it with:
 
 ```logql
-{namespace=~"memex|memex-cloud"} |= "warm-up complete"
+{namespace=~"<ns-a>|<ns-b>"} |= "warm-up complete"
 ```
 
 whose `compileErrors=` is the portal's standing baseline plus whatever that boot invented.

@@ -32,7 +32,7 @@ own code (with a runnable sample). For the outbound **credential/Graph** setup s
 
 ## 1. Ingestion — mail as a chat device
 
-A person emails the portal mailbox (e.g. `memex@systemorph.com`). A Microsoft Graph change-notification
+A person emails the portal mailbox (e.g. `portal@example.com`). A Microsoft Graph change-notification
 subscription on that inbox calls back to the portal, which turns each message into an agent conversation.
 
 ### Pipeline
@@ -289,7 +289,7 @@ inbound adds the subscription block. The client secret comes from Key Vault in p
 | Key | Meaning |
 |---|---|
 | `Email:Enabled` | master switch — `false` registers a NoOp sender (local dev/tests never send) |
-| `Email:MailboxAddress` | the mailbox to send/receive as (e.g. `memex@systemorph.com`) |
+| `Email:MailboxAddress` | the mailbox to send/receive as (e.g. `portal@example.com`) |
 | `Email:TenantId` / `Email:ClientId` / `Email:ClientSecret` | app-only Graph credential (`Mail.Send` + `Mail.ReadWrite`) |
 | `Email:UseManagedIdentity` | use a managed identity instead of a client secret (prod) |
 | `Email:InboundEnabled` | turn on the inbound channel (Graph subscription + webhook) |
@@ -313,7 +313,7 @@ Deploy parameters (`Memex.Deploy.AppHost` → the Deployment record's `email` bl
 ## 7. Executive Assistant — a mail & calendar agent
 
 The [Executive Assistant agent](/Doc/AI/ExecutiveAssistant) gives each user a personal assistant over
-**their own** mailbox and calendar (triage/write mail, "do my booking"). Unlike the shared `memex@`
+**their own** mailbox and calendar (triage/write mail, "do my booking"). Unlike the shared `portal@`
 ingestion mailbox — which uses an **application** Graph credential — the EA acts with **per-user,
 just-in-time delegated** consent: the user grants the EA access to *their own* mailbox/calendar only when
 they first use the tool, and every Graph call targets `/me/…` with that user's own delegated token. No

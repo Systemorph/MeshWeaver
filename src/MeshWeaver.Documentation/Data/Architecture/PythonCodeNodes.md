@@ -83,7 +83,7 @@ cd clients/python
 pip install -e .
 bash scripts/gen_proto.sh                      # generate gRPC stubs from the canonical mesh.proto
 python -m meshweaver.worker \
-    --url https://memex.meshweaver.cloud \
+    --url https://portal.example.com \
     --token mw_…                                # validated server-side; the worker writes under this identity
     --address py/python-kernel                 # the address CodeNodeType routes python submissions to
 ```

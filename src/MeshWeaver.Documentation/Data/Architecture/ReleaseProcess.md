@@ -131,7 +131,7 @@ two places it is compared are diverging, and only one of them keeps a verdict:**
 | | who compares | verdict |
 |---|---|---|
 | **Authoring / pack time** | `.github/scripts/check-module-platform-floor.py`, MeshWeaver.Plugins' `check-module-floors.py` | **an ERROR.** A floor above the platform the bundle is built against is unsatisfiable by construction, and the lane refuses it. This is where the ordering above bites, and it is the gate that reddened the Plugins pull requests. |
-| **Runtime** | `ModulePlatformLink.Check` plus the actual load | **the declared floor decides nothing here** ([#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [PR #3661](https://github.com/Systemorph/MeshWeaver/pull/3661)): the type-level link probe at landing and at boot, plus the load itself, are the only runtime gates; a declared floor the platform does not satisfy is logged and shown as an advisory, and a generation that cannot load falls back to the previous one (#3649). |
+| **Runtime** | `PlatformFloor`, then `ModulePlatformLink.Check` plus the actual load | **a COMPARABLE floor above the running platform holds the version** (policy `package-min-mesh-version`, [Module Adoption Policy](../ModuleAdoptionPolicy) R2): it is not landed or installed, and the installed version keeps running. A floor that cannot be ordered against the running version (an rc label against a ci build, the case this section measured) stays an advisory, as it has been since [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648). The link probe at landing and at boot, plus the load itself, still gate what passes the floor; a generation that cannot load falls back to the previous one (#3649). |
 
 So read the `HOLDING …` line above as a **measurement of what happened on 2026-09-07**, never as the
 contract: that hold is precisely what #3648 is removing, and this page deliberately does not restate
@@ -219,7 +219,7 @@ distinguished only by its run number. A clean label is the only thing the defaul
 which is why it is what "releasing" means here.
 
 🚨 **The fleet's setting while no clean release above `3.0.0` exists: `policy: Continuous`,
-`pattern: 3.0.0-ci*`** on `memex` and `memex-cloud` — they follow the line's sealed sets. **Change
+`pattern: 3.0.0-ci*`** on every fleet instance — they follow the line's sealed sets. **Change
 it the day `3.0.1` is tagged**: either remove the pattern (the install then waits for clean
 releases — the default) or move it to `3.0.1-ci*` to keep following the next line's builds. A
 record that still reads `3.0.0-ci*` after the tag is not broken, it is finished: it selects nothing
@@ -233,8 +233,11 @@ The record an operator writes (Settings → Updates edits the same fields):
 ```
 
 `SelfUpdate__DefaultPolicy` / `SelfUpdate__DefaultPattern` seed a NEW install's record (a dev/test
-host that should track the line sets `Continuous` + `3.0.0-ci*`); an existing record is edited on
-the record, never by configuration.
+host that should track the line sets `Continuous` + `3.0.0-ci*`). When `SelfUpdate__DefaultPolicy`
+is SET — which is what a fleet deployment record's `updatePolicy` renders — the self-updater also
+converges an EXISTING record's `policy` and `pattern` to those values at every start (policy
+`self-update-record-authoritative`, [Why the Fleet Stopped Rolling Itself](../SelfUpdateFreeze));
+with it unset, an existing record is edited on the record, never by configuration.
 
 > 🚨 **There is no rc line and there will be none** (maintainer, 2026-09-05; restated and settled
 > 2026-09-07). `3.0.0-rc1` … `3.0.0-rc13` were tagged and rebuilt on tagging, which made each
@@ -370,7 +373,7 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
    > green on every catalogue is the only "validated" the fleet has — there is no tag for it, and
    > the clean `X.Y.Z` of step 4 remains the only tag-shaped promotion. Turning the wave on is the
    > MAJOR-bump exception. The recommended setup, end to end:
-   > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+   > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` over the mesh MCP).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes

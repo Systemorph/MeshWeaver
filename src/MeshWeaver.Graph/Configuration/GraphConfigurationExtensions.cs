@@ -59,6 +59,8 @@ public static class GraphConfigurationExtensions
                 .AddRedirectType()
                 .AddWhatsNewType()
                 .AddAccessAssignmentType()
+                // The per-granter mail budget of access-granted notifications (AccessGrantMailBudget).
+                .AddAccessGrantMailSlotType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
                 .AddVUserType()
@@ -73,6 +75,7 @@ public static class GraphConfigurationExtensions
                 .AddNotificationType()
                 .AddNotificationSettingsType()
                 .AddNotificationFeaturePreferenceType()
+                .AddNotificationAppPreferenceType()
                 .AddCompletionMemoryType()
                 // NotificationRule/NotificationChannel ride the MeshWeaver.Notifications.Channels
                 // MODULE (Modules:Assemblies / AddNotificationChannels()) together with the triage
@@ -83,6 +86,7 @@ public static class GraphConfigurationExtensions
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
+                .AddInstanceSecretType()
                 .AddTeamsConversationType()
                 .AddGraphSubscriptionType()
                 .AddActivityType()
@@ -96,11 +100,15 @@ public static class GraphConfigurationExtensions
                 .AddLogonActionType()
                 .AddKernel()
                 .AddApiTokenType()
+                // Non-person principals (Admin/_ServiceIdentity) — Doc/Architecture/ServiceIdentities.
+                .AddServiceIdentityType()
                 .AddLicenseType()
                 .AddMeshWeaverInstanceType()
                 .AddMeshDataSourceType()
                 .AddPartitionType()
-                .AddGlobalSettingsType();
+                .AddGlobalSettingsType()
+                // The Admin partition root as the Admin app (never an empty Space).
+                .AddAdminAppType();
 
             // Data-contributed menu entries (UiContribution nodes, #1645) + the mesh-scoped live
             // catalog the menu aggregation maps (one query subscription per silo).
@@ -338,7 +346,7 @@ public static class GraphConfigurationExtensions
                 // has always refused a NodeType that names nothing; update refused nothing, so
                 // `update` was a supported route to CREATE a node whose type resolves to nothing —
                 // which has no per-node hub, reads as Unavailable rather than failing, and renders
-                // empty with nothing naming why (prod: rbuergi/_Draft/PartnerRe_EslProposalQA,
+                // empty with nothing naming why (prod: rbuergi/_Draft/Globex_TeamProposalQA,
                 // nodeType 'EmailDraft'). It judges a CHANGE of NodeType, never a state, so the
                 // one repair route for an already-mistyped node (a full-node update naming a type
                 // that DOES resolve — `patch` refuses nodeType outright) stays open. Scoped, like
@@ -391,6 +399,14 @@ public static class GraphConfigurationExtensions
                 // which is both why no import that is legal today starts failing and why the bulk
                 // fan-out pays no read. Scoped, like the other content-integrity validators.
                 services.AddScoped<INodeValidator, CreatableTypesCreationValidator>();
+
+                // Instance secrets are written only through the InstanceSecrets verbs (rights,
+                // slot and encryption checked, then written as system); a direct write is refused.
+                services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
+
+                // A service principal never holds platform administration: no Admin-partition grant
+                // may name one, and a service caller writes nothing in the Admin partition.
+                services.AddScoped<INodeValidator, Security.ServicePrincipalAdminGuard>();
 
                 // Delivery for the compile pipeline's parked-failure bell. The pipeline lives in
                 // MeshWeaver.Compiler and cannot reference NotificationService (it reads the

@@ -429,7 +429,7 @@ A failed leg used to be swallowed (`.Catch(_ => empty)`), so the surviving legs'
 won the race and reached Roslyn — which then emitted a completely genuine-looking
 `CS0246: The type or namespace name 'ScopeLibrary' could not be found` about code that was
 fine. The bake readiness gate cannot tell that from a real image regression, so a rollout
-stalled on healthy content (issue #1218; memex-cloud 2026-08-11, 14 of 56 sampled types).
+stalled on healthy content (issue #1218; the public instance 2026-08-11, 14 of 56 sampled types).
 
 An unestablished report never *wins* the race either — it is held until both legs have
 answered, so one dead query cannot veto a healthy cached set. It only settles the snapshot when
@@ -574,7 +574,7 @@ the full release history is the set of `Release/*` children.
 
 ### 🚨 A publication is durable and verified, or it is REFUSED — a full volume publishes nothing
 
-**Measured on `memex.systemorph.com`, 2026-09-08.** `/data` — the ReadWriteMany Azure Files share
+**Measured on the control instance, 2026-09-08.** `/data` — the ReadWriteMany Azure Files share
 holding `/data/assembly-cache`, the module generations and the prebuilt bundles — sat at **3 MiB
 free of 16 GiB**. Every recompile of `Hosting/InstanceAction` then went through *unchanged*: Roslyn
 emitted into the pod-local `.mesh-cache`, the emit was digest-verified there, the bytes were copied
@@ -759,7 +759,7 @@ coordinates, the release watcher needs a human, and the park registry's source-c
 in-memory (a failure that predates the process is not in it). Only a human pressing **Compile** got
 such a node out; a redeploy, a framework bump, a module update and a fix to the failing code reached
 none of them ([#1793](https://github.com/Systemorph/MeshWeaver/issues/1793); the fix written for
-fifteen types parked on memex-cloud could not reach the nodes it was written for).
+fifteen types parked on the public instance could not reach the nodes it was written for).
 
 So a failure records the one thing it honestly can: **the inputs the verdict was formed from** —
 framework identity, installed-module fingerprint, and the source snapshot the compile consumed —
@@ -835,7 +835,7 @@ build resolves on the process that declined. On a pod that has **restarted** sin
 coordinates name a `local` collection path (`FileSystemAssemblyStore` — the pod's own `/tmp`) in a
 pod that no longer exists: no process can load them, and nothing dispatched a compile (the branch's
 own comment claimed "the caller compiles" — the sweep reads a decline as compile-instead only for a
-bundle declined WHOLE). Measured on memex.systemorph.com, 2026-09-08: `Crm/Client` pointed at
+bundle declined WHOLE). Measured on the control instance, 2026-09-08: `Crm/Client` pointed at
 `Crm_Client/v31756-….dll` in the `local` collection of a replaced pod; both current replicas
 degraded every read of its content (`MeshNodeContentDegradedException`) for hours.
 
@@ -1016,7 +1016,7 @@ with nothing wrong (#1105):
   in an install than the emission was.
 
 In both cases the next emission is the one that should fulfil the request. The mark reported it as a
-failure instead. Measured on memex.meshweaver.cloud: `Store/Order` logged the Error at 2026-09-22
+failure instead. Measured on the public instance: `Store/Order` logged the Error at 2026-09-22
 22:54:24Z. A read 74 s later showed `requestedSourceStampAt` absent,
 `currentSourceFingerprint == adoptedSourceFingerprint` and `buildProvenance: AdoptedVerified`. The
 request had converged; only the log said it had not.
@@ -1045,8 +1045,8 @@ set on a mesh nobody can see:
   it, and the log says so.
 
 > 🚨 Do not collapse this to "`RequirePrebuilt` is unset everywhere". It is measured absent on
-> **memex** and **memex-cloud** (#2194 item 3 records the same) — two instances, saying nothing about
-> `pearl`, `atioz`, local installs, or any external instance the registry serves.
+> **the control instance** and **the public instance** (#2194 item 3 records the same) — two instances, saying nothing about
+> client instances, local installs, or any external instance the registry serves.
 
 #### 🚨 A module's content this mesh does not TRACK never compiles here — it errors, named
 
@@ -1055,7 +1055,7 @@ framework identity has landed, **compile the live source instead**. That fallbac
 exactly one kind of partition — one whose files TRACK the module's repository (a configured
 `_GitSync`), because there "the live source" is the repository at some commit and a local build of
 it is the same code the bake would have produced. On a partition nothing syncs, "the live source" is
-whatever an install left behind. Measured on **memex**, 2026-09-07 (#3583): the `Feedback` partition
+whatever an install left behind. Measured on **the control instance**, 2026-09-07 (#3583): the `Feedback` partition
 held four of the bundle's five files and no `_GitSync`; every `Feedback` bundle was refused on
 fingerprint (the bundle knew about the fifth file); and on every roll the portal compiled the
 leftover copy — old code, reading as current, with no line anywhere saying so. The maintainer's rule
@@ -1097,7 +1097,7 @@ compile, and the refusal is only ever formed from a positive *false*.
 | partition tracks a source | module content (offered / adopted before) | outcome |
 |---|---|---|
 | yes | yes | compile the live source (today's behaviour — Crm and Edu on the production portals) |
-| no | **yes** | **PARK, named** (#3583 — Feedback on memex) |
+| no | **yes** | **PARK, named** (#3583 — Feedback on the control instance) |
 | no | no | compile (authored content in a user's own space) |
 | unknown (no seam registered) | any | compile (local / CI / bake host) |
 
@@ -1499,6 +1499,15 @@ reference the private copy builds itself (leg 2's shape); the reflection binds t
 own types by full name and fills every optional parameter with its declared default; the context
 is unloaded after the emit. Cost: ~1 s on a healthy process including both loads, on the
 already-failing path only.
+
+The first successful private-copy control in a process also emits the same source 63 more times
+before unloading that **same** copy. Its `held=` suffix reports the first failed attempt and
+throw site, a non-emit diagnostic, or `EMITS(64/64)`. Later failures keep the cold control
+without repeating this work. `held=THREW` after a successful cold emit is direct evidence that
+the fault can develop inside one compiler copy. `held=EMITS(64/64)` is deliberately weaker:
+the probe does not independently observe a JIT promotion, so 64 successful calls alone do not
+exclude a tiering fault or establish a bad image mapping. Calling `Emit` repeatedly would instead
+load 64 cold copies and cannot make this measurement.
 
 🚨 **The control that cannot run is the trap this leg is most exposed to**, and
 `EmitCanaryPrivateCompilerLegTest` is the guard: on a healthy process the only acceptable reading
@@ -2017,8 +2026,8 @@ line (its fault budget was suppressing records in the same window), and a single
 single instance. Recorded so the next occurrence is checked for it, not concluded from.
 
 **Not established.** Whether production replicas ever reach this state: a `Logs` read of
-`PROCESS CANNOT EMIT` over the last 3 h on `memex` returned 0 with no positive control, and the
-3-day and 12-hour reads on `memex` and `memex-cloud` were refused by Loki (timeout, then `429`). The
+`PROCESS CANNOT EMIT` over the last 3 h on the control instance returned 0 with no positive control, and the
+3-day and 12-hour reads on the control and public instances were refused by Loki (timeout, then `429`). The
 per-process rate above is a test-host rate and says nothing about a portal either way. Nor is the
 harness null a statement about `linux-x64`: it ran on arm64, and a codegen hypothesis is
 architecture-specific.
@@ -2090,7 +2099,7 @@ shared but the *decision* to rebuild is per-process, so with `maxSurge` during a
 `replicas > 1` — every replica independently starts the same sweep over the same NodeTypes into the
 same volume. That is not merely duplicated work: it is concurrent cold Roslyn compiles of the SAME
 type, which is precisely the storm the sequential, dependency-ordered sweep exists to prevent (four
-of them on memex, 2026-07-28 04:05, dropped six plugin roots to the "did not settle" overlay and
+of them on the control instance, 2026-07-28 04:05, dropped six plugin roots to the "did not settle" overlay and
 needed a scale-to-zero).
 
 Coordination is the **build protocol**: candidates register a claim on the `Admin/Build` node and its
@@ -2118,7 +2127,7 @@ previous image's bytes (`BadImageFormatException` → failed grain activations �
 prod 2026-06-20) — so a **fresh set of files for the whole fleet on every published build is
 correct**, and making the tag stable is not the fix.
 
-What was missing is anything that ever removes an old set. Measured on memex 2026-08-12:
+What was missing is anything that ever removes an old set. Measured on the control instance 2026-08-12:
 
 | | |
 |---|---|
@@ -2172,7 +2181,7 @@ overwrites rather than accrues.
 #### 🚨 The cache grows on a SECOND axis, and generation retention is blind to it
 
 Generations are one axis. The other is **per-type version accumulation *inside* one generation** —
-one dll/pdb pair per recompile, forever, every file carrying the same tag. Measured on memex-cloud
+one dll/pdb pair per recompile, forever, every file carrying the same tag. Measured on the public instance
 2026-08-22, when the 16 GiB `/data` PVC hit 100% and every NodeType recompile failed with
 `No space left on device` (surfacing four steps away as `compilationStatus: Error`, while the
 migration pod crash-looped 66 times):
@@ -2217,7 +2226,7 @@ assembly generation — types × Roslyn artifacts — onto the silo hosting the 
 eviction fix on the compile path (#605) cannot free any of it: eviction drops the store's
 reference, not the instance's.
 
-Measured, 2026-08-25 (issue #2194): two memex-cloud silos flat at 2.7–4.5 GB for five hours, then
+Measured, 2026-08-25 (issue #2194): two of the public instance's silos flat at 2.7–4.5 GB for five hours, then
 a hard inflection the moment the first scheduled bake tick after a framework-pin bump published a
 full-catalog rebake, followed by five content merges — six publication waves in four hours. The
 two type-hosting silos climbed ~2.5 GB/h to 17–20 GB and four cores of GC; every other replica
@@ -2461,7 +2470,7 @@ The NodeType node is **one record for the whole deployment**. Every generation o
 assembly coordinates, and every generation's adoption sweep writes them — which is fine while every
 writer is a pod that will go on serving the type, and a clobber the moment one of them is not.
 
-**What was measured (issue #3129, memex.systemorph.com, 2026-09-02).** A rollout left the old pod
+**What was measured (issue #3129, the control instance, 2026-09-02).** A rollout left the old pod
 terminating for 27 minutes (`terminationGracePeriodSeconds=1800`, circuits still held, 11.8 GB,
 3–5 s GC stalls every ~4 s). While draining it kept running the prebuilt-bundle adoption sweep
 against the shared NodeType nodes, and Loki shows the loop verbatim:
@@ -2522,7 +2531,7 @@ request standing for the owner activation on a pod that stays. The answer everyw
 caller's ordinary "not adopted / nothing to do" signal, so nothing is ever parked on it.
 
 **The release leg follows the same rule (issue #5629).** A GitSync recompile wave in flight on a
-draining memex pod (2026-09-24 00:49:10Z) issued fifteen release trigger writes in 3 ms, each refused
+draining control-instance pod (2026-09-24 00:49:10Z) issued fifteen release trigger writes in 3 ms, each refused
 by the pod's own router — `Host is shutting down, cannot route to Manufacturing/…` — and each filed
 at Error as `a TRANSIENT HUB OR ROUTING MISS`. Nothing leaving can route a write, so the attempt was
 never possible. Now:
@@ -2581,7 +2590,7 @@ compiler the **enumerated** node together with the **later** source set. A modul
 inside that window moves a definition and its files together, and the pair Roslyn received was
 neither the old content nor the new one.
 
-Measured on `memex.systemorph.com`, new pod on `3.0.0-ci.8372` started 18:50Z, while the Hosting
+Measured on the control instance, new pod on `3.0.0-ci.8372` started 18:50Z, while the Hosting
 module moved 1.15 → 1.16 (Plugins `cff9fb34cb`, which added `FleetWatch` and its
 `shared=@Hosting/InstanceAction/Source/ObservationQueries` entry together):
 
@@ -2699,7 +2708,7 @@ already sitting at `Error` before the deploy is pre-existing damage, and gating 
 abandoned NodeType freeze every future rollout.
 
 That distinction is what makes the readiness gate safe to arm. Counting timeouts as regressions
-stalled memex-cloud on 2026-08-02 with "7 NodeType(s) regressed" and not one `CS####` diagnostic;
+stalled the public instance on 2026-08-02 with "7 NodeType(s) regressed" and not one `CS####` diagnostic;
 counting only *direct* timeouts leniently still let one timed-out shared source gate through its
 dependents, which reproduced the same stall one hop downstream.
 
@@ -2761,7 +2770,7 @@ partition the sweeper has no grant on is not counted — the sweep returns a sma
 error**, and the two instruments part company exactly where it matters.
 
 🚨 **"Rows the caller may read" is per NODE, not per partition** — a grant can sit on a single node
-below a partition root, so a sweeper denied `Helvetia` may still be shown one NodeType inside it.
+below a partition root, so a sweeper denied `Initech` may still be shown one NodeType inside it.
 Which is why the denominator has to be counted, never inferred from the list of partitions you can
 open. (`autocomplete` joined this filtered set in #3890 and is *not* a compilation instrument: it
 returns suggestion projections — path, name, node type, icon — and never a `compilationStatus`.)
@@ -2769,8 +2778,8 @@ returns suggestion projections — path, name, node type, icon — and never a `
 🚨 **And `get`/`get_diagnostics` answer `Not found` for a node they may not read.** Denied and
 absent are the same string. That is not a hypothetical reading of the code:
 
-> #1391 recorded `BinaryClickerV2/BinaryToggle` at `CompileError` on every boot of the `memex`
-> namespace, and noted in the same thread that *"`BinaryClickerV2` is not visible to an admin MCP
+> #1391 recorded `BinaryClickerV2/BinaryToggle` at `CompileError` on every boot of the control
+> instance's namespace, and noted in the same thread that *"`BinaryClickerV2` is not visible to an admin MCP
 > read"* — it is a private partition. It was then **closed** on
 > `get_diagnostics @BinaryClickerV2/BinaryToggle → {"status":"Unknown","message":"Not found: …"}`,
 > read as *the type is gone*. It was not gone. Four weeks later the same `CS1929` on the same two
@@ -2783,7 +2792,7 @@ absent are the same string. That is not a hypothetical reading of the code:
 point.** `autocomplete '@/<Namespace>/'` ran `RunQueryNodes(…, useSecurityFilter: false)` with the
 caller's identity dropped, so it enumerated names, paths and node types the caller could not `get` —
 which is what made it a witness here, and is also why it was a **disclosure surface**. On
-memex.systemorph.com, 2026-09-10, that drill-down named five `Helvetia/*` nodes, with their titles,
+the control instance, 2026-09-10, that drill-down named five `Initech/*` nodes, with their titles,
 to an identity whose `get` and `search` on the very same paths answered nothing. #3890 closed it:
 the drill-down now resolves the viewer and runs the same `ValidateRead` chain as `get`, so a
 suggestion and a point read agree by construction. **There is no caller-run read that separates
@@ -2794,7 +2803,7 @@ someone else's document titles is a disclosure wearing an instrument's colours.
 *"Compile requires Compile permission on the target NodeType — it schedules a Roslyn build and
 records an activity under the node. Ask someone with editor access to the node (or a platform
 admin) to do it."*, which reads exactly like *"the node is there, you may just not build it"*. It is
-not. Measured on memex.systemorph.com, 2026-09-11, three calls, one answer:
+not. Measured on the control instance, 2026-09-11, three calls, one answer:
 
 | call | answer |
 |---|---|
@@ -2869,7 +2878,7 @@ the skip-trapdoor this whole page argues against, wearing a health check's colou
 🚨 **Third way its silence means nothing: the check exists in `main` and not in the RUNNING IMAGE.**
 `/health` is served by the image the pod booted, never by the branch you are reading, and the gap
 between the two is routinely a day's worth of merges. Measured 2026-09-11 on
-**memex.systemorph.com**, a portal whose `/health` was *already* `Degraded` — so plainly reachable
+**the control instance**, a portal whose `/health` was *already* `Degraded` — so plainly reachable
 and reporting — and which published exactly five checks: `content-types`,
 `pending_module_activation`, `required_modules`, `bundle_adoption` and the roll-up. **No
 `bake-report`, no `source-discovery`, no `nodetype_bake`.**
@@ -2928,7 +2937,7 @@ every future install and **nothing already installed** (Plugins#1258).
 
 **And the copies cannot be enumerated, by design.** A learner's copy lives in *their* partition, so
 no sweep any agent can run may read it — row-level security is doing exactly its job. Measured on
-memex: `rbuergi/AgenticEngineering/Introduction/Exercise/AskForATable` is a **2026-08-13** snapshot
+the control instance: `rbuergi/AgenticEngineering/Introduction/Exercise/AskForATable` is a **2026-08-13** snapshot
 that still carries the cell INLINE (a ```` ```csharp --render Chat ```` block in the markdown body
 plus a `codeSubmissions` entry) — a shape the central course stopped using on 2026-08-21, when the
 cell became a separate `Source/Chat` node. That copy calls `TrainingSimResponder.Live`, and it is
@@ -2960,7 +2969,7 @@ together.
 That is not hypothetical: #1386 moved a copy-pasted Article extractor into compiled framework code
 as `MarkdownBody.Of`, and the in-mesh callers referencing it went out before the image did.
 `ACME/Article`, `Cornerstone/Article` and `Northwind/Article` sat at `CS0103: The name
-'MarkdownBody' does not exist in the current context` on memex-cloud until the portal self-updated
+'MarkdownBody' does not exist in the current context` on the public instance until the portal self-updated
 to the image that contained it, at which point all three returned to `Ok` on their own.
 
 So when a framework change and its in-mesh callers ship together, **the framework half must land

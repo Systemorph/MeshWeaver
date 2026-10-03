@@ -250,12 +250,19 @@ public class PlatformReleaseNotifyGuard
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
         var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
         Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
-        Assert.Contains("notify-platform-update=", legs, StringComparison.Ordinal);
+        // 🚨 Under policy `one-promotion-gate` the release event follows `arm`, which
+        // arms the fleet only for a promoted set whose dependent suites passed — asynchronously,
+        // often in a later run — so it is NOT a leg of the platform delivery verdict any more. It
+        // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
+        Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);
+        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update:"), StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// The ONE permitted sender (policy <c>dependent-suites-gate</c>): <c>dotnet-test.yml</c> asks
-    /// MeshWeaver.Plugins to test a core CANDIDATE. Keyed by file, and every sending line in that
+    /// The ONE permitted sender: <c>dotnet-test.yml</c> asks MeshWeaver.Plugins to test a core
+    /// CANDIDATE — advisory under policy <c>core-merge-never-blocked</c>. The promotion
+    /// gate's verdict (main-cd <c>arm</c>) is requested by MeshWeaver.Plugins' own poller, so
+    /// main-cd sends nothing and stays off this ledger. Keyed by file, and every sending line in that
     /// file is held to the one event type and the one target by
     /// <see cref="TheLedgeredSender_SendsOnlyTheCandidateTestRequest"/>.
     /// </summary>

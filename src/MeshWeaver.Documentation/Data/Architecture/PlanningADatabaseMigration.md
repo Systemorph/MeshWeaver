@@ -17,7 +17,7 @@ itself is on [The Self-Update Schema Wall](../SelfUpdateSchemaWall).
 
 `DbVersion.Latest` (MeshWeaver.Plugins, `src/Memex.Database.Migration/DbVersion.cs`) went from 57 to
 58 with V58 (`V58_ReapplySatelliteAuthorshipColumns`, Plugins #2353). Routed self-update `Roll`s on
-the control instance `memex` and on `memex-cloud` then moved the portal image without running the
+the control instance and on the public instance then moved the portal image without running the
 migration Job. The new pods refused to start on `DbVersionGate` (`db_version=57 < expected 58`). One
 pod on ci.9332 restarted 91 times in about 24 hours, the old ReplicaSet kept answering 200, and
 every fix was stuck behind the roll that could not complete. The migrate-first `Roll` plan (Plugins
@@ -165,7 +165,7 @@ changes remove that dependency:
 
 ## 7. A `Reconcile` that unblocks a roll can meet a second blocker: the vault values half
 
-The governed `Reconcile` that finally carried V58 onto `memex` first failed at `helm upgrade`, not
+The governed `Reconcile` that finally carried V58 onto the control instance first failed at `helm upgrade`, not
 at the migration: `Job memex-migration-62 invalid: duplicate volume "kv-secrets"`. The Key Vault
 values half (`helm-values-<release>`, layered before the record's render) still held legacy
 structure (`extraVolumes`, `extraVolumeMounts`, `extraEnvFrom`) from an old whole-release capture,

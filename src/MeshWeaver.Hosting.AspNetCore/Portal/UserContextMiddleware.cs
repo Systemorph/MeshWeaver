@@ -23,6 +23,11 @@ namespace MeshWeaver.Hosting.AspNetCore.Portal;
 /// <param name="logger">Logger for user resolution warnings and errors.</param>
 public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMiddleware> logger)
 {
+    // Positive verdicts only, per process, for a short TTL — see ValidatedTokenCache. The
+    // middleware instance lives for the application's lifetime (UseMiddleware builds it once), so
+    // this is per-replica state owned by an instance, never static.
+    private readonly ValidatedTokenCache validatedTokens = new();
+
     // Framework/build assets — no user context needed, and for /static none may EXIST.
     //
     // 🚨 /static is excluded again (issue #587). It was un-excluded for #666, when the route still
@@ -93,7 +98,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // 2026-08-30: "no ToTask ever"). Rx's bridge resumes this middleware INLINE on the
             // ApiToken hub's own action-block thread, and the whole remainder of the request
             // pipeline then runs there — the exact shape that wedges a partition hub.
-            var bearer = await ExtractFromBearerToken(context.Request, hub)
+            var bearer = await ExtractFromBearerToken(context.Request, hub, validatedTokens, logger)
                 .FirstOrDefaultAsync()
                 .ObserveCompletion(
                     ex => logger.LogWarning(ex,
@@ -127,7 +132,11 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         {
             // If this request already has a resolved context (same email), reuse it.
             var existing = userService.Context;
-            if (existing is not null && existing.Email == userContext.Email)
+            if (existing is not null && existing.Email == userContext.Email
+                // A service principal has no e-mail, and neither has an anonymous context — so for a
+                // service the reuse must match the PRINCIPAL, never merely the (empty) address.
+                && (!userContext.IsService
+                    || (existing.IsService && existing.ObjectId == userContext.ObjectId)))
             {
                 userService.SetContext(existing);
                 await next(context);
@@ -208,6 +217,37 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 }
             }
 
+            // 🚨 A SERVICE object id (`svc-…`) is reachable ONLY through a service token
+            // (Doc/Architecture/ServiceIdentities). Any other road to it — an e-mail whose local part
+            // reads `svc-…`, a dev login, a claims-provider quirk — would hand the caller that
+            // service's grants, so it is refused: anonymous, never the service.
+            if (ServiceIdentity.IsServiceObjectId(userContext.ObjectId)
+                && !userContext.IsService)
+            {
+                logger.LogWarning(
+                    "UserContextMiddleware: refusing service object id '{ObjectId}' for a session that was "
+                    + "not authenticated by that service's token (email {Email}). Treating as anonymous.",
+                    userContext.ObjectId, userContext.Email);
+                userService.SetContext(AnonymousContext with { Locale = requestLocale });
+                await next(context);
+                return;
+            }
+
+            // 🚨 A RESERVED id (System, Anonymous, Public, a hub principal) is never a person's.
+            // The id is the local part of a provider's claim, and sign-in is multi-tenant, so an
+            // account `system-security@<any tenant>` would otherwise BE the System identity —
+            // every permission on every partition. Refused like a service id: anonymous.
+            if (RequestIdentity.IsReservedPrincipal(userContext.ObjectId))
+            {
+                logger.LogWarning(
+                    "UserContextMiddleware: refusing reserved object id '{ObjectId}' derived from the sign-in "
+                    + "claims of {Email} — a reserved identity is never a person's. Treating as anonymous.",
+                    userContext.ObjectId, userContext.Email);
+                userService.SetContext(AnonymousContext with { Locale = requestLocale });
+                await next(context);
+                return;
+            }
+
             // Defence-in-depth: if anything upstream slipped an email-shaped
             // identifier through (claims provider quirks, Bearer-token path,
             // etc.), refuse to set it. Better anonymous than mis-partitioned.
@@ -250,7 +290,9 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // request, so an ungated call would re-resolve and re-run the platform's logon actions
             // per page load, per /api call, per SSE frame — the per-request storm the dedup exists
             // to prevent, on the authentication critical path.
-            if (TrackLogin(userContext, hub))
+            // A service principal has no person's session: no login record in a user partition it
+            // does not have, and no per-user logon actions.
+            if (!userContext.IsService && TrackLogin(userContext, hub))
                 RunLogonActions(userContext, hub);
         }
         else
@@ -437,7 +479,8 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         public static readonly BearerTokenResolution NoToken = new((AccessContext?)null, null);
     }
 
-    private static IObservable<BearerTokenResolution> ExtractFromBearerToken(HttpRequest request, IMessageHub hub)
+    private static IObservable<BearerTokenResolution> ExtractFromBearerToken(
+        HttpRequest request, IMessageHub hub, ValidatedTokenCache validatedTokens, ILogger logger)
     {
         var authHeader = request.Headers.Authorization.ToString();
         if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -447,7 +490,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix))
             return Observable.Return(BearerTokenResolution.NoToken);
 
-        return ValidateTokenViaHub(rawToken, hub)
+        return ValidateToken(rawToken, hub, validatedTokens, logger)
             .Select(response =>
             {
                 // UNAVAILABLE is a fault category, not a token verdict — surface it so
@@ -498,10 +541,67 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         // Doc/Architecture/AccessControl → "API tokens and the Api capability".
                         Roles = response.Roles,
                         IsApiToken = true,
+                        // Set only when validation read the service's identity record and found it
+                        // live — never from anything the caller sent.
+                        IsService = response.IsService,
                     }, null)
                     // Definitive negative verdict (unknown/mismatch/revoked/expired) —
                     // fail closed to anonymous, as before.
                     : new BearerTokenResolution(null, null);
+            });
+    }
+
+    /// <summary>
+    /// Authenticates a raw token WITHOUT depending on a hub hop being answered.
+    ///
+    /// <para>In order: a positive verdict this replica reached within
+    /// <see cref="ValidatedTokenCache.Ttl"/>; then the SHARED verdict (<see cref="ApiTokenVerdict"/>)
+    /// over a read straight from the authoritative store; then — only when that read did not
+    /// reach a SUCCESS — the <c>ApiToken/{hashPrefix}</c> hub (<see cref="ValidateTokenViaHub"/>),
+    /// exactly as before.</para>
+    ///
+    /// <para>🚨 Only a SUCCESS short-circuits. A negative or unavailable direct verdict is
+    /// re-asked of the hub, so this path can only ever ADD acceptances the hub would also give and
+    /// can never turn a valid token into a 401 — a store that cannot see a partition this
+    /// process's routing can see would otherwise sign people out, which is the defect being
+    /// fixed. Why the hub hop alone is not enough: on memex, 2026-09-30 05:23Z, a request routed to
+    /// <c>ApiToken/342abeed8e6d</c> on a replica Ready for 40 minutes was forwarded and never
+    /// handled, and every MCP call with that token answered 503 for five minutes
+    /// (Doc/Architecture/TokenValidationHotPath).</para>
+    /// </summary>
+    /// <param name="rawToken">The raw bearer token.</param>
+    /// <param name="hub">The portal (or mesh) hub whose services and serializer options apply.</param>
+    /// <param name="validatedTokens">This replica's positive-verdict cache.</param>
+    /// <param name="logger">Logger for the fast path's fall-throughs.</param>
+    /// <returns>The verdict; never an error.</returns>
+    public static IObservable<ValidateTokenResponse?> ValidateToken(
+        string rawToken, IMessageHub hub, ValidatedTokenCache validatedTokens, ILogger? logger = null)
+    {
+        var hash = ValidateTokenRequest.HashToken(rawToken);
+        if (validatedTokens.TryGet(hash, DateTimeOffset.UtcNow) is { } cached)
+            return Observable.Return<ValidateTokenResponse?>(cached);
+
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var direct = storage is null
+            ? Observable.Return<ValidateTokenResponse?>(null)
+            : ApiTokenVerdict.Decide(rawToken, path => storage.Read(path, hub.JsonSerializerOptions), hub.JsonSerializerOptions)
+                .Select(r => (ValidateTokenResponse?)r);
+
+        return direct
+            .SelectMany(verdict =>
+            {
+                if (verdict is { Success: true })
+                    return Observable.Return<ValidateTokenResponse?>(verdict);
+                if (verdict is not null)
+                    logger?.LogDebug(
+                        "Direct token verdict for {HashPrefix} was not a success ({Error}, unavailable={Unavailable}) — asking the ApiToken hub",
+                        hash[..ApiTokenVerdict.HashPrefixLength], verdict.Error, verdict.IsUnavailable);
+                return ValidateTokenViaHub(rawToken, hub);
+            })
+            .Do(verdict =>
+            {
+                if (verdict is { Success: true })
+                    validatedTokens.Put(hash, verdict, DateTimeOffset.UtcNow);
             });
     }
 
@@ -632,6 +732,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                     return AnonymousContext;
                 }
             }
+            // The same two identity refusals as the middleware path: a reserved id (System,
+            // Anonymous, Public, a hub principal) and a service id reached by anything but that
+            // service's own token are never a sign-in's.
+            if (RequestIdentity.IsReservedPrincipal(ctx.ObjectId)
+                || (ServiceIdentity.IsServiceObjectId(ctx.ObjectId) && !ctx.IsService))
+            {
+                logger?.LogWarning(
+                    "ResolveHttpCaller: refusing reserved or service ObjectId {ObjectId} derived from the sign-in claims; treating as anonymous.",
+                    ctx.ObjectId);
+                return AnonymousContext;
+            }
             if (LooksLikeEmail(ctx.ObjectId))
             {
                 logger?.LogWarning(
@@ -671,7 +782,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         }
     }
 
-    private static AccessContext? ExtractUserContext(ClaimsPrincipal user)
+    /// <summary>
+    /// The access context the claims of <paramref name="user"/> yield BEFORE the middleware's
+    /// refusals (a collision, a service id, a reserved id, an email shape). Pure, so the derivation
+    /// is pinned without a request.
+    /// </summary>
+    public static AccessContext? ExtractUserContext(ClaimsPrincipal user)
     {
         if (user?.Identity?.IsAuthenticated != true)
             return null;
@@ -701,9 +817,25 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name") ?? string.Empty,
             ObjectId = objectId,
             Email = email,
-            Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
+            Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList(),
+            IsService = IsServiceTokenIdentity(user),
         };
     }
+
+    /// <summary>
+    /// True when <paramref name="user"/> was authenticated by a SERVICE principal's API token: the
+    /// principal-kind claim is present AND the identity carrying it is the API-token scheme's. The
+    /// second half is what makes the claim unforgeable — a cookie or an external provider's identity
+    /// has another authentication type, so whatever claims it carries cannot make it a service.
+    /// </summary>
+    public static bool IsServiceTokenIdentity(ClaimsPrincipal user)
+        => user.Identities.Any(identity =>
+            identity.IsAuthenticated
+            && string.Equals(identity.AuthenticationType,
+                ServiceIdentity.TokenAuthenticationType, StringComparison.Ordinal)
+            && identity.HasClaim(
+                ServiceIdentity.PrincipalKindClaim,
+                ServiceIdentity.ServicePrincipalKind));
 
     /// <summary>
     /// Whether a candidate partition id is TAKEN: the mesh <c>User</c> node carrying that id belongs

@@ -95,7 +95,7 @@ A Space can sync with **more than one repository**. The Repository section above
 the **primary** source (`{space}/_GitSync`); every additional source is its own config
 node at `{space}/_GitSync/{sourceId}` with its own repository, branch, subdirectory and
 direction. Manage them in the **Additional sync sources** section of the same settings
-tab (or, platform admins, on **Global Settings → Administration → Partitions**): add a
+tab (or, platform admins, on **Admin app (`/Admin`) → Partitions**): add a
 source by name, edit its settings through the same data-bound editor, sync it with its
 own direction-aware buttons, and remove it when no longer needed. Programmatically:
 `GitHubSyncService.AddSyncSource / WatchConfigNodes / RemoveSyncSource`, and every sync
@@ -196,6 +196,20 @@ another's question is how an investigation goes wrong. They are deliberately ind
 | `lastSyncedAt` | *When were mesh and repo last RECONCILED?* — the two-way **conflict horizon** | Only on an import that really reconciled: **not** on a fingerprint-matched no-op, **not** when server-newer nodes were preserved, **not** when something failed to land. |
 | `lastAttemptedCommitSha` + `lastAttemptWasFinal` (+ `lastAttemptedConfigFingerprint`) | *Have we already LOOKED at exactly these bytes, as this source is configured now, and could looking again change the answer?* | On every import conclusion, a refusal included; **cleared** by an export and by a hold. This is the pair that makes a green build or a publication announcement free for a source that cannot converge, and the fingerprint is what lets an edit of the source re-attempt at the same commit — see [What a Green Build Costs a Synced Space](/Doc/Architecture/GitSyncTriggerCost). |
 
+GitSync reads authored JSON with strict member matching. If a repository record contains a
+field the running image does not know, it refuses the **whole snapshot** before writing nodes.
+The activity and the source's `lastSyncNote` name the offending file and field;
+`lastSyncCommitSha` and `lastSyncedAt` stay put. The attempted SHA is recorded with
+`lastAttemptWasFinal = false`, so the same commit remains eligible after the image gains the
+new record type. A malformed node file follows the same all-or-nothing rule; files with no
+node parser, such as ordinary `.py` files, remain outside the import.
+The mesh serializer also emits `$type` on sealed nested records, such as a deployment's
+`keyVaultSecrets` and `gates` entries. These markers describe the record type, not an
+authored field: the strict importer recognizes them while still refusing any other
+unknown member at that same nesting level. Without that distinction, the first control
+roll after strict import refused five valid deployment files
+([Memex #601](https://github.com/Systemorph/Memex/issues/601)).
+
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
 exactly the protection two-way exists for — a later push would then delete that work. That is why
@@ -203,8 +217,8 @@ the suppressions are there, and why **the horizon must never be made to track "w
 sync"**.
 
 > 🚨 **A frozen `lastSyncedAt` beside a fresh `lastSyncCommitSha` is not a bug.** Measured on
-> 2026-09-07, `Edu/_GitSync` read a `lastSyncedAt` of 2026-07-11 (memex) and 2026-08-07
-> (memex-cloud) beside a `lastSyncCommitSha` from that same morning. Both were correct: every sync
+> 2026-09-07, `Edu/_GitSync` read a `lastSyncedAt` of 2026-07-11 (control instance) and 2026-08-07
+> (public instance) beside a `lastSyncCommitSha` from that same morning. Both were correct: every sync
 > in between had been a no-op at unchanged content, which advances the commit and holds the
 > horizon. What was missing was the third fact — nothing recorded that a sync had run at all, so
 > the only way to date one was to compare node timestamps against image tags in a container
@@ -329,7 +343,7 @@ never asked what that segment was. `check` and `update` need only **Read**, and 
 is exempt from the "no partition, no write" guard, so **any readable first segment became a
 System-owned `{segment}/_Activity/{id}` create.**
 
-Measured on memex.meshweaver.cloud: `42P01: relation "whatsnew.activities" does not exist` for
+Measured on the public instance: `42P01: relation "whatsnew.activities" does not exist` for
 `WhatsNew/_Activity/cc667f2e` (2026-09-18 15:35:29.421Z), reported as *"the WhatsNew namespace was
 never provisioned"*. It was not a provisioning gap. The same pod logged
 `MCP github_sync check failed for WhatsNew` **one millisecond later** (…29.422Z): an MCP caller
@@ -543,7 +557,7 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    once: the first expiry minted a new token, every later expiry compared against the stale
    capture and handed the expired token back. Two token lifetimes after boot every private
    source read as `401 Bad credentials` until the process restarted (Systemorph/Memex#165 —
-   measured on memex-cloud as the first failure 2 h 01 min after the container started).
+   measured on the public instance as the first failure 2 h 01 min after the container started).
    `GitHubAppTokenRefreshTest` in `Memex.Portal.Shared.Test` holds the invariant with an
    injected clock: the second and third refresh mint, a fresh token replays.
 

@@ -27,6 +27,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// CompilationStatus = Pending was observed. <see cref="NodeTypeCompilationHelpers.RunCompile"/>
 /// compiles from this snapshot so it reads the trigger-time state (ReleaseNotes
 /// etc.) without re-fetching through the mesh-hub-cached remote stream.</param>
+[InfrastructureOnly]
 public record DispatchCompileTrigger(MeshNode PendingNode);
 
 /// <summary>
@@ -1599,7 +1600,7 @@ internal static class NodeTypeCompilationHelpers
         //
         // 🚨 Do NOT collapse this to "RequirePrebuilt is unset everywhere". It is measured absent on
         // memex and memex-cloud, and #2194 item 3 records the same - that is TWO instances, and says
-        // nothing about pearl, atioz, local installs, or any external instance the registry serves.
+        // nothing about fabrikam, initech, local installs, or any external instance the registry serves.
         // Configuration lives on AKS in places this repo has never heard of (Memex#148).
         return canCompileLocally
             ? refused with

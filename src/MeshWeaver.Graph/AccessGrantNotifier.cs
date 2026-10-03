@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -30,8 +31,11 @@ public sealed class AccessGrantNotifier(
     IMessageHub hub,
     IMeshChangeFeed changeFeed,
     AccessService accessService,
-    ILogger<AccessGrantNotifier>? logger = null) : IHostedService, IDisposable
+    ILogger<AccessGrantNotifier>? logger = null,
+    TimeProvider? timeProvider = null) : IHostedService, IDisposable
 {
+    private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
+
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
     private IDisposable? subscription;
 
@@ -97,32 +101,94 @@ public sealed class AccessGrantNotifier(
                                 $"{granter} gave you {roleText} access to \"{name}\".",
                                 "notification.accessGranted.bodyByGranter",
                                 ("granter", granter), ("role", roleText), ("name", name));
-                        return NotificationService.DispatchLocalizable(
-                            hub,
-                            recipient: recipient,
-                            mainNodePath: recipient,
-                            title: LocalizableText.Keyed(
+                        var request = new NotificationRequest
+                        {
+                            Recipient = recipient,
+                            MainNodePath = recipient,
+                            Title = LocalizableText.Keyed(
                                 $"You've been given access to {name}",
                                 "notification.accessGranted.title", ("name", name)),
-                            message: message,
-                            type: NotificationType.AccessGranted,
-                            targetNodePath: grantedNodePath,
-                            createdBy: assignmentNode.CreatedBy,
-                            icon: "/static/NodeTypeIcons/shield.svg",
+                            Message = message,
+                            Type = NotificationType.AccessGranted,
+                            TargetNodePath = grantedNodePath,
+                            CreatedBy = assignmentNode.CreatedBy,
+                            Icon = "/static/NodeTypeIcons/shield.svg",
                             // The email leg has ONE known reader, so NotificationService resolves
                             // these against that person's own profile locale before sending.
-                            emailCtaLabel: LocalizableText.Keyed(
+                            EmailCtaLabel = LocalizableText.Keyed(
                                 $"Open {name}", "notification.accessGranted.emailCta", ("name", name)),
                             // First-contact hint — this recipient may have never signed in. Passed
                             // explicitly (not defaulted in NotificationService) so it never leaks onto
                             // notifications aimed at already-signed-in users.
-                            emailFooterNote: LocalizableText.Keyed(
+                            EmailFooterNote = LocalizableText.Keyed(
                                 "New to Memex? Sign in with this email address to open it.",
-                                "notification.accessGranted.emailFooter"));
+                                "notification.accessGranted.emailFooter"),
+                        };
+                        // 🚨 The granter's MAIL BUDGET decides whether this grant may leave the
+                        // bell at all (AccessGrantMailBudget): a bulk grant never becomes one
+                        // message in every recipient's mailbox, whoever makes it.
+                        var granterId = assignmentNode.CreatedBy;
+                        return AsSystem(() => AccessGrantMailBudget.Claim(
+                                hub.ServiceProvider.GetRequiredService<IMeshService>(),
+                                granterId, assignmentNode.Path, clock.GetUtcNow(), logger))
+                            .SelectMany(verdict =>
+                            {
+                                var raise = NotificationService.Raise(hub, Capped(request, verdict))
+                                    .Select(_ => Unit.Default);
+                                return TellsGranter(verdict, granterId) && granterId is { } tellTo
+                                    ? raise.Concat(TellGranter(tellTo))
+                                    : raise;
+                            })
+                            .LastOrDefaultAsync();
                     });
             });
         });
     }
+
+    /// <summary>
+    /// The request as the budget allows it: within budget it is unchanged (the recipient's
+    /// preferences decide, email and Teams included); over budget it is capped to the bell. Pure.
+    /// </summary>
+    internal static NotificationRequest Capped(NotificationRequest request, AccessGrantMailVerdict verdict)
+        => verdict == AccessGrantMailVerdict.Mail ? request : request with { BellOnly = true };
+
+    /// <summary>
+    /// Whether this grant is the one that tells the GRANTER their further grants went out silently —
+    /// the first over budget in its window, for a granter who is a person (an unattributed grant
+    /// has nobody to tell). Pure.
+    /// </summary>
+    internal static bool TellsGranter(AccessGrantMailVerdict verdict, string? granter)
+        => verdict == AccessGrantMailVerdict.BellOnlyAndTellGranter
+           && !string.IsNullOrWhiteSpace(granter)
+           && !string.Equals(granter, WellKnownUsers.System, StringComparison.Ordinal);
+
+    // ONE notice to the granter, bell only: the recipients of the rest got no email or Teams message.
+    private IObservable<Unit> TellGranter(string granter)
+        => NotificationService.Raise(hub, new NotificationRequest
+            {
+                Recipient = granter,
+                MainNodePath = granter,
+                Title = LocalizableText.Keyed(
+                    "Further access grants were delivered quietly",
+                    "notification.accessGranted.quietTitle"),
+                Message = LocalizableText.Keyed(
+                    $"You gave more than {AccessGrantMailBudget.MailPerWindow} people access within "
+                    + $"{(int)AccessGrantMailBudget.Window.TotalMinutes} minutes. The others were told in Memex only — "
+                    + "no email and no Teams message was sent to them.",
+                    "notification.accessGranted.quietBody",
+                    ("count", AccessGrantMailBudget.MailPerWindow.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("minutes", ((int)AccessGrantMailBudget.Window.TotalMinutes).ToString(System.Globalization.CultureInfo.InvariantCulture))),
+                Type = NotificationType.AccessGranted,
+                CreatedBy = WellKnownUsers.System,
+                Icon = "/static/NodeTypeIcons/shield.svg",
+                BellOnly = true,
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "AccessGrantNotifier: could not tell {Granter} about the quiet grants", granter);
+                return Observable.Return(Unit.Default);
+            });
 
     /// <summary>
     /// Pure decision: should the created <paramref name="assignmentNode"/> raise an access-granted
@@ -162,6 +228,16 @@ public sealed class AccessGrantNotifier(
         if (string.Equals(assignmentNode.CreatedBy, assignment.AccessObject, StringComparison.Ordinal))
             return false;
 
+        // 🚨 NEVER notify a SYSTEM-issued grant. A grant written as System is an entitlement — a
+        // free app, a plan unlock, a purchase, a redeemed coupon, a sweep — never a person sharing
+        // something: either the user caused it themselves or nobody asked for it. Measured on
+        // memex.meshweaver.cloud 2026-09-29: the free plugin Parties was published at 10:36 UTC and
+        // the Store's all-users sweep wrote 72 system-security grants 10:50–10:53, each one mailed,
+        // belled and Teams-messaged to its user. A new app being available is never a notification.
+        // A person granting through the UI is CreatedBy = that person and still notifies.
+        if (string.Equals(assignmentNode.CreatedBy, WellKnownUsers.System, StringComparison.Ordinal))
+            return false;
+
         var scope = ResolveGrantedNode(assignmentNode);
         if (string.IsNullOrEmpty(scope))
             return false;
@@ -181,7 +257,7 @@ public sealed class AccessGrantNotifier(
     ///
     /// <para>🚨 Derived from the NAMESPACE, not read from MainNode, because rows written before that
     /// stamp was fixed still carry the <c>_Access</c> CONTAINER there — which is how the recipient
-    /// got "You've been given access to CollaborationNotus/_Access" with a link to the container
+    /// got "You've been given access to CollaborationInitech/_Access" with a link to the container
     /// instead of the space. MainNode is only a fallback for an assignment with no namespace.</para>
     ///
     /// <para>A ROOT-scope grant (namespace <c>_Access</c> or empty — e.g. the global-admin seed)

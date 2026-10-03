@@ -48,8 +48,14 @@ public class InboxLegsAreAnchoredTest
     [Fact]
     public void NoLeg_UsesANamespaceAlternation()
     {
+        // The ANCHOR terms (namespace:/path:) must be single-valued; a value alternation on a
+        // content field (Recent's `content.status:Succeeded|…`) filters inside the one partition and
+        // is not the fan-out this guards against.
         foreach (var leg in InboxQueries.Resolve(InboxQueries.BuiltIn, Viewer))
-            Assert.DoesNotContain("|", leg.Query, StringComparison.Ordinal);
+            foreach (var term in leg.Query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                         .Where(t => t.StartsWith("namespace:", StringComparison.Ordinal)
+                                     || t.StartsWith("path:", StringComparison.Ordinal)))
+                Assert.DoesNotContain("|", term, StringComparison.Ordinal);
     }
 
     /// <summary>The token must be fully substituted — a surviving one would query a literal path.</summary>

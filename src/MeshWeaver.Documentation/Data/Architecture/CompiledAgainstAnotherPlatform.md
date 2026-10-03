@@ -7,7 +7,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Compiled Against A Platform The Instance Does Not Run
 
-On 2026-09-14, six NodeTypes on memex.meshweaver.cloud stopped compiling forty minutes after a
+On 2026-09-14, six NodeTypes on the public instance stopped compiling forty minutes after a
 satellite merge. **Every gate was green, and correctly so.** This page is about the window they do
 not cover, and about a compiler diagnostic that is easy to read in the wrong direction.
 
@@ -20,7 +20,7 @@ compiles it:
 |---|---|---|
 | [The Module Platform Link Gate](../ModulePlatformLinkGate) | a module **assembly**'s linked types | **the platform actually running** — it refuses a generation the process cannot load |
 | `node-repo-compile-check.yml` → `compile-check.py` (`compile-check / Compile every NodeType (vs core)`, a required context on most satellites) | every NodeType's **resolved Source**, concatenated with hoisted usings, the way the mesh does it | the **reference set of a resolved platform image** — for MeshWeaver.Plugins, `scripts/resolve-platform.py` picks *the newest SEALED set of core's main-cd* |
-| `minMeshVersion` floor ([Module Adoption Policy](../ModuleAdoptionPolicy)) | a version string the author writes | advisory since 2026-09-07, and per module rather than per source node |
+| `minMeshVersion` floor ([Module Adoption Policy](../ModuleAdoptionPolicy)) | the version string a package version declares | holds the version when it is comparable with the running platform and above it (policy `package-min-mesh-version`; advisory under #3648 before it); per package version rather than per source node |
 
 The second row is the one that matters here, and it is not a hole: it was introduced precisely so
 that API-drifted Source could no longer merge green and park on a live mesh. **It ran on the commit
@@ -32,7 +32,7 @@ The gap is narrower, and it is a gap of *target*, not of coverage:
 > running.** The link gate does exactly that, for bytes. Its counterpart for source is not wired on
 > the path the content actually travels.
 
-## The measured window — 2026-09-14, memex.meshweaver.cloud
+## The measured window — 2026-09-14, the public instance
 
 | when | what |
 |---|---|
@@ -40,10 +40,10 @@ The gap is narrower, and it is a gap of *target*, not of coverage:
 | **2026-09-12T17:28:05Z** | core PR #4102 (`00fa2b69f9`) adds `PlanTierRefusal` (`src/MeshWeaver.Mesh.Contract/Security/PlanTierRefusal.cs`) and `RegistryPackageSource.ListCatalog` (`src/MeshWeaver.PluginCatalog/RegistryPackageSource.cs:95`) |
 | **2026-09-14T06:19:40Z** | MeshWeaver.Plugins merges `dd9c96b4c8` (PR #1837), changing the in-mesh Code node `Store/Publishing/Source/RegistryPackages.cs` to call both |
 | — | on that commit, `Compile every NodeType (vs core)` is **`completed/success`** (48 success, 11 skipped, 0 failures) — the resolved platform was a sealed set that carries `00fa2b69f9` |
-| **2026-09-14T06:59:28Z** | the package lane has delivered the source to memex-cloud, still on `c84c6c055`. First failing compile — forty minutes after the merge |
+| **2026-09-14T06:59:28Z** | the package lane has delivered the source to the public instance, still on `c84c6c055`. First failing compile — forty minutes after the merge |
 
 Both portals answered `3.0.0+c84c6c05503228860df03c4a8b596e497e6d218c` to ten `/api/version` samples
-that day (six on memex.meshweaver.cloud, four on memex.systemorph.com), so this was not one unlucky
+that day (six on the public instance, four on the control instance), so this was not one unlucky
 replica. And the direction was settled on the **surface**, not on ancestry, exactly as the procedure
 below asks: `PlanTierRefusal.cs` is a file `00fa2b69f9` ADDED, and `git cat-file -e
 c84c6c055:src/MeshWeaver.Mesh.Contract/Security/PlanTierRefusal.cs` reports it **absent** at the
@@ -153,8 +153,8 @@ and passes one already at `Error`, so such a type is never named by it.
 
 ## The live record census — `bake-report` after boot (#4632)
 
-The 2026-09-17 instance of this class was the mirror image of the one above. `memex.systemorph.com`
-was mid-roll (`Ops/Status/memex`: `generations: 2`, `converged: false` — two READY replicas on
+The 2026-09-17 instance of this class was the mirror image of the one above. The control instance
+was mid-roll (`Ops/Status/<record>`: `generations: 2`, `converged: false` — two READY replicas on
 `3.0.0-ci.8710`, one not-ready on `ci.8812`). At 14:33 the `ci.8812` replica adopted a prebuilt for
 `Approvals/Desk` and stamped the shared record `compiledFrameworkVersion: saec4a2d…`,
 `buildProvenance: AdoptedVerified`; the serving replicas ran `s2902ab1…`. Their activation refuses a
@@ -217,7 +217,7 @@ The census names a cross-stamp; until MeshWeaver#4632's other half landed, the b
 framework-stale branch of `NodeTypeEnrichmentHelpers` — flip the type `Pending`, recompile for the
 live framework, restamp — which is right after a platform roll (the previous image's build, stamped
 before this process started) and wrong mid-roll (a NEWER image's build, stamped after). Measured on
-the memex control instance's roll from `3.0.0-ci.9106` to `9162`: within minutes of the new replica
+the control instance's roll from `3.0.0-ci.9106` to `9162`: within minutes of the new replica
 booting its `/health` read *"34 NodeType record(s) were RE-KEYED to a framework this replica does not
 run AFTER it booted"* — the two draining replicas were healing the new generation's stamps backwards,
 the new replica was healing them forward, every activation on both flipped the same types `Pending`
@@ -240,7 +240,7 @@ three-way decision (`DecideFrameworkStale`: Yield / Overlay / Recompile) is pure
 `hub.IsLeaving()`.** A framework identity is a hash with no order: "foreign and stamped after I
 booted" reads identically on the draining replica (the new generation's stamp) and on the
 SURVIVOR (every record a draining replica re-keyed backwards after the survivor booted — the 34
-the census counted on memex's new replica were exactly those). Yielding on the stamp alone left the
+the census counted on the control instance's new replica were exactly those). Yielding on the stamp alone left the
 survivor overlaying those types as framework-stale for its whole life, since a persisted `Ok` is
 recompiled by no watcher; `OrleansCompileActivityAccessTest.FrameworkStaleAssembly_SelfHealsOnInstanceActivation`
 caught it by stamping a foreign framework mid-run on a process that is not stopping and demanding

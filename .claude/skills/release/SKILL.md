@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a MeshWeaver release. Two channels, both already wired in .github/workflows. CONTINUOUS = merge to main → multi-arch Docker to ACR, baked and sealed → CD rolls memex/memex-cloud AND every install self-updates. OFFICIAL = push an annotated v*.*.* tag on a promoted, sealed commit → release.yml PROMOTES that set (retags in ACR + GHCR, release marker, GitHub Release, next-line bump PR). Nothing is rebuilt and nothing ships to NuGet. Use when shipping a release, tagging a version, or wiring/altering the release pipeline. Read BEFORE tagging — a tag is a public, hard-to-reverse publish.
+description: Cut a MeshWeaver release. Two channels, both already wired in .github/workflows. CONTINUOUS = merge to main → multi-arch Docker to ACR, baked and sealed → every install self-updates under its own policy. OFFICIAL = push an annotated v*.*.* tag on a promoted, sealed commit → release.yml PROMOTES that set (retags in ACR + GHCR, release marker, GitHub Release, next-line bump PR). Nothing is rebuilt and nothing ships to NuGet. Use when shipping a release, tagging a version, or wiring/altering the release pipeline. Read BEFORE tagging — a tag is a public, hard-to-reverse publish.
 user-invocable: true
 allowed-tools:
   - Read
@@ -18,7 +18,7 @@ allowed-tools:
 >   | jq -r '"AKS_RG=\(.cluster.resourceGroup) AKS_CLUSTER=\(.cluster.name) NAMESPACES=\"\([.environments[].ns]|join(" "))\""')"
 > ```
 >
-> Verified to set all three (`memex-aks-rg` / `memexaks-cluster` / the namespaces) on
+> Verified to set all three (resource group / cluster / the namespaces) on
 > 2026-08-19. Reading it from the source of truth also means a new environment shows up here
 > automatically instead of this file going quietly stale.
 
@@ -43,28 +43,28 @@ and the version mechanics in
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | ACR retag + GHCR mirror, by digest |
 | **Bake / seal** | ✅ platform content, sealed under the compatibility key `c<major>e<epoch>`; the Plugins re-seal is an independent follow-up that never gates the platform | ✅ inherited — `_releases/<clean>` copies the key marker |
 | **NuGet** | ❌ never | ❌ **retired** (last publish `3.0.0-rc13`) |
-| **Rollout** | CD rolls memex/memex-cloud; an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.0.0-ci*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
+| **Rollout** | an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.0.0-ci*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
 
 So: **merge to main = build + bake + seal + deploy; tag = promote.** There is no rc line: the
 continuous builds ARE the pre-releases, and `PlatformVersion` always names the next clean release.
 
 > 📅 **2026-09-12 — what a merge to `main` sets in motion downstream, corrected.** (1) `main-cd.yml`
 > has no deploy job: it builds, promotes, bakes, seals and POSTs ONE signed `platform-build` to the
-> control instance, then stops; every portal — memex and memex-cloud included — rolls itself under
+> control instance, then stops; every portal — our own instances included — rolls itself under
 > its `Admin/UpdatePolicy` (pull, never push). (2) That build fact no longer wakes the satellites:
 > the per-build `meshweaver-framework-released` wave is off by default
 > (`Hosting:PlatformBuilds:BroadcastFrameworkReleases`, Plugins#1707) and no satellite lists the
 > event. Each node repo rebuilds against the newest SEALED set on its own pushes and once a day —
 > that daily run is the full run and is what validates a continuous build; a bundle for a new
 > identity therefore arrives with the next daily run, not minutes after the merge. Turning the wave
-> on is a MAJOR-bump procedure. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).
+> on is a MAJOR-bump procedure. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` through the mesh MCP).
 
 🚨 **Self-update takes clean releases by default** (maintainer, 2026-09-08: *"by default we will not
 upgrade as long as no version without `-ci…` is labelled"*). A `-ci.<n>` build is rolled onto only
 under `Continuous` + a `pattern` on `Admin/UpdatePolicy` — a glob over the tag, `3.0.1-ci*` — and
 `Continuous` with no pattern IS `Stable` (the poller warns once, naming the pattern to set). A
 pattern admits exactly the line it names: `3.0.0-ci*` never selects `3.0.1`, so following a line
-ends by itself when the next release is tagged. **Fleet today: `memex` and `memex-cloud` carry
+ends by itself when the next release is tagged. **Fleet today: every Systemorph-operated instance carries
 `Continuous` + `3.0.0-ci*`; change it the day `3.0.1` is tagged.** The `-latest` pointers (`3-latest`,
 `3.0-latest`, `3.0.1-latest`) are a fresh install's STARTING image and never a self-update
 candidate. Full rule: [ReleaseProcess.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md)
@@ -183,14 +183,14 @@ OUT=~/.cache/zap-scan-$(date -u +%F); mkdir -p "$OUT/public" "$OUT/auth"   # a P
 # scripts exit 0 PASS / 2 WARN / 1 FAIL / 3 scanner error — echo it, never let it end the shell.
 # 1. PUBLIC, ACTIVE — anonymous, safe against production
 docker run --rm -v "$OUT/public":/zap/wrk/:rw -t "$ZAP" \
-  zap-full-scan.py -t https://memex.meshweaver.cloud -r public-full.html -J public-full.json -w public-full.md \
+  zap-full-scan.py -t https://portal.example.com -r public-full.html -J public-full.json -w public-full.md \
   > "$OUT/public/public-full.log" 2>&1; echo "public exit=$?"
 # 2. AUTHENTICATED, PASSIVE — never zap-full-scan with a session on production (it fires payloads
 #    AS THE USER at every write endpoint). $COOKIE = the full Cookie header of a real browser
 #    session (.AspNetCore.Cookies; an API token does not authenticate the SPA). -j = AJAX spider,
 #    the only thing that reaches the bundles a signed-in page loads.
 docker run --rm -v "$OUT/auth":/zap/wrk/:rw -t "$ZAP" \
-  zap-baseline.py -t https://memex.meshweaver.cloud -j -r auth-report.html -J auth-report.json -w auth-report.md \
+  zap-baseline.py -t https://portal.example.com -j -r auth-report.html -J auth-report.json -w auth-report.md \
   -z "-config replacer.full_list(0).description=sess -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$COOKIE" \
   > "$OUT/auth/auth-baseline.log" 2>&1; echo "authenticated exit=$?"
 # 3. VERDICT — the last line of each captured log; FAIL-NEW must be 0 on both, and rule 10003 blocks:
@@ -214,7 +214,7 @@ gh api "repos/Systemorph/MeshWeaver/actions/runs?branch=main&per_page=3" \
   --jq '.workflow_runs[] | "\(.name) \(.head_sha[0:9]) \(.status) \(.conclusion)"'
 # 2. Merge the PR. main-cd.yml then fires automatically on the green test run:
 #    builds multi-arch portal-ai + migration + mw-plugin-test, promotes <version>;<sha>;main to ACR,
-#    bakes + seals the platform content and the Plugins modules, and rolls memex/memex-cloud.
+#    bakes + seals the platform content and the Plugins modules, and notifies the control instance.
 # 3. Every OTHER install whose Admin/UpdatePolicy is Continuous + a pattern admitting the tag
 #    (3.0.0-ci*) self-updates from ACR on the next publication EVENT (no action). Stable installs
 #    (the default) wait for the clean release.
@@ -316,11 +316,11 @@ promoted, a set whose bake is not sealed, and a release with no notes page.
 ## "All portals update" — how (and how to confirm)
 
 Two mechanisms, both live:
-- **Push (CD):** `main-cd.yml`'s `deploy` matrix rolls `memex` and `memex-cloud` directly.
-  *📅 2026-09-12: no longer — `main-cd.yml` carries no `deploy` job; memex and memex-cloud roll by
-  the pull mechanism below like every other install (their overlays in Systemorph/Memex additionally
-  carry a reviewed `pinnedImageTag` applied by that repo's `helm-release.yml`). See
-  `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` on the memex MCP).*
+- **Push (CD):** `main-cd.yml`'s `deploy` matrix rolled our own portals directly.
+  *📅 2026-09-12: no longer — `main-cd.yml` carries no `deploy` job; our own portals roll by
+  the pull mechanism below like every other install (their overlays in the deployments repository carry
+  a floor image, never a pin, applied by that repo's `helm-release.yml`). See
+  `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` through the mesh MCP).*
 - **Pull (self-update):** `SelfUpdateHostedService` runs on EVERY install. It reads
   `Admin/UpdatePolicy` (default **Stable** — clean tags only, i.e. what `release.yml` promoted),
   lists ACR tags, walks the eligible ones newest-first and takes the first one whose set is SEALED
@@ -329,7 +329,7 @@ Two mechanisms, both live:
   eligible; `Continuous` without a pattern is `Stable`.
 
 Confirm a roll-out — the RUNNING version per instance is on the Fleet Console (`/Hosting/Console`
-on memex.meshweaver.cloud), and a roll you order by hand is a `Roll` `Hosting/InstanceAction` with
+on the instance that hosts the fleet records), and a roll you order by hand is a `Roll` `Hosting/InstanceAction` with
 the tag, never `kubectl set image` (policy:
 [OperatingFromThePortal.md](../../../src/MeshWeaver.Documentation/Data/Architecture/OperatingFromThePortal.md)).
 The cluster reads below are the break-glass form of the same three questions:

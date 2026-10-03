@@ -1060,6 +1060,7 @@ public static class PrebuiltAssemblySeeder
                         }
 
                         stamped = true;
+                        var retirePendingRelease = PendingReleaseWasSuperseded(def, nodeTypePath, location);
                         var adopted = def with
                         {
                             DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
@@ -1074,6 +1075,10 @@ public static class PrebuiltAssemblySeeder
                             LastCompiledVersion = version,
                             LatestAssemblyCollection = location.Collection,
                             LatestAssemblyPath = location.ContentPath,
+                            // Retire a previous build's marker with the new coordinates. A replay
+                            // of the SAME coordinates still owes its pending release, so keep it.
+                            UnreleasedBuildPath = retirePendingRelease ? null : def.UnreleasedBuildPath,
+                            UnreleasedBuildReason = retirePendingRelease ? null : def.UnreleasedBuildReason,
                             // The adopted bytes' own identity (#2471), read from the image
                             // in hand — no file, no load. An adopted build is exactly the
                             // case where a path says least: several pods adopt the same
@@ -1337,6 +1342,20 @@ public static class PrebuiltAssemblySeeder
                     ? SeedOutcome.DeclinedStaleSourcesCompileDispatched
                     : SeedOutcome.DeclinedStaleSources);
         });
+    }
+
+    /// <summary>Whether known adopted coordinates supersede the pending release's content identity.</summary>
+    internal static bool PendingReleaseWasSuperseded(
+        NodeTypeDefinition definition, string nodeTypePath, AssemblyStoreLocation location)
+    {
+        // Legacy stores can omit coordinates. Unknown cannot prove a pending release obsolete.
+        if (string.IsNullOrEmpty(definition.UnreleasedBuildPath)
+            || string.IsNullOrEmpty(location.Collection) || string.IsNullOrEmpty(location.ContentPath))
+            return false;
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            location.LocalPath, [], Collection: location.Collection, ContentPath: location.ContentPath));
+        return !NodeTypeBuildState.IsReusableAttempt(definition.UnreleasedBuildPath,
+            $"{nodeTypePath}/{GraphNodeTypeNames.ReleaseSegment}", hash);
     }
 
     /// <summary>The no-op reservation handle for a host with no adoption registry (an older or

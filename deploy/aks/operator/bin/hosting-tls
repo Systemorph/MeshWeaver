@@ -15,8 +15,8 @@
 # which of the two it was. The explicit `kubectl get certificates` below is also what makes the
 # grant visible to deploy/aks/operator/test/check-rbac-coverage.sh: a Certificate created through
 # `kubectl apply -f -` is invisible to that check, which is why this script reached main without
-# its ClusterRole rule and failed pearl's Provision at step 15/18 on 2026-09-15 with
-# `certificates.cert-manager.io "pearl-tls" is forbidden`.
+# its ClusterRole rule and failed fabrikam's Provision at step 15/18 on 2026-09-15 with
+# `certificates.cert-manager.io "fabrikam-tls" is forbidden`.
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
@@ -49,7 +49,7 @@ secret="${HOSTING_TLS_SECRET:-${namespace}-tls}"
 # merely mislead — it spends the entire budget first and only then lies (MeshWeaver#4722). Measured
 # shape before this change: a Forbidden on `certificates` left $state empty for the full timeout and
 # the step then died with `Certificate Ready: no such object`, asserting the object does not exist.
-# The pearl Provision of 2026-09-15 stopped on exactly that Forbidden, which is why the ClusterRole
+# The fabrikam Provision of 2026-09-15 stopped on exactly that Forbidden, which is why the ClusterRole
 # grants `certificates` today — and why a future RBAC change must not be able to bring the sentence
 # back. A refusal ends the wait immediately; nothing is ruled out and no budget is burned.
 #

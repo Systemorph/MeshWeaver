@@ -8,6 +8,11 @@ icon: /static/NodeTypeIcons/document.svg
 
 # Adding a New Node Type
 
+> **Authoring a NodeType as CONTENT** — a `.json` definition with `Source/` and `Test/` folders,
+> compiled by the mesh at runtime, the way every node repo ships its types? Start from
+> [A Typical NodeType](../ATypicalNodeType): a small `Budget` type shipped with the docs, with its
+> tests as the build queue runs them. This page is the COMPILED route, for types built into a platform assembly.
+
 Every built-in type — `Agent`, `LanguageModel`, `Thread` — follows the same six-step recipe. The pattern is strict by design: miss any one piece and the symptoms cascade in ways that look unrelated (empty dropdowns, deserialization falling back to raw `JsonElement`, sticky cluster errors). Follow all six steps in order and the type just works.
 
 > **Before you start**, look at the reference implementations listed at the bottom of this page. Reading one concrete example end-to-end takes five minutes and prevents the most common mistakes.

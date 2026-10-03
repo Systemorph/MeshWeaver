@@ -1825,10 +1825,15 @@ public partial class MeshOperations
         return Observable.Defer(() =>
         {
             List<MeshNode>? nodeList;
+            // The caller's RAW array too, element for element: the typed deserialisation below drops
+            // every content member the bound type does not declare, and only the raw JSON still
+            // names what was dropped (see UnknownContentMembers).
+            JsonArray? rawArray;
             try
             {
                 var sanitized = RepairJson(nodes);
                 nodeList = JsonSerializer.Deserialize<List<MeshNode>>(sanitized, hub.JsonSerializerOptions);
+                rawArray = JsonNode.Parse(sanitized) as JsonArray;
             }
             catch (JsonException ex)
             {
@@ -1842,8 +1847,9 @@ public partial class MeshOperations
             // Per-node outputs combine in input order via Concat so the caller sees a deterministic
             // result string even for batches.
             var perNode = ImmutableList<IObservable<string>>.Empty;
-            foreach (var rawNode in nodeList)
+            for (var index = 0; index < nodeList.Count; index++)
             {
+                var rawNode = nodeList[index];
                 if (rawNode == null)
                 {
                     perNode = perNode.Add(Observable.Return(
@@ -1864,6 +1870,19 @@ public partial class MeshOperations
                 if (meshNode.Content == null)
                 {
                     perNode = perNode.Add(BuildNullContentError(meshNode.Path, meshNode.NodeType!));
+                    continue;
+                }
+
+                // 🚨 Same silent drop as Patch: a content member the bound type does not declare is
+                // lost by the typed deserialisation above, and the landed-write check could never
+                // see it, so "Updated:" was reported for a field that was never written. Refuse it.
+                if ((rawArray is not null && index < rawArray.Count ? rawArray[index] : null) is JsonObject rawElement
+                    && rawElement["content"] is JsonObject rawContent
+                    && UnknownContentMembers(rawContent, meshNode.Content, hub.JsonSerializerOptions)
+                        is { Count: > 0 } unknownMembers)
+                {
+                    perNode = perNode.Add(Observable.Return(UnknownContentMembersMessage(
+                        "update", meshNode.Path, meshNode.NodeType, meshNode.Content.GetType(), unknownMembers)));
                     continue;
                 }
 
@@ -1955,8 +1974,16 @@ public partial class MeshOperations
         if (string.IsNullOrWhiteSpace(path))
             return Observable.Return("Error: path is required.");
 
+        // The node read and schema check answer on later reactive callbacks. Capture the tool's
+        // authenticated writer at CALL time, not from whichever identity happens to be ambient
+        // when those callbacks eventually issue UpdateNode. Without this, an agent's System write
+        // can arrive with no writer (or inherit another circuit user) even though the patch lands.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context ?? access?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
         return Observable.Defer(() =>
         {
+            using var callerScope = access?.SwitchAccessContext(caller);
             var resolvedPath = ResolvePath(path);
             if (string.IsNullOrWhiteSpace(resolvedPath))
                 return Observable.Return("Error: path is required.");
@@ -1986,7 +2013,9 @@ public partial class MeshOperations
             // Read-merge-write via DataChangeRequest. FetchNode returns null when the
             // path doesn't resolve (now with path-match verification so we don't
             // accidentally patch an ancestor hub).
-            return FetchNode(resolvedPath).SelectMany(outcome =>
+            return FetchNode(resolvedPath)
+                .CarryAccessContext(hub.ServiceProvider, caller)
+                .SelectMany(outcome =>
             {
                 // 🚨 The read-before-write MUST NOT report a stall as "node not found" (#974) —
                 // that message tells the caller to go create the node instead, which duplicates a
@@ -2071,6 +2100,42 @@ public partial class MeshOperations
                     MainNode = jsonObj.ContainsKey("mainNode") ? partial.MainNode : existing.MainNode,
                 };
 
+                // 🚨 REFUSE content members the bound type does not declare. The merged content was
+                // deserialised into the TYPE this portal has bound for the NodeType, and System.Text.Json
+                // drops a member that type does not declare without a word. ProjectTouched then reads
+                // the dropped key as "serializer omits it ⇒ expect absent", the live node satisfies that
+                // on its first emission, and the tool answered "Patched:" for a write that changed
+                // nothing. Measured on a Crm/Counterparty node whose NodeType had just gained
+                // aliases/domains/matchCaseSensitive: "Patched" twice, version unchanged, keys absent on
+                // read-back — because the running type was the one compiled BEFORE the fields existed.
+                if (callerDelta["content"] is JsonObject callerContent
+                    && partial.Content is { } typedContent
+                    && UnknownContentMembers(callerContent, typedContent, hub.JsonSerializerOptions)
+                        is { Count: > 0 } unknownMembers)
+                    return Observable.Return(UnknownContentMembersMessage(
+                        "patch", resolvedPath, existing.NodeType, typedContent.GetType(), unknownMembers));
+
+                // 🚨 A patch that changes NOTHING is not "Patched". Compare what would be stored with
+                // what is stored; equal ⇒ say so and write nothing, so a caller can tell "my value is
+                // already there" from "my value landed" (the version tells the second story).
+                // 🚨 AUTHORIZED FIRST: this answer skips mesh.UpdateNode, which is where the owner's
+                // Update check runs, so without its own check a caller holding Read but not Update
+                // would be told "No change" where every other patch of theirs is refused. Ask the
+                // SAME question the owner asks — the raw (path, Update) fold, re-decided through the
+                // node's INodeTypeAccessRule on a definitive denial — and fail closed otherwise.
+                if (JsonNode.DeepEquals(
+                        JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions),
+                        JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)))
+                    return CheckUpdateOutcome(resolvedPath, "Patch")
+                        .Select(outcome => outcome.IsGranted
+                            ? $"No change: {existing.Path} (v{existing.Version}) — every field in the patch "
+                                + "already holds that value, so nothing was written."
+                            : outcome.IsUndetermined
+                                ? $"Error: patching {resolvedPath}: the permission check did not complete "
+                                    + $"({outcome.UndeterminedReason}). Nothing was written; retry."
+                                : $"Error: patching {resolvedPath}: access denied — Update permission on this "
+                                    + "node is required. Nothing was written.");
+
                 // Validate merged content against the NodeType's schema when the
                 // caller touched content. Surface the schema in the error so an
                 // agent can fix its payload on the retry.
@@ -2088,7 +2153,9 @@ public partial class MeshOperations
                 var expectedFields = ProjectTouched(mergedJson, callerDelta);
 
                 var versionBefore = existing.Version;
-                return validationObs.SelectMany(validationError =>
+                return validationObs
+                    .CarryAccessContext(hub.ServiceProvider, caller)
+                    .SelectMany(validationError =>
                     validationError != null
                         ? Observable.Return(validationError)
                         : mesh.UpdateNode(merged)
@@ -2529,37 +2596,115 @@ public partial class MeshOperations
     }
 
     /// <summary>
-    /// Attempts to repair common JSON issues from LLM output:
-    /// - Truncated strings (unclosed quotes/braces)
-    /// - Unescaped control characters inside strings
+    /// Repairs the two JSON defects model-written tool payloads actually carry, and nothing else:
+    /// <list type="number">
+    /// <item><b>Missing closers at the END.</b> A payload one or two <c>}</c>/<c>]</c> short
+    /// (<c>{"content":{"policy":"None"}</c>) fails <c>System.Text.Json</c> with
+    /// <i>"Expected depth to be zero at the end of the JSON payload"</i>. The containers still open
+    /// when the text ends — counted OUTSIDE string literals, honouring <c>\"</c> and <c>\\</c>
+    /// escapes — are closed in reverse order of opening.</item>
+    /// <item><b>Trailing junk after a complete value</b> (a stray fence or a sentence): the longest
+    /// prefix ending in a closer that parses.</item>
+    /// </list>
+    /// <para><b>It never changes what a parseable payload means</b>, and never guesses inside one:
+    /// valid JSON is returned untouched; text that ends INSIDE a string (a truncated value), has a
+    /// closer of the wrong kind or one too many, is left alone by the closer step. A candidate is
+    /// accepted only when it parses; otherwise the ORIGINAL text is returned, so the caller's parse
+    /// reports the original error, never one about a repair the caller did not write.</para>
+    /// <para>Internal (not private) so the repair rules are measured directly
+    /// (<c>RepairJsonTest</c>); every JSON-taking tool body — <c>create</c>, <c>update</c>,
+    /// <c>patch</c>, <c>delete</c> — routes its payload through it, whether it arrived over MCP or
+    /// as an agent tool call.</para>
     /// </summary>
-    private static string RepairJson(string json)
+    internal static string RepairJson(string json)
     {
         if (string.IsNullOrEmpty(json))
             return json;
 
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
+        if (Parses(json))
             return json;
-        }
-        catch (JsonException) { }
+
+        var closed = AppendMissingClosers(json);
+        if (closed is not null && Parses(closed))
+            return closed;
 
         for (var i = json.Length - 1; i > 0; i--)
         {
             if (json[i] is '}' or ']')
             {
                 var candidate = json[..(i + 1)];
-                try
-                {
-                    using var doc = JsonDocument.Parse(candidate);
+                if (Parses(candidate))
                     return candidate;
-                }
-                catch (JsonException) { }
             }
         }
 
         return json;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="json"/> outside string literals and returns it with the closers of the
+    /// containers still open at the end appended (innermost first), or <c>null</c> when nothing is
+    /// open or the text cannot be balanced by appending alone — it ends inside a string, a closer
+    /// does not match its opener, or there are more closers than openers.
+    /// </summary>
+    private static string? AppendMissingClosers(string json)
+    {
+        var open = ImmutableStack<char>.Empty;
+        var inString = false;
+        var escaped = false;
+
+        foreach (var c in json)
+        {
+            if (inString)
+            {
+                if (escaped)
+                    escaped = false;
+                else if (c == '\\')
+                    escaped = true;
+                else if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    open = open.Push('}');
+                    break;
+                case '[':
+                    open = open.Push(']');
+                    break;
+                case '}' or ']':
+                    if (open.IsEmpty || open.Peek() != c)
+                        return null;
+                    open = open.Pop();
+                    break;
+            }
+        }
+
+        if (inString || open.IsEmpty)
+            return null;
+
+        var builder = new System.Text.StringBuilder(json.TrimEnd());
+        foreach (var closer in open)
+            builder.Append(closer);
+        return builder.ToString();
+    }
+
+    private static bool Parses(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -2817,7 +2962,7 @@ public partial class MeshOperations
             List<string>? pathList;
             try
             {
-                pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
+                pathList = JsonSerializer.Deserialize<List<string>>(RepairJson(paths), hub.JsonSerializerOptions);
             }
             catch (JsonException ex)
             {
@@ -3917,13 +4062,7 @@ public partial class MeshOperations
         // COMPLETES without emitting (#2742) sails past it. CheckPermissionOutcome classifies both
         // terminals, so "we could not find out" gets its own answer instead of borrowing the
         // denial's. Still fail-closed: nothing is recycled without a positive verdict.
-        return hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .Catch((Exception ex) => Observable.Return(
-                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
-                    $"the permission check for Recycle on '{resolvedPath}' did not complete: "
-                    + $"{ex.GetType().Name}")))
+        return CheckUpdateOutcome(resolvedPath, "Recycle")
             // 🚨 THE PRE-FLIGHT MUST ASK THE QUESTION THE OWNER WILL ASK — issue #3121. The check
             // above is a RAW (path, Update) fold, and the owner's delivery gate stopped being that
             // in #3061/#3100: on a definitive denial it re-decides through the node's registered
@@ -3937,9 +4076,6 @@ public partial class MeshOperations
             // same two reasons: it costs nothing on the granted path (which never reads a node), and
             // it never turns an UNDETERMINED fold into a rule question — "we could not check" must
             // stay "we could not check".
-            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
-                ? Observable.Return(outcome)
-                : ReconsiderRecycleThroughNodeTypeRule(resolvedPath))
             .SelectMany(outcome =>
             {
                 // 🚨 THE LEASE GATE, AFTER THE PERMISSION VERDICT AND BEFORE THE FIRST WRITE
@@ -3985,7 +4121,29 @@ public partial class MeshOperations
     }
 
     /// <summary>
-    /// Re-decides a DENIED <see cref="Recycle(string)"/> pre-flight through the target node's own
+    /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
+    /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
+    /// DEFINITIVE denial re-decided through the node's <c>INodeTypeAccessRule</c> exactly as the owner's
+    /// delivery gate does (#3121). One implementation, so Recycle and Patch's no-change answer cannot
+    /// drift into asking different questions.
+    /// </summary>
+    /// <param name="resolvedPath">The target, already resolved.</param>
+    /// <param name="verb">The verb asking, for the log and the undetermined reason.</param>
+    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> CheckUpdateOutcome(
+        string resolvedPath, string verb) =>
+        hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) => Observable.Return(
+                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the permission check for {verb} on '{resolvedPath}' did not complete: "
+                    + $"{ex.GetType().Name}")))
+            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                ? Observable.Return(outcome)
+                : ReconsiderUpdateThroughNodeTypeRule(resolvedPath, verb));
+
+    /// <summary>
+    /// Re-decides a DENIED Update pre-flight (<see cref="Recycle(string)"/>, Patch's no-change answer) through the target node's own
     /// <c>INodeTypeAccessRule</c> — the same second opinion <c>AccessControlPipeline</c> takes since
     /// #3061, built from the same <c>NodeTypeAccessRuleGate</c> helpers so the two seams cannot
     /// drift into asking different questions.
@@ -3996,9 +4154,10 @@ public partial class MeshOperations
     /// blip must not be reported as a refusal nobody established. Undetermined carries
     /// <c>IsGranted = false</c>, so the caller fails closed on every leg.</para>
     /// </summary>
-    /// <param name="resolvedPath">The recycle target, already resolved.</param>
-    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderRecycleThroughNodeTypeRule(
-        string resolvedPath)
+    /// <param name="resolvedPath">The target, already resolved.</param>
+    /// <param name="verb">The verb asking, for the log.</param>
+    private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderUpdateThroughNodeTypeRule(
+        string resolvedPath, string verb)
     {
         // Update is in the CRUD set SubjectOperationFor maps, so this is never null in practice —
         // it is asked rather than assumed so that a change to that mapping cannot silently make
@@ -4022,17 +4181,17 @@ public partial class MeshOperations
                     AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                 };
                 logger.LogDebug(
-                    "Recycle: Update on {Path} was denied by the standard check — re-deciding "
+                    "{Verb}: Update on {Path} was denied by the standard check — re-deciding "
                     + "through the {NodeType} access rule, which governs this node type",
-                    resolvedPath, node.NodeType);
+                    verb, resolvedPath, node.NodeType);
                 return NodeTypeAccessRuleGate.Evaluate(rule, context, ResolveCallerUserId(), logger);
             })
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
-                    "Recycle: could not read the node at {Path} to apply its node-type access rule "
+                    "{Verb}: could not read the node at {Path} to apply its node-type access rule "
                     + "— reporting UNAVAILABLE rather than a denial nobody established",
-                    resolvedPath);
+                    verb, resolvedPath);
                 return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
                     $"the node at '{resolvedPath}' could not be read to apply its node-type access "
                     + $"rule ({ex.GetType().Name})"));
@@ -4921,6 +5080,66 @@ public partial class MeshOperations
         fields.Select(pair => pair.Key)
             .Where(key => !PatchableFields.Contains(key))
             .ToList();
+
+    /// <summary>
+    /// The top-level keys of a caller's content object that the TYPED content does not declare —
+    /// members <see cref="System.Text.Json"/> drops without error when the content is deserialised
+    /// into that type, so a write carrying them silently loses them. Pure, so the rule is testable
+    /// without a hub.
+    ///
+    /// <para>Answers nothing (empty) when there is no typed content to judge against: untyped content
+    /// (<see cref="JsonElement"/> / <see cref="JsonNode"/>) keeps every key, a type with a
+    /// <c>[JsonExtensionData]</c> member keeps unknown keys by design, and a type serialised by a custom
+    /// converter has no property list to compare. Keys starting with <c>$</c> are wire metadata
+    /// (<c>$type</c>) and never members. Nested objects are not descended into: the top level is where
+    /// a NodeType gains fields, and it is the shape that was measured dropping them.</para>
+    /// </summary>
+    /// <param name="callerContent">The content keys the caller SENT (not the merged blob).</param>
+    /// <param name="typedContent">The content as deserialised by this hub.</param>
+    /// <param name="options">The hub's serializer options — they define the member names.</param>
+    /// <returns>The undeclared keys, in the caller's order.</returns>
+    internal static IReadOnlyList<string> UnknownContentMembers(
+        JsonObject? callerContent, object? typedContent, JsonSerializerOptions options)
+    {
+        if (callerContent is null or { Count: 0 } || typedContent is null or JsonElement or JsonNode)
+            return [];
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo typeInfo;
+        try
+        {
+            typeInfo = options.GetTypeInfo(typedContent.GetType());
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+        {
+            return [];
+        }
+        if (typeInfo.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
+            || typeInfo.Properties.Any(p => p.IsExtensionData))
+            return [];
+        var known = typeInfo.Properties
+            .Select(p => p.Name)
+            .ToImmutableHashSet(options.PropertyNameCaseInsensitive
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        return callerContent
+            .Select(pair => pair.Key)
+            .Where(key => !key.StartsWith('$') && !known.Contains(key))
+            .ToImmutableList();
+    }
+
+    /// <summary>The refusal a write with undeclared content members answers — names the members, the
+    /// bound type and the NodeType, and the remedy when the type is stale.</summary>
+    private static string UnknownContentMembersMessage(
+        string verb, string path, string? nodeType, Type boundType, IReadOnlyList<string> members) =>
+        $"Error: refused {verb} of {path}: unknown content member(s) "
+        + $"{string.Join(", ", members.Select(m => $"'{m}'"))} for type {boundType.Name}"
+        + (string.IsNullOrEmpty(nodeType) ? "" : $" (NodeType '{nodeType}')")
+        + ". The type this portal has bound does not declare "
+        + (members.Count == 1 ? "it" : "them")
+        + ", so the write would drop "
+        + (members.Count == 1 ? "it" : "them")
+        + " silently. Check the spelling against the content schema (get @<path>/schema/). If the NodeType "
+        + "was just changed to add " + (members.Count == 1 ? "this field" : "these fields")
+        + ", the running type is stale: recompile the NodeType and recycle it, then retry. Nothing was written.";
 
     /// <summary>
     /// Returns the node with a fresh RELEASE REQUEST stamped on its content:

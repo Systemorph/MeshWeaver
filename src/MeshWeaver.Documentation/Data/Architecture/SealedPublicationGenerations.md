@@ -612,11 +612,11 @@ atomic rename would remove even that.
 
 | | reading |
 |---|---|
-| `build` | `Ops/Status/build` → `cr.meshweaver.cloud/memex-portal-ai:3.0.0-ci.8411`. **The commit read the 09-14 census owed**: `main-cd` run number 8411 is `c84c6c055`, and `a4109d422` (phase 1) is an ancestor. Past phase 1 on a COMMIT now, not on identity equality. (The mapping is the run number the image tag carries: run 8798 = `43915af5c`, the roll `memex` was on the same day, confirms it.) |
-| `memex` (memex.systemorph.com) | mid-roll: replicas on `3.0.0-ci.8710` = `afde4eabe` and `3.0.0-ci.8798` = `43915af5c`. **Both past phase 1.** |
-| `memex-cloud` (memex.meshweaver.cloud) | `3.0.0-ci.8411` = `c84c6c055` on all four replicas. **Past phase 1.** |
-| `pearl` | now RUNNING (it was `Provisioning` on 09-14): `3.0.0-ci.8080` = `67cbbe0ee`, which **contains phase 1**. |
-| `partnerre` | `status: Planned`, no estate: the record deliberately carries no host, cluster or `pinnedImageTag` until its first infra deploy, and its data lives in PartnerRe's own subscription. It reads nothing on this share. |
+| the build instance | `Ops/Status/<build>` → `<registry>/memex-portal-ai:3.0.0-ci.8411`. **The commit read the 09-14 census owed**: `main-cd` run number 8411 is `c84c6c055`, and `a4109d422` (phase 1) is an ancestor. Past phase 1 on a COMMIT now, not on identity equality. (The mapping is the run number the image tag carries: run 8798 = `43915af5c`, the roll the control instance was on the same day, confirms it.) |
+| the control instance | mid-roll: replicas on `3.0.0-ci.8710` = `afde4eabe` and `3.0.0-ci.8798` = `43915af5c`. **Both past phase 1.** |
+| the public instance | `3.0.0-ci.8411` = `c84c6c055` on all four replicas. **Past phase 1.** |
+| an SME client instance | now RUNNING (it was `Provisioning` on 09-14): `3.0.0-ci.8080` = `67cbbe0ee`, which **contains phase 1**. |
+| an enterprise client | `status: Planned`, no estate: the record deliberately carries no host, cluster or `pinnedImageTag` until its first infra deploy, and its data lives in the client's own subscription. It reads nothing on this share. |
 
 🚨 **State the denominator: those are the FIVE `Hosting/Deployment` records on the control instance, and the records are not provably the whole population** — an install that self-updates from the registry and has stopped doing so appears in none of them. The instrument that would name a running image per replica is `Sample`, and on this cluster it is blind ([#4218](https://github.com/Systemorph/MeshWeaver/issues/4218)).
 
@@ -815,7 +815,7 @@ was ever visible instead of silently shipping a mixed set.
 - **Phase 5 is landed** (2026-09-17) — a generation publication DISPOSES of the flat compatibility
   copy once `_current` has moved and been read back: the seal first, alone, then the files it
   positively identifies. The precondition was measured on the five `Hosting/Deployment` records the
-  same day, with the commit read `build` owed (`3.0.0-ci.8411` = `c84c6c055`). The readers whose
+  same day, with the commit read the build instance owed (`3.0.0-ci.8411` = `c84c6c055`). The readers whose
   fall-back was permissive were fixed with it — see
   ["The reader contract phase 5 changes"](#-the-reader-contract-phase-5-changes-a-faulted-pointer-is-no-longer-the-flat-copy).
 - **The precondition on moving the default, measured 2026-09-14 rather than inherited.** The

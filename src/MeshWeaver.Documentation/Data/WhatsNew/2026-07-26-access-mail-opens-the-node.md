@@ -9,7 +9,7 @@ Order: -20260726
 # Sharing a node grants — and opens — that node
 
 When someone shared a space or a page with you, the invitation could name the internal access list
-behind it — "You've been given access to CollaborationNotus/_Access" — and its button opened that
+behind it — "You've been given access to CollaborationInitech/_Access" — and its button opened that
 list instead of the space. The same mix-up applied the permission one level too deep, so a freshly
 invited person could be told they had access while the space itself still looked closed to them.
 

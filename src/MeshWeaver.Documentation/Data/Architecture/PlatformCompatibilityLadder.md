@@ -96,7 +96,10 @@ exemption is the already-green-tree reuse path, as for every gate on that check)
 - **Plugin side:** the newest COMPLETED `main-cd` run on `main` whose `promote` job succeeded and that still holds all four module bundles
   (`MeshWeaver.AI`, `.Markdown.Collaboration`, `.Maps`, `.Payments.Stripe`) —
   `.github/scripts/fetch-deployed-plugin-set.sh`. Those are the bytes the fleet self-rolled to. No
-  such run ⇒ **red**, never "nothing to check".
+  such run ⇒ **red**, never "nothing to check". The script lists recent workflow runs without
+  GitHub's branch/status query filters, then checks those fields on each returned row. On
+  2026-09-28 the filtered listing served a stale page and said none of its runs carried bundles,
+  while the unfiltered listing named a recent promoted run whose four artifacts were present.
 - **Platform side:** this pull request's core build (the tester's bin — the canonical content
   surface) plus the runner's shared frameworks.
 - **Measurement:** `mw-plugin-test platform-link`, i.e. `ModulePlatformLink.Check` with

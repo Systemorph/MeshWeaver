@@ -1712,7 +1712,7 @@ repro corrupts a static in every run and the control in none, on `10.0.11` and `
 
 #### Comparison with the production crash, Systemorph/MeshWeaver#4654 — NOT established as the same defect
 
-#4654 (`memex.systemorph.com`, both portal containers, 2026-09-17, exit 139) exposes exactly three
+#4654 (the control instance, both portal containers, 2026-09-17, exit 139) exposes exactly three
 fingerprint-bearing fields, from its `createdump` line: `signo 11`, `code 0001`, `addr (nil)`. Those
 three match this family's canonical form — and they are **precisely the three that every null
 dereference in any process shares**. The fields that discriminate (the faulting frame, whether a
@@ -1721,7 +1721,7 @@ MethodTable word reads zero, the ALC census, the thread) all live in
 
 Against that, **two properties of the two processes are measured and differ**:
 
-| | CI (`MeshWeaver.FutuRe.Test`, all 18 sightings) | production (`memex.systemorph.com`, #4654) |
+| | CI (`MeshWeaver.FutuRe.Test`, all 18 sightings) | production (the control instance, #4654) |
 |---|---|---|
 | GC flavour | **workstation** — `heap.IsServer = False` (#18), and every symbolised frame in #1–#17 resolves to `WKS::gc_heap::*` | **server** — `serverGC=True` on the portal's own `[LIVENESS]` line. Its `gc_heap` frames would be `SVR::`, an implementation the family has never been read in |
 | native surface | **19** `.so`, runtime + libc/ICU/OpenSSL only; no third-party native library | maps **`libSkiaSharp.so`** (named in #4654's own dump header). A class of heap writer that CI provably does not have |
@@ -1951,7 +1951,7 @@ Both portal images are **framework-dependent** layers on one hand-built base: co
 MeshWeaver.Plugins `portal-ai-image.yml` publish with `--no-self-contained` and
 `-p:ContainerBaseImage=meshweaver.azurecr.io/memex-portal-ai-base:latest`, so the runtime inside a
 portal pod is whatever `mcr.microsoft.com/dotnet/aspnet:10.0` resolved to **when that base was last
-built** — not the SDK the app was compiled with. The image memex.systemorph.com runs (`45306a33`,
+built** — not the SDK the app was compiled with. The image the control instance runs (`45306a33`,
 `main-cd` run `34543984567`) was compiled on SDK `10.0.401` with runtime `10.0.12` installed, and its
 log says `Building image 'memex-portal-ai' … on top of base image
 'meshweaver.azurecr.io/memex-portal-ai-base:latest'`.

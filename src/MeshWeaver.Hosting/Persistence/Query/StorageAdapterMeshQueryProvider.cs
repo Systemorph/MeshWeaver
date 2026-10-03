@@ -1205,7 +1205,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // @-reference drill-down enumerated names, paths and node types out of partitions
         // the caller cannot `get`. It is the SAME storage and the SAME query shape as the
         // secured read; only these two inputs differed, which is what made autocomplete a
-        // witness to other people's content (measured on memex 2026-09-10: `@/Helvetia/`
+        // witness to other people's content (measured on memex 2026-09-10: `@/Initech/`
         // named five nodes for an identity whose `get` and `search` on the very same paths
         // answered nothing).
         //
@@ -1239,7 +1239,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         // over-fetch above is filtered, not narrowed: there is no "partitions this user may
         // read" oracle to narrow with (the native SQL providers express it as an inline
         // predicate, never as a list), and a partition-level narrowing would be wrong anyway
-        // — grants exist BELOW a partition root, so a caller denied `Helvetia` may still hold
+        // — grants exist BELOW a partition root, so a caller denied `Initech` may still hold
         // Read on one node inside it. RlsNodeValidator short-circuits synchronously for the
         // caller's own partition, which is the common drill-down.
         return RunQueryNodes(queryRequest, options, useSecurityFilter: true)
@@ -1483,6 +1483,19 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 })
                 .ToList();
             var parsedQuery = _parser.Parse(effectiveQueries[0]);
+            // 🚨 The TYPE half of the relevance test (Doc/Architecture/LiveQueryRequeryCost). The
+            // scope test below looks at the path alone, and every trigger costs a FULL re-read —
+            // for the security fold's permanent queries (every partition's AccessAssignment and
+            // _Policy index, the mesh-wide GroupMembership index) that is a walk of the partition
+            // or of the whole mesh on EVERY write beneath it, whatever was written. That made the
+            // cost of one write grow with the size of the mesh. A change whose old and new node
+            // types both lie outside a query's required types cannot move its result, so it does
+            // not trigger one. RAW surface only: a secured result also moves with grants, and a
+            // grant is exactly a node of another type (see NodeTypeChangeRelevance).
+            var relevantNodeTypes = useSecurityFilter
+                || scopeFilters.Any(sf => sf.Scope == QueryScope.NextLevel)
+                    ? null
+                    : NodeTypeChangeRelevance.RequiredNodeTypes(effectiveQueries.Select(q => _parser.Parse(q)));
             var (firstBasePath, firstScope) = scopeFilters[0];
             var effectivePath = firstBasePath;
             var effectiveScope = firstScope;
@@ -1557,8 +1570,8 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // Published under `earlyLock` in the same critical section that sets initialDone.
             Subject<DataChangeNotification>? liveBuffer = null;
             disposables.Add(persistence.Changes
-                .Where(n => scopeFilters.Any(sf =>
-                    PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
+                .Where(n => NodeTypeChangeRelevance.CanAffect(n, relevantNodeTypes)
+                    && scopeFilters.Any(sf => PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
                 .Subscribe(n =>
                 {
                     Subject<DataChangeNotification>? live;

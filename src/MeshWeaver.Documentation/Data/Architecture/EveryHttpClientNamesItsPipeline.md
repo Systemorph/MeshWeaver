@@ -37,22 +37,22 @@ itself, and why the fix below leaves those two alone.
 
 ## What it actually was (measured)
 
-Read-only `Logs` InstanceActions on memex.meshweaver.cloud, 2026-09-24:
+Read-only `Logs` InstanceActions on the public instance, 2026-09-24:
 
 - **Every stack under the timeouts ends in `Memex.Portal.Shared.SelfUpdate.SelfUpdateHandover.Post`.**
-  `Ops/logs-memexcloud-20260924-timeout-stack2` (pod `…589ff8f895-vn49b`, 100 min): each
+  `Ops/logs-<public>-20260924-timeout-stack2` (pod `…589ff8f895-vn49b`, 100 min): each
   `Polly.Timeout.TimeoutRejectedException` is followed by `ResilienceHandler.SendAsync` frames and a
   `SelfUpdateHandover.<>c__DisplayClass37_0.<<Post…` frame — 12:33:06Z, 12:34:44Z, 12:52:31Z,
-  13:43:15Z, 13:43:32Z. `Ops/logs-memexcloud-20260924-2x9rq-stack` found the same caller behind the
-  06:24–06:30Z samples the recurrence bot quoted (pod `…76cf776847-2x9rq`, a memex-cloud replica).
+  13:43:15Z, 13:43:32Z. `Ops/logs-<public>-20260924-2x9rq-stack` found the same caller behind the
+  06:24–06:30Z samples the recurrence bot quoted (pod `…76cf776847-2x9rq`, a public-instance replica).
   The client is the NAMED `self-update-handover` client, posting a signed release hand-over to the
-  control instance's inbox `https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds`.
+  control instance's inbox `https://control.example.com/api/hooks/Hosting/PlatformBuilds`.
 - **The bursts line up with the control instance's replicas starting.** 24 h of
-  `-standard//Standard-TotalRequestTimeout` + hand-over-FAILED lines on memex-cloud
-  (`Ops/logs-memexcloud-20260924-totaltimeouts-1440`, 157 lines) against the control instance's own
-  `Now listening on` / `Application is shutting down` lines (`Ops/logs-memex-20260924-boots-600`):
+  `-standard//Standard-TotalRequestTimeout` + hand-over-FAILED lines on the public instance
+  (`Ops/logs-<public>-20260924-totaltimeouts-1440`, 157 lines) against the control instance's own
+  `Now listening on` / `Application is shutting down` lines (`Ops/logs-<control>-20260924-boots-600`):
 
-  | memex-cloud hand-over failures (UTC) | control instance (memex) replicas |
+  | public-instance hand-over failures (UTC) | control instance replicas |
   |---|---|
   | 05:50–06:30 | two new replicas listening 06:29:58 / 06:30:32, no graceful shutdown logged before them |
   | 07:10–07:20 | shutdown 07:06:42, listening 07:07:40; shutdown 07:20:50, listening 07:22:13 |

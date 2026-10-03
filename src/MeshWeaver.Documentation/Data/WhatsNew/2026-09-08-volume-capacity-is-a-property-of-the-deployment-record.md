@@ -8,8 +8,8 @@ Order: -20260908
 
 # Volume capacity is a property of the Deployment record
 
-On 2026-09-08 at 13:51Z the `/data` share of `memex.systemorph.com` measured **16 GiB with 3 MiB
-free** — full — while its sibling on `memex.meshweaver.cloud` ran 128 GiB. The size of that share
+On 2026-09-08 at 13:51Z the `/data` share of the control instance measured **16 GiB with 3 MiB
+free** — full — while its sibling on the public instance ran 128 GiB. The size of that share
 was written in three places (the Deployment record, the rendered values file, a hand-applied PVC
 capture) and none of them could change it: on this fleet the portal's claims were applied by hand
 once and are not managed by helm, so a bigger `size` on the record re-rendered a bigger number
@@ -36,7 +36,7 @@ patch pvc` from a laptop — the break-glass write the same day's rule
   (`volumeCapacityBelowRecord`, with the claim and both sizes) — the one record-versus-live
   comparison in the audit, because the manifest cannot show it.
 
-The measured numbers are corrected in the same change: `memex`'s data volume is declared at
-128Gi, and `memex-cloud`'s stale 16Gi overlay entry now states the 128Gi its share has held all
+The measured numbers are corrected in the same change: the control instance's data volume is declared at
+128Gi, and the public instance's stale 16Gi overlay entry now states the 128Gi its share has held all
 along. The runbook is in [DeploymentAKS](/Doc/Architecture/DeploymentAKS) → "Volume capacity is a
 record property".

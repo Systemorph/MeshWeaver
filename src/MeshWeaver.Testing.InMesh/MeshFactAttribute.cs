@@ -40,8 +40,8 @@ public sealed class MeshTheoryAttribute : Attribute
 
 /// <summary>One argument row of a <see cref="MeshTheoryAttribute"/> case.</summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = true, Inherited = true)]
-public sealed class MeshInlineDataAttribute(params object?[] data) : Attribute
+public sealed class MeshInlineDataAttribute(params object?[]? data) : Attribute
 {
     /// <summary>The arguments, in parameter order.</summary>
-    public object?[] Data { get; } = data;
+    public object?[] Data { get; } = data ?? [null];
 }

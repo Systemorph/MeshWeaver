@@ -18,7 +18,7 @@ every lane ran the OTHER way or somewhere else:
 
 So an operation that has to act INSIDE another instance's mesh — recycle an address, delete a
 space nobody may delete — could only be filed on that instance's own mesh, which needs the Hosting
-package there. `memex-cloud` does not run Hosting. This lane closes that gap with the smallest
+package there. The public instance does not run Hosting. This lane closes that gap with the smallest
 surface that is still safe: two operations, one signed request per step, and the target as the
 authority over what it runs.
 
@@ -26,7 +26,7 @@ authority over what it runs.
 
 ```
 control instance                                            target instance
-Hosting/InstanceAction (DeleteSpace, deployment=memex-cloud)
+Hosting/InstanceAction (DeleteSpace, deployment=<public>)
   │ 1. dry run: POST /api/control-lane  ─── signed, K_dep ──►  verify · admit · claim Admin/ControlLane/{id}
   │                                                              plan (as system, writes nothing)
   │ ◄── report Planned {plan, digest}  ─── signed, K_dep ────  POST {control}/api/hooks/Hosting/PlatformBuilds
@@ -131,24 +131,77 @@ would make this lane a remote system shell.
 
 ## The plan is bound by digest
 
-`ControlLanePlan.Digest()` is the `action-plan/v1` encoding MeshWeaver.Plugins'
-`ActionPlanSnapshot.Digest` computes (length-prefixed, injective; no namespace, no image, executor
-`control-lane`). The control instance parks the action with the reported plan, the approval binds
-that snapshot's digest, and the real run carries it. The control side recomputes the digest over the
-reported steps and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`),
-so a drift between the two implementations is a loud refusal at dry-run time — never an approval
-that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` pins the encoding.
+`ControlLanePlan.Digest()` is the digest MeshWeaver.Plugins' `ActionPlanSnapshot.Digest` computes:
+length-prefixed and injective, with no namespace, no image and executor `control-lane`.
+
+🚨 **A plan never contains a listing.** Every set a step acts on is a TARGET
+(`ControlLanePlanTarget`): an anchored, scoped query with its count. Examples are the space's
+NodeTypes, its grants, its GitSync nodes and its content roots. The whole subtree is a query with NO
+count, because its rows move while a stranded space waits. The outside dependents and a NodeType's
+dependency network are counts in the command. A plan whose steps carry targets digests as
+`action-plan/v2`, which binds each query and count but never a label. A plan without targets stays
+`action-plan/v1`.
+
+The control instance parks the action with the reported plan, the approval binds that snapshot's
+digest, and the real run carries it. The control side recomputes the digest over the reported steps
+and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`). A drift between
+the two implementations is therefore a loud refusal at dry-run time, never an approval that can
+never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding` and
+`APlanWithTargets_IsTheActionPlanV2Encoding` pin both encodings.
 
 ## What each operation binds
 
-- **Recycle** binds the target and, for a NodeType, the EXACT address set of its dependency network
-  (its digest is in the step's command). The cascade recomputes the network when the dispose lands,
-  so the run derives it once more right before the dispose and refuses unless it is the bound set; an
-  INCOMPLETE network is refused at planning, before anything is disposed.
+- **Recycle** uses a complete `scope:children` listing of the target's parent only to establish that
+  the target path exists, then reads the current node from its stream before deciding whether it is a NodeType.
+  It never treats an exact-path index query as proof of presence or absence. It binds the target (a `path:` query, count 1) and,
+  for a NodeType, the EXACT address set of its dependency network (its digest is in the step's
+  command, never the addresses). The cascade recomputes the network when the dispose lands, so the run derives it once
+  more right before the dispose and refuses unless it is the bound set; an INCOMPLETE network is
+  refused at planning, before anything is disposed.
 - **DeleteSpace** binds what the in-process action binds: the space, schema, root shape, every grant,
-  GitSync node, content root and NodeType, the outside dependents and the store route. Row counts are
-  shown, never bound. A framework delete that completes WITHOUT an answer fails the run — no answer
-  is not "already gone".
+  GitSync node and NodeType, the outside dependents and the teardown. Row counts are shown, never
+  bound. The content, grants and store go in ONE `PartitionTeardown.TearDownPartition` as system,
+  whatever the size — never a per-node recursive delete, whose pre-validation fan-out stalled on a
+  31,138-descendant space ([Partition Teardown](../PartitionTeardown) → *The direct teardown*). The
+  plan is offered only after `SpaceDeletion.Preflight` — rights as system, the per-node GitSync leg
+  within `PerNodeDeleteBound`, the no-store sweep within `SweepBound`, the teardown's own refusal —
+  answers none (policy `governed-action-preflight`). The query index is used only to list nodes and establish path existence (by
+  listing a parent and filtering for its child, never by an exact-path query); the
+  root and `Admin/Partition/{space}` definition are then read from their live node streams before
+  their type/creator or table mappings enter the plan. A framework delete that completes WITHOUT an
+  answer fails the run — no answer is not "already gone".
+
+## Forwarded events
+
+The lane's third kind, beside a request and a report: a **forwarded event**
+(`ControlLaneEvent`, `"kind": "control-lane-event"`). The control instance received and verified a
+delivery on its own inbox, and hands it to the instance that consumes it. The first use is the ONE
+GitHub organisation webhook: it posts pull-request and check events to the control instance, which
+forwards them to the build instance, where the PR steward's heal/observe half
+(MeshWeaver.Plugins `Hosting/PrBabysitter`) consumes them (policy `pr-babysitter-cadence`).
+
+| part | what it is |
+|---|---|
+| **The envelope** | `eventId` (16–64 letters, digits, dashes), `deployment`, `source` (open vocabulary, `ControlLaneEventSource.GitHub`), `name` (for GitHub, the `X-GitHub-Event` value), `target` (a local inbox owner), `payload` (the verified body, verbatim), `issuedAt`/`expiresAt`. Signed exactly like a request, with the target deployment's OWN key. |
+| **The control half** | `ControlLaneClient.NewEvent` + `ControlLaneClient.Forward`. It uses the same key rule (`ControlKeyFor`), the same transport and the same signed-acceptance check as `Send`. |
+| **The target half** | `ControlLaneReceiver.Receive`, on the same endpoint. Checks 1 and 2 (armed, signature) are shared. Then `ControlLaneEvents.Admit` runs: a well-formed envelope, this deployment, a window of at most 15 minutes, a target this instance DECLARED under `ControlLane:EventTargets`, and a payload within the inbox's size cap. Last, `ControlLaneEvents.Store` creates `{target}/_Inbox/{eventId}` as a `WebhookEvent`. |
+| **Single use** | The inbox node's CREATION is the claim, so a replay answers `replayed` (409). |
+
+What it deliberately does NOT have, and why that is safe:
+
+- **No operation, plan, approval or report.** The target runs nothing for it. Its whole effect is
+  one node in an inbox the target opened to the lane. The consumer treats the payload as a trigger
+  and re-reads the live state itself. It never takes an action on the payload's word.
+- **Not the public inbox list.** `ControlLane:EventTargets` is separate from `WebhookInbox:Targets`.
+  An armed lane with no declared event target accepts no event, and a lane target need not be
+  reachable from the internet.
+- **No inbox signature.** The stored node carries `X-Control-Lane-Event`, `X-Control-Lane-Source` and
+  `X-GitHub-Event`, but no `X-Hub-Signature-256`. A consumer that verifies an inbox HMAC (the
+  platform-build watcher) therefore drops a forwarded event, even if one were misrouted to it.
+
+Wiring a target (Systemorph/Memex record): the lane key as above, plus
+`ControlLane__EventTargets__0` naming the inbox owner (build: `Hosting/Babysitter`). The node must
+exist on the target, or the event is refused.
 
 ## Audited on both sides
 
@@ -163,8 +216,8 @@ that can never execute. `ControlLaneTest.ThePlanDigest_IsTheActionPlanV1Encoding
 
 Minting a key is a GUI act on the control instance, never a vault command, and no agent creates or
 reads a secret value (policy `secrets-write-only-entry`,
-[Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)). On `Deployments/memex-cloud`,
-use **Set Key Vault secrets…** → **Generate** for `memexcloud-Hosting-ControlLaneKey`. Both ends of the
+[Secrets: Write-Only Entry, Split Identities](../SecretsWriteOnlyEntry)). On `Deployments/<id>`,
+use **Set Key Vault secrets…** → **Generate** for `<id>-Hosting-ControlLaneKey`. Both ends of the
 lane read the vault, so the value is minted in the operator Job and never shown. The status the page
 shows (present, enabled, updated, and the `mw-fp` fingerprint) comes from vault metadata alone.
 

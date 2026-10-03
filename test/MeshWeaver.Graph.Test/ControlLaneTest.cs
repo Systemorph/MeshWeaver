@@ -41,6 +41,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private const string OtherDeploymentKey = "another-deployments-own-key";
     private const string ControlInbox = "TestData/LaneInbox";
     private const string ControlAction = "Ops/Actions/lane-test";
+    private const string EventInbox = "TestData/LaneEvents";
 
     private static readonly Uri Endpoint = ControlLaneClient.EndpointOf("lane-target.example")!;
 
@@ -68,6 +69,8 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             [ControlLaneKeys.ControlKeySection] = FleetSecret,
             ["WebhookInbox:Targets:0"] = "TestData/OwnInbox",
             ["WebhookInbox:Targets:0:SecretConfigKey"] = ControlLaneKeys.ControlKeySection,
+            // The ONE local inbox this target accepts forwarded events into.
+            [ControlLaneEvents.TargetsSection + ":0"] = EventInbox,
         }).Build();
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -110,8 +113,15 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planned = await Terminal(dry, ct);
         planned.Status.Should().Be(ControlLaneStatus.Planned, planned.Message);
         planned.Plan.Should().NotBeNull();
-        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Delete content");
+        planned.Plan!.Steps.Select(s => s.Name).Should().Contain("Tear down the partition",
+            "a space's content goes with its store in ONE teardown, never a per-node delete (policy governed-action-preflight)");
+        planned.Plan.Steps.Select(s => s.Name).Should().NotContain("Delete content");
         planned.PlanDigest.Should().Be(planned.Plan.Digest());
+        planned.Plan.Steps.Should().NotContain(s => s.Command.Contains("Doomed/Page"),
+            "a plan never contains a listing — the sets are queries with counts");
+        planned.Plan.Steps.Single(s => s.Name == "Tear down the partition").Targets
+            .Should().Contain(t => t.Query == "path:Doomed scope:subtree" && t.Count == null,
+                "the subtree is a query and deliberately uncounted");
         (await target.Exists("Doomed/Page")).Should().BeTrue("a dry run changes nothing");
 
         var real = Request(ControlLaneOperation.DeleteSpace, "Doomed", dryRun: false, planned.PlanDigest);
@@ -146,6 +156,31 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var done = await Terminal(real, ct);
         done.Status.Should().Be(ControlLaneStatus.Done, done.Message);
         (await ReportsOf(real, ct)).Should().Contain(r => r.Message.Contains("FRESH activation"));
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task DeleteSpaceInventoryReadsRootAndPartitionDefinitionFromTheirLiveStreams()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string space = "LiveInventory";
+        await target!.SeedSpace(space);
+
+        await AsSystem(target.Hub, () => target.Hub.GetMeshNodeStream(space)
+            .Update(root => root with { Name = "current-root-name" }));
+
+        var seededRecord = PartitionOwnership.PartitionDefinitionNode(new MeshNode(space) { Name = space }, "stream-read test");
+        var seededDefinition = (PartitionDefinition)seededRecord.Content!;
+        var currentRecord = seededRecord with { Content = seededDefinition with { Table = "current_rows" } };
+        await AsSystem(target.Hub, () => target.Hub.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(currentRecord));
+
+        var inventory = await SpaceDeletion.Inventory(target.Hub, space)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        inventory.Root.Should().NotBeNull();
+        inventory.Root!.Name.Should().Be("current-root-name");
+        inventory.Tables.Should().ContainSingle(table => table.Table == "current_rows" && table.Rows == 2,
+            "the partition definition's live table mapping is part of the approved inventory");
+        inventory.Unread.Should().BeEmpty();
     }
 
     // ───────────────────────────── the negatives ─────────────────────────────
@@ -252,6 +287,78 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         refused.Message.Should().Contain("system or fleet partition");
     }
 
+    // ───────────────────────────── forwarded events ─────────────────────────────
+
+    [Fact(Timeout = 120000)]
+    public async Task AForwardedEvent_IsStoredVerbatim_InTheDeclaredInbox_Once()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPage(EventInbox);
+        const string payload = "{\"action\":\"completed\",\"repository\":{\"full_name\":\"o/r\"},\"check_suite\":{\"pull_requests\":[{\"number\":7}]}}";
+        var evt = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "check_suite", EventInbox, payload, DateTimeOffset.UtcNow);
+
+        (await Forward(evt, ct)).Verdict.Should().Be(ControlLaneVerdict.Accepted);
+        var stored = await target.Stored(evt.EventId);
+        stored.Should().NotBeNull("the event lands at {target}/_Inbox/{eventId}");
+        stored!.Body.Should().Be(payload, "the payload is stored verbatim — the consumer re-reads live state from it");
+        stored.Headers[ControlLaneEvents.GitHubEventHeader].Should().Be("check_suite");
+        stored.Headers[ControlLaneEvents.EventIdHeader].Should().Be(evt.EventId);
+        stored.Headers.ContainsKey(ControlLaneWire.SignatureHeader).Should().BeFalse(
+            "it carries no inbox signature, so a consumer that verifies one (the platform-build watcher) drops it");
+
+        var replay = await Forward(evt, ct);
+        replay.Verdict.Should().Be(ControlLaneVerdict.Replayed, replay.Why ?? "");
+        (await target.Ledger(evt.EventId)).Should().BeNull("an event runs nothing, so it writes no operation ledger");
+    }
+
+    [Fact(Timeout = 120000)]
+    public async Task AForwardedEvent_ForAnUndeclaredInbox_OrAnotherDeployment_OrBadlySigned_IsRefused_AndStoresNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await target!.SeedPage(EventInbox);
+        await target.SeedPage("TestData/OwnInbox");
+        var now = DateTimeOffset.UtcNow;
+
+        var undeclared = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "pull_request", "TestData/OwnInbox", "{}", now);
+        var refused = await Forward(undeclared, ct);
+        refused.Verdict.Should().Be(ControlLaneVerdict.Refused,
+            "the lane stores only into an inbox the target declared for it — not even its own public webhook inbox");
+        (await target.AnyStored(undeclared.EventId, "TestData/OwnInbox")).Should().BeFalse();
+
+        var elsewhere = ControlLaneClient.NewEvent("other-deployment", ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", now);
+        var body = ControlLaneWire.Body(elsewhere);
+        (await target.Receiver.Receive(body, ControlLaneWire.Sign(body, LaneKey)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Verdict.Should().Be(ControlLaneVerdict.WrongDeployment);
+
+        var forged = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", now);
+        var forgedBody = ControlLaneWire.Body(forged);
+        foreach (var wrongKey in new[] { FleetSecret, OtherDeploymentKey })
+            (await target.Receiver.Receive(forgedBody, ControlLaneWire.Sign(forgedBody, wrongKey)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+                .Verdict.Should().Be(ControlLaneVerdict.SignatureInvalid, "only this deployment's own key forwards to it");
+        (await target.AnyStored(forged.EventId)).Should().BeFalse();
+
+        var stale = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", now.AddMinutes(-20));
+        (await Forward(stale, ct)).Verdict.Should().Be(ControlLaneVerdict.Expired);
+    }
+
+    [Fact]
+    public void AnEvent_IsNeitherARequestNorAReport_AndNeitherIsAnEvent()
+    {
+        var evt = ControlLaneClient.NewEvent(Deployment, ControlLaneEventSource.GitHub, "pull_request", EventInbox, "{}", DateTimeOffset.UtcNow);
+        var body = ControlLaneWire.Body(evt);
+        ControlLaneWire.ParseEvent(body).Should().NotBeNull();
+        ControlLaneWire.ParseRequest(body).Should().BeNull("an event must never parse as a command");
+        ControlLaneWire.ParseReport(body).Should().BeNull();
+        ControlLaneWire.ParseEvent(ControlLaneWire.Body(Request(ControlLaneOperation.Recycle, "X", true))).Should().BeNull(
+            "a request must never be stored as an event");
+        ControlLaneEvents.Admit(evt, Deployment, DateTimeOffset.UtcNow, []).Verdict.Should().Be(ControlLaneVerdict.Refused,
+            "an armed lane with no declared event inbox accepts none");
+    }
+
+    private Task<ControlLaneReceipt> Forward(ControlLaneEvent evt, CancellationToken ct) =>
+        ControlLaneClient.Forward(Mesh, evt, Endpoint)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
     // ───────────────────────────── the keys (pure) ─────────────────────────────
 
     [Fact]
@@ -280,6 +387,32 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
                 (ControlLaneKeys.ControlKeySection, FleetSecret), (ControlLaneKeys.ControlKeyOf(Deployment), FleetSecret)),
                 Deployment).Refusal
             .Should().Contain("equals the fleet-wide inbox secret");
+    }
+
+    /// <summary>
+    /// 🚨 PRE-FLIGHT AT PARK (policy governed-action-preflight): the incident's 31,065-row space plans ONE
+    /// teardown and passes; the one per-node leg (GitSync) and the no-store sweep are bounded, and a plan over
+    /// either bound is refused before it is offered.
+    /// </summary>
+    [Fact]
+    public void ALargeSpace_IsOneTeardown_AndAnOversizedLeg_IsRefusedAtPark()
+    {
+        var large = new SpaceDeletionInventory
+        {
+            Space = "UWDeepfield", Schema = "uwdeepfield", StoreExists = true,
+            Tables = [new SpaceTableCount("mesh_nodes", 15780), new SpaceTableCount("activities", 14514), new SpaceTableCount("threads", 771)],
+        };
+        SpaceDeletion.PreflightRefusal(large).Should().BeNull("a reported store is one drop, whatever its size");
+        var (steps, notes) = SpaceDeletion.PlanSteps(large);
+        steps.Select(s => s.Name).Should().Contain("Tear down the partition");
+        steps.Select(s => s.Name).Should().NotContain("Delete content");
+        notes.Should().Contain(n => n.StartsWith("PRE-FLIGHT"));
+
+        SpaceDeletion.PreflightRefusal(large with { GitSyncRows = SpaceDeletion.PerNodeDeleteBound + 1 })
+            .Should().Contain("Refused at park");
+        var hugeNoStore = large with { StoreExists = null, Tables = [new SpaceTableCount("mesh_nodes", SpaceDeletion.SweepBound + 1)] };
+        SpaceDeletion.PreflightRefusal(hugeNoStore).Should().Contain("sweep bound");
+        SpaceDeletion.TeardownCommand(large with { StoreExists = null }).Should().Contain("swept below the pipeline");
     }
 
     [Fact]
@@ -338,6 +471,44 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var plan = ControlLanePlan.Of("Recycle", "memex-cloud", [("Recycle", "hub.RecycleNode(\"A\", reason) as system", false)]);
         plan.Digest().Should().Be(Sha("action-plan/v1;7:Recycle;11:memex-cloud;~;~;12:control-lane;1:1;1:1;4:safe;7:Recycle;"
                                       + "38:hub.RecycleNode(\"A\", reason) as system;"));
+    }
+
+    [Fact]
+    public void APlanWithTargets_IsTheActionPlanV2Encoding()
+    {
+        // Pinned against the in-mesh ActionPlanSnapshot.Digest (MeshWeaver.Plugins) for a structured
+        // step: after each step, the target count, then each target's query and count (never its label).
+        var plan = ControlLanePlan.OfSteps("DeleteSpace", "memex-cloud",
+        [
+            new ControlLanePlanStep
+            {
+                Name = "Delete content", Command = "del", Destructive = true,
+                Targets =
+                [
+                    new ControlLanePlanTarget { Label = "content-roots", Query = "path:X", Count = 1 },
+                    new ControlLanePlanTarget { Label = "subtree", Query = "path:X scope:subtree", Count = null },
+                ],
+            },
+        ]);
+        plan.Digest().Should().Be(Sha("action-plan/v2;11:DeleteSpace;11:memex-cloud;~;~;12:control-lane;1:1;"
+                                      + "1:1;11:destructive;14:Delete content;3:del;1:2;6:path:X;1:1;20:path:X scope:subtree;~;"));
+        (plan with { Steps = [plan.Steps[0] with { Targets = [plan.Steps[0].Targets[0] with { Label = "renamed" }, plan.Steps[0].Targets[1]] }] })
+            .Digest().Should().Be(plan.Digest(), "a target's label is shown, never bound");
+    }
+
+    [Fact]
+    public void SpaceDeletionExistenceQueriesDoNotProjectRootOrPartitionContent()
+    {
+        SpaceDeletion.ParentListingQuery("TestData/Recyclable").Should().Be("path:TestData scope:children select:path");
+        SpaceDeletion.RootQuery("LiveInventory").Should().Be("path:LiveInventory select:path",
+            "a space root is read exactly in its own partition — never listed through the empty root, "
+            + "which names no partition and UNIONs every schema (#5508)");
+        new QueryParser().Parse(SpaceDeletion.RootQuery("LiveInventory")).IsSufficientlySpecified()
+            .Should().BeTrue("the existence read of a space root must anchor to a partition (#5508)");
+        new QueryParser().Parse("path: scope:children select:path").IsSufficientlySpecified()
+            .Should().BeFalse("negative control: the previous root listing names no partition");
+        SpaceDeletion.RecordQuery("LiveInventory").Should().Be("path:Admin/Partition scope:children select:path");
+        SpaceDeletion.InventoryQueries("LiveInventory").First().Should().Be(SpaceDeletion.RootQuery("LiveInventory"));
     }
 
     // ───────────────────────────── helpers ─────────────────────────────
@@ -424,6 +595,8 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// <summary>The TARGET instance: a second, independent mesh with the lane armed.</summary>
     private sealed class TargetMesh(ITestOutputHelper output, ControlLaneTest control) : MonolithMeshTestBase(output)
     {
+        public IMessageHub Hub => Mesh;
+
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
             => base.ConfigureMesh(builder)
                 .AddWebhookInbox()
@@ -451,6 +624,20 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, $"path:{path} limit:1"));
             reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");
             return reading.Rows.Any(r => r.Path == path);
+        }
+
+        /// <summary>An ACCEPTED event's stored node, read through its own authoritative stream (never the index, which may lag the create).</summary>
+        public Task<WebhookEvent?> Stored(string eventId, string inbox = EventInbox) =>
+            AsSystem(Mesh, () => Mesh.GetMeshNodeStream($"{inbox}/{WebhookInbox.InboxContainer}/{eventId}")
+                .Where(node => node is not null)
+                .Select(node => node!.ContentAs<WebhookEvent>(Mesh.JsonSerializerOptions)));
+
+        /// <summary>Whether a REFUSED event left anything behind — a listing of the inbox, asserted to be an answer.</summary>
+        public async Task<bool> AnyStored(string eventId, string inbox = EventInbox)
+        {
+            var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, $"path:{inbox}/{WebhookInbox.InboxContainer} scope:children"));
+            reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");
+            return reading.Rows.Any(r => r.Id == eventId);
         }
 
         public async Task<ControlLaneRecord?> Ledger(string requestId)

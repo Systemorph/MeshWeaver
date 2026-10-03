@@ -93,6 +93,28 @@ public static class PlatformBuildInfo
     public static string PlatformVersion => RuntimePlatformVersion ?? AssemblyVersion;
 
     /// <summary>
+    /// 🚨 <b>THE running platform version every version DECISION compares against</b> — the
+    /// declared <c>minMeshVersion</c> floor (<c>PlatformFloor</c>), the prebuilt-adoption policy, the
+    /// per-module GitSync decline: <see cref="PlatformVersion"/> with the <c>+sha</c> build metadata
+    /// stripped, or null when the build carries no version (<c>"unknown"</c>). One reader, so the
+    /// module lane and the content lane can never disagree about which platform is running (they
+    /// used to: one read MeshWeaver.Graph's assembly stamp, which carries no run number, the other
+    /// this property).
+    /// </summary>
+    public static string? RunningPlatformVersion => StripBuildMetadata(PlatformVersion);
+
+    /// <summary>The pure half of <see cref="RunningPlatformVersion"/>: blank or <c>"unknown"</c>
+    /// is null; otherwise the text before any <c>+</c>.</summary>
+    /// <param name="version">A version as a build surface reports it.</param>
+    public static string? StripBuildMetadata(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version) || version == "unknown")
+            return null;
+        var plus = version.IndexOf('+');
+        return plus < 0 ? version : version[..plus];
+    }
+
+    /// <summary>
     /// The git commit sha this build was produced from, or <c>null</c> when the build carried no
     /// source-control information (a git-less source drop).
     /// </summary>

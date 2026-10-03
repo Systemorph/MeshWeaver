@@ -87,7 +87,7 @@ fi
 # (backups.bicep); the workload-identity webhook projects a token into the pod and sets
 # AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE. 🚨 az DOES NOT READ THOSE ON ITS
 # OWN — the Azure SDKs do (WorkloadIdentityCredential), the CLI does not. Measured 2026-09-09 01:33Z
-# on the first Provision ever run through the lane (Deployments/pearl-provision-20260909): step 1/14
+# on the first Provision ever run through the lane (Deployments/fabrikam-provision-20260909): step 1/14
 # `az postgres flexible-server db create` answered "ERROR: Please run 'az login' to setup account."
 # Every earlier run (memex Reconcile/Restart) was kubectl+helm only, which authenticate in-cluster,
 # so no run had reached an az step before. Sign in ONCE here, as the identity, and say so.

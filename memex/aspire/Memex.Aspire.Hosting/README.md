@@ -40,7 +40,7 @@ Key Vault through the record's `keyVaultSecrets` map.
   `PluginCatalog__*`, `Modules__Required__N`, `Authentication__*`, `Email__*`, …
 
 The parity table (fluent method → record field → Helm value → configuration key) is
-[Configuring an instance from Aspire](https://memex.meshweaver.cloud/Doc/Architecture/ConfiguringAnInstanceFromAspire).
+[Configuring an instance from Aspire](../../../src/MeshWeaver.Documentation/Data/Architecture/ConfiguringAnInstanceFromAspire.md).
 Aspire emits a record, never a chart: the Kubernetes/Helm side renders from the same record on the
 control instance.
 

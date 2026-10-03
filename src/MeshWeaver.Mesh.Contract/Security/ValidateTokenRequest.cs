@@ -51,6 +51,13 @@ public record ValidateTokenResponse
     /// </summary>
     public IReadOnlyCollection<string> Roles { get; init; } = [];
 
+    /// <summary>
+    /// True when the token belongs to a <see cref="ServiceIdentity"/> — the caller authenticates as
+    /// that service principal (<see cref="UserId"/> is its <c>svc-…</c> object id), never as a person.
+    /// Additive and wire-compatible: absent on old payloads ⇒ <c>false</c>.
+    /// </summary>
+    public bool IsService { get; init; }
+
     /// <summary>Error message if validation failed.</summary>
     public string? Error { get; init; }
 

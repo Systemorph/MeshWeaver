@@ -1,0 +1,11 @@
+apiVersion: v2
+name: s1-extract
+description: >-
+  A stateless System-1 extractor: GLiNER multi v2.1 (Apache-2.0) on ONNX Runtime, cluster-internal
+  only. It finds organisation/person spans in text it is sent; it holds no names and decides nothing.
+  Its one caller is the instance that owns the CRM (the name check's candidate finder). See
+  deploy/s1-extract/.
+type: application
+version: 0.1.0
+# The model the image bakes in (deploy/s1-extract/Dockerfile).
+appVersion: "gliner-multi-2.1"

@@ -18,7 +18,7 @@ public class ContentDegradationRegistryTest
         registry.IsEmpty.Should().BeTrue();
         ContentDegradationRegistry.Describe(registry.Snapshot()).Should().Contain("every node content read on this replica typed");
 
-        registry.Record("Crm/Client", "PartnerRe", "MeshNodeStreamCache.GetStream");
+        registry.Record("Crm/Client", "Globex", "MeshNodeStreamCache.GetStream");
         registry.Record("Crm/Client", "AcmeRe", "MeshNodeStreamCache.GetStream");
         registry.Record("Store/Install", "rbuergi/_Install/Crm", "MeshNodeStreamCache.GetQuery");
 
@@ -47,7 +47,7 @@ public class ContentDegradationRegistryTest
     public void ACleanReadOfTheType_ClearsIt()
     {
         var registry = new ContentDegradationRegistry();
-        registry.Record("Crm/Client", "PartnerRe", "seam");
+        registry.Record("Crm/Client", "Globex", "seam");
         registry.Clear("Crm/Client");
         registry.IsEmpty.Should().BeTrue("a degradation a module load cured stops being reported");
         registry.Clear(null);

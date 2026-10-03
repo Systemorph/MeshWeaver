@@ -685,7 +685,7 @@ repeat. Most transport errors answer only the first, and only sometimes.
 
 The instrument was `lsp_check_node`, the pre-flight the `/code` skill's whole edit loop is built on
 (*"edit a source file in your head → `lsp_check_node` → if diagnostics, fix → repeat → only then
-patch + compile"*). Measured on `memex.systemorph.com`, 2026-09-10:
+patch + compile"*). Measured on the control instance, 2026-09-10:
 
 ```
 lsp_check_node  nodeTypePath: @BinaryClickerV2/BinaryToggle
@@ -729,7 +729,7 @@ them.
 ### 14. Two counters over different populations, printed as if they were one measurement
 
 Not a control this time, but the same property one step over: an **instrument pair** whose readings
-were not comparable and whose lines did not say so. memex, 2026-09-08, one cold boot, ten seconds
+were not comparable and whose lines did not say so. The control instance, 2026-09-08, one cold boot, ten seconds
 apart:
 
 ```

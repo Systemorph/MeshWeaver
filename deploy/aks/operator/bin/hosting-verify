@@ -14,8 +14,8 @@
 # answered", which reads like a dead app and sends the reader to the pods. It is not the app: it
 # is the certificate. So on failure the served certificate is read and compared against the host,
 # and the refusal says whether NO certificate was served, the WRONG one was, or TLS was fine and
-# the application answered badly. pearl.meshweaver.cloud served CN=memex.meshweaver.cloud for nine
-# hours on 2026-09-15 while its portal was healthy (Systemorph/Memex, the pearl Provision).
+# the application answered badly. fabrikam.example.com served CN=memex.meshweaver.cloud for nine
+# hours on 2026-09-15 while its portal was healthy (Systemorph/Memex, the fabrikam Provision).
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here

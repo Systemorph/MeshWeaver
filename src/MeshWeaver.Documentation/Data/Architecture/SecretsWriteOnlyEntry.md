@@ -75,8 +75,11 @@ person's own Azure credential:
 2. The value is encrypted with the platform key protector (`enc:`) onto a `Hosting/InstanceAction` node
    on the control instance. It is refused, not stored, if encryption is unavailable. The field is
    cleared and nothing is bound back.
-3. The control plane authorises the invoker. Destructive operations (**Delete**, **Purge**) need a second
-   person's approval.
+3. The control plane authorises the invoker. Every **write** (Set, Replace, Generate: a `SetSecrets`) and every
+   lifecycle change parks on its governed action node until a global administrator other than the requester
+   approves it. On a single-admin installation the configured maintainer (`Hosting:Operator:Maintainer`)
+   may approve their own request instead. **Delete** and **Purge** are also marked destructive for that
+   approver. A **status** read changes nothing and needs no approval.
 4. One operator Job, running under the **writer** identity, decrypts the value for exactly that Job and
    writes it through a mode-600 file (`--file`, never argv, never a log line). It stamps the tags,
    confirms the new version through `list-versions` (a metadata read), and then removes the ciphertext.
@@ -85,6 +88,38 @@ The verbs are `hosting-kv-set` (set, `--generate`), `hosting-kv-status` (status 
 `hosting-kv-state` (enable, disable, delete, recover, purge; a purge is refused unless the object is
 already soft-deleted). Their behaviour tests run against a stub `az` that plays the writer: it **refuses**
 `secret show`, so a verb that reads a value is red in CI.
+
+### Interim: the value-free verbs on the Actions lane
+
+🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`, **proposed**: it takes effect once its executor half, MeshWeaver.Plugins#2528, is rolled onto the control instance; until then the control plane refuses both verbs at *Check executor*). The writer identity is not provisioned yet. The control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`), not as in-cluster Jobs. **Once that half is live**, and until the writer exists and every secret action moves to the in-cluster Job under it, the two verbs that carry **no value** run on that lane as `hosting-operator`:
+
+- **Generate** (`SetSecrets` with only `generate:`): the lane runs `hosting-kv-set --generate`. The value is
+  minted inside the run, written through a mode-600 file and never shown. It is never in the dispatch payload
+  or the bundle. Like every `SetSecrets`, the action **parks for approval** on its governed action node, the
+  gate described in step 3 of *The governed write path* above (the same gate a Roll waits on). The lane then
+  re-verifies the signed approval token before it runs.
+- **Read status** (`SecretStatus`): the lane runs `hosting-kv-status`, a metadata read. It needs no approval.
+
+**The accepted interim risk.** This path does not have the property the design exists for: the identity
+that writes cannot read. `hosting-operator` holds **get, list, set** on the vault (the table in *Where the fleet
+stands*, below), and also the inert *Key Vault Secrets Officer* RBAC role. So during the interim a secret is
+written by an identity that *could* read it back. The two verbs never do: their scripts call only
+`list`/`list-versions`/`set` (the behaviour tests' stub `az` refuses `secret show`), and no value crosses the
+lane. What compensates is that nothing value-bearing travels, and the write is approved in the mesh. The lane holds `hosting-operator` through its existing federated OIDC credential; no stored credential was added for this interim. Once the
+exception is in force, each such run records a `writerIdentityNote` beginning `TRANSITIONAL` on its node and in its log, so a reader can
+tell it apart from a writer-identity run. The invariants above (*exactly two kinds of access*; *one operator
+Job under the writer identity*) are the target. For these two verbs they do not hold until the exception ends.
+
+**What stays refused on that lane:** a **pasted** value and every **lifecycle** verb. A paste's value would sit
+in a dispatch payload anyone reading the repo's Actions can decode. The lane's classifier refuses such a
+bundle as well (`--object` on a write, or `HOSTING_SECRETS` in its environment). This leaves one **accepted
+gap**: a secret a **third party must hold too** (below: minted in the portal, shown once, then filed like a
+paste) has **no write path** during the interim. Such secrets wait for the writer identity. None may be
+entered by hand in the meantime; break-glass (below) is the only exception.
+
+The whole exception ends when the writer identity is provisioned **and** every secret action runs in the
+in-cluster Job under it. That covers this section, the policy row and the TRANSITIONAL mark on
+`hosting-kv-set` in `.github/manual-keyvault.allow`.
 
 ### Generate: shown once, or never
 
@@ -117,17 +152,17 @@ already looks.
 
 | secrets | GUI | owner |
 |---|---|---|
-| a deployment's vault objects (connection strings, sign-in and mail client secrets, registry instance key, AI platform keys) | control instance → `Deployments/<id>` → **Secrets** (status list + Set / Generate / Disable / Delete / Recover) | fleet admins |
-| fleet pairings (`Hosting-PlatformWebhookSecret`, `Hosting-OperationsSigningKey`, control-inbox secrets, the per-deployment announcement key) | the same page on each end of the pairing, compared by fingerprint | fleet admins |
-| per-user AI provider keys | the user's **Model providers** settings (already write-only, `enc:` in the mesh) | the user |
+| a deployment's vault objects, grouped by the domain that reads them (AI provider keys, database connections, sign-in and mail client secrets, Stripe keys, GitHub App and webhook secrets, the registry instance key) | the control instance's **domain app** for that domain, per deployment: `/Hosting/{Ai,Databases,SignIn,Email,Payments,Integrations}/Deployment/<id>` (status list + Set / Generate / Disable / Delete / Recover) — see [Domain Configuration Apps](../DomainConfigurationApps) | fleet admins |
+| fleet pairings (`Hosting-PlatformWebhookSecret`, `Hosting-OperationsSigningKey`, control-inbox secrets, the per-deployment announcement key) | the **Integrations** app on the control instance, and the target instance's Admin app (**Control lane**), compared by fingerprint | fleet admins; the target's own admin for its announcement key |
+| per-user AI provider keys | the user's **Model providers** app (already write-only, `enc:` in the mesh) | the user |
 | an instance's first-run sign-in secret | the instance's **Setup** wizard hand-off | the instance's first admin |
-| payment keys (Stripe secret key, webhook secret) | **Store → Payments** admin, with a *Test* action that lists the webhook endpoints | store admins |
+| the platform master key (`Ai:KeyProtection:MasterKey`) | none — it encrypts every `enc:` value, and replacing it makes them unreadable; break-glass only | — |
 
 The platform pieces are the `SecretStatus` contract, the `WriteOnlySecretSection` control and the
-`SecretInventorySection` list over a scope of them. They are owed by the companion core change and not
-yet on `main`. An app wires those pieces up. It never builds its own form, and it never binds a value
-back into a view. Today the Deployments page's **Set Key Vault secrets…** dialog is the one GUI that
-exists; the rows above marked Store and the status list are what the companion changes add.
+`SecretInventorySection` list over a scope of them ([Instance Secrets](../InstanceSecrets)). An app
+wires those pieces up. It never builds its own form, and it never binds a value back into a view.
+The Deployments page's **Set Key Vault secrets…** dialog predates the domain apps and is removed as
+each domain claims its keys.
 
 ## Break-glass
 
@@ -164,7 +199,7 @@ principals hold secret permissions on it:
 | principal | secrets today | target |
 |---|---|---|
 | CSI add-on identity (the READER, one identity for every pod in the cluster) | get, list | get |
-| `hosting-operator` (operator Jobs, `infra-deploy`) | get, list, set | none: its secret work moves to the writer |
+| `hosting-operator` (operator Jobs, `infra-deploy`, and Memex `aks-ops.yml`, which exchanges its OIDC token for this identity through a federated credential that already existed for the lane's other work) | get, list, set | none: its secret work moves to the writer |
 | `github-actions-deploy` (Memex `helm-release` / `infra-deploy`) | get, list, set | none |
 | a user principal | backup, delete, get, list, recover, restore, set | none: break-glass is an Owner re-granting temporarily |
 | two principals the directory no longer resolves | get (+ delete, set) | removed |
@@ -187,7 +222,7 @@ and do every change to the vault through infrastructure-as-code.
      source entered through the GUI;
    - `hosting::pg_password`: the connection string is minted together with a per-instance database
      password in one writer step, instead of being composed from the admin password;
-   - `hosting-kv-ensure` and `hosting-signin-app`: their existence checks use `list`, not `secret show`;
+   - done: every existence check (`hosting-kv-ensure`, `-kv-copy`, `-signin-app`, `-registry-register`) uses `list` through `hosting::kv_exists`, never `secret show`, and a refused listing is a refusal, never "absent";
    - `hosting-registry-register` and `hosting-kv-rotate`: the registry key is issued straight into the
      vault and never read back;
    - `hosting-image-mirror` and `hosting-pull-secret`: the registry credentials are mounted through a

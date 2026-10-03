@@ -11,6 +11,14 @@ MeshWeaver serializes all mesh node content as polymorphic JSON. Rather than usi
 
 The hub-per-registry model is the foundation. Two hubs running side-by-side can own completely different type sets, and both write to the persistence layer with their own discriminators.
 
+Metadata resolution visits registered types to discover derived types. Its duplicate check compares
+the existing derived-type list directly: a captured LINQ predicate in that loop allocated about
+88 bytes for every registry candidate, including unrelated types. The allocation regression test
+uses the real hub registry and subtracts registry traversal costs; adding 512 unrelated types
+previously added about 45 KB to each resolution. Attribute-defined discriminators retain precedence
+over registry aliases, and registered subtypes still round-trip. This removes a measured allocation
+source; allocation samples alone do not establish the callers or retained roots of a production OOM.
+
 ```mermaid
 flowchart TB
     subgraph Hub1["MessageHub (App)"]

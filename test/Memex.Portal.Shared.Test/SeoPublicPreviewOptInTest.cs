@@ -24,7 +24,7 @@ namespace Memex.Portal.Shared.Test;
 /// flag unset, which is every partition until somebody sets it, nothing changes at all.</para>
 ///
 /// <para><b>What it is measured against.</b> A link into a partition that is gated all the way up:
-/// on a live control instance, <c>/PG3/LocalHardwareOffer</c> AND <c>/PG3</c> both unfurled as the
+/// on a live control instance, <c>/Initech/LocalHardwareOffer</c> AND <c>/Initech</c> both unfurled as the
 /// bare site card, so there was no public ancestor anywhere on that chain and the ancestor fallback
 /// (<see cref="SeoAncestorCard"/>) correctly had nothing to offer. The fixture below is that shape:
 /// <c>Offers</c> has no grant of any kind, and only the flag makes its pages say anything.</para>

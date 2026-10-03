@@ -136,12 +136,12 @@ Contributor on the PostgreSQL server. A Provision needs two more, both scoped to
 
 | Step | Command | Grant | Where |
 |---|---|---|---|
-| 3 · Federate namespace identity | `hosting-federate` → `az identity federated-credential create` on the PORTAL identity | **Managed Identity Contributor** on `memexaks-portal-mi` | `backups.bicep`, param `portalIdentityId` |
+| 3 · Federate namespace identity | `hosting-federate` → `az identity federated-credential create` on the PORTAL identity | **Managed Identity Contributor** on the portal identity (`<portal-identity>`) | `backups.bicep`, param `portalIdentityId` |
 | 4 · Create DNS record | `hosting-dns upsert` → `az network dns record-set a add-record` | **DNS Zone Contributor** on the zone | `dns-zone-operator-role.bicep` (the zone's resource group), or `backups.bicep` param `dnsZoneId` |
 
-Measured 2026-09-09 (`Deployments/pearl-provision-20260909-b`, the first Provision ever run
+Measured 2026-09-09 (`Deployments/fabrikam-provision-20260909-b`, the first Provision ever run
 through the lane): step 3 failed with `AuthorizationFailed … federatedIdentityCredentials/write`
-over `…/memexaks-portal-mi/federatedIdentityCredentials/hosting-pearl` — the identity had never
+over `…/<portal-identity>/federatedIdentityCredentials/hosting-fabrikam` — the identity had never
 been granted anything on the portal identity.
 
 🚨 **No lane deploys bicep.** Applying these is the documented break-glass, run by a person with
@@ -149,10 +149,10 @@ Owner on the resource group (the operator identity itself deliberately cannot as
 
 ```bash
 # from deploy/aks/infra/modules — parameters as your environment names them
-az deployment group create -g memex-aks-rg -f backups.bicep \
-  -p oidcIssuerUrl=<AZ_OIDC_ISSUER> postgresServerId=<memexaks-pg resource id> \
-     portalIdentityId=<memexaks-portal-mi resource id> \
-     dnsZoneId=/subscriptions/<sub>/resourceGroups/dns/providers/Microsoft.Network/dnsZones/meshweaver.cloud
+az deployment group create -g <resource-group> -f backups.bicep \
+  -p oidcIssuerUrl=<AZ_OIDC_ISSUER> postgresServerId=<pg-server resource id> \
+     portalIdentityId=<portal-identity resource id> \
+     dnsZoneId=/subscriptions/<sub>/resourceGroups/dns/providers/Microsoft.Network/dnsZones/<dns-zone>
 ```
 
 After it: re-request the Provision — the plan is idempotent from the top (the database and the

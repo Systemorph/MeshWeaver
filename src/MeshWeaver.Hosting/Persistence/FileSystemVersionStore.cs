@@ -163,6 +163,32 @@ public class FileSystemVersionStore : IVersionQuery
             return GetVersion(path, bestVersion, options);
         });
 
+    /// <inheritdoc />
+    /// <remarks>Deletes every <c>{id}_{version}.json</c> snapshot of the node on the
+    /// <c>FileSystem</c> pool. The glob is the same one <see cref="GetVersions"/> discovers history
+    /// by, filtered to names whose suffix parses as a version, so a sibling whose id merely starts
+    /// with this one (<c>a</c> vs <c>a_b</c>) is never touched.</remarks>
+    public IObservable<bool> PurgeVersions(string path)
+        // Cold (Defer): a purge is a destructive act and must happen on Subscribe, never on call.
+        => Observable.Defer(() => _ioPool.RunBlocking(ct =>
+        {
+            var (ns, id) = SplitPath(path);
+            var dir = string.IsNullOrEmpty(ns)
+                ? _versionsDirectory
+                : Path.Combine(_versionsDirectory, ns.Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(dir))
+                return true;
+
+            foreach (var file in Directory.GetFiles(dir, $"{id}_*.json"))
+            {
+                ct.ThrowIfCancellationRequested();
+                var name = Path.GetFileNameWithoutExtension(file);
+                if (long.TryParse(name[(id.Length + 1)..], out _))
+                    File.Delete(file);
+            }
+            return true;
+        }));
+
     private string? GetVersionFilePath(string path, long version)
     {
         var (ns, id) = SplitPath(path);

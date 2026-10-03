@@ -1,0 +1,28 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress to the extractor only from the named namespaces, on the service port only. Egress is not
+# restricted here: the pod needs the API server for TokenReview and nothing else, and the cluster's
+# own egress policy (if any) governs that.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "s1.fullname" . }}
+  labels:
+    {{- include "s1.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "s1.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- if .Values.networkPolicy.allowedNamespaces }}
+    - from:
+        {{- range .Values.networkPolicy.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+{{- end }}

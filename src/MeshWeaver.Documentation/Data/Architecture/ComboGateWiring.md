@@ -14,7 +14,7 @@ a build that passed every CI job, has a sealed content bake, links every landed 
 aborts at boot with a `MissingMethodException` because a landed module binds a method that no longer
 exists.
 
-That is not hypothetical. `memex.systemorph.com` was trapped between two failing states: rolling the
+That is not hypothetical. The control instance was trapped between two failing states: rolling the
 image forward gave it a new platform with its old landed modules, and re-fetching its bundles gave
 it new modules with its old platform. Both aborted the host. It was only *up* because both halves
 happened to be consistently old.
@@ -84,7 +84,7 @@ describe a mechanism that never ran. Measured 2026-09-07 (issue #3544):
 - `RecordVerification` called from exactly one place, the in-process producer path;
 - no production `IComboGateRunner` registered anywhere — the only implementation in either repo was
   a test fake, so `ResolveRunner()` returned null on every portal;
-- `Admin/UpdatePolicy.comboVerifications` was `[]` on memex-cloud, and both portals said so in their
+- `Admin/UpdatePolicy.comboVerifications` was `[]` on the public instance, and both portals said so in their
   own words: *"no combo-gate runner is registered on this host, so it produces no verdicts of its
   own — they are landed here by mw-combo-verify."*
 
@@ -299,17 +299,17 @@ required.
 
 🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
 derived roster before it asks for credentials, and names the instance any map is missing
-(`combo-verify.yml:215-238`). The hand-written value this page used to carry named `memex` and
-`memex-cloud` — and the fleet's overlays declared more than that on the day it was specified, which
+(`combo-verify.yml:215-238`). The hand-written value this page used to carry named the control instance and
+the public instance — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
 🚨 **The roster is a measured, fail-closed output.** Workflow run `36272707636` on 2026-09-26
-derived five live installations — `build`, `memex`, `memex-cloud`, `partnerre-test`, and `pearl` —
-without a duplicate credential name. The same run stopped at the credential check because the
+derived five live installations — the build instance, the control instance, the public instance, an enterprise client's test
+installation (`globex-test`) and an SME client instance — without a duplicate credential name. The same run stopped at the credential check because the
 per-instance key and admin-token maps are absent; no instance was verified by that run. A missing
 credential is not repaired by shrinking the roster. Duplicate names remain a red condition in the
-deriver if the fleet declares them again. The earlier duplicate `memex` was resolved by the
-PartnerRe rename documented below; the fail-closed duplicate check remains for future declarations.
+deriver if the fleet declares them again. The earlier duplicate id was resolved by the
+enterprise client's rename documented below; the fail-closed duplicate check remains for future declarations.
 
 🚨 **The right answer in principle is a third one, and it is NOT IMPLEMENTED — do not reach for a flag
 that looks like it.** Scoping the **denominator** is what fits here: an installation that can never
@@ -320,7 +320,7 @@ Nothing expresses that today, and **neither existing flag can stand in for it**:
 | flag | what it actually means | why it cannot be used here |
 |---|---|---|
 | `instances.json` instance `state` | **liveness** — `live` / `not-installed` / `retired` (`ROSTER_STATES`) | it is the only exclusion lever that file has, and the installation in question IS live. Declaring it `not-installed` records a **falsehood** in order to obtain an exclusion. |
-| the retention table's derived `out_of_scope` | the **lock** lane's registry scoping | `derive-combo-instances.py` never reads it. `build` is live and `out_of_scope` and is still in the combo roster — the direct counter-example. |
+| the retention table's derived `out_of_scope` | the **lock** lane's registry scoping | `derive-combo-instances.py` never reads it. The build instance is live and `out_of_scope` and is still in the combo roster — the direct counter-example. |
 
 So a `not-installed` exclusion is **not** a scope mechanism: it is a liveness declaration, and a live
 installation must not be marked absent to obtain an exclusion. Building the real thing means an
@@ -384,7 +384,7 @@ Two independent reasons, and both were measured rather than assumed:
    NotVerifiable each get their own rendering, with the verdict's caveats surfaced on every one —
    so nothing is hidden from an operator, there is simply nothing recorded to show.
 2. **The one consumer is switched off on both live instances.** `Admin/UpdatePolicy` on
-   memex.systemorph.com and on memex.meshweaver.cloud both read
+   the control instance and on the public instance both read
    `lastCheckVerdict: "updates are disabled on this install (Admin/UpdatePolicy = None); the
    registry was not listed."` So the self-update poller — the only thing in this repository that
    consults a verdict at decision time — is not deciding anything to begin with.
@@ -422,10 +422,10 @@ nothing about a line that was true when it was written and is not any more — a
 live installation from every denominator derived from this file, with nothing anywhere contradicting
 it, because a non-live installation was never asked anything.
 
-Measured: the `pearl` entry read *"never installed — pearl.meshweaver.cloud has no DNS record
-(measured 2026-09-12)"* and ended *"Delete this entry the day it is provisioned."* pearl was
-provisioned 2026-09-16 and answered `/api/version` from then on. Five days later the line still
-stood, so pearl was outside this lane's roster **and** outside the nightly lock's AXIS 3 protected
+Measured: an SME client instance's entry read *"never installed — fabrikam.example.com has no DNS
+record (measured 2026-09-12)"* and ended *"Delete this entry the day it is provisioned."* The
+instance was provisioned 2026-09-16 and answered `/api/version` from then on. Five days later the
+line still stood, so the instance was outside this lane's roster **and** outside the nightly lock's AXIS 3 protected
 set, and no run of either was red about it. The entry even named its own expiry condition; nothing
 evaluated it.
 
@@ -435,7 +435,7 @@ probe seam it already takes, and an ANSWER is a blocker naming the line to delet
 the returned **commit**, never the absence of an error, so `derive-combo-instances.py` — which
 passes a probe that answers nothing — stays free of an HTTPS call to every portal in the fleet and
 the arm is inert there by construction: one lane does the network. An exempted installation whose
-overlay names no host (`partnerre`, whose template still reads `host: "TODO"`) cannot be falsified
+overlay names no host (an enterprise client's hand-over template, which still reads `host: "TODO"`) cannot be falsified
 this way and is left to the roster's own stale-entry check, so the cost in the fleet today is zero
 calls.
 
@@ -477,8 +477,8 @@ repository. In
 ### The derived inputs are not credentials, and credentials still gate verification
 
 The preflight now derives both the roster and source map before checking per-instance credentials.
-Run `36272707636` on 2026-09-26 derived five live instances — `build`, `memex`, `memex-cloud`,
-`partnerre-test`, and `pearl` — then correctly stopped because the key and admin-token maps were not
+Run `36272707636` on 2026-09-26 derived five live instances — the build instance, the control instance, the public instance, an enterprise client's test
+installation (`globex-test`) and an SME client instance — then correctly stopped because the key and admin-token maps were not
 provisioned. Until those two maps cover every derived instance, the lane cannot produce a verdict.
 The derivation is not a substitute for issuing credentials and does not imply any instance was
 verified.
@@ -486,42 +486,41 @@ verified.
 ### The two credential maps are the whole of the CREDENTIAL prerequisite — `verify:combo` is not one
 
 The duplicate-name blocker that preceded credential provisioning has been resolved by renaming
-PartnerRe's installation to `partnerre-test` (#3848). At the time, qualifying the maps by
+an enterprise client's installation to `globex-test` (#3848). At the time, qualifying the maps by
 `repo:id` would have required credentials for an installation outside this fleet's control; the
 rename allowed the existing name-keyed credential maps to remain unambiguous.
 
-### The rename — PartnerRe's installation is `partnerre-test`
+### The rename — the enterprise client's installation is `globex-test`
 
-The first way out was taken (#3848). The control instance keeps `memex`; the installation at
-partnerre.meshweaver.cloud answers to **`partnerre-test`**
-([PartnerRe.Memex#85](https://github.com/Systemorph/PartnerRe.Memex/pull/85)). The id comes from that
-record's own `purpose` ("PartnerRe test environment"); `partnerre` was not available (the hand-over
-template `deployments/aks/partnerre/values.partnerre.yaml` declares it) and `partnerre-memex` is a
-retired registry id.
+The first way out was taken (#3848). The control instance keeps its id; the enterprise client's
+installation at globex.example.com answers to **`globex-test`** (a pull request in the client's
+deployments repository). The id comes from that record's own `purpose` (a test environment); `globex`
+was not available (the client's hand-over template declares it) and `globex-memex` is a retired
+registry id.
 
 **What moved is the identity and nothing else.** `Hosting__Deployment` (overlay and record
-`extraPortalConfig`), the record's id and file (`mesh/Deployments/partnerre-test.json`) and that
+`extraPortalConfig`), the record's id and file (`mesh/Deployments/globex-test.json`) and that
 repository's `envs.json` `deployment` changed. The namespace, the Helm release, the overlay
 directory (`deployments/aks/memex/`), the database, the vault prefix `memex-`, the host and the
-registry instance id (`pluginCatalog.instanceId: partnerre`) did not. The registry authenticates an
+registry instance id (`pluginCatalog.instanceId: globex`) did not. The registry authenticates an
 instance key by the instance it was registered for, never by `Hosting__Deployment`, so nothing is
-re-registered. Because the record id no longer equals the namespace, PartnerRe.Memex's
+re-registered. Because the record id no longer equals the namespace, the client deployments repository's
 `check-record-renders-overlay.py` now pairs a record with its overlay by the record's `configPath`.
 
 What the rename changes on the running instance, which has no `Hosting:ReportTo` and lists
 `Hosting/PlatformBuilds` itself (so it is its own control plane for both channels):
 
-- its module inventory is filed at `Ops/Modules/partnerre-test` instead of `Ops/Modules/memex`;
-- its self-update hand-over (the Local route) announces `deployment: partnerre-test`, and a
+- its module inventory is filed at `Ops/Modules/globex-test` instead of `Ops/Modules/<old-id>`;
+- its self-update hand-over (the Local route) announces `deployment: globex-test`, and a
   `Hosting/InstanceAction` filed on its own mesh must target that id (`RecycleRunner` refuses a
   target that is not the instance's own `Hosting:Deployment`).
 
-No mesh the fleet can read syncs that repository's `mesh/Deployments` — memex.systemorph.com's and
-memex.meshweaver.cloud's `Deployments/_GitSync` both read `Systemorph/Memex` — so the file rename is
+No mesh the fleet can read syncs that repository's `mesh/Deployments` — the control instance's and
+the public instance's `Deployments/_GitSync` both read `Systemorph/Memex` — so the file rename is
 not a delete-and-create anywhere else.
 
-The roster the derivation then prints is five names: `build`, `memex`, `memex-cloud`, `partnerre-test`
-and `pearl`. The refusal and its self-test arm stay: they guard the mechanism, and the next
+The roster the derivation then prints is five installations: the build instance, the control instance, the public instance, an enterprise client's test
+installation (`globex-test`) and an SME client instance. The refusal and its self-test arm stay: they guard the mechanism, and the next
 deployments repository to declare a taken name meets the same red.
 
 ### Where to issue the two credentials
@@ -535,7 +534,7 @@ Each is issued **on the instance it is for**, by a person, and neither can be re
   register a NEW entry with its own id (for example `combo-verify`), which returns the raw key once.
   That is additive and revocable on its own. **Never use Reissue on an existing entry**: `ReissueKey`
   replaces that entry's key, and the old one stops authenticating the moment it completes. An
-  instance id is claimed mesh-wide, so on memex.meshweaver.cloud (the registry) pick an id no
+  instance id is claimed mesh-wide, so on the plugin registry instance pick an id no
   installation uses. A registered entry is granted nothing to pull, and these two routes need no
   grant.
 - **`mw_` token.** **Settings ▸ Security ▸ API Tokens** (`/me/Settings/ApiTokens`), minted while

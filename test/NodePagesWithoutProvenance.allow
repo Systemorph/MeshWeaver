@@ -43,7 +43,13 @@
 # landing page on exactly one hub — Partition — and PartitionNodeType re-registers it there through
 # WithNodePage (node-type configuration runs AFTER the default chain), so the Partition landing page
 # does carry a verdict. This registration is the tab, on every other node in the mesh.
-src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	1
+# The same holds for the framework's Settings TAB: it is a landing page on exactly one hub — the
+# Admin app, whose AdminAppNodeType re-registers it through WithNodePage — and the tab everywhere else.
+src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs	2
+
+# A person's own settings app: the User hub's Settings TAB, wrapped in an owner-only gate
+# (UserNodeType.OwnSettings). A User node's landing page is its Activity area, not Settings.
+src/MeshWeaver.Graph/Configuration/UserNodeType.cs	1
 
 # The NodeType page's instance-search TAB, wrapped in the NodeType shell. A NodeType node's landing
 # page is Overview, registered immediately above it through WithNodePage with RenderedByThePage

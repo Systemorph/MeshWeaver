@@ -169,7 +169,7 @@ python -m meshweaver.examples.pandas_node --demo
 Serve as a real participant other participants / agents drive over gRPC:
 
 ```bash
-python -m meshweaver.examples.pandas_node --url https://memex.meshweaver.cloud --token mw_… --address py/pandas
+python -m meshweaver.examples.pandas_node --url https://portal.example.com --token mw_… --address py/pandas
 ```
 
 The bidi participant connection is native gRPC at the ordinary portal URL (the deployment routes `meshweaver.v1.Mesh/Open` to a dedicated HTTP/2 port — see the transport note in [A standalone hub in Python](../PythonStandaloneHub)); a gate shipping in the portal's own pod uses the trusted loopback endpoint instead, with no token at all. The `PandasCommand` protocol itself needs **no server-side registration**: the participant's proxy hub forwards unregistered types verbatim (`RawJsonPassThrough`).

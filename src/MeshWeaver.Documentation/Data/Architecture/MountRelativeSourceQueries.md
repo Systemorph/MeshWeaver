@@ -59,7 +59,7 @@ Matched Code nodes (2)
 ```
 
 A completely genuine-looking verdict about code that is fine, on a mesh whose content is entirely
-present. Measured on memex-cloud 2026-09-19/20 (issue #4813): every pod that attempted the compile
+present. Measured on the public instance 2026-09-19/20 (issue #4813): every pod that attempted the compile
 failed the same way, and it does not self-heal — there is nothing to wait for.
 
 ## The rule, and why it is *one* rule

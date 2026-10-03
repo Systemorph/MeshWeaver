@@ -236,7 +236,7 @@ every Cause C occurrence is reported in the outermost, least informative terms. 
 [Bounds Must Be Ordered](../BoundsMustBeOrdered).
 
 **Why it is invisible until it is not.** A cold start costs ~0.1 s on a quiet replica — measured
-2026-09-10 on memex.meshweaver.cloud, where five previously-untouched owning nodes (`Doc/DataMesh`,
+2026-09-10 on the public instance, where five previously-untouched owning nodes (`Doc/DataMesh`,
 `Doc/Architecture/MessageBasedCommunication`, `…/UserInterface`, `…/AccessControl`,
 `…/BusinessRules`) each served their first asset in **0.14–0.20 s**. The budget is 100× that, so
 nothing is ever seen. It becomes visible only while the replica is doing something that makes a
@@ -411,7 +411,7 @@ takes the LogQL, so this is one node and no cluster credential:
 
 ```json
 { "namespace": "Ops/Actions", "nodeType": "Hosting/InstanceAction",
-  "content": { "$type": "InstanceActionContent", "deployment": "Deployments/memex-cloud",
+  "content": { "$type": "InstanceActionContent", "deployment": "Deployments/<id>",
     "requestedAction": "Logs", "query": "Reading content collection config from",
     "sinceMinutes": 240, "limit": 200,
     "reason": "Read-only — read the Target clause for Cause C, then the Reader clause for A vs B." } }

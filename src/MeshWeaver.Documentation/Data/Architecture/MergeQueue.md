@@ -7,6 +7,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Merge Queue
 
+> 🚨 **THE QUEUE IS OFF on `main`.** Measured 2026-09-27: `enqueuePullRequest` answers *"No merge
+> queue found for branch 'main'"*, and the ruleset `main pr protection` (id 2128472) carries no
+> `merge_queue` rule — `main` merges on its required checks plus auto-merge. The same day the
+> dependent-suites wait left the merge path altogether (policy `core-merge-never-blocked`,
+> [One Promotion Gate](../OnePromotionGate)): a core merge waits on no other repository, queued or
+> not. What follows is the queue's design and history, kept for the day it is re-enabled; the
+> steward acts only on `dequeued` events, so it is dormant while no queue exists.
+
 **A merge queue builds the combination that is about to land, before it lands.** With
 `strict: false` branch protection every pull request is tested against the `main` it branched from,
 so a burst of merges lands a tree no run ever compiled. That happened twice in one week —
@@ -82,6 +90,59 @@ pool (≈24 runners) cannot serve alongside Plugins' own CI. Whether to return t
 `max_entries_to_build` is a maintainer's ruleset edit; `merge-queue-steward.py status` prints the
 drift.
 
+### 🚨 What that drift did: the queue froze on a waiter with NO verdict (2026-09-27)
+
+The paragraph above predicted it, and on 2026-09-27 09:00–11:00Z it happened: nothing merged for two
+hours. Three entries in a row (core runs 36307979031, 36308367885, 36311194922) failed on ONE job,
+`Dependent suites (MeshWeaver.Plugins)`. Each time its waiter hit its 42-minute verdict deadline (`await-dependent-verdict.py --deadline-minutes 42`, inside the job's 45-minute `timeout-minutes`) **with no verdict**.
+Not one was a test failure. The Plugins candidate runs were green, and each landed 3–10 minutes after
+core had stopped waiting (candidate run 36308382966 published at 10:18Z; its core waiter gave up at
+10:08Z).
+
+| measured over REST | value |
+|---|---|
+| a candidate leg's run time | 5–14 min |
+| its wait for a runner | **20–50 min** |
+| `aks-silos-dind` registrations | 24 (the cap), all busy. The 6 listed "offline" were ephemeral runners still starting, not zombies: each picked up a job minutes later. |
+| the set's runner-minutes 08:00–10:50Z | 4,477, of which 27% went to candidate legs and the rest to Plugins PR/push lanes and satellite bakes |
+| a candidate run whose core run had already finished | 36311218290: up to 8 runners for 74 min after core run 36311194922 failed, while four newer entries' legs queued behind it |
+
+**Root cause.** The candidate legs shared the `aks-silos-dind` label with every Plugins PR and every
+satellite bake. GitHub hands a scale set's queued jobs out first-come-first-served, with no job
+priority. So the one piece of work that gates EVERY core merge waited behind whatever PR work was
+queued before it. The set's cap is the hardware (the CI pools take the whole spot and Dsv6 quota), so
+raising it on the same label would only lengthen the same line. What was missing was an ORDER, not
+capacity. The run that kept going after core stopped waiting was a second, smaller defect on the same
+path.
+
+**The fix, in the repos that own each half:**
+
+- **Systemorph/Memex#587**: a gate lane, `aks-silos-dind-gate`. It is the same dind pod under its own
+  label, with PriorityClass `arc-runner-gate` above the ordinary sets' `arc-runner-low` and
+  `preemptionPolicy: Never`. No PR job can queue ahead of a gate leg. When the CI nodes are full, the
+  next freed slot goes to a gate leg, and nothing running is ever evicted.
+- **Systemorph/MeshWeaver.Plugins#2444**: the candidate legs run on that lane (rollback: the variable
+  `MW_RUNNER_CORE_GATE`). Each leg first reads the core run named by the verdict key
+  (`<run id>-<attempt>`) and stands down in seconds if that run has already completed. The verdict
+  then states that reason.
+
+🚨 **A `Dependent suites` NO-VERDICT is infrastructure, and the steward re-queues it.** The
+steward used to reject it with every other non-shard job ("a build or gate failure is never a
+flake"), which left five entries (#5789, #5791, #5792, #5793, #5795) `queue-rejected` that morning
+for starvation alone. Silence and a verdict are now two different reds.
+`await-dependent-verdict.py` exits `3` on silence. `dotnet-test.yml` fails that case on its own step,
+*No verdict in time: the dependent's suites did not report (infrastructure)*. A Dependent-suites
+job that failed on that step and nothing else is re-queued as `infra`, capped at 2 per head sha,
+with the usual marker comment. A red **verdict** (the candidate broke a dependent suite) still fails
+the wait step itself and is still rejected, and a no-verdict next to a build failure or an
+uncatalogued assertion is rejected too. Before you touch an entry that hit the cap, read the
+candidate run's leg WAIT times: a leg that waited longer than it ran is starvation, and the gate
+lane above is where to look.
+
+The remaining lever is `max_entries_to_build: 8`. Up to eight concurrent candidates of up to 12 legs
+each is more than the 12-runner gate lane can serve inside core's 42-minute verdict deadline. Whether to return
+to a small value is still the maintainer's ruleset edit, as the paragraph above says.
+
 ### Enabling it
 
 The rule is added to ruleset `2128472` (`main pr protection`) with the REST rulesets API. `PUT`
@@ -127,6 +188,7 @@ applying an existing one needs only `pull_requests: write`).
 | `CI_FAILURE` | a job other than a test shard failed (build, a gate) | **reject** — never a flake | — |
 | `CI_FAILURE` | every failed assertion matches an active catalogue entry | re-queue | 2 |
 | `CI_FAILURE` | a shard failed on an infrastructure step (download, upload, setup) and left no test evidence | re-queue | 2 |
+| `CI_FAILURE` | the only failed job is `Dependent suites (MeshWeaver.Plugins)`, on its no-verdict step: the dependent never reported inside the deadline | re-queue (`infra`) | 2 |
 | `CI_FAILURE` | an uncatalogued assertion, the group held more than one PR, and this PR's own run was green | re-queue **alone** — the culprit's solo group fails and stays out | 1 |
 | `CI_FAILURE` | anything else — an uncatalogued assertion, a dead host with no recorded failure, no artifact to read | **reject**: comment the assertion and the run, label `queue-rejected` | — |
 | `MANUAL`, `QUEUE_CLEARED`, `ROLL_BACK`, `BRANCH_PROTECTIONS`, `GIT_TREE_INVALID`, `INVALID_MERGE_COMMIT`, `MERGE_CONFLICT`, `UNKNOWN_REMOVAL_REASON` | — | comment once, no action | — |

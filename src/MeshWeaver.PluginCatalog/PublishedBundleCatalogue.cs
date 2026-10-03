@@ -408,8 +408,17 @@ public static class PublishedBundleCatalogue
     /// </summary>
     /// <param name="sourceDirectory">A <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
     /// <param name="logger">Diagnostics.</param>
-    internal static SourceDeclaration DeclaredBundlesOfSource(string sourceDirectory, ILogger? logger)
+    internal static SourceDeclaration DeclaredBundlesOfSource(string sourceDirectory, ILogger? logger) =>
+        DeclaredBundlesOfSource(sourceDirectory, logger, CancellationToken.None);
+
+    /// <summary>Reads one source's declaration under its owning worker's cancellation.</summary>
+    /// <param name="sourceDirectory">The source publication directory.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="cancellationToken">Cancellation of the filesystem worker.</param>
+    internal static SourceDeclaration DeclaredBundlesOfSource(
+        string sourceDirectory, ILogger? logger, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // 🚨 A POINTER THAT CANNOT BE FOLLOWED SHRINKS THIS DENOMINATOR, and a smaller
         // denominator is the one direction that EXEMPTS a package from the gate (#3461
         // phase 5). Until the flat compatibility copy was disposed of, the fall-back landed
@@ -417,8 +426,10 @@ public static class PublishedBundleCatalogue
         // source directory holding nothing, so the source silently declares NOTHING. The
         // floor is the set of packages that must carry a sealed bake, so reading it short
         // clears a release that should hold — cannot determine ≠ clear to proceed.
-        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger);
+        cancellationToken.ThrowIfCancellationRequested();
         var declared = DeclaredBundlesOf(pointer.Directory);
+        cancellationToken.ThrowIfCancellationRequested();
         if (declared is null && pointer.Fault is not null)
             return new SourceDeclaration(
                 null,
@@ -958,7 +969,7 @@ public static class PublishedBundleCatalogue
     /// exists to prevent. Reading the sentinel alone is one file read per source.</para>
     /// </summary>
     /// <param name="publication">The publication directory — <b>already resolved</b> by the caller
-    /// (<see cref="ShippedPrebuiltBundles.ResolvePublicationPointer"/>), because the caller is the
+    /// (<see cref="ShippedPrebuiltBundles.ResolvePublicationPointer(string, ILogger)"/>), because the caller is the
     /// one that must tell "this source declares nothing" from "the pointer could not be followed".</param>
     private static IReadOnlyList<string>? DeclaredBundlesOf(string publication)
     {
@@ -1201,7 +1212,7 @@ internal sealed record IdentityDeclaration(IReadOnlyList<string> Declared, strin
 
 /// <summary>
 /// What ONE source directory declares, as
-/// <see cref="PublishedBundleCatalogue.DeclaredBundlesOfSource"/> read it.
+/// <see cref="PublishedBundleCatalogue.DeclaredBundlesOfSource(string, ILogger)"/> read it.
 /// </summary>
 /// <param name="Declared">The bundle names its seal lists, or <c>null</c> when it carries no seal at
 /// all — a source mid-publication, or one whose bake died before sealing. Null contributes nothing

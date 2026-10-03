@@ -24,7 +24,11 @@ mkdir -p "$out"
 # finished promoting — and below, only one whose `promote` job SUCCEEDED: those bundles shipped with a
 # promoted set, which is what the fleet rolls to. (A run can be red for other reasons — a satellite
 # leg, an arm64 bake — and still have promoted; the promote job, not the run's colour, is the fact.)
-runs=$(gh api "repos/$repo/actions/workflows/main-cd.yml/runs?branch=main&status=completed&per_page=40" --jq '.workflow_runs[].id') \
+# GitHub's filtered workflow-run listing can serve an older page than the unfiltered listing:
+# on 2026-09-28 it omitted a promoted run whose four bundles were still downloadable. Read the
+# current page and apply the branch/status filters to its returned rows instead.
+runs=$(gh api "repos/$repo/actions/workflows/main-cd.yml/runs?per_page=40" \
+  --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed") | .id') \
   || { echo "::error::could not list main-cd.yml runs on $repo — the deployed plugin set cannot be located"; exit 1; }
 
 chosen=""

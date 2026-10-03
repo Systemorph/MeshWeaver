@@ -66,6 +66,16 @@ public record AccessContext
     public bool IsApiToken { get; init; }
 
     /// <summary>
+    /// When true, this context is a SERVICE principal (a non-person identity, <c>ServiceIdentity</c>):
+    /// <see cref="ObjectId"/> is a service object id (<c>svc-…</c>) and the context was established by
+    /// one of that service's API tokens. Set ONLY by token validation — a session that resolves to a
+    /// service object id without it is refused by the request middleware, and a service context never
+    /// gets person-only treatment (onboarding, login tracking, logon actions). See
+    /// Doc/Architecture/ServiceIdentities.
+    /// </summary>
+    public bool IsService { get; init; }
+
+    /// <summary>
     /// When true, this context is a HUB credential: <see cref="ObjectId"/> is the hub's own
     /// mesh address (set by <c>ImpersonateAsHub</c>), not a user/group identity. A hub
     /// initializes and syncs its own EntityStore under this credential and a sub-hub subscribes
@@ -75,4 +85,26 @@ public record AccessContext
     /// <c>AccessAssignment</c> (which never exists). See AccessControl.md.
     /// </summary>
     public bool IsHub { get; init; }
+
+    /// <summary>
+    /// The path of the GOVERNED ACTIVITY this write executes (<c>Governance/Activities/{id}</c>), set
+    /// only by the governance executor when it runs a signed standard as System. The broad-grant
+    /// guard (<c>BroadGrantGuard</c>) lets a grant to Public/Anonymous, a grant written by System
+    /// for somebody else, or a partition access-policy change through ONLY when this names an
+    /// activity that is executing a standard on the allowlist. Null on every other context — a
+    /// person's standing rights, however broad, never carry it. Posted as a value
+    /// (<c>PostOptions.WithAccessContext</c>), never read from an ambient scope that does not
+    /// survive a scheduler hop.
+    /// </summary>
+    public string? GovernedBy { get; init; }
+
+    /// <summary>
+    /// The ONE user a System-context write is made for — set by the Store's per-user enrollment
+    /// (a subscription, a coupon, a purchase: the user acquiring access for themselves). A System
+    /// grant whose subject equals this is that user's own acquisition and passes the broad-grant
+    /// guard; a System grant for anyone else needs <see cref="GovernedBy"/>. Null means "for no
+    /// one in particular", which is exactly the shape that granted a new free plugin to 72 users
+    /// on 2026-09-29.
+    /// </summary>
+    public string? OnBehalfOf { get; init; }
 }

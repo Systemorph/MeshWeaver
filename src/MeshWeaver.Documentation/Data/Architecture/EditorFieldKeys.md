@@ -81,7 +81,7 @@ built to turn updates back on is the Updates tab, and it had become a no-op that
 success. Nothing else on the install ever disagrees with it, because under `None` nothing else
 runs.
 
-Measured on memex.meshweaver.cloud, 2026-09-18: `Admin/UpdatePolicy` carries no `policy` field, its
+Measured on the public instance, 2026-09-18: `Admin/UpdatePolicy` carries no `policy` field, its
 `lastCheckVerdict` reads *"updates are disabled on this install (Admin/UpdatePolicy = None); the
 registry was not listed"*, and its `heldAt` is frozen at 2026-09-11T08:57Z — the last evaluation
 that ran while a policy was still on the record. Every `lastCheckedAt` since is a check that decided

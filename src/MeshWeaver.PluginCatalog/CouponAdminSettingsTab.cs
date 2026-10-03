@@ -26,8 +26,9 @@ namespace MeshWeaver.PluginCatalog;
 /// tab reads content by SHAPE — typed, <c>JsonElement</c> or <c>JsonNode</c>, whatever arrives —
 /// and never references the plugin's compiled types.</para>
 ///
-/// <para>Gated exactly like the Plugin Catalog tab — visible only when the viewer is a global
-/// admin AND on their own settings page — and grouped under "Administration" beside it.</para>
+/// <para>A tab of the Admin app (<c>/Admin/Settings/Coupons</c>), visible only to a confirmed
+/// platform admin (<see cref="AdminAppNodeType.AdminOnlyTab"/>); an old link to the admin's own
+/// settings page redirects there.</para>
 /// </summary>
 public static class CouponAdminSettingsTab
 {
@@ -39,44 +40,26 @@ public static class CouponAdminSettingsTab
 
     /// <summary>Registers the Coupons settings tab provider (global admins only).</summary>
     public static MessageHubConfiguration AddCouponAdminSettingsTab(this MessageHubConfiguration config)
-        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab));
+        => config.AddSettingsMenuItems(new SettingsMenuItemProvider(GetTab)).RelocateSettingsTabsToAdminApp(TabId);
 
     private static IObservable<IReadOnlyList<SettingsMenuItemDefinition>> GetTab(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
-
-        // Same home as the Global Administration tab: the admin's own settings page.
-        var hubPath = host.Hub.Address.ToString();
-        var nodeOwnerId = hubPath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
-            ? hubPath["User/".Length..]
-            : hubPath;
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var viewerId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        if (string.IsNullOrEmpty(viewerId)
-            || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(none);
-
         var tab = new SettingsMenuItemDefinition(
             Id: TabId,
             Label: "Coupons",
             ContentBuilder: BuildContent,
-            Group: "Administration",
+            Group: AdminAppNodeType.CommercialGroup,
             Icon: FluentIcons.TicketDiagonal(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 330,
+            GroupIcon: FluentIcons.Money(),
+            Order: AdminAppNodeType.CommercialOrder,
             Keywords: ["coupons", "coupon codes", "discount", "redeem", "redemption", "store",
-                "entitlement", "unlock", "voucher", "promo"]);
+                "entitlement", "unlock", "voucher", "promo"])
+        { GroupKey = AdminAppNodeType.CommercialGroupKey };
 
-        // Wait for the POSITIVE admin confirmation with a bounded timeout; StartWith(none) so the
-        // menu renders immediately (mirrors the Global Administration tab).
-        return host.Hub.IsGlobalAdmin(viewerId)
-            .Where(isAdmin => isAdmin)
-            .Take(1)
-            .Select(_ => (IReadOnlyList<SettingsMenuItemDefinition>)new[] { tab })
-            .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<IReadOnlyList<SettingsMenuItemDefinition>, Exception>(_ => Observable.Return(none))
-            .StartWith(none);
+        // The Admin app is the tab's home (/Admin/Settings/Coupons), for confirmed platform
+        // admins only; everywhere else — a person's own settings page included — it contributes nothing.
+        return AdminAppNodeType.AdminOnlyTab(host, tab);
     }
 
     // ── Row model (pure — unit-tested) ─────────────────────────────────────────

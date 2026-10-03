@@ -137,10 +137,16 @@ public class PlatformBakeLaneGuard
 
         var body = string.Join('\n', lines.Skip(step)
             .TakeWhile((l, i) => i == 0 || !l.TrimStart().StartsWith("- name:", StringComparison.Ordinal)));
+        // 🚨 From memex-MIGRATION's tag set, not the portal's (policy
+        // `one-promotion-gate`): the portal's `<version>` is the ARMING write `arm` makes only once the
+        // dependent suites pass, so a promoted-but-unarmed set has none — while promote's phase A
+        // tags the migration `<version>` + `<short-sha>` on one digest, the same version by
+        // construction (CdImageVersionsShareOneSourceGuard).
         Assert.True(body.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
-                    && body.Contains("memex-portal-ai", StringComparison.Ordinal),
-            "`bake_version` must recover the version from the PROMOTED image's tags "
-            + "(az acr manifest list-metadata … memex-portal-ai), never recompute or invent one.");
+                    && body.Contains("--name memex-migration", StringComparison.Ordinal),
+            "`bake_version` must recover the version from the PROMOTED set's tags "
+            + "(az acr manifest list-metadata … memex-migration, which phase A tags), never recompute or invent one "
+            + "— and never from memex-portal-ai, whose version tag is the arming write and may not exist yet.");
         Assert.True(body.Contains("tags &&", StringComparison.Ordinal),
             "the jmespath query must short-circuit rows whose `tags` is null (`tags && contains(...)`). "
             + "contains() THROWS on null and the throw aborts the WHOLE query, so ONE of the registry's untagged "
@@ -164,7 +170,7 @@ public class PlatformBakeLaneGuard
                 var endLine = idx + 1 < jobs.Count ? jobs[idx + 1] : all.Length;
                 var text = ExecutableLinesOf(string.Join("\n", all[startLine..endLine]));
                 return (name: all[startLine].Trim().TrimEnd(':'), hasRead: text.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
-                    && text.Contains("memex-portal-ai", StringComparison.Ordinal));
+                    && text.Contains("--name memex-migration", StringComparison.Ordinal));
             })
             .Where(x => x.hasRead)
             .Select(x => x.name)

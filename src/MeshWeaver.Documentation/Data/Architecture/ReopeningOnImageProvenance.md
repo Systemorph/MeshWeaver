@@ -59,7 +59,7 @@ This corrects a belief worth correcting. Measured on the control instance:
 | 1100 | 2026-09-15 12:57Z | `true` | empty |
 | 1457 | 2026-09-17 18:18Z | `false` | **2 replicas, each with `pod`, `image`, `generation`, `startedAt`** |
 
-So kube-state-metrics began scraping the `memex` namespace between 2026-09-15 12:57Z and
+So kube-state-metrics began scraping the control instance's namespace between 2026-09-15 12:57Z and
 2026-09-17 18:18Z, and the per-pod image has been available since. Any note saying `replicas[]` is
 empty fleet-wide is now stale.
 
@@ -83,7 +83,7 @@ rejected candidate that is not written down is proposed again by the next reader
    per-pod warnings in `Ops/Status` come from. Probing `/api/version` in the same pass yields
    `{"commit":"…"}` from the running assembly, so one sample would carry `(pod, generation, image,
    commit)` together. 🚨 The public `/health` body does **not** carry it: measured on
-   memex.systemorph.com, that payload names no pod, no image and no commit — it is a prose census.
+   the control instance, that payload names no pod, no image and no commit — it is a prose census.
    `/api/version` is the endpoint that answers, and it answers for whichever replica takes the
    request, which is why it has to be probed **per pod** rather than through the ingress.
 2. ~~**A Loki label the watcher already throws away.**~~ 🚨 **Dropped, and the reason is worth
