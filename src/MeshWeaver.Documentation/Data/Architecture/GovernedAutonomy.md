@@ -104,5 +104,6 @@ honest report is "the fix is in, the proof is pending, here is what would dispro
 
 ## Related
 
+- [End Vision — Jobs, Durable Streams and Document Ingestion](../DocumentIngestionEndVision) — the governed branch in practice: work that lacks a right parks on a governed activity whose approver the user names, and resumes on its completion
 - [Incidental Findings](../IncidentalFindings) — the *file it* branch in full
 - [Specifying Software](../SpecifyingSoftware) — what a well-posed instruction looks like from the other side

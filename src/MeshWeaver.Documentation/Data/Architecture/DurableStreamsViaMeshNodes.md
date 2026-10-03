@@ -377,6 +377,9 @@ with this page; the adapter's one is corrected in its own repo.
 
 ## Related
 
+- [End Vision — Jobs, Durable Streams and Document Ingestion](/Doc/Architecture/DocumentIngestionEndVision) —
+  the decision (2026-10-03) that streams are saved nodes with checkpoints, lease = a live
+  subscription, park = waiting for the unblocking event; plan items G3 and G24
 - [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) — the defect,
   the durable `PubSubStore`, and the two residuals this page answers
 - [Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan) — the transport swap and the N+2 gate

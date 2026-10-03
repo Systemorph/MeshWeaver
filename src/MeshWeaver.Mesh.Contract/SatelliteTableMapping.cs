@@ -71,6 +71,10 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // (_Activity, _DocumentPart, _ThreadMessage …): ResolveTable picks the LONGEST mapped segment in
         // the path, so an item of a stream owned by a thread message still resolves here.
         new SatelliteTableMapping(DurableStreamPaths.ItemSegment, DurableStreamPaths.ItemTable, DurableStreamNodeTypes.Item),
+        // Storage bindings ({partition}/_Storage/{id}) — the partition's OWN storage configuration,
+        // in its own table of the partition schema (Doc/Architecture/StorageBindings). Directly
+        // under the partition root, never nested under another satellite.
+        new SatelliteTableMapping("_Storage", "storage", "StorageBinding"),
         new SatelliteTableMapping("Source", "code"),
         new SatelliteTableMapping("Test", "code"),
     ];
