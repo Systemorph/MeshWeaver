@@ -427,7 +427,7 @@ public class StorageBindingTest(ITestOutputHelper output) : MonolithMeshTestBase
         ActAs(AcmeAdmin);
         var page = await GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(node.Path),
-                new LayoutAreaReference(StorageBindingLayoutArea.AreaName))
+                new LayoutAreaReference(StorageBindingLayoutArea.PageArea))
             .Select(change => change.Value.GetRawText())
             .Should().Within(Budget)
             .Match(json => json.Contains("\"acme_parts\"") && json.Contains("newContainerName"),

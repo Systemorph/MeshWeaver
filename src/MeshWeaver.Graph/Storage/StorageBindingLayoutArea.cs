@@ -25,15 +25,15 @@ namespace MeshWeaver.Graph.Storage;
 public static class StorageBindingLayoutArea
 {
     /// <summary>The area name.</summary>
-    public const string AreaName = "Binding";
+    public const string PageArea = "Binding";
 
     /// <summary>Registers the page as the binding's default and edit view.</summary>
     /// <param name="config">The binding node's hub configuration.</param>
     public static MessageHubConfiguration AddStorageBindingViews(this MessageHubConfiguration config)
         => config.AddLayout(layout => layout
-            .WithNodePage(AreaName, Render)
+            .WithNodePage(PageArea, Render)
             .WithView(MeshNodeLayoutAreas.EditArea, Render)
-            .WithDefaultArea(AreaName));
+            .WithDefaultArea(PageArea));
 
     /// <summary>Renders the page.</summary>
     /// <param name="host">The layout host on the binding's own hub.</param>
