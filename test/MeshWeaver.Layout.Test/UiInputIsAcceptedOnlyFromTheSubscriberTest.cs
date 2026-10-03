@@ -339,6 +339,50 @@ public class UiInputIsAcceptedOnlyFromTheSubscriberTest(ITestOutputHelper output
             .Emit("the subscriber's release ends the stream", cancellationToken: ct);
     }
 
+    /// <summary>A message type the classification does not name, handled on the stream's hub.</summary>
+    /// <param name="StreamId">The stream it is addressed to.</param>
+    public record RuntimeInput(string StreamId) : StreamMessage(StreamId), IRequest<RuntimeInputHandled>;
+
+    /// <summary>The answer the run-time handler gives.</summary>
+    public record RuntimeInputHandled;
+
+    /// <summary>
+    /// A handler registered on the stream's hub at run time, for a type the classification does
+    /// not name, is not open: from a participant connection carrying another identity it is
+    /// refused and does not run; from the subscriber's connection it runs.
+    /// </summary>
+    [HubFact]
+    public async Task AHandlerRegisteredAtRunTimeIsNotOpenToAnotherParticipant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = GetClient();
+        var stream = OpenAsSubscriber(client, Area);
+        await stream.GetControlStream(ButtonArea).Should().Within(TestTimeouts.Convergence)
+            .Match(control => control is not null, "the area is rendered for its subscriber", cancellationToken: ct);
+        var streamHub = (await owner.Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct)).Stream.Hub;
+        var handled = 0;
+        using var registration = streamHub.Register<RuntimeInput>(delivery =>
+        {
+            Interlocked.Increment(ref handled);
+            streamHub.Post(new RuntimeInputHandled(), o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        });
+
+        var refusal = await Refusal(client, new RuntimeInput(stream.StreamId), CreateHostAddress(), Other,
+                participant: true)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("another participant's delivery to a run-time handler is answered, not handled", cancellationToken: ct);
+        refusal.ErrorType.Should().Be(ErrorType.Forbidden);
+
+        // The control: the subscriber's own connection reaches the handler, which answers.
+        await client.Observe<RuntimeInputHandled>(new RuntimeInput(stream.StreamId), o => o
+                .WithTarget(CreateHostAddress()).WithAccessContext(Subscriber)
+                .WithProperty(ParticipantIngress.Property, "test"))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the subscriber's delivery is handled", cancellationToken: ct);
+        Volatile.Read(ref handled).Should().Be(1, "the handler ran for the subscriber's delivery only");
+    }
+
     private async Task<(ISynchronizationStream<JsonElement> Stream, IMessageHub StreamHub, string StreamId)>
         OpenAndFindTheStream(CancellationToken ct)
     {

@@ -26,14 +26,27 @@ internal enum StreamDeliveryRole
     /// through a participant connection — see <see cref="ParticipantIngress"/>).
     /// </summary>
     ReleaseOrAnswer,
+
+    /// <summary>
+    /// A type <see cref="StreamInputRule"/> does not name: the hub's own framework messages, and a
+    /// handler registered on the hub at run time (<c>IMessageHub.Register</c>) rather than in the
+    /// stream's hub configuration. Held to the <see cref="ReleaseOrAnswer"/> rule — accepted from
+    /// the subscriber's identity or from the mesh's own hubs, refused from any other participant
+    /// connection — so an unclassified type is never open to another participant.
+    /// </summary>
+    Unclassified,
 }
 
 /// <summary>
-/// The explicit, closed classification of every message type a synchronization hub handles, read
-/// by the input rule (see <c>SynchronizationStream.AcceptInputFromSubscriberOnly</c>). The rule is
-/// type-based, so a message type is checked by the rule only because it is listed here, and the
-/// stream refuses to configure its hub with a handler for a type that is not listed: a new handler
-/// cannot reach a stream without first being classified.
+/// The explicit classification of every message type a synchronization hub handles, read by the
+/// input rule (see <c>SynchronizationStream.AcceptInputFromSubscriberOnly</c>). Two guarantees
+/// keep it closed: the stream refuses to configure its hub with a handler (registered in its hub
+/// configuration) for a type that is not listed, so such a handler cannot ship unclassified; and
+/// any type that reaches the hub without being listed — its framework messages, a handler
+/// registered on the hub at run time — is held to the <see cref="StreamDeliveryRole.Unclassified"/>
+/// rule, so it is never open to a participant connection other than the subscriber's. The one
+/// run-time registration the platform makes, <c>LayoutAreaHost</c>'s click / blur / dialog
+/// handlers, is for <see cref="IUserAction"/> types, which are listed.
 ///
 /// <list type="table">
 /// <listheader><term>Message</term><description>Role and reason</description></listheader>

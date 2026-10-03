@@ -1533,6 +1533,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <item><see cref="StreamDeliveryRole.ReleaseOrAnswer"/> — <see cref="UnsubscribeRequest"/>,
     /// <see cref="GetDataResponse"/>, <see cref="DeliveryFailure"/>: accepted from the subscriber's
     /// identity, or from the mesh's own hubs; refused from any other participant connection.</item>
+    /// <item><see cref="StreamDeliveryRole.Unclassified"/> — every other type that reaches the hub
+    /// (its framework messages, and a handler registered on the hub at run time): held to the same
+    /// rule as a release, so no participant connection but the subscriber's reaches it.</item>
     /// </list>
     /// A refused delivery reaches no handler; its sender is answered with a
     /// <see cref="ErrorType.Forbidden"/> <see cref="DeliveryFailure"/> (an answer is not answered
@@ -1553,8 +1556,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// <returns>The refused delivery, or <c>null</c> when the delivery may proceed.</returns>
     private IObservable<IMessageDelivery>? AcceptInputFromSubscriberOnly(IMessageDelivery delivery)
     {
-        if (StreamInputRule.RoleOf(delivery.Message.GetType()) is not { } role)
-            return null;
+        // A type the classification does not name — the hub's own framework messages, and any
+        // handler registered on the hub at run time rather than in ConfigureSynchronizationHub —
+        // is not left open: it is held to the release/answer rule, so it is accepted from the
+        // subscriber's identity or from the mesh's own hubs and refused from any other
+        // participant connection.
+        var role = StreamInputRule.RoleOf(delivery.Message.GetType()) ?? StreamDeliveryRole.Unclassified;
 
         var subscriber = Configuration.SubscriberIdentity?.ObjectId;
         var sender = delivery.AccessContext?.ObjectId;
@@ -1565,7 +1572,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             StreamDeliveryRole.SubscriberInput => fromSubscriber,
             StreamDeliveryRole.OwnWrite => delivery.Properties.TryGetValue(OwnWriteProperty, out var token)
                 && ReferenceEquals(token, ownWriteToken),
-            StreamDeliveryRole.ReleaseOrAnswer => fromSubscriber || !delivery.IsFromParticipant(),
+            StreamDeliveryRole.ReleaseOrAnswer or StreamDeliveryRole.Unclassified
+                => fromSubscriber || !delivery.IsFromParticipant(),
             _ => false,
         };
         if (accepted)
@@ -1579,7 +1587,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             role switch
             {
                 StreamDeliveryRole.OwnWrite => "the stream itself",
-                StreamDeliveryRole.ReleaseOrAnswer => "its subscriber or the mesh's own hubs",
+                StreamDeliveryRole.ReleaseOrAnswer or StreamDeliveryRole.Unclassified
+                    => "its subscriber or the mesh's own hubs",
                 _ => "its subscriber '" + (string.IsNullOrEmpty(subscriber) ? "(none recorded)" : subscriber) + "'",
             },
             string.IsNullOrEmpty(sender) ? "(none)" : sender, delivery.Sender);

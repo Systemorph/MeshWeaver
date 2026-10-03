@@ -26,6 +26,7 @@ classification (`StreamInputRule`), and the role says who may send it:
 | `UpdateStreamRequest`, `SetCurrentRequest` | the stream's own write path (`Update`, `OnNext`) | the stream itself only — every own write carries a per-stream token no other party holds |
 | `UnsubscribeRequest` | the end of the subscription | the subscriber's identity, or the mesh's own hubs |
 | `GetDataResponse`, `DeliveryFailure` | answers to deliveries the stream's hub sent | the subscriber's identity, or the mesh's own hubs |
+| any other type (framework messages, a handler registered at run time) | unclassified | the subscriber's identity, or the mesh's own hubs |
 
 Why the last two rows are not held to the subscriber's identity alone: a subscribing hub releases
 its subscription while it is tearing down, as a system message that need not carry the
@@ -43,10 +44,15 @@ A delivery that does not meet its row is **refused**:
 - the owner logs one Warning naming the stream, the message's role, the area, the subscriber and
   the identity the delivery carried.
 
-**The classification is closed.** The stream registers each of its handlers through one helper
-that records the type, and a stream whose hub handles a type the classification does not name is
-not built — the construction fails, naming the type. A new handler therefore reaches no stream
-until it has been given a role. `StreamInputRuleClassifiesEveryHandledTypeTest` pins the set.
+**The classification is closed, by two guarantees.** The stream registers each handler of its
+hub configuration through one helper that records the type, and a stream whose hub configuration
+handles a type the classification does not name is not built — the construction fails, naming the
+type (`StreamInputRuleClassifiesEveryHandledTypeTest` pins the set). And every type that reaches
+the hub without being named — the hub's own framework messages, or a handler registered on the hub
+at run time with `Register<T>` — is held to the release rule: accepted from the subscriber's
+identity or from the mesh's own hubs, refused from any other participant connection. The one
+run-time registration the platform makes is `LayoutAreaHost`'s click, blur and dialog handlers,
+whose types are `IUserAction` and therefore named.
 
 ## It fails closed
 
