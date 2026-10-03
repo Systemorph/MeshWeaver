@@ -31,7 +31,6 @@ public static class InboxSettingsTab
     public const string TabId = "Inbox";
     private const string ResultDataId = "inboxResult";
     private const string ListDataId = "inboxList";
-    private const string SelectedDataId = "inboxSelected";
 
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)
     {
@@ -49,13 +48,28 @@ public static class InboxSettingsTab
                 .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // The inbox — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid is
-        // declared at once and fed by the synced Admin/Inbox query; a mail is archived by SELECTING
-        // its row, then Archive below the grid.
-        host.UpdateData(SelectedDataId, MailRow.None(host.Localize("inbox.selectMail")));
+        // declared at once and fed by the synced Admin/Inbox query; each row carries its own Archive
+        // button, a ROW-SCOPED action ("Row-scoped actions") — the click says which mail it is.
         var meshService = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
 
-        stack = stack.WithView(InboxRowsFeed(host)
+        stack = stack.WithView(MailGrid(host, InboxRowsFeed(host),
+            (ctx, row) => Archive(ctx, host, row, meshService, accessService)));
+
+        return stack;
+    }
+
+    /// <summary>The column of <see cref="MailGrid"/> that holds each row's Archive button.</summary>
+    internal const int ArchiveColumn = 5;
+
+    /// <summary>
+    /// The inbox grid over <paramref name="rows"/> — the template half, separate from the feed so its
+    /// row-scoped action is testable. The Archive column's ONE button hands the row it was clicked in
+    /// to <paramref name="archive"/>; a click that carries no row does nothing.
+    /// </summary>
+    internal static DataGridControl MailGrid(
+        LayoutAreaHost host, IObservable<IEnumerable<MailRow>> rows, Action<UiActionContext, MailRow> archive)
+        => rows
             .BindGrid(ListDataId, host.Localize("inbox.empty"), message => host.Localize("inbox.listFailed", message))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.From).ToCamelCase() }
                 .WithTitle(host.Localize("inbox.column.from")))
@@ -67,65 +81,53 @@ public static class InboxSettingsTab
                 .WithTitle(host.Localize("inbox.column.status")))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Preview).ToCamelCase() }
                 .WithTitle(host.Localize("inbox.column.preview")))
-            .WithClickAction(ctx =>
-            {
-                if (ctx.Payload is DataGridCellClick { Item: { } item }
-                    && item.As<MailRow>(ctx.Hub.JsonSerializerOptions, what: "inbox row") is { } row)
-                    ctx.Host.UpdateData(SelectedDataId, row);
-                return Task.CompletedTask;
-            }));
-
-        stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: center; margin-top: 8px;")
-            .WithView(new LabelControl(new JsonPointerReference(
-                    LayoutAreaReference.GetDataPointer(SelectedDataId, nameof(MailRow.Display).ToCamelCase())))
-                .WithStyle("flex: 1;"))
-            .WithView(Controls.Button(host.Localize("ui.archive"))
-                .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx =>
-                {
-                    ArchiveSelected(ctx, host, meshService, accessService);
-                    return Task.CompletedTask;
-                })));
-
-        return stack;
-    }
+            .WithColumn(new TemplateColumnControl(Controls.Button(host.Localize("ui.archive"))
+                    .WithAppearance(Appearance.Outline)
+                    .WithClickAction(ctx =>
+                    {
+                        if (ctx.RowAs<MailRow>() is { } row)
+                            archive(ctx, row);
+                        return Task.CompletedTask;
+                    }))
+                .WithTitle(host.Localize("ui.archive")));
 
     /// <summary>
-    /// Archives the mail selected in the grid, or says that one has to be selected first. The
-    /// selection is client input (a cell-click payload), so it only says WHICH mail: the target is
-    /// re-derived from the inbox query itself, read now, and the write — which runs as System — only
-    /// ever reaches a mail of that query in its CURRENT state. A path outside the inbox, or a mail
-    /// archived since it was selected, is refused.
+    /// Archives the mail of the clicked row, or says it is archived already. The row is client
+    /// input, so it only says WHICH mail: the target is re-derived from the inbox query itself, read
+    /// now (<see cref="CurrentMail"/>), and the write — which runs as System — only ever reaches a
+    /// mail that query lists, in its CURRENT state. A path outside the inbox is refused.
     /// </summary>
-    private static void ArchiveSelected(
-        UiActionContext ctx, LayoutAreaHost host, IMeshService meshService, AccessService? accessService)
-        => ctx.Host.Stream.GetDataStream<MailRow>(SelectedDataId).Take(1)
-            .SelectMany(selected => CurrentMail(host, selected?.Path))
-            .Subscribe(row =>
+    private static void Archive(
+        UiActionContext ctx, LayoutAreaHost host, MailRow clicked, IMeshService meshService, AccessService? accessService)
+        => CurrentMail(host, clicked.Path).Subscribe(row =>
+        {
+            if (row is null)
             {
-                if (row is null || row.IsArchived)
-                {
-                    ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.selectMail"))));
-                    return;
-                }
-                if (accessService is null)
-                {
-                    ctx.Host.UpdateData(ResultDataId, Error("No access service is registered; the mail cannot be archived."));
-                    return;
-                }
-                ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
-                // The node itself, read once for the write (it exists: the inbox query just listed it).
-                ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
-                    .SelectMany(node => EmailOf(node, ctx.Hub.JsonSerializerOptions) is { } email
-                        ? Observable.Using(
-                            () => accessService.ImpersonateAsSystem(),
-                            _ => meshService.UpdateNode(node with { Content = email with { Status = EmailStatus.Archived } }))
-                        : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no email.")))
-                    .Subscribe(
-                        _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
-                        ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
-            }, ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+                ctx.Host.UpdateData(ResultDataId, Error(host.Localize("inbox.notInInbox")));
+                return;
+            }
+            if (row.IsArchived)
+            {
+                ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.alreadyArchived"))));
+                return;
+            }
+            if (accessService is null)
+            {
+                ctx.Host.UpdateData(ResultDataId, Error("No access service is registered; the mail cannot be archived."));
+                return;
+            }
+            ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
+            // The node itself, read once for the write (it exists: the inbox query just listed it).
+            ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
+                .SelectMany(node => EmailOf(node, ctx.Hub.JsonSerializerOptions) is { } email
+                    ? Observable.Using(
+                        () => accessService.ImpersonateAsSystem(),
+                        _ => meshService.UpdateNode(node with { Content = email with { Status = EmailStatus.Archived } }))
+                    : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no email.")))
+                .Subscribe(
+                    _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
 
     /// <summary>
     /// The row of the inbox query, as it is NOW, whose path is <paramref name="path"/> — or null when
@@ -163,9 +165,8 @@ public static class InboxSettingsTab
     /// <summary>One row of the inbox grid — display text plus what Archive needs.</summary>
     internal record MailRow(
         string From, string Subject, string Received, string Status, string Preview,
-        string Path, string FromAddress, bool IsArchived, string Display)
+        string Path, string FromAddress, bool IsArchived)
     {
-        internal static MailRow None(string hint) => new("", "", "", "", "", "", "", false, hint);
 
         internal static MailRow Of(MeshNode node, MeshWeaver.Mesh.Email email, string status)
         {
@@ -179,8 +180,7 @@ public static class InboxSettingsTab
                 body.Length > 140 ? body[..140] + "…" : body,
                 node.Path ?? "",
                 email.From,
-                email.Status == EmailStatus.Archived,
-                $"{from} · {email.Subject}");
+                email.Status == EmailStatus.Archived);
         }
     }
 

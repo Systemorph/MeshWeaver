@@ -35,7 +35,6 @@ public static class ServiceIdentitiesSettingsTab
     private const string ResultDataId = "serviceIdentityResult";
     private const string ListDataId = "serviceIdentityList";
     private const string TokensDataId = "serviceIdentityTokens";
-    private const string SelectedTokenDataId = "serviceIdentitySelectedToken";
 
     /// <summary>The query every emission of the identity list is read from.</summary>
     internal const string IdentitiesQuery =
@@ -58,8 +57,6 @@ public static class ServiceIdentitiesSettingsTab
             ["scope"] = "",
             ["role"] = "Editor",
         });
-
-        host.UpdateData(SelectedTokenDataId, NoSelection(host.Localize("serviceIdentities.selectToken")));
 
         stack = stack
             .WithView(Controls.Title(host.Localize("serviceIdentities.title"), 2))
@@ -135,8 +132,9 @@ public static class ServiceIdentitiesSettingsTab
 
         // The live lists — TEMPLATES (Doc/GUI/DataBinding → "Templates first, data later"): one grid
         // of every identity, one grid of every identity's tokens, each declared at once and fed by a
-        // synced query (a create, a revoke or a new token re-emits it — no refresh trigger). A token
-        // is acted on by SELECTING its row, then Rotate / Revoke below the grid.
+        // synced query (a create, a revoke or a new token re-emits it — no refresh trigger). Each token
+        // row carries its own Rotate and Revoke buttons, ROW-SCOPED actions ("Row-scoped actions"):
+        // the click says which token it is.
         var failed = (Func<string, string>)(message => $"{host.Localize("serviceIdentities.error")} {message}");
         stack = stack
             .WithView(Controls.Title(host.Localize("serviceIdentities.listHeading"), 3))
@@ -151,89 +149,102 @@ public static class ServiceIdentitiesSettingsTab
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.IssuedBy).ToCamelCase() }
                     .WithTitle(host.Localize("serviceIdentities.column.issuedBy"))))
             .WithView(Controls.Title(host.Localize("serviceIdentities.tokensHeading"), 3))
-            .WithView(TokenRowsFeed(host, tokens)
-                .BindGrid(TokensDataId, host.Localize("serviceIdentities.noTokens"), failed)
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.ServiceId).ToCamelCase() }
-                    .WithTitle(host.Localize("serviceIdentities.column.id")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Label).ToCamelCase() }
-                    .WithTitle(host.Localize("serviceIdentities.field.label")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.HashPrefix).ToCamelCase() }
-                    .WithTitle(host.Localize("serviceIdentities.column.token")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Status).ToCamelCase() }
-                    .WithTitle(host.Localize("serviceIdentities.column.status")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Created).ToCamelCase() }
-                    .WithTitle(host.Localize("apiTokens.created")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Expires).ToCamelCase() }
-                    .WithTitle(host.Localize("apiTokens.expires")))
-                .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.LastUsed).ToCamelCase() }
-                    .WithTitle(host.Localize("apiTokens.lastUsed")))
-                .WithClickAction(ctx =>
-                {
-                    if (ctx.Payload is DataGridCellClick { Item: { } item }
-                        && item.As<TokenRow>(ctx.Hub.JsonSerializerOptions, what: "service-identity token row") is { } row)
-                        ctx.Host.UpdateData(SelectedTokenDataId, row);
-                    return Task.CompletedTask;
-                }))
-            .WithView(TokenActions(host, tokens));
+            .WithView(TokenGrid(host, TokenRowsFeed(host, tokens),
+                rotate: (ctx, token) => Rotate(ctx, host, tokens, token),
+                revoke: (ctx, token) => Revoke(ctx, host, tokens, token)));
 
         return stack;
     }
 
-    /// <summary>
-    /// Rotate / Revoke for the token selected in the grid. The selection is a bound label; the
-    /// buttons read it when clicked, and refuse — saying so — when nothing (or a revoked token) is
-    /// selected.
-    /// </summary>
-    private static UiControl TokenActions(LayoutAreaHost host, ApiTokenService tokens)
-        => Row()
-            .WithView(new LabelControl(new JsonPointerReference(
-                    LayoutAreaReference.GetDataPointer(SelectedTokenDataId, nameof(TokenRow.Display).ToCamelCase())))
-                .WithStyle("flex: 1;"))
-            .WithView(Controls.Button(host.Localize("serviceIdentities.rotate"))
-                .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
-                {
-                    // Same term length as the token it replaces, counted from now.
-                    DateTimeOffset? expiresAt = token.ExpiresAt is { } old
-                        ? DateTimeOffset.UtcNow + (old - token.CreatedAt)
-                        : null;
-                    ServiceIdentities.Rotate(tokens, token.ServiceId, token.NodePath, token.Label, expiresAt)
-                        .Subscribe(
-                            result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
-                            ex => ctx.Host.UpdateData(ResultDataId,
-                                $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
-                })))
-            .WithView(Controls.Button(host.Localize("ui.revoke"))
-                .WithAppearance(Appearance.Outline)
-                .WithClickAction(ctx => WithSelectedToken(ctx, host, tokens, token =>
-                    tokens.RevokeToken(token.NodePath).Subscribe(
-                        ok => ctx.Host.UpdateData(ResultDataId, ok
-                            ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
-                            : host.Localize("apiTokens.revokeFailed")),
-                        ex => ctx.Host.UpdateData(ResultDataId,
-                            $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}")))));
+    /// <summary>The column of <see cref="TokenGrid"/> that holds each row's Rotate button.</summary>
+    internal const int RotateColumn = 7;
 
-    /// <summary>Hands the selected token to <paramref name="act"/>, or says that a live token has
-    /// to be selected first. The selection is client input, so it only says WHICH token: the token
-    /// handed on is the token feed's row as it is NOW (service id, node path and revoked flag from the
-    /// server), and a token the feed does not list, or one revoked since it was selected, is refused.</summary>
-    private static Task WithSelectedToken(
-        UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, Action<TokenRow> act)
-    {
-        // The slot is seeded with NoSelection when the tab is built, so it always holds a value.
-        ctx.Host.Stream.GetDataStream<TokenRow>(SelectedTokenDataId)
-            .Take(1)
-            .SelectMany(selected => CurrentToken(host, tokens, selected?.NodePath))
-            .Subscribe(token =>
+    /// <summary>The column of <see cref="TokenGrid"/> that holds each row's Revoke button.</summary>
+    internal const int RevokeColumn = 8;
+
+    /// <summary>
+    /// The token grid over <paramref name="rows"/> — the template half, separate from the feed so its
+    /// row-scoped actions are testable. The Rotate and Revoke columns each hold ONE button that hands
+    /// the row it was clicked in to <paramref name="rotate"/> / <paramref name="revoke"/>; a click that
+    /// carries no row does nothing.
+    /// </summary>
+    internal static DataGridControl TokenGrid(
+        LayoutAreaHost host, IObservable<IEnumerable<TokenRow>> rows,
+        Action<UiActionContext, TokenRow> rotate, Action<UiActionContext, TokenRow> revoke)
+        => rows
+            .BindGrid(TokensDataId, host.Localize("serviceIdentities.noTokens"),
+                message => $"{host.Localize("serviceIdentities.error")} {message}")
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.ServiceId).ToCamelCase() }
+                .WithTitle(host.Localize("serviceIdentities.column.id")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Label).ToCamelCase() }
+                .WithTitle(host.Localize("serviceIdentities.field.label")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.HashPrefix).ToCamelCase() }
+                .WithTitle(host.Localize("serviceIdentities.column.token")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Status).ToCamelCase() }
+                .WithTitle(host.Localize("serviceIdentities.column.status")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Created).ToCamelCase() }
+                .WithTitle(host.Localize("apiTokens.created")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Expires).ToCamelCase() }
+                .WithTitle(host.Localize("apiTokens.expires")))
+            .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.LastUsed).ToCamelCase() }
+                .WithTitle(host.Localize("apiTokens.lastUsed")))
+            .WithColumn(RowButtonColumn(host.Localize("serviceIdentities.rotate"), rotate))
+            .WithColumn(RowButtonColumn(host.Localize("ui.revoke"), revoke));
+
+    /// <summary>A template column holding ONE button whose click hands its row to <paramref name="act"/>.</summary>
+    private static TemplateColumnControl RowButtonColumn(string label, Action<UiActionContext, TokenRow> act)
+        => new TemplateColumnControl(Controls.Button(label)
+                .WithAppearance(Appearance.Outline)
+                .WithClickAction(ctx =>
+                {
+                    if (ctx.RowAs<TokenRow>() is { } token)
+                        act(ctx, token);
+                    return Task.CompletedTask;
+                }))
+            .WithTitle(label);
+
+    /// <summary>Rotates the clicked row's token, or says that only a live token can be rotated.
+    /// The row only says WHICH token: service id, node path, term and revoked flag come from the
+    /// token feed as it is NOW (<see cref="CurrentToken"/>).</summary>
+    private static void Rotate(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked)
+        => WithLiveToken(ctx, host, tokens, clicked, token =>
+        {
+            // Same term length as the token it replaces, counted from now.
+            DateTimeOffset? expiresAt = token.ExpiresAt is { } old
+                ? DateTimeOffset.UtcNow + (old - token.CreatedAt)
+                : null;
+            ServiceIdentities.Rotate(tokens, token.ServiceId, token.NodePath, token.Label, expiresAt)
+                .Subscribe(
+                    result => ctx.Host.UpdateData(ResultDataId, TokenShownOnce(host, result)),
+                    ex => ctx.Host.UpdateData(ResultDataId,
+                        $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
+        });
+
+    /// <summary>Revokes the clicked row's token, or says that only a live token can be revoked.
+    /// The token is the feed's row as it is NOW (<see cref="CurrentToken"/>).</summary>
+    private static void Revoke(UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked)
+        => WithLiveToken(ctx, host, tokens, clicked, token =>
+            tokens.RevokeToken(token.NodePath).Subscribe(
+                ok => ctx.Host.UpdateData(ResultDataId, ok
+                    ? $"{host.Localize("apiTokens.revoked")} **{token.Label}**"
+                    : host.Localize("apiTokens.revokeFailed")),
+                ex => ctx.Host.UpdateData(ResultDataId,
+                    $"{host.Localize("apiTokens.revokeFailed")} {ex.Message}")));
+
+    /// <summary>Hands the token feed's CURRENT row for the clicked token to <paramref name="act"/>;
+    /// a token the feed does not list, or one revoked since the render, is refused on the result
+    /// line.</summary>
+    private static void WithLiveToken(
+        UiActionContext ctx, LayoutAreaHost host, ApiTokenService tokens, TokenRow clicked, Action<TokenRow> act)
+        => CurrentToken(host, tokens, clicked.NodePath).Subscribe(
+            token =>
             {
                 if (token is null || token.IsRevoked)
-                    ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.selectToken"));
+                    ctx.Host.UpdateData(ResultDataId, host.Localize("serviceIdentities.tokenRevoked"));
                 else
                     act(token);
-            }, ex => ctx.Host.UpdateData(ResultDataId,
-                $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
-        return Task.CompletedTask;
-    }
+            },
+            ex => ctx.Host.UpdateData(ResultDataId, $"{host.Localize("serviceIdentities.error")} {ex.Message}"));
 
     /// <summary>The token feed's row, as it is NOW, whose node path is <paramref name="nodePath"/>
     /// — or null when no identity lists such a token.</summary>
@@ -277,8 +288,7 @@ public static class ServiceIdentitiesSettingsTab
                 token.NodePath,
                 token.IsRevoked,
                 token.CreatedAt,
-                token.ExpiresAt,
-                $"{token.Label} · {token.HashPrefix} · {identity.Name} ({identity.ObjectId})");
+                token.ExpiresAt);
         }
 
         return IdentityRowsFeed(host)
@@ -314,15 +324,12 @@ public static class ServiceIdentitiesSettingsTab
 
     /// <summary>
     /// One row of the token grid — every display column as text for the viewer, plus what Rotate and
-    /// Revoke need (<see cref="NodePath"/>, the term) and the selection label (<see cref="Display"/>).
+    /// Revoke need (<see cref="NodePath"/>, the term).
     /// </summary>
     internal record TokenRow(
         string ServiceId, string Label, string HashPrefix, string Status,
         string Created, string Expires, string LastUsed,
-        string NodePath, bool IsRevoked, DateTimeOffset CreatedAt, DateTimeOffset? ExpiresAt, string Display);
-
-    /// <summary>The selection before a row is clicked: no token, and the hint as its label.</summary>
-    private static TokenRow NoSelection(string hint) => new("", "", "", "", "", "", "", "", false, default, null, hint);
+        string NodePath, bool IsRevoked, DateTimeOffset CreatedAt, DateTimeOffset? ExpiresAt);
 
     private static string TokenShownOnce(LayoutAreaHost host, TokenCreationResult result)
         => $"**{host.Localize("apiTokens.copyNow")}**\n\n```\n{result.RawToken}\n```";
