@@ -350,6 +350,11 @@ moves what the mesh runs (the rule at the top of this page), so it is the one pl
 refused as a whole. A per-module landing would judge a half-landed wave — a dependent landing a
 moment before its dependency is the normal shape of a wave, not a fault. Boot would need the
 install records, which live in the mesh it has not started yet, and could only refuse to start.
+🚨 **The proposal is not the only gate, and it was not enough on its own.** On 2026-10-04 a package's
+SOURCES moved onto an unmet floor without any module landing at all — Hosting 1.56 (`AI@^1.21.0`)
+was GitSync-imported and compiled against the loaded AI 1.20.4. The same floor is therefore also
+checked on the import, against the LOADED dependency, and a module that fails it is declined there
+([Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash) → rule 1b).
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot
