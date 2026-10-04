@@ -149,7 +149,9 @@ The sanctioned ways to re-bind a type in `Hosting` (or any other package-install
 partition), in order of preference:
 
 1. **Let the platform do it.** A package install or update recycles the types it wrote, with the
-   dependency cascade ("recycle the main bit"), as the system identity. A **roll** ends every
+   dependency cascade ("recycle the main bit"), as the system identity. On the control instance a
+   type that releases a new build has its live activations recycled by a `recycle` job, and a
+   platform admin may enqueue one (see "Recycling a type" below). A **roll** ends every
    activation on the pods it replaces. If a fix to a Hosting type is merged, the path is the
    module's publish → seal → roll, never a hand recycle.
 2. **If the running activation is stuck and no install or roll is due**, the operator action is a
@@ -178,6 +180,43 @@ the control instance before its roll to `ci.9332` still listed `recycle` as `pat
 by then took `reason` (Plugins `abcf92d71`, in `1470fbf3`). An MCP client reads the tool list when it
 connects, so after a roll, reconnect before concluding that a parameter is missing from the
 deployed surface.
+
+### Recycling a type — every live activation, on every process
+
+A new build of a NodeType reaches only the activations created after it; the existing per-node hubs
+stay on the previous build until something disposes them. **`ActivationRecycle`**
+(`MeshWeaver.Graph`) is the framework's type-scoped recycle: *"dispose every LIVE activation whose
+bound NodeType is T"* (optionally narrowed to some addresses, or to the activations under one path).
+
+- **The request is a node, and the node is the broadcast.** `ActivationRecycle.Request(hub, request)`
+  writes `Admin/_Recycle/{id}` (`nodeType: ActivationRecycle`) as System. Every process hears that
+  commit on its `IMeshInvalidationFeed` — PostgreSQL LISTEN/NOTIFY in production, the in-process feed
+  on a monolith — so the request reaches every silo without a cluster-singleton grain.
+- **Each process disposes what IT hosts.** The agent on every mesh hub walks that process's
+  `HostedHubsCollection`, keeps the per-node hubs whose `NodeTypePathHolder` names a requested type
+  and that are still `Started`, and posts one `DisposeRequest` each — off the router, through
+  `NodeOperationIssuingHub()`, with the request's reason (sanitised onto one line). No index of
+  stored instances is read, so a type with ten thousand instances and three open pages disposes
+  three hubs, and a cold address is never touched. Disposals go out in batches of 20, 500 ms apart,
+  and each target goes through its normal quiesce.
+- **Each process reports.** It writes `{request}/{process}` (`ActivationRecycleReport`: matched,
+  disposed, the addresses) as System. The request plus its reports are the audit: who asked, when,
+  why, which types, and what each silo did.
+- **Once.** A process handles a request path once, and a hub already tearing down is never selected,
+  so no activation is disposed twice.
+- **Refused, with nothing written:** no reason, nothing named, an unknown NodeType, or the
+  definition type `NodeType` itself (it would recycle every definition hub).
+
+The request is a platform write. On the control instance it is issued by the build queue as System:
+the `recycle` job kind (MeshWeaver.Plugins, `Hosting/Queue`) runs it, either when a NodeType of the
+estate releases a new build or when a platform admin enqueues one over MCP (`enqueue_recycle`).
+Enqueueing is a platform action; it grants the admin no read or write on the partition, and the job,
+not the admin, holds the rights. The direct `recycle` verb above is unchanged and remains the
+`Update` holder's tool, including its forced rebuild.
+
+Pinned by `ActivationRecycleTest` (monolith: two live activations of T and one of U, exactly the two
+disposed, re-activation on a fresh hub, redelivery, refusals) and `TwoSiloActivationRecycleTest` (both silos' activations,
+one report per silo whose counts match what each hosted).
 
 ### Three rules for posting one, each paid for
 
