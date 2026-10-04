@@ -718,6 +718,11 @@ public static class ServiceDefaults
             var live = tracker?.Count ?? 0;
 
             Report(logger, progress.Probe(live, DateTimeOffset.UtcNow));
+            // 🚨 The first probe IS "this pod has begun terminating" (preStop, before SIGTERM). Publish it
+            // process-wide, so an always-on singleton hub (RelocateOnDrain) leaves this pod NOW instead of
+            // serving — or stalling — from it for the whole grace period (HostDrainSignal).
+            if (services.GetService<HostDrainSignal>() is { } signal && signal.Begin())
+                logger.LogWarning("Drain: termination began — instance singletons (RelocateOnDrain) are handed off to a live pod now");
 
             return live == 0
                 ? Results.Text("drained", "text/plain")

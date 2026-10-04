@@ -56,7 +56,7 @@ public class DrainEndpointTest
     /// The pipeline under test. <paramref name="tracker"/> is registered exactly as the portal
     /// registers it, so the endpoint reads the same counter a live pod's circuits feed.
     /// </summary>
-    private static WebApplication BuildApp(ActiveCircuitTracker? tracker)
+    private static WebApplication BuildApp(ActiveCircuitTracker? tracker, MeshWeaver.Mesh.HostDrainSignal? signal = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -65,6 +65,8 @@ public class DrainEndpointTest
 
         if (tracker is not null)
             builder.Services.AddSingleton(tracker);
+        if (signal is not null)
+            builder.Services.AddSingleton(signal);
 
         builder.Services.AddAuthentication(TestScheme)
             .AddScheme<AuthenticationSchemeOptions, NoSessionHandler>(TestScheme, _ => { });
@@ -183,5 +185,25 @@ public class DrainEndpointTest
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.Should().Be("drained");
+    }
+
+    /// <summary>
+    /// 🚨 The first <c>/drain</c> probe publishes "this pod has begun TERMINATING" process-wide
+    /// (<see cref="MeshWeaver.Mesh.HostDrainSignal"/>), so an instance singleton (RelocateOnDrain) leaves the pod NOW —
+    /// at preStop, not 30 minutes later at SIGTERM (maintainer, 2026-10-04: "babysitter should be 1 process per cloud").
+    /// </summary>
+    [Fact]
+    public async Task TheFirstDrainProbe_BeginsTermination_ForTheSingletonsToLeave()
+    {
+        using var signal = new MeshWeaver.Mesh.HostDrainSignal();
+        var app = BuildApp(new ActiveCircuitTracker(), signal);
+        await using (app)
+        {
+            await app.StartAsync(TestContext.Current.CancellationToken);
+            using var client = app.GetTestClient();
+            signal.Begun.Should().BeFalse("nothing has probed /drain yet");
+            await client.GetAsync(DrainRoute, TestContext.Current.CancellationToken);
+            signal.Begun.Should().BeTrue("the first probe IS termination beginning — the singletons must leave now");
+        }
     }
 }

@@ -128,6 +128,31 @@ Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *Wh
 
 ---
 
+## Instance singletons leave a pod when its drain BEGINS
+
+Maintainer, 2026-10-04: "babysitter should be 1 process per cloud". The control instance's always-on
+singleton hub, `Hosting/PlatformBuilds`, runs the PR babysitter and the PR steward's intake. After
+each roll it sat on a DRAINING pod for up to 30 minutes, and reviews and passes stalled from 09:00 to
+09:37. preStop polls `/drain` BEFORE SIGTERM, so nothing in the process knew the pod was leaving
+until the grace period ran out.
+
+- **`HostDrainSignal`** is a process-wide DI singleton. The first `/drain` probe calls `Begin()`, and
+  `WhenBegun` replays that once.
+- **`config.RelocateOnDrain()`** opts a hub in as an instance singleton.
+- **When drain begins**, that hub's grain hands its address off to another live silo through the
+  same `MigrateOnIdle` hand-off as #5256. A 2 s watch on the grain's own scheduler does this, so it
+  needs no message. Any delivery that reaches it in the meantime is refused retryably, as from a
+  leaving host.
+- **Every other hub stays.** The drain is waiting for exactly the sessions that hold the pod open.
+  That is why this is not folded into `IsLeaving()`.
+
+Pinned by:
+
+- `AnInstanceSingletonLeavesADrainingSiloTest`, a two-silo test. The singleton leaves the draining
+  silo within seconds with no message, and the next message is answered from the live silo. An
+  ordinary hub on the same silo stays. The test fails when the grain's check is removed.
+- `DrainEndpointTest.TheFirstDrainProbe_BeginsTermination_ForTheSingletonsToLeave`.
+
 ## Layer 2 — the hub goes down behind its work: the stall verdicts
 
 `MessageHub.OnDisposalStall` runs every `DisposalWatchdogTimeout` (8 s) during which nothing in the
