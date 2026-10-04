@@ -53,7 +53,7 @@ public class PedestrianWalkHeadOfLineTest
     /// pool admission; <see cref="Requests"/> counts them, <see cref="PeakOutstanding"/> is the most that
     /// were queued-or-running at once, <see cref="Completed"/> ticks on every terminal.
     /// </summary>
-    private sealed class PooledSlowStore(IIoPool pool, ImmutableDictionary<string, MeshNode> nodes) : IStorageAdapter
+    private sealed class PooledSlowStore(IIoPool pool, ImmutableDictionary<string, MeshNode> nodes, TimeSpan? latency = null) : IStorageAdapter
     {
         private int requests;
         private int outstanding;
@@ -75,7 +75,7 @@ public class PedestrianWalkHeadOfLineTest
                        && Interlocked.CompareExchange(ref peak, now, seen) != seen) { }
                 return pool.Invoke(async ct =>
                     {
-                        await Task.Delay(Latency, ct).ConfigureAwait(false);
+                        await Task.Delay(latency ?? Latency, ct).ConfigureAwait(false);
                         return answer();
                     })
                     .Finally(() =>
@@ -160,7 +160,7 @@ public class PedestrianWalkHeadOfLineTest
             .Await(ct);
 
         frame.Items.Should().BeEmpty("the pedestrian contributes nothing to a query the native provider owns");
-        store.Requests.Should().BeLessThanOrEqualTo(1,
+        store.Requests.Should().Be(0,
             "a scoped satellite read with a native provider wired must not walk the partition — the walk "
             + "cannot even find threads (they live in a satellite table under node-less _Thread segments) "
             + "and cost two pg-read admissions per node, ahead of every other read in the process");
@@ -191,6 +191,30 @@ public class PedestrianWalkHeadOfLineTest
         store.PeakOutstanding.Should().BeLessThanOrEqualTo(8,
             "one query's walk may keep at most 4 listings and 4 reads outstanding on the shared pool; an "
             + "unbounded walk enqueues every node of the partition ahead of every other query");
+    }
+
+    /// <summary>
+    /// The bound changes WHEN the walk reads, never WHAT it returns: the breadth-first, chunked walk
+    /// still answers every one of the 1,020 nodes (here at 1 ms per leaf so the whole walk fits the
+    /// Initial budget comfortably).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheBoundedWalk_StillAnswersEveryNode()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var pool = SmallSlowPool();
+        var store = new PooledSlowStore(pool, Seed(), TimeSpan.FromMilliseconds(1));
+
+        var frame = await Core(store, deferToNative: false)
+            .Query<MeshNode>(AsSystem("namespace:Admin scope:descendants"), Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Await(ct);
+
+        frame.Items.Select(n => n.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            .Should().Be(Groups * (PerGroup + 1), "every node under Admin, exactly once");
+        frame.SnapshotIncomplete.Should().BeFalse("no read was dropped");
+        store.PeakOutstanding.Should().BeLessThanOrEqualTo(8, "the bound holds over the whole walk");
     }
 
     /// <summary>
