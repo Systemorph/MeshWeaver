@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -377,32 +376,26 @@ public static class ActivationRecycle
         var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         if (feed is null)
             return Observable.Return(Unit.Default);
-        var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        meshHub.RegisterForDisposal(heard);
         // Arm runs during this hub's buildup. IMeshService resolves IMessageHub, so neither
         // resolution nor request handling may run until the hub's initialization gate opens.
-        // Subscribe to heard BEFORE the feed: a feed that emits while subscribing must not lose
-        // its request, and a request heard during buildup waits in this serial channel.
-        meshHub.RegisterForDisposal(heard
-            .Select(path => WhenStarted(meshHub.RunLevelChanged, () => Handle(
+        // One subscription carries the feed straight into Concat: even a synchronous emission
+        // during Subscribe has a listener, and a request heard during buildup waits in the channel.
+        meshHub.RegisterForDisposal(Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Where(change => IsRequest(change) && handled.TryAdd(change.Path, 0))
+            .Select(change => WhenStarted(meshHub.RunLevelChanged, () => Handle(
                     meshHub,
                     meshHub.ServiceProvider.GetRequiredService<IMeshService>(),
                     meshHub.ServiceProvider.GetRequiredService<AccessService>(),
-                    path,
+                    change.Path,
                     logger))
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", path);
+                    logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", change.Path);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
             .Subscribe(_ => { }, ex => logger?.LogError(ex, "[ActivationRecycle] the agent on {Hub} stopped", meshHub.Address)));
-        meshHub.RegisterForDisposal(feed.Subscribe(change =>
-        {
-            if (IsRequest(change) && handled.TryAdd(change.Path, 0))
-                heard.OnNext(change.Path);
-        }));
         return Observable.Return(Unit.Default);
     }
 
