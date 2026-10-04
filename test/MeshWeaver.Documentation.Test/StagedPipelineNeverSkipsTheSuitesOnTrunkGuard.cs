@@ -98,7 +98,7 @@ public class StagedPipelineNeverSkipsTheSuitesOnTrunkGuard
                 }
                 : new List<string>();
             var cond = body.Children.TryGetValue(new YamlScalarNode("if"), out var i) ? ((YamlScalarNode)i).Value ?? "" : "";
-            result[((YamlScalarNode)key).Value!] = new Job(needs, cond);
+            result[((YamlScalarNode)key).Value ?? ""] = new Job(needs, cond);
         }
         return result;
     }
