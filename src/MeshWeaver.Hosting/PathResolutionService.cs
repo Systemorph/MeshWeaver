@@ -458,8 +458,21 @@ internal class PathResolutionService : IPathResolver, IDisposable
         // off the storage backend for hot-written paths (issue #1172). A node-reading caller
         // treats the same entry as a miss and re-queries below; its fresh commit replaces
         // the stale entry for everyone.
+        //
+        // 🚨 …EXCEPT an entry with a REMAINDER, for a route-shape caller (#6045). The router
+        // answers any remainder with a terminal NotFound ("Closest ancestor is …"), so for it an
+        // ancestor-plus-remainder entry IS a cached negative — exactly what "positive-only"
+        // exists to forbid. Only the Created event retracts it, and on another replica that
+        // event arrives only when the cross-process relay (PostgreSQL LISTEN) delivers it: a
+        // route resolved there BEFORE a create (a pre-create probe, a heartbeat, any message)
+        // kept answering NotFound for a node whose create had been acknowledged. So the router
+        // re-asks the store for such a path, and the fresh answer replaces the entry. Cost: one
+        // query per route that is about to be refused — the uncached behaviour, and only on the
+        // NotFound path; a node that exists is still a dictionary hit. Node-reading callers keep
+        // the entry: for them a remainder is a legitimate shape (a layout-area path).
         if (_resolutionCache.TryGetValue(key, out var cached)
-            && (routeShapeOnly || !cached.NodeStale))
+            && (routeShapeOnly || !cached.NodeStale)
+            && !(routeShapeOnly && !string.IsNullOrEmpty(cached.Resolution.Remainder)))
             return Observable.Return<AddressResolution?>(cached.Resolution);
 
         // 🚨 CLAIM the fill BEFORE the query runs. The query is a live round-trip that

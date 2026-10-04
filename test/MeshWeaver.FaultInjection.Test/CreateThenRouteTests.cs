@@ -60,27 +60,50 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
         => await ProbeCreateWrite(createOn: 0, withholdTheCreatesNotification: false, "steward-probe", TestContext.Current.CancellationToken);
 
     /// <summary>
-    /// 🚨 <b>The gap the harness found.</b> The same probe, but the create is made by ANOTHER replica
-    /// and its notification is late (the cross-process relay — PostgreSQL LISTEN in production — is
-    /// HELD). The prober's own write then fails with the steward's exact line, <c>No node found at
-    /// '…/Item'</c>, although the create has been acknowledged: the probe's NotFound opened the storm
-    /// breaker's window on this process, the breaker fast-fails WRITES on a read-minted window
-    /// (<c>MeshNodeStreamCache.UpdateRaw</c>), and the only thing that closes it early is the create's
-    /// change event reaching this process. Released, the notification closes it and the write lands.
+    /// 🚨 <b>The cross-replica gap (#6045 / #6046), now closed.</b> The same probe, but the create is
+    /// made by ANOTHER replica and its notification is late (the cross-process relay — PostgreSQL
+    /// LISTEN in production — is HELD for the whole case). The prober's first write must land anyway.
     ///
-    /// <para>This PINS today's behaviour so a change to it is deliberate: a fix (a write not
-    /// suppressed by a READ's window, or a window that an acknowledged create elsewhere can close)
-    /// turns the first assertion red and must rewrite it. It is not yet established that the steward
-    /// met THIS shape — its create and its write ran in one process, which
-    /// <see cref="APreCreateProbe_DoesNotPoisonTheIssuersFirstWrite_WhenNotificationsAreLate"/> shows
-    /// is safe. See Doc/Architecture/FaultInjectionHarness, "What the cases found".</para>
+    /// <para>Two process-local verdicts stood between it and the node, and both were retracted ONLY
+    /// by that notification: the probe's NotFound in the storm breaker (<c>MeshNodeStreamCache</c>,
+    /// which fast-failed writes on a READ-minted window) and the probe's ancestor-plus-remainder
+    /// route in the silo's resolution cache (<c>PathResolutionService</c>, which the router turns
+    /// into "No node found … Closest ancestor is …"). Neither re-asked the authority. Now a write
+    /// re-asks the owner past a read's window, and the router re-asks the store for a cached
+    /// remainder, so the write reaches the node while the notification is still held.</para>
+    ///
+    /// <para><b>Negative controls</b> (run by hand, recorded in Doc/Architecture/FaultInjectionHarness):
+    /// restoring the read-window fast-fail in <c>UpdateRaw</c> turns this red with the steward's line
+    /// <c>No node found at '…/Item'</c>; restoring the cached-remainder route in
+    /// <c>PathResolutionService.ResolveSegments</c> turns it red with <c>… Closest ancestor is
+    /// '…' (remainder='Item')</c>.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task ACrossReplicaCreate_WithALateNotification_LeavesTheProbersWriteShut_UntilTheNotificationArrives()
+    public async Task ACrossReplicaCreate_WithALateNotification_IsWritableByTheProber_BeforeTheNotificationArrives()
+        => await CrossReplicaProbeCreateWrite(parentExists: false, TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// The steward's PRODUCTION shape of the same gap: the item's parent EXISTS
+    /// (<c>Hosting/Triage</c>), so the probe's route resolves to that ancestor with a remainder —
+    /// a non-null answer the resolution cache stores, and the router turns into
+    /// <c>No node found at '…/Item'. Closest ancestor is '…' (remainder='Item')</c>, the exact log line
+    /// of #6045. With no parent the resolution is null and is never cached, which is why the case
+    /// above cannot see this half.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ACrossReplicaCreate_UnderAnExistingParent_WithALateNotification_IsWritableByTheProber()
+        => await CrossReplicaProbeCreateWrite(parentExists: true, TestContext.Current.CancellationToken);
+
+    private async Task CrossReplicaProbeCreateWrite(bool parentExists, System.Threading.CancellationToken ct)
     {
-        var ct = TestContext.Current.CancellationToken;
         var ns = $"steward-probe-late-{Guid.NewGuid():N}";
         var path = $"{ns}/Item";
+        if (parentExists)
+            // Created BEFORE the hold, so its own notification has reached silo 0 and the probe
+            // below resolves to it — the ancestor-plus-remainder answer this case is about.
+            await Access(1).RunAsSystem(() => MeshService(1).CreateNode(
+                    MeshNode.FromPath(ns) with { Name = "parent", NodeType = "Markdown", State = MeshNodeState.Active }))
+                .Should().Within(TestTimeouts.Convergence).Emit("the parent is created", ct);
         await Probe(path, ct);
 
         var late = mesh.Relay.Hold();
@@ -89,28 +112,22 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
             await Access(1).RunAsSystem(() => MeshService(1).CreateNode(Item(ns)))
                 .Should().Within(TestTimeouts.Convergence).Emit("the other replica's create is acknowledged", ct);
             var inTheGap = await Write(path, "in-the-gap").Materialize()
+                .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
                 .Should().Within(TestTimeouts.Convergence).Emit("the prober's write settles", ct);
-            inTheGap.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
-                "TODAY a read-minted window fast-fails the write until the create's notification arrives");
-            (inTheGap.Exception?.Message ?? "").Should().Contain(path, "and it fails loudly, naming the path");
+            inTheGap.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
+                "the first write after another replica's ACKNOWLEDGED create must reach the node even while "
+                + $"the create's notification is late: {inTheGap.Exception?.Message}");
+            inTheGap.Value!.Name.Should().Be("in-the-gap");
             await late.Arrivals.Where(a => a.Contains(path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
                 .Emit("the create's notification really is the one being held", ct);
+            late.IsClosed.Should().BeTrue(
+                "the notification was still withheld when the write landed — otherwise this measured nothing");
         }
         finally
         {
             late.Release();
         }
-
-        var landed = await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
-            .Select(_ => Write(path, "after-the-notification").Materialize()
-                .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted).Take(1))
-            .Concat()
-            .Where(n => n.Kind == System.Reactive.NotificationKind.OnNext)
-            .Select(n => n.Value)
-            .Should().Within(TestTimeouts.Convergence)
-            .Emit("once the notification arrives the window is closed and the write lands", ct);
-        landed.Name.Should().Be("after-the-notification");
     }
 
     private IObservable<MeshNode> Write(string path, string name)
