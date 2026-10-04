@@ -1,0 +1,113 @@
+# The staged pull-request pipeline's STAGE-1 GATE (reusable) — may the expensive suites start for this head?
+#
+# Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc. must
+# pass before we start test. and we arm only at end of test". Design of record, with the measured
+# saving: Doc/Architecture/StagedPullRequestPipeline.
+#
+#   STAGE 0  cheap static controls (validate, confidential terms, shared rules, locks, policy gates) —
+#            the caller makes its heavy-leg front door NEED them, so they fail fast.
+#   STAGE 1  THIS lane: the head's automatic review (`internal-review`, App systemorph-com) landed and
+#            every reviewer thread has a reply from a person — `check-review-answered.py --stage-gate`,
+#            the SAME `internal_review_runs` / `reviewer_threads` / `listing_incomplete` the arm gate and
+#            the merge gate use, so the three can never disagree about "reviewed" or "answered".
+#   STAGE 2  the caller's test shards / portal hosts / gate shards / bundles — they `need` this job and
+#            require `result == 'success'` EXPLICITLY (a skipped need is success() to the implicit guard).
+#   STAGE 3  arming — the control plane's babysitter, after the required checks are green.
+#
+# 🚨 A HOLD IS RED, NEVER SKIPPED. The job fails, naming what holds the head; every required aggregator
+# downstream reads red with that root line. Nothing here may grow a job-level `if:` or
+# `continue-on-error` — a skipped gate is success() to everything that needs it (the #4139 shape).
+# A non-pull-request event (push, merge_group, schedule, dispatch) is not staged: trunk and the queue
+# never wait for a review, and the step says so in green.
+#
+# 🔁 WHAT RE-ASKS THE QUESTION (event-driven, not polling): the caller's `stage-advance.yml`, calling
+# node-repo-stage-advance.yml on `check_run: completed` (the review landing), on a person's reply
+# (`pull_request_review_comment`) and on a 15-minute sweep (the bounded fallback — a review OUTAGE
+# raises no event at all). It POSTs `rerun-failed-jobs` on the held run: this gate, the front door and
+# everything they held run again on the SAME head; the green stage-0 jobs are not repeated.
+#
+# 🛟 THREE LOUD RELEASES, so stage 1 can never freeze the fleet in silence: the reviewer's own
+# "Reviewer unavailable" degradation; NO completed review `fallback-minutes` after the head's run was
+# created (a review outage); the label `tests-before-review`. Each prints a ::warning:: and a summary
+# line; NONE of them arms — the arm gate still requires this head's real review and every answer.
+name: Node repo stage gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. Callers float on `main`
+          (no pins — MeshWeaver#3842); core's own caller passes github.sha so a pull request that
+          changes the predicate is judged by its own copy.
+        required: false
+        type: string
+        default: main
+      fallback-minutes:
+        description: >-
+          Minutes after the head's CI run was created with NO completed review, after which stage 2
+          starts anyway — loudly, and still without arming. Derived from the measured review latency
+          (Doc/Architecture/StagedPullRequestPipeline).
+        required: false
+        type: number
+        default: 120
+    outputs:
+      ready:
+        description: "'true' when stage 2 may start for this head"
+        value: ${{ jobs.gate.outputs.ready }}
+      mode:
+        description: "reviewed | degraded | fallback | label | not-staged | draft | waiting | unanswered | unreadable"
+        value: ${{ jobs.gate.outputs.mode }}
+
+jobs:
+  gate:
+    # 🚨 This NAME is the contract the event half matches (check-review-answered.py STAGE_GATE_JOB). Rename both or neither.
+    name: "Stage 1: review landed and answered"
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    outputs:
+      ready: ${{ steps.judge.outputs.ready }}
+      mode: ${{ steps.judge.outputs.mode }}
+    steps:
+      - name: Fetch the platform's review predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the stage predicate has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+
+      - name: "Prove the predicate can say no (self-test)"
+        run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
+
+      - name: Stage 1 — is this head reviewed and every finding answered?
+        id: judge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          FALLBACK: ${{ inputs.fallback-minutes }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "event '$EVENT_NAME' is not staged — trunk, the queue, the schedule and a dispatch never wait for a review"
+            { echo "ready=true"; echo "mode=not-staged"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ -n "${PR:-}" ] || { echo "::error::a pull_request event without a pull request number"; exit 1; }
+          # Stage 1 began when the head's run was created; a re-run keeps created_at, so the fallback
+          # clock does not restart on every re-evaluation.
+          since=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" --jq .created_at)
+          python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --pr "$PR" --stage-gate \
+            --since "$since" --fallback-minutes "$FALLBACK"

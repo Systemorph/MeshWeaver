@@ -60,6 +60,26 @@ repos:
   Systemorph/MeshWeaver.Plugins:
     asserted-by: node-repo-validate
     callers:
+      - workflow: ci.yml
+        job: stage-gate
+        lane: node-repo-stage-gate.yml
+        grants: {actions: read, checks: read, contents: read, pull-requests: read}
+        pending: ARRIVING — the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline, 2026-10-04) — stage 2 waits for stage 0 + the head's answered review
+      - workflow: stage-advance.yml
+        job: on-answer
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
+        pending: ARRIVING — the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline, 2026-10-04) — stage 2 waits for stage 0 + the head's answered review
+      - workflow: stage-advance.yml
+        job: on-review
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
+        pending: ARRIVING — the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline, 2026-10-04) — stage 2 waits for stage 0 + the head's answered review
+      - workflow: stage-advance.yml
+        job: sweep
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
+        pending: ARRIVING — the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline, 2026-10-04) — stage 2 waits for stage 0 + the head's answered review
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
