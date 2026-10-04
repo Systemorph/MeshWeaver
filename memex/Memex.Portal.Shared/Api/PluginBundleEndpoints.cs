@@ -1543,15 +1543,21 @@ public static class PluginBundleEndpoints
                 new Dictionary<string, ServableModule>());
 
         return readActivation().Take(1)
+            // 🚨 MeshWeaver#6067 — resolved AT THE ADVERTISED VERSION, never "the head" for an
+            // install-record entry: a record that moved ahead of the shelf (content path) must not
+            // advertise a module section for bytes shelved under another version.
+            // ModuleBundleSource.GenerationVersionFor is the one rule, shared with the download.
             .Select(activation => (IReadOnlyDictionary<string, ServableModule>)declaring
-                .Where(p => ModuleBundleSource.CollectVersion(
-                        landing.BaseDirectory, p.Module!, activation, p.ShelfVersion)
+                .Select(p => (Package: p, Generation: ModuleBundleSource.GenerationVersionFor(
+                    activation, p.Module!, p.Version, p.ShelfVersion)))
+                .Where(x => ModuleBundleSource.CollectVersion(
+                        landing.BaseDirectory, x.Package.Module!, activation, x.Generation)
                     .DeclineReason is null)
                 .ToDictionary(
-                    p => BundleVersionKey(p.PluginId, p.Version),
-                    p => new ServableModule(
-                        p.Module!,
-                        ModuleBundleSource.ResolveEntry(activation, p.Module!, p.ShelfVersion)
+                    x => BundleVersionKey(x.Package.PluginId, x.Package.Version),
+                    x => new ServableModule(
+                        x.Package.Module!,
+                        ModuleBundleSource.ResolveEntry(activation, x.Package.Module!, x.Generation)
                             ?.FrameworkMvid),
                     StringComparer.OrdinalIgnoreCase));
     }
@@ -2057,14 +2063,20 @@ public static class PluginBundleEndpoints
         return landing.GetActivation().Take(1)
             .Select(activation =>
             {
+                // 🚨 MeshWeaver#6067 — the generation shelved AT THE VERSION THIS URL NAMES, by the
+                // same rule the index used to decide it may advertise a module section here. An
+                // install record that moved ahead of the shelf used to resolve the HEAD and serve
+                // its bytes under the record's version.
+                var generation = ModuleBundleSource.GenerationVersionFor(
+                    activation, package.Module!, package.Version, package.ShelfVersion);
                 var (files, assets, decline) = ModuleBundleSource.CollectVersion(
-                    landing.BaseDirectory, package.Module!, activation, package.ShelfVersion);
+                    landing.BaseDirectory, package.Module!, activation, generation);
                 // 🚨 The shelf's NATIVE tree (#4126) — a separate call rather than a fourth tuple
                 // element, because widening that tuple rewrites a signature a sibling repository
                 // already destructures into three. It resolves the SAME generation by the same
                 // rule, so the two readings cannot name different bytes.
                 var natives = ModuleBundleSource.NativeAssetsOf(
-                    landing.BaseDirectory, package.Module!, activation, package.ShelfVersion);
+                    landing.BaseDirectory, package.Module!, activation, generation);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
@@ -2087,7 +2099,17 @@ public static class PluginBundleEndpoints
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} serves module '{Module}' {Mvid} from {Provenance}",
                         package.PluginId, package.Module, recorded.Mvid, served.Provenance);
-                return served;
+                // The version the served bytes were SHELVED at, stated on the wire so the consumer
+                // can refuse a label that disagrees with what it was advertised (#6067). Only the
+                // shelf's own generation can state it; a sealed-publication substitution leaves it
+                // unstated rather than borrowing a version those bytes never carried.
+                return served.Files.Count > 0
+                       && string.Equals(served.Provenance, ServedModuleBytes.ShelfProvenance, StringComparison.Ordinal)
+                    ? served with
+                    {
+                        Version = ModuleBundleSource.ResolveEntry(activation, package.Module!, generation)?.Version,
+                    }
+                    : served;
             });
     }
 
@@ -2220,6 +2242,10 @@ public static class PluginBundleEndpoints
                     : new
                     {
                         assemblyName = package.Module,
+                        // 🚨 #6067 — the version these module bytes were SHELVED at, which the
+                        // consumer stamps and compares against the advertised one. Omitted when
+                        // the route cannot state it (see ModuleFiles).
+                        version = module.Version,
                         assemblies = moduleFiles.Select(f => f.FileName).ToArray(),
                         minMeshVersion = package.MinMeshVersion,
                         // Declared, never inferred from the archive — BundleReader.ReadModuleAssets
@@ -2311,9 +2337,12 @@ public static class PluginBundleEndpoints
     /// null for a baseline package — the cached observation; <see cref="Decide"/> prefers the
     /// anchor's, exactly as it does for <paramref name="Source"/>.</param>
     /// <param name="ShelfVersion">The retained published generation this entry resolves, or null
-    /// for an installed/anchored entry that follows the ordinary activation head or image module.
-    /// Kept separate from <paramref name="Version"/> because an install record's package version
-    /// is not evidence that a sidecar generation with that version exists.</param>
+    /// for an installed/anchored entry. Kept separate from <paramref name="Version"/> because an
+    /// install record's package version is not evidence that a sidecar generation with that
+    /// version exists — 🚨 and since #6067 a null here no longer means "serve the head": such an
+    /// entry resolves the generation shelved at its OWN <paramref name="Version"/>, or serves no
+    /// module section (<see cref="ModuleBundleSource.GenerationVersionFor"/>); only a module with
+    /// no activation entry (the image's copy) still follows the unversioned lookup.</param>
     private sealed record BundleEntry(
         string PackageId, string Version, string PluginId, string? Module = null,
         string? MinMeshVersion = null, string? Source = null, string? Tier = null,

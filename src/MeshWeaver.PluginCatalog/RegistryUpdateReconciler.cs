@@ -1252,7 +1252,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return(Unit.Default);
-        return landing.ProposeModuleSet()
+        // 🚨 #6067 — CHECKED against what the installed packages require: a set whose declared
+        // dependency floors are not met is refused (faults), and the catch below keeps the mesh on
+        // the set it runs.
+        return ModuleDependencyFloor.ProposeChecked(hub, landing)
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {
