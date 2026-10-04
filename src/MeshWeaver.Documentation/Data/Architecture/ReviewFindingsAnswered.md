@@ -1051,40 +1051,53 @@ that list before reaching for the re-run.
 
 ## The arm gate — auto-merge is armed only on a reviewed, answered head
 
-**Measured 2026-10-03/04 on MeshWeaver.Plugins:** `auto-arm.yml` re-armed auto-merge on every push
-and on undraft, BEFORE the internal review had run on the new head. On Plugins the review is
+**Measured 2026-10-03/04 on MeshWeaver.Plugins:** `auto-arm.yml` armed auto-merge on every open, push
+and undraft, BEFORE the internal review had run on the new head. On Plugins the review is
 comment-only and nothing required waits for it, so #2549 (6 of 6 findings unanswered), #2643/#2647
 (reviewer unavailable) and Memex#641 merged unreviewed or unanswered, and agents disarmed by hand
 after every push (#2791 twice in an hour).
 
-So the fleet's one arm lane now asks `check-review-answered.py --arm-gate` first, and arms only when
-**all** of these hold:
+**Arming is a decision, so it moved to the control plane** (2026-10-04). The control instance's PR
+steward (App `systemorph-com`) already reads every fleet pull request's review state and
+answered-findings verdict; it is the one place that arms. **No workflow arms auto-merge any more** —
+`ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails the build if one does.
 
-1. the pull request is not a draft;
-2. the `systemorph-com` App's (id 4918443) `internal-review` check run on the **current head** has
-   completed and is **not** the neutral `Reviewer unavailable …` degradation. The degradation
-   releases the *merge* gate's review condition (a down reviewer must not hold every pull request),
-   but it is not a review — arming on it would land an unreviewed change nobody decided to merge, so
-   it stays unarmed and a person merges it by hand;
-3. every thread the automatic reviewer opened has a reply from a person, following `in_reply_to_id`
+### What the control plane arms on
+
+It arms a pull request only when **all** of these hold, read on its **current head**:
+
+1. it is open, not a draft, and its head branch is in the same repository (a fork never arms itself);
+2. its base is the repository's **default branch**, read from `repos/{o}/{r}` and never assumed. An
+   unprotected base has an empty required set, so an arm there is an immediate merge
+   (MeshWeaver.Plugins#1685 merged 61 seconds after it opened, before its own CI started);
+3. the `systemorph-com` App's (id 4918443) `internal-review` check run on the head has completed, no
+   run of it is still in progress, and the newest one is **not** the neutral `Reviewer unavailable …`
+   degradation. The degradation releases the *merge* gate's review condition (a down reviewer must
+   not hold every pull request), but it is not a review — arming on it would land an unreviewed
+   change nobody decided to merge, so a person merges it by hand;
+4. every thread the automatic reviewer opened has a reply from a person, following `in_reply_to_id`
    to the root, read from a provably complete listing — the **same** `reviewer_threads` /
    `listing_incomplete` predicate this gate uses, so the two can never disagree.
 
-Otherwise it does nothing and writes one line to its job summary naming the missing condition. It
-re-evaluates on `check_run: completed` (only the internal reviewer's `internal-review` reaches a
-runner), `pull_request_review_comment: created`, and `pull_request_target` (`ready_for_review`,
-`synchronize`, `opened`, `reopened`). **A push invalidates the review:** GitHub keeps auto-merge armed
-across a push, so on `synchronize` an armed pull request whose new head is not ready is disarmed; it
-re-arms by itself once that head is reviewed and answered. No other not-ready event touches an arm a
-person set deliberately.
+The reference implementation of 1, 3 and 4 is `check-review-answered.py --arm-gate`
+(`arm_readiness`), and its `--self-test` cases are the test vectors the control plane's port must
+pass. The arm is the GraphQL `enablePullRequestAutoMerge` mutation (or `enqueuePullRequest` on a
+base with a merge queue) carrying `expectedHeadOid` = the head it judged, so an arm that races a push
+is refused by GitHub instead of landing on the new, unreviewed head. It is attempted **once per
+head** and read back (`autoMergeRequest` / `mergeQueueEntry`); a head a person disarmed is not
+re-armed.
 
-The lane reads the check run with a **minted, read-only meshweaver-cloud token**
-(`permission-checks: read`, `contents: read`, `pull-requests: read`), never the run's `GITHUB_TOKEN`:
-the lane merges, so the default token may not appear in it at all
-(`ArmedMergeMustTriggerMainsPushLanesGuard`), and a minted token asks no caller for a `checks: read`
-grant — every caller keeps `{contents: write, pull-requests: write}`. It therefore needs the
-meshweaver-cloud App to carry `Checks: read`; without it the mint fails, the run is red and nothing
-is armed.
+### What stays in the workflow: the disarm
+
+**A push invalidates the review**, and GitHub keeps auto-merge armed across a push by anyone with
+write access — so a pull request armed on a reviewed head would merge the next, unreviewed head the
+moment the required contexts pass. `auto-arm.yml` (still the fleet's one lane, still called by every
+repository through `workflow_call`, its name kept so no caller changes) therefore now does exactly
+one thing: on `synchronize`, if the pull request is armed, it takes the arm off (`gh pr merge
+--disable-auto`) and reads the result back. It reacts to the event itself, so a fast CI cannot
+outrun it, and it tolerates no failed step: a disarm that silently did not happen is the hole
+reopened. It uses the meshweaver-cloud token it always used (`contents: write`,
+`pull-requests: write`) — no `checks` permission, and no change to any caller's grants.
 
 ## Related
 

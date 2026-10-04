@@ -335,8 +335,9 @@ buy, is in [/ci](../ci/SKILL.md).)
 Many sessions and their agents work the fleet at once. Four practices keep them from undoing each
 other:
 
-- **A hold on a PR is a DRAFT, and a draft needs a stated end.** `auto-arm.yml` re-arms auto-merge
-  on every push, so `--disable-auto` is not a hold; draft is the only state it respects. But a draft
+- **A hold on a PR is a DRAFT, and a draft needs a stated end.** The control plane's PR steward
+  re-arms auto-merge once each new head is reviewed and answered, so `--disable-auto` is not a
+  hold; draft is the only state it respects. But a draft
   has no expiry: write in the PR body WHAT it waits for (a named PR merged, a sealed set carrying a
   commit) and re-check that condition before you leave it parked, because the blocker may already
   be gone. Copilot does not review pushes to a draft, so mark it ready before the fix you want
@@ -412,8 +413,9 @@ that was tested — the fix for two independently-green PRs being red together (
 changes about this procedure:
 
 - **`gh pr merge <n> --auto` means "enqueue when this PR's own required checks are green".**
-  `auto-arm.yml` runs it on every non-draft PR, so a green PR lands without a hand on it. Convert to
-  **draft** to opt out. `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it
+  The control plane's PR steward arms it on a non-draft PR once its CURRENT head has a completed
+  internal review and every reviewer thread is answered (`auto-arm.yml` only DISARMS, on every push —
+  Doc/Architecture/ReviewFindingsAnswered → "The arm gate"). Convert to **draft** to opt out. `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it
   enters the queue, it does not merge on the spot.
 - **A push to a queued branch ejects it.** The queue does not pick up the new commit in place; the
   arm lane re-arms on `synchronize` and the new head re-enters once its own run is green.
