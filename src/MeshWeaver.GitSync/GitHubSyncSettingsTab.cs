@@ -593,7 +593,7 @@ public static class GitHubSyncSettingsTab
             // Policy module-sync-per-manifest-hash — per MODULE: which modules were declined (a
             // declared platform floor above the running one), and which were unchanged by their
             // manifest hash. A declined module never held its siblings, so it is named, not the Space.
-            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList()
+            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined && m.UnmetRequirement is null).ToList()
                 is { Count: > 0 } declinedModules
                 ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesDeclined", locale,
                     new Dictionary<string, object>
@@ -601,6 +601,18 @@ public static class GitHubSyncSettingsTab
                         ["count"] = declinedModules.Count,
                         ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
                         ["modules"] = string.Join(", ", declinedModules.Select(m => $"{m.Module} (≥ {m.Floor})")),
+                    }))
+                : null,
+            // MeshWeaver.Plugins#2715 — the second decline: a module needing a newer module than
+            // this instance runs. Its own line, because its remedy (the dependency's update landing)
+            // is not the platform roll the line above names.
+            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined && m.UnmetRequirement is not null).ToList()
+                is { Count: > 0 } awaitingModules
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesAwaitingModule", locale,
+                    new Dictionary<string, object>
+                    {
+                        ["count"] = awaitingModules.Count,
+                        ["modules"] = string.Join(", ", awaitingModules.Select(m => m.DescribeUnmetRequirement())),
                     }))
                 : null,
             cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Unchanged).ToList()

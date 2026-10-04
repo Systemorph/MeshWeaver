@@ -282,4 +282,95 @@ public class ModuleSyncDecisionTest
     public void ATreeWithNoManifest_StatesNoModule()
         => ModuleSyncDecision.Read([("index.json", "{}"), ("Doc/Page.md", "# hi")])
             .Should().BeEmpty("a course or content repo imports exactly as before");
+
+    // ── MeshWeaver.Plugins#2715: a module whose sources need a NEWER module than this instance runs ──
+
+    private static readonly Dictionary<string, string> RunsAi1121 = new() { ["AI"] = "1.12.1", ["Store"] = "1.4.0" };
+
+    private static ModuleReading Requiring(string name, string version, params string[] requires)
+        => new(name, "", version, null) { Requires = [.. requires] };
+
+    /// <summary>
+    /// 🚨 THE INCIDENT, as data: the control instance ran AI 1.12.1 and a Hosting import brought
+    /// sources calling AI 1.20 types — 16 NodeTypes went to Error. A Hosting that DECLARES what it
+    /// needs is declined, named with both versions, and keeps its last-good sources.
+    /// </summary>
+    [Fact]
+    public void ARequirementAboveTheRunningModule_DeclinesThatModule_AndNamesBothVersions()
+    {
+        var outcome = ModuleSyncDecision.DecideAgainstRunningModules(
+                [Requiring("Hosting", "1f75ade77bdf2fa5", "Store@^1.0.0", "AI@^1.20.0")],
+                new Dictionary<string, string> { ["Hosting"] = "971f5cd34e9af1f2" },
+                Running, reconcile: false, RunsAi1121)
+            .Single();
+        outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+        outcome.UnmetRequirement.Should().Be("AI@^1.20.0");
+        outcome.RunningDependencyVersion.Should().Be("1.12.1");
+        outcome.Reason.Should().Contain("AI@^1.20.0").And.Contain("1.12.1");
+        ModuleSyncDecision.Recorded([outcome])["Hosting"].Should().Be("971f5cd34e9af1f2",
+            "a declined module did not land — the Space keeps the hash it held, so the next import re-judges it");
+    }
+
+    /// <summary>The control's other half: without the running versions the same tree SYNCS — which
+    /// is what happened, and why the test above can fail.</summary>
+    [Fact]
+    public void WithoutRunningVersions_TheSameTreeSyncs()
+        => ModuleSyncDecision.Decide(
+                [Requiring("Hosting", "1f75ade77bdf2fa5", "AI@^1.20.0")], null, Running, reconcile: false)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
+
+    [Theory]
+    [InlineData("AI@^1.12.0")]
+    [InlineData("AI@^1.0.0")]
+    [InlineData("AI@>=1.12.1")]
+    [InlineData("AI@~1.12.0")]
+    [InlineData("AI@*")]
+    [InlineData("AI")]
+    [InlineData("Essentials@^9.0.0")]
+    public void ARequirementThatIsMetOrCannotBeJudged_Syncs(string requirement)
+        => ModuleSyncDecision.DecideAgainstRunningModules(
+                [Requiring("Hosting", "1f75ade77bdf2fa5", requirement)], null, Running, reconcile: false, RunsAi1121)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced,
+                $"{requirement} against AI 1.12.1 is met, has no readable floor, or names a package this instance runs no module of");
+
+    /// <summary>Only the FLOOR is judged: a NEWER major than the caret's ceiling is a compatibility
+    /// question the module set's own check answers, never a reason to hold sources.</summary>
+    [Fact]
+    public void ANewerMajorThanTheCaretCeiling_IsNotADecline()
+        => ModuleSyncDecision.DecideAgainstRunningModules(
+                [Requiring("Hosting", "1f75ade77bdf2fa5", "AI@^1.20.0")], null, Running, reconcile: false,
+                new Dictionary<string, string> { ["AI"] = "2.0.0" })
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
+
+    [Fact]
+    public void ARequirementDecline_HoldsNoSibling()
+    {
+        var outcomes = ModuleSyncDecision.DecideAgainstRunningModules(
+            [
+                Requiring("Hosting", "bbbb", "AI@^1.20.0") with { Root = "Hosting" },
+                Requiring("Agent", "cccc", "AI@^1.0.0") with { Root = "Agent" },
+            ],
+            null, Running, reconcile: false, RunsAi1121);
+        outcomes.Single(o => o.Module == "Hosting").Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+        outcomes.Single(o => o.Module == "Agent").Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
+    }
+
+    /// <summary>A reconcile re-writes nothing either — the loaded module is what it is.</summary>
+    [Fact]
+    public void AReconcile_IsDeclinedToo()
+        => ModuleSyncDecision.DecideAgainstRunningModules(
+                [Requiring("Hosting", "1f75ade77bdf2fa5", "AI@^1.20.0")], null, Running, reconcile: true, RunsAi1121)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+
+    [Fact]
+    public void Read_TakesTheRequirementsFromTheModuleRootsIndex()
+    {
+        var module = ModuleSyncDecision.Read(
+            [
+                ("manifest.lock", """{ "module": "Hosting", "moduleVersion": "1f75ade77bdf2fa5", "version": "1.48.0" }"""),
+                ("index.json", """{ "content": { "requires": ["Store@^1.0.0", "AI@^1.20.0", "Essentials@^1.8.0"], "minMeshVersion": "3.0.0-ci.7845" } }"""),
+            ]).Single();
+        module.Requires.Should().Equal("Store@^1.0.0", "AI@^1.20.0", "Essentials@^1.8.0");
+        module.Floor.Should().Be("3.0.0-ci.7845");
+    }
 }

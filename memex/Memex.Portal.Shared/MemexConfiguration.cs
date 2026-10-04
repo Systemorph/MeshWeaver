@@ -472,6 +472,21 @@ public static class MemexConfiguration
                 Console.WriteLine,
                 Console.Error.WriteLine);
 
+            // 🚨 MeshWeaver.Plugins#2715 — WHICH PACKAGE RELEASE each module this boot hands the
+            // loader is, for the import that must not write sources needing a newer one
+            // (ModuleSyncDecision.DecideAgainstRunningModules). The loaded assembly cannot say (its
+            // informational version is the platform's); this boot can, because it chose the copy:
+            // a landed generation records its package version, the image's own copy its stamp.
+            var activatedVersions = loadableModules
+                .Select(candidate => ModuleActivationBoot.ActivatedVersionOf(candidate.Module))
+                .ToArray();
+            builder.ConfigureServices(services =>
+            {
+                foreach (var activated in activatedVersions)
+                    services.AddSingleton(activated);
+                return services;
+            });
+
             // 🚨 #2507 — HAND THE CONFIGURATION TO THE BUILDER BEFORE ANYTHING INSTALLS. A module
             // attribute's BuilderConfigurations run inside InstallAssemblies and read
             // builder.Configuration for the deployment's answers; this method had every answer in

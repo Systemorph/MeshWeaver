@@ -48,20 +48,36 @@ hold only ever stopped the sources, and those are the part that was safe to deli
 
 ## The rule, per module
 
-The pure decision is `ModuleSyncDecision.Decide` (MeshWeaver.GitSync). It runs inside every import,
-after the fetch, over each `manifest.lock` in the incoming tree:
+The pure decision is `ModuleSyncDecision.DecideAgainstRunningModules` (MeshWeaver.GitSync;
+`Decide` is the same rule with no running modules stated). It runs inside every import, after the
+fetch, over each `manifest.lock` in the incoming tree:
 
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
+| 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.20.0`) whose package this instance **runs a module of below the requirement's floor** — judged against `ActivatedModuleVersion`, the release the boot chose for each module (MeshWeaver.Plugins#2715) | **Declined** — the reason names the requirement and the running version | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
-- **A declined module is the ONE per-module decline**, and it holds no sibling. Its paths are neither
+- **The two declines are the same act**: a declared floor the running instance does not meet —
+  the platform's (1) or a module's (1b). Either holds no sibling. Its paths are neither
   written nor pruned, and the Space's commit baseline stays put, the same rule a partially held Space
   follows ([Adopt Then Sync, Per NodeType](../AdoptThenSyncPerNodeType)). Its files are still in the
-  next diff, and the attempt is never recorded as final. The decline depends on the running platform,
-  so a roll changes it at the same commit.
+  next diff, and the attempt is never recorded as final. The decline depends on what is RUNNING, so
+  a roll (1) or the required module's update landing and loading (1b) changes it at the same commit.
+- **Why 1b exists.** In-mesh sources compile against the module assemblies the process has LOADED.
+  Measured on the control instance 2026-10-02: a Hosting import brought sources calling MeshWeaver.AI
+  types from Plugins#2638 while the instance ran AI 1.12.1, and 16 Hosting NodeTypes went to `Error`
+  (CS0246/CS0103). Declining keeps the last-good sources and builds instead.
+- **1b judges only what it can know**: the requirement's **lower** bound (`^`, `~`, `>=`, `=` or a bare
+  version), against a package this instance runs a module of with a recorded release. A content-only
+  package, an unrecorded release, or a range with no readable floor decides nothing. A newer major
+  above a caret's ceiling is not a decline here: that is a compatibility question, and
+  `ModuleDependencyFloor` answers it for the module set.
+- 🚨 **It holds only what the package DECLARES.** A package that starts calling a newer module
+  without raising its `requires` range is not caught. The incident's Hosting declared `AI@^1.0.0`
+  while it called AI 1.20 types. Keeping the range honest is the producing repository's job, and no
+  gate enforces it yet.
 - **Unchanged** means byte-identical per the manifest, so nothing is written. When every file of the
   tree is under an unchanged or declined module, the import is a no-op: outcome `Skipped`, or
   `Declined` when a module was declined, and the fetched commit counts as seen.
@@ -116,9 +132,10 @@ way (see the per-NodeType page).
   `Unchanged`, `Synced` or `Declined` with its reason, and `ModuleVersions` holds the recorded hashes.
   `LastSyncOutcome` is the import's own outcome (`Declined` only when every module was declined) and
   never the whole-Space `Held` the gate used to write. `LastSyncNote` names each declined module.
-- **The activity**: one keyed Warning line, `activity.gitsync.modulesDeclined`, rendered in the
-  viewer's language.
-- **The settings tab**: `ui.gitSync.modulesDeclined` and `ui.gitSync.modulesUnchanged`.
+- **The activity**: one keyed Warning line per kind, `activity.gitsync.modulesDeclined` (platform) and
+  `activity.gitsync.modulesAwaitingModule` (1b), rendered in the viewer's language.
+- **The settings tab**: `ui.gitSync.modulesDeclined`, `ui.gitSync.modulesAwaitingModule` and
+  `ui.gitSync.modulesUnchanged`.
 - **`/health`** (`publication-seal`): every module's last outcome, by Space. A decline that outlives
   the 45-minute CI job cap reads Degraded, never Unhealthy.
 

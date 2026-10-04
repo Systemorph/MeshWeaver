@@ -3022,6 +3022,32 @@ public static class ModuleActivationBoot
     }
 
     /// <summary>
+    /// The package release an effective module IS (MeshWeaver.Plugins#2715): a landed generation's
+    /// recorded <see cref="ModuleActivationEntry.Version"/> and the package named by its
+    /// <see cref="ModuleActivationEntry.PackagePath"/> (<c>&lt;source&gt;/&lt;package&gt;</c>), or —
+    /// for the image's own copy — what the image build stamped beside it
+    /// (<see cref="ImageModuleSeed"/>). Unrecorded halves stay null, and null judges nothing.
+    /// </summary>
+    /// <param name="module">One entry of the boot's effective list.</param>
+    /// <param name="imageSeedOf">The image stamp reader; production's default is
+    /// <see cref="ImageModuleSeed.OfImageCopy"/>.</param>
+    public static ActivatedModuleVersion ActivatedVersionOf(
+        EffectiveModule module, Func<string, ImageModuleSeed?>? imageSeedOf = null)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        var name = Path.GetFileNameWithoutExtension(module.Entry);
+        if (module.Landed is { } landed)
+        {
+            var package = landed.PackagePath?.Split('/', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } segments
+                ? segments[^1]
+                : null;
+            return new ActivatedModuleVersion(landed.Name, package, landed.Version);
+        }
+        var seed = (imageSeedOf ?? ImageModuleSeed.OfImageCopy)(name);
+        return new ActivatedModuleVersion(name, seed?.Package, seed?.Version);
+    }
+
+    /// <summary>
     /// The landed entry-DLL path of a store-installed entry:
     /// <c>{baseDirectory}/modules/{entry.Directory ?? entry.Name}/{entry.Name}.dll</c>.
     ///

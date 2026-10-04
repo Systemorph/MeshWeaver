@@ -232,6 +232,32 @@ public class ImageCopyVersionDiscriminatorTest : IDisposable
         report.Describe().Should().NotContain("a restart activates them");
     }
 
+    // ─────────────────────── what the boot tells the import it runs (MeshWeaver.Plugins#2715)
+
+    /// <summary>
+    /// The package release each module this boot chose IS — what the GitSync import judges an
+    /// incoming module's <c>requires</c> against. A landed copy states its recorded version and the
+    /// package of its install record; the image's own copy states its stamp. The two cases are the
+    /// two the #6044 rule produces, so a declined store copy must report the IMAGE's release.
+    /// </summary>
+    [Fact]
+    public async Task TheActivatedVersion_IsTheReleaseTheBootChose()
+    {
+        await Land("1.16.4");
+        Stamp("1.16.3");
+        var newer = Assert.Single(Boot());
+        ModuleActivationBoot.ActivatedVersionOf(newer, name => ImageModuleSeed.Read(imageModuleDir, name))
+            .Should().Be(new MeshWeaver.Mesh.ActivatedModuleVersion(Plugin, "AcmeWidgets", "1.16.4"),
+                "the newer store copy won, so the instance runs its release");
+
+        Stamp("1.16.5");
+        var image = Assert.Single(Boot());
+        image.Landed.Should().BeNull("1.16.4 is older than the image's 1.16.5");
+        ModuleActivationBoot.ActivatedVersionOf(image, name => ImageModuleSeed.Read(imageModuleDir, name))
+            .Should().Be(new MeshWeaver.Mesh.ActivatedModuleVersion(Plugin, "AcmeWidgets", "1.16.5"),
+                "the image's copy runs, so the instance runs the image's stamped release — not the declined store one");
+    }
+
     // ───────────────────────────────────────────────────────────────────────── harness
 
     /// <summary>Writes the stamp exactly as the closure lane (<c>WriteMeshModuleSeedStamps</c>)

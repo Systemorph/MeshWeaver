@@ -761,6 +761,8 @@ public static class GitHubActivityExtensions
             ctx.Log(bundleHeld);
         if (ModulesDeclinedLine(result) is { } modulesDeclined)
             ctx.Log(modulesDeclined);
+        if (ModulesAwaitingModuleLine(result) is { } awaitingModule)
+            ctx.Log(awaitingModule);
         ctx.Log(ImportedLine(result, commitish));
     }
 
@@ -770,6 +772,20 @@ public static class GitHubActivityExtensions
     /// named on the activity in the viewer's language. Warning: those modules are deliberately not at
     /// the commit the rest of the Space took, and every sibling module synced.
     /// </summary>
+    private static LogMessage? ModulesAwaitingModuleLine(StaticRepoImportResult result)
+    {
+        if (result.ModulesAwaitingModule.Count == 0)
+            return null;
+        var modules = string.Join(", ", result.ModulesAwaitingModule);
+        return new LogMessage(
+                $"⛔ {result.ModulesAwaitingModule.Count} module(s) not written — each requires a newer "
+                + $"module than this instance runs: {modules}. Their NodeTypes keep their last-good "
+                + "sources; every other module synced, and these sync once the required module is running here.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.modulesAwaitingModule",
+                ("count", result.ModulesAwaitingModule.Count), ("modules", modules));
+    }
+
     private static LogMessage? ModulesDeclinedLine(StaticRepoImportResult result)
     {
         if (result.DeclinedModules.Count == 0)

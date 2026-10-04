@@ -82,6 +82,14 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> DeclinedModules { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The modules this import did NOT write because each requires a package release newer than the
+    /// module this instance runs (MeshWeaver.Plugins#2715) — the second per-module decline. Each
+    /// entry is <c>module (requires AI@^1.20.0, runs 1.12.1)</c>. Every sibling module synced; these
+    /// sync on the first import after the required module is running here.
+    /// </summary>
+    public ImmutableList<string> ModulesAwaitingModule { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///

@@ -33,7 +33,16 @@ public static class ModuleSyncOutcomeKind
 /// the manifest carries none.</param>
 /// <param name="Floor">The module's declared platform floor (<c>content.minMeshVersion</c> of its
 /// root <c>index.json</c>), or null when it declares none.</param>
-public sealed record ModuleReading(string Module, string Root, string? ModuleVersion, string? Floor);
+public sealed record ModuleReading(string Module, string Root, string? ModuleVersion, string? Floor)
+{
+    /// <summary>
+    /// The package requirements the module root's <c>index.json</c> declares
+    /// (<c>content.requires</c>, e.g. <c>AI@^1.20.0</c>) — what its sources need of the modules
+    /// they call into. Empty when it declares none. An init property, not a fifth positional
+    /// parameter: that would replace a public record's constructor (a binary break).
+    /// </summary>
+    public ImmutableList<string> Requires { get; init; } = [];
+}
 
 /// <summary>
 /// One module's outcome for one import, as recorded on the sync config
@@ -52,6 +61,20 @@ public sealed record ModuleSyncOutcome(
 
     /// <summary>The declared floor, when the module was declined on it.</summary>
     public string? Floor { get; init; }
+
+    /// <summary>The package requirement the module was declined on (<c>AI@^1.20.0</c>), when it
+    /// was declined because this instance runs that package's module below the requirement's floor
+    /// (MeshWeaver.Plugins#2715); null otherwise.</summary>
+    public string? UnmetRequirement { get; init; }
+
+    /// <summary>The version of the required package's module this instance runs, when the module
+    /// was declined on <see cref="UnmetRequirement"/>; null otherwise.</summary>
+    public string? RunningDependencyVersion { get; init; }
+
+    /// <summary>The short form every surface names a requirement decline by:
+    /// <c>Hosting (requires AI@^1.20.0, runs 1.12.1)</c>.</summary>
+    public string DescribeUnmetRequirement() =>
+        $"{Module} (requires {UnmetRequirement}, runs {RunningDependencyVersion})";
 }
 
 /// <summary>
@@ -65,9 +88,10 @@ public sealed record ModuleSyncOutcome(
 ///   <item><description><b>Declined</b> — the module declares a platform floor above the running
 ///   platform (<see cref="PlatformFloor.Evaluate"/> — the ONE floor decision every package consumer
 ///   uses, policy <c>package-min-mesh-version</c>; an unknown, unreadable or unordered version on
-///   either side, or a local <c>-ci.0</c> build, is accepted, never declined). The ONE per-module decline:
-///   the module's paths are neither written nor pruned, the reason names both versions, and it
-///   holds NO sibling module.</description></item>
+///   either side, or a local <c>-ci.0</c> build, is accepted, never declined) — or (MeshWeaver.Plugins#2715,
+///   <see cref="DecideAgainstRunningModules"/>) requires a package release above the module this
+///   instance runs. Either way the module's paths are neither written nor pruned, the reason names
+///   both versions, and it holds NO sibling module.</description></item>
 ///   <item><description><b>Unchanged</b> — the incoming <c>moduleVersion</c> equals the one this
 ///   Space recorded when that module last landed, and the import is not a reconcile or a force:
 ///   nothing is written.</description></item>
@@ -101,17 +125,123 @@ public static class ModuleSyncDecision
         IReadOnlyDictionary<string, string>? held,
         string? runningPlatformVersion,
         bool reconcile)
+        => DecideAgainstRunningModules(incoming, held, runningPlatformVersion, reconcile, runningModules: null);
+
+    /// <summary>
+    /// <see cref="Decide"/> with the package versions of the modules this instance RUNS — the second
+    /// per-module decline (MeshWeaver.Plugins#2715): a module whose <see cref="ModuleReading.Requires"/>
+    /// names a package this instance runs BELOW the requirement's floor is declined, exactly as a
+    /// platform floor above the running platform is, and every sibling still syncs.
+    ///
+    /// <para>🚨 <b>Why.</b> In-mesh sources compile against the module assemblies the process has
+    /// LOADED, not against the ones their repository builds them with. Measured on the control
+    /// instance 2026-10-02: a Hosting import brought sources calling <c>ModelOutcome</c> /
+    /// <c>ModelCalibration</c> (MeshWeaver.AI from Plugins#2638) while the instance ran AI 1.12.1,
+    /// and 16 Hosting NodeTypes went to <c>Error</c> (CS0246/CS0103) — nothing held the import. A
+    /// declined module keeps its last-good sources and builds; it syncs on the first import after
+    /// the required module version is running.</para>
+    ///
+    /// <para>🚨 <b>Only the FLOOR is judged, and only where something is known.</b> A requirement
+    /// whose package this instance runs no recorded version of (a content-only package, a module
+    /// with no recorded version) decides nothing; neither does a range shape without a readable
+    /// lower bound. The upper bound of a caret range is NOT a decline here: a NEWER major of a
+    /// dependency is a compatibility question the module set's own check answers
+    /// (<c>ModuleDependencyFloor</c>), while an OLDER one is certainly missing what the sources
+    /// call — which is the failure this exists to prevent.</para>
+    /// </summary>
+    /// <param name="incoming">The modules the incoming tree carries.</param>
+    /// <param name="held">Module → manifest hash this Space recorded when each last landed.</param>
+    /// <param name="runningPlatformVersion">The running platform build, or null when unknown.</param>
+    /// <param name="reconcile">True for a reconcile or a force import.</param>
+    /// <param name="runningModules">Package id (case-insensitive) → the version of its module this
+    /// instance runs (<c>MeshWeaver.Mesh.ActivatedModuleVersion</c>); null or empty judges no
+    /// requirement.</param>
+    /// <returns>One outcome per module, ordinal by module name.</returns>
+    public static ImmutableList<ModuleSyncOutcome> DecideAgainstRunningModules(
+        IReadOnlyList<ModuleReading> incoming,
+        IReadOnlyDictionary<string, string>? held,
+        string? runningPlatformVersion,
+        bool reconcile,
+        IReadOnlyDictionary<string, string>? runningModules)
     {
         ArgumentNullException.ThrowIfNull(incoming);
         return incoming
             .OrderBy(m => m.Module, StringComparer.Ordinal)
-            .Select(module => DecideOne(module, held, runningPlatformVersion, reconcile))
+            .Select(module => DecideOne(module, held, runningPlatformVersion, reconcile, runningModules))
             .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The first requirement of <paramref name="requires"/> whose package this instance runs at a
+    /// version BELOW the requirement's floor, as (requirement, package, running version, floor);
+    /// null when every judged requirement is met or none can be judged. Pure.
+    /// </summary>
+    /// <param name="requires">The declared requirements (<c>AI@^1.20.0</c>).</param>
+    /// <param name="runningModules">Package id → running module version.</param>
+    public static (string Requirement, string Package, string Running, string Floor)? UnmetFloor(
+        IReadOnlyList<string> requires, IReadOnlyDictionary<string, string>? runningModules)
+    {
+        ArgumentNullException.ThrowIfNull(requires);
+        if (runningModules is null || runningModules.Count == 0)
+            return null;
+        foreach (var requirement in requires)
+        {
+            if (string.IsNullOrWhiteSpace(requirement))
+                continue;
+            var at = requirement.IndexOf('@');
+            var package = (at < 0 ? requirement : requirement[..at]).Trim();
+            if (package.Length == 0
+                || !TryGetIgnoreCase(runningModules, package, out var running)
+                || !IsOrderedVersion(running))
+                continue;
+            if (at < 0 || LowerBound(requirement[(at + 1)..]) is not { } floor)
+                continue;
+            if (NuGetVersionComparer.Instance.Compare(running, floor) < 0)
+                return (requirement.Trim(), package, running, floor);
+        }
+        return null;
+    }
+
+    private static bool TryGetIgnoreCase(IReadOnlyDictionary<string, string> map, string key, out string value)
+    {
+        foreach (var pair in map)
+            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(pair.Value))
+            {
+                value = pair.Value;
+                return true;
+            }
+        value = "";
+        return false;
+    }
+
+    /// <summary>The inclusive lower bound of a requirement range — <c>^1.20.0</c>, <c>~1.20.0</c>,
+    /// <c>&gt;=1.20.0</c>, <c>=1.20.0</c> or a bare <c>1.20.0</c> all floor at <c>1.20.0</c> — or
+    /// null for a shape with no readable floor (<c>*</c>, <c>&gt;1.2</c>, empty).</summary>
+    private static string? LowerBound(string range)
+    {
+        var text = range.Trim();
+        if (text.StartsWith(">=", StringComparison.Ordinal))
+            text = text[2..];
+        else if (text.StartsWith('^') || text.StartsWith('~') || text.StartsWith('='))
+            text = text[1..];
+        text = text.Trim();
+        return IsOrderedVersion(text) ? text : null;
+    }
+
+    private static bool IsOrderedVersion(string text)
+    {
+        var core = text.Trim();
+        var cut = core.IndexOfAny(['-', '+']);
+        if (cut >= 0)
+            core = core[..cut];
+        var parts = core.Split('.');
+        return parts.Length is >= 1 and <= 4 && parts.All(p => p.Length > 0 && p.All(char.IsAsciiDigit));
     }
 
     private static ModuleSyncOutcome DecideOne(
         ModuleReading module, IReadOnlyDictionary<string, string>? held,
-        string? runningPlatformVersion, bool reconcile)
+        string? runningPlatformVersion, bool reconcile, IReadOnlyDictionary<string, string>? runningModules)
     {
         var heldVersion = held is not null && held.TryGetValue(module.Module, out var h) ? h : null;
 
@@ -131,6 +261,24 @@ public static class ModuleSyncDecision
             {
                 Root = module.Root,
                 Floor = floorVerdict.Floor,
+            };
+
+        // 🚨 MeshWeaver.Plugins#2715 — the second per-module decline: the sources need a module
+        // version this instance does not run yet. Writing them would recompile every NodeType they
+        // touch against the OLDER loaded module and park it in Error; declining keeps the last-good
+        // sources and builds. It applies to a reconcile too — the loaded module is what it is.
+        if (UnmetFloor(module.Requires, runningModules) is { } unmet)
+            return new ModuleSyncOutcome(module.Module, ModuleSyncOutcomeKind.Declined, heldVersion,
+                module.ModuleVersion,
+                $"module '{module.Module}' requires {unmet.Requirement} but this instance runs "
+                + $"'{unmet.Package}' {unmet.Running} — it is not written until a '{unmet.Package}' "
+                + $"module at or above {unmet.Floor} is running here, so its NodeTypes keep their "
+                + "last-good sources instead of compiling against a module that lacks what they call; "
+                + "every other module syncs (MeshWeaver.Plugins#2715)")
+            {
+                Root = module.Root,
+                UnmetRequirement = unmet.Requirement,
+                RunningDependencyVersion = unmet.Running,
             };
 
         if (!reconcile
@@ -183,8 +331,12 @@ public static class ModuleSyncDecision
                     ? module
                     : root.Length > 0 ? root[(root.LastIndexOf('/') + 1)..] : "(root)";
                 var indexPath = root.Length == 0 ? "index.json" : root + "/index.json";
-                var floor = byPath.TryGetValue(indexPath, out var index) ? ParseFloor(index) : null;
-                return new ModuleReading(name, root, version, floor);
+                var hasIndex = byPath.TryGetValue(indexPath, out var index);
+                var floor = hasIndex ? ParseFloor(index!) : null;
+                return new ModuleReading(name, root, version, floor)
+                {
+                    Requires = hasIndex ? ParseRequires(index!) : [],
+                };
             })
             .OrderBy(m => m.Root, StringComparer.Ordinal)
             .ToImmutableList();
@@ -233,6 +385,29 @@ public static class ModuleSyncDecision
         catch (JsonException)
         {
             return (null, null);
+        }
+    }
+
+    private static ImmutableList<string> ParseRequires(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object
+                || !r.TryGetProperty("content", out var content)
+                || content.ValueKind != JsonValueKind.Object
+                || !content.TryGetProperty("requires", out var requires)
+                || requires.ValueKind != JsonValueKind.Array)
+                return [];
+            return requires.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+                .Select(e => e.GetString()!.Trim())
+                .ToImmutableList();
+        }
+        catch (JsonException)
+        {
+            return [];
         }
     }
 

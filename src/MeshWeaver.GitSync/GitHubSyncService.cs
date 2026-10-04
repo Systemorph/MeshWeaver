@@ -853,11 +853,16 @@ public sealed class GitHubSyncService
             // a platform floor above the running one is the ONE decline — its paths are neither
             // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
             // module and imports exactly as before.
-            var modules = ModuleSyncDecision.Decide(
+            // 🚨 MeshWeaver.Plugins#2715 — and against the module versions this instance RUNS: a
+            // module whose index.json requires a package release newer than the one booted here is
+            // the second per-module decline (its sources would compile against a module that lacks
+            // what they call, and park every NodeType they touch in Error).
+            var modules = ModuleSyncDecision.DecideAgainstRunningModules(
                 ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content))),
                 heldModuleVersions,
                 PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                reconcile: policy is { Force: true } or { Reconcile: true });
+                reconcile: policy is { Force: true } or { Reconcile: true },
+                RunningModuleVersions());
             var notWritten = modules
                 .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
                 .ToList();
@@ -865,7 +870,12 @@ public sealed class GitHubSyncService
             foreach (var decline in declined)
                 logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
             var declinedNames = declined
+                .Where(m => m.UnmetRequirement is null)
                 .Select(m => $"{m.Module} (≥ {m.Floor})")
+                .ToImmutableList();
+            var awaitingModule = declined
+                .Where(m => m.UnmetRequirement is not null)
+                .Select(m => m.DescribeUnmetRequirement())
                 .ToImmutableList();
             // Nothing of this tree is written when every file sits under a module that is unchanged
             // or declined — the whole import is a no-op, and says which.
@@ -880,6 +890,7 @@ public sealed class GitHubSyncService
                     declined.Count > 0 ? DeclinedOutcome : "Skipped")
                 {
                     DeclinedModules = declinedNames,
+                    ModulesAwaitingModule = awaitingModule,
                 };
                 return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
             }
@@ -959,6 +970,7 @@ public sealed class GitHubSyncService
                                     {
                                         BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
                                         DeclinedModules = declinedNames,
+                                        ModulesAwaitingModule = awaitingModule,
                                     },
                                     snapshot.CommitSha,
                                     Hold: hold,
@@ -1421,6 +1433,22 @@ public sealed class GitHubSyncService
     /// <see cref="GitHubSyncConfig.ModuleOutcomes"/>.
     /// </summary>
     public const string DeclinedOutcome = "Declined";
+
+    /// <summary>
+    /// Package id → the release of its module this instance booted
+    /// (<see cref="ActivatedModuleVersion"/>, registered by the portal boot) — what an incoming
+    /// module's requirements are judged against (MeshWeaver.Plugins#2715). Empty on a host that
+    /// registers none, which judges no requirement.
+    /// </summary>
+    private ImmutableDictionary<string, string> RunningModuleVersions()
+    {
+        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var activated in hub.ServiceProvider.GetServices<ActivatedModuleVersion>())
+            if (!string.IsNullOrWhiteSpace(activated.Package) && !string.IsNullOrWhiteSpace(activated.Version)
+                && !builder.ContainsKey(activated.Package))
+                builder[activated.Package] = activated.Version;
+        return builder.ToImmutable();
+    }
 
     /// <summary>
     /// The <see cref="GitHubSyncConfig.LastSyncNote"/> sentence for the modules an import declined —
