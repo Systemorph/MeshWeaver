@@ -373,11 +373,20 @@ public static class ActivationRecycle
     /// </summary>
     private static IObservable<Unit> Arm(IMessageHub meshHub)
     {
+        // 🚨 RESOLVE NOTHING HEAVY HERE. This runs on the mesh hub's initialization turn, on the
+        // hub's own thread, CONCURRENTLY with whatever the host's other threads are resolving — and
+        // Autofac builds each singleton under its own lock. Resolving IMeshService here (which
+        // reaches MeshNodeStreamCache) while a caller thread resolved MeshNodeStreamCache (whose
+        // constructor reaches services this chain holds) is a lock-order inversion: both threads wait
+        // on each other forever, and the host never answers. Measured on MeshWeaver.Plugins main
+        // (CrossProcessChangeFeedTest, one hang in ~6 runs: test thread in MeshNodeStreamCache..ctor,
+        // hub thread in ActivationRecycle.Arm, both in LifetimeScope.CreateSharedInstance).
+        // So the agent takes only the change feed (a leaf: it depends on the storage adapter alone)
+        // and resolves the mesh service and AccessService when a request is actually HEARD — by then
+        // every singleton exists and no lock is contested.
         var logger = meshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
         var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
-        var mesh = meshHub.ServiceProvider.GetService<IMeshService>();
-        var access = meshHub.ServiceProvider.GetService<AccessService>();
-        if (feed is null || mesh is null || access is null)
+        if (feed is null)
             return Observable.Return(Unit.Default);
         var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -388,7 +397,12 @@ public static class ActivationRecycle
                 heard.OnNext(change.Path);
         }));
         meshHub.RegisterForDisposal(heard
-            .Select(path => Handle(meshHub, mesh, access, path, logger)
+            .Select(path => Observable.Defer(() =>
+                    meshHub.ServiceProvider.GetService<IMeshService>() is { } mesh
+                    && meshHub.ServiceProvider.GetService<AccessService>() is { } access
+                        ? Handle(meshHub, mesh, access, path, logger)
+                        : Observable.Throw<Unit>(new InvalidOperationException(
+                            "this process has no IMeshService/AccessService to act on the request with")))
                 .Catch((Exception ex) =>
                 {
                     logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", path);
