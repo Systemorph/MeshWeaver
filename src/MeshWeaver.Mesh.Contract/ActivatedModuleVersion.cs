@@ -9,9 +9,11 @@ namespace MeshWeaver.Mesh;
 /// AI 1.20", and the import that writes those sources needs to know which AI THIS instance runs to
 /// hold them when it is older (<c>ModuleSyncDecision.DecideAgainstRunningModules</c> in
 /// MeshWeaver.GitSync). The loaded assembly cannot say: a module's informational version is the
-/// PLATFORM's (MeshWeaver#3732), not its package's. The boot knows, because it chose the copy —
-/// a landed store generation records its package version, and the image's own copy carries the
-/// version stamped at image build (<c>ImageModuleSeed</c>, MeshWeaver#6044).</para>
+/// PLATFORM's (MeshWeaver#3732), not its package's. The boot knows, because it chose the copy: a
+/// landed store generation records the version its bundle was published at. The image's own copy
+/// states NO version yet — its stamp (<c>ImageModuleSeed</c>, MeshWeaver#6044) comes from a
+/// committed lock that can lag its sources, and an understated version would hold sources the
+/// image's copy satisfies.</para>
 ///
 /// <para>🚨 It describes what the boot HANDED THE LOADER. A copy the loader then refused, or one it
 /// fell back from, is reported by <see cref="IncompatibleModule"/> / <see cref="FallbackModule"/>,

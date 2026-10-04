@@ -70,7 +70,11 @@ fetch, over each `manifest.lock` in the incoming tree:
   types from Plugins#2638 while the instance ran AI 1.12.1, and 16 Hosting NodeTypes went to `Error`
   (CS0246/CS0103). Declining keeps the last-good sources and builds instead.
 - **1b judges only what it can know**: the requirement's **lower** bound (`^`, `~`, `>=`, `=` or a bare
-  version), against a package this instance runs a module of with a recorded release. A content-only
+  version), against a package this instance runs a module of with a recorded release. Only a
+  LANDED store copy records one today. The image's own copy states none, because its seed stamp
+  comes from a committed main-owned lock that can lag its sources (Plugins `AI/manifest.lock` read
+  1.20.4 at `fd3dbd1e` over newer AI sources). An understated version would hold sources the image
+  satisfies. A content-only
   package, an unrecorded release, or a range with no readable floor decides nothing. A newer major
   above a caret's ceiling is not a decline here: that is a compatibility question, and
   `ModuleDependencyFloor` answers it for the module set.

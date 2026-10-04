@@ -254,8 +254,9 @@ public class ImageCopyVersionDiscriminatorTest : IDisposable
         var image = Assert.Single(Boot());
         image.Landed.Should().BeNull("1.16.4 is older than the image's 1.16.5");
         ModuleActivationBoot.ActivatedVersionOf(image, name => ImageModuleSeed.Read(imageModuleDir, name))
-            .Should().Be(new MeshWeaver.Mesh.ActivatedModuleVersion(Plugin, "AcmeWidgets", "1.16.5"),
-                "the image's copy runs, so the instance runs the image's stamped release — not the declined store one");
+            .Should().Be(new MeshWeaver.Mesh.ActivatedModuleVersion(Plugin, "AcmeWidgets", null),
+                "the image's copy runs, and its stamp comes from a committed lock that can lag its sources — "
+                + "so it states no version (judging nothing), and never the declined store copy's 1.16.4");
     }
 
     // ───────────────────────────────────────────────────────────────────────── harness

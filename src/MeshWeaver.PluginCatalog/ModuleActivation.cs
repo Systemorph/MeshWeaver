@@ -3043,8 +3043,15 @@ public static class ModuleActivationBoot
                 : null;
             return new ActivatedModuleVersion(landed.Name, package, landed.Version);
         }
+        // 🚨 The image's own copy states its PACKAGE and NO version. Its stamp is read from the
+        // COMMITTED manifest.lock, and a main-owned lock lags the tree it was built from until the
+        // settle job lands (measured 2026-10-04: AI/manifest.lock read 1.20.4 at Plugins fd3dbd1e
+        // over AI sources a release newer). A stamp that low is SAFE for the #6044 choice (an
+        // equal store version still loses to the image) but would make the import decline sources
+        // the image's copy satisfies — so until the image build materializes its locks it states
+        // nothing here, and nothing unknown is judged.
         var seed = (imageSeedOf ?? ImageModuleSeed.OfImageCopy)(name);
-        return new ActivatedModuleVersion(name, seed?.Package, seed?.Version);
+        return new ActivatedModuleVersion(name, seed?.Package, Version: null);
     }
 
     /// <summary>
