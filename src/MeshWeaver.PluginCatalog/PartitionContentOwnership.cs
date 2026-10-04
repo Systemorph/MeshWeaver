@@ -229,6 +229,69 @@ public static class PartitionContentOwnership
             });
 
     /// <summary>
+    /// What the partition's own sync sources have LANDED, per module — the fold of every registered
+    /// provider's <see cref="IPartitionSourceTracking.SyncedModules"/>. Cold, emits exactly once,
+    /// never faults: a provider that faults, stalls or cannot say contributes nothing, and when no
+    /// provider could say the reading is <see cref="SyncedModuleVersions.Unknown"/> — which licenses
+    /// no convergence.
+    ///
+    /// <para>Used by the two unattended registry lanes to converge a SYNC-OWNED package (maintainer,
+    /// 2026-10-04): when the sync has landed exactly the candidate's content, the install record
+    /// adopts it and its module lands — no content is written, so there is still ONE writer.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose service provider carries the seam.</param>
+    /// <param name="partition">The partition (a top-level path segment).</param>
+    public static IObservable<SyncedModuleVersions> SyncedModules(IMessageHub hub, string partition)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return Observable.Defer(() =>
+        {
+            var providers = hub.ServiceProvider.GetServices<IPartitionSourceTracking>().ToArray();
+            if (providers.Length == 0)
+                return Observable.Return(SyncedModuleVersions.Unknown);
+            return providers
+                .Select(p => Observable.Defer(() => p.SyncedModules(partition))
+                    .Take(1)
+                    .DefaultIfEmpty(SyncedModuleVersions.Unknown)
+                    .Timeout(TrackingBudget)
+                    .Catch<SyncedModuleVersions, Exception>(_ => Observable.Return(SyncedModuleVersions.Unknown)))
+                .CombineLatest()
+                .Take(1)
+                .Select(FoldSynced)
+                .Catch<SyncedModuleVersions, Exception>(_ => Observable.Return(SyncedModuleVersions.Unknown));
+        });
+    }
+
+    /// <summary>Several providers' readings into one: known when ANY provider answered; the
+    /// versions of every known reading merged. Pure.</summary>
+    /// <param name="readings">One reading per provider.</param>
+    public static SyncedModuleVersions FoldSynced(IEnumerable<SyncedModuleVersions> readings)
+    {
+        ArgumentNullException.ThrowIfNull(readings);
+        var known = readings.Where(r => r.Known).ToList();
+        return known.Count == 0
+            ? SyncedModuleVersions.Unknown
+            : SyncedModuleVersions.Of(known.SelectMany(r => r.Versions));
+    }
+
+    /// <summary>
+    /// Whether the installer's view of a sync-owned package may CONVERGE to the candidate without
+    /// writing content: the content is not the installer's, but its owner has landed exactly the
+    /// candidate's tree. Pure, so every arm is pinnable without a mesh.
+    /// </summary>
+    /// <param name="ownership">Who owns the partition's content.</param>
+    /// <param name="synced">What the partition's sync sources have landed.</param>
+    /// <param name="module">The package (module) id.</param>
+    /// <param name="contentHash">The candidate's content hash.</param>
+    public static bool SyncDelivered(
+        PartitionContentOwnershipVerdict ownership, SyncedModuleVersions synced, string? module, string? contentHash)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        ArgumentNullException.ThrowIfNull(synced);
+        return ownership.Owner == PartitionContentOwner.SyncSource && synced.Delivered(module, contentHash);
+    }
+
+    /// <summary>
     /// Whether the partition's own writers DEFINITELY import from a repository other than the one
     /// this candidate is sealed from — the only condition under which a PROVEN ref may be held
     /// (MeshWeaver#4625).

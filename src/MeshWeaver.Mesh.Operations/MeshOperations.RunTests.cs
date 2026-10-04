@@ -89,6 +89,33 @@ public partial class MeshOperations
     // and the first frame that is not a progress frame is the verdict.
     private IObservable<Unit> WatchTestsArea(
         string nodePath, AccessContext? caller, IPathResolver pathResolver, TimeSpan budget, ActivityContext ctx) =>
+        Preflight(ctx).SelectMany(_ => WatchVerdict(nodePath, caller, pathResolver, budget, ctx));
+
+    /// <summary>
+    /// 🚨 THE FIRST STEP OF THE RUN, the framework's (maintainer, 2026-10-04: "should be always
+    /// beginning of each test run", "done by framework"): resolve the target set, read what this
+    /// mesh runs, converge it (the instance's own reconcile — nothing its Auto policy would not do
+    /// anyway), or REFUSE naming the skew; and log the versions under test as the run's header, so
+    /// the verdict below names exactly what it tested. A mesh without a target-set provider is an
+    /// in-process mesh and passes straight through, its header still logged.
+    /// </summary>
+    private IObservable<Unit> Preflight(ActivityContext ctx) =>
+        Observable.Defer(() => (hub.ServiceProvider.GetService<ITestRunPreflight>() ?? TestRunPreflight.Default)
+                .Prepare(mayConverge: true)
+                .Take(1))
+            .Select(result =>
+            {
+                ctx.Log(new LogMessage(result.Versions.Header(all: false), LogLevel.Information)
+                    .WithKey("activity.tests.versions", ("header", (object?)result.Versions.Header(all: false))));
+                ctx.Log(new LogMessage(result.Message, result.Proceed ? LogLevel.Information : LogLevel.Warning)
+                    .WithKey("activity.tests.preflight", ("message", (object?)result.Message)));
+                if (!result.Proceed)
+                    throw new InvalidOperationException(result.Message);
+                return Unit.Default;
+            });
+
+    private IObservable<Unit> WatchVerdict(
+        string nodePath, AccessContext? caller, IPathResolver pathResolver, TimeSpan budget, ActivityContext ctx) =>
         Observable.Defer(() =>
         {
             // The last frame seen, so a timeout can NAME the case that never finished. Written only

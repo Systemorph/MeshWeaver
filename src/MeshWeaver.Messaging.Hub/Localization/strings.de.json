@@ -1773,6 +1773,8 @@
   "activity.tests.case": "{result} {case} ({time})",
   "activity.tests.caseOutput": "{result} {case} ({time}) — {output}",
   "activity.tests.summary": "{passed} von {total} Fällen bestanden",
+  "activity.tests.versions": "{header}",
+  "activity.tests.preflight": "{message}",
   "tests.progress":"{0}-Tests — {1} von {2} erledigt, seit {3}s in Arbeit",
   "tests.column.class": "Klasse",
   "tests.column.case": "Fall",
