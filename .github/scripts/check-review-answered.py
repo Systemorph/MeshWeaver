@@ -940,7 +940,16 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
         action, why = advance_action(pr, run, job, verdict)
     if action == "rerun":
-        gh.post(f"actions/runs/{run['id']}/rerun-failed-jobs")
+        try:
+            gh.post(f"actions/runs/{run['id']}/rerun-failed-jobs")
+        except ReadError:
+            # Lost a race (the sweep and a listener, two listeners): if the run is no longer completed,
+            # another invocation re-ran it — that is the outcome wanted, not a failure.
+            again = gh.api(f"actions/runs/{run['id']}")
+            if (again or {}).get("status") != "completed":
+                print(f"  #{number}: run {run['id']} is already {again.get('status')} — another invocation re-ran it")
+                return "none"
+            raise
         if verdict.loud:
             print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::#{number}: {verdict.loud}")
         print(f"::notice::#{number}: {why} — {run.get('html_url')}")
