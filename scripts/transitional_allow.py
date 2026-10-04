@@ -599,6 +599,11 @@ def self_test() -> int:
                 raise RuntimeError(f"git {' '.join(args)}: {done.stderr}")
 
         run("init", "-q", "-b", "main")
+        # Commits in this throwaway repo need no background maintenance. Git can start an
+        # auto-gc after a commit and keep writing under .git after the command returns;
+        # TemporaryDirectory would then race that writer during cleanup.
+        run("config", "maintenance.auto", "false")
+        run("config", "gc.auto", "0")
         (root / allow).write_text("# header only\n", encoding="utf-8")
         run("add", allow)
         run("commit", "-qm", "base")

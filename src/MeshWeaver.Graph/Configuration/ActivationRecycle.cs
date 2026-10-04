@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -375,29 +374,40 @@ public static class ActivationRecycle
     {
         var logger = meshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
         var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
-        var mesh = meshHub.ServiceProvider.GetService<IMeshService>();
-        var access = meshHub.ServiceProvider.GetService<AccessService>();
-        if (feed is null || mesh is null || access is null)
+        if (feed is null)
             return Observable.Return(Unit.Default);
-        var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        meshHub.RegisterForDisposal(heard);
-        meshHub.RegisterForDisposal(feed.Subscribe(change =>
-        {
-            if (IsRequest(change) && handled.TryAdd(change.Path, 0))
-                heard.OnNext(change.Path);
-        }));
-        meshHub.RegisterForDisposal(heard
-            .Select(path => Handle(meshHub, mesh, access, path, logger)
+        // Arm runs during this hub's buildup. IMeshService resolves IMessageHub, so neither
+        // resolution nor request handling may run until the hub's initialization gate opens.
+        // One subscription carries the feed straight into Concat: even a synchronous emission
+        // during Subscribe has a listener, and a request heard during buildup waits in the channel.
+        meshHub.RegisterForDisposal(Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Where(change => IsRequest(change) && handled.TryAdd(change.Path, 0))
+            .Select(change => WhenStarted(meshHub.RunLevelChanged, () => Handle(
+                    meshHub,
+                    meshHub.ServiceProvider.GetRequiredService<IMeshService>(),
+                    meshHub.ServiceProvider.GetRequiredService<AccessService>(),
+                    change.Path,
+                    logger))
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", path);
+                    logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", change.Path);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
             .Subscribe(_ => { }, ex => logger?.LogError(ex, "[ActivationRecycle] the agent on {Hub} stopped", meshHub.Address)));
         return Observable.Return(Unit.Default);
     }
+
+    /// <summary>Waits for startup before subscribing to one request's work; fails if teardown wins.</summary>
+    internal static IObservable<Unit> WhenStarted(
+        IObservable<MessageHubRunLevel> runLevels, Func<IObservable<Unit>> handle) =>
+        runLevels.Where(level => level >= MessageHubRunLevel.Started)
+            .Take(1)
+            .SelectMany(level => level == MessageHubRunLevel.Started
+                ? Observable.Defer(handle)
+                : Observable.Throw<Unit>(new ObjectDisposedException(nameof(ActivationRecycle),
+                    $"The mesh hub reached {level} before the recycle request could be handled.")));
 
     /// <summary>
     /// Whether a change event is the commit of a request (not a report, not a nested node). Created
