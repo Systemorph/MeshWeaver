@@ -110,6 +110,29 @@ USAGE
   check-review-answered.py --repo O/R --pr N [--as-of 2026-09-14T14:04:21Z]
   check-review-answered.py --repo O/R --pr N --arm-gate     (auto-arm.yml: may auto-merge be armed now?)
   check-review-answered.py --repo O/R --merge-group-ref refs/heads/gh-readonly-queue/main/pr-N-<sha>
+  check-review-answered.py --repo O/R --pr N --stage-gate --since <run created_at>
+        (node-repo-stage-gate.yml: may the expensive suites start for this head?)
+  check-review-answered.py --repo O/R --stage-advance --workflow ci.yml (--head-sha S | --pr N | --sweep)
+        (node-repo-stage-advance.yml: re-run a waiting run's failed jobs now that stage 1 is green)
+
+THE STAGE GATE (Doc/Architecture/StagedPullRequestPipeline)
+-----------------------------------------------------------
+Stage 0 (cheap static controls) and stage 1 (this head's automatic review landed AND every
+reviewer thread answered) must be green before stage 2 (test shards, portal hosts, gate shards,
+bundles) spends a runner on the head; arming waits for stage 2. `stage_readiness` is stage 1's
+predicate. It shares `internal_review_runs`, `listing_incomplete` and `reviewer_threads` with the
+arm gate, so the two can never disagree about "reviewed" or "answered". It differs from the arm
+gate in exactly the three places where a stage-1 hold would otherwise freeze the fleet:
+  * the reviewer-unavailable degradation RELEASES stage 2 (arming still refuses it);
+  * no completed review `--fallback-minutes` after the head's run was created RELEASES stage 2
+    (a review OUTAGE posts nothing at all, so no event could ever release it);
+  * the label `tests-before-review` RELEASES stage 2 (runner spend only — arming is unaffected).
+Each release is LOUD (::warning:: + job summary). Unanswered threads never fall back: that wait is
+a person's, not the infrastructure's.
+
+`--stage-advance` is the event half: it re-evaluates `stage_readiness` and, only when it is green
+and the head's newest CI run holds a FAILED stage gate, POSTs `rerun-failed-jobs` (the doctrine's
+own re-run remedy, review-answered-on-degradation.yml). `--sweep` is the bounded-fallback timer.
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
@@ -583,6 +606,127 @@ def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
     return ArmVerdict(True, "", notes)
 
 
+# ─────────────────────────────── the STAGE gate (pure) ───────────────────────────────
+#
+# Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
+# must pass before we start test. and we arm only at end of test". Stage 1's predicate — the head's
+# automatic review landed and every thread answered — asked BEFORE the expensive suites, not after.
+# Design of record, with the measurements: Doc/Architecture/StagedPullRequestPipeline.
+
+TESTS_FIRST_LABEL = "tests-before-review"
+#: Minutes after the head's CI run was created with NO completed review, after which stage 2
+#: starts anyway (loudly). Derived from the measured review latency — see the design doc.
+STAGE_FALLBACK_MINUTES = 120
+STAGE_GATE_JOB = "Stage 1: review landed and answered"
+#: Every hold's error MESSAGE starts with this (stage gate, Plugins `admission`, core `Consolidate test
+#: results`), so a hold is recognisable from the annotations alone — Plugins' PrBabysitter reads it.
+STAGE_HOLD_MARKER = "STAGE 2 HELD ("
+
+
+@dataclasses.dataclass(frozen=True)
+class StageVerdict:
+    ready: bool
+    #: reviewed | degraded | fallback | label | draft | waiting | unanswered | unreadable
+    mode: str
+    #: ONE line naming what holds stage 2 (empty when ready).
+    missing: str
+    #: When `ready` came from a RELEASE rather than a review: the line every surface prints LOUDLY.
+    loud: str = ""
+    notes: tuple[str, ...] = ()
+
+
+def parse_stamp(stamp: str | None) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.strptime(stamp or "", "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+
+
+def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
+                    fallback_minutes: int = STAGE_FALLBACK_MINUTES) -> StageVerdict:
+    """May stage 2 start for this head? Pure; `now` and `since` are ISO-8601 UTC stamps (`since` =
+    when the head's CI run was created, i.e. when stage 1 began)."""
+    number = pr.get("number")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    short = head[:10] or "(unknown)"
+    labels = {l.get("name") for l in pr.get("labels") or []}
+    if TESTS_FIRST_LABEL in labels:
+        return StageVerdict(True, "label", "", (
+            f"STAGE 2 STARTED BEFORE THE REVIEW of {short}: label `{TESTS_FIRST_LABEL}` is on #{number}. "
+            "Runner minutes only — arming still waits for this head's review and every answer."))
+    if pr.get("draft"):
+        return StageVerdict(False, "draft", f"#{number} is a draft — a draft is not reviewed, so stage 2 waits for ready-for-review "
+                                            f"(or the label `{TESTS_FIRST_LABEL}` to run the suites before the review)")
+    mine = internal_review_runs(check_runs, head)
+    run = newest_internal_review_run(mine, None)
+    if run is None:
+        t_now, t_since = parse_stamp(now), parse_stamp(since)
+        if t_now is None or t_since is None:
+            return StageVerdict(False, "unreadable", f"cannot tell how long head {short} has waited (now={now!r}, since={since!r}) — "
+                                                     "not released on a guess")
+        waited = (t_now - t_since).total_seconds() / 60
+        running = [c for c in mine if c.get("status") != "completed"]
+        state = (f"is still {running[0].get('status') or 'running'} (check run {running[0].get('id')})" if running
+                 else "has not started")
+        if waited >= fallback_minutes:
+            return StageVerdict(True, "fallback", "", (
+                f"REVIEW UNAVAILABLE: the `{DEGRADATION_CHECK_NAME}` review of head {short} {state} after {waited:.0f} min "
+                f"(fallback {fallback_minutes} min) — stage 2 started WITHOUT it. Arming still waits for the review; "
+                "if the reviewer is down, that is the incident to chase."))
+        return StageVerdict(False, "waiting", (
+            f"the `{DEGRADATION_CHECK_NAME}` review of head {short} {state} ({waited:.0f} of {fallback_minutes} min) — "
+            "stage 2 starts the moment it completes and every finding is answered (event-driven), or at the fallback"))
+    title = ((run.get("output") or {}).get("title") or "").strip()
+    if degradation_of([run], None) is not None:
+        return StageVerdict(True, "degraded", "", (
+            f"REVIEWER UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — stage 2 started without a review. "
+            "Arming still refuses a degraded head; a person merges, and a post-merge review is owed."))
+    notes = (f"`{DEGRADATION_CHECK_NAME}` completed on head {short}: {run.get('conclusion')} \"{title}\" (check run {run.get('id')})",)
+    incomplete = listing_incomplete(pr, comments)
+    if incomplete:
+        return StageVerdict(False, "unreadable", incomplete + " — it re-evaluates on the next event", notes=notes)
+    roots, unanswered = reviewer_threads(comments)
+    notes += (f"threads opened by the automatic reviewer: {len(roots)}, answered by a person: {len(roots) - len(unanswered)}",)
+    if unanswered:
+        first = unanswered[0]
+        return StageVerdict(False, "unanswered", (
+            f"{len(unanswered)} of {len(roots)} reviewer thread(s) have no reply from a person "
+            f"(first: {first.get('html_url') or first.get('id')}) — reply to each (fixed, or why not); a fix push restarts at stage 0"),
+            notes=notes)
+    return StageVerdict(True, "reviewed", "", notes=notes)
+
+
+def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: StageVerdict) -> tuple[str, str]:
+    """What the event half does for ONE pull request: ('rerun' | 'wait' | 'none', why). Pure.
+
+    `run` is the newest `pull_request` run of the caller's CI workflow for the PR's CURRENT head,
+    `gate_job` that run's stage-gate job. Only a FAILED gate on the current head with a GREEN stage
+    1 is re-run — never a run of an older head (no stale verdict carried), never a gate that is
+    still evaluating (it reads live state itself), never a gate that already passed."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if pr.get("state") not in (None, "open"):
+        return "none", f"#{pr.get('number')} is {pr.get('state')}"
+    if run is None:
+        return "none", f"no pull_request CI run exists for head {head[:10]} yet — the push's own run evaluates stage 1"
+    if run.get("head_sha") != head:
+        return "none", f"run {run.get('id')} is for {str(run.get('head_sha'))[:10]}, not the current head {head[:10]} — a new head restarts at stage 0"
+    if gate_job is None:
+        return "none", f"run {run.get('id')} has no `{STAGE_GATE_JOB}` job — this caller has not adopted the stage gate"
+    if gate_job.get("status") != "completed":
+        return "none", f"the stage gate of run {run.get('id')} is still {gate_job.get('status')} — it evaluates live state itself"
+    if gate_job.get("conclusion") == "success":
+        return "none", f"the stage gate of run {run.get('id')} already passed — stage 2 started"
+    if gate_job.get("conclusion") != "failure":
+        return "none", f"the stage gate of run {run.get('id')} concluded {gate_job.get('conclusion')} — only a failed gate is re-run"
+    if not verdict.ready:
+        return "none", f"stage 1 still holds head {head[:10]}: {verdict.missing}"
+    if run.get("status") != "completed":
+        return "wait", f"run {run.get('id')} is still {run.get('status')} — a re-run needs it completed"
+    if run.get("conclusion") == "cancelled":
+        return "none", f"run {run.get('id')} was cancelled (superseded) — a cancelled run is never revived"
+    return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -616,6 +760,12 @@ class Gh:
                 raise ReadError(f"GET repos/{self.repo}/{path} did not return a list of pages")
             data = [item for page in data for item in page]
         return data
+
+    def post(self, path: str) -> None:
+        p = subprocess.run(["gh", "api", "-X", "POST", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"],
+                           capture_output=True, text=True, check=False)
+        if p.returncode != 0:
+            raise ReadError(f"POST repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
 
     def role(self, login: str) -> str:
         data = self.api(f"collaborators/{login}/permission")
@@ -696,6 +846,153 @@ def run_arm_gate(repo: str, number: int) -> int:
         with open(out, "a", encoding="utf-8") as f:
             f.write(f"ready={'true' if verdict.ready else 'false'}\n")
     return 0
+
+
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _append(env_key: str, text: str) -> None:
+    path = os.environ.get(env_key)
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+
+
+def run_stage_gate(repo: str, number: int, since: str, fallback_minutes: int) -> int:
+    """The stage gate job: exit 0 when stage 2 may start, 1 (RED, named) when it may not. A RED here
+    is a HOLD, not a defect: the heavy legs skip, the required aggregators read red naming this line,
+    and the event half (`--stage-advance`) re-runs the failed jobs when stage 1 turns green."""
+    try:
+        pr, comments, check_runs = read_arm_inputs(Gh(repo), number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), since, fallback_minutes)
+    except (ReadError, KeyError) as e:
+        verdict = StageVerdict(False, "unreadable", f"cannot read #{number}'s review state, so stage 2 is not started on a guess: {e}")
+    for n in verdict.notes:
+        print(f"  {n}")
+    if verdict.ready and verdict.loud:
+        print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::{verdict.loud}")
+        line = f"⚠️ Stage 2 started for #{number} — {verdict.loud}"
+    elif verdict.ready:
+        line = f"✅ Stage 1 green for #{number}: the head's review landed and every reviewer thread is answered — stage 2 starts."
+    else:
+        # The MESSAGE carries the marker (STAGE_HOLD_MARKER): an annotation's title is not what a reader
+        # of the check's annotations sees first, and the PR babysitter keys its "a hold, not a defect"
+        # class on the message (MeshWeaver.Plugins PrBabysitter.StageHoldMarker).
+        print(f"::error title=Stage 2 held — stage 1 ({verdict.mode})::{STAGE_HOLD_MARKER}stage 1, {verdict.mode}): {verdict.missing}")
+        line = f"⏸ Stage 2 held for #{number} ({verdict.mode}): {verdict.missing}"
+    print(line)
+    _append("GITHUB_STEP_SUMMARY", "### Staged pipeline — stage 1\n\n" + line + "\n")
+    _append("GITHUB_OUTPUT", f"ready={'true' if verdict.ready else 'false'}\nmode={verdict.mode}\n")
+    return 0 if verdict.ready else 1
+
+
+def newest_ci_run(gh: Gh, workflow: str, head_sha: str) -> dict | None:
+    listing = gh.api(f"actions/workflows/{workflow}/runs?head_sha={head_sha}&event=pull_request&per_page=50")
+    runs = (listing or {}).get("workflow_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list):
+        raise ReadError(f"actions/workflows/{workflow}/runs?head_sha={head_sha[:10]} did not return a run listing")
+    return max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
+
+
+def stage_gate_job(gh: Gh, run_id: int) -> dict | None:
+    # The jobs listing pages are objects ({total_count, jobs}), not lists, so they are paged by hand;
+    # a short listing is an unreadable one (a gate job missing from page 3 must not read as absent).
+    flat: list = []
+    for page in range(1, 11):
+        data = gh.api(f"actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}")
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list) or not isinstance(data.get("total_count"), int):
+            raise ReadError(f"actions/runs/{run_id}/jobs page {page} did not return a job listing")
+        flat += data["jobs"]
+        if len(flat) >= data["total_count"] or not data["jobs"]:
+            break
+    if len(flat) < (data.get("total_count") or 0):
+        raise ReadError(f"actions/runs/{run_id}/jobs returned {len(flat)} of {data.get('total_count')} jobs")
+    gates = [j for j in flat if str(j.get("name") or "").endswith(STAGE_GATE_JOB)]
+    return max(gates, key=lambda j: (j.get("started_at") or "", j.get("id") or 0)) if gates else None
+
+
+def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_minutes: int) -> str:
+    pr = gh.api(f"pulls/{number}")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    run = newest_ci_run(gh, workflow, head) if re.fullmatch(r"[0-9a-f]{40}", head) else None
+    job = stage_gate_job(gh, int(run["id"])) if run else None
+    verdict = StageVerdict(False, "unread", "not evaluated")
+    if job is not None and job.get("status") == "completed" and job.get("conclusion") == "failure":
+        _, comments, check_runs = read_arm_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
+    action, why = advance_action(pr, run, job, verdict)
+    deadline = time.monotonic() + wait_minutes * 60
+    waited = action == "wait"
+    while action == "wait" and time.monotonic() < deadline:
+        print(f"  #{number}: {why}")
+        time.sleep(30)
+        run = gh.api(f"actions/runs/{run['id']}")
+        action, why = advance_action(pr, run, job, verdict)
+    if action == "wait":
+        raise ReadError(f"#{number}: {why} — still not completed after {wait_minutes} min; the sweep re-tries")
+    if action == "rerun" and waited:
+        # 🚨 Everything judged before the wait is stale now (#6070 review): a fix push may have made a
+        # new head (and cancelled this run), the PR may be closed, an answer may have been deleted.
+        # Re-read the pull request and re-judge stage 1 before POSTing, never on the snapshot.
+        pr = gh.api(f"pulls/{number}")
+        _, comments, check_runs = read_arm_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
+        action, why = advance_action(pr, run, job, verdict)
+    if action == "rerun":
+        gh.post(f"actions/runs/{run['id']}/rerun-failed-jobs")
+        if verdict.loud:
+            print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::#{number}: {verdict.loud}")
+        print(f"::notice::#{number}: {why} — {run.get('html_url')}")
+    else:
+        print(f"  #{number}: {why}")
+    return action
+
+
+def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str | None, sweep: bool,
+                      fallback_minutes: int, wait_minutes: int, max_per_run: int = 25) -> int:
+    gh = Gh(repo)
+    errors: list[str] = []
+    try:
+        if pr is not None:
+            numbers = [pr]
+        elif head_sha:
+            pulls = gh.api(f"commits/{head_sha}/pulls?per_page=100")
+            numbers = [p["number"] for p in pulls or () if p.get("state") == "open"
+                       and (p.get("head") or {}).get("sha") == head_sha]
+            if not numbers:
+                print(f"  no OPEN pull request has {head_sha[:10]} as its head — nothing to advance (an older head never is)")
+        else:
+            # The fallback timer: every open pull request whose newest CI run FAILED in the last six
+            # hours. One listing of open PRs and one of failed runs; per-PR reads only for those.
+            open_heads = {p["head"]["sha"]: p["number"] for p in gh.api("pulls?state=open&per_page=100", paginate=True)
+                          if not p.get("draft") and (p.get("head") or {}).get("sha")}
+            cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Paged by hand (the pages are objects): a mass outage is exactly when more than one page
+            # of failed runs exists, and a head on page 2 must not wait for page 1 to age out.
+            failed: set = set()
+            for page in range(1, 11):
+                listing = gh.api(f"actions/workflows/{workflow}/runs?event=pull_request&status=failure"
+                                 f"&created=%3E%3D{cutoff}&per_page=100&page={page}")
+                runs = (listing or {}).get("workflow_runs") if isinstance(listing, dict) else None
+                if not isinstance(runs, list):
+                    raise ReadError(f"the failed-run listing of {workflow} (page {page}) is unreadable")
+                failed |= {r.get("head_sha") for r in runs}
+                if len(runs) < 100:
+                    break
+            numbers = sorted({open_heads[s] for s in failed if s in open_heads})[:max_per_run]
+            print(f"sweep: {len(open_heads)} open non-draft PR(s), {len(failed)} head(s) with a failed run since {cutoff}; examining {numbers}")
+    except ReadError as e:
+        print(f"::error::cannot list what to advance: {e}")
+        return 1
+    for number in numbers:
+        try:
+            advance_one(gh, number, workflow, fallback_minutes, wait_minutes)
+        except (ReadError, KeyError, TypeError) as e:
+            errors.append(f"#{number}: {e}")
+    for e in errors:
+        print(f"::error::stage advance failed — {e}")
+    return 1 if errors else 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -1213,6 +1510,78 @@ def self_test() -> int:
              [_ir(at="2026-10-04T07:00:00Z", crid=940), _ir(conclusion="neutral", title=DEGRADED_TITLE)], "UNAVAILABLE")
     arm_case("draft -> no arm (even when reviewed and answered)", False, draft_pr, [], [_ir()], "is a draft")
 
+    # ── the STAGE gate (node-repo-stage-gate.yml): stage 2 starts only on a reviewed, answered head —
+    # or on one of the three LOUD releases (degradation, fallback, label). Each case names the mode
+    # it must land in AND, for a hold, the phrase it must hold on.
+    T0, T_EARLY, T_LATE = "2026-10-04T08:00:00Z", "2026-10-04T08:20:00Z", "2026-10-04T09:05:00Z"
+    def stage_case(name, mode, pr, comments, runs, now=T_EARLY, says=""):
+        nonlocal failures
+        v = stage_readiness(pr, comments, runs, now, T0, 60)
+        expect_ready = mode in ("reviewed", "degraded", "fallback", "label")
+        ok = (v.mode == mode and v.ready == expect_ready and (says in v.missing if not v.ready else True)
+              and (bool(v.loud) == (mode in ("degraded", "fallback", "label"))))
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage: {name:53} expected={mode} got={v.mode}"
+              f"{'' if v.ready else ' — ' + v.missing[:70]}")
+    stage_case("no review yet, 20 of 60 min -> waiting", "waiting", _pr(0), [], [], says="has not started")
+    stage_case("review running, 20 of 60 min -> waiting", "waiting", _pr(0), [], [_ir(status="in_progress", conclusion=None)],
+               says="still in_progress")
+    stage_case("review only on an OLDER head -> waiting (no stale verdict)", "waiting", _pr(0), [], [_ir(sha="b" * 40)],
+               says="has not started")
+    stage_case("another App's internal-review -> waiting", "waiting", _pr(0), [],
+               [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], says="has not started")
+    stage_case("no review after 65 min -> FALLBACK (loud)", "fallback", _pr(0), [], [], now=T_LATE)
+    stage_case("review still running after 65 min -> FALLBACK (loud)", "fallback", _pr(0), [],
+               [_ir(status="in_progress", conclusion=None)], now=T_LATE)
+    stage_case("reviewer unavailable -> DEGRADED release (loud)", "degraded", _pr(0), [],
+               [_ir(conclusion="neutral", title=DEGRADED_TITLE)])
+    stage_case("neutral but not the unavailable title -> reviewed, not degraded", "reviewed", _pr(0), [],
+               [_ir(conclusion="neutral", title="Nothing to review")])
+    stage_case("reviewed, no findings -> stage 2", "reviewed", _pr(0), [], [_ir()])
+    stage_case("findings answered by a person -> stage 2", "reviewed", _pr(2),
+               [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1)], [_ir(conclusion="failure", title="1 blocking finding")])
+    stage_case("unanswered finding -> held", "unanswered", _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()], says="1 of 1")
+    stage_case("unanswered finding after 65 min -> STILL held (no fallback)", "unanswered", _pr(1),
+               [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()], now=T_LATE, says="1 of 1")
+    stage_case("a bot reply does not answer -> held", "unanswered", _pr(2),
+               [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, OTHER_BOT, 1)], [_ir()], says="1 of 1")
+    stage_case("incomplete comment listing -> held", "unreadable", _pr(5), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
+               says="listing returned")
+    stage_case("draft -> held even after the fallback", "draft", dict(_pr(0), draft=True), [], [], now=T_LATE, says="is a draft")
+    stage_case("label tests-before-review -> released (loud)", "label",
+               dict(_pr(0), draft=True, labels=[{"name": TESTS_FIRST_LABEL}]), [], [])
+    v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
+    ok = (not v.ready) and v.mode == "unreadable"
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an unreadable clock is never a fallback':53} got={v.mode}")
+
+    # ── the EVENT half: only a FAILED gate on the CURRENT head with a GREEN stage 1 is re-run.
+    def adv_case(name, expect, pr, run, job, verdict, says=""):
+        nonlocal failures
+        action, why = advance_action(pr, run, job, verdict)
+        ok = action == expect and says in why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} advance: {name:51} expected={expect} got={action} ({why[:60]})")
+    GREEN_S = StageVerdict(True, "reviewed", "")
+    HELD_S = StageVerdict(False, "unanswered", "1 of 1 reviewer thread(s) have no reply")
+    open_pr = dict(_pr(0), state="open")
+    done_run = {"id": 7, "head_sha": HEAD, "status": "completed", "created_at": T0}
+    failed_gate = {"status": "completed", "conclusion": "failure", "name": f"stage-gate / {STAGE_GATE_JOB}"}
+    adv_case("held run + green stage 1 -> rerun", "rerun", open_pr, done_run, failed_gate, GREEN_S, "re-running")
+    adv_case("held run + stage 1 still held -> none", "none", open_pr, done_run, failed_gate, HELD_S, "still holds")
+    adv_case("run of an OLDER head -> none (no stale verdict)", "none", open_pr, dict(done_run, head_sha="b" * 40),
+             failed_gate, GREEN_S, "new head restarts")
+    adv_case("gate already passed -> none", "none", open_pr, done_run, dict(failed_gate, conclusion="success"), GREEN_S, "already passed")
+    adv_case("gate still evaluating -> none", "none", open_pr, done_run, dict(failed_gate, status="in_progress"), GREEN_S, "still in_progress")
+    adv_case("gate cancelled (superseded) -> none", "none", open_pr, done_run, dict(failed_gate, conclusion="cancelled"), GREEN_S,
+             "only a failed gate")
+    adv_case("run still finishing -> wait", "wait", open_pr, dict(done_run, status="in_progress"), failed_gate, GREEN_S, "needs it completed")
+    adv_case("no stage gate in the caller -> none", "none", open_pr, done_run, None, GREEN_S, "not adopted")
+    adv_case("no CI run yet -> none", "none", open_pr, None, None, GREEN_S, "no pull_request CI run")
+    adv_case("cancelled (superseded) run -> none, never revived", "none", open_pr, dict(done_run, conclusion="cancelled"),
+             failed_gate, GREEN_S, "never revived")
+    adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -1257,12 +1626,54 @@ def main(argv=None) -> int:
                     help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
                          "many minutes (its own event cannot start a run here — see waiting_would_help), "
                          "then answer RED")
+    ap.add_argument("--stage-gate", action="store_true",
+                    help="the staged pipeline's stage-1 gate: may stage 2 start for this head (stage_readiness)? "
+                         "exit 0 = yes, 1 = held (RED, named); takes --repo, --pr, --since, --fallback-minutes")
+    ap.add_argument("--stage-advance", action="store_true",
+                    help="the event half: re-run a held run's failed jobs once stage 1 is green; takes --repo, "
+                         "--workflow and exactly one of --pr / --head-sha / --sweep")
+    ap.add_argument("--since", help="--stage-gate: when the head's CI run was created (ISO-8601 UTC)")
+    ap.add_argument("--fallback-minutes", type=int, default=STAGE_FALLBACK_MINUTES,
+                    help="minutes without a completed review after which stage 2 starts anyway, loudly")
+    ap.add_argument("--workflow", help="--stage-advance: the caller's pull-request CI workflow FILE (ci.yml, dotnet-test.yml)")
+    ap.add_argument("--head-sha", help="--stage-advance: the head a check_run event named")
+    ap.add_argument("--sweep", action="store_true", help="--stage-advance: every open PR with a failed run (the fallback timer)")
+    ap.add_argument("--wait-minutes", type=int, default=20,
+                    help="--stage-advance: how long to let an in-flight held run finish before re-running it")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not args.repo:
         print("::error::--repo (or GH_REPO) is required")
         return 2
+    if not 5 <= args.fallback_minutes <= 240:
+        print(f"::error::--fallback-minutes must be between 5 and 240, got {args.fallback_minutes}")
+        return 2
+    if args.stage_advance:
+        if not args.workflow or not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.workflow):
+            print("::error::--stage-advance needs --workflow <file>.yml (the caller's pull-request CI workflow)")
+            return 2
+        chosen = [x for x in (args.pr, args.head_sha, args.sweep or None) if x]
+        if len(chosen) != 1:
+            print("::error::--stage-advance takes exactly one of --pr, --head-sha, --sweep")
+            return 2
+        if args.pr and not re.fullmatch(r"[1-9]\d*", args.pr):
+            print(f"::error::--pr must be a pull request number, got {args.pr!r}")
+            return 2
+        if args.head_sha and not re.fullmatch(r"[0-9a-f]{40}", args.head_sha):
+            print(f"::error::--head-sha must be a full 40-hex sha (an abbreviated one lists nothing, silently), got {args.head_sha!r}")
+            return 2
+        return run_stage_advance(args.repo, args.workflow, pr=int(args.pr) if args.pr else None, head_sha=args.head_sha,
+                                 sweep=args.sweep, fallback_minutes=args.fallback_minutes,
+                                 wait_minutes=max(0, min(args.wait_minutes, 30)))
+    if args.stage_gate:
+        if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print("::error::--stage-gate takes --repo, --pr <number>, --since and --fallback-minutes")
+            return 2
+        if parse_stamp(args.since) is None:
+            print(f"::error::--since must be an ISO-8601 UTC instant like 2026-10-04T08:00:00Z, got {args.since!r}")
+            return 2
+        return run_stage_gate(args.repo, int(args.pr), args.since, args.fallback_minutes)
     if bool(args.pr) == bool(args.merge_group_ref):
         print("::error::exactly one of --pr or --merge-group-ref is required — refusing to guess which pull request to judge")
         return 2
