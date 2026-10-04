@@ -108,7 +108,7 @@ USAGE
 -----
   check-review-answered.py --self-test
   check-review-answered.py --repo O/R --pr N [--as-of 2026-09-14T14:04:21Z]
-  check-review-answered.py --repo O/R --pr N --arm-gate     (auto-arm.yml: may auto-merge be armed now?)
+  check-review-answered.py --repo O/R --pr N --arm-gate     (the control plane's arm decision: may auto-merge be armed now?)
   check-review-answered.py --repo O/R --merge-group-ref refs/heads/gh-readonly-queue/main/pr-N-<sha>
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
@@ -513,7 +513,8 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 
 # ─────────────────────────────── the ARM gate (pure) ───────────────────────────────
 #
-# `auto-arm.yml` asks a DIFFERENT, stricter question than the merge gate above: not "may this merge"
+# The ARM decision (the control plane's PR steward since 2026-10-04; this is its reference
+# implementation and these self-test cases its test vectors) asks a DIFFERENT, stricter question than the merge gate above: not "may this merge"
 # but "may auto-merge be armed NOW". Measured 2026-10-03/04 on MeshWeaver.Plugins, where the review
 # is comment-only and nothing required waits for it: the lane re-armed on every push and on undraft,
 # BEFORE the internal review had run on the new head, so #2549, #2643, #2647 and Memex#641 merged
@@ -1169,7 +1170,7 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
-    # ── the ARM gate (auto-arm.yml): arms only on a completed internal review of the CURRENT head,
+    # ── the ARM gate (control-plane reference): arms only on a completed internal review of the CURRENT head,
     # with every reviewer thread answered by a person, and never a draft. Each NO case names the
     # condition it must fail ON, so a fixture cannot pass by failing for another reason.
     HEAD = "a" * 40
@@ -1245,7 +1246,7 @@ def main(argv=None) -> int:
     ap.add_argument("--pr", help="pull request number")
     ap.add_argument("--merge-group-ref", help="a merge-queue head ref; the pull request number is read from it")
     ap.add_argument("--arm-gate", action="store_true",
-                    help="answer auto-arm.yml's question instead — may auto-merge be armed NOW (see arm_readiness); "
+                    help="answer the arm decision's question instead — may auto-merge be armed NOW (see arm_readiness); "
                          "writes ready=true|false to $GITHUB_OUTPUT and one line to the job summary, exit 0 either way")
     ap.add_argument("--as-of", help="evaluate as of this ISO-8601 UTC instant (e.g. a merged_at)")
     ap.add_argument("--settle-replies", type=int, default=0, metavar="SECONDS",

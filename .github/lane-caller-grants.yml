@@ -64,12 +64,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: modules-floor
         lane: node-repo-module-pack.yml
@@ -126,12 +120,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: publish-bake
         lane: node-repo-publish-bake.yml
@@ -181,12 +169,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -240,12 +222,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -300,12 +276,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -352,12 +322,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -408,12 +372,6 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -466,9 +424,3 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
-        pending: RETIRING — replaced by the checks:read row below once this repository's caller grants it; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)
-      - workflow: auto-arm.yml
-        job: arm
-        lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
-        pending: ARRIVING — the caller adds checks:read (the lane reads the internal-review check run) and the check_run / pull_request_review_comment triggers; auto-arm arms only after the internal review (MeshWeaver PR fix/arm-after-review, 2026-10-04)

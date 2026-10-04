@@ -168,7 +168,7 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             lines.Any(l =>
                 l.Contains("GH_TOKEN", StringComparison.Ordinal) &&
                 l.Contains("steps.arm-token.outputs.token", StringComparison.Ordinal)),
-            "auto-arm.yml's arm step does not pass the minted token as GH_TOKEN. Without it gh "
+            "auto-arm.yml's disarm step does not pass the minted token as GH_TOKEN. Without it gh "
             + "falls back to the runner's default credential — the #2916 failure, by omission "
             + "rather than by choice.");
 
@@ -176,42 +176,11 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
         {
             Assert.True(
                 lines.Any(l => l.Contains(permission, StringComparison.Ordinal)),
-                $"auto-arm.yml's token mint no longer requests '{permission}'. Arming is the "
-                + "enablePullRequestAutoMerge mutation (Pull requests: write) and the merge it "
-                + "performs writes to the branch (Contents: write); requesting both explicitly is "
-                + "what makes a missing grant fail at the mint instead of somewhere downstream.");
+                $"auto-arm.yml's token mint no longer requests '{permission}'. Taking an arm off is the "
+                + "disablePullRequestAutoMerge mutation (Pull requests: write) on a pull request whose "
+                + "merge writes to the branch (Contents: write); requesting both explicitly is what "
+                + "makes a missing grant fail at the mint instead of somewhere downstream.");
         }
-    }
-
-    /// <summary>
-    /// A queue admission is not represented by <c>autoMergeRequest</c>. Core PR #3950 entered the
-    /// merge queue successfully on 2026-09-11, while the auto-arm read-back saw a null
-    /// <c>autoMergeRequest</c> and warned that nothing had been armed (run 34555063094). The queue
-    /// entry is the positive evidence for that repository shape; ordinary satellites still use
-    /// the auto-merge request.
-    /// </summary>
-    [Fact]
-    public void TheArmReadBackRecognisesOrdinaryAutoMergeAndMergeQueueAdmission()
-    {
-        var path = Path.Combine(WorkflowsDir(), "auto-arm.yml");
-        var armStep = Assert.Single(
-            StepBlocks(File.ReadAllText(path)),
-            block => block.Contains("- name: Arm it", StringComparison.Ordinal));
-
-        Assert.Contains("state merged autoMergeRequest{enabledAt}", armStep, StringComparison.Ordinal);
-        Assert.Contains("autoMergeRequest{enabledAt}", armStep, StringComparison.Ordinal);
-        Assert.Contains("mergeQueueEntry{id}", armStep, StringComparison.Ordinal);
-        Assert.Contains("elif .merged then \"landed\"", armStep, StringComparison.Ordinal);
-        Assert.Contains("elif .state == \"CLOSED\" then \"closed\"", armStep, StringComparison.Ordinal);
-        Assert.Contains("elif .mergeQueueEntry != null then \"queued\"", armStep, StringComparison.Ordinal);
-        Assert.Contains("elif .autoMergeRequest != null then \"armed\"", armStep, StringComparison.Ordinal);
-        Assert.Contains("queued) echo \"queued: #$PR is in the merge queue\"", armStep, StringComparison.Ordinal);
-
-        var failedCommand = armStep.IndexOf("arm_error=\"$out\"", StringComparison.Ordinal);
-        Assert.True(failedCommand >= 0, "A failed arm command is no longer captured for the read-back.");
-        Assert.True(
-            armStep.IndexOf("state=$(arm_state)", failedCommand, StringComparison.Ordinal) > failedCommand,
-            "The failed-command path no longer re-reads state, so a racing successful arm is reported as a failure.");
     }
 
     /// <summary>
@@ -514,47 +483,6 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     }
 
     /// <summary>
-    /// Every <c>steps.&lt;id&gt;.outputs.*</c> reference that appears inside a step's <c>if:</c> —
-    /// and nowhere else in the step. A reference sitting in <c>env:</c> says the step USES a value;
-    /// only one inside <c>if:</c> says the step is GOVERNED by it, and that difference is the whole
-    /// assertion below. Handles both the one-line form and a block scalar (<c>if: >-</c>), whose
-    /// continuation lines are the ones indented past the <c>if:</c> itself. Pure.
-    /// </summary>
-    private static string[] StepOutputsGoverningTheStep(string stepBlock)
-    {
-        var lines = stepBlock.Split('\n');
-        var governing = new List<string>();
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var indent = lines[i].Length - lines[i].TrimStart().Length;
-            if (!lines[i].TrimStart().StartsWith("if:", StringComparison.Ordinal))
-                continue;
-            governing.Add(lines[i]);
-            for (var j = i + 1; j < lines.Length; j++)
-            {
-                if (lines[j].Trim().Length == 0)
-                    continue;
-                if (lines[j].Length - lines[j].TrimStart().Length <= indent)
-                    break;
-                governing.Add(lines[j]);
-            }
-        }
-
-        return [.. Regex
-            .Matches(string.Join('\n', governing), @"steps\.([A-Za-z0-9_.\-]+)\.outputs")
-            .Select(m => m.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)];
-    }
-
-    /// <summary>The <c>id:</c> a step declares, or <c>null</c>. Pure.</summary>
-    private static string? StepId(string stepBlock) =>
-        ExecutableLines(stepBlock)
-            .Select(l => Regex.Match(l, @"^id:\s*([A-Za-z0-9_.\-]+)\s*$"))
-            .Where(m => m.Success)
-            .Select(m => m.Groups[1].Value)
-            .FirstOrDefault();
-
-    /// <summary>
     /// A step block ARMS auto-merge when it runs the command that either enables auto-merge or
     /// admits the pull request to a merge queue. Both are <c>gh pr merge --auto</c>; the GraphQL
     /// mutation is the same act spelled differently, and a read-back that merely NAMES
@@ -566,173 +494,92 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             || l.Contains("enablePullRequestAutoMerge", StringComparison.Ordinal));
 
     /// <summary>
-    /// 🚨🚨 Arming a pull request whose BASE is not the default branch is not "merge when green" —
-    /// it is "merge NOW", and this guard is the thing that keeps it from being reintroduced.
+    /// 🚨🚨 NO WORKFLOW ARMS AUTO-MERGE — arming is the control plane's decision (2026-10-04).
     ///
-    /// <para>GitHub's auto-merge waits for exactly the contexts BRANCH PROTECTION requires of the
-    /// pull request's BASE. Protection in this fleet is configured on the default branch and
-    /// nowhere else, so a STACKED pull request — one opened against another pull request's feature
-    /// branch — has an unprotected base, an EMPTY required set, and a condition that is satisfied
-    /// the instant it is first read.</para>
+    /// <para>Arming says "this head was reviewed and every finding answered, so let it land when
+    /// green". <c>auto-arm.yml</c> used to make that call on every open, push and undraft — BEFORE
+    /// the internal review had run on the new head — and on MeshWeaver.Plugins, where the review is
+    /// comment-only, #2549, #2643/#2647 and Memex#641 merged with unanswered findings or no review
+    /// at all. The decision now lives with the control instance's PR steward (App
+    /// <c>systemorph-com</c>), which already reads the review state and the answered-findings
+    /// verdict, and applies <c>check-review-answered.py --arm-gate</c>'s predicate, the default-branch
+    /// base check (an unprotected base has an empty required set, so an arm there is an immediate
+    /// merge — MeshWeaver.Plugins#1685, merged 61 seconds after it opened) and an
+    /// <c>expectedHeadOid</c> on the mutation.</para>
     ///
-    /// <para><b>Measured, 2026-09-11.</b> MeshWeaver.Plugins#1685 was opened against the feature
-    /// branch of #1681. <c>auto-arm.yml</c> armed it and GitHub merged it at 21:03:23Z — 61 seconds
-    /// after it was opened, <i>before its own CI had started a single job</i>. Nothing failed and
-    /// nothing was bypassed: the stack collapsed unreviewed, exactly as configured. This file is
-    /// the fleet's only copy of the arm lane, reached by every satellite through
-    /// <c>workflow_call</c>, so the same hole was open in all eight repositories simultaneously.
-    /// </para>
-    ///
-    /// <para><b>What is asserted is the CHAIN, not a spelling.</b> The arming step must be governed
-    /// by an <c>if:</c>, that <c>if:</c> must consume a step output, and the step producing it must
-    /// read the repository's default branch from the event payload. A condition moved into
-    /// <c>env:</c>, or an <c>if:</c> that only consults the token mint, both break the chain and
-    /// fail here — which is the shape the regression would actually take.</para>
+    /// <para>So a workflow that arms is a SECOND decider, deciding without the review — exactly the
+    /// hole that was closed. This replaces the earlier per-workflow default-branch checks with the
+    /// stronger rule: there is nothing in this directory left to check them on.</para>
     /// </summary>
     [Fact]
-    public void TheArmLaneArmsOnlyOntoTheRepositoryDefaultBranch()
-    {
-        var path = Path.Combine(WorkflowsDir(), "auto-arm.yml");
-        Assert.True(File.Exists(path), $"{path} is missing — the arm lane is the subject of this guard.");
-
-        var blocks = StepBlocks(File.ReadAllText(path));
-        var armStep = Assert.Single(blocks.Where(ArmsAutoMerge));
-
-        var governing = StepOutputsGoverningTheStep(armStep);
-        Assert.True(
-            governing.Length > 0,
-            "auto-arm.yml's arming step is not governed by any step output — so it arms every pull "
-            + "request this lane sees, whatever its base.\n"
-            + "Auto-merge waits for the required contexts of the BASE. A base that is not the "
-            + "default branch has no branch protection and therefore no required contexts, so the "
-            + "condition is met the moment GitHub reads it and the pull request merges immediately "
-            + "(measured: MeshWeaver.Plugins#1685, merged 61 seconds after it was opened, before a "
-            + "single check had started).\n"
-            + "Read github.event.repository.default_branch in a step, compare it with "
-            + "github.event.pull_request.base.ref, and condition the arm on the result.");
-
-        var producers = blocks
-            .Where(b => StepId(b) is { } id && governing.Contains(id, StringComparer.Ordinal))
-            .ToArray();
-
-        Assert.True(
-            producers.Any(b => ExecutableLines(b).Any(l => l.Contains("default_branch", StringComparison.Ordinal))),
-            "auto-arm.yml's arming step is conditioned on step outputs "
-            + $"({string.Join(", ", governing)}), but none of the steps producing them reads the "
-            + "repository's default branch. The arm is therefore still unguarded against a "
-            + "non-default base — the #1685 failure, by omission rather than by choice.\n"
-            + "The step that decides must read github.event.repository.default_branch.");
-
-        // 🚨 And it must be READ, never assumed. Every repository in the fleet uses `main` today,
-        // which is exactly what makes a literal indistinguishable from a correct check while being
-        // a copy of a fact — the drift the header of this lane exists to end. One lane serves eight
-        // repositories; the day one of them renames its default branch, a literal arms nothing and
-        // says nothing.
-        var literalMain = ExecutableLines(File.ReadAllText(path))
-            .Where(l => Regex.IsMatch(l, @"(^|[^A-Za-z0-9_\-/.])main([^A-Za-z0-9_\-/.]|$)"))
-            .ToArray();
-
-        Assert.True(
-            literalMain.Length == 0,
-            "auto-arm.yml names the branch 'main' literally: "
-            + $"{string.Join(" | ", literalMain)}.\n"
-            + "This lane is called by every repository in the fleet through workflow_call, and the "
-            + "default branch is on the event payload in both modes. A literal is a copy of a fact "
-            + "that every repo happens to share today — precisely the drift that made the hand-copied "
-            + "versions of this file diverge into four variants. Read "
-            + "github.event.repository.default_branch instead.");
-    }
-
-    /// <summary>
-    /// The same rule, ratcheted across the whole directory: no workflow anywhere in this repository
-    /// may arm auto-merge without the base check. <c>auto-arm.yml</c> is the only lane that arms
-    /// today, and the point of a directory-wide sweep is that the SECOND one — a release lane, a
-    /// bump lane, a convenience added in a hurry — cannot ship without meeting the same bar.
-    ///
-    /// <para>The neighbours were checked when this was written and are clean for structural
-    /// reasons rather than by luck, which is why they are not exempted by name:
-    /// <c>arm-credential.yml</c> mints and inspects a token and arms nothing;
-    /// <c>merge-queue-steward.yml</c> acts only on a <c>dequeued</c> event, which cannot occur for
-    /// a pull request that was never admitted to a merge queue — and a queue exists only on a
-    /// branch that has one configured, i.e. a protected one; and <c>release.yml</c> /
-    /// <c>node-repo-platform-ref-bump.yml</c> OPEN pull requests (already covered above) without
-    /// arming them.</para>
-    /// </summary>
-    [Fact]
-    public void NoWorkflowArmsAutoMergeWithoutReadingTheDefaultBranch()
+    public void NoWorkflowArmsAutoMerge()
     {
         var offenders = Directory
             .EnumerateFiles(WorkflowsDir(), "*.yml")
-            .Select(path => (path, blocks: StepBlocks(File.ReadAllText(path))))
-            .Where(w => w.blocks.Any(ArmsAutoMerge))
-            .Where(w =>
-            {
-                var governing = w.blocks.Where(ArmsAutoMerge).SelectMany(StepOutputsGoverningTheStep).ToArray();
-                return !w.blocks.Any(b =>
-                    StepId(b) is { } id
-                    && governing.Contains(id, StringComparer.Ordinal)
-                    && ExecutableLines(b).Any(l => l.Contains("default_branch", StringComparison.Ordinal)));
-            })
-            .Select(w => Path.GetFileName(w.path))
+            .Where(path => StepBlocks(File.ReadAllText(path)).Any(ArmsAutoMerge))
+            .Select(Path.GetFileName)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
 
         Assert.True(
             offenders.Length == 0,
-            $"These workflows arm auto-merge without checking the base branch: {string.Join(", ", offenders)}.\n"
-            + "Auto-merge waits for the required contexts of the pull request's BASE, and only the "
-            + "default branch carries branch protection in this fleet. On any other base the required "
-            + "set is EMPTY, so arming merges the pull request immediately — measured on "
-            + "MeshWeaver.Plugins#1685, which was opened against another pull request's feature branch "
-            + "and merged 61 seconds later, before its own CI had started.\n"
-            + "Read github.event.repository.default_branch, compare it with "
-            + "github.event.pull_request.base.ref, and condition the arm on the result.");
+            $"These workflows arm auto-merge: {string.Join(", ", offenders)}.\n"
+            + "Arming is the control plane's decision (the control instance's PR steward, App "
+            + "systemorph-com): it arms only a non-draft, same-repository pull request onto the "
+            + "default branch whose CURRENT head has a completed internal review (not the "
+            + "'Reviewer unavailable' degradation) and every automatic-review thread answered by a "
+            + "person. A workflow that arms decides without the review — measured: #2549, "
+            + "#2643/#2647 and Memex#641 merged unreviewed that way. See "
+            + "Doc/Architecture/ReviewFindingsAnswered, 'The arm gate'.");
     }
 
     /// <summary>
-    /// 🚨 Not arming must be SAID, not merely done.
+    /// 🚨 What stays in <c>auto-arm.yml</c> is the DISARM, and it must stay able to happen.
     ///
-    /// <para>An author whose stacked pull request is sitting there unarmed cannot tell "the lane
-    /// decided not to arm this one" from "the lane is broken" — both look like nothing happening,
-    /// which is the same defect as a gate that skips silently, one level down. So the base decision
-    /// is reported twice: a <c>::warning::</c> in the run log, and one comment on the pull request
-    /// itself, where the author already is.</para>
-    ///
-    /// <para>And the JOB must not be what skips. Moving the base test onto the job's <c>if:</c>
-    /// would be the tidy-looking version of this fix and would delete the message with it — a
-    /// skipped job renders like a passed one and carries no warning, no summary and no comment.
-    /// This test pins the base out of the job condition for exactly that reason.</para>
+    /// <para>GitHub keeps auto-merge armed across a push by anyone with write access, so a pull
+    /// request armed on a reviewed head would merge the NEXT, unreviewed head the moment the
+    /// required contexts pass. The disarm is a reaction to the <c>synchronize</c> event itself, so
+    /// a fast CI cannot outrun it. Pinned here: it runs on <c>synchronize</c>, it takes the arm off
+    /// (<c>--disable-auto</c>) and reads the result back, it tolerates no failed step (a disarm
+    /// that silently did not happen is the hole reopened), and it names no branch literally — the
+    /// lane serves every repository in the fleet through <c>workflow_call</c>.</para>
     /// </summary>
     [Fact]
-    public void APullRequestOnANonDefaultBaseIsToldWhyItWasNotArmed()
+    public void TheAutoMergeLaneDisarmsOnEveryPushAndToleratesNoFailure()
     {
-        var text = File.ReadAllText(Path.Combine(WorkflowsDir(), "auto-arm.yml"));
-        var blocks = StepBlocks(text);
+        var path = Path.Combine(WorkflowsDir(), "auto-arm.yml");
+        Assert.True(File.Exists(path), $"{path} is missing — every fleet repository calls it through workflow_call.");
+        var text = File.ReadAllText(path);
+        var lines = ExecutableLines(text);
 
-        var deciders = blocks
-            .Where(b => StepId(b) is not null)
-            .Where(b => ExecutableLines(b).Any(l => l.Contains("default_branch", StringComparison.Ordinal)))
-            .ToArray();
-
-        Assert.True(
-            deciders.Any(b => ExecutableLines(b).Any(l => l.Contains("::warning::", StringComparison.Ordinal))),
-            "auto-arm.yml decides not to arm a non-default base without emitting a ::warning::. "
-            + "Deciding silently is indistinguishable from being broken: the author waits for an arm "
-            + "that is never coming, with nothing anywhere saying why.");
-
-        Assert.True(
-            blocks.Any(b => ExecutableLines(b).Any(l => l.Contains("gh pr comment", StringComparison.Ordinal))),
-            "auto-arm.yml no longer comments on the pull request when it declines to arm. The run "
-            + "log of a lane whose entire normal output is the word 'armed' is not somewhere anyone "
-            + "looks; the one place the author already is, is the pull request.");
-
-        // The job-level `if:` may test draft and fork — both properties of the event that mean
-        // "there is nothing to do here at all". The base is different: there IS something to do,
-        // namely say why nothing was armed.
         var jobCondition = Regex.Match(text, @"\n    if: >-\n((?:      .*\n)+)");
         Assert.True(jobCondition.Success, "auto-arm.yml's job-level `if:` is no longer in the expected block form.");
-        Assert.DoesNotContain("base.ref", jobCondition.Groups[1].Value, StringComparison.Ordinal);
-        Assert.DoesNotContain("default_branch", jobCondition.Groups[1].Value, StringComparison.Ordinal);
+        Assert.Contains("synchronize", jobCondition.Groups[1].Value, StringComparison.Ordinal);
+
+        var disarm = Assert.Single(StepBlocks(text).Where(b =>
+            ExecutableLines(b).Any(l => l.Contains("gh pr merge", StringComparison.Ordinal)
+                                        && l.Contains("--disable-auto", StringComparison.Ordinal))));
+        Assert.True(
+            ExecutableLines(disarm).Count(l => l.Contains(".auto_merge != null", StringComparison.Ordinal)) >= 2,
+            "auto-arm.yml's disarm step no longer reads `auto_merge` both before and after "
+            + "--disable-auto. The read-back is the evidence the arm is off; without it a disarm "
+            + "that GitHub ignored reads exactly like one that worked.");
+
+        Assert.True(
+            lines.All(l => !l.Contains("continue-on-error", StringComparison.Ordinal)),
+            "auto-arm.yml carries continue-on-error. Disarming is a SAFETY action: a mint or a "
+            + "disarm that fails quietly leaves a reviewed head's arm on an unreviewed head, which "
+            + "then merges the moment the required contexts pass.");
+
+        var literalMain = lines
+            .Where(l => Regex.IsMatch(l, @"(^|[^A-Za-z0-9_\-/.])main([^A-Za-z0-9_\-/.]|$)"))
+            .ToArray();
+        Assert.True(
+            literalMain.Length == 0,
+            $"auto-arm.yml names the branch 'main' literally: {string.Join(" | ", literalMain)}.\n"
+            + "This lane is called by every repository in the fleet through workflow_call; a literal "
+            + "is a copy of a fact every repo happens to share today. Read "
+            + "github.event.repository.default_branch instead.");
     }
 
     private static string FindRepoRoot()
