@@ -2100,6 +2100,27 @@ jobs:
     - name: Check dependency licences
       run: python3 .github/scripts/check-licenses.py --report
 
+  client-names:
+    name: "No client names"
+    # This repository is PUBLIC: a client name, a client person or a client identifier (host,
+    # tenant/app GUID, admin handle) must never land in it. WHO is a client is the CRM's call, and
+    # the CRM is never read from a build — the reusable job sends the added lines to the instance
+    # that owns the CRM and reads back pass/fail with masked positions (`client#n` at file:line).
+    # No term list lives here or in a secret. 🚨 It FAILS CLOSED (no secret, unreachable, refused,
+    # timeout, NotChecked), and it is a NEEDS of `Consolidate test results` with an explicit fail
+    # step there, like every other gate. The fork / Dependabot exemption is the EVENT, nowhere else.
+    needs: [precheck]
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) }}
+    uses: ./.github/workflows/client-names.yml
+    with:
+      # The checker that runs with the secrets is the REVIEWED one: the pull request's base (the
+      # queue's base on merge_group), the pushed commit on main. A branch that edits the checker
+      # proves its edit in the secretless --self-test step, and cannot make its own gate pass.
+      script-ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+    secrets:
+      NAME_CHECK_URL: ${{ secrets.NAME_CHECK_URL }}
+      NAME_CHECK_TOKEN: ${{ secrets.NAME_CHECK_TOKEN }}
+
   workflow-shell:
     name: "CI's own shell"
     # 🚨 THE GAP THIS CLOSES: `main-cd.yml` is 2000 lines of shell that decides what is built,
@@ -3912,7 +3933,7 @@ jobs:
     # compiled plugin calls compiles clean everywhere in this repo and throws MissingMethodException in a
     # portal. The ladder's rung 2 — deployed plugin bytes on this platform — must be able to fail the
     # required check, or it is a notification.
-    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
+    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, client-names, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -4253,6 +4274,13 @@ jobs:
       run: |
         echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
         echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
+        exit 1
+
+    # ── …and a client name in the change decides it too ─────────────────────────────────────
+    - name: Fail if the client-names gate failed
+      if: needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) && needs.client-names.result != 'success'
+      run: |
+        echo "::error::A client of ours is named in this change, or the change could not be checked — see the 'No client names' job for client#n at file:line. Replace it with a neutral placeholder (AGENTS.md, 'Confidential terms'). 'Not checked' is a failure too: an unchecked diff is not a clean one."
         exit 1
 
     # ── …and a BINARY-COMPATIBILITY break decides it too ────────────────────────────────────
