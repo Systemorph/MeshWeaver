@@ -133,13 +133,20 @@ public sealed class EaGraphAuth(
 
     public bool IsConfigured => !string.IsNullOrEmpty(ClientId) && !string.IsNullOrEmpty(ClientSecret);
 
-    /// <summary>The Microsoft consent/authorize URL to send the user to (incremental consent, forces the prompt).</summary>
+    /// <summary>
+    /// The Microsoft consent/authorize URL to send the user to (incremental consent).
+    ///
+    /// <para>🚨 No <c>prompt=consent</c>. It forced the consent dialog on every request, and in a
+    /// tenant where users may not consent to these scopes that dialog is always "request admin
+    /// approval" — also after an admin granted tenant-wide consent, so the user looped (#6082).
+    /// Microsoft prompts by itself when consent is actually missing.</para>
+    /// </summary>
     public string BuildConsentUrl(string state, string redirectUri) =>
         $"{Authority}/authorize?client_id={Uri.EscapeDataString(ClientId ?? "")}" +
         "&response_type=code&response_mode=query" +
         $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
         $"&scope={Uri.EscapeDataString(Scopes)}" +
-        $"&state={Uri.EscapeDataString(state)}&prompt=consent";
+        $"&state={Uri.EscapeDataString(state)}";
 
     /// <inheritdoc />
     public IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId)

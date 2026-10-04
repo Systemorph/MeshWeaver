@@ -15,9 +15,8 @@ namespace Memex.Portal.Shared.Test;
 /// Pins the consent flow's idempotence: a user whose Executive-Assistant grant is already stored
 /// is NOT sent back through Microsoft's consent dialog when they hit <c>/auth/ea/connect</c> again.
 ///
-/// <para><b>Why this test exists.</b> <c>BuildConsentUrl</c> deliberately carries
-/// <c>prompt=consent</c> (the first connect must mint a refresh token for every scope), and
-/// <c>Connect</c> used to redirect there unconditionally. Every visit to the connect link —
+/// <para><b>Why this test exists.</b> <c>Connect</c> used to redirect to <c>BuildConsentUrl</c>
+/// unconditionally, and that URL then carried <c>prompt=consent</c> (removed in #6082). Every visit to the connect link —
 /// a second click on the EA's "please connect" hint, a bookmarked URL — re-ran the full Microsoft
 /// consent, and users read the repeat dialog as "my consent was never saved" (reported 2026-08-23).
 /// The grant WAS stored; only the entry point ignored it.</para>
@@ -85,7 +84,7 @@ public class EaConnectReconsentTest
         result.Should().BeOfType<RedirectResult>()
             .Which.Url.Should().Be("/rbuergi",
                 "a stored grant means there is nothing to consent — the connect link must be "
-                + "idempotent, not a forced prompt=consent round trip");
+                + "idempotent, not a Microsoft round trip");
         ea.ConsentUrlBuilt.Should().BeFalse("the consent URL must not even be composed");
     }
 

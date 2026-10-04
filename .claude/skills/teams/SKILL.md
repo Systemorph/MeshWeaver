@@ -32,7 +32,7 @@ and that credential is the seam everything below hangs on.
 ## The seam: the EA consent link IS a delegated Graph token
 
 `{BaseUrl}/auth/ea/connect` sends the user through Microsoft's authorize endpoint with
-`prompt=consent` and the scope string in `EaGraphAuth.Scopes` — **this repo**,
+the scope string in `EaGraphAuth.Scopes` — **this repo**,
 `memex/Memex.Portal.Shared/Authentication/EaGraphAuth.cs`:
 
 ```
