@@ -226,6 +226,8 @@ public static class CouponAdminSettingsTab
 
     // ── Tab content ────────────────────────────────────────────────────────────
 
+    private const string CouponListDataId = "couponList";
+
     private static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         stack = stack
@@ -236,64 +238,32 @@ public static class CouponAdminSettingsTab
             .WithView(Controls.Button(host.Localize("ui.newCoupon"))
                 .WithAppearance(Appearance.Accent)
                 .WithNavigateToHref("/Store/Coupon/Create?type=Store%2FCoupon"), "NewCoupon")
-            .WithView((h, _) => LiveCouponList(h), "CouponList");
+            .WithView(CouponList(host), "CouponList");
         return stack;
     }
 
     /// <summary>
-    /// The LIVE coupon list: accumulates the chunked query over <see cref="CouponsNamespace"/>
-    /// (creates, edits and deletes all land) and re-renders the grid per snapshot. The viewer is
-    /// a confirmed global admin, so the query runs under their own identity — no impersonation.
+    /// The coupon list — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid
+    /// is declared at once and fed by <see cref="CouponRowsFeed"/>. Each row's Code cell is a button
+    /// labelled with its code that opens that coupon's node page, where the Store/Coupon type's own
+    /// Edit / Delete actions live — the per-row button of the baked list, restored as a ROW-SCOPED
+    /// ACTION (Doc/GUI/DataBinding → "Row-scoped actions"): ONE button declared in a template
+    /// column, and the click says which row it came from.
     /// </summary>
-    private static IObservable<UiControl?> LiveCouponList(LayoutAreaHost host)
-    {
-        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService is null)
-            return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdMeshUnavailable")));
-        var options = host.Hub.JsonSerializerOptions;
+    private static UiControl CouponList(LayoutAreaHost host)
+        => Controls.Stack
+            .WithView(CouponGrid(host, CouponRowsFeed(host)))
+            .WithView(Controls.Body(host.Localize("coupons.openHint"))
+                .WithStyle("color: var(--neutral-foreground-hint); margin-top: 8px;"));
 
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{CouponsNamespace} scope:children"))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Accumulate)
-            // Let the chunked first snapshot settle instead of re-rendering per chunk.
-            .Throttle(TimeSpan.FromMilliseconds(300))
-            .StartWith(ImmutableDictionary<string, MeshNode>.Empty)
-            .Select(map => (UiControl?)BuildGrid(host, map, options));
-    }
-
-    /// <summary>One accumulation step over the chunked query — pure: Reset restarts, Removed
-    /// deletes, everything else upserts by path.</summary>
-    public static ImmutableDictionary<string, MeshNode> Accumulate(
-        ImmutableDictionary<string, MeshNode> map, QueryResultChange<MeshNode> change)
-    {
-        if (change.ChangeType == QueryChangeType.Reset)
-            map = ImmutableDictionary<string, MeshNode>.Empty;
-        foreach (var item in change.Items)
-            map = change.ChangeType == QueryChangeType.Removed
-                ? map.Remove(item.Path)
-                : map.SetItem(item.Path, item);
-        return map;
-    }
-
-    private static UiControl BuildGrid(
-        LayoutAreaHost host, ImmutableDictionary<string, MeshNode> coupons, JsonSerializerOptions options)
-    {
-        if (coupons.IsEmpty)
-            return Controls.Markdown(host.Localize("ui.mdNoCoupons"));
-
-        // One delegate for the whole grid, not one per row: this projection re-runs on every
-        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
-        var localize = (Func<string, string>)(key => host.Localize(key));
-        var rows = coupons.Values
-            .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(n => ToRow(n, options, localize))
-            .ToImmutableArray();
-
-        // Rows bind INLINE — a per-render UpdateData under a fresh id would accumulate orphaned
-        // data entries for the host's lifetime (each snapshot re-renders this grid).
-        var grid = Controls.DataGrid(rows)
-            .WithColumn(new PropertyColumnControl<string>
-                { Property = nameof(CouponRow.Code).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnCode")))
+    /// <summary>The coupon grid over <paramref name="rows"/> — the template half of
+    /// <see cref="CouponList"/>, separate from the feed so its row-scoped action is testable.</summary>
+    internal static DataGridControl CouponGrid(LayoutAreaHost host, IObservable<IEnumerable<CouponRow>> rows)
+        => rows
+            .BindGrid(CouponListDataId, host.Localize("coupons.none"),
+                message => host.Localize("coupons.listFailed", message))
+            .WithColumn(new TemplateColumnControl(OpenCouponButton())
+                .WithTitle(host.Localize("ui.couponColumnCode")))
             .WithColumn(new PropertyColumnControl<string>
                 { Property = nameof(CouponRow.Grants).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnGrants")))
             .WithColumn(new PropertyColumnControl<string>
@@ -308,20 +278,70 @@ public static class CouponAdminSettingsTab
                 { Property = nameof(CouponRow.Notes).ToCamelCase() }.WithTitle(host.Localize("ui.couponColumnNotes")))
             .Resizable();
 
-        // DataGrid has no row-click — one Open button per coupon navigates to its node page,
-        // where the Store/Coupon type's own Edit / Delete actions live.
-        var openRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithHorizontalGap(8)
-            .WithStyle("flex-wrap: wrap; margin-top: 8px;");
-        foreach (var row in rows)
-            openRow = openRow.WithView(Controls.Button(row.Code)
-                .WithAppearance(Appearance.Outline)
-                .WithNavigateToHref($"/{CouponsNamespace}/{row.Code}"));
+    /// <summary>
+    /// The Code column's cell: a button showing the row's code (bound to the grid row through
+    /// <see cref="ContextProperty"/>) whose click opens THAT coupon. Declared once; the row arrives
+    /// with the click (<see cref="OpenCoupon"/>).
+    /// </summary>
+    internal static ButtonControl OpenCouponButton()
+        => Controls.Button(new ContextProperty(JsonNamingPolicy.CamelCase.ConvertName(nameof(CouponRow.Code))))
+            .WithAppearance(Appearance.Outline)
+            .WithClickAction(OpenCoupon);
 
-        return Controls.Stack
-            .WithView(grid)
-            .WithView(Controls.Markdown(host.Localize("ui.openCoupon")))
-            .WithView(openRow);
+    /// <summary>
+    /// Opens the coupon whose row the click came from — the row as the person saw it, never one
+    /// re-read by position, so a list that refreshed since the render still opens the coupon that
+    /// was clicked. A click with no row (or a row with no code) opens nothing.
+    /// The code is client input, so it is escaped as ONE path segment (<see cref="Uri.EscapeDataString(string)"/>):
+    /// it cannot add a separator, a query or a fragment to the URI it builds. Opening it is still gated
+    /// by the viewer's own read of the node the URI resolves to — a navigation grants nothing.
+    /// </summary>
+    internal static Task OpenCoupon(UiActionContext ctx)
+    {
+        if (ctx.RowAs<CouponRow>() is { Code.Length: > 0 } row)
+            ctx.NavigateTo($"/{CouponsNamespace}/{Uri.EscapeDataString(row.Code)}");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The feed half of the LIVE coupon list: accumulates the chunked query over
+    /// <see cref="CouponsNamespace"/> (creates, edits and deletes all land) into rows, one set per
+    /// settled snapshot. The viewer is a confirmed global admin, so the query runs under their own
+    /// identity — no impersonation. Builds no control.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<CouponRow>> CouponRowsFeed(LayoutAreaHost host)
+    {
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return Observable.Throw<IReadOnlyList<CouponRow>>(
+                new InvalidOperationException(host.Localize("ui.mdMeshUnavailable")));
+        var options = host.Hub.JsonSerializerOptions;
+        // One delegate for the whole feed, not one per row: this projection re-runs on every
+        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
+        var localize = (Func<string, string>)(key => host.Localize(key));
+
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{CouponsNamespace} scope:children"))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Accumulate)
+            // Let the chunked first snapshot settle instead of re-emitting per chunk.
+            .Throttle(TimeSpan.FromMilliseconds(300))
+            .Select(map => (IReadOnlyList<CouponRow>)map.Values
+                .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(n => ToRow(n, options, localize))
+                .ToImmutableArray());
+    }
+
+    /// <summary>One accumulation step over the chunked query — pure: Reset restarts, Removed
+    /// deletes, everything else upserts by path.</summary>
+    public static ImmutableDictionary<string, MeshNode> Accumulate(
+        ImmutableDictionary<string, MeshNode> map, QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType == QueryChangeType.Reset)
+            map = ImmutableDictionary<string, MeshNode>.Empty;
+        foreach (var item in change.Items)
+            map = change.ChangeType == QueryChangeType.Removed
+                ? map.Remove(item.Path)
+                : map.SetItem(item.Path, item);
+        return map;
     }
 }
