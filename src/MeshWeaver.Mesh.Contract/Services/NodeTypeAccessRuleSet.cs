@@ -68,4 +68,41 @@ public sealed class NodeTypeAccessRuleSet
             ? rule
             : null;
     }
+
+    /// <summary>
+    /// The rule that decides the NON-CRUD <paramref name="permission"/> (Comment, Thread, Execute, …)
+    /// on a node of <paramref name="nodeType"/>, or <c>null</c> when none does. Same index and the same
+    /// last-registration-wins selection as <see cref="Find"/>: the governing rule for the type must
+    /// itself be an <see cref="INodeTypePermissionRule"/> that lists the permission.
+    ///
+    /// <para>🚨 Read, Create, Update and Delete — and any composite or empty value — always answer
+    /// <c>null</c> here. The CRUD four are decided through <see cref="Find"/> and
+    /// <see cref="INodeTypeAccessRule.HasAccess"/>; answering them twice would let one rule give two
+    /// verdicts to one question depending on which seam asked.</para>
+    /// </summary>
+    /// <param name="nodeType">The node's <see cref="MeshNode.NodeType"/>; null/empty yields null.</param>
+    /// <param name="permission">A single non-CRUD permission flag.</param>
+    /// <returns>The governing rule, or null.</returns>
+    public INodeTypePermissionRule? FindPermissionRule(string? nodeType, Permission permission)
+    {
+        if (!IsRuleDecidablePermission(permission)
+            || string.IsNullOrEmpty(nodeType)
+            || !rules.TryGetValue(nodeType, out var rule)
+            || rule is not INodeTypePermissionRule permissionRule)
+            return null;
+
+        return permissionRule.SupportedPermissions.Contains(permission) ? permissionRule : null;
+    }
+
+    /// <summary>
+    /// True for exactly one permission flag outside the CRUD four — the only shape
+    /// <see cref="FindPermissionRule"/> answers.
+    /// </summary>
+    /// <param name="permission">The permission a seam is checking.</param>
+    public static bool IsRuleDecidablePermission(Permission permission)
+    {
+        const Permission crud = Permission.Read | Permission.Create | Permission.Update | Permission.Delete;
+        var bits = (int)permission;
+        return bits != 0 && (bits & (bits - 1)) == 0 && (permission & crud) == 0;
+    }
 }

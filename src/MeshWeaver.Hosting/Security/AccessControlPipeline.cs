@@ -153,20 +153,39 @@ public static class AccessControlPipeline
         if (!string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
             return Observable.Return(PermissionCheckOutcome.Denied);
 
-        if (NodeTypeAccessRuleGate.SubjectOperationFor(check.Permission) is not { } operation)
+        var operation = NodeTypeAccessRuleGate.SubjectOperationFor(check.Permission);
+        // A non-CRUD permission (Comment, Thread, Execute, …) about THIS hub's own node is decided by
+        // the node type's INodeTypePermissionRule when it declares one. Create still maps to nothing
+        // on either branch — its subject is a node that does not exist yet.
+        if (operation is null && !NodeTypeAccessRuleSet.IsRuleDecidablePermission(check.Permission))
             return Observable.Return(PermissionCheckOutcome.Denied);
 
         return NodeTypeAccessRuleGate.ReadSubjectNode(hub, hubPath)
             .SelectMany(node =>
             {
-                if (node is null
-                    || NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation) is not { } rule)
+                if (node is null)
                     return Observable.Return(PermissionCheckOutcome.Denied);
 
                 var accessService = hub.ServiceProvider.GetService<AccessService>();
+                if (operation is null)
+                {
+                    if (NodeTypeAccessRuleGate.FindPermissionRule(hub, node.NodeType, check.Permission) is not { } permissionRule)
+                        return Observable.Return(PermissionCheckOutcome.Denied);
+                    logger?.LogDebug(
+                        "AccessControlPipeline: {Permission} on {Path} was denied by the standard check — "
+                        + "re-deciding through the {NodeType} permission rule, which governs this node type",
+                        check.Permission, check.Path, node.NodeType);
+                    return NodeTypeAccessRuleGate.EvaluatePermission(permissionRule, node,
+                        delivery.AccessContext ?? accessService?.Context ?? accessService?.CircuitContext,
+                        userId, check.Permission, logger);
+                }
+
+                if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation.Value) is not { } rule)
+                    return Observable.Return(PermissionCheckOutcome.Denied);
+
                 var context = new NodeValidationContext
                 {
-                    Operation = operation,
+                    Operation = operation.Value,
                     Node = node,
                     // The DELIVERY's context, exactly as CheckDeletePermissionByRule builds it —
                     // it is the only copy that survives the scheduler hops to here.
