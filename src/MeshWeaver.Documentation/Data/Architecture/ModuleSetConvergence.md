@@ -306,8 +306,12 @@ also writes an activation entry: a HELD module is skipped at boot by the platfor
 as before, but it must still be IN the set for the boot after a platform update to be able to load
 it, which is the whole shelf contract.
 
-All three are `ModuleLandingService.ProposeModuleSet()`, on the landing service's cap-1 IO pool, so
-a proposal never observes a landing halfway through. Idempotent: a wave that landed nothing derives
+All three propose on the landing service's cap-1 IO pool, so a proposal never observes a landing
+halfway through. The two CONSUMER lanes propose through `ModuleDependencyFloor.ProposeChecked` →
+`ModuleLandingService.ProposeCheckedModuleSet(installed)`, which refuses a set whose declared
+dependency floors are not met (next section); the registry's publish endpoint keeps the unchecked
+`ProposeModuleSet()`, because its shelf is a warehouse filled one CI upload at a time, in no
+dependency order, and the bytes it carries are judged by each consumer's own wave. Idempotent: a wave that landed nothing derives
 the set that is already proposed and writes nothing — which matters because the reconcile runs at
 EVERY boot and normally lands nothing.
 
@@ -319,6 +323,49 @@ pass after this change derives sequence 1 from the activation record as it alrea
 mechanism is live from the next boot. Deliberately not done at boot, and deliberately not by every
 replica: several replicas bootstrapping at once, mid-wave, would each derive a different sequence 1.
 Until it happens, a deployment with no set records gets the activation list back unchanged.
+
+## A set must meet the floors its packages declare (#6067)
+
+A package declares what it needs in `PluginContent.requires` (`AI@^1.20.0`). Until #6067 nothing
+compared that range with what LOADS: `PackageDependencyGraph` reads the id half for install
+ORDER and nothing else. Measured on the control instance, 2026-10-04: Hosting required
+`AI@^1.20.0`, the AI module the set loaded was the 1.19.4 build, and Hosting's sources threw
+`MissingMethodException` on every PR review in the fleet — with no surface saying the set was
+inconsistent. (The AI entry there was also mislabelled `1.20.1`, which is the other half of #6067
+and is fixed where the label is made: [Modules](/Doc/Architecture/Modules) → "A module's bytes
+carry ONE version label".)
+
+**The rule: a consumer's wave does not propose a set in which an installed package's declared
+requirement is not met by the version of the dependency's module that the set would load.**
+`ModuleDependencyFloor.Unmet(installed, landed)` pairs every install record's `requires` with the
+dependency's landed, enabled, versioned activation entry (through the dependency's install record's
+`module`, else the entry's `<source>/<package>` path) and keeps every pair outside its range. If
+any remain, `ProposeCheckedModuleSet` logs one Error per pair — *"'Hosting' 1.55.3 requires
+AI@^1.20.0, but this set loads 'MeshWeaver.AI' (package 'AI') at 1.19.4, which does not satisfy
+it"* — writes NO set record and faults; both callers already answer a fault by leaving the mesh on
+the set it runs. The first wave that lands a satisfying dependency proposes.
+
+**Why the proposal, and not boot or the per-module landing.** The proposal is the one step that
+moves what the mesh runs (the rule at the top of this page), so it is the one place a set can be
+refused as a whole. A per-module landing would judge a half-landed wave — a dependent landing a
+moment before its dependency is the normal shape of a wave, not a fault. Boot would need the
+install records, which live in the mesh it has not started yet, and could only refuse to start.
+
+**What it does not judge, deliberately.** A requirement whose dependency has no landed module here
+(content-only, image-shipped, not installed) has no landed version to compare. A range it cannot
+parse is unverifiable (`ModuleDependencyFloor.Satisfies` → null) and never refuses; the fleet's
+shapes are all caret ranges (115 of 115 `requires` entries in MeshWeaver.Plugins), and `~`, `>=`,
+`>` and exact versions are understood too. Choosing a different build of the dependency — for
+example the image's copy when it is newer — was considered and not taken: a landed generation is
+labelled by its PACKAGE version on its activation entry, while the image's copy has no activation
+entry and only the version its image build stamped into the DLL, and nothing guarantees the two
+schemes are comparable. Picking "the newer one" across them would be a guess presented as a rule;
+refusing loudly names the fix instead.
+
+**The cost, stated.** While a floor is unmet, every consumer wave on that deployment proposes
+nothing — including modules unrelated to the unmet pair. That is the set rule applied
+consistently (a set is proposed whole or not at all), and the Error lines name exactly which
+dependency has to land to release it.
 
 ## Rejected alternatives
 

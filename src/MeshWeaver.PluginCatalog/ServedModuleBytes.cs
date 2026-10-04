@@ -53,6 +53,12 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public static class ServedModuleBytes
 {
+    /// <summary>The <see cref="ServedModule.Provenance"/> of bytes served off this registry's own
+    /// <c>modules/</c> shelf — the one provenance whose VERSION the serving route can state, because
+    /// the shelf generation it resolved records the version its producer published it at
+    /// (MeshWeaver#6067).</summary>
+    public const string ShelfProvenance = "this registry's own modules/ shelf";
+
     /// <summary>The seal's own naming for a package's module bundle, mirrored from
     /// <c>.github/scripts/compose-sealed-modules.sh</c> (<c>&lt;lower(package)&gt;.module.nupkg</c>)
     /// — the first candidate tried, before the identity's module index is scanned.</summary>
@@ -186,7 +192,7 @@ public static class ServedModuleBytes
             assets.Select(asset =>
                     new ServedModuleAsset(asset.RelativePath, () => File.OpenRead(asset.FullPath)))
                 .ToArray(),
-            "this registry's own modules/ shelf",
+            ShelfProvenance,
             null)
         {
             Natives = (natives ?? [])
@@ -428,4 +434,15 @@ public sealed record ServedModule(
     /// this type keeps working as written).</para>
     /// </summary>
     public IReadOnlyList<ServedModuleAsset> Natives { get; init; } = [];
+
+    /// <summary>
+    /// 🚨 The version THESE module bytes were shelved at (MeshWeaver#6067) — the activation
+    /// entry's own <c>Version</c> for the shelf generation that was resolved, written into the
+    /// served manifest's module section so the consumer can compare the bytes' label with the
+    /// version the index advertised and refuse a disagreement. Null when the serving route cannot
+    /// state it (a sealed-publication substitution, or an image module no landing labelled), which
+    /// a consumer reads as "unstated", never as a match. An INIT property for the same
+    /// binary-compatibility reason as <see cref="Natives"/>.
+    /// </summary>
+    public string? Version { get; init; }
 }
