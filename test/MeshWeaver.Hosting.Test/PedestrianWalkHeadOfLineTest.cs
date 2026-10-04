@@ -185,7 +185,7 @@ public class PedestrianWalkHeadOfLineTest
         {
             // Well into the read phase: 21 listings, then reads.
             await store.Completed.Where(c => c >= 200).FirstAsync()
-                .Timeout(TimeSpan.FromSeconds(20)).Await(ct);
+                .Timeout(TestTimeouts.Convergence).Await(ct);
         }
 
         store.PeakOutstanding.Should().BeLessThanOrEqualTo(8,
@@ -211,13 +211,13 @@ public class PedestrianWalkHeadOfLineTest
         {
             // The walk is under way and has filled whatever queue positions it is going to take.
             await store.Completed.Where(c => c >= 60).FirstAsync()
-                .Timeout(TimeSpan.FromSeconds(20)).Await(ct);
+                .Timeout(TestTimeouts.Convergence).Await(ct);
 
             var clock = Stopwatch.StartNew();
             var other = await core
                 .Query<MeshNode>(AsSystem("namespace:Other scope:children"), Options)
                 .FirstAsync()
-                .Timeout(TimeSpan.FromSeconds(30))
+                .Timeout(TestTimeouts.Convergence)
                 .Await(ct);
             clock.Stop();
 
