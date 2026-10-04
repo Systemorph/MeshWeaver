@@ -775,6 +775,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
+    /// What this run TESTS — the platform and commit of the in-process mesh, recorded by
+    /// <see cref="InitializeAsync"/> before any test body runs and written as the run's header
+    /// (maintainer, 2026-10-04). Null only before initialisation.
+    /// </summary>
+    protected VersionsUnderTest? VersionsUnderTest { get; private set; }
+
+    /// <summary>
     /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin),
     /// pre-warms NodeType hubs that runtime CreateNode calls would otherwise try to
     /// auto-create (and recurse on), and sets up access rights so that access control
@@ -789,13 +796,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// the Autofac Reflection.Emit factory pin lives, plus any unmanaged
     /// allocations from native libraries the test pulls in.
     /// </summary>
-    /// <summary>
-    /// What this run TESTS — the platform and commit of the in-process mesh, recorded by
-    /// <see cref="InitializeAsync"/> before any test body runs and written as the run's header
-    /// (maintainer, 2026-10-04). Null only before initialisation.
-    /// </summary>
-    protected VersionsUnderTest? VersionsUnderTest { get; private set; }
-
     private long _instanceInitManagedBytes;
     private long _instanceInitRssBytes;
     private long _instanceInitRssAnonBytes;

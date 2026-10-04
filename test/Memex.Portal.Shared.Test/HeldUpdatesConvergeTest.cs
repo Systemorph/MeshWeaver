@@ -449,7 +449,11 @@ public class TestRunPreflightRulesTest
             new ServedPackage("Store", "1.20.0", "s1", null));
         var records = ImmutableList.Create(
             new PackageManifest { Id = "AI", ReleasedVersion = "1.19.4", ModuleVersion = "085cc77d" },
-            new PackageManifest { Id = "Hosting", ReleasedVersion = "1.53.0", ModuleVersion = "h1", HeldUpdate = "held: …" },
+            new PackageManifest
+            {
+                Id = "Hosting", ReleasedVersion = "1.53.0", ModuleVersion = "h1", HeldUpdate = "held: …",
+                AutoUpdate = true, UpdatePolicy = PackageUpdatePolicy.Auto,
+            },
             new PackageManifest { Id = "Local", Version = "0.1.0", ModuleVersion = "l1" });
 
         var (versions, platformAtTarget) = CatalogTestRunPreflight.Compose("3.0.0-ci.9887", "abc", served, records);
@@ -474,6 +478,59 @@ public class TestRunPreflightRulesTest
         TargetSet.Standing("h1", served[1], "3.0.0-ci.9898").Should().Be(TargetStanding.Behind);
         CatalogTestRunPreflight.Compose("3.0.0-ci.9898", "abc", null, records).Versions.TargetPlatform
             .Should().BeNull("no feed read yet is 'no target known', never 'at target'");
+    }
+
+    [Fact]
+    public void ARepublishedVersionWithNewContent_IsBehind_AndTheTargetNamesItsHash()
+    {
+        // Review on MeshWeaver#6065: Standing decides by CONTENT; the header's AtTarget must not
+        // re-derive it from SemVer strings, or a same-SemVer re-publish reads as at target.
+        var served = ImmutableList.Create(new ServedPackage("AI", "1.19.4", "new-hash", null));
+        var records = ImmutableList.Create(new PackageManifest
+        {
+            Id = "AI", ReleasedVersion = "1.19.4", ModuleVersion = "old-hash",
+            AutoUpdate = true, UpdatePolicy = PackageUpdatePolicy.Auto,
+        });
+
+        var (versions, platformAtTarget) = CatalogTestRunPreflight.Compose("3.0.0-ci.9887", "abc", served, records);
+        var ai = versions.Modules.Single();
+        ai.AtTarget.Should().BeFalse("the installed content is not the served content, whatever the SemVer says");
+        ai.Target.Should().Be("new-hash", "the same SemVer would name no difference at all");
+        TestRunPreflight.Decide(versions, platformAtTarget, mayConverge: false, alreadyConverged: false)
+            .Kind.Should().Be(TestRunPreflightKind.Skew, "a run on stale content is the case the preflight refuses");
+        versions.Header(all: true).Should().Contain("AI 1.19.4 → target new-hash");
+    }
+
+    [Fact]
+    public void APackageAPersonKeepsOnNotify_IsAReportedHold_NotASkewThatRefusesEveryRun()
+    {
+        // Review on MeshWeaver#6065: a Notify/None package is never applied unattended, so no
+        // convergence pass can close it; it must not refuse every test run on the instance.
+        var served = ImmutableList.Create(
+            new ServedPackage("Manual", "2.0.0", "m2", null),
+            new ServedPackage("Auto", "2.0.0", "a2", null));
+        var records = ImmutableList.Create(
+            new PackageManifest { Id = "Manual", ReleasedVersion = "1.0.0", ModuleVersion = "m1", UpdatePolicy = PackageUpdatePolicy.Notify },
+            new PackageManifest
+            {
+                Id = "Auto", ReleasedVersion = "1.0.0", ModuleVersion = "a1",
+                AutoUpdate = true, UpdatePolicy = PackageUpdatePolicy.Auto,
+            });
+
+        var (versions, platformAtTarget) = CatalogTestRunPreflight.Compose("3.0.0-ci.9887", "abc", served, records);
+        var manual = versions.Modules.Single(m => m.Id == "Manual");
+        manual.AtTarget.Should().BeTrue("a person's policy is a hold, not a gap the run can be refused for");
+        manual.Held.Should().Contain("update policy is Notify", "the reason is shown");
+        versions.Modules.Single(m => m.Id == "Auto").AtTarget.Should().BeFalse();
+
+        var decision = TestRunPreflight.Decide(versions, platformAtTarget, mayConverge: false, alreadyConverged: false);
+        decision.Kind.Should().Be(TestRunPreflightKind.Skew, "the Auto package is still a gap");
+        decision.Message.Should().Contain("Auto 1.0.0").And.NotContain("Manual 1.0.0 ≠");
+        versions.Header(all: true).Should().Contain("Manual 1.0.0 → target 2.0.0 [the package's update policy is Notify");
+
+        var onlyManual = CatalogTestRunPreflight.Compose("3.0.0-ci.9887", "abc", served, records.RemoveAt(1));
+        TestRunPreflight.Decide(onlyManual.Versions, onlyManual.PlatformAtTarget, mayConverge: false, alreadyConverged: false)
+            .Kind.Should().Be(TestRunPreflightKind.UpToDate);
     }
 
     [Fact]
@@ -517,7 +574,13 @@ public class CatalogTestRunPreflightTest(ITestOutputHelper output) : MonolithMes
         => base.ConfigureMesh(builder)
             .AddPluginCatalog()
             .ConfigureServices(services => services
-                .AddSingleton(new PluginCatalogOptions { InstallPreInstalledPackages = false }));
+                // Auto: the premise is a package the convergence pass MAY apply (a Notify package
+                // is a reported hold, pinned in TestRunPreflightRulesTest).
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstallPreInstalledPackages = false,
+                    DefaultUpdatePolicy = PackageUpdatePolicy.Auto,
+                }));
 
     [Fact(Timeout = 300_000)]
     public async Task AStaleInstance_IsConvergedFirst_AndRefusedNamingTheSkew_WhenThatDoesNotCloseIt()

@@ -105,8 +105,11 @@ public partial class MeshOperations
                 .Take(1))
             .Select(result =>
             {
-                ctx.Log(new LogMessage(result.Versions.Header(all: false), LogLevel.Information)
-                    .WithKey("activity.tests.versions", ("header", (object?)result.Versions.Header(all: false))));
+                // EVERY module, not only the off-target ones: the header exists so the verdict names
+                // exactly what it ran against, and a mesh at target would otherwise name nothing.
+                var header = result.Versions.Header(all: true);
+                ctx.Log(new LogMessage(header, LogLevel.Information)
+                    .WithKey("activity.tests.versions", ("header", (object?)header)));
                 ctx.Log(new LogMessage(result.Message, result.Proceed ? LogLevel.Information : LogLevel.Warning)
                     .WithKey("activity.tests.preflight", ("message", (object?)result.Message)));
                 if (!result.Proceed)

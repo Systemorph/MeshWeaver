@@ -232,7 +232,7 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                     : report.Warnings.Add("adopted artifact inventory is incomplete; retention must not delete"),
             })
             .Zip(ReadServed(), (report, served) => (report, served))
-            .Zip(ReadLatestArmed(), (pair, armed) => WithTarget(pair.report, pair.served, armed))
+            .Zip(ReadLatestArmed(hub, ReadBudget, logger), (pair, armed) => WithTarget(pair.report, pair.served, armed))
             .SelectMany(report => Deliver(settings, report));
     }
 
@@ -265,7 +265,12 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
     /// <c>resolve-platform.py --armed</c> resolves. Null when the instance has no such node (a host
     /// without self-update) or it could not be read.
     /// </summary>
-    private IObservable<string?> ReadLatestArmed()
+    /// <remarks>The ONE reader of this fact — <see cref="CatalogTestRunPreflight"/> calls it too, so a
+    /// partition or NodeType rename cannot blind one reader while the other still sees the tag.</remarks>
+    /// <param name="hub">The hub whose mesh is read.</param>
+    /// <param name="budget">How long the read may take.</param>
+    /// <param name="logger">Where an unreadable policy is logged, if anywhere.</param>
+    internal static IObservable<string?> ReadLatestArmed(IMessageHub hub, TimeSpan budget, ILogger? logger = null)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -273,24 +278,29 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
         return accessService
             .RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
             .Take(1)
-            .Timeout(ReadBudget)
+            .Timeout(budget)
             .Select(change => change.Items
-                .Select(node => StringProperty(node.Content, "latestAvailableTag"))
+                .Select(node => StringProperty(node.Content, "latestAvailableTag", hub.JsonSerializerOptions))
                 .FirstOrDefault(tag => tag is not null))
             .Catch((Exception exception) =>
             {
-                logger.LogDebug(exception, "[DeploymentReport] the newest armed tag could not be read.");
+                logger?.LogDebug(exception, "[DeploymentReport] the newest armed tag could not be read.");
                 return Observable.Return<string?>(null);
             });
     }
 
-    private string? StringProperty(object? content, string name)
+    /// <summary>A trimmed, non-blank string property of a node's content in whatever shape it
+    /// arrives, else null.</summary>
+    /// <param name="content">The content.</param>
+    /// <param name="name">The property name (camelCase).</param>
+    /// <param name="options">The hub's serializer options.</param>
+    internal static string? StringProperty(object? content, string name, JsonSerializerOptions options)
     {
         if (content is null)
             return null;
         var element = content is JsonElement je
             ? je
-            : JsonSerializer.SerializeToElement(content, content.GetType(), hub.JsonSerializerOptions);
+            : JsonSerializer.SerializeToElement(content, content.GetType(), options);
         return element.ValueKind == JsonValueKind.Object
                && element.TryGetProperty(name, out var value)
                && value.ValueKind == JsonValueKind.String

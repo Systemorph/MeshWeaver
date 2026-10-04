@@ -82,31 +82,10 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
                 .ToImmutableList());
 
         // The newest ARMED set this instance's self-updater sees (Admin/UpdatePolicy.latestAvailableTag):
-        // the target platform, which a sealed-but-unarmed set is not (TargetSet).
-        var armed = access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    "path:Admin scope:children nodeType:UpdatePolicy"))
-                .Take(1))
-            .Timeout(ReadBudget)
-            .Select(change => change.Items
-                .Select(n => LatestAvailableTag(n.Content))
-                .FirstOrDefault(t => t is not null))
-            .Catch((Exception _) => Observable.Return<string?>(null));
+        // the target platform, which a sealed-but-unarmed set is not (TargetSet). The ONE reader of it.
+        var armed = DeploymentReportService.ReadLatestArmed(hub, ReadBudget, logger);
 
         return served.Zip(records, armed, (s, r, a) => Compose(running, PlatformBuildInfo.CommitHash, s, r, a));
-    }
-
-    private string? LatestAvailableTag(object? content)
-    {
-        if (content is null)
-            return null;
-        var element = content is System.Text.Json.JsonElement je
-            ? je
-            : System.Text.Json.JsonSerializer.SerializeToElement(content, content.GetType(), hub.JsonSerializerOptions);
-        return element.ValueKind == System.Text.Json.JsonValueKind.Object
-               && element.TryGetProperty("latestAvailableTag", out var tag)
-               && tag.ValueKind == System.Text.Json.JsonValueKind.String
-            ? tag.GetString()
-            : null;
     }
 
     /// <summary>The reading, pure: installed records against the served feed.</summary>
@@ -127,11 +106,19 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
                 var installed = r.ReleasedVersion ?? r.Version ?? r.ModuleVersion;
                 byId.TryGetValue(r.Id, out var s);
                 var standing = TargetSet.Standing(r.ModuleVersion, s, target);
-                return new ModuleUnderTest(
-                    r.Id,
-                    installed,
-                    standing == TargetStanding.Behind && s is not null ? s.Version ?? s.ModuleVersion : null,
-                    r.HeldUpdate);
+                if (standing != TargetStanding.Behind || s is null)
+                    return new ModuleUnderTest(r.Id, installed, Target: null, r.HeldUpdate, Behind: false);
+                // Behind is decided by CONTENT (the hashes), so a re-published SemVer with new
+                // content is behind too — and then the target names its hash, not the same SemVer.
+                var targetVersion = s.Version is not null && !string.Equals(s.Version, installed, StringComparison.Ordinal)
+                    ? s.Version
+                    : s.ModuleVersion ?? s.Version;
+                // 🚨 A package a person keeps on Notify/None is never applied unattended
+                // (RegistryUpdateReconciler.PolicyDecline), so converging cannot close it: it is a
+                // REPORTED hold with its reason, not a skew that refuses every run on the instance.
+                return RegistryUpdateReconciler.PolicyDecline(r) is { } policyHold
+                    ? new ModuleUnderTest(r.Id, installed, targetVersion, r.HeldUpdate ?? policyHold, Behind: false)
+                    : new ModuleUnderTest(r.Id, installed, targetVersion, r.HeldUpdate, Behind: true);
             })
             .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
             .ToImmutableList();

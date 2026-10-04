@@ -8,11 +8,21 @@ namespace MeshWeaver.Mesh;
 /// <param name="Installed">The installed version (SemVer, else content hash), or null.</param>
 /// <param name="Target">The target set's version, or null when the target names none.</param>
 /// <param name="Held">Why a newer version is not installed, when a hold says so.</param>
-public sealed record ModuleUnderTest(string Id, string? Installed, string? Target, string? Held = null)
+/// <param name="Behind">Whether the module is behind its target, as the reader DECIDED it (by
+/// content hash, a policy a person keeps, …). Null when the reader decided nothing, in which case
+/// the two version strings are compared.</param>
+public sealed record ModuleUnderTest(string Id, string? Installed, string? Target, string? Held = null, bool? Behind = null)
 {
-    /// <summary>Whether the installed version is the target's (a module with no target is never
-    /// behind — there is nothing to measure it against).</summary>
-    public bool AtTarget => Target is null || string.Equals(Installed, Target, StringComparison.Ordinal);
+    /// <summary>Whether the module counts as at its target. The reader's own decision wins, so a
+    /// re-published version with new content (same SemVer, new hash) cannot read as at target; with
+    /// no decision, a module with no target is never behind — there is nothing to measure it
+    /// against.</summary>
+    public bool AtTarget => Behind is { } behind
+        ? !behind
+        : Target is null || string.Equals(Installed, Target, StringComparison.Ordinal);
+
+    /// <summary>Whether the header should name a target: there is one, and it is not what runs.</summary>
+    public bool ShowsTarget => Target is not null && !string.Equals(Installed, Target, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -48,7 +58,7 @@ public sealed record VersionsUnderTest(
             .Where(m => all || !m.AtTarget)
             .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)
             .Select(m => $"  {m.Id} {m.Installed ?? "(unknown)"}"
-                + (m.AtTarget ? "" : $" → target {m.Target}")
+                + (m.ShowsTarget ? $" → target {m.Target}" : "")
                 + (string.IsNullOrWhiteSpace(m.Held) ? "" : $" [{m.Held}]")));
         return string.Join("\n", lines);
     }
