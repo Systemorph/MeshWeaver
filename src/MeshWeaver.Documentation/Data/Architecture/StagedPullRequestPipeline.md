@@ -187,7 +187,10 @@ A skipped required context counts as satisfied, so the hold is a **failure** at 
   the test shards, doc gate and platform-compat also use `!cancelled()` with an explicit successful
   `build` result. Without that status function, their implicit `success()` still sees the skipped
   PR-only stage-0 ancestors on a main push and silently skips them even after a green build (main
-  run 37197032428). The result gate then correctly refuses to claim test evidence.
+  run 37197032428). The result gate then correctly refuses to claim test evidence. A failed
+  `precheck` does not suppress a successful build's suites (an indeterminate probe still needs
+  evidence), but `Consolidate test results` explicitly rejects a non-successful precheck verdict;
+  test evidence alone cannot turn that run green.
   `Consolidate test results` (required) fails at its first step, *"Stage 2 held — stage 1 (…)"* or
   *"— stage 0 red"*, before the generic no-evidence reds. The green-tree reuse path is not held — it
   spends nothing.
