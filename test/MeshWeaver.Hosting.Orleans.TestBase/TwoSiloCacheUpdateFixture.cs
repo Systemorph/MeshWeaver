@@ -55,8 +55,16 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     /// <summary>Read access to the store of record for tests that assert on durable rows.</summary>
     internal OrleansTestBackingStore BackingStore => backingStore;
 
+    /// <summary>
+    /// Subclass hook: whether both silos' adapters share ONE change feed, so a write on one silo is
+    /// heard on the other as PostgreSQL LISTEN/NOTIFY makes it heard in production. Off by default.
+    /// </summary>
+    protected virtual bool ShareStorageChanges => false;
+
     public async ValueTask InitializeAsync()
     {
+        if (ShareStorageChanges)
+            backingStore.ShareChanges();
         // No Orleans client: the test driver issues cache.Update directly against a silo's
         // mesh hub. DeployAsync also seeds the default System circuit identity on both silos'
         // mesh hubs so those direct posts carry an identity (never-null AccessContext
