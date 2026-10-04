@@ -51,12 +51,26 @@ on:
         required: false
         type: number
         default: 120
+      stage0-results:
+        description: >-
+          Space-separated `name=result` pairs of the caller's stage-0 controls (`needs.<job>.result`).
+          `failure` or `cancelled` holds the head as STAGE 0 RED; `success` and `skipped` pass (a control
+          that skips by its own design — a fork, a non-PR event — does not hold stage 2). The caller job
+          runs with `if: !cancelled()` so a skipped control never skips this gate.
+        required: false
+        type: string
+        default: ""
+      already-green:
+        description: "The caller's tree is already tested green (core's green-tree reuse): nothing is spent, so nothing is held"
+        required: false
+        type: boolean
+        default: false
     outputs:
       ready:
         description: "'true' when stage 2 may start for this head"
         value: ${{ jobs.gate.outputs.ready }}
       mode:
-        description: "reviewed | degraded | fallback | label | not-staged | draft | waiting | unanswered | unreadable"
+        description: "reviewed | degraded | fallback | label | not-staged | stage0-red | draft | waiting | unanswered | unreadable"
         value: ${{ jobs.gate.outputs.mode }}
 
 jobs:
@@ -98,12 +112,40 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
           FALLBACK: ${{ inputs.fallback-minutes }}
+          STAGE0: ${{ inputs.stage0-results }}
+          ALREADY_GREEN: ${{ inputs.already-green }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "event '$EVENT_NAME' is not staged — trunk, the queue, the schedule and a dispatch never wait for a review"
+          # Stage 0 first: a red static control holds every event's heavy legs only on a pull request,
+          # but it is judged here on its own results so a SKIPPED control can never skip this gate.
+          red=""
+          for pair in $STAGE0; do
+            case "${pair#*=}" in failure|cancelled) red="$red ${pair}" ;; esac
+          done
+          not_staged() {
+            echo "$1"
             { echo "ready=true"; echo "mode=not-staged"; } >> "$GITHUB_OUTPUT"
+            echo "### Staged pipeline — $1" >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          }
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            not_staged "event '$EVENT_NAME' is not staged — trunk, the queue, the schedule and a dispatch never wait for a review"
+          fi
+          if [ -n "$red" ]; then
+            echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control is red (${red# }) — fix it and push; the new head restarts at stage 0"
+            { echo "ready=false"; echo "mode=stage0-red"; } >> "$GITHUB_OUTPUT"
+            echo "### ⏸ Stage 2 held — stage 0 red:${red}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ "$ALREADY_GREEN" = "true" ]; then
+            not_staged "this tree is already tested green — the reuse path spends nothing, so it is not held"
+          fi
+          # The internal reviewer does not review a FORK's head (the steward admits members, their
+          # agents and bots), so holding one would only wait out the fallback under a warning that
+          # blames an outage. A fork runs as before; its merge still needs the review gate (a waiver).
+          if [ "$FORK" = "true" ]; then
+            not_staged "a fork's head is not reviewed by the internal reviewer — not staged; the merge gate still applies"
           fi
           [ -n "${PR:-}" ] || { echo "::error::a pull_request event without a pull request number"; exit 1; }
           # Stage 1 began when the head's run was created; a re-run keeps created_at, so the fallback

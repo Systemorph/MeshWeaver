@@ -722,6 +722,8 @@ def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: S
         return "none", f"stage 1 still holds head {head[:10]}: {verdict.missing}"
     if run.get("status") != "completed":
         return "wait", f"run {run.get('id')} is still {run.get('status')} — a re-run needs it completed"
+    if run.get("conclusion") == "cancelled":
+        return "none", f"run {run.get('id')} was cancelled (superseded) — a cancelled run is never revived"
     return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
 
 
@@ -921,6 +923,7 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
     action, why = advance_action(pr, run, job, verdict)
     deadline = time.monotonic() + wait_minutes * 60
+    waited = action == "wait"
     while action == "wait" and time.monotonic() < deadline:
         print(f"  #{number}: {why}")
         time.sleep(30)
@@ -928,6 +931,14 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         action, why = advance_action(pr, run, job, verdict)
     if action == "wait":
         raise ReadError(f"#{number}: {why} — still not completed after {wait_minutes} min; the sweep re-tries")
+    if action == "rerun" and waited:
+        # 🚨 Everything judged before the wait is stale now (#6070 review): a fix push may have made a
+        # new head (and cancelled this run), the PR may be closed, an answer may have been deleted.
+        # Re-read the pull request and re-judge stage 1 before POSTing, never on the snapshot.
+        pr = gh.api(f"pulls/{number}")
+        _, comments, check_runs = read_arm_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
+        action, why = advance_action(pr, run, job, verdict)
     if action == "rerun":
         gh.post(f"actions/runs/{run['id']}/rerun-failed-jobs")
         if verdict.loud:
@@ -957,8 +968,18 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
             open_heads = {p["head"]["sha"]: p["number"] for p in gh.api("pulls?state=open&per_page=100", paginate=True)
                           if not p.get("draft") and (p.get("head") or {}).get("sha")}
             cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            listing = gh.api(f"actions/workflows/{workflow}/runs?event=pull_request&status=failure&created=%3E%3D{cutoff}&per_page=100")
-            failed = {r.get("head_sha") for r in (listing or {}).get("workflow_runs") or ()}
+            # Paged by hand (the pages are objects): a mass outage is exactly when more than one page
+            # of failed runs exists, and a head on page 2 must not wait for page 1 to age out.
+            failed: set = set()
+            for page in range(1, 11):
+                listing = gh.api(f"actions/workflows/{workflow}/runs?event=pull_request&status=failure"
+                                 f"&created=%3E%3D{cutoff}&per_page=100&page={page}")
+                runs = (listing or {}).get("workflow_runs") if isinstance(listing, dict) else None
+                if not isinstance(runs, list):
+                    raise ReadError(f"the failed-run listing of {workflow} (page {page}) is unreadable")
+                failed |= {r.get("head_sha") for r in runs}
+                if len(runs) < 100:
+                    break
             numbers = sorted({open_heads[s] for s in failed if s in open_heads})[:max_per_run]
             print(f"sweep: {len(open_heads)} open non-draft PR(s), {len(failed)} head(s) with a failed run since {cutoff}; examining {numbers}")
     except ReadError as e:
@@ -1557,6 +1578,8 @@ def self_test() -> int:
     adv_case("run still finishing -> wait", "wait", open_pr, dict(done_run, status="in_progress"), failed_gate, GREEN_S, "needs it completed")
     adv_case("no stage gate in the caller -> none", "none", open_pr, done_run, None, GREEN_S, "not adopted")
     adv_case("no CI run yet -> none", "none", open_pr, None, None, GREEN_S, "no pull_request CI run")
+    adv_case("cancelled (superseded) run -> none, never revived", "none", open_pr, dict(done_run, conclusion="cancelled"),
+             failed_gate, GREEN_S, "never revived")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
     # the merge-queue ref → pull request number

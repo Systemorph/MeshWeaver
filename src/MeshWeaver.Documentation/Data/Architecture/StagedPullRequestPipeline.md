@@ -179,7 +179,11 @@ Unchanged supersession rules, applied per head:
 
 A skipped required context counts as satisfied, so the hold is a **failure** at every level:
 
-- **Core**: `stage-gate` fails; `build` requires `needs.stage-gate.result == 'success'` explicitly;
+- **Core**: `stage-gate` fails; `build` requires `needs.stage-gate.result == 'success'` explicitly.
+  The gate itself runs with `if: !cancelled()` and receives the stage-0 results as an input: several
+  stage-0 controls SKIP by design (push, merge queue, forks), and a job whose need is skipped is itself
+  skipped — on the implicit guard the gate, and through it the build, would have skipped on every main
+  push (#6070 review). So `failure`/`cancelled` holds (mode `stage0-red`), `skipped` passes;
   `Consolidate test results` (required) fails at its first step, *"Stage 2 held — stage 1 (…)"* or
   *"— stage 0 red"*, before the generic no-evidence reds. The green-tree reuse path is not held — it
   spends nothing.
@@ -199,6 +203,10 @@ the event half owns it), with open threads it is `review-unanswered`, and whatev
 INDEPENDENTLY of the hold (the stage-0 control itself, a leg that does not wait for the front door)
 is classified exactly as before. Without the marker, every hold would read as a real defect on the
 front door — and the fixer would cancel the very run the review is about to release.
+
+**Not staged at all** (the gate answers `not-staged` in green): a **fork's** pull request (the internal
+reviewer does not review forks, so a hold would only wait out the fallback under a warning blaming an
+outage — the merge gate still applies to it), and core's **green-tree reuse** path (it spends nothing).
 
 `push`, `schedule`, `workflow_dispatch` and `merge_group` are never staged: the gate answers
 `not-staged` in green at once. Trunk never waits for a review, and core's merge queue re-tests a PR
@@ -228,8 +236,10 @@ adopted together and why the Plugins pin (`check-build-queue-admission.py`) name
 - **An answer on a branch that predates the listener.** `pull_request_review_comment` runs the
   workflow file from the pull request's own merge ref, so a branch cut before `stage-advance.yml`
   existed raises no run on a reply. The 15-minute sweep catches it.
-- **The sweep looks back six hours** and at most 25 pull requests per pass, so a held run older than
-  that needs a push or a manual re-run of its failed jobs.
+- **The sweep looks back six hours** (every page of failed runs in that window) and at most 25 pull
+  requests per pass, so a held run older than that needs a push or a manual re-run of its failed jobs.
+- **A cancelled run is never revived**, and a run whose wait for completion outlasted a push, a close
+  or a deleted answer is re-judged on a fresh read before the re-run is posted.
 - **Drafts are not reviewed, so they wait** — mark the pull request ready, or apply
   `tests-before-review`.
 - **Not every repository is staged yet** (see the adoption table); an unadopted repository behaves

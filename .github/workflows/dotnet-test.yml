@@ -600,8 +600,16 @@ jobs:
   # dispatch are not staged (the lane answers green at once), and the green-tree reuse costs nothing,
   # so it is not held either. `scripts-ref: github.sha` = a PR that changes the predicate is judged
   # by its own copy, as review-answered.yml's lane does.
+  #
+  # 🚨 `if: !cancelled()` and the stage-0 results passed IN, never the implicit guard (#6070 review):
+  # several stage-0 controls skip by design on push / merge_group / a fork, and a job whose need is
+  # SKIPPED is itself skipped — which would skip this gate and, through its explicit success check,
+  # the build on every main push. So the gate always runs and judges the results itself: `failure`
+  # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
+  # nothing is spent there, so it is not held.
   stage-gate:
-    needs: [shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
+    needs: [precheck, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/node-repo-stage-gate.yml
     permissions:
       contents: read
@@ -610,6 +618,12 @@ jobs:
       actions: read
     with:
       scripts-ref: ${{ github.sha }}
+      already-green: ${{ needs.precheck.outputs.skip == 'true' }}
+      stage0-results: >-
+        shared-rules=${{ needs.shared-rules.result }} closing-keywords=${{ needs.closing-keywords.result }}
+        package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
+        i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
+        cross-repo-pair=${{ needs.cross-repo-pair.result }}
 
   build:
     name: "Build solution (once)"
@@ -3954,13 +3968,13 @@ jobs:
     # When stage 0 or stage 1 held the build, every check below would also red on "no test evidence"
     # — true, and useless. This step names the one cause; stage-advance.yml re-runs the failed jobs
     # of this run (this job included) when stage 1 turns green, so nobody has to push to unhold it.
-    - name: "Stage 2 started (stage 0 and stage 1 green for this head)"
+    - name: "Stage 2 held? (stage 0 or stage 1 not green for this head)"
       if: needs.precheck.outputs.skip != 'true' && needs.stage-gate.result != 'success'
       env:
         GATE: ${{ needs.stage-gate.result }}
         MODE: ${{ needs.stage-gate.outputs.mode }}
       run: |
-        if [ "$GATE" = "skipped" ]; then
+        if [ "$MODE" = "stage0-red" ]; then
           echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
           echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the 'Stage 1: review landed and answered' job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
