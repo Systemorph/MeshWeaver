@@ -176,6 +176,33 @@ internal static class PackageUpdateReconciler
         if (floor.Kind == PlatformFloorKind.Advisory)
             logger?.LogInformation("Package update: {Id} {Advisory}", pkg.Id, floor.Reason);
 
+        // 🚨 The floor is MET now. A record still saying "held: … updates when the platform rolls"
+        // is a lie from here on — measured on the control instance 2026-10-04: Plugins/Hosting and
+        // 22 others kept "running 3.0.0-ci.9885" after the roll to 9887, and the fleet's only
+        // record of a hold read as current. The decision below may still hold the package for
+        // ANOTHER reason (sync-owned content), and then it says so in its own words.
+        // Only a FLOOR hold ends because the floor is met; a hold for another reason is re-decided by
+        // the lane that stamped it and keeps its since-when (review on MeshWeaver#6065).
+        var proceed = PackagePlatformFloorGate.IsFloorHold(record.HeldUpdate)
+            ? ClearFloorHold(hub, accessService, recordPath, record, logger)
+            : Observable.Return(record);
+        return proceed.SelectMany(current => DecidePolicy(
+            hub, meshService, accessService, source, sourceRef, pkg, current, recordPath, provenance, logger));
+    }
+
+    /// <summary>The policy half of <see cref="Decide"/> — reached only once the floor is met.</summary>
+    private static IObservable<Unit> DecidePolicy(
+        IMessageHub hub,
+        IMeshService meshService,
+        AccessService accessService,
+        IPackageSource source,
+        string sourceRef,
+        PackageManifest pkg,
+        PackageManifest record,
+        string recordPath,
+        string provenance,
+        ILogger? logger)
+    {
         var delta = DescribeDelta(pkg, record);
         var detail = Describe(delta);
         var name = pkg.Name ?? pkg.Id;
@@ -207,7 +234,20 @@ internal static class PackageUpdateReconciler
                 .SelectMany(ownership => ownership.InstallerOwnsTheContent
                     ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
                         recordPath, provenance, delta, logger)
-                    : Notify(
+                    // 🚨 Sync-owned — but has the sync ALREADY landed this very content? Then there
+                    // is nothing to write and no second writer: the record adopts the candidate and
+                    // the module lane (RegistryUpdateReconciler.AdoptOne) lands its code in the same
+                    // pass. This is the convergence the 10-03/10-04 holds lacked (maintainer,
+                    // 2026-10-04: "a module held because _GitSync owns the partition must also
+                    // converge, without a manual step").
+                    : ownership.Owner == PartitionContentOwner.SyncSource
+                        ? PartitionContentOwnership
+                            .SyncedModules(hub, PackageInstaller.TargetPartitionOf(pkg.Id, pkg))
+                            .SelectMany(synced => PartitionContentOwnership.SyncDelivered(ownership, synced, pkg.Id, pkg.ModuleVersion)
+                                ? AdoptSyncedContent(hub, accessService, recordPath, pkg, logger)
+                                : HoldForSync(hub, meshService, accessService, recordPath, pkg, record,
+                                    ownership, synced, name, detail, delta, provenance, logger))
+                        : Notify(
                         hub, meshService, accessService, recordPath, pkg, record, SyncOwnedPartitionKind,
                         LocalizableText.Keyed(
                             $"Update held: {name}",
@@ -236,6 +276,161 @@ internal static class PackageUpdateReconciler
             // either, because the administrator chose not to be reminded.
             _ => Observable.Return(Unit.Default),
         };
+    }
+
+    /// <summary>
+    /// The floor that held an update is met: clear the hold on the record (sentence, dispatch,
+    /// stamps) and hand the decision the CURRENT record. Never faults — a stamp that could not be
+    /// written costs one stale line, never the update itself.
+    /// </summary>
+    private static IObservable<PackageManifest> ClearFloorHold(
+        IMessageHub hub, AccessService accessService, string recordPath, PackageManifest record, ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Package update: {Id} — the platform now satisfies the floor that held it ({Held}); the hold "
+            + "is cleared and the update is decided again.", record.Id, record.HeldUpdate);
+        var cleared = record with
+        {
+            HeldUpdate = null,
+            HeldUpdateDispatch = null,
+            HeldUpdateDispatchedAt = null,
+            HeldSince = null,
+        };
+        // RunAsSystem, never Observable.Using (#1790): the install-records partition is System-owned.
+        return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                .Update<PackageManifest>(current => current with
+                {
+                    HeldUpdate = null,
+                    HeldUpdateDispatch = null,
+                    HeldUpdateDispatchedAt = null,
+                    HeldSince = null,
+                }))
+            .Take(1)
+            .Select(_ => cleared)
+            .DefaultIfEmpty(cleared)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Package update: clearing the met floor hold on {Path} failed.", recordPath);
+                return Observable.Return(cleared);
+            });
+    }
+
+    /// <summary>
+    /// 🚨 <b>The convergence of a SYNC-OWNED package</b> (maintainer, 2026-10-04). The partition's
+    /// sync source has landed exactly the candidate's content, so nothing is written to the
+    /// partition — the record ADOPTS the candidate (version, content hash, file map, floor) and
+    /// any hold clears. One writer stays one writer: the installer only brings its own books in
+    /// line with what the owner landed, which is the repair One Partition, One Bookkeeping asks of
+    /// every lane ("whichever writer lands content must leave the other writer's record
+    /// consistent"). The module lane that follows in the same pass then lands the module whose
+    /// content this is (<c>RegistryUpdateReconciler.AdoptOne</c>).
+    /// </summary>
+    internal static IObservable<Unit> AdoptSyncedContent(
+        IMessageHub hub, AccessService accessService, string recordPath, PackageManifest pkg, ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Package update: {Id} — its partition's sync source has already landed {Version} ({Hash}); "
+            + "the install record adopts it (no content written) and its module lands in this pass.",
+            pkg.Id, pkg.ReleasedVersion ?? pkg.Version, pkg.ModuleVersion);
+        return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                .Update<PackageManifest>(current => AdoptedFromSync(current, pkg, DateTimeOffset.UtcNow)))
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .DefaultIfEmpty(Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Package update: adopting the synced content of {Id} on {Path} failed.",
+                    pkg.Id, recordPath);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>The record after adopting a candidate the sync has landed (pure). Policy, the
+    /// authorizing principal and every other install-time field are kept.</summary>
+    /// <param name="current">The record as it stands.</param>
+    /// <param name="pkg">The candidate.</param>
+    /// <param name="now">Now.</param>
+    internal static PackageManifest AdoptedFromSync(PackageManifest current, PackageManifest pkg, DateTimeOffset now) =>
+        current with
+        {
+            Version = pkg.Version ?? current.Version,
+            ReleasedVersion = pkg.ReleasedVersion ?? current.ReleasedVersion,
+            ModuleVersion = pkg.ModuleVersion,
+            MinMeshVersion = pkg.MinMeshVersion,
+            InstalledFiles = pkg.ManifestFiles ?? current.InstalledFiles,
+            InstalledAtUtc = now,
+            NotifiedModuleVersion = pkg.ModuleVersion,
+            HeldUpdate = null,
+            HeldUpdateDispatch = null,
+            HeldUpdateDispatchedAt = null,
+            HeldSince = null,
+        };
+
+    /// <summary>The hold sentence for a sync-owned package whose sync has NOT landed the
+    /// candidate yet (pure) — what the record and the fleet view say instead of a silent reminder.</summary>
+    /// <param name="pkg">The candidate.</param>
+    /// <param name="synced">What the partition's sync sources have landed.</param>
+    /// <param name="partition">The target partition.</param>
+    internal static string SyncHoldSentence(PackageManifest pkg, SyncedModuleVersions synced, string partition)
+    {
+        var version = pkg.ReleasedVersion ?? pkg.Version ?? pkg.ModuleVersion ?? "the served version";
+        var landed = !synced.Known
+            ? "an unknown version (its sync source could not be read)"
+            : synced.Versions.TryGetValue(pkg.Id, out var hash) ? hash : "nothing for this module";
+        return $"held: {version} — '{partition}' is kept by its sync source, which has landed {landed}, "
+            + $"not {pkg.ModuleVersion}; converges when the sync lands it (the seal for this platform)";
+    }
+
+    /// <summary>
+    /// A sync-owned package whose sync has NOT landed the candidate: stamp the reason on the record
+    /// (so the fleet view lists it, with since-when) and raise the once-per-candidate reminder.
+    /// </summary>
+    private static IObservable<Unit> HoldForSync(
+        IMessageHub hub,
+        IMeshService meshService,
+        AccessService accessService,
+        string recordPath,
+        PackageManifest pkg,
+        PackageManifest record,
+        PartitionContentOwnershipVerdict ownership,
+        SyncedModuleVersions synced,
+        string name,
+        string detail,
+        (int Changed, int Removed)? delta,
+        string provenance,
+        ILogger? logger)
+    {
+        var sentence = SyncHoldSentence(pkg, synced, ownership.Partition);
+        var stamp = string.Equals(record.HeldUpdate, sentence, StringComparison.Ordinal)
+            ? Observable.Return(Unit.Default)
+            : accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                    .Update<PackageManifest>(current => current with
+                    {
+                        HeldUpdate = sentence,
+                        HeldSince = current.HeldSince ?? DateTimeOffset.UtcNow,
+                    }))
+                .Take(1)
+                .Select(_ => Unit.Default)
+                .DefaultIfEmpty(Unit.Default)
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "Package update: stamping the sync hold on {Path} failed.", recordPath);
+                    return Observable.Return(Unit.Default);
+                });
+        return stamp.SelectMany(_ => Notify(
+            hub, meshService, accessService, recordPath, pkg, record with { HeldUpdate = sentence }, SyncOwnedPartitionKind,
+            LocalizableText.Keyed(
+                $"Update held: {name}",
+                "notification.packageUpdate.held.title", ("name", name)),
+            LocalizableText.Keyed(
+                $"A new build of {name} is available ({detail}), and this package "
+                + "is set to update automatically — but it was NOT applied. "
+                + ownership.Because + ". Applying it here would leave two writers with "
+                + "separate records of one partition (MeshWeaver#4355). " + provenance + ".",
+                BodyKey("held", delta),
+                ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
+                ("because", ownership.Because), ("provenance", provenance)),
+            logger));
     }
 
     /// <summary>

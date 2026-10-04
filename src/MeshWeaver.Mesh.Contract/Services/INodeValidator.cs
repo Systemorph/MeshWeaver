@@ -182,6 +182,48 @@ public interface INodeTypeAccessRule
 }
 
 /// <summary>
+/// An <see cref="INodeTypeAccessRule"/> that also speaks for permissions OUTSIDE the CRUD four —
+/// <see cref="Permission.Comment"/>, <see cref="Permission.Thread"/>, <see cref="Permission.Execute"/>
+/// and the like — on the node it governs.
+///
+/// <para><b>Why a second interface.</b> <see cref="INodeTypeAccessRule.SupportedOperations"/> is
+/// expressed in <see cref="NodeOperation"/>s, so a rule could never have an opinion about a
+/// <c>[RequiresPermission(Permission.Thread)]</c> delivery at its own node: the delivery gate maps
+/// only Read/Update/Delete to an operation (<see cref="NodeTypeAccessRuleGate.SubjectOperationFor"/>)
+/// and left every other permission to the raw path fold. A node type that must declare "who may use
+/// THIS node" for a non-CRUD permission — a conversation that a person may write into without
+/// holding a write grant on the data around it — had no declared place to say so.</para>
+///
+/// <para><b>Same contract as the CRUD half.</b> Consulted ONLY after the standard fold DENIED, and
+/// only about the node at the hub being addressed (the node the rule governs) — never about a node
+/// that does not exist yet, so <see cref="Permission.Create"/> is never asked here. A rule that
+/// refuses leaves the denial standing; a rule that faults or completes empty is
+/// <see cref="PermissionCheckOutcome.Undetermined(string)"/>, still fail-closed
+/// (<see cref="NodeTypeAccessRuleGate.EvaluatePermission"/>). The CRUD permissions are never routed
+/// here: they are decided through <see cref="INodeTypeAccessRule.HasAccess"/>, so a rule cannot give
+/// two different answers to one question.</para>
+/// </summary>
+public interface INodeTypePermissionRule : INodeTypeAccessRule
+{
+    /// <summary>
+    /// The non-CRUD permissions this rule decides on its own node. Read, Create, Update and Delete
+    /// listed here are ignored (<see cref="NodeTypeAccessRuleSet.FindPermissionRule"/>).
+    /// </summary>
+    IReadOnlyCollection<Permission> SupportedPermissions { get; }
+
+    /// <summary>
+    /// Whether <paramref name="userId"/> holds <paramref name="permission"/> on
+    /// <paramref name="node"/>. Emits <c>true</c> to grant, <c>false</c> to leave the denial standing.
+    /// </summary>
+    /// <param name="node">The node the rule governs — the subject of the check.</param>
+    /// <param name="accessContext">The caller's context as the asking seam captured it; may be null.</param>
+    /// <param name="userId">The identity being decided for.</param>
+    /// <param name="permission">One of <see cref="SupportedPermissions"/>.</param>
+    /// <returns>One verdict.</returns>
+    IObservable<bool> HasPermission(MeshNode node, AccessContext? accessContext, string? userId, Permission permission);
+}
+
+/// <summary>
 /// Unified rejection reasons for all node operations.
 /// </summary>
 public enum NodeRejectionReason

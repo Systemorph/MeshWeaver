@@ -82,6 +82,12 @@ public static class PluginCatalogConfigurationExtensions
                 .AddSingleton<RegistryUpdateReconciler>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<RegistryUpdateReconciler>())
+                // The first step of every test run on this mesh (MeshOperations.RunTests reads
+                // it): resolve the target set from the feed, read what is installed, converge,
+                // or refuse naming the skew (maintainer, 2026-10-04).
+                .AddSingleton<ITestRunPreflight>(sp => new CatalogTestRunPreflight(
+                    sp.GetRequiredService<IMessageHub>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<CatalogTestRunPreflight>()))
                 // Resolves an inbound instance key to its instance + grant for the /api/plugins
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
@@ -329,6 +335,7 @@ public static class PluginCatalogConfigurationExtensions
             // are named here for the same reason ModuleInventoryContent below is.
             .WithType(typeof(RegistryReconcileEntry), nameof(RegistryReconcileEntry))
             .WithType(typeof(UndeliveredModule), nameof(UndeliveredModule))
+            .WithType(typeof(ServedPackage), nameof(ServedPackage))
             // 🚨 The module-inventory record every instance writes about ITSELF, and it was the one
             // type on this surface that was never registered (#3625). DeploymentReportService
             // stamped a hand-written discriminator, "ModuleInventoryContent", that named NO CLR

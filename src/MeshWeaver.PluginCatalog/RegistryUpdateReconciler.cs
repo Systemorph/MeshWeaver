@@ -595,6 +595,24 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Repeat();
     }
 
+    /// <summary>
+    /// ONE full pass against every configured registry, NOW, on the serialized lane — the same work
+    /// a safety-net tick does, for a caller that must not wait half an hour: the test-run preflight
+    /// (<see cref="CatalogTestRunPreflight"/>) converges a mesh before it tests it. Completes when
+    /// the pass has ended; never faults (a registry that cannot be read is logged and skipped, and
+    /// the caller re-reads the records to see what moved).
+    /// </summary>
+    public IObservable<Unit> ReconcileNow()
+    {
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+            .Select(SafetyNetReconcile)
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync();
+    }
+
     /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
     private IObservable<Unit> SafetyNetReconcile(PluginRegistryReference registry)
     {
@@ -746,6 +764,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 LastReconciledAt = DateTimeOffset.UtcNow,
                 LastReconciledVia = via,
                 UndeliveredModules = undelivered,
+                Served = packages.Select(ServedPackage.Of).ToImmutableList(),
+                TargetPlatform = TargetSet.Platform(packages.Select(ServedPackage.Of)),
             }))
             .Select(_ => Unit.Default);
     }
@@ -1035,7 +1055,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         // Not installed here → somebody else's module; nothing to reconcile.
                         ? Observable.Return(Unit.Default)
                         : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath,
-                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)));
+                            record.ContentAs<PackageManifest>(hub.JsonSerializerOptions), pkg.ModuleVersion));
             })
             .ToObservable()
             .Concat()
@@ -1105,9 +1125,19 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// nor fail the packages after it. Shared by the boot pass and the broadcast drain, so the two
     /// cannot differ in what "adopt" means.
     /// </summary>
+    /// <param name="bundles">The registry's bundle client.</param>
+    /// <param name="registryName">For log copy.</param>
+    /// <param name="packageId">The package.</param>
+    /// <param name="moduleName">Its declared module.</param>
+    /// <param name="recordPath">Its install record.</param>
+    /// <param name="record">The install record as read.</param>
+    /// <param name="candidateContentHash">The content hash of the version the registry SERVES, when
+    /// the caller read the feed (the boot / safety-net pass); null from the broadcast lane. Only with
+    /// it can a sync-owned package's hold be lifted: its module may land when the partition's sync
+    /// has landed exactly that content (<see cref="SyncConvergedDecline"/>).</param>
     private IObservable<Unit> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
-        PackageManifest? record) =>
+        PackageManifest? record, string? candidateContentHash = null) =>
         // 🚨 #4355 — THE MODULE HALF TAKES THE SAME HOLD AS THE CONTENT HALF. The policy gate above
         // exists so "a package never lands one half without the other"; the ownership gate that
         // holds the CONTENT apply (PackageUpdateReconciler) would break exactly that promise if it
@@ -1121,9 +1151,16 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Observe(hub, record is null
                 ? packageId
                 : PackageInstaller.TargetPartitionOf(packageId, record))
-            .SelectMany(ownership => bundles
+            .SelectMany(ownership => (ownership.Owner == PartitionContentOwner.SyncSource
+                    ? PartitionContentOwnership.SyncedModules(hub, record is null
+                        ? packageId
+                        : PackageInstaller.TargetPartitionOf(packageId, record))
+                    : Observable.Return(SyncedModuleVersions.Unknown))
+                .Select(synced => PolicyDecline(record)
+                    ?? SyncConvergedDecline(ownership, synced, packageId, candidateContentHash)))
+            .SelectMany(decline => bundles
                 .AdoptModule(packageId, moduleName, recordPath, unattended: true,
-                    policyDecline: PolicyDecline(record) ?? OwnershipDecline(ownership))
+                    policyDecline: decline)
                 // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
                 // so a single adopt that never answers (a wedged record read, a download that stalls)
                 // silently starves EVERY package after it — on memex.systemorph.com the Northwind
@@ -1186,6 +1223,25 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <summary>
+    /// <see cref="OwnershipDecline"/>, LIFTED when the partition's sync source has already landed
+    /// exactly the content the registry serves (maintainer, 2026-10-04: a sync-owned package must
+    /// converge without a manual step). Then the code and the content are of one tree, which is the
+    /// only thing gate 1b protects, and the module may land unattended. Without a candidate hash (the
+    /// broadcast lane) or with an unknown sync reading, the gate holds exactly as before. Pure.
+    /// </summary>
+    /// <param name="ownership">Who owns the partition's content.</param>
+    /// <param name="synced">What the partition's sync sources have landed.</param>
+    /// <param name="packageId">The package (module) id.</param>
+    /// <param name="candidateContentHash">The content hash the registry serves, or null.</param>
+    /// <returns>The decline sentence, or null when the module may land.</returns>
+    internal static string? SyncConvergedDecline(
+        PartitionContentOwnershipVerdict ownership, SyncedModuleVersions synced, string packageId,
+        string? candidateContentHash) =>
+        PartitionContentOwnership.SyncDelivered(ownership, synced, packageId, candidateContentHash)
+            ? null
+            : OwnershipDecline(ownership);
+
+    /// <summary>
     /// Closes the landing wave by proposing the module set the activation record now describes
     /// (#3395). Never fails the reconcile: a proposal that cannot be written leaves the mesh on its
     /// previous set — every replica still agrees with every other one, and the next wave proposes
@@ -1196,7 +1252,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return(Unit.Default);
-        return landing.ProposeModuleSet()
+        // 🚨 #6067 — CHECKED against what the installed packages require: a set whose declared
+        // dependency floors are not met is refused (faults), and the catch below keeps the mesh on
+        // the set it runs.
+        return ModuleDependencyFloor.ProposeChecked(hub, landing)
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {

@@ -706,7 +706,7 @@ public static partial class CatalogLayoutAreas
     /// a satisfied or advisory floor, and a record at the SAME hash (the skip / heal path —
     /// re-landing what is already here replaces nothing). With no record at all the install is a
     /// FRESH one and is refused before anything is fetched
-    /// (<see cref="PackagePlatformFloorGate.RequireForFreshInstall"/>).
+    /// (<see cref="PackagePlatformFloorGate.RequireForInstall"/>).
     /// </summary>
     private static IObservable<InstallResult> HoldIfPlatformBelowFloor(
         IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
@@ -728,7 +728,7 @@ public static partial class CatalogLayoutAreas
                 record is null
                     // A FRESH install: refused here, before a single file is fetched — the
                     // installer's own gate says the same thing to callers that reach it directly.
-                    ? PackagePlatformFloorGate.RequireForFreshInstall(hub, pkg, logger).SelectMany(_ => proceed())
+                    ? PackagePlatformFloorGate.RequireForInstall(hub, pkg, logger).SelectMany(_ => proceed())
                     : !string.IsNullOrEmpty(pkg.ModuleVersion)
                       && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal)
                         ? proceed()
@@ -747,7 +747,10 @@ public static partial class CatalogLayoutAreas
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return<ModuleSet?>(null);
-        return landing.ProposeModuleSet()
+        // 🚨 #6067 — CHECKED against what the installed packages require: a set whose declared
+        // dependency floors are not met is refused (faults), and the catch below keeps the mesh on
+        // the set it runs.
+        return ModuleDependencyFloor.ProposeChecked(hub, landing)
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,

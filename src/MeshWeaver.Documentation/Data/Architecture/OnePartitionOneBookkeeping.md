@@ -242,6 +242,22 @@ park a type whose sources are current.
   target partition is connected to a DIFFERENT repository would still get two writers with two
   trees. Closing that needs a seam that can name the tracked repository, not just answer a bit.
 
+### Gate 1e — a held sync-owned package CONVERGES once its sync has landed the candidate (2026-10-04)
+
+Gates 1 and 1b held the unattended lanes, and nothing ever released them: no lane landed a
+sync-owned package's MODULE, so on the control instance `Plugins/AI` and `Plugins/Hosting` stayed
+behind until a human ran `RefreshModules` (10-03, and again 10-04). The seal moved the content; no
+lane moved the code.
+
+The release is a fact, not a timer: `IPartitionSourceTracking.SyncedModules` reports, per module,
+the content hash the partition's sync last LANDED (`_GitSync.moduleVersions`). When it equals the
+served candidate's hash, the content half ADOPTS the candidate on the install record — no node is
+written, so there is still one writer — and the module lane (`AdoptOne`, boot and safety-net passes)
+lands the bundle whose content that is. When the sync landed something else, the hold stays and the
+record now says so (`heldUpdate`: what the sync landed, what it waits for; `heldSince`), so the
+fleet view lists it. The broadcast lane names no candidate and keeps the hold; the next full pass
+converges. Pinned by `HeldUpdatesConvergeTest`.
+
 ### Gate 2 — a delta is never diffed against a baseline the installer does not own
 
 `CatalogLayoutAreas.InstallOrUpdateCore` consults the same verdict before choosing the incremental

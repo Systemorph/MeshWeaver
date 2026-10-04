@@ -89,10 +89,10 @@ public sealed class EaConsentController(
         var userId = access.Context?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
         // Already connected → nothing to consent: bounce straight back to the caller instead of
-        // forcing Microsoft's dialog (BuildConsentUrl carries prompt=consent) on a user whose
-        // grant is stored — visiting the connect link twice used to re-prompt every time and read
-        // as "my consent is not saved". ?force=true still runs the full consent deliberately
-        // (credential rotation, a revoked grant the stored token hides). A SCOPE ADDITION needs no
+        // sending a user whose grant is stored through Microsoft again — visiting the connect link
+        // twice used to re-prompt every time and read as "my consent is not saved". ?force=true
+        // still runs the authorize flow deliberately and stores a new grant (credential rotation,
+        // a revoked grant the stored token hides). A SCOPE ADDITION needs no
         // force: EaGraphAuth classifies a grant consented for a smaller scope set than the build's
         // as NotConnected, so this fast path is not taken for it — which is what ended the
         // 2026-09-10 loop where the read scopes had landed, the reconnect link bounced a
@@ -118,9 +118,15 @@ public sealed class EaConsentController(
         return Redirect(ea.BuildConsentUrl(Uri.EscapeDataString(safeReturnUrl), CallbackUri));
     }
 
+    /// <summary>
+    /// Completes the consent and tells the caller how it ended: the return URL carries
+    /// <c>eaConnect=connected</c>, or <c>eaConnect=failed&amp;reason=microsoft|exchange</c>.
+    /// A silent redirect made a refused consent look exactly like success (#6082).
+    /// </summary>
     [HttpGet(CallbackAction)]
     public async Task<IActionResult> Callback(
-        [FromQuery] string? code, [FromQuery] string? state, [FromQuery] string? error, CancellationToken ct)
+        [FromQuery] string? code, [FromQuery] string? state, [FromQuery] string? error,
+        [FromQuery(Name = "error_description")] string? errorDescription = null, CancellationToken ct = default)
     {
         // `state` is whatever came back from the IdP — treated as untrusted input, exactly like
         // the query parameter it originated from. Re-sanitised here rather than trusted because
@@ -131,8 +137,10 @@ public sealed class EaConsentController(
 
         if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(code))
         {
-            logger.LogWarning("EA consent callback for {User} returned error '{Error}'", userId, error);
-            return Redirect(returnUrl);
+            // error_description carries the AADSTS code that names the cause; error alone does not.
+            logger.LogWarning("EA consent callback for {User} returned error '{Error}': {Description}",
+                userId, error, errorDescription);
+            return Redirect(WithOutcome(returnUrl, "eaConnect=failed&reason=microsoft"));
         }
 
         // Same single bridge as Connect: the Task is the MVC action's, not the seam's.
@@ -143,6 +151,15 @@ public sealed class EaConsentController(
                     + "already settled", userId),
                 ct);
         logger.LogInformation("EA consent for {User}: {Result}", userId, ok ? "connected" : "failed");
-        return Redirect(returnUrl);
+        return Redirect(WithOutcome(returnUrl, ok ? "eaConnect=connected" : "eaConnect=failed&reason=exchange"));
+    }
+
+    /// <summary>Appends <paramref name="outcome"/> to the query of an already-sanitised local URL, before any fragment.</summary>
+    internal static string WithOutcome(string returnUrl, string outcome)
+    {
+        var hash = returnUrl.IndexOf('#');
+        var path = hash < 0 ? returnUrl : returnUrl[..hash];
+        var fragment = hash < 0 ? "" : returnUrl[hash..];
+        return path + (path.Contains('?') ? "&" : "?") + outcome + fragment;
     }
 }

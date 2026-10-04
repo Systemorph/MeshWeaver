@@ -115,7 +115,7 @@ public class EaConnectOpenRedirectTest
             .Callback(code: null, state: "https%3A%2F%2Fphish.example", error: "access_denied",
                 ct: CancellationToken.None);
 
-        result.Should().BeOfType<RedirectResult>().Which.Url.Should().Be("/");
+        result.Should().BeOfType<RedirectResult>().Which.Url.Should().Be("/?eaConnect=failed&reason=microsoft");
     }
 
     [Theory]

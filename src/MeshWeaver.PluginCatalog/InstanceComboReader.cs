@@ -274,6 +274,10 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
                         InstalledFromRef = manifest.InstalledFromRef,
                         InstalledAtUtc = manifest.InstalledAtUtc,
                         SourceName = manifest.Source,
+                        ReleasedVersion = manifest.ReleasedVersion,
+                        MinMeshVersion = manifest.MinMeshVersion,
+                        HeldUpdate = manifest.HeldUpdate,
+                        HeldSince = manifest.HeldSince,
                     };
                 },
                 StringComparer.OrdinalIgnoreCase);

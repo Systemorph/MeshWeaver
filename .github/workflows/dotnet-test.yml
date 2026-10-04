@@ -589,9 +589,45 @@ jobs:
   # it would not add a single assertion that is not already made, and moving the credential proof
   # away from the gate that needs it is how a proof and its subject drift apart.
 
+  # ── STAGE 1 of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
+  # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
+  # must pass before we start test. and we arm only at end of test". On a pull request the build and
+  # the shards wait for (a) the cheap static controls below — stage 0, which fail fast — and (b) the
+  # head's automatic review having landed with every reviewer thread answered. A HOLD is this job
+  # FAILING (never skipping): `build` requires its success explicitly, `collect-results` reads red
+  # with the hold as its first line, and stage-advance.yml re-runs the failed jobs the moment the
+  # review lands / a finding is answered / the bounded fallback elapses. push, merge_group and
+  # dispatch are not staged (the lane answers green at once), and the green-tree reuse costs nothing,
+  # so it is not held either. `scripts-ref: github.sha` = a PR that changes the predicate is judged
+  # by its own copy, as review-answered.yml's lane does.
+  #
+  # 🚨 `if: !cancelled()` and the stage-0 results passed IN, never the implicit guard (#6070 review):
+  # several stage-0 controls skip by design on push / merge_group / a fork, and a job whose need is
+  # SKIPPED is itself skipped — which would skip this gate and, through its explicit success check,
+  # the build on every main push. So the gate always runs and judges the results itself: `failure`
+  # or `cancelled` holds (stage 0 red), `skipped` passes. The green-tree reuse path is passed in too:
+  # nothing is spent there, so it is not held.
+  stage-gate:
+    needs: [precheck, shared-rules, closing-keywords, package-pin-removal, interface-addition, i18n-mirror-sync, workflow-shell, cross-repo-pair]
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/node-repo-stage-gate.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    with:
+      scripts-ref: ${{ github.sha }}
+      already-green: ${{ needs.precheck.outputs.skip == 'true' }}
+      stage0-results: >-
+        shared-rules=${{ needs.shared-rules.result }} closing-keywords=${{ needs.closing-keywords.result }}
+        package-pin-removal=${{ needs.package-pin-removal.result }} interface-addition=${{ needs.interface-addition.result }}
+        i18n-mirror-sync=${{ needs.i18n-mirror-sync.result }} workflow-shell=${{ needs.workflow-shell.result }}
+        cross-repo-pair=${{ needs.cross-repo-pair.result }}
+
   build:
     name: "Build solution (once)"
-    needs: precheck
+    needs: [precheck, stage-gate]
     # Skipped ONLY when this exact tree is already green (see the file header). `test`
     # needs `build`, so it skips with it; `collect-results` is if:always() and
     # reports the reused result.
@@ -603,7 +639,9 @@ jobs:
     # build and all six shards, and the run still reported a green required check.
     # With !cancelled(), an unanswerable probe means "we don't know" ⇒ TEST IT; only a
     # genuine workflow cancellation (where !cancelled() is false) still stops the run.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' }}
+    # 🚨 `needs.stage-gate.result == 'success'` is EXPLICIT: a skipped gate (a stage-0 control red)
+    # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
     timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
@@ -3704,8 +3742,9 @@ jobs:
 
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
-    needs: preflight
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' }}
+    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for stage 1 too.
+    needs: [preflight, stage-gate]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -3933,7 +3972,7 @@ jobs:
     # compiled plugin calls compiles clean everywhere in this repo and throws MissingMethodException in a
     # portal. The ladder's rung 2 — deployed plugin bytes on this platform — must be able to fail the
     # required check, or it is a notification.
-    needs: [precheck, build, test, doc-gate, platform-compat, licence-gate, client-names, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
+    needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, client-names, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -3946,6 +3985,23 @@ jobs:
     # ── Reuse path: build+test skipped because the tree is already green ──
     # This job still runs (and succeeds), so it is the stable required check and
     # it keeps the run's conclusion `success` for main-cd's workflow_run gate.
+    # ── The staged pipeline's hold, named FIRST (Doc/Architecture/StagedPullRequestPipeline) ──
+    # When stage 0 or stage 1 held the build, every check below would also red on "no test evidence"
+    # — true, and useless. This step names the one cause; stage-advance.yml re-runs the failed jobs
+    # of this run (this job included) when stage 1 turns green, so nobody has to push to unhold it.
+    - name: "Stage 2 held? (stage 0 or stage 1 not green for this head)"
+      if: needs.precheck.outputs.skip != 'true' && needs.stage-gate.result != 'success'
+      env:
+        GATE: ${{ needs.stage-gate.result }}
+        MODE: ${{ needs.stage-gate.outputs.mode }}
+      run: |
+        if [ "$MODE" = "stage0-red" ]; then
+          echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
+        else
+          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the 'Stage 1: review landed and answered' job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
+        fi
+        echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
+        exit 1
     - name: "Reused: tree already green"
       if: needs.precheck.outputs.skip == 'true'
       env:

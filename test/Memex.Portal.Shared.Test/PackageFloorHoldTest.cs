@@ -100,6 +100,7 @@ public class PackageFloorHoldTest(ITestOutputHelper output) : MonolithMeshTestBa
         held.HeldUpdate.Should().Contain(FloorFixture.Above).And.Contain(FloorFixture.Running)
             .And.Contain("held").And.Contain(FloorHoldFixture.V2Version);
         held.HeldUpdateDispatch.Should().StartWith("blocking ticket dispatched");
+        held.HeldSince.Should().NotBeNull("the fleet view's 'held since' and the too-long rule read it");
 
         var ticket = dispatch.Tickets.Should().ContainSingle("one held state, one blocking ticket").Subject;
         ticket.Package.Should().Be(FloorHoldFixture.Package);
@@ -124,6 +125,7 @@ public class PackageFloorHoldTest(ITestOutputHelper output) : MonolithMeshTestBa
         landed.HeldUpdate.Should().BeNull("an install of the candidate ends the hold");
         landed.HeldUpdateDispatch.Should().BeNull();
         landed.HeldUpdateDispatchedAt.Should().BeNull();
+        landed.HeldSince.Should().BeNull("a hold that ended carries no since-when");
         dispatch.Tickets.Should().ContainSingle("a satisfied floor sends no ticket");
     }
 

@@ -252,9 +252,25 @@ public static class ModulePublish
                 + "packs on a lane older than MeshWeaver#3211: bump that repo's "
                 + "node-repo-module-pack.yml pin and re-publish.");
 
+        // 🚨 MeshWeaver#6067 — the SHELF is labelled with the version the bundle declares, never
+        // with a caller's. The URL's `?version=` used to win outright, so an upload whose query and
+        // manifest disagreed shelved the bytes under the query's label — and every consumer then
+        // lands them under it. When both are stated they must agree; a disagreement is refused
+        // here, naming both, before a byte reaches the shelf.
+        var declaredVersion = string.IsNullOrWhiteSpace(manifest.Version) ? null : manifest.Version.Trim();
+        var statedVersion = string.IsNullOrWhiteSpace(version) ? null : version.Trim();
+        if (declaredVersion is not null && statedVersion is not null
+            && !string.Equals(declaredVersion, statedVersion, StringComparison.OrdinalIgnoreCase))
+            return (null,
+                $"the upload is labelled version {statedVersion} (?version=) but the bundle "
+                + $"declares its bytes are version {declaredVersion} — shelving them under "
+                + $"{statedVersion} would advertise '{module}' at a version its bytes are not "
+                + "(MeshWeaver#6067). Re-pack at the version you publish, or publish the version "
+                + "you packed.");
+
         return (new Accepted(
             module,
-            string.IsNullOrWhiteSpace(version) ? manifest.Version : version,
+            declaredVersion ?? statedVersion,
             manifest.Module.MinMeshVersion,
             manifest.FrameworkMvid,
             [.. files.Select(f => (f.FileName, f.Bytes))],
