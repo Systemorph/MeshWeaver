@@ -531,6 +531,22 @@ public sealed class PluginBundleClient
                     return Observable.Return(0);
                 }
 
+                // 🚨 MeshWeaver#6067 — the generation is stamped with the version the BUNDLE
+                // declares for these module bytes, never with the version it was ADVERTISED at, and
+                // the two must agree. A registry once served the 1.19.4 bytes under an index entry
+                // reading 1.20.1; every consumer landed them stamped "1.20.1", a dependent requiring
+                // AI@^1.20.0 passed every check and threw MissingMethodException at run time, and
+                // the mislabelled entry then read as "already landed" to the update decision, so
+                // the real 1.20.1 could not displace it. Refused, loudly, naming both.
+                if (VersionMislabel(version, manifest) is { } mislabel)
+                {
+                    _logger?.LogError(
+                        "Module bundle for {Plugin} REFUSED — nothing landed: {Mislabel}",
+                        pluginId, mislabel);
+                    return Observable.Return(0);
+                }
+                var declaredVersion = DeclaredModuleVersion(manifest) ?? version;
+
                 // The bundle must be the module the PACKAGE declared — a producer/catalog drift
                 // here would land bytes under an identity the boot union never asks for.
                 if (manifest?.Module?.AssemblyName is { Length: > 0 } declared
@@ -554,7 +570,7 @@ public sealed class PluginBundleClient
                         // rebuild from a no-op (Plugins#931).
                         advertisedFrameworkMvid ?? manifest!.FrameworkMvid,
                         packagePath,
-                        version,
+                        declaredVersion,
                         manifest!.Module?.MinMeshVersion,
                         // A view pack's wwwroot rides the bundle (#1724's provider serves it from
                         // the module folder); without this the pack lands unstyled and its
@@ -581,8 +597,47 @@ public sealed class PluginBundleClient
                     .Select(_ => files.Count)
                     .Do(count => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "
-                        + "— RESTART REQUIRED to load it", moduleName, pluginId, count, version));
+                        + "— RESTART REQUIRED to load it", moduleName, pluginId, count, declaredVersion));
             });
+
+    /// <summary>
+    /// The version a downloaded bundle declares for its MODULE bytes: the module section's own
+    /// <see cref="BundleReader.ModuleRef.Version"/> (stated by a registry since MeshWeaver#6067),
+    /// else the manifest-level <see cref="BundleReader.Manifest.Version"/> (what every producer
+    /// packs), else null. Pure.
+    /// </summary>
+    /// <param name="manifest">The bundle's manifest, or null.</param>
+    internal static string? DeclaredModuleVersion(BundleReader.Manifest? manifest) =>
+        manifest?.Module?.Version is { Length: > 0 } moduleVersion && !string.IsNullOrWhiteSpace(moduleVersion)
+            ? moduleVersion.Trim()
+            : manifest?.Version is { Length: > 0 } version && !string.IsNullOrWhiteSpace(version)
+                ? version.Trim()
+                : null;
+
+    /// <summary>
+    /// 🚨 Why a bundle's module bytes must NOT be landed under <paramref name="advertisedVersion"/>
+    /// (MeshWeaver#6067), or null when they may: the bundle declares a version for them
+    /// (<see cref="DeclaredModuleVersion"/>) and it is not the advertised one. Exact TEXT,
+    /// case-insensitive — the rule the index and the download route match versions by; a SemVer
+    /// comparison reads unparseable parts as 0 and would call two different labels equal. A bundle
+    /// that declares nothing cannot disagree, and lands under the advertised version as before.
+    /// Pure, so the refusal is pinnable without HTTP.
+    /// </summary>
+    /// <param name="advertisedVersion">The version the registry's index advertised.</param>
+    /// <param name="manifest">The downloaded bundle's manifest.</param>
+    internal static string? VersionMislabel(string? advertisedVersion, BundleReader.Manifest? manifest)
+    {
+        var declared = DeclaredModuleVersion(manifest);
+        if (declared is null || string.IsNullOrWhiteSpace(advertisedVersion)
+            || string.Equals(declared, advertisedVersion.Trim(), StringComparison.OrdinalIgnoreCase))
+            return null;
+        return $"the registry advertised version {advertisedVersion.Trim()}, but the bundle's "
+               + $"module '{manifest?.Module?.AssemblyName ?? "(unnamed)"}' declares its bytes are "
+               + $"version {declared}. Landing them would stamp a generation with a version its "
+               + "bytes are not, so every dependency floor and every update decision downstream "
+               + "would read a lie. The registry must advertise these bytes at the version they "
+               + "were published at, or publish the advertised version's bytes.";
+    }
 
     /// <summary>
     /// Downloads the bundle, or emits null when the registry has none for this plugin/version.

@@ -160,6 +160,17 @@ public static class BundleReader
         /// <see cref="AssemblyRef.SourceFingerprint"/> are here for the same reason.</para>
         /// </summary>
         public IReadOnlyList<string>? NativeAssets { get; init; }
+
+        /// <summary>
+        /// 🚨 The version THESE module bytes were published at (MeshWeaver#6067) — stated by the
+        /// serving registry from the shelf generation it resolved. It is what a consumer stamps on
+        /// the generation it lands, and what it compares against the version the index advertised:
+        /// a disagreement is a mislabel, and the landing refuses it naming both. Null from a
+        /// producer or a registry that predates the field; the consumer then falls back to the
+        /// manifest-level <see cref="Manifest.Version"/>. An INIT property for the binary-break
+        /// reason given on <see cref="NativeAssets"/>.
+        /// </summary>
+        public string? Version { get; init; }
     }
 
     /// <summary>One landed-to-be module file: its name and bytes.</summary>
