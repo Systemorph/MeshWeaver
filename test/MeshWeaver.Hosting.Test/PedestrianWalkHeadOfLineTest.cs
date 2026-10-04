@@ -208,7 +208,7 @@ public class PedestrianWalkHeadOfLineTest
         var frame = await Core(store, deferToNative: false)
             .Query<MeshNode>(AsSystem("namespace:Admin scope:descendants"), Options)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
         frame.Items.Select(n => n.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()
