@@ -2249,11 +2249,56 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             {
                 return meshHub.GetEffectivePermissions(path, captured.ObjectId)
                     .Take(1)
+                    // The node type's own Read rule is the authority the RLS validator and the
+                    // delivery gate already consult (#3061); this gate is the third read seam and
+                    // must not answer differently. Asked ONLY on a fold denial, so a granted read
+                    // never pays for the node read.
+                    .SelectMany(perms => perms.HasFlag(Permission.Read)
+                        ? Observable.Return(perms)
+                        : ReconsiderReadThroughNodeTypeRule(path, captured)
+                            .Select(granted => granted ? perms | Permission.Read : perms))
                     .Do(perms => _access[key] =
                         new AccessEntry(perms, DateTimeOffset.UtcNow + AccessTtl));
             }
         });
     }
+
+    /// <summary>
+    /// Re-decides a DENIED read through the node's <see cref="INodeTypeAccessRule"/> for
+    /// <see cref="NodeOperation.Read"/> — the same second opinion <c>RlsNodeValidator</c> and the
+    /// <c>[RequiresPermission]</c> delivery gate take, through the same
+    /// <see cref="NodeTypeAccessRuleGate"/> helpers, so a node type that DECLARES who may read it is
+    /// readable through this cache exactly when it is readable through a query or a subscription.
+    /// Without it a rule's read grant held at two seams and was refused at the third — the one every
+    /// <c>GetMeshNodeStream</c> view goes through.
+    ///
+    /// <para>Emits <c>true</c> only on a rule GRANT. No node at the path, no rule for its type, a
+    /// rule refusal, a fault and an empty completion all emit <c>false</c>: the fold's denial stands,
+    /// fail-closed.</para>
+    /// </summary>
+    private IObservable<bool> ReconsiderReadThroughNodeTypeRule(string path, AccessContext captured)
+        => NodeTypeAccessRuleGate.ReadSubjectNode(meshHub, path)
+            .SelectMany(node =>
+            {
+                if (node is null
+                    || NodeTypeAccessRuleGate.Find(meshHub, node.NodeType, NodeOperation.Read) is not { } rule)
+                    return Observable.Return(false);
+                var context = new NodeValidationContext
+                {
+                    Operation = NodeOperation.Read,
+                    Node = node,
+                    AccessContext = captured
+                };
+                return NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger)
+                    .Select(outcome => outcome.IsGranted);
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogDebug(ex,
+                    "MeshNodeStreamCache: could not apply the node-type read rule at {Path} — the fold's denial stands",
+                    path);
+                return Observable.Return(false);
+            });
 
     // 🚨 PRIVATE raw write — does NOT deserialize JsonElement Content before the
     // lambda. The interface no longer exposes a bare Update(path, fn): callers
