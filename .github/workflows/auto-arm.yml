@@ -237,8 +237,12 @@ jobs:
       # and Memex#641 merged with unanswered findings or no review at all, and agents disarmed by
       # hand after every push (Plugins #2791, twice in an hour). The gate is
       # `check-review-answered.py --arm-gate` — the SAME thread predicate as the merge gate
-      # `Automatic review answered`, fetched from core at `main` (this lane's own vintage), never a
-      # local copy. It answers ready only when ALL hold: not a draft; the `systemorph-com` App's
+      # `Automatic review answered`, fetched from core's DEFAULT branch (this lane's own vintage),
+      # never a local copy. The fetch names no `ref`: the contents API then reads the repository's
+      # default branch, which is the branch READ rather than a literal copied into a lane that every
+      # fleet repository calls (ArmedMergeMustTriggerMainsPushLanesGuard). It is CORE's default
+      # branch that matters here, not the caller's, so `github.event.repository.default_branch`
+      # (the CALLING repository on a workflow_call) would be the wrong reading. It answers ready only when ALL hold: not a draft; the `systemorph-com` App's
       # `internal-review` check run on the CURRENT head has completed and is not the neutral
       # "Reviewer unavailable" degradation (not a review: merge by hand); every thread the
       # automatic reviewer opened has a person's reply. Otherwise it writes ONE line to the job
@@ -252,8 +256,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${PR:-}" =~ ^[1-9][0-9]*$ ]] || { echo "::error::event '${{ github.event_name }}' carried no pull request number"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=main" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
-            || { echo "::error::could not fetch check-review-answered.py from Systemorph/MeshWeaver@main — not armed; never fall back to a local copy"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py from Systemorph/MeshWeaver's default branch — not armed; never fall back to a local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -F "check-review-answered" >/dev/null \
             || { echo "::error::the fetched check-review-answered.py does not look like the predicate — not armed"; exit 1; }
           python3 "$RUNNER_TEMP/check-review-answered.py" --self-test >/dev/null \
