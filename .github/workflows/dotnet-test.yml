@@ -822,6 +822,10 @@ jobs:
   test:
     name: "Run tests (shard ${{ matrix.shard }})"
     needs: [build, precheck]
+    # stage-gate has PR-only controls in its ancestry that intentionally skip on main.
+    # An implicit success() sees those skipped ancestors and skips every shard even
+    # after build succeeded. The build's result is the prerequisite we need here.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     # HARD CAP on a shard. Each project already has its own `timeout 8m` below, but that
     # only bounds a project that is RUNNING — it cannot bound a shard that wedges between
     # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
@@ -1844,7 +1848,9 @@ jobs:
     # — without this job, the doc tree's node sources and NodeType configuration lambdas ship
     # untested, and two of the four Doc NodeTypes had never been compiled by anything.
     needs: [build]
-    if: needs.build.result == 'success'
+    # The explicit status function keeps skipped PR-only stage-0 ancestors from
+    # suppressing this gate on main after the build has succeeded.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     # Same wall-clock contract as plugin-gate: depends on `build` like the shards, so it runs
     # CONCURRENTLY with them; while it stays under the slowest shard it costs the PR nothing.
@@ -2036,7 +2042,7 @@ jobs:
   platform-compat:
     name: "Platform compatibility: deployed plugin set links against this platform (ladder)"
     needs: [build]
-    if: needs.build.result == 'success'
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
