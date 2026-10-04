@@ -73,8 +73,23 @@ public static class PackagePlatformFloorGate
     /// <param name="candidate">The held candidate.</param>
     /// <param name="verdict">Its <see cref="PlatformFloorKind.Held"/> verdict.</param>
     public static string HeldSentence(PackageManifest candidate, PlatformFloorVerdict verdict) =>
-        $"held: {VersionOf(candidate)} needs platform ≥ {verdict.Floor}, running {verdict.Running} — "
+        $"held: {VersionOf(candidate)} {FloorHoldMarker} {verdict.Floor}, running {verdict.Running} — "
         + "updates when the platform rolls";
+
+    /// <summary>
+    /// Whether <paramref name="heldUpdate"/> is a FLOOR hold (<see cref="HeldSentence"/>) — the only hold
+    /// a met floor may clear. A hold for another reason (a sync-owned partition whose sync has not
+    /// landed the candidate) is re-decided by its own lane and must keep its since-when; clearing it on
+    /// every pass would reset <see cref="PackageManifest.HeldSince"/> and wipe its dispatch stamps each
+    /// time (review on MeshWeaver#6065). Pure.
+    /// </summary>
+    /// <param name="heldUpdate">The record's hold sentence, or null.</param>
+    public static bool IsFloorHold(string? heldUpdate) =>
+        heldUpdate is { Length: > 0 } sentence
+        && sentence.Contains(FloorHoldMarker, StringComparison.Ordinal);
+
+    /// <summary>The phrase every <see cref="HeldSentence"/> carries and no other hold does.</summary>
+    internal const string FloorHoldMarker = "needs platform ≥";
 
     /// <summary>The blocking ticket for one held update (pure).</summary>
     /// <param name="candidate">The held candidate.</param>
@@ -180,6 +195,7 @@ public static class PackagePlatformFloorGate
                                 HeldUpdate = sentence,
                                 HeldUpdateDispatch = outcome.Status,
                                 HeldUpdateDispatchedAt = outcome.At,
+                                HeldSince = current.HeldSince ?? now,
                             })
                             .Select(_ => Unit.Default))
                         .Take(1)
@@ -195,10 +211,11 @@ public static class PackagePlatformFloorGate
 
     /// <summary>
     /// The installer's gate for a FRESH install: faults with <see cref="PackagePlatformFloorException"/>
-    /// when <paramref name="manifest"/>'s floor is held on this platform AND no install record
-    /// exists yet. An existing record is not this gate's business — an update is held upstream,
-    /// before anything is fetched (<c>CatalogLayoutAreas.InstallOrUpdate</c>,
-    /// <c>PackageUpdateReconciler</c>), and a re-install of what is already here heals in place.
+    /// when <paramref name="manifest"/>'s floor is held on this platform, unless it is a re-install of
+    /// the content already recorded here (<see cref="AllowedOverExistingRecord"/>), which heals in
+    /// place. The unattended and click lanes hold an update upstream, before anything is fetched
+    /// (<c>CatalogLayoutAreas.InstallOrUpdate</c>, <c>PackageUpdateReconciler</c>); this is the
+    /// enforcement half for every OTHER caller of the installer — a maintenance refresh included.
     /// </summary>
     /// <param name="hub">The installing hub.</param>
     /// <param name="manifest">The package about to be installed.</param>
@@ -215,25 +232,47 @@ public static class PackagePlatformFloorGate
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         var existing = persistence is null
-            ? Observable.Return(false)
+            ? Observable.Return<(bool Installed, string? ModuleVersion)>((false, null))
             : persistence.Read($"{PackageInstaller.InstalledPartition}/{manifest.Id}", hub.JsonSerializerOptions)
                 .Take(1)
                 .DefaultIfEmpty()
-                .Select(node => node is not null)
-                .Catch((Exception _) => Observable.Return(false));
+                .Select(node => (Installed: node is not null,
+                    ModuleVersion: node?.ContentAs<PackageManifest>(hub.JsonSerializerOptions)?.ModuleVersion))
+                .Catch((Exception _) => Observable.Return<(bool Installed, string? ModuleVersion)>((false, null)));
 
-        return existing.SelectMany(installed =>
+        return existing.SelectMany(record =>
         {
-            if (installed)
+            if (AllowedOverExistingRecord(record.Installed, record.ModuleVersion, manifest.ModuleVersion))
                 return Observable.Return(Unit.Default);
-            var message =
-                $"Package '{manifest.Id}' was not installed: the version the source serves needs "
-                + $"platform ≥ {verdict.Floor}, and this instance runs {verdict.Running}. It installs "
-                + "once the platform rolls (policy package-min-mesh-version).";
+            var message = record.Installed
+                ? $"Package '{manifest.Id}' was not updated: the version the source serves needs "
+                  + $"platform ≥ {verdict.Floor}, and this instance runs {verdict.Running}. The installed "
+                  + "version keeps running; the update lands once the platform rolls (policy "
+                  + "package-min-mesh-version)."
+                : $"Package '{manifest.Id}' was not installed: the version the source serves needs "
+                  + $"platform ≥ {verdict.Floor}, and this instance runs {verdict.Running}. It installs "
+                  + "once the platform rolls (policy package-min-mesh-version).";
             logger?.LogWarning("{Refusal}", message);
             return Observable.Throw<Unit>(new PackagePlatformFloorException(message));
         });
     }
+
+    /// <summary>
+    /// Whether an install whose floor is HELD may still run because a record exists (pure): only a
+    /// re-install of the SAME content heals in place. A different version above the floor is
+    /// refused even over an existing record — before 2026-10-04 any existing record waved it
+    /// through, so a maintenance refresh (RefreshModules → <c>RegistryPackages.Install</c>) could
+    /// land exactly the version policy <c>package-min-mesh-version</c> exists to hold (the 09-27
+    /// breakage: 14 NodeTypes with no usable assembly).
+    /// </summary>
+    /// <param name="installed">Whether an install record exists.</param>
+    /// <param name="installedModuleVersion">The record's content hash.</param>
+    /// <param name="candidateModuleVersion">The candidate's content hash.</param>
+    public static bool AllowedOverExistingRecord(
+        bool installed, string? installedModuleVersion, string? candidateModuleVersion) =>
+        installed
+        && !string.IsNullOrWhiteSpace(candidateModuleVersion)
+        && string.Equals(installedModuleVersion, candidateModuleVersion, StringComparison.Ordinal);
 }
 
 /// <summary>

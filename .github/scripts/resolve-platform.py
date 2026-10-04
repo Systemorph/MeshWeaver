@@ -1784,9 +1784,14 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
 
 def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | None,
                    short_sha: str, run_number: int, migration: str | None = None,
-                   pair_tag: str | None = None) -> tuple[dict[str, str], str] | str:
+                   pair_tag: str | None = None, armed: bool = False) -> tuple[dict[str, str], str] | str:
     """Required digests of one promoted set, or the reason they could not be had. The version tag is
-    tried in both historical shapes, then the exact identity tags promote writes in phase A."""
+    tried in both historical shapes, then the exact identity tags promote writes in phase A.
+
+    `armed` — the TARGET-SET question (core Doc/Architecture/OnePromotionGate → "The target set"):
+    only a set whose PORTAL carries its version tag counts, because main-cd's `arm` job is the only
+    writer of that tag and the fleet rolls only to it. Measured 2026-10-04: set 3.0.0-ci.9898 was
+    sealed but not armed, and a roll to it failed at the mirror — the tag did not exist."""
     tags = [f"{version}-ci.{run_number}", f"{version}.ci.{run_number}"] if version else []
     out: dict[str, str] = {}
     via = ""
@@ -1798,12 +1803,17 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
         # A promotion receipt makes the pair exact. The portal's bare core tag is moving across
         # Plugins-only builds, so it cannot substitute if the recorded pair is absent.
         identity_tags = [pair_tag] if image == portal and pair_tag else [short_sha]
+        if armed and image == portal:
+            identity_tags = []
         for tag in tags + identity_tags:
             digest = resolve(image, tag)
             if digest:
                 found, via = digest, tag
                 break
         if not found:
+            if armed and image == portal:
+                return (f"{image} carries no version tag for this set — NOT ARMED (main-cd `arm` writes "
+                        "it once MeshWeaver.Plugins' dependent suites passed); the fleet cannot roll to it")
             identity = pair_tag if image == portal and pair_tag else short_sha
             return (f"{image} carries neither a version tag nor the identity tag `{identity}` "
                     "for this set — purged by retention (MeshWeaver#3438) or never promoted")
@@ -1854,7 +1864,8 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
            wait_for_seal: float = 0.0, freeze: str | None = None,
            sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
            now: Callable[[], float] = time.time, migration: str | None = None,
-           passed_ceiling: int | None = None, verify_source: bool = False) -> Chosen:
+           passed_ceiling: int | None = None, verify_source: bool = False,
+           armed: bool = False) -> Chosen:
     """`passed_ceiling` — OPTIONAL, and `None` (every caller that does not ask for it) leaves this
     function on exactly the path it took before the option existed. When given, it is the highest
     core-CD run number the CALLING repository's own `main` has passed on: a sealed set NEWER than
@@ -2131,7 +2142,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                         # A freeze can never silently resolve to a different source.
                         continue
                 images = resolve_images(resolve, tester, portal, version, sha[:7], number,
-                                        migration, pair_tag)
+                                        migration, pair_tag, armed=armed)
                 if isinstance(images, str):
                     skipped.append(f"{label} = {set_name}: sealed, but {images}")
                     log(f"  skip {skipped[-1]}")
@@ -2520,6 +2531,12 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         _registry(unarmed), tester, portal, log=logs.append),
          lambda c: c.sha == A and c.digests == {"image-digest": D1, "portal-image-digest": D2})
+    # 5c — the TARGET-SET question (`--armed`, OnePromotionGate → The target set): the same unarmed
+    # newest set is passed over, said so, and the newest ARMED set is the answer.
+    case("newest set sealed but NOT armed → `--armed` passes it over, takes the armed one", True,
+         lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
+                        _registry(unarmed), tester, portal, log=logs.append, armed=True),
+         lambda c: c.sha == B and any("NOT ARMED" in l and "#8207" in l for l in logs))
     # A run may promote an earlier validated core commit. Its head SHA names neither the tester
     # nor the portal; the portal's bare core tag can also point at another Plugins build.
     actual_core, actual_plugins = "e" * 40, "f" * 40
@@ -4341,6 +4358,12 @@ def main() -> int:
                         help="OPTIONAL: the ceiling a `platform-ref` job already established (its "
                              "`ceiling` output) — a re-resolving job on a pull request passes it "
                              "instead of re-reading main's runs (no extra API cost).")
+    parser.add_argument("--armed", action="store_true",
+                        help="OPTIONAL: resolve the fleet's TARGET SET — the newest sealed set that is "
+                             "also ARMED (its portal carries the version tag main-cd `arm` writes). "
+                             "Needs the registry. The default, without it, is the newest sealed set: "
+                             "the CANDIDATE CI tests so that it can be armed "
+                             "(Doc/Architecture/OnePromotionGate → The target set).")
     parser.add_argument("--verify-source", action="store_true",
                         help="OPTIONAL: take the chosen set's core commit and release from the "
                              "platform bake's OWN final publication receipt instead of the run's "
@@ -4412,7 +4435,7 @@ def main() -> int:
     choose_fn = lambda: choose(fetch, resolve, tester, portal,  # noqa: E731 — one call, two callers
                                wait_for_seal=arguments.wait_for_seal, freeze=arguments.freeze or None,
                                migration=migration or None, passed_ceiling=ceiling,
-                               verify_source=arguments.verify_source)
+                               verify_source=arguments.verify_source, armed=arguments.armed)
     # 🚨 THE FLOOR BINDS EVERY PATH — read BEFORE the choice so a malformed declaration is a red
     # here and not a surprise after a successful resolution, and applied to whatever set was
     # chosen, by whatever route (newest sealed, ceiling, freeze, or a kept baseline).
