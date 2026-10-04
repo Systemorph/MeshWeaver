@@ -163,6 +163,28 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         _changes = new IsolatedChangeFeed(logger, "in-memory");
     }
 
+    /// <summary>
+    /// Shared-store constructor that ALSO shares one change feed across every adapter built over the
+    /// dictionaries — the shape of PostgreSQL LISTEN/NOTIFY, where a commit on one process reaches
+    /// every process's <see cref="IStorageAdapter.Changes"/>. For multi-silo tests whose subject is
+    /// a cross-process signal carried by a durable write (<c>ActivationRecycle</c>); the default
+    /// overloads keep one feed per adapter.
+    /// </summary>
+    /// <param name="nodes">The shared node dictionary.</param>
+    /// <param name="partitionObjects">The shared partition-object dictionary.</param>
+    /// <param name="sharedChanges">The one change feed every adapter over these dictionaries publishes to and serves.</param>
+    /// <param name="logger">Optional logger.</param>
+    public InMemoryStorageAdapter(
+        ConcurrentDictionary<string, MeshNode> nodes,
+        ConcurrentDictionary<string, List<object>> partitionObjects,
+        IsolatedChangeFeed sharedChanges,
+        ILogger<InMemoryStorageAdapter>? logger = null)
+        : this(nodes, partitionObjects, logger)
+    {
+        ArgumentNullException.ThrowIfNull(sharedChanges);
+        _changes = sharedChanges;
+    }
+
     private static string Norm(string? path) => path?.Trim('/') ?? "";
 
     /// <summary>Records <paramref name="path"/> under every ancestor directory of <paramref name="index"/> (the root is "").</summary>
