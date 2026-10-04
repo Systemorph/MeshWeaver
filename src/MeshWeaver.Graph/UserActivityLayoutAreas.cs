@@ -513,7 +513,8 @@ public static class UserActivityLayoutAreas
     /// <summary>The catalog region — the TABBED home surface (see <see cref="BuildHome"/>):
     /// <b>Pinned</b> · <b>Apps</b> (the viewer's OWN <c>{owner}/_App</c> records — a pure READ) ·
     /// <b>Spaces</b> (the deduplicated catalog) · <b>All</b>, with the <b>Shared with me</b> band
-    /// (the caller's cross-partition grants, #385 — see <see cref="ObserveSharedTargets"/>)
+    /// (the caller's cross-partition grants, #385 — read from the profile's
+    /// <see cref="User.SharedPaths"/>, kept by <see cref="Logon.RefreshSpacePathsLogonAction"/>)
     /// below. The admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back
     /// to the legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).
     /// <para>🚨 The render path performs NO app writes, with no exception. Everything install-shaped
@@ -535,19 +536,23 @@ public static class UserActivityLayoutAreas
         var screen = host.ViewerScreen();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
-        // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
-        // (#385) and the owner node (pins). Every leg starts with a value so the home paints
-        // instantly. The Apps grid needs NOTHING here: the tiles are rendered from their own
-        // single-partition query inside the search control.
+        // LIVE — no code change, no image roll. Combined with the owner node (pins AND the home's path
+        // manifests, User.SpacePaths/SharedPaths) and the screen. Every leg starts with a value so the
+        // home paints instantly. The Apps grid needs NOTHING here: the tiles are rendered from their
+        // own single-partition query inside the search control.
+        //
+        // 🚨 NO mesh-wide read on this path. The cross-partition grants (#385) used to be read here
+        // per render — `nodeType:AccessAssignment content.accessObject:{owner}` over every partition
+        // schema. That read now runs once per logon, in RefreshSpacePathsLogonAction, which writes
+        // its answer onto the profile this view already streams (maintainer, 2026-10-04: "installed
+        // apps must be in manifest on user's home. only this must be read").
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        // [Home] timing: when the catalog's four legs first combined (= first catalog paint), and
-        // when the shared-targets leg delivered its REAL answer rather than its StartWith([]).
+        // [Home] timing: when the catalog's legs first combined (= first catalog paint).
         var homeClock = System.Diagnostics.Stopwatch.StartNew();
         var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         var catalogLogged = 0;
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
-                ObserveSharedTargets(host, ownerId),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
                 screen,
                 // 🚨 The render path performs NO app writes at all now. Seeding the platform
@@ -559,61 +564,15 @@ public static class UserActivityLayoutAreas
                 // defaults permanently — including the Store tile the seeding exists to guarantee.
                 // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
                 // the proxy was reaching for: once per user because the ledger says so.
-                (config, shared, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, shared, user, locale, viewerScreen))
+                (config, user, viewerScreen) =>
+                    (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen))
             .Do(_ =>
             {
                 if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
                     homeLogger?.LogInformation(
-                        "[Home] server owner={Owner} +{ElapsedMs}ms catalog: config, shared, owner and screen combined",
+                        "[Home] server owner={Owner} +{ElapsedMs}ms catalog: config, owner and screen combined",
                         ownerId, homeClock.ElapsedMilliseconds);
             });
-    }
-
-    /// <summary>
-    /// The cross-partition scopes the owner has been granted access to — an invited module living in
-    /// ANOTHER partition, reachable by URL but otherwise invisible in nav (the #385 symptom). Sourced
-    /// from the owner's <c>AccessAssignment</c> satellites (<c>content.accessObject == ownerId</c>),
-    /// fanned out cross-partition and access-filtered, each resolved to its governed target scope
-    /// (<see cref="MeshNode.MainNode"/>). Starts empty so the home paints instantly; grants land
-    /// reactively. No security surface changes — it only READS the caller's own readable grants.
-    /// </summary>
-    private static IObservable<IReadOnlyList<string>> ObserveSharedTargets(LayoutAreaHost host, string ownerId)
-    {
-        var mesh = host.Hub.ServiceProvider.GetService<IMeshService>();
-        if (mesh is null || string.IsNullOrEmpty(ownerId))
-            return Observable.Return<IReadOnlyList<string>>([]);
-        var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
-        return mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                // A share grant lives in the GRANTING partition — that is what makes it a share —
-                // so "shared with me" cannot be anchored to the viewer and says so (#3202 —
-                // fan-out is opt-in). Doc/Architecture/UnanchoredSecurityReads → "Needs a decision".
-                MeshWideQuery.Declare($"nodeType:AccessAssignment content.accessObject:{ownerId}")))
-            .Scan(ImmutableDictionary<string, MeshNode>.Empty,
-                (map, change) =>
-                {
-                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                        return change.Items.ToImmutableDictionary(n => n.Path);
-                    foreach (var item in change.Items)
-                        map = change.ChangeType switch
-                        {
-                            QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
-                            QueryChangeType.Removed => map.Remove(item.Path),
-                            _ => map
-                        };
-                    return map;
-                })
-            .Select(map => SharedTargetPaths(map.Values, ownerId))
-            .Do(targets => homeLogger?.LogDebug(
-                "[Home] server owner={Owner} shared targets answered: {Count}", ownerId, targets.Count))
-            .StartWith((IReadOnlyList<string>)[])
-            // 🚨 Emit only when the LIST changes. Every Updated of any of the viewer's grants re-ran
-            // the Scan and re-emitted an equal list, which rebuilt the whole home control; and the
-            // common case — the real answer is ALSO empty — re-emitted [] over the StartWith([]).
-            // A changed list still flows (it re-shapes the content section's union, which the view
-            // now re-queries without blanking — MeshSearchView.LoadResults(keepVisible)).
-            .DistinctUntilChanged(SharedTargetsComparer.Instance);
     }
 
     /// <summary>
@@ -746,11 +705,23 @@ public static class UserActivityLayoutAreas
     /// <c>-nodeType:User</c>: a User root is simply not a Space. <paramref name="exclusions"/>
     /// (leading-space <c>-nodeType:…</c> clauses) applies to the OWN leg only — the root leg has
     /// nothing left to exclude.</summary>
-    private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
-        // The root leg enumerates the partition roots of EVERY partition — mesh-wide by nature, and
-        // it says so (#3202 — fan-out is opt-in). The own leg is anchored to the user's home.
-        $"namespace: is:main is:content{RootTypeFilter} {sortSuffix} {ParsedQuery.CrossPartitionQualifier}\n" +
+    private static string FirstLevelUnion(
+        string ownerId, string sortSuffix, string exclusions = "", IReadOnlyList<string>? spacePaths = null) =>
+        // 🚨 BOTH legs are anchored. The root leg used to enumerate the partition roots of EVERY
+        // partition (`namespace: … partitions:all`) on every render — a UNION over every partition
+        // schema (251 on the public instance, ~1.3 s, measured 2026-10-04). It now reads the spaces
+        // the viewer's own profile lists (User.SpacePaths, kept by RefreshSpacePathsLogonAction) as
+        // a path alternation, and is OMITTED while that list is empty: a first-ever home paints its
+        // own leg at once and repaints with its spaces when the logon action writes the list.
+        (RootLeg(spacePaths, sortSuffix) is { } root ? root + "\n" : "") +
         $"namespace:{ownerId} is:main is:content{exclusions} {sortSuffix}";
+
+    /// <summary>The anchored root leg — the viewer's own space manifest as a path alternation — or
+    /// null when the manifest is empty. Pure.</summary>
+    private static string? RootLeg(IReadOnlyList<string>? spacePaths, string sortSuffix) =>
+        spacePaths is { Count: > 0 }
+            ? $"path:{string.Join("|", spacePaths)} is:main is:content{RootTypeFilter} {sortSuffix}"
+            : null;
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (the SPACES the viewer
     /// can reach + the user's home children), or a cross-partition SUBTREE query (everything the viewer
@@ -758,11 +729,13 @@ public static class UserActivityLayoutAreas
     /// <see cref="HomeCatalogScope.Subtree"/>. The user's own root never lists on their home page: the
     /// first-level shape drops it because a User is not a Space, the subtree shape excludes it by type.
     /// <c>Subtree</c> is the admin's explicit "show me everything" and keeps the deny-list shape.</summary>
-    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
+    private static string CatalogQuery(
+        HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "",
+        IReadOnlyList<string>? spacePaths = null) =>
         scope == HomeCatalogScope.Subtree
             // "Show me everything" is every partition by definition (#3202 — fan-out is opt-in).
             ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix} {ParsedQuery.CrossPartitionQualifier}"
-            : FirstLevelUnion(ownerId, sortSuffix, exclusions);
+            : FirstLevelUnion(ownerId, sortSuffix, exclusions, spacePaths);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
     // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
@@ -813,8 +786,15 @@ public static class UserActivityLayoutAreas
         // whether or not a card for it is ever drawn. The Apps records are the viewer's own
         // (filtered where painted, like Spaces/All whose queries are generic).
         var privacy = screen ?? PresentationScreen.Off;
+        // The home's path MANIFESTS live on the viewer's own profile (User.SpacePaths/SharedPaths,
+        // kept by RefreshSpacePathsLogonAction) — the render reads them from the owner stream it
+        // already holds and issues no mesh-wide query. An explicit sharedTargets (tests, callers
+        // that already hold the list) wins over the profile's.
+        sharedTargets ??= user?.SharedPaths;
+        // Interpolated into query strings exactly like the shared targets, so screened the same way.
+        var spacePaths = privacy.Retain(user?.SpacePaths);
         if (cfg.Style == HomeStyle.Catalog)
-            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
+            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy, spacePaths);
 
         // TWO SECTIONS, apps first: the icon grid you launch things from, then the content you
         // search through. They are different acts — one is "open my app", the other is "find that
@@ -831,9 +811,9 @@ public static class UserActivityLayoutAreas
             .WithStyle("gap: 24px; width: 100%;")
             // The launcher's Spaces scope needs the invitations too — the same list the content
             // section folds into All, screened the same way.
-            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets)))
+            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets), spacePaths))
             .WithView(BuildContentSection(
-                nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets)));
+                nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets), spacePaths));
     }
 
     /// <summary>
@@ -852,7 +832,7 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static MeshSearchControl BuildContentSection(
         string nodeOwnerId, HomeConfig? config, User? user, string? locale, PresentationScreen? screen,
-        IReadOnlyList<string>? sharedTargets = null)
+        IReadOnlyList<string>? sharedTargets = null, IReadOnlyList<string>? spacePaths = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var privacy = screen ?? PresentationScreen.Off;
@@ -870,7 +850,7 @@ public static class UserActivityLayoutAreas
             ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions}"
             : string.Empty;
         scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
-            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions) + sharedLeg));
+            (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions, spacePaths) + sharedLeg));
 
         // Pinned — the owner's shortcuts, present only when there are pins.
         // 🚨 The pins are INTERPOLATED INTO the query string, so the presentation screen (#1803)
@@ -949,7 +929,8 @@ public static class UserActivityLayoutAreas
     /// content section below is where you search. Pure, exposed for tests.</para>
     /// </summary>
     internal static MeshSearchControl BuildAppsBand(
-        string nodeOwnerId, string? locale, IReadOnlyList<string>? sharedTargets = null)
+        string nodeOwnerId, string? locale, IReadOnlyList<string>? sharedTargets = null,
+        IReadOnlyList<string>? spacePaths = null)
     {
         var appsQuery =
             $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
@@ -996,7 +977,7 @@ public static class UserActivityLayoutAreas
                     // reader can see (mesh-wide by nature, and the qualifier says so) plus the ones
                     // they were invited into. NOT Sortable: the arrangement lives on App records,
                     // and a space has none — a drop here would have nowhere to write.
-                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.spaces", locale), SpacesQuery(sharedTargets))
+                    new MeshSearchScopeTab(LocalizationCatalog.Get("home.spaces", locale), SpacesQuery(nodeOwnerId, spacePaths, sharedTargets))
                     {
                         RenderMode = nameof(MeshSearchRenderMode.Icons),
                         NavigateToMainNode = true,
@@ -1015,14 +996,20 @@ public static class UserActivityLayoutAreas
     /// modified in the query and re-ordered by the viewer's own access log at paint
     /// (<c>SortByAccess</c>), so "recently used" is the viewer's recency, not the mesh's. Pure.
     /// </summary>
-    internal static string SpacesQuery(IReadOnlyList<string>? sharedTargets)
+    internal static string SpacesQuery(
+        string ownerId, IReadOnlyList<string>? spacePaths, IReadOnlyList<string>? sharedTargets)
     {
-        var roots = $"namespace: is:main is:content{RootTypeFilter} {SortSuffixLastModified} "
-            + ParsedQuery.CrossPartitionQualifier;
-        return sharedTargets is { Count: > 0 }
-            ? roots + "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content "
-                + $"-nodeType:User{SpacesDedupExclusions} {SortSuffixLastModified}"
-            : roots;
+        var legs = new List<string>();
+        if (RootLeg(spacePaths, SortSuffixLastModified) is { } roots)
+            legs.Add(roots);
+        if (sharedTargets is { Count: > 0 })
+            legs.Add($"path:{string.Join("|", sharedTargets)} is:main is:content "
+                + $"-nodeType:User{SpacesDedupExclusions} {SortSuffixLastModified}");
+        // Both manifests empty (a first-ever logon whose refresh has not landed yet): the spaces
+        // inside the viewer's own home — anchored, usually short, never a mesh-wide fallback.
+        if (legs.Count == 0)
+            legs.Add($"namespace:{ownerId} is:main is:content{RootTypeFilter} {SortSuffixLastModified}");
+        return string.Join("\n", legs);
     }
 
     /// <summary>The record content property the Apps grid groups by — <see cref="App.Group"/>.</summary>
@@ -1269,10 +1256,11 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static UiControl BuildCatalog(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
-        string? locale = null, PresentationScreen? screen = null)
+        string? locale = null, PresentationScreen? screen = null, IReadOnlyList<string>? spacePaths = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale);
+        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale,
+            (screen ?? PresentationScreen.Off).Retain(spacePaths));
         // Same rule as BuildHome: the shared band's targets are query-string content, so the
         // presentation screen (#1803) applies before the query is built. The catalog list itself is
         // a generic query and is deliberately NOT narrowed — a `-path:` clause would put the marked
@@ -1316,13 +1304,14 @@ public static class UserActivityLayoutAreas
     /// no client-side WithSortBy (that would override the query order).
     /// </summary>
     private static MeshSearchControl BuildCatalogList(
-        string nodeOwnerId, HomeConfig cfg, string exclusions, string? locale)
+        string nodeOwnerId, HomeConfig cfg, string exclusions, string? locale,
+        IReadOnlyList<string>? spacePaths = null)
     {
         var sortOptions = CatalogSorts
             .OrderByDescending(s => s.Sort == cfg.DefaultSort)
             .Select(s => new MeshSearchSortOption(
                 LocalizationCatalog.Get(s.LabelKey, locale),
-                CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix, exclusions)))
+                CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix, exclusions, spacePaths)))
             .ToArray();
 
         var everything = Controls.MeshSearch
