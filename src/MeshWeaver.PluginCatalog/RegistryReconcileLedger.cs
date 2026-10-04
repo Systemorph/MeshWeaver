@@ -85,4 +85,18 @@ public record RegistryReconcileEntry
     /// <see cref="Pending"/> exists to draw, one question further along.</para>
     /// </summary>
     public ImmutableList<UndeliveredModule>? UndeliveredModules { get; init; }
+
+    /// <summary>
+    /// What this registry SERVED at the last full feed read — one row per package, with its
+    /// published version, content hash and platform floor. The source of the TARGET SET
+    /// (<see cref="TargetSet"/>): the instance report carries it so the fleet view can say, per
+    /// module, installed vs newest published. Null until a full feed read has happened in this
+    /// process — "not read yet", never "serves nothing".
+    /// </summary>
+    public ImmutableList<ServedPackage>? Served { get; init; }
+
+    /// <summary>The newest floor among <see cref="Served"/> — the newest set CI verified a served
+    /// package on (<see cref="TargetSet.Platform(System.Collections.Generic.IEnumerable{ServedPackage})"/>).
+    /// The fleet's TARGET platform caps it at the newest ARMED set the instance can see.</summary>
+    public string? TargetPlatform { get; init; }
 }

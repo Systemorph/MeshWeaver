@@ -231,7 +231,110 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                 Warnings = adopted.Complete ? report.Warnings
                     : report.Warnings.Add("adopted artifact inventory is incomplete; retention must not delete"),
             })
+            .Zip(ReadServed(), (report, served) => (report, served))
+            .Zip(ReadLatestArmed(hub, ReadBudget, logger), (pair, armed) => WithTarget(pair.report, pair.served, armed))
             .SelectMany(report => Deliver(settings, report));
+    }
+
+    /// <summary>
+    /// The registry feed as the last full reconcile read it (<see cref="RegistryReconcileEntry.Served"/>
+    /// on this instance's own ledger) — what makes a report say, per module, installed vs newest
+    /// published, and name the TARGET SET. Never faults: an unreadable ledger reports no served
+    /// rows, which the view renders as "not known", never as "up to date".
+    /// </summary>
+    private IObservable<ImmutableList<ServedPackage>?> ReadServed() =>
+        hub.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(() =>
+            hub.ServiceProvider.GetRequiredService<IStorageAdapter>()
+                .Read(RegistryUpdateReconciler.LedgerPath, hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .Timeout(ReadBudget)
+                .Select(node => node?.ContentAs<RegistryReconcileLedger>(hub.JsonSerializerOptions)?.Registries
+                    .SelectMany(r => r.Served ?? ImmutableList<ServedPackage>.Empty)
+                    .ToImmutableList()))
+            .Catch<ImmutableList<ServedPackage>?, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "[DeploymentReport] the registry reconcile ledger could not be read — "
+                    + "this report carries no served versions and no target set");
+                return Observable.Return<ImmutableList<ServedPackage>?>(null);
+            });
+
+    /// <summary>
+    /// The newest ARMED platform this instance's self-updater can see — <c>latestAvailableTag</c> on
+    /// <c>Admin/UpdatePolicy</c>, read off the same version-shaped tags core's <c>arm</c> job writes and
+    /// <c>resolve-platform.py --armed</c> resolves. Null when the instance has no such node (a host
+    /// without self-update) or it could not be read.
+    /// </summary>
+    /// <remarks>The ONE reader of this fact — <see cref="CatalogTestRunPreflight"/> calls it too, so a
+    /// partition or NodeType rename cannot blind one reader while the other still sees the tag.</remarks>
+    /// <param name="hub">The hub whose mesh is read.</param>
+    /// <param name="budget">How long the read may take.</param>
+    /// <param name="logger">Where an unreadable policy is logged, if anywhere.</param>
+    internal static IObservable<string?> ReadLatestArmed(IMessageHub hub, TimeSpan budget, ILogger? logger = null)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var query = $"path:{UpdatePolicyPartition} scope:children nodeType:{UpdatePolicyNodeType}";
+        return accessService
+            .RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
+            .Take(1)
+            .Timeout(budget)
+            .Select(change => change.Items
+                .Select(node => StringProperty(node.Content, "latestAvailableTag", hub.JsonSerializerOptions))
+                .FirstOrDefault(tag => tag is not null))
+            .Catch((Exception exception) =>
+            {
+                logger?.LogDebug(exception, "[DeploymentReport] the newest armed tag could not be read.");
+                return Observable.Return<string?>(null);
+            });
+    }
+
+    /// <summary>A trimmed, non-blank string property of a node's content in whatever shape it
+    /// arrives, else null.</summary>
+    /// <param name="content">The content.</param>
+    /// <param name="name">The property name (camelCase).</param>
+    /// <param name="options">The hub's serializer options.</param>
+    internal static string? StringProperty(object? content, string name, JsonSerializerOptions options)
+    {
+        if (content is null)
+            return null;
+        var element = content is JsonElement je
+            ? je
+            : JsonSerializer.SerializeToElement(content, content.GetType(), options);
+        return element.ValueKind == JsonValueKind.Object
+               && element.TryGetProperty(name, out var value)
+               && value.ValueKind == JsonValueKind.String
+               && !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()?.Trim()
+            : null;
+    }
+
+    /// <summary>The report with the target set and each module's served version applied (pure).</summary>
+    /// <param name="report">The composed report.</param>
+    /// <param name="served">The served rows, or null when they could not be read.</param>
+    /// <param name="latestArmed">The newest armed platform this instance can see, or null.</param>
+    internal static DeploymentReport WithTarget(
+        DeploymentReport report, ImmutableList<ServedPackage>? served, string? latestArmed = null)
+    {
+        if (served is null)
+            return report with
+            {
+                LatestArmedPlatform = latestArmed,
+                TargetPlatform = latestArmed,
+                Warnings = report.Warnings.Add("no registry feed has been read in this process — served versions are unknown"),
+            };
+        var byId = TargetSet.ById(served);
+        var target = TargetSet.Platform(served, latestArmed);
+        return report with
+        {
+            TargetPlatform = target,
+            LatestArmedPlatform = latestArmed,
+            Modules = report.Modules
+                .Select(m => byId.TryGetValue(m.Id, out var s)
+                    ? m with { ServedVersion = s.Version, ServedModuleVersion = s.ModuleVersion, ServedMinMeshVersion = s.MinMeshVersion }
+                    : m)
+                .ToImmutableList(),
+        };
     }
 
     private IObservable<(ImmutableList<string> Identities, bool Complete)> ReadAdoptedFrameworks() =>
@@ -312,6 +415,10 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
         LastSyncedAt = module.GitSync?.LastSyncedAt is { } at ? Stamp(at) : null,
         ModuleVersion = Blank(module.Package?.ModuleVersion) ?? Blank(module.Package?.Version),
         Origin = module.GitSync is not null ? "GitSync" : "Package",
+        Version = Blank(module.Package?.ReleasedVersion) ?? Blank(module.Package?.Version),
+        MinMeshVersion = Blank(module.Package?.MinMeshVersion),
+        HeldUpdate = Blank(module.Package?.HeldUpdate),
+        HeldSince = module.Package?.HeldSince is { } since ? Stamp(since) : null,
     };
 
     /// <summary>
@@ -491,6 +598,10 @@ public sealed record DeploymentReport
     public string SampledAt { get; init; } = "";
     public ImmutableList<ModuleReport> Modules { get; init; } = [];
     public ImmutableList<string> Warnings { get; init; } = [];
+    /// <summary>The TARGET platform (<see cref="TargetSet.Platform(System.Collections.Generic.IEnumerable{ServedPackage}, string?)"/>).</summary>
+    public string? TargetPlatform { get; init; }
+    /// <summary>The newest ARMED platform this instance's self-updater sees (<c>latestAvailableTag</c>).</summary>
+    public string? LatestArmedPlatform { get; init; }
 }
 
 public sealed record ModuleReport
@@ -503,6 +614,20 @@ public sealed record ModuleReport
     public string? LastSyncedAt { get; init; }
     public string? ModuleVersion { get; init; }
     public string Origin { get; init; } = "GitSync";
+    /// <summary>The installed published SemVer, when the install record has one.</summary>
+    public string? Version { get; init; }
+    /// <summary>The installed version's platform floor.</summary>
+    public string? MinMeshVersion { get; init; }
+    /// <summary>Why a newer version is not installed — the install record's hold sentence.</summary>
+    public string? HeldUpdate { get; init; }
+    /// <summary>When the hold began (UTC, ISO-8601 with Z).</summary>
+    public string? HeldSince { get; init; }
+    /// <summary>The newest version the registry serves (the target version).</summary>
+    public string? ServedVersion { get; init; }
+    /// <summary>The served version's content hash.</summary>
+    public string? ServedModuleVersion { get; init; }
+    /// <summary>The served version's platform floor.</summary>
+    public string? ServedMinMeshVersion { get; init; }
 }
 
 public enum DeploymentReportDelivery
