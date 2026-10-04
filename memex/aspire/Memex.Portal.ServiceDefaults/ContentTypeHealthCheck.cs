@@ -40,7 +40,7 @@ public sealed class ContentTypeHealthCheck(IServiceProvider services) : IHealthC
 
         var data = degraded.ToDictionary(
             d => d.NodeType,
-            d => (object)$"{d.Count} degraded read(s), last {d.LastPath} at {d.LastAt:O} via {d.Seam}",
+            d => (object)$"{d.Count} degraded read(s) between {d.WindowStart:O} and {d.LastAt:O}, last {d.LastPath} via {d.Seam}",
             StringComparer.Ordinal);
         return Task.FromResult(
             HealthCheckResult.Degraded(ContentDegradationRegistry.Describe(degraded), data: data));
