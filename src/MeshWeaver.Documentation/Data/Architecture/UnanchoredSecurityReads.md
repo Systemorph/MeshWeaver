@@ -185,21 +185,19 @@ materialization of the fold's global sets on the `partition_access` precedent �
 
 ### Needs a decision, not a patch
 
-- **`UserActivityLayoutAreas.ObserveSharedTargets`** — `nodeType:AccessAssignment
-  content.accessObject:{owner}`, the home page's "Shared with me" band. This is the one core query
-  that is unanchored **and uncached** **and on a per-render path**, so it is the largest single core
-  contributor to the `access` bucket. It cannot be anchored (a share grant lives in the GRANTING
-  partition — that is what makes it a share; pinning it to `{user}/…` returns only the grants the
-  user made to themselves, and everything shared *with* them silently disappears). The remaining
-  levers each change something a test must first pin:
-  - Routing it through `IMeshNodeStreamCache.GetQuery` like its twin on the identity path moves the
-    read from source-side RLS (`user_effective_permissions`) to consumer-side `PermissionEvaluator`
-    — two independent implementations that [AccessControl](/Doc/Architecture/AccessControl) is
-    explicit must agree. A divergence would silently change what "Shared with me" shows.
-  - A per-viewer cache keyed on `(viewer, owner)` holds one live mesh-wide subscription per pair for
-    the mesh's lifetime, and a bare `ConcurrentDictionary<key, IObservable<T>>` is the shape that
-    latches a transient `OnError` forever (#1369). It needs an `IIoPool` promise slot and an
-    invalidation contract, which is a design, not a patch.
+- ~~**`UserActivityLayoutAreas.ObserveSharedTargets`**~~ — **decided 2026-10-04 (maintainer:
+  "installed apps must be in manifest on user's home. only this must be read … rest must be slow,
+  page must load quickly").** The read itself is unchanged — `nodeType:AccessAssignment
+  content.accessObject:{owner}`, mesh-wide by nature because a share grant lives in the GRANTING
+  partition — but it is no longer on the render path. `RefreshSpacePathsLogonAction` runs it once
+  per logon session, in the background, as the user (so source-side RLS still decides, exactly as
+  before), and writes the projected targets onto the user's own profile as `User.SharedPaths`
+  beside `User.SpacePaths` (the root-Space leg, same treatment). The home reads both from the owner
+  stream it already holds and anchors its queries on them (`path:a|b|c`). Neither of the two
+  levers below was needed: there is no cache to invalidate, because the profile IS the store and
+  the action is its only writer. The cost is freshness — a grant issued mid-session lists on the
+  next logon (the target is reachable by URL at once; the list scopes what the home LISTS, never
+  what the user may open).
 - **Collapsing `GatedNodes(type)` into one `nodeType:A|B|C` fan-out.** Arithmetically attractive —
   three gated types are three mesh-wide UNIONs where one would do. But `ParsedQuery.ExtractNodeType`
   returns `null` for an alternation (`QueryOperator.In`), and that value drives satellite-TABLE
