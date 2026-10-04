@@ -209,8 +209,17 @@ public static class PackagePlatformFloorGate
             });
     }
 
+    /// <summary>The former name of <see cref="RequireForInstall"/> — kept as a forwarder for any caller
+    /// compiled against it; the gate now covers updates over an existing record too.</summary>
+    /// <param name="hub">The installing hub.</param>
+    /// <param name="manifest">The package about to be installed.</param>
+    /// <param name="logger">Diagnostics.</param>
+    [Obsolete("Use RequireForInstall — the gate covers every install, an update over an existing record included.")]
+    public static IObservable<Unit> RequireForFreshInstall(IMessageHub hub, PackageManifest manifest, ILogger? logger)
+        => RequireForInstall(hub, manifest, logger);
+
     /// <summary>
-    /// The installer's gate for a FRESH install: faults with <see cref="PackagePlatformFloorException"/>
+    /// The installer's gate for EVERY install — a fresh one and an update over an existing record: faults with <see cref="PackagePlatformFloorException"/>
     /// when <paramref name="manifest"/>'s floor is held on this platform, unless it is a re-install of
     /// the content already recorded here (<see cref="AllowedOverExistingRecord"/>), which heals in
     /// place. The unattended and click lanes hold an update upstream, before anything is fetched
@@ -221,7 +230,7 @@ public static class PackagePlatformFloorGate
     /// <param name="manifest">The package about to be installed.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <returns>Cold; emits once when the install may proceed.</returns>
-    public static IObservable<Unit> RequireForFreshInstall(
+    public static IObservable<Unit> RequireForInstall(
         IMessageHub hub, PackageManifest manifest, ILogger? logger)
     {
         var verdict = Evaluate(hub, manifest);

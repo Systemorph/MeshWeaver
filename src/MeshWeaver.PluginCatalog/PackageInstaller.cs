@@ -110,7 +110,7 @@ public static class PackageInstaller
         // update is held upstream, before anything is fetched (CatalogLayoutAreas.InstallOrUpdate).
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
-            .SelectMany(_ => PackagePlatformFloorGate.RequireForFreshInstall(hub, manifest, logger))
+            .SelectMany(_ => PackagePlatformFloorGate.RequireForInstall(hub, manifest, logger))
             .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
                 hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
     }

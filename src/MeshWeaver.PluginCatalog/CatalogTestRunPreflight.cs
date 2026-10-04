@@ -99,7 +99,12 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
         string? latestArmed = null)
     {
         var byId = served is null ? ImmutableDictionary<string, ServedPackage>.Empty : TargetSet.ById(served);
-        var target = served is null ? null : TargetSet.Platform(served, latestArmed);
+        // No feed read yet still knows the ARMED platform when the self-updater sees one — the same
+        // reading DeploymentReportService.WithTarget reports, so the preflight and the fleet view
+        // cannot disagree, and a platform behind it is refused even before the first feed read.
+        var target = served is null
+            ? (string.IsNullOrWhiteSpace(latestArmed) ? null : latestArmed.Trim())
+            : TargetSet.Platform(served, latestArmed);
         var modules = records
             .Select(r =>
             {

@@ -478,6 +478,9 @@ public class TestRunPreflightRulesTest
         TargetSet.Standing("h1", served[1], "3.0.0-ci.9898").Should().Be(TargetStanding.Behind);
         CatalogTestRunPreflight.Compose("3.0.0-ci.9898", "abc", null, records).Versions.TargetPlatform
             .Should().BeNull("no feed read yet is 'no target known', never 'at target'");
+        var (armedOnly, armedOnlyAtTarget) = CatalogTestRunPreflight.Compose("3.0.0-ci.9885", "abc", null, records, latestArmed: "3.0.0-ci.9887");
+        armedOnly.TargetPlatform.Should().Be("3.0.0-ci.9887", "the armed platform binds before the first feed read (review on #6065)");
+        armedOnlyAtTarget.Should().BeFalse("a platform behind the armed set is refused even then");
     }
 
     [Fact]
