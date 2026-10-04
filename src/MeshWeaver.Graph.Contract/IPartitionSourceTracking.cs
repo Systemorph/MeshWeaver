@@ -128,12 +128,19 @@ public sealed record SyncedModuleVersions(bool Known, ImmutableDictionary<string
         new(false, ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase));
 
     /// <summary>A definite reading.</summary>
+    /// <remarks>
+    /// 🚨 A module that two sources name with DIFFERENT hashes is AMBIGUOUS — no source's tree can be
+    /// said to be what the partition runs — so it is dropped from the reading rather than resolved
+    /// by a last-wins pick. <see cref="Delivered"/> is then false for it and nothing converges on
+    /// one source's word. Sources that AGREE on a hash are not a conflict.
+    /// </remarks>
     /// <param name="versions">Module id → landed content hash; blank entries are dropped.</param>
     public static SyncedModuleVersions Of(IEnumerable<KeyValuePair<string, string>> versions) =>
         new(true, versions
             .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
             .GroupBy(kv => kv.Key.Trim(), StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(g => g.Key, g => g.Last().Value.Trim(), StringComparer.OrdinalIgnoreCase));
+            .Where(g => g.Select(kv => kv.Value.Trim()).Distinct(StringComparer.Ordinal).Count() == 1)
+            .ToImmutableDictionary(g => g.Key, g => g.First().Value.Trim(), StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// Whether the source has landed EXACTLY <paramref name="contentHash"/> for

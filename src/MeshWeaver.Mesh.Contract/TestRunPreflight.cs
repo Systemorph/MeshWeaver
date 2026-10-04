@@ -47,6 +47,8 @@ public sealed record VersionsUnderTest(
     /// <param name="all">List every module, not only those off-target.</param>
     public string Header(bool all = true)
     {
+        if (Unread)
+            return $"Versions under test — {Source}: platform, target and modules NOT READ (versions unknown).";
         var commit = Commit is { Length: > 0 } sha && !string.IsNullOrWhiteSpace(sha) ? $" (core {Short(sha)})" : "";
         var target = string.IsNullOrWhiteSpace(TargetPlatform) ? "no target known" : $"target {TargetPlatform}";
         var lines = new List<string>
@@ -62,6 +64,16 @@ public sealed record VersionsUnderTest(
                 + (string.IsNullOrWhiteSpace(m.Held) ? "" : $" [{m.Held}]")));
         return string.Join("\n", lines);
     }
+
+    /// <summary>True when the instance's own reading failed, so every other member is a placeholder
+    /// and the header must say the versions are unknown rather than print them.</summary>
+    public bool Unread { get; init; }
+
+    /// <summary>The reading for an instance whose versions could not be read — names no platform,
+    /// no commit and no modules, because none are known.</summary>
+    /// <param name="source">Where the failed reading was attempted.</param>
+    public static VersionsUnderTest NotRead(string source) =>
+        new(null, null, null, ImmutableList<ModuleUnderTest>.Empty, source) { Unread = true };
 
     private static string Short(string sha) => sha.Length <= 9 ? sha : sha[..9];
 

@@ -51,7 +51,7 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
             })
             .Catch((Exception ex) => Observable.Return(new TestRunPreflightResult(
                 TestRunPreflightKind.Skew,
-                VersionsUnderTest.OfThisProcess() with { Source = "this instance" },
+                VersionsUnderTest.NotRead("this instance"),
                 $"the versions under test could NOT be read ({ex.Message}) — refusing to call a run on an "
                 + "unknown version a pass")));
 

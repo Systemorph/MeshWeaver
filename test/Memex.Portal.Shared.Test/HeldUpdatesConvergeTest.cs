@@ -284,6 +284,20 @@ public class HeldUpdateConvergenceRulesTest
     }
 
     [Fact]
+    public void FoldSynced_TwoSourcesNamingDifferentHashesForOneModule_IsAmbiguousAndLicensesNothing()
+    {
+        var folded = PartitionContentOwnership.FoldSynced(
+            [SyncedModuleVersions.Of([new("AI", "abc"), new("Hosting", "h1")]),
+             SyncedModuleVersions.Of([new("AI", "def"), new("Hosting", "h1")])]);
+        folded.Known.Should().BeTrue();
+        folded.Delivered("AI", "abc").Should().BeFalse("two sources disagree: no winner");
+        folded.Delivered("AI", "def").Should().BeFalse("two sources disagree: no winner");
+        folded.Delivered("Hosting", "h1").Should().BeTrue("sources that agree are not a conflict");
+        SyncedModuleVersions.Of([new("AI", "abc"), new("ai", "def")]).Delivered("AI", "def")
+            .Should().BeFalse("the same conflict inside one provider's reading");
+    }
+
+    [Fact]
     public void SyncDelivered_ConvergesOnlyASyncOwnedPartition()
     {
         var landed = SyncedModuleVersions.Of([new("P", "abc")]);
@@ -438,6 +452,14 @@ public class TestRunPreflightRulesTest
         Reading(new ModuleUnderTest("AI", "1.19.4", null)).Header(all: false).Should().NotContain("  AI",
             "the short form lists only what is off-target");
         VersionsUnderTest.OfThisProcess().Header().Should().Contain("in-process mesh").And.Contain("no target known");
+    }
+
+    [Fact]
+    public void AnUnreadInstance_HeaderSaysUnknown_NotTheHostProcessVersions()
+    {
+        var header = VersionsUnderTest.NotRead("this instance").Header();
+        header.Should().Contain("NOT READ").And.Contain("unknown").And.NotContain("0 module(s)")
+            .And.NotContain("core ").And.NotContain("in-process mesh");
     }
 
     [Fact]
