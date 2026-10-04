@@ -62,7 +62,7 @@ public class DeckSlidesReadAsViewerTest(ITestOutputHelper output) : MonolithMesh
         var deck = $"{TestPartition}/deck{Guid.NewGuid():N}";
         foreach (var (id, order) in new[] { ("s1", 1), ("s2", 2), ("s3", 3) })
             await MeshService.CreateNode(new MeshNode(id, deck) { NodeType = SlideNodeType.NodeType, Order = order })
-                .Timeout(30.Seconds()).Await(cancellationToken);
+                .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         foreach (var scope in new[] { $"{deck}/s1", $"{deck}/s2" })
             await MeshService.CreateNode(new MeshNode($"{Viewer.ObjectId}_Access", $"{scope}/_Access")
                 {
@@ -76,7 +76,7 @@ public class DeckSlidesReadAsViewerTest(ITestOutputHelper output) : MonolithMesh
                         Roles = [new RoleAssignment { Role = "Viewer" }],
                     },
                 })
-                .Timeout(30.Seconds()).Await(cancellationToken);
+                .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         return deck;
     }
 
@@ -97,7 +97,7 @@ public class DeckSlidesReadAsViewerTest(ITestOutputHelper output) : MonolithMesh
     private static Task<IReadOnlyList<MeshNode>> First(
         IObservable<IReadOnlyList<MeshNode>> slides, Func<IReadOnlyList<MeshNode>, bool> settled,
         CancellationToken cancellationToken) =>
-        slides.Where(settled).FirstAsync().Timeout(30.Seconds()).Await(cancellationToken);
+        slides.Where(settled).FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
     private static string[] Ids(IReadOnlyList<MeshNode> slides) => slides.Select(n => n.Id).ToArray();
 
