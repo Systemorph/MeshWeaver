@@ -520,6 +520,10 @@ the 15 s Initial bound:
 Routing (`PathResolutionService`) gates on every provider's Initial, so a stall here is also a
 routing stall.
 
+The second query is the thread supervisor's sweep (MeshWeaver.Plugins `ThreadSupervisor.Scan`): it
+reads the newest threads mesh-wide with `partitions:all`, and separately under `Admin`, which
+`partitions:all` leaves out.
+
 **The read that floods the pool.** `StorageAdapterMeshQueryProvider.DefersToNativeProvider` deferred
 unscoped and scoped-primary queries to the native partitioned provider, but kept every scoped
 SATELLITE read local (a `_` segment, a satellite nodeType such as `Thread`, or
@@ -573,7 +577,11 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
 
 - No production timing data. The control instance gave no per-query census of pool admissions, so
   the share of the stalls this walk caused is inferred from the mechanism, not measured.
-- Who issues the Admin/Thread query. Its caller was not found in core or in MeshWeaver.Plugins.
+- How often the Admin/Thread query ran on the stalled pod. Its issuer is the thread supervisor's
+  sweep (MeshWeaver.Plugins `ThreadSupervisor.Scan`, the `newest/Admin` query, run as the system
+  identity, `LookbackLimit` 500). The sweep was documented as running every 60 s when it shipped,
+  which would repeat the whole walk every minute. The interval in force on the control instance
+  was not read.
 - Whether the event log or the instance store share the 50-connection data source with
   `pg-read:Postgres`. If they do, they compete for the same connections, which this change does not
   touch.
