@@ -89,6 +89,66 @@ public interface IPartitionSourceTracking
     /// answers <see cref="TrackedRepositories.Unknown"/>, which obliges no implementer.</returns>
     IObservable<TrackedRepositories> ImportingRepositories(string partition) =>
         System.Reactive.Linq.Observable.Return(TrackedRepositories.Unknown);
+
+    /// <summary>
+    /// WHICH content each importing source has actually landed in this partition — per module, the
+    /// content hash (<c>moduleVersion</c>, the manifest.lock hash) of the tree the source last
+    /// imported. The version half of <see cref="ImportsContent"/>, for the one question the
+    /// ownership bit cannot answer: <i>has the partition's own writer already delivered the very
+    /// content a registry candidate describes?</i>
+    ///
+    /// <para>🚨 <b>Why the registry lanes need it (maintainer, 2026-10-04: "a module held because
+    /// _GitSync owns the partition must also converge, without a manual step").</b> A sync-owned
+    /// partition's unattended content apply and module landing both decline (One Partition, One
+    /// Bookkeeping, gates 1 and 1b), and nothing else ever landed the compiled MODULE of such a
+    /// package — the seal moves the content, no lane moved the code. AI and Hosting sat held on the
+    /// control instance until a human ran RefreshModules. When the sync has landed EXACTLY the
+    /// candidate's content, there is no second writer to fear: the install record may adopt it and
+    /// the module whose content it is may land, and both halves agree.</para>
+    ///
+    /// <para>The default is <see cref="SyncedModuleVersions.Unknown"/> — no evidence, which
+    /// licenses no convergence: a provider that cannot say keeps today's hold exactly.</para>
+    /// </summary>
+    /// <param name="partition">The partition (the top-level path segment).</param>
+    /// <returns>A cold observable emitting the reading once.</returns>
+    IObservable<SyncedModuleVersions> SyncedModules(string partition) =>
+        System.Reactive.Linq.Observable.Return(SyncedModuleVersions.Unknown);
+}
+
+/// <summary>
+/// What a provider can say about the content its sources have landed in a partition, per module.
+/// <see cref="Known"/> keeps "landed nothing" apart from "cannot tell".
+/// </summary>
+/// <param name="Known">Whether this provider could answer at all.</param>
+/// <param name="Versions">Module id → the content hash the source last landed (ordinal-ignore-case).</param>
+public sealed record SyncedModuleVersions(bool Known, ImmutableDictionary<string, string> Versions)
+{
+    /// <summary>No evidence. Licenses nothing.</summary>
+    public static SyncedModuleVersions Unknown { get; } =
+        new(false, ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>A definite reading.</summary>
+    /// <param name="versions">Module id → landed content hash; blank entries are dropped.</param>
+    public static SyncedModuleVersions Of(IEnumerable<KeyValuePair<string, string>> versions) =>
+        new(true, versions
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+            .GroupBy(kv => kv.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.Last().Value.Trim(), StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Whether the source has landed EXACTLY <paramref name="contentHash"/> for
+    /// <paramref name="module"/> — the only condition under which a registry lane may converge a
+    /// sync-owned package. False on an unknown reading, a module the source does not report, or a
+    /// blank hash on either side: none of those is evidence the two writers agree.
+    /// </summary>
+    /// <param name="module">The module (package) id.</param>
+    /// <param name="contentHash">The candidate's content hash.</param>
+    public bool Delivered(string? module, string? contentHash) =>
+        Known
+        && !string.IsNullOrWhiteSpace(module)
+        && !string.IsNullOrWhiteSpace(contentHash)
+        && Versions.TryGetValue(module.Trim(), out var landed)
+        && string.Equals(landed, contentHash.Trim(), StringComparison.Ordinal);
 }
 
 /// <summary>
