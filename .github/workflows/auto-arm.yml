@@ -97,10 +97,9 @@ on:
         required: true
 
 permissions:
-  # The arm gate reads the `internal-review` check run on the head; the meshweaver-cloud App token
-  # carries no `checks` permission, so the read uses this run's GITHUB_TOKEN. A DEMAND on every
-  # caller — paired in .github/lane-caller-grants.yml (check-workflow-permission-pairing.py).
-  checks: read
+  # No `checks: read` here: the arm gate reads the `internal-review` check run with a minted
+  # meshweaver-cloud token (`permission-checks: read`, see the gate step), so no caller has to
+  # grant anything beyond the pair below — .github/lane-caller-grants.yml is unchanged by the gate.
   contents: write
   pull-requests: write
 
@@ -242,15 +241,36 @@ jobs:
       # default branch, which is the branch READ rather than a literal copied into a lane that every
       # fleet repository calls (ArmedMergeMustTriggerMainsPushLanesGuard). It is CORE's default
       # branch that matters here, not the caller's, so `github.event.repository.default_branch`
-      # (the CALLING repository on a workflow_call) would be the wrong reading. It answers ready only when ALL hold: not a draft; the `systemorph-com` App's
+      # (the CALLING repository on a workflow_call) would be the wrong reading. It answers ready only
+      # when ALL hold: not a draft; the `systemorph-com` App's
       # `internal-review` check run on the CURRENT head has completed and is not the neutral
       # "Reviewer unavailable" degradation (not a review: merge by hand); every thread the
       # automatic reviewer opened has a person's reply. Otherwise it writes ONE line to the job
       # summary naming the missing condition, and the events above ask again.
+      #
+      # 🚨 The gate reads with a MINTED meshweaver-cloud token, never this run's GITHUB_TOKEN. This
+      # file merges, so the default token may not appear in it at all
+      # (ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowMergesOrArmsAPullRequestWithTheDefaultToken),
+      # and a minted token also spares every caller a `checks: read` grant. Read-only on purpose:
+      # this token can see the check run, the pull request and its threads, and can change nothing.
+      # No `continue-on-error`: an App that cannot mint `Checks: read` is a red run that arms
+      # nothing — the safe direction, and loud.
+      - name: Mint a read-only token for the arm gate (Checks, Contents, Pull requests)
+        id: read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-checks: read
+          permission-contents: read
+          permission-pull-requests: read
+
       - name: Is the current head reviewed and every finding answered?
         id: ready
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.read-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.check_run.pull_requests[0].number }}
         run: |

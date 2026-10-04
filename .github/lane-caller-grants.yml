@@ -63,7 +63,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: modules-floor
         lane: node-repo-module-pack.yml
@@ -119,7 +119,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: publish-bake
         lane: node-repo-publish-bake.yml
@@ -168,7 +168,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -221,7 +221,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -275,7 +275,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -321,7 +321,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -371,7 +371,7 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}
       - workflow: ci.yml
         job: compile-check
         lane: node-repo-compile-check.yml
@@ -423,4 +423,4 @@ repos:
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
-        grants: {checks: read, contents: write, pull-requests: write}
+        grants: {contents: write, pull-requests: write}

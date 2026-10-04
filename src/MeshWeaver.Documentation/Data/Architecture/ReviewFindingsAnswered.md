@@ -1078,8 +1078,13 @@ across a push, so on `synchronize` an armed pull request whose new head is not r
 re-arms by itself once that head is reviewed and answered. No other not-ready event touches an arm a
 person set deliberately.
 
-The lane reads the check run with the run's `GITHUB_TOKEN` (the meshweaver-cloud App has no `checks`
-permission), so every caller grants `checks: read` — paired in `.github/lane-caller-grants.yml`.
+The lane reads the check run with a **minted, read-only meshweaver-cloud token**
+(`permission-checks: read`, `contents: read`, `pull-requests: read`), never the run's `GITHUB_TOKEN`:
+the lane merges, so the default token may not appear in it at all
+(`ArmedMergeMustTriggerMainsPushLanesGuard`), and a minted token asks no caller for a `checks: read`
+grant — every caller keeps `{contents: write, pull-requests: write}`. It therefore needs the
+meshweaver-cloud App to carry `Checks: read`; without it the mint fails, the run is red and nothing
+is armed.
 
 ## Related
 
