@@ -496,6 +496,10 @@ def _allowance_cases() -> list[tuple[str, bool, str]]:
             return rev()
 
         g("init", "-q", "-b", "main")
+        # A throwaway history needs no auto-gc. Background maintenance can still write to
+        # .git after commit exits and race TemporaryDirectory cleanup on a CI runner.
+        g("config", "maintenance.auto", "false")
+        g("config", "gc.auto", "0")
         (root / "Rail.cs").write_text(_RAIL_BEFORE, encoding="utf-8")
         allow.write_text("# header only\n", encoding="utf-8")
         base = commit("base")
