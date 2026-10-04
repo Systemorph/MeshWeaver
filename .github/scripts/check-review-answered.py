@@ -727,6 +727,27 @@ def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: S
     return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
 
 
+def post_rerun(gh, run_id) -> bool:
+    """POST rerun-failed-jobs. True when this call re-ran the run; False when it lost a race (the sweep
+    and a listener) and another invocation already re-ran it. Any other failure is RAISED: `Gh.post`
+    and `Gh.api` both raise ReadError on a failed call, so a refused POST whose run is still
+    `completed`, or an unreadable read-back, is never masked. Self-tested with a stub `gh`."""
+    try:
+        gh.post(f"actions/runs/{run_id}/rerun-failed-jobs")
+        return True
+    except ReadError:
+        if lost_rerun_race(gh.api(f"actions/runs/{run_id}")):
+            return False
+        raise
+
+
+def lost_rerun_race(readback) -> bool:
+    """After a rerun POST failed: True only when the read-back run is a run object that is no longer
+    `completed` — another invocation re-ran it. Anything else (still completed, an unreadable shape)
+    is False, so the POST's failure is raised, never masked. Pure."""
+    return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -940,7 +961,9 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
         action, why = advance_action(pr, run, job, verdict)
     if action == "rerun":
-        gh.post(f"actions/runs/{run['id']}/rerun-failed-jobs")
+        if not post_rerun(gh, run["id"]):
+            print(f"  #{number}: run {run['id']} was already re-run by another invocation")
+            return "none"
         if verdict.loud:
             print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::#{number}: {verdict.loud}")
         print(f"::notice::#{number}: {why} — {run.get('html_url')}")
@@ -1580,6 +1603,39 @@ def self_test() -> int:
     adv_case("no CI run yet -> none", "none", open_pr, None, None, GREEN_S, "no pull_request CI run")
     adv_case("cancelled (superseded) run -> none, never revived", "none", open_pr, dict(done_run, conclusion="cancelled"),
              failed_gate, GREEN_S, "never revived")
+    for name, readback, expect in [
+        ("race: the run is in_progress again -> another invocation re-ran it", {"status": "in_progress"}, True),
+        ("race: the run is queued again -> another invocation re-ran it", {"status": "queued"}, True),
+        ("race: still completed -> the POST really failed, raise", {"status": "completed"}, False),
+        ("race: no status -> never masks the failure", {}, False),
+        ("race: not a run object -> never masks the failure", None, False),
+    ]:
+        ok = lost_rerun_race(readback) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect}")
+    class _StubGh:
+        def __init__(self, post_fails, readback):
+            self.post_fails, self.readback = post_fails, readback
+        def post(self, path):
+            if self.post_fails:
+                raise ReadError(f"POST {path} failed (409)")
+        def api(self, path):
+            if isinstance(self.readback, Exception):
+                raise self.readback
+            return self.readback
+    for name, stub, expect in [
+        ("post_rerun: the POST succeeds -> True", _StubGh(False, None), True),
+        ("post_rerun: refused, run in_progress again -> lost race (False)", _StubGh(True, {"status": "in_progress"}), False),
+        ("post_rerun: refused, run still completed -> RAISES", _StubGh(True, {"status": "completed"}), "raise"),
+        ("post_rerun: refused, read-back fails -> RAISES", _StubGh(True, ReadError("GET failed")), "raise"),
+    ]:
+        try:
+            got = post_rerun(stub, 7)
+        except ReadError:
+            got = "raise"
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
     # the merge-queue ref → pull request number
