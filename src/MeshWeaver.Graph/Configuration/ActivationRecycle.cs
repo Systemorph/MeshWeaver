@@ -141,22 +141,36 @@ public static class ActivationRecycle
     }
 
     /// <summary>
-    /// Why <paramref name="request"/> must not be written, or null. Pure. A recycle with no reason is
-    /// refused (#3510: an unstated reason cost six occurrences and four bake seals), and so is one
-    /// that names nothing, or names the definition type <c>NodeType</c> itself (that would recycle
-    /// every NodeType definition hub of the mesh).
+    /// The NodeTypes a request may never name: the definition type <c>NodeType</c> (it would recycle
+    /// every NodeType definition hub of the mesh) and this feature's own request and report types (it
+    /// would tear down its own audit while it is being written).
+    /// </summary>
+    public static readonly ImmutableHashSet<string> RefusedNodeTypes = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        MeshNode.NodeTypePath, ActivationRecycleRequest.NodeType, ActivationRecycleReport.NodeType);
+
+    /// <summary>The longest caller-supplied request id; longer ids are refused rather than cut, so two ids never collapse silently.</summary>
+    public const int MaxIdLength = 80;
+
+    /// <summary>
+    /// Why <paramref name="request"/> must not be written, or null. Pure. Refused: no reason (#3510:
+    /// an unstated reason cost six occurrences and four bake seals); no NodeType (a request is always
+    /// TYPE-scoped — <see cref="ActivationRecycleRequest.Paths"/> and
+    /// <see cref="ActivationRecycleRequest.UnderPath"/> only narrow it); a blank type or address; and
+    /// any of <see cref="RefusedNodeTypes"/>. The per-process agent applies the same check to what it
+    /// reads, so a request that bypassed <see cref="Request"/> is refused there too.
     /// </summary>
     public static string? Validate(ActivationRecycleRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Reason))
             return "a recycle needs a reason — it is carried into every target's [QUIESCE-START] line";
-        if (request.NodeTypes.IsEmpty && request.Paths.IsEmpty)
-            return "a recycle must name at least one NodeType or one address";
+        if (request.NodeTypes.IsEmpty)
+            return "a recycle must name at least one NodeType — addresses and a path only narrow it";
         if (request.NodeTypes.Any(t => string.IsNullOrWhiteSpace(t)))
             return "a NodeType in the request is blank";
-        if (request.NodeTypes.Any(t => string.Equals(t, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)))
-            return $"'{MeshNode.NodeTypePath}' is refused: it would recycle every NodeType definition hub of the mesh";
-        if (request.Paths.Any(p => string.IsNullOrWhiteSpace(p) || !p.Contains('/') && string.IsNullOrWhiteSpace(p.Trim('/'))))
+        if (request.NodeTypes.FirstOrDefault(RefusedNodeTypes.Contains) is { } refused)
+            return $"'{refused}' is refused: a recycle of it would tear down every NodeType definition hub or this feature's own audit";
+        if (request.Paths.Any(p => string.IsNullOrWhiteSpace(p.Trim('/'))))
             return "an address in the request is blank";
         return null;
     }
@@ -168,15 +182,24 @@ public static class ActivationRecycle
     /// </summary>
     /// <param name="hub">Any surviving hub of the mesh (never one the request would recycle).</param>
     /// <param name="request">What to recycle and why.</param>
-    /// <param name="id">The request's id — a dedupe key: a second request with the same id is not written again.</param>
+    /// <param name="id">The request's id — a dedupe key: when a request already exists at that id its
+    /// path is answered and nothing is written again. Letters, digits and '-' only, at most
+    /// <see cref="MaxIdLength"/>; any other id is refused rather than rewritten, so two ids never
+    /// collapse onto one request.</param>
     public static IObservable<ActivationRecycleTicket> Request(IMessageHub hub, ActivationRecycleRequest request, string? id = null)
     {
         if (Validate(request) is { } refusal)
             return Observable.Return(new ActivationRecycleTicket(null, refusal));
+        if (id is { } given && (given.Length == 0 || given.Length > MaxIdLength || Segment(given) != given))
+            return Observable.Return(new ActivationRecycleTicket(null,
+                $"the request id '{SanitizeReason(given)}' is refused: use letters, digits and '-' only, at most {MaxIdLength} characters"));
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        var nodeId = Segment(id ?? $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..30]);
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var nodeId = id ?? Segment($"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..30]);
         var path = $"{ActivationRecycleRequest.Namespace}/{nodeId}";
+        IObservable<bool> Exists() =>
+            access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1).Timeout(ReadBudget))
+                .Select(change => change.Items.Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
 
         // A NodeType is either a framework built-in (a static node — no NodeType stamp of its own)
         // or a node of type NodeType (a compiled, imported or installed definition).
@@ -205,8 +228,11 @@ public static class ActivationRecycle
                     NodeType = ActivationRecycleRequest.NodeType,
                     Content = request with { RequestedAt = request.RequestedAt == default ? DateTimeOffset.UtcNow : request.RequestedAt },
                 };
-                return access.RunAsSystem(() => mesh.CreateNode(node).Take(1))
-                    .Select(_ => new ActivationRecycleTicket(path, null));
+                // The id is the dedupe key: an existing request is the answer, never a second write.
+                return Exists().SelectMany(there => there
+                    ? Observable.Return(new ActivationRecycleTicket(path, null))
+                    : access.RunAsSystem(() => mesh.CreateNode(node).Take(1))
+                        .Select(_ => new ActivationRecycleTicket(path, null)));
             })
             .Take(1);
     }
@@ -215,7 +241,7 @@ public static class ActivationRecycle
     public static IObservable<ImmutableList<ActivationRecycleReport>> Reports(IMessageHub hub, string requestPath)
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var access = hub.ServiceProvider.GetService<AccessService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => mesh.Query<MeshNode>(
                     MeshQueryRequest.FromQuery($"path:{requestPath} scope:children nodeType:{ActivationRecycleReport.NodeType}"))
                 .Take(1)
@@ -276,7 +302,7 @@ public static class ActivationRecycle
         return Observable.Defer(() =>
         {
             var matched = Select(hosted?.Hubs.ToImmutableList() ?? ImmutableList<IMessageHub>.Empty, request);
-            var reason = $"ActivationRecycle '{requestPath}' (requested by {request.RequestedBy ?? "an unnamed caller"}): "
+            var reason = $"ActivationRecycle '{requestPath}' (requested by {SanitizeReason(request.RequestedBy ?? "an unnamed caller")}): "
                          + SanitizeReason(request.Reason);
             var issuing = meshHub.NodeOperationIssuingHub();
             var batches = matched.Select((h, i) => (Hub: h, Batch: i / BatchSize))
@@ -350,9 +376,9 @@ public static class ActivationRecycle
         var logger = meshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
         var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         var mesh = meshHub.ServiceProvider.GetService<IMeshService>();
-        if (feed is null || mesh is null)
-            return Observable.Return(Unit.Default);
         var access = meshHub.ServiceProvider.GetService<AccessService>();
+        if (feed is null || mesh is null || access is null)
+            return Observable.Return(Unit.Default);
         var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         meshHub.RegisterForDisposal(heard);
@@ -384,16 +410,24 @@ public static class ActivationRecycle
         && string.Equals(change.NodeType, ActivationRecycleRequest.NodeType, StringComparison.OrdinalIgnoreCase)
         && string.Equals(change.Namespace?.Trim('/'), ActivationRecycleRequest.Namespace, StringComparison.OrdinalIgnoreCase);
 
-    private static IObservable<Unit> Handle(IMessageHub meshHub, IMeshService mesh, AccessService? access, string path, ILogger? logger) =>
+    private static IObservable<Unit> Handle(IMessageHub meshHub, IMeshService mesh, AccessService access, string path, ILogger? logger) =>
         access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1).Timeout(ReadBudget))
-            .Select(change => change.Items.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))
-                ?.ContentAs<ActivationRecycleRequest>(meshHub.JsonSerializerOptions))
-            .SelectMany(request =>
+            .Select(change => change.Items.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(found =>
             {
-                if (request is null || Validate(request) is not null)
+                // 🚨 The durable write IS the broadcast, so the agent trusts only what Request wrote: a
+                // node created by System and valid on its own terms. Anyone else able to write under
+                // Admin/_Recycle (a platform admin holds Admin) bypasses Request's checks — and is
+                // refused here, with nothing disposed.
+                var request = found?.ContentAs<ActivationRecycleRequest>(meshHub.JsonSerializerOptions);
+                var why = found is null || request is null ? "unreadable"
+                    : !string.Equals(found.CreatedBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+                        ? $"written by '{found.CreatedBy}', not by System — only ActivationRecycle.Request may issue one"
+                        : Validate(request);
+                if (request is null || why is not null)
                 {
-                    logger?.LogWarning("[ActivationRecycle] {Path}: the request could not be read or is invalid ({Why}) — nothing recycled",
-                        path, request is null ? "unreadable" : Validate(request));
+                    logger?.LogWarning("[ActivationRecycle] {Path}: the request is refused on this process ({Why}) — nothing recycled",
+                        path, why);
                     return Observable.Empty<Unit>();
                 }
                 return RecycleLocal(meshHub, request, path)

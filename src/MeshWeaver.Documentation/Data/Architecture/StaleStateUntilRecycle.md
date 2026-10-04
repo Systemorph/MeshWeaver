@@ -204,8 +204,17 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   why, which types, and what each silo did.
 - **Once.** A process handles a request path once, and a hub already tearing down is never selected,
   so no activation is disposed twice.
-- **Refused, with nothing written:** no reason, nothing named, an unknown NodeType, or the
-  definition type `NodeType` itself (it would recycle every definition hub).
+- **Always type-scoped.** A request names at least one NodeType; `Paths` (exact addresses) and
+  `UnderPath` (one subtree) only narrow it, and the filters combine conjunctively, so an address
+  recycle never reaches a same-type sibling.
+- **Refused, with nothing written:** no reason, no NodeType, a blank entry, an unknown NodeType, the
+  definition type `NodeType` (it would recycle every definition hub) or the feature's own
+  `ActivationRecycle` / `ActivationRecycleReport` types, and a request id that is not letters, digits
+  and `-` (at most 80). An id is a dedupe key: an existing request at that id is answered, not
+  rewritten.
+- **Only System's requests are acted on.** Each process re-validates what it reads and refuses a
+  request node not created by System — a platform admin, who holds `Admin`, cannot bypass the checks
+  by writing `Admin/_Recycle` directly.
 
 The request is a platform write. On the control instance it is issued by the build queue as System:
 the `recycle` job kind (MeshWeaver.Plugins, `Hosting/Queue`) runs it, either when a NodeType of the

@@ -122,8 +122,8 @@ public static class GraphConfigurationExtensions
             builder.AddUiContributionType();
             builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
             // Type-scoped recycle (Admin/_Recycle): every process disposes the live activations it
-            // HOSTS of the requested NodeTypes — the per-process LiveActivationRegistry is filled by
-            // MeshNodeHubFactory. Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".
+            // HOSTS of the requested NodeTypes, read from its mesh hub's HostedHubsCollection.
+            // Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".
             builder.AddActivationRecycle();
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.

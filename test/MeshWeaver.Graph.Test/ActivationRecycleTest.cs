@@ -7,6 +7,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,7 +40,11 @@ public class ActivationRecycleTest(ITestOutputHelper output) : MonolithMeshTestB
                 new MeshNode(TypeU) { Name = "Recycle Type U" },
                 new MeshNode("RecycleT1", TestPartition) { Name = "T one", NodeType = TypeT },
                 new MeshNode("RecycleT2", TestPartition) { Name = "T two", NodeType = TypeT },
-                new MeshNode("RecycleU1", TestPartition) { Name = "U one", NodeType = TypeU });
+                new MeshNode("RecycleU1", TestPartition) { Name = "U one", NodeType = TypeU },
+                new MeshNode("Elsewhere") { Name = "Elsewhere", NodeType = "Markdown" },
+                new MeshNode("RecycleT3", "Elsewhere") { Name = "T three", NodeType = TypeT });
+
+    private const string T3 = "Elsewhere/RecycleT3";
 
     private HostedHubsCollection Hosted => Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>();
 
@@ -166,6 +171,8 @@ public class ActivationRecycleTest(ITestOutputHelper output) : MonolithMeshTestB
     [InlineData("NoSuchRecycleType", "a reason", "unknown NodeType")]
     [InlineData(TypeT, "  ", "needs a reason")]
     [InlineData("NodeType", "a reason", "is refused")]
+    [InlineData(ActivationRecycleRequest.NodeType, "a reason", "is refused")]
+    [InlineData(ActivationRecycleReport.NodeType, "a reason", "is refused")]
     public async Task ARefusedRequest_WritesNothing(string type, string reason, string expected)
     {
         var before = await RequestCount();
@@ -184,4 +191,82 @@ public class ActivationRecycleTest(ITestOutputHelper output) : MonolithMeshTestB
         (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{ActivationRecycleRequest.Namespace} scope:children nodeType:{ActivationRecycleRequest.NodeType}"))
             .FirstAsync().Await(TestContext.Current.CancellationToken)).Items.Count();
+
+    /// <summary>Paths narrow a type recycle to those addresses: a live same-type sibling is spared.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APathsNarrowedRecycle_SparesTheSameTypeSibling()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var t1 = await Activate(T1);
+        var t2 = await Activate(T2);
+        var ticket = await ActivationRecycle.Request(RequestHub, new ActivationRecycleRequest
+        {
+            NodeTypes = ImmutableList.Create(TypeT),
+            Paths = ImmutableList.Create("/" + T1.ToLowerInvariant() + "/"),
+            Reason = "test: one address",
+        }).FirstAsync().Await(ct);
+        await Disposed(t1, "T1 is the named address (matched slash-trimmed and case-insensitively)");
+        var reports = await AwaitReports(ticket.Path!, 1);
+        reports[0].Disposed.Should().Be(1);
+        t2.RunLevel.Should().Be(MessageHubRunLevel.Started, "T2 is the same type but not the named address");
+    }
+
+    /// <summary>UnderPath narrows a type recycle to one subtree: the same type outside it is spared.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnderPathNarrowedRecycle_SparesTheSameTypeOutsideThePath()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var t1 = await Activate(T1);
+        var t3 = await Activate(T3);
+        var ticket = await ActivationRecycle.Request(RequestHub, new ActivationRecycleRequest
+        {
+            NodeTypes = ImmutableList.Create(TypeT),
+            UnderPath = "Elsewhere",
+            Reason = "test: one subtree",
+        }).FirstAsync().Await(ct);
+        await Disposed(t3, "T3 is under Elsewhere");
+        var reports = await AwaitReports(ticket.Path!, 1);
+        reports[0].Paths.Should().ContainSingle().Which.Should().Be(T3);
+        t1.RunLevel.Should().Be(MessageHubRunLevel.Started, "T1 is the same type outside the path");
+    }
+
+    /// <summary>The id is a dedupe key: a second request with it answers the first and writes nothing.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARequestId_IsADedupeKey_AndAMalformedIdIsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var request = new ActivationRecycleRequest { NodeTypes = ImmutableList.Create(TypeU), Reason = "test: dedupe" };
+        var first = await ActivationRecycle.Request(RequestHub, request, "dedupe-1").FirstAsync().Await(ct);
+        var count = await RequestCount();
+        var second = await ActivationRecycle.Request(RequestHub, request, "dedupe-1").FirstAsync().Await(ct);
+        second.Path.Should().Be(first.Path);
+        (await RequestCount()).Should().Be(count, "the same id writes no second request");
+        var malformed = await ActivationRecycle.Request(RequestHub, request, "dedupe.1").FirstAsync().Await(ct);
+        malformed.Accepted.Should().BeFalse("'dedupe.1' would collapse onto 'dedupe-1' if it were rewritten");
+    }
+
+    /// <summary>
+    /// 🚨 A request node NOT written by System — someone who can write Admin/_Recycle directly — is
+    /// refused by every process: nothing is disposed and no report is written.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARequestNotWrittenBySystem_DisposesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var t1 = await Activate(T1);
+        var path = $"{ActivationRecycleRequest.Namespace}/forged-{Guid.NewGuid():N}"[..40];
+        await NodeFactory.CreateNode(new MeshNode(path[(path.LastIndexOf('/') + 1)..], ActivationRecycleRequest.Namespace)
+        {
+            Name = "forged",
+            NodeType = ActivationRecycleRequest.NodeType,
+            Content = new ActivationRecycleRequest { NodeTypes = ImmutableList.Create(TypeT), Reason = "forged", RequestedAt = DateTimeOffset.UtcNow },
+        }).FirstAsync().Await(ct);
+        var written = await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}").AsSystem())
+            .Select(c => c.Items.Single()).FirstAsync().Await(ct);
+        written.CreatedBy.Should().NotBe(WellKnownUsers.System, "the precondition: this write is NOT System's");
+
+        await Task.Delay(ActivationRecycle.BatchInterval * 4, ct);
+        t1.RunLevel.Should().Be(MessageHubRunLevel.Started, "a request System did not write is refused on every process");
+        (await ActivationRecycle.Reports(RequestHub, path).FirstAsync().Await(ct)).Should().BeEmpty();
+    }
 }
