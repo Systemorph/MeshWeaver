@@ -242,7 +242,9 @@ adopted together and why the Plugins pin (`check-build-queue-admission.py`) name
 
 Staging stops a pull request from STARTING expensive work too early; it does not decide who gets a
 runner when the pools are full. On 2026-10-04 13:44Z both ARC sets were at their cap (aks-silos-dind
-39/40, aks-silos 31/32) with 11 Plugins and 13 core runs queued, and a label's queued jobs are handed
+39/40, aks-silos 31/32) with 11 Plugins runs queued on them (the same snapshot counted 13 core runs
+queued too — on GitHub-hosted capacity, a separate line: core's jobs run on `ubuntu-latest`), and a
+label's queued jobs are handed
 out first-come-first-served — there is no job priority. Measured over 06:00–14:00Z (19 main and 133
 pull-request runs of `Plugin Catalog CI`): a main run's worst queued job waited a median 1.9 min (p90
 4.7, max 5.6) against 1.4 / 4.4 / 9.7 for pull requests — the same line, so under saturation the run
@@ -255,7 +257,7 @@ The mechanism is the one the merge-queue gate lane already proved (`aks-silos-di
 | Own labels `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), overlays on the ordinary values so a runner is the same pod | Memex `deployments/aks/ci-runners/` (Systemorph/Memex#653) |
 | PriorityClass `arc-runner-trunk` −7: after the queue gate (−5), before PR work (−10), `preemptionPolicy: Never` — the next freed slot goes to trunk, nothing running is evicted | same |
 | Every job of Plugins' `ci.yml` selects `(github.event_name != 'pull_request' && vars.MW_RUNNER_TRUNK[_DOCKER]) || <the ordinary expression>` | Systemorph/MeshWeaver.Plugins#2863 |
-| Switch-on: apply the two sets (`ci-runners-apply.yml -f set=silos-trunk / dind-trunk`), prove them, set `MW_RUNNER_TRUNK` / `MW_RUNNER_TRUNK_DOCKER`. Rollback: delete the variables | a maintainer go — it changes the running cluster |
+| Switch-on: apply the two sets (`-f set=silos-trunk`, then `dind-trunk`), prove them, set `MW_RUNNER_TRUNK` / `MW_RUNNER_TRUNK_DOCKER`; rollback = delete the variables. Each step is a maintainer go (it changes the running cluster) | Memex `.github/workflows/ci-runners-apply.yml` + MeshWeaver.Plugins repository variables |
 
 Until the variables are set, nothing routes differently. Not yet routed: the light orchestration jobs
 INSIDE core's reusable lanes (validate, the gate's plan) read `vars.MW_RUNNER` directly; they run
