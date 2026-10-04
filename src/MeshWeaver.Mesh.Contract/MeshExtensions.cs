@@ -2807,10 +2807,11 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Reads a single node by EXACT path authoritatively: the storage adapter first (a read fault
-    /// on a not-yet-provisioned PG schema means the node is, by definition, absent → null), then
-    /// the static/config node provider — so a partition whose root is a static node is recognized
-    /// as present and never re-created.
+    /// Reads a single node by EXACT path authoritatively: the storage adapter first, then the
+    /// static/config node provider. The storage adapter already answers null for an absent PG
+    /// schema. A real read fault must propagate: treating it as absence makes bootstrap attempt
+    /// to create an existing root or grant, then misreport that nested create as the child's
+    /// refusal (#6055/#6056).
     ///
     /// <para>🚨 A DEFINITION-ONLY static entry is NOT a node at this path and must never answer an
     /// existence probe — the same rule <c>HandleCreateNodeRequest</c> and the batch create already
@@ -2830,7 +2831,6 @@ public static class MeshExtensions
         IMessageHub hub, IStorageAdapter persistence, string path)
         => persistence.Read(path, hub.JsonSerializerOptions)
             .Take(1)
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .DefaultIfEmpty(null)
             .Select(n => n ?? StaticNodeAt(hub, path));
 
@@ -2852,7 +2852,6 @@ public static class MeshExtensions
         IMessageHub hub, IStorageAdapter persistence, string path)
         => persistence.Read(path, hub.JsonSerializerOptions)
             .Take(1)
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
             .DefaultIfEmpty(null)
             .Select(n => n is not null ? (n, true) : (StaticNodeAt(hub, path), false));
 
