@@ -1889,6 +1889,19 @@ public partial class MeshOperations
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
                 var nodeForCapture = meshNode;
+                // 🚨 The sync CLAIM is ownership metadata, not authorable content: a caller that
+                // does not NAME `syncBehavior` has not decided it. Deserialising the omitted key
+                // yields the default (Include), so a full-entity update by an agent that sent
+                // back the content it meant to change silently RELEASED the node's claim — and
+                // the next static-repo import pruned a runtime record as "absent from the repo"
+                // (MeshWeaver.Plugins#2803: a triage item's verdict write, v3 of
+                // Hosting/Triage/ci-failure/systemorph-meshweaver-36988365138). Carry the live
+                // node's claim unless the caller states one; an explicit value — including
+                // Include, the "resume sync" decision — is written as given.
+                var claimRead = NamesSyncBehavior(
+                        rawArray is not null && index < rawArray.Count ? rawArray[index] as JsonObject : null)
+                    ? null
+                    : FetchNode(currentPath);
                 // The caller's OWN intended field values (#2469 — see WaitForPatchApplied):
                 // restrict to the mutable surface (PatchableFields) so identity/audit fields
                 // (version, lastModified*, …) — which the OWNER re-stamps on apply and will
@@ -1903,7 +1916,14 @@ public partial class MeshOperations
                     ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
                         validationError != null
                             ? Observable.Return(validationError)
-                            : mesh.UpdateNode(nodeForCapture)
+                            : (claimRead is null
+                                ? Observable.Return(NodeReadOutcome.Found(nodeForCapture))
+                                : claimRead.Take(1).Select(outcome => outcome.IsUnavailable || outcome.Node is not { } live
+                                    ? outcome
+                                    : NodeReadOutcome.Found(nodeForCapture with { SyncBehavior = live.SyncBehavior })))
+                            .SelectMany(claimed => claimed.IsUnavailable
+                                ? Observable.Return(UnavailableMessage(currentPath, claimed.UnavailableReason!))
+                                : mesh.UpdateNode(claimed.Node ?? nodeForCapture)
                                 // Gate the success string on the update PROVABLY landing — see
                                 // WaitForPatchApplied's #2469 note on Patch above; the same
                                 // late-NACK-after-optimistic-emit gap applies here.
@@ -1928,7 +1948,7 @@ public partial class MeshOperations
                                         return $"Updated: {after.Path}";
                                     }))
                                 .Catch((Exception ex) =>
-                                    Observable.Return($"Error: updating {currentPath}: {ex.Message}"))));
+                                    Observable.Return($"Error: updating {currentPath}: {ex.Message}")))));
             }
 
             return perNode
@@ -5070,6 +5090,18 @@ public partial class MeshOperations
     {
         "name", "description", "icon", "category", "order", "content", "preRenderedHtml", "mainNode",
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a caller's raw node JSON NAMES the sync claim (<c>syncBehavior</c>, any casing). An
+    /// absent key is "not decided by this caller" — <see cref="Update"/> then carries the live node's
+    /// claim rather than writing the deserialiser's default (MeshWeaver.Plugins#2803). A null element
+    /// (no raw JSON to read) is treated as not naming it. Pure.
+    /// </summary>
+    /// <param name="rawNode">The caller's raw JSON object for one node, or null.</param>
+    /// <returns><c>true</c> when the caller stated a <c>syncBehavior</c> value.</returns>
+    internal static bool NamesSyncBehavior(JsonObject? rawNode) =>
+        rawNode is not null
+        && rawNode.Any(pair => string.Equals(pair.Key, "syncBehavior", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The keys of a patch payload that <see cref="Patch"/> cannot apply — so it can REFUSE instead
