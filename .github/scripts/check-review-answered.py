@@ -727,6 +727,13 @@ def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: S
     return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
 
 
+def lost_rerun_race(readback) -> bool:
+    """After a rerun POST failed: True only when the read-back run is a run object that is no longer
+    `completed` — another invocation re-ran it. Anything else (still completed, an unreadable shape)
+    is False, so the POST's failure is raised, never masked. Pure."""
+    return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -945,8 +952,8 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         except ReadError:
             # Lost a race (the sweep and a listener, two listeners): if the run is no longer completed,
             # another invocation re-ran it — that is the outcome wanted, not a failure.
-            again = gh.api(f"actions/runs/{run['id']}")
-            if (again or {}).get("status") != "completed":
+            again = gh.api(f"actions/runs/{run['id']}")  # raises ReadError itself on a failed read
+            if lost_rerun_race(again):
                 print(f"  #{number}: run {run['id']} is already {again.get('status')} — another invocation re-ran it")
                 return "none"
             raise
@@ -1589,6 +1596,16 @@ def self_test() -> int:
     adv_case("no CI run yet -> none", "none", open_pr, None, None, GREEN_S, "no pull_request CI run")
     adv_case("cancelled (superseded) run -> none, never revived", "none", open_pr, dict(done_run, conclusion="cancelled"),
              failed_gate, GREEN_S, "never revived")
+    for name, readback, expect in [
+        ("race: the run is in_progress again -> another invocation re-ran it", {"status": "in_progress"}, True),
+        ("race: the run is queued again -> another invocation re-ran it", {"status": "queued"}, True),
+        ("race: still completed -> the POST really failed, raise", {"status": "completed"}, False),
+        ("race: no status -> never masks the failure", {}, False),
+        ("race: not a run object -> never masks the failure", None, False),
+    ]:
+        ok = lost_rerun_race(readback) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect}")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
     # the merge-queue ref → pull request number
