@@ -27,7 +27,9 @@ permissions:
   actions: write
 
 concurrency:
-  group: stage-advance-${{ github.event.check_run.head_sha || github.event.pull_request.number || 'sweep' }}
+  # ONE group per HEAD for both listeners: a check_run and a review event of the same head must not
+  # race to re-run one run (Plugins #2836 review); the sweep has its own.
+  group: stage-advance-${{ github.event.check_run.head_sha || github.event.pull_request.head.sha || 'sweep' }}
   cancel-in-progress: false
 
 jobs:
