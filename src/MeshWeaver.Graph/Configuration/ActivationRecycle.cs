@@ -375,9 +375,7 @@ public static class ActivationRecycle
     {
         var logger = meshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
         var feed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
-        var mesh = meshHub.ServiceProvider.GetService<IMeshService>();
-        var access = meshHub.ServiceProvider.GetService<AccessService>();
-        if (feed is null || mesh is null || access is null)
+        if (feed is null)
             return Observable.Return(Unit.Default);
         var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -387,8 +385,15 @@ public static class ActivationRecycle
             if (IsRequest(change) && handled.TryAdd(change.Path, 0))
                 heard.OnNext(change.Path);
         }));
+        // Arm runs during this hub's buildup. IMeshService resolves IMessageHub, so resolving it
+        // here can wait on the very buildup action being armed. A request arrives after startup.
         meshHub.RegisterForDisposal(heard
-            .Select(path => Handle(meshHub, mesh, access, path, logger)
+            .Select(path => Observable.Defer(() => Handle(
+                    meshHub,
+                    meshHub.ServiceProvider.GetRequiredService<IMeshService>(),
+                    meshHub.ServiceProvider.GetRequiredService<AccessService>(),
+                    path,
+                    logger))
                 .Catch((Exception ex) =>
                 {
                     logger?.LogError(ex, "[ActivationRecycle] {Path}: this process could not act on the request — its live activations of the named types keep their build", path);
