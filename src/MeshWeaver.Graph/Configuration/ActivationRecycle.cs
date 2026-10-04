@@ -380,15 +380,12 @@ public static class ActivationRecycle
         var heard = new Subject<string>();
         var handled = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         meshHub.RegisterForDisposal(heard);
-        meshHub.RegisterForDisposal(feed.Subscribe(change =>
-        {
-            if (IsRequest(change) && handled.TryAdd(change.Path, 0))
-                heard.OnNext(change.Path);
-        }));
-        // Arm runs during this hub's buildup. IMeshService resolves IMessageHub, so resolving it
-        // here can wait on the very buildup action being armed. A request arrives after startup.
+        // Arm runs during this hub's buildup. IMeshService resolves IMessageHub, so neither
+        // resolution nor request handling may run until the hub's initialization gate opens.
+        // Subscribe to heard BEFORE the feed: a feed that emits while subscribing must not lose
+        // its request, and a request heard during buildup waits in this serial channel.
         meshHub.RegisterForDisposal(heard
-            .Select(path => Observable.Defer(() => Handle(
+            .Select(path => WhenStarted(meshHub.RunLevelChanged, () => Handle(
                     meshHub,
                     meshHub.ServiceProvider.GetRequiredService<IMeshService>(),
                     meshHub.ServiceProvider.GetRequiredService<AccessService>(),
@@ -401,8 +398,23 @@ public static class ActivationRecycle
                 }))
             .Concat()
             .Subscribe(_ => { }, ex => logger?.LogError(ex, "[ActivationRecycle] the agent on {Hub} stopped", meshHub.Address)));
+        meshHub.RegisterForDisposal(feed.Subscribe(change =>
+        {
+            if (IsRequest(change) && handled.TryAdd(change.Path, 0))
+                heard.OnNext(change.Path);
+        }));
         return Observable.Return(Unit.Default);
     }
+
+    /// <summary>Waits for startup before subscribing to one request's work; fails if teardown wins.</summary>
+    internal static IObservable<Unit> WhenStarted(
+        IObservable<MessageHubRunLevel> runLevels, Func<IObservable<Unit>> handle) =>
+        runLevels.Where(level => level >= MessageHubRunLevel.Started)
+            .Take(1)
+            .SelectMany(level => level == MessageHubRunLevel.Started
+                ? Observable.Defer(handle)
+                : Observable.Throw<Unit>(new ObjectDisposedException(nameof(ActivationRecycle),
+                    $"The mesh hub reached {level} before the recycle request could be handled.")));
 
     /// <summary>
     /// Whether a change event is the commit of a request (not a report, not a nested node). Created

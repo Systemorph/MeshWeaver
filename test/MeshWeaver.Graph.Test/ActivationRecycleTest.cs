@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -26,6 +28,26 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class ActivationRecycleTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>A feed event heard during buildup waits for the real startup gate before touching DI.</summary>
+    [Fact]
+    public void ARequestHeardDuringBuildup_IsHandledOnlyAfterTheHubStarts()
+    {
+        using var levels = new BehaviorSubject<MessageHubRunLevel>(MessageHubRunLevel.Starting);
+        var handled = 0;
+        using var subscription = ActivationRecycle.WhenStarted(levels, () =>
+            Observable.Defer(() =>
+            {
+                handled++;
+                return Observable.Return(Unit.Default);
+            })).Subscribe();
+
+        handled.Should().Be(0, "the feed can deliver while the mesh hub is building up");
+        levels.OnNext(MessageHubRunLevel.Started);
+        handled.Should().Be(1, "the request is retained until initialization opens");
+        levels.OnNext(MessageHubRunLevel.Started);
+        handled.Should().Be(1, "one request is handled exactly once");
+    }
+
     private const string TypeT = "RecycleTypeT";
     private const string TypeU = "RecycleTypeU";
     private const string T1 = $"{TestPartition}/RecycleT1";

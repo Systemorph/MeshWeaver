@@ -194,7 +194,9 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   on a monolith — so the request reaches every silo without a cluster-singleton grain.
 - **Arming the listener does not resolve mesh services.** It runs in the mesh hub's buildup, when
   resolving `IMeshService` can ask DI for that same hub and wait on the buildup action itself.
-  The listener resolves `IMeshService` and `AccessService` only when a request arrives, after startup.
+  The feed can deliver during buildup, so the listener queues each request until the hub reaches
+  `Started` before resolving `IMeshService` or `AccessService`. It subscribes to that queue before
+  the feed, preserving a request emitted synchronously as the feed subscription is installed.
 - **Each process disposes what IT hosts.** The agent on every mesh hub walks that process's
   `HostedHubsCollection`, keeps the per-node hubs whose `NodeTypePathHolder` names a requested type
   and that are still `Started`, and posts one `DisposeRequest` each — off the router, through
