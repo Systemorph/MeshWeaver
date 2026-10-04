@@ -3987,16 +3987,6 @@ jobs:
         fi
         echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
         exit 1
-    # A failed precheck deliberately does not suppress a green build or its suites:
-    # an indeterminate reuse/selection probe still needs test evidence. But the
-    # required context must not report success while that prerequisite is red.
-    - name: "Precheck must have answered"
-      if: always() && needs.precheck.result != 'success'
-      env:
-        PRECHECK_RESULT: ${{ needs.precheck.result }}
-      run: |
-        echo "::error::The precheck ended ${PRECHECK_RESULT}; its selection/reuse verdict is unverified. The suites may still run, but this required check cannot pass."
-        exit 1
     - name: "Reused: tree already green"
       if: needs.precheck.outputs.skip == 'true'
       env:
@@ -4200,6 +4190,19 @@ jobs:
           echo "$bad"
           exit 1
         fi
+
+    # A failed precheck deliberately does not suppress a green build or its suites:
+    # an indeterminate reuse/selection probe still needs test evidence. Run this
+    # AFTER downloading, summarizing and publishing the shard results, but BEFORE
+    # either green marker, so the evidence survives and an unverified selection
+    # cannot be recorded or reported as a green required context.
+    - name: "Precheck must have answered"
+      if: always() && needs.precheck.result != 'success'
+      env:
+        PRECHECK_RESULT: ${{ needs.precheck.result }}
+      run: |
+        echo "::error::The precheck ended ${PRECHECK_RESULT}; its selection/reuse verdict is unverified. The suites may still run, but this required check cannot pass."
+        exit 1
 
     # ─────────────────── RECORD THE GREEN TREE ────────────────────
     # Only reached when every gate above passed AND every upstream job actually
