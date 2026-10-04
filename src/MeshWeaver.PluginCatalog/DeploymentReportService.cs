@@ -250,8 +250,7 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                 .DefaultIfEmpty(null)
                 .Timeout(ReadBudget)
                 .Select(node => node?.ContentAs<RegistryReconcileLedger>(hub.JsonSerializerOptions)?.Registries
-                    .Where(r => r.Served is not null)
-                    .SelectMany(r => r.Served!)
+                    .SelectMany(r => r.Served ?? ImmutableList<ServedPackage>.Empty)
                     .ToImmutableList()))
             .Catch<ImmutableList<ServedPackage>?, Exception>(ex =>
             {
@@ -296,7 +295,7 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                && element.TryGetProperty(name, out var value)
                && value.ValueKind == JsonValueKind.String
                && !string.IsNullOrWhiteSpace(value.GetString())
-            ? value.GetString()!.Trim()
+            ? value.GetString()?.Trim()
             : null;
     }
 

@@ -68,8 +68,7 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
                 .DefaultIfEmpty(null))
             .Timeout(ReadBudget)
             .Select(node => node?.ContentAs<RegistryReconcileLedger>(hub.JsonSerializerOptions)?.Registries
-                .Where(r => r.Served is not null)
-                .SelectMany(r => r.Served!)
+                .SelectMany(r => r.Served ?? ImmutableList<ServedPackage>.Empty)
                 .ToImmutableList());
 
         var records = access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
@@ -78,8 +77,8 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
             .Timeout(ReadBudget)
             .Select(change => change.Items
                 .Select(n => n.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
-                .Where(m => m is not null && !string.IsNullOrWhiteSpace(m.Id))
-                .Select(m => m!)
+                .OfType<PackageManifest>()
+                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
                 .ToImmutableList());
 
         // The newest ARMED set this instance's self-updater sees (Admin/UpdatePolicy.latestAvailableTag):
@@ -131,7 +130,7 @@ public sealed class CatalogTestRunPreflight(IMessageHub hub, ILogger<CatalogTest
                 return new ModuleUnderTest(
                     r.Id,
                     installed,
-                    standing == TargetStanding.Behind ? s!.Version ?? s.ModuleVersion : null,
+                    standing == TargetStanding.Behind && s is not null ? s.Version ?? s.ModuleVersion : null,
                     r.HeldUpdate);
             })
             .OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase)

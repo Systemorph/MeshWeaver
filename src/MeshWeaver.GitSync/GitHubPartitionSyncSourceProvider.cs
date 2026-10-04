@@ -125,8 +125,9 @@ public sealed class GitHubPartitionSyncSourceProvider(GitHubSyncService sync, IM
                             Observable.Throw<GitHubSyncConfig?>(new PartitionSourceReadFailed()))))
                     .Take(1)
                     .Select(configs => SyncedModuleVersions.Of(configs
+                        .OfType<GitHubSyncConfig>()
                         .Where(c => c is { RepositoryUrl.Length: > 0, Direction: not SyncDirection.ExportOnly })
-                        .SelectMany(c => c!.ModuleVersions ?? ImmutableDictionary<string, string>.Empty)))
+                        .SelectMany(c => c.ModuleVersions ?? ImmutableDictionary<string, string>.Empty)))
                     .Catch<SyncedModuleVersions, PartitionSourceReadFailed>(_ =>
                         Observable.Return(SyncedModuleVersions.Unknown)));
 

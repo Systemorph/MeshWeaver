@@ -75,8 +75,9 @@ public static class TargetSet
         ArgumentNullException.ThrowIfNull(served);
         return served
             .Select(s => s.MinMeshVersion?.Trim())
-            .Where(v => !string.IsNullOrEmpty(v))
-            .Select(v => (Version: v!, Ordinal: PlatformReleaseOrder.BuildOrdinal(v!)))
+            .OfType<string>()
+            .Where(v => v.Length > 0)
+            .Select(v => (Version: v, Ordinal: PlatformReleaseOrder.BuildOrdinal(v)))
             .Where(v => v.Ordinal is > 0)
             .OrderByDescending(v => v.Ordinal)
             .Select(v => v.Version)

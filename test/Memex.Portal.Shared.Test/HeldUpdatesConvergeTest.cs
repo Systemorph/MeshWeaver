@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -108,6 +106,15 @@ public class HeldUpdatesConvergeTest(ITestOutputHelper output) : MonolithMeshTes
             "the record — and the fleet view that lists it — says WHY it is held and what it waits for");
         held.HeldSince.Should().NotBeNull("the view's 'held since' and the too-long rule read it");
 
+        // ── The same hold, decided again: its since-when must SURVIVE (review on #6065 — clearing a
+        //    non-floor hold on every pass reset it, so the too-long rule could never fire). ────────
+        var since = held.HeldSince;
+        await PackageUpdateReconciler.ReconcileInstalled(
+                Mesh, second, "HEAD", [Candidate(StaysHeld, V2)], "Served by registry 'test'", Logger)
+            .Should().Within(TestTimeouts.CrossSilo).Emit(cancellationToken: ct);
+        (await AwaitRecord(StaysHeld, r => r.HeldUpdate is not null, ct)).HeldSince.Should().Be(since,
+            "a hold that is still in force keeps the instant it began");
+
         // ── The sync lands V2 for the held one too: the next pass converges it. ─────────────────
         await TrackPartition(StaysHeld, landed: V2, ct);
         await PackageUpdateReconciler.ReconcileInstalled(
@@ -206,8 +213,8 @@ public class HeldUpdatesConvergeTest(ITestOutputHelper output) : MonolithMeshTes
             .SelectMany(_ => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
                 .Read($"{PackageInstaller.InstalledPartition}/{id}", Mesh.JsonSerializerOptions).Take(1).DefaultIfEmpty(null))
             .Select(n => n?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions))
-            .Where(r => r is not null && predicate(r))
-            .Select(r => r!)
+            .OfType<PackageManifest>()
+            .Where(predicate)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(120))
             .Await(ct);
@@ -327,6 +334,20 @@ public class HeldUpdateConvergenceRulesTest
         adopted.HeldUpdateDispatch.Should().BeNull();
         adopted.UpdatePolicy.Should().Be(PackageUpdatePolicy.Auto, "policy is the administrator's, never the lane's");
         adopted.AuthorizedBy.Should().Be("system-security");
+    }
+
+    [Fact]
+    public void OnlyAFloorHold_EndsWhenTheFloorIsMet()
+    {
+        var floorHold = PackagePlatformFloorGate.HeldSentence(
+            new PackageManifest { Id = "AI", ReleasedVersion = "1.19.4" },
+            new PlatformFloorVerdict(PlatformFloorKind.Held, "3.0.0-ci.9887", "3.0.0-ci.9885", null));
+        PackagePlatformFloorGate.IsFloorHold(floorHold).Should().BeTrue();
+        PackagePlatformFloorGate.IsFloorHold(PackageUpdateReconciler.SyncHoldSentence(
+                new PackageManifest { Id = "AI", ReleasedVersion = "1.19.4", ModuleVersion = "a4" },
+                SyncedModuleVersions.Of([new("AI", "a1")]), "AI"))
+            .Should().BeFalse("a sync hold is re-decided by its own lane and keeps its since-when");
+        PackagePlatformFloorGate.IsFloorHold(null).Should().BeFalse();
     }
 
     [Fact]
@@ -478,9 +499,10 @@ public class MonolithRunHeaderTest(ITestOutputHelper output) : MonolithMeshTestB
     public void TheBase_RecordsTheVersionsUnderTest_BeforeTheTestRuns()
     {
         VersionsUnderTest.Should().NotBeNull("the framework records the run's header in InitializeAsync");
-        VersionsUnderTest!.Source.Should().Be("in-process mesh");
-        VersionsUnderTest.Commit.Should().Be(PlatformBuildInfo.CommitHash);
-        VersionsUnderTest.Header().Should().Contain("Versions under test");
+        var versions = VersionsUnderTest ?? throw new InvalidOperationException("no versions under test were recorded");
+        versions.Source.Should().Be("in-process mesh");
+        versions.Commit.Should().Be(PlatformBuildInfo.CommitHash);
+        versions.Header().Should().Contain("Versions under test");
     }
 }
 

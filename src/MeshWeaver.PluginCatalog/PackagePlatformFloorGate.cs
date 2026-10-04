@@ -73,8 +73,23 @@ public static class PackagePlatformFloorGate
     /// <param name="candidate">The held candidate.</param>
     /// <param name="verdict">Its <see cref="PlatformFloorKind.Held"/> verdict.</param>
     public static string HeldSentence(PackageManifest candidate, PlatformFloorVerdict verdict) =>
-        $"held: {VersionOf(candidate)} needs platform ≥ {verdict.Floor}, running {verdict.Running} — "
+        $"held: {VersionOf(candidate)} {FloorHoldMarker} {verdict.Floor}, running {verdict.Running} — "
         + "updates when the platform rolls";
+
+    /// <summary>
+    /// Whether <paramref name="heldUpdate"/> is a FLOOR hold (<see cref="HeldSentence"/>) — the only hold
+    /// a met floor may clear. A hold for another reason (a sync-owned partition whose sync has not
+    /// landed the candidate) is re-decided by its own lane and must keep its since-when; clearing it on
+    /// every pass would reset <see cref="PackageManifest.HeldSince"/> and wipe its dispatch stamps each
+    /// time (review on MeshWeaver#6065). Pure.
+    /// </summary>
+    /// <param name="heldUpdate">The record's hold sentence, or null.</param>
+    public static bool IsFloorHold(string? heldUpdate) =>
+        heldUpdate is { Length: > 0 } sentence
+        && sentence.Contains(FloorHoldMarker, StringComparison.Ordinal);
+
+    /// <summary>The phrase every <see cref="HeldSentence"/> carries and no other hold does.</summary>
+    internal const string FloorHoldMarker = "needs platform ≥";
 
     /// <summary>The blocking ticket for one held update (pure).</summary>
     /// <param name="candidate">The held candidate.</param>

@@ -181,9 +181,11 @@ internal static class PackageUpdateReconciler
         // 22 others kept "running 3.0.0-ci.9885" after the roll to 9887, and the fleet's only
         // record of a hold read as current. The decision below may still hold the package for
         // ANOTHER reason (sync-owned content), and then it says so in its own words.
-        var proceed = record.HeldUpdate is null
-            ? Observable.Return(record)
-            : ClearFloorHold(hub, accessService, recordPath, record, logger);
+        // Only a FLOOR hold ends because the floor is met; a hold for another reason is re-decided by
+        // the lane that stamped it and keeps its since-when (review on MeshWeaver#6065).
+        var proceed = PackagePlatformFloorGate.IsFloorHold(record.HeldUpdate)
+            ? ClearFloorHold(hub, accessService, recordPath, record, logger)
+            : Observable.Return(record);
         return proceed.SelectMany(current => DecidePolicy(
             hub, meshService, accessService, source, sourceRef, pkg, current, recordPath, provenance, logger));
     }

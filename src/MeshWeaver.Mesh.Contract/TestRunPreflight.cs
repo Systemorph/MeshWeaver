@@ -37,7 +37,7 @@ public sealed record VersionsUnderTest(
     /// <param name="all">List every module, not only those off-target.</param>
     public string Header(bool all = true)
     {
-        var commit = string.IsNullOrWhiteSpace(Commit) ? "" : $" (core {Short(Commit!)})";
+        var commit = Commit is { Length: > 0 } sha && !string.IsNullOrWhiteSpace(sha) ? $" (core {Short(sha)})" : "";
         var target = string.IsNullOrWhiteSpace(TargetPlatform) ? "no target known" : $"target {TargetPlatform}";
         var lines = new List<string>
         {
