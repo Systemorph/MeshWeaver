@@ -104,8 +104,8 @@ Every in-mesh Plugins NodeType group that impersonates, from the sweep:
 | **Essentials/OperationRequest** | Runs an **approved arbitrary script as System** | Trusted, but this is the highest-power site: approval is the only gate. It deserves a governed standard of its own |
 | **Feedback/** (Feedback, EvalCase, Digest) | Writes into the shared Feedback space the viewer cannot write | Trusted-code entry (`Feedback`), or a submission grant for every signed-in user |
 | **Edu/** (AnswerSheet, CourseInvite, LearningJourney, CourseCatalog); **Chess/Game**; **RemoteControl/Screen** | Provision the viewer's **own** partition, then write the viewer's own node | A **self-provisioning API**: `EnsurePartitionProvisioned(viewer)` as the platform, with the write as the user. With that API, no trust entry is needed |
-| **Publish/Slide** | A live sibling-slides query opened as System, which **bypasses RLS on a read** | None: this looks like an escalation and should run as the viewer |
-| Reinsurance `ReinsuranceDemo/Installer`, `Underwriting/Submission/ClaimsReviewArea` | Demo seeding; an enquiry node created from a layout area as System | ClaimsReviewArea looks like an escalation (a user action written as System). The demo installer is a trusted-code entry |
+| **Publish/Slide** | A live sibling-slides query opened as System, which **bypasses RLS on a read** | None: this was an escalation. The deck is now read as the viewer (MeshWeaver.Plugins#2802), and so is core's `DeckSlidesCache`, which is keyed by viewer |
+| Reinsurance `ReinsuranceDemo/Installer`, `Underwriting/Submission/ClaimsReviewArea` | Demo seeding; an enquiry node created from a layout area as System | ClaimsReviewArea was an escalation (a user action written as System); its writes now run as the clicking user (MeshWeaver.Reinsurance#249). The demo installer is a trusted-code entry |
 | SocialMedia `LinkedIn/TileMigration` | Converges other users' profile tiles | Trusted-code entry, or a governed migration |
 | Crm `CrmSystem` | Migration control plane re-typing client roots the admin does not own | A governed migration |
 
