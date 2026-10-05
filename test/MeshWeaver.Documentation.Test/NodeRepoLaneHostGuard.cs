@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -171,40 +172,29 @@ public class NodeRepoLaneHostGuard
         Assert.True(workflow.Length > 0);
     }
 
-    [Fact]
-    public void ThePlatformsPluginsBake_PassesThePortalOfThePromotedSet()
-    {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), MainCd));
-        // The job block: its 4-space-indented lines (plus blank lines and 2-space comments), up to
-        // the next top-level job key.
-        var job = Regex.Match(text, @"\n  plugins-bake:\n(?<body>(?:(?:    .*|  #.*)\n|\n)+?)(?=  [a-z][a-z-]*:\n)");
-        Assert.True(job.Success, $"{MainCd} must have a `plugins-bake` job");
-        var body = ExecutableLinesOf(job.Groups["body"].Value);
-        Assert.Contains("platform-image: meshweaver.azurecr.io/memex-portal-ai:", body, StringComparison.Ordinal);
-        Assert.Contains("platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}", body, StringComparison.Ordinal);
-    }
-
     /// <summary>
-    /// 🚨 <b>The <c>plugins</c> prefix is MIGRATED, and only this caller's own input says so from
-    /// inside this repository</b> (MeshWeaver#3461, phase 4).
-    ///
-    /// <para>The publisher discovers the layout from a live <c>_current</c>, so dropping this line
-    /// would not silently return the prefix to flat — the run would publish a generation anyway and
-    /// warn. What it WOULD do is make every core publication announce that its caller is
-    /// unflipped, for ever, and leave the fleet's most-read prefix with no statement of its layout
-    /// in the repository that owns the lane. The harness
-    /// (<c>test-publish-bake-overlap.py</c>) cannot see this: it supplies
-    /// <c>BAKE_PUBLICATION_LAYOUT</c> to the script directly and never reads a caller.</para>
+    /// 🚨 Policy <c>platform-module-deploy-separate</c>: the PLATFORM deploy (<c>main-cd.yml</c>) calls
+    /// no module lane — it neither bakes nor seals a MeshWeaver.Plugins publication (that lane's own
+    /// caller is MeshWeaver.Plugins' <c>ci.yml</c>), so the two facts that used to pin core's
+    /// <c>plugins-bake</c> call (its portal input and its generation layout) have no subject here any
+    /// more. The layout every caller gets is the lane's own default, held by the next test.
     /// </summary>
     [Fact]
-    public void ThePlatformsPluginsBake_DeclaresTheGenerationLayout()
+    public void ThePlatformDeploy_CallsNoModuleLane()
     {
         var text = File.ReadAllText(Path.Combine(FindRepoRoot(), MainCd));
-        var job = Regex.Match(text, @"\n  plugins-bake:\n(?<body>(?:(?:    .*|  #.*)\n|\n)+?)(?=  [a-z][a-z-]*:\n)");
-        Assert.True(job.Success, $"{MainCd} must have a `plugins-bake` job");
-        var body = ExecutableLinesOf(job.Groups["body"].Value);
-        Assert.Contains("publication-layout: generation", body, StringComparison.Ordinal);
+        Assert.Empty(ModuleLaneCalls(text));
+        // Negative control: a module lane called from the platform deploy is caught by name.
+        var mutated = text.Replace("\n  published-modules:\n",
+            "\n  plugins-bake:\n    uses: ./.github/workflows/node-repo-publish-bake.yml\n\n  published-modules:\n",
+            StringComparison.Ordinal);
+        Assert.NotEqual(text, mutated);
+        Assert.Contains(ModuleLaneCalls(mutated), c => c.Contains("node-repo-publish-bake.yml", StringComparison.Ordinal));
     }
+
+    private static List<string> ModuleLaneCalls(string workflowText) =>
+        Regex.Matches(workflowText, @"(?m)^\s*uses:\s*\./\.github/workflows/(?<lane>node-repo-(?:publish-bake|module-pack|module-publish)\.yml)")
+            .Select(m => m.Groups["lane"].Value).ToList();
 
     /// <summary>
     /// 🚨 <b>THE LANE'S OWN DEFAULT IS THE FLEET'S PUBLICATION LAYOUT</b> (MeshWeaver#3461, phase 4),
@@ -216,8 +206,8 @@ public class NodeRepoLaneHostGuard
     /// satellite's publication is written. Ask the question that catches this class: <i>if this
     /// default were <c>flat</c> right now, would anything else go red?</i> No — the overlap harness
     /// supplies <c>BAKE_PUBLICATION_LAYOUT</c> to the script directly and never reads a caller, and
-    /// <see cref="ThePlatformsPluginsBake_DeclaresTheGenerationLayout"/> covers core's own explicit
-    /// input only. Every satellite lane would silently return to in-place publication, which is the
+    /// core's own explicit input is gone with its call (policy
+    /// <c>platform-module-deploy-separate</c>). Every satellite lane would silently return to in-place publication, which is the
     /// republish window #3461 exists to close. Raised by Copilot on the pull request that moved it.</para>
     ///
     /// <para>The second assertion is the other half of the same property: the step must pass the
