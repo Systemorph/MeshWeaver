@@ -53,6 +53,36 @@ public record User : AccessObject
     public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 
     /// <summary>
+    /// The partition-root SPACES this user can read, other than their own home — the paths the home
+    /// page's Spaces scope and the root leg of its content list are ANCHORED on
+    /// (<c>path:a|b|c</c>), so painting the home issues no mesh-wide query.
+    ///
+    /// <para>🚨 <b>A manifest, not a preference.</b> Written ONLY by the every-logon
+    /// <c>RefreshSpacePathsLogonAction</c>, which runs the mesh-wide read once per logon session, in
+    /// the background, as the user — the read the home used to run on EVERY render (measured on the
+    /// public instance 2026-10-04: a cross-schema UNION over 251 partition schemas, ~1.3 s, whose
+    /// relation locks also queue every anchored read behind it). One writer, so a whole-list patch
+    /// is safe. Onboarding keeps the stored value (<c>UserOnboardingService.UpsertProfile</c>).</para>
+    ///
+    /// <para>Freshness is per logon: a space that becomes readable mid-session appears on the next
+    /// logon, or straight away by URL — the list scopes what the home LISTS, never what the user may
+    /// open. See <c>Doc/Architecture/CrossSchemaFanOutElimination</c>.</para>
+    /// </summary>
+    public IReadOnlyList<string> SpacePaths { get; init; } = [];
+
+    /// <summary>
+    /// The scopes in OTHER partitions this user has been granted access to (#385 — an invited module
+    /// living elsewhere), each the governed scope of one of the user's <c>AccessAssignment</c>s. The
+    /// home folds them into its content list and its Spaces scope as an anchored path leg.
+    ///
+    /// <para>Same contract as <see cref="SpacePaths"/>: written ONLY by
+    /// <c>RefreshSpacePathsLogonAction</c> (a share grant lives in the GRANTING partition, so the
+    /// read that finds it is mesh-wide by nature — it runs once per logon, never per render), and
+    /// kept by onboarding.</para>
+    /// </summary>
+    public IReadOnlyList<string> SharedPaths { get; init; } = [];
+
+    /// <summary>
     /// The run-once ledger for logon actions: action id → when it ran for THIS user. A
     /// <c>LogonActionMode.RunOnce</c> action whose id is a key here never runs again, on any
     /// replica, after any restart — the ledger is part of the durable profile, not process state.
