@@ -11,7 +11,17 @@ namespace MeshWeaver.Messaging;
 /// </summary>
 [SystemMessage]
 [CanBeIgnored]
-public record HeartBeatEvent;
+public record HeartBeatEvent
+{
+    /// <summary>
+    /// The sync stream the sender holds on the target, when the heartbeat is a sync-stream
+    /// keep-alive whose subscription the target has ACKNOWLEDGED; <c>null</c> for every other
+    /// heartbeat. A target that serves no such stream for the sender (a fresh activation after a
+    /// hand-off or recycle) answers with a stream-ended announcement so the sender re-subscribes
+    /// instead of holding a read that receives nothing (#6047).
+    /// </summary>
+    public string? StreamId { get; init; }
+}
 
 /// <summary>
 /// Registered on the hub configuration by the Orleans grain during activation.

@@ -251,7 +251,8 @@ public class PlatformReleaseNotifyGuard
         var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
         Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
         // 🚨 Under policy `one-promotion-gate` the release event follows `arm`, which
-        // arms the fleet only for a promoted set whose dependent suites passed — asynchronously,
+        // arms the fleet only for a promoted set whose platform verdict is green (its ladder, and
+        // control running it — policy `platform-deploy-control-first`) — asynchronously,
         // often in a later run — so it is NOT a leg of the platform delivery verdict any more. It
         // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
         Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);

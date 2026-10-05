@@ -80,15 +80,28 @@ public class PolymorphicResolverAllocationTest(ITestOutputHelper output) : HubTe
     /// tier-up is late — measured on CI: the same tree read 0 bytes alone and 2,460 / 55,150 bytes
     /// while a heavy suite shared the shard. A real per-candidate allocation is present in EVERY
     /// sample, so the minimum still shows it; a transient one is gone from at least one.
+    ///
+    /// <para>🚨 The two readings are settled SEPARATELY and subtracted once — never the minimum of
+    /// per-sample DIFFERENCES. A transient (tier-0, a late tier-up) is just as likely in the
+    /// traversal reading as in the resolution one, and a sample whose TRAVERSAL is inflated makes
+    /// its difference strongly negative; the minimum then picks exactly that sample. Measured on
+    /// core main (run 37271740357): <c>small=-7,284</c> — a negative "allocation" — so
+    /// <c>large - small</c> read 15,076 bytes and the test failed with no per-candidate allocation
+    /// present. Each minimum is bounded below by the true settled cost, so their difference is not
+    /// pulled below it by noise in the other reading.</para>
     /// </summary>
     private static long SettledResolutionBytes(
         PolymorphicTypeInfoResolver resolver, JsonSerializerOptions options, ITypeRegistry registry)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var settled = long.MaxValue;
-        for (var sample = 0; sample < 10 || (settled > 0 && clock.ElapsedMilliseconds < 3000); sample++)
-            settled = Math.Min(settled, ResolutionBytes(resolver, options) - TraversalBytes(registry));
-        return settled;
+        var resolution = long.MaxValue;
+        var traversal = long.MaxValue;
+        for (var sample = 0; sample < 10 || (resolution - traversal > 0 && clock.ElapsedMilliseconds < 3000); sample++)
+        {
+            resolution = Math.Min(resolution, ResolutionBytes(resolver, options));
+            traversal = Math.Min(traversal, TraversalBytes(registry));
+        }
+        return resolution - traversal;
     }
 
     private static long ResolutionBytes(PolymorphicTypeInfoResolver resolver, JsonSerializerOptions options)

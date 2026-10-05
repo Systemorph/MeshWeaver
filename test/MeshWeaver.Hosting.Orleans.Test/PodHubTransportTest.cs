@@ -306,6 +306,15 @@ public class PodHubTransportTest : IClassFixture<TwoSiloCacheUpdateFixture>
         // rendezvous-grain host left behind in production, and what made every publish a silent
         // discard.
         var (manager, streamId) = Registry(cluster, sender);
+        // 🚨 The stream subscription attaches ASYNCHRONOUSLY and independently of the pod-hub claim
+        // (OrleansRoutingService.RegisterStream: SubscribeWhenStreamingReadyAsync), and neither
+        // probe above proves it has landed — the claim is the grain, and the ping may arrive over
+        // the grain. Erasing a list read while that subscribe is still in flight erases nothing, the
+        // late subscription lands afterwards, and the registry never reads empty (the 30 s timeout
+        // below, PR #6109 run 37325878991). So wait for the subscription to EXIST before erasing it.
+        await WaitUntil(
+            async () => (await Subscriptions(manager, streamId, ct)).Any(),
+            "the sender's stream subscription must be attached before the test erases it", ct);
         foreach (var subscription in await Subscriptions(manager, streamId, ct))
             await manager.RemoveSubscription(StreamProviders.Memory, streamId, subscription.SubscriptionId)
                 .WaitAsync(Budget, ct);

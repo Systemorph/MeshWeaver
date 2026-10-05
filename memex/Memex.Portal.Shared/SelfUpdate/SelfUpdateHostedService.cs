@@ -39,7 +39,7 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// while the mesh is degraded — and a fresh image is precisely what recovers a degraded pod. The
 /// policy READ was decoupled in #611; the availability WRITE in #1020.</para>
 /// </summary>
-public class SelfUpdateHostedService : IHostedService
+public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart
 {
     private readonly IMessageHub _hub;
     private readonly IAcrTagLister _acr;
@@ -430,7 +430,8 @@ public class SelfUpdateHostedService : IHostedService
             return Restart(platform);
         return live.ActivatePending("self-update: a landed module generation is pending activation")
             .SelectMany(result => result.NeedsRestart
-                ? Restart(platform, result.Describe())
+                ? Restart(platform, honourFloor: true,
+                    reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
                 : Observable.Return(SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
     }
 
@@ -447,7 +448,40 @@ public class SelfUpdateHostedService : IHostedService
 
     /// <summary>The restart itself: detect-only says so; the floor defers; otherwise the updater rolls
     /// the running image, or reports that it cannot.</summary>
-    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform, string? why = null)
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform) =>
+        Restart(platform, honourFloor: true, reason: null);
+
+    /// <summary>
+    /// 🚨 <see cref="IModuleActivationRestart"/> — the restart half of an explicit module reload
+    /// (<c>Doc/Architecture/ModuleReload</c>), taken through THIS service's one restart path: a
+    /// self-patch restart of the running image, or <c>self-update-restart-pending</c> handed to the
+    /// control lane, which routes it to an unattended Restart (no approval, no confirmation). The
+    /// same three apply modes, the same hand-over, the same verdict sentences — only two things
+    /// differ, both because the caller is an authorised one-shot request rather than a recurring
+    /// check: the roll FLOOR does not defer it (the reload issues exactly one, stamped on its node
+    /// before it asks), and the announcement carries the reload's own reason.
+    ///
+    /// <para>Exactly one restart still holds against this service's own checks: a check that
+    /// follows a self-patch restart reads the fresh roll instant and the floor defers its own
+    /// restart; on the control lane the control plane treats an open or freshly done Restart as
+    /// having delivered the announcement.</para>
+    /// </summary>
+    /// <param name="reason">Why — carried into the announcement and the log line.</param>
+    public IObservable<ModuleRestartOutcome> RequestRestart(string reason) =>
+        Restart(new SelfUpdateVerdict(SelfUpdateOutcome.NoNewerRelease, $"Module reload ({reason}):"),
+                honourFloor: false, reason: $"a landed module generation is pending activation — {reason}")
+            .Select(verdict => new ModuleRestartOutcome(
+                verdict.Outcome switch
+                {
+                    SelfUpdateOutcome.Restarted => ModuleRestartKinds.Restarted,
+                    SelfUpdateOutcome.RestartHandedOver => ModuleRestartKinds.HandedOver,
+                    _ => ModuleRestartKinds.Unavailable,
+                },
+                verdict.Message))
+            .Catch((Exception ex) => Observable.Return(new ModuleRestartOutcome(
+                ModuleRestartKinds.Unavailable, $"the restart request faulted: {ex.Message}")));
+
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform, bool honourFloor, string? reason)
     {
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
         var handover = ResolveHandover();
@@ -464,7 +498,7 @@ public class SelfUpdateHostedService : IHostedService
                     "[SelfUpdate] a landed module generation is pending activation — handing the restart to the "
                     + "control lane ({Destination}); this install does not roll its own pods.",
                     DescribeRoute(route, settings));
-                return handover.Announce(RestartAnnouncement(installed, why))
+                return handover.Announce(RestartAnnouncement(installed, reason))
                     .Select(outcome => SelfUpdateVerdict.RestartHandedOver(
                         platform, installed, outcome.Destination, outcome.Detail))
                     .Catch((Exception ex) =>
@@ -478,19 +512,19 @@ public class SelfUpdateHostedService : IHostedService
                     platform, installed,
                     "this install does not self-patch, and " + (SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured")));
             case SelfUpdateApply.DetectOnly:
-                return CannotPatchReason().Select(reason => SelfUpdateVerdict.RestartUnavailable(
-                    platform, installed, "this install does not self-patch" + reason));
+                return CannotPatchReason().Select(why => SelfUpdateVerdict.RestartUnavailable(
+                    platform, installed, "this install does not self-patch" + why));
         }
 
         // The same floor read Apply makes, and skipped for the same reason when the floor is off:
         // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor
         // does not take.
-        var lastRolled = _options.MinRollInterval <= TimeSpan.Zero
+        var lastRolled = !honourFloor || _options.MinRollInterval <= TimeSpan.Zero
             ? Observable.Return<DateTimeOffset?>(null)
             : _http.Invoke(ct => _updater.LastRolledAtAsync(ct));
         return lastRolled.SelectMany(lastRolledAt =>
         {
-            if (SelfUpdateVerdict.RestartDeferredBy(
+            if (honourFloor && SelfUpdateVerdict.RestartDeferredBy(
                     platform, installed, lastRolledAt, _options.MinRollInterval, DateTimeOffset.UtcNow)
                 is { } deferred)
                 return Observable.Return(deferred);
@@ -1342,15 +1376,17 @@ public class SelfUpdateHostedService : IHostedService
     }
 
     /// <summary>The <c>self-update-restart-pending</c> event: the image this install runs, and why the pods should be re-created on it.</summary>
-    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed, string? why = null) =>
+    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed, string? reason = null) =>
         new()
         {
             Event = SelfUpdateHandover.RestartEvent,
             CurrentVersion = installed,
             CurrentImage = _options.PortalImage(installed.Split('+')[0]),
-            Reason = why is null
-                ? "a landed module generation is pending activation (restart-as-activation, #3650)"
-                : $"a landed module generation did not go live in the running process — {why}",
+            // Callers pass the whole sentence: a live swap that did not go live and an explicit
+            // module reload explain the restart differently.
+            Reason = reason is { Length: > 0 }
+                ? reason
+                : "a landed module generation is pending activation (restart-as-activation, #3650)",
             DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
         };
 

@@ -72,6 +72,26 @@ public sealed class OrleansClusterMembership(
         return Classify(status);
     }
 
+    /// <inheritdoc />
+    public IReadOnlyCollection<string>? AliveMembers
+    {
+        get
+        {
+            try
+            {
+                return membership.CurrentSnapshot.Members
+                    .Where(m => Classify(m.Value.Status) == ClusterMemberState.Alive)
+                    .Select(m => m.Key.ToParsableString())
+                    .ToArray();
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Cluster membership could not be enumerated — reporting no roster");
+                return null;
+            }
+        }
+    }
+
     /// <summary>
     /// The <see cref="SiloStatus"/> → <see cref="ClusterMemberState"/> mapping, pure so the rule can
     /// be pinned without standing up a cluster.
