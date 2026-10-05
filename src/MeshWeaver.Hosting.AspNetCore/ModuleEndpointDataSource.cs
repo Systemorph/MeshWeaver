@@ -48,7 +48,7 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
     }
 
     /// <summary>How many endpoints the held modules currently contribute.</summary>
-    public int Count => endpoints.Count;
+    public int Count => Volatile.Read(ref endpoints).Count;
 
     /// <inheritdoc />
     public override IReadOnlyList<Endpoint> Endpoints => Volatile.Read(ref endpoints);

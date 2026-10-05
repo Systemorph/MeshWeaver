@@ -818,8 +818,11 @@ public partial record MeshBuilder
         var name = assembly.GetName().Name ?? "";
         if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
         {
-            if (held.Contributions?.AllDefaultNodeHubConfigurations is not { Count: > 0 })
-                return;
+            // Registered for EVERY held module, whatever its boot generation contributes (#6128
+            // review): a later generation may ADD every-per-node-hub configuration, and the swap
+            // recycles every per-node hub for it — without the indirection those hubs would rebuild
+            // without it while the swap reports Live. It aggregates to nothing while the current
+            // generation contributes none, exactly as the mesh-hub indirection does.
             var contexts = ModuleContexts;
             ConfigureDefaultNodeHub(config =>
                 (contexts.Current(name)?.Contributions?.AllDefaultNodeHubConfigurations ?? [])

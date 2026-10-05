@@ -66,6 +66,31 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
         drained.Collected.Should().BeTrue($"no routing structure may keep the old generation alive ({drained})");
     }
 
+    /// <summary>A held module that maps NO endpoints at boot and ADDS them in a later generation (#6128
+    /// review): the dynamic source must exist anyway, or the new routes are silently absent while the
+    /// swap reports Live.</summary>
+    [Fact]
+    public async Task AGenerationThatAddsEndpoints_IsMappedLive_EvenWhenBootMappedNone()
+    {
+        using var contexts = new ModuleContexts();
+        contexts.Commit(contexts.Load(Write("g0", NoEndpointsSource)));
+        await using var app = await Start(contexts);
+        var client = app.GetTestClient();
+
+        (await client.GetAsync("/live-endpoint")).StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "the boot generation maps nothing");
+
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1))));
+
+        (await client.GetStringAsync("/live-endpoint")).Should().Be("v1",
+            "the generation that adds the attribute must be mapped in the running process");
+    }
+
+    private const string NoEndpointsSource = """
+        namespace MeshWeaver.Test.LiveEndpoints;
+        public sealed class Placeholder { }
+        """;
+
     /// <summary>The NEGATIVE CONTROL for the refusal: a new generation whose route collides with one the
     /// host already serves is NOT published — the previous endpoints keep serving.</summary>
     [Fact]

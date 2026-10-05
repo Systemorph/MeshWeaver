@@ -37,15 +37,19 @@ public static class MeshModuleEndpointExtensions
         // that re-maps them from the current generation on a live swap (policy
         // module-live-update-default) — never onto the app directly, where they would be fixed for the
         // life of the process. Image-bound modules map as before.
+        //
+        // Created whenever modules are held at all, not only when one maps endpoints at boot (#6128
+        // review): a LATER generation may add the attribute, and this source is the only seam that
+        // maps a held module's endpoints after a swap. It maps zero endpoints until one contributes.
         var held = app.Services.GetService<ModuleContexts>();
-        if (held is not null
-            && held.Generations.Any(g => g.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>().Any()))
+        if (held is not null)
         {
             var dynamicEndpoints = new ModuleEndpointDataSource(
                 app.Services, held, ((IEndpointRouteBuilder)app).CreateApplicationBuilder, logger);
             ((IEndpointRouteBuilder)app).DataSources.Add(dynamicEndpoints);
             contributed += dynamicEndpoints.Count;
-            logger.LogInformation(
+            if (dynamicEndpoints.Count > 0)
+                logger.LogInformation(
                 "Mapped {Count} endpoint(s) from modules held in their own load contexts, re-mapped on every live swap",
                 dynamicEndpoints.Count);
         }
