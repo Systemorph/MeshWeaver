@@ -2428,10 +2428,16 @@ jobs:
           # Phase A already wrote every NEWER promoted set's tester version tag, so the highest
           # `mw-plugin-test:<line>-ci.<n>` is the newest promoted set; when it is newer than this
           # run, the moving pointers stay where that set put them (ACR, cr and GHCR alike).
-          n_self="${V_PLUGIN##*ci.}"
-          n_max=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv \
-                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          if [ -n "$n_max" ] && [ "$n_max" -gt "$n_self" ]; then
+          # FAIL-CLOSED on both reads: a tag list that cannot be read, or a version without a run
+          # ordinal, is RED — never "no newer set", which would move the pointers on no evidence.
+          [[ "$V_PLUGIN" =~ [.-]ci\.([0-9]+)$ ]] || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no ci.<n> run ordinal — cannot decide whether a newer set already holds main/latest"; exit 1; }
+          n_self="${BASH_REMATCH[1]}"
+          tags=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv) \
+            || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds main/latest; refusing to move them blind"; exit 1; }
+          # Phase A just wrote this run's own version tag, so an EMPTY reading is itself a broken read.
+          n_max=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
+          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no <line>-ci.<n> tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
+          if [ "$n_max" -gt "$n_self" ]; then
             echo "::notice title=Moving pointers left in place::a newer set (ci.$n_max) was promoted while this run (ci.$n_self) built — main/latest stay on it; this set keeps its own version and identity tags"
             echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self (never backwards)" >> "$GITHUB_STEP_SUMMARY"
             # This set's OWN GHCR version tag is not a pointer: the satellite-compat legs pull it.
