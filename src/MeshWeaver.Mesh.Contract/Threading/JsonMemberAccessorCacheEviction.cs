@@ -3,10 +3,10 @@ using System.Reflection.Metadata;
 using System.Runtime.Loader;
 using System.Text.Json;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
-/// Empties System.Text.Json's PROCESS-STATIC member-accessor cache when a collectible node context
+/// Empties System.Text.Json's PROCESS-STATIC member-accessor cache when a collectible node or module context
 /// starts unloading — the System.Text.Json twin of <c>ReflectionCacheEviction</c> (Autofac).
 ///
 /// <para><b>Why (Plugins#1605, measured).</b> On CoreCLR, STJ builds property getters/setters and
@@ -34,7 +34,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// is released — the same moment Autofac's cache is purged. Holds no state: the resolved method is an
 /// immutable lookup computed once (NoStaticState allows <c>static readonly</c> constants).</para>
 /// </summary>
-internal static class JsonMemberAccessorCacheEviction
+public static class JsonMemberAccessorCacheEviction
 {
     private static readonly MethodInfo? ClearCache = typeof(JsonSerializer).Assembly
         .GetCustomAttributes<MetadataUpdateHandlerAttribute>()

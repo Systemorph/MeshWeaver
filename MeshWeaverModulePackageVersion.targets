@@ -1,0 +1,106 @@
+<Project>
+  <!--
+    🚨 STAMP A MODULE ASSEMBLY WITH THE VERSION OF THE PACKAGE THAT DECLARES IT.
+
+    A module build inherits its informational version from the PLATFORM (MeshWeaver#3732), so every
+    build of e.g. MeshWeaver.AI states the same 3.0.0.0, and a compiled NodeType's dependency record
+    over it (min:3.0.0.0) is satisfied by EVERY build of the module — including an older one that
+    lacks members the prebuilt calls. Measured 2026-10-05: the control instance ran AI 1.20.4, adopted
+    a Hosting prebuilt compiled against a newer AI, and failed at call time with
+    MissingMethodException (set_Group). Doc/Architecture/DependencyRecordFloor → "A floor must move
+    with the module".
+
+    This target writes [assembly: AssemblyMetadata("MeshWeaver.PackageVersion", "<version>")], where
+    <version> is the `version` of the manifest.lock of the package whose index.json declares this
+    assembly as its `content.module` (searched exactly as WriteMeshModuleSeedStamps searches: a
+    sibling folder of one of the project's ancestors, up to four levels — in a node repository the
+    package folder sits beside src/). InstalledModuleAssembly.PackageVersion reads it on BOTH sides
+    (bake host and portal), and CompiledDependencies records it as a pkg: floor.
+
+    A project that no package declares gets no stamp and behaves exactly as before. Imported by a
+    node repository's src/Directory.Build.targets (MeshWeaver.Plugins and satellites) via
+    $(MeshWeaverRoot)/MeshWeaverModulePackageVersion.targets. Opt out per project with
+    <MeshWeaverModulePackageVersion>false</MeshWeaverModulePackageVersion>.
+
+    Inline and netstandard-only on purpose (RoslynCodeTaskFactory compiles against netstandard), so
+    the JSON is read through JsonReaderWriterFactory rather than System.Text.Json.
+  -->
+  <Target Name="_MeshWeaverStampModulePackageVersion"
+          BeforeTargets="GetAssemblyAttributes"
+          Condition="'$(IsTestProject)' != 'true' and '$(MeshWeaverModulePackageVersion)' != 'false'">
+    <ResolveMeshModulePackageVersion AssemblyName="$(AssemblyName)" ProjectDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="Version" PropertyName="_MeshWeaverModulePackageVersion" />
+      <Output TaskParameter="Package" PropertyName="_MeshWeaverModulePackage" />
+    </ResolveMeshModulePackageVersion>
+    <ItemGroup Condition="'$(_MeshWeaverModulePackageVersion)' != ''">
+      <AssemblyMetadata Include="MeshWeaver.PackageVersion" Value="$(_MeshWeaverModulePackageVersion)" />
+    </ItemGroup>
+    <Message Importance="high" Condition="'$(_MeshWeaverModulePackageVersion)' != ''"
+             Text="MeshWeaverModulePackageVersion: $(AssemblyName) stamped as $(_MeshWeaverModulePackage)@$(_MeshWeaverModulePackageVersion)" />
+  </Target>
+
+  <UsingTask TaskName="ResolveMeshModulePackageVersion" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <AssemblyName ParameterType="System.String" Required="true" />
+      <ProjectDirectory ParameterType="System.String" Required="true" />
+      <Version ParameterType="System.String" Output="true" />
+      <Package ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Xml" />
+      <Using Namespace="System.Xml.Linq" />
+      <Using Namespace="System.Runtime.Serialization.Json" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        Func<string, XElement> load = path =>
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                using (var reader = JsonReaderWriterFactory.CreateJsonReader(bytes, XmlDictionaryReaderQuotas.Max))
+                    return XElement.Load(reader);
+            }
+            catch (Exception ex)
+            {
+                Log.LogMessage(MessageImportance.Low, "ResolveMeshModulePackageVersion: could not read " + path + " (" + ex.GetType().Name + ": " + ex.Message + ") — ignored");
+                return null;
+            }
+        };
+        string packageDir = null;
+        var ancestor = ProjectDirectory;
+        for (var level = 0; level < 4 && packageDir == null && !string.IsNullOrEmpty(ancestor); level++)
+        {
+            if (Directory.Exists(ancestor))
+                foreach (var candidate in Directory.EnumerateDirectories(ancestor))
+                {
+                    var index = Path.Combine(candidate, "index.json");
+                    if (!File.Exists(index) || !File.Exists(Path.Combine(candidate, "manifest.lock")))
+                        continue;
+                    var root = load(index);
+                    var content = root == null ? null : root.Element("content");
+                    var module = content == null ? null : (string)content.Element("module");
+                    if (string.Equals(module, AssemblyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        packageDir = candidate;
+                        break;
+                    }
+                }
+            ancestor = Path.GetDirectoryName(ancestor);
+        }
+        if (packageDir == null)
+            return true;
+        var lockRoot = load(Path.Combine(packageDir, "manifest.lock"));
+        var version = lockRoot == null ? null : (string)lockRoot.Element("version");
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            Log.LogWarning("ResolveMeshModulePackageVersion: " + Path.GetFileName(packageDir) + "/manifest.lock declares " + AssemblyName + " but states no version — the module is built WITHOUT a package-version stamp, so its NodeTypes' dependency records fall back to the informational version");
+            return true;
+        }
+        Version = version.Trim();
+        Package = Path.GetFileName(packageDir);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+</Project>

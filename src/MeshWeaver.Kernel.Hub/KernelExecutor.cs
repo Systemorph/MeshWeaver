@@ -447,9 +447,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // worker before its first await (Doc/Architecture/CompileOffTheThreadPool).
             scope => Observable.Defer(() =>
                 {
+                    // A module the script names binds its CURRENT generation from the mesh's
+                    // registry — modules run in their own collectible contexts (policy
+                    // module-live-update-default), which the default context cannot see.
+                    var modules = publicHub.ServiceProvider.GetService<ModuleContexts>();
                     var current = session ??= new ScriptSession(
                         scriptGlobals!,
-                        name => cellSurfaceBindings?.GetValueOrDefault(name));
+                        name => cellSurfaceBindings?.GetValueOrDefault(name) ?? modules?.Resolve(name));
                     var options = scriptOptions;
                     return cpuLane
                         .InvokeBlocking(t =>

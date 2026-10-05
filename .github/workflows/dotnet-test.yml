@@ -450,12 +450,23 @@ jobs:
       tests-mode: ${{ steps.scope.outputs.mode }}
       tests-projects: ${{ steps.scope.outputs.projects }}
       tests-reason: ${{ steps.scope.outputs.reason }}
+      # THE ONE MAIN THIS RUN TESTS AGAINST (policy suites-test-fresh-merge). On a pull request every
+      # suite job below merges the head onto THIS sha — resolved once, here, so the build and the
+      # shards that read its artifacts test the byte-identical tree. Empty on any other event.
+      main-sha: ${{ steps.fresh.outputs.main-sha }}
     steps:
     - uses: actions/checkout@v7
       with:
         # Only HEAD's tree matters; the marker push in collect-results needs
         # nothing deeper either (it points the ref at github.sha).
         fetch-depth: 1
+    # 🔀 FRESH MERGE (Doc/Architecture/FreshMergeUnderTest): `refs/pull/N/merge` is the head merged onto
+    # main AS IT STOOD AT THE PUSH, and every re-run tests that same old merge. Replace it with the head
+    # merged onto main's CURRENT tip before anything reads the tree — the green-tree probe below then
+    # keys the tree that is actually tested. Red on a conflict with the current main.
+    - name: Merge the head onto the current main
+      id: fresh
+      uses: ./.github/actions/fresh-merge
     # ── Tests only for changed functionality (the fleet rule, applied to core 2026-09-13) ──────
     # Every run used to execute every test project — 5 shards, ~21 of a run's 31 job-minutes —
     # whatever the change touched. On a PULL REQUEST the diff against the base is mapped to the
@@ -589,7 +600,12 @@ jobs:
   # it would not add a single assertion that is not already made, and moving the credential proof
   # away from the gate that needs it is how a proof and its subject drift apart.
 
-  # ── STAGE 1 of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
+  # ── THE STAGE GATE of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
+  # 🔀 Under policy suites-parallel-with-review the lane holds on STAGE 0 only: the build
+  # and the shards start as soon as the static controls are green and run IN PARALLEL with the
+  # automatic review; `Automatic review answered` stays a required check, so the merge still waits for
+  # every finding answered. The paragraph below is the review-first ordering, now the lane's opt-in
+  # (`review-before-suites: true`).
   # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
   # must pass before we start test. and we arm only at end of test". On a pull request the build and
   # the shards wait for (a) the cheap static controls below — stage 0, which fail fast — and (b) the
@@ -646,6 +662,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
+    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the run's current main
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.precheck.outputs.main-sha }}
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
@@ -841,6 +863,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the run's current main
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.precheck.outputs.main-sha }}
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
@@ -1847,7 +1875,7 @@ jobs:
     # `dotnet build` (the csproj embeds Data/** and explicitly removes its .cs from compilation)
     # — without this job, the doc tree's node sources and NodeType configuration lambdas ship
     # untested, and two of the four Doc NodeTypes had never been compiled by anything.
-    needs: [build]
+    needs: [build, precheck]
     # The explicit status function keeps skipped PR-only stage-0 ancestors from
     # suppressing this gate on main after the build has succeeded.
     if: ${{ !cancelled() && needs.build.result == 'success' }}
@@ -1860,6 +1888,12 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
+    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the run's current main
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.precheck.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 10.0.x
@@ -2041,7 +2075,7 @@ jobs:
   # RED (fetch-deployed-plugin-set.sh), never a skip.
   platform-compat:
     name: "Platform compatibility: deployed plugin set links against this platform (ladder)"
-    needs: [build]
+    needs: [build, precheck]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2051,6 +2085,12 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
+    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the run's current main
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.precheck.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 10.0.x
@@ -2252,6 +2292,14 @@ jobs:
     - name: "The local node-test harness compiles what the gate compiles (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/run-node-tests.py --self-test
+
+    # The fresh merge every suite job runs (policy suites-test-fresh-merge) is proven both ways on
+    # throwaway repositories: parents [main tip, head], main's NEWER change present, the identical
+    # commit from a shallow and a full checkout, a conflict RED naming the path, and the negative
+    # control that the merge onto the OLD main is a different tree.
+    - name: "The fresh merge tests head + CURRENT main, and refuses a conflict (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/ci-fresh-merge.py --self-test
 
     # The doc-gate job's "every Test/ folder ran" check (check-tests-area-verdicts.py) reads the
     # gate's stdout, so a changed log format would make it see nothing. Its self-test pins both
@@ -3727,7 +3775,8 @@ jobs:
 
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
-    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for stage 1 too.
+    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too
+    # (stage 0 only since policy suites-parallel-with-review).
     needs: [preflight, stage-gate]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
@@ -3967,6 +4016,14 @@ jobs:
     - uses: actions/checkout@v7
       with:
         fetch-depth: 1
+    # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
+    # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha
+    # and the head), not github.sha. Not a gate: it only re-derives the tested commit for the push.
+    - name: Re-derive the tested commit (fresh merge onto precheck's main)
+      if: needs.precheck.outputs.main-sha != ''
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.precheck.outputs.main-sha }}
     # ── Reuse path: build+test skipped because the tree is already green ──
     # This job still runs (and succeeds), so it is the stable required check and
     # it keeps the run's conclusion `success` for main-cd's workflow_run gate.
@@ -3983,7 +4040,7 @@ jobs:
         if [ "$MODE" = "stage0-red" ]; then
           echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
-          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the 'Stage 1: review landed and answered' job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
+          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the stage gate job for exactly which (this run predates or opted into the review hold). The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
         fi
         echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
         exit 1
@@ -4204,63 +4261,6 @@ jobs:
         echo "::error::The precheck ended ${PRECHECK_RESULT}; its selection/reuse verdict is unverified. The suites may still run, but this required check cannot pass."
         exit 1
 
-    # ─────────────────── RECORD THE GREEN TREE ────────────────────
-    # Only reached when every gate above passed AND every upstream job actually
-    # SUCCEEDED. The job-result condition is not redundant with the gates: a shard
-    # that infra-fails (runner dies, artifact upload lost) leaves NOTHING for the
-    # trx/exit-marker gates to parse, so they pass on the surviving shards' green
-    # results. Marking that tree green would let a genuinely untested tree skip
-    # its main run.
-    - name: "Record green tree"
-      if: >-
-        needs.precheck.outputs.skip != 'true' &&
-        needs.build.result == 'success' &&
-        needs.test.result == 'success'
-      # Best-effort: a fork PR's read-only GITHUB_TOKEN cannot push the marker.
-      # Losing a marker only costs a redundant run — never correctness.
-      continue-on-error: true
-      run: |
-        set -euo pipefail
-        tree="${{ needs.precheck.outputs.tree }}"
-        # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
-        # REUSES this marker can name the run that actually gathered the evidence instead of
-        # leaving the reader to infer it from a run list that cannot distinguish the two
-        # kinds of green. Readers split on the first `-`; a bare `<epoch>` (legacy) still parses.
-        ref="refs/ci-green/$tree/$(date +%s)-${{ github.run_id }}"
-        # github.sha is this run's commit — the merge commit on a pull_request run,
-        # which is exactly the commit whose tree we tested. Marker refs live
-        # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
-        # they trigger no workflow (a GITHUB_TOKEN push never does anyway).
-        git push origin "${{ github.sha }}:$ref"
-        echo "Recorded green tree: $ref"
-        echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
-
-    # ── RECORD THE LAST MAIN COMMIT WHOSE TESTS ACTUALLY RAN ──────────────────────────────
-    # The other half of #1491. `refs/ci-green` is keyed by TREE, so it can say "these bytes
-    # passed" but never "main was verified at this commit" — and the bisect window a human (or
-    # an agent) reaches for is `git log <last-green>..<red>`, taken from the run list. On
-    # 2026-08-14 that window contained exactly one PR, and it was the wrong one: the preceding
-    # main run had REUSED a marker, so main's tip had never been tested as a whole, and the
-    # regression came from the change set BEFORE the one the window named.
-    #
-    # This ref is written only when the suite genuinely executed AND passed on main, so the
-    # newest one is, by construction, the last main commit whose tests actually ran.
-    - name: "Record executed-and-green main commit"
-      if: >-
-        github.ref == 'refs/heads/main' &&
-        github.event_name == 'push' &&
-        needs.precheck.outputs.skip != 'true' &&
-        needs.build.result == 'success' &&
-        needs.test.result == 'success'
-      # Same rationale as the marker push: losing one costs a less precise bisect hint, never
-      # correctness.
-      continue-on-error: true
-      run: |
-        set -euo pipefail
-        ref="refs/ci-executed/main/$(date +%s)-${{ github.run_id }}"
-        git push origin "${{ github.sha }}:$ref"
-        echo "Recorded executed-and-green main commit ${{ github.sha }} at $ref"
-
     # Keep the marker namespace small. Anything past the prune horizon is long
     # past the TTL — it can never be honoured again, it only slows the ls-remote.
     - name: "Prune stale green markers"
@@ -4457,6 +4457,71 @@ jobs:
       run: |
         echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. The clients tree is now just the Python SDK (the GUI clients moved to MeshWeaver.Plugins, MeshWeaver#2169), so a red verdict is a real SDK regression rather than the image-publication stopper it used to be."
         exit 1
+
+    # ─────────────────── RECORD THE GREEN TREE ────────────────────
+    # This MUST follow every collector gate verdict: the implicit success() guard
+    # prevents a marker when any prior gate failed (#5988). The precheck reuses
+    # this marker as proof for the WHOLE tree, so writing it before a later red
+    # gate would make that same tree appear green on its next run.
+    # It also requires every upstream job to have succeeded. The job-result
+    # condition is not redundant with the gates: a shard
+    # that infra-fails (runner dies, artifact upload lost) leaves NOTHING for the
+    # trx/exit-marker gates to parse, so they pass on the surviving shards' green
+    # results. Marking that tree green would let a genuinely untested tree skip
+    # its main run.
+    - name: "Record green tree"
+      if: >-
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Best-effort: a fork PR's read-only GITHUB_TOKEN cannot push the marker.
+      # Losing a marker only costs a redundant run — never correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        tree="${{ needs.precheck.outputs.tree }}"
+        # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
+        # REUSES this marker can name the run that actually gathered the evidence instead of
+        # leaving the reader to infer it from a run list that cannot distinguish the two
+        # kinds of green. Readers split on the first `-`; a bare `<epoch>` (legacy) still parses.
+        ref="refs/ci-green/$tree/$(date +%s)-${{ github.run_id }}"
+        # HEAD is the commit whose tree we tested: github.sha on a push, and on a pull request
+        # the fresh merge re-derived above (policy suites-test-fresh-merge). Marker refs live
+        # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
+        # they trigger no workflow (a GITHUB_TOKEN push never does anyway).
+        if [ "$(git rev-parse 'HEAD^{tree}')" != "$tree" ]; then
+          echo "::warning::the checked-out tree is not the tested tree $tree — no marker written"
+          exit 0
+        fi
+        git push origin "HEAD:$ref"
+        echo "Recorded green tree: $ref"
+        echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # ── RECORD THE LAST MAIN COMMIT WHOSE TESTS ACTUALLY RAN ──────────────────────────────
+    # The other half of #1491. `refs/ci-green` is keyed by TREE, so it can say "these bytes
+    # passed" but never "main was verified at this commit" — and the bisect window a human (or
+    # an agent) reaches for is `git log <last-green>..<red>`, taken from the run list. On
+    # 2026-08-14 that window contained exactly one PR, and it was the wrong one: the preceding
+    # main run had REUSED a marker, so main's tip had never been tested as a whole, and the
+    # regression came from the change set BEFORE the one the window named.
+    #
+    # This ref is written only when the suite genuinely executed AND passed on main, so the
+    # newest one is, by construction, the last main commit whose tests actually ran.
+    - name: "Record executed-and-green main commit"
+      if: >-
+        github.ref == 'refs/heads/main' &&
+        github.event_name == 'push' &&
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Same rationale as the marker push: losing one costs a less precise bisect hint, never
+      # correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        ref="refs/ci-executed/main/$(date +%s)-${{ github.run_id }}"
+        git push origin "${{ github.sha }}:$ref"
+        echo "Recorded executed-and-green main commit ${{ github.sha }} at $ref"
 
     # ── STATE THE BISECT WINDOW ON A RED ────────────────────────────────────────────────────
     # #1491's diagnostic half. The natural first move on a red main is

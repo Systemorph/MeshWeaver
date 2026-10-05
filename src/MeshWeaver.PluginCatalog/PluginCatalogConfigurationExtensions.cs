@@ -208,6 +208,12 @@ public static class PluginCatalogConfigurationExtensions
                         ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
                         ?? Mesh.Threading.IoPool.Unbounded,
                 })
+                // 🚨 MeshWeaver#6067 follow-up — what the GitSync import consults before it writes a
+                // package's sources: the module generation this process LOADED per package, so a
+                // package whose `requires` floor the loaded dependency does not meet is declined
+                // rather than compiled against a build that lacks what it calls.
+                .AddSingleton<MeshWeaver.GitSync.ILoadedPackageModules>(sp =>
+                    new LoadedPackageModuleReader(sp.GetRequiredService<ModuleLandingService>()))
                 // The restart-as-activation READER (#1979): which landed modules are not loaded in
                 // THIS process. Registered beside the writer and rooted at the same resolved
                 // module root — a reader looking at a different directory than the writer is how
