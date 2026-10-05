@@ -1278,6 +1278,12 @@ def separation_problems(workflow_text: str) -> list[str]:
         for n in needs:
             if n.startswith("plugins-") or n in ("published-modules", "satellite-compat"):
                 problems.append(f"`arm` needs `{n}` — a module job must never gate the platform arm")
+        # `select` reads `.github/control-instance.json`; a sparse checkout without it refuses every
+        # arming (review on #6143) — the file sits BESIDE the scripts, so it must be named.
+        checkout = next((s for s in arm.get("steps") or [] if str(s.get("uses", "")).startswith("actions/checkout")), {})
+        sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
+        if sparse and ".github/control-instance.json" not in sparse:
+            problems.append("`arm`'s sparse checkout omits `.github/control-instance.json` — `select` cannot name control and refuses every arming")
     cf = jobs.get("control-first")
     if cf is None:
         problems.append("`control-first` is missing — control is no longer deployed first")
@@ -1388,6 +1394,17 @@ def main() -> int:
     case("...and the guard catches the arm losing the ladder half of its verdict",
          no_ladder != workflow_text and any("platform-ladder-compat" in p for p in separation_problems(no_ladder)),
          "the mutation passed (or could not apply) with an arm that no longer waits for the ladder")
+    no_decl = workflow_text.replace(
+        "          sparse-checkout: |\n            .github/scripts\n            .github/control-instance.json\n"
+        "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"",
+        "          sparse-checkout: .github/scripts\n      - name: \"The selection can say no (self-test)\"", 1)
+    case("...and the guard catches the arm checking out no control declaration",
+         no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
+         "the mutation passed (or could not apply) with an arm that cannot read which instance is control")
+    alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
+    case("the control-always-latest alarm checks out the control declaration it reads",
+         ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
+         "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
     module_gates_arm = workflow_text.replace(
         "    needs: [preflight, gate, promote, platform-ladder-compat]",
         "    needs: [preflight, gate, promote, platform-ladder-compat, published-modules]", 1)

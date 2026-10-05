@@ -416,7 +416,7 @@ def load_control_instance(path: Path) -> dict:
     if not isinstance(d, dict) or not str(d.get("url", "")).startswith("https://"):
         raise ValueError(f"{path}: `url` must be the control instance's https:// base URL")
     bound = d.get("platformLagBoundMinutes")
-    if not isinstance(bound, int) or bound <= 0:
+    if type(bound) is not int or bound <= 0:  # not isinstance: `true` is an int in Python
         raise ValueError(f"{path}: `platformLagBoundMinutes` must be a positive integer")
     return d
 
@@ -441,12 +441,19 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
          build that contains this set's core commit, and answers `/health` 200. `control` is
          {"commit", "healthy", "contains": {core_sha: True|False|None}, "why"}.
 
-    A missing or still-running ladder is WAITING; a ladder that ended any other way than `success`
-    is REFUSED. Control not (yet) on the set, unreadable, or unhealthy is WAITING: the fleet is
-    offered a build only after control proved it, and `control-always-latest` alarms on a control
-    that does not take it. Silence is never a pass."""
+    A still-running (or unreadable) ladder is WAITING. A ladder that is `missing` (the run has no
+    ladder job), `ambiguous` (several jobs answer to its name) or ended any other way than `success`
+    is REFUSED — each with its own sentence. Control not (yet) on the set, unreadable, or unhealthy
+    is WAITING: the fleet is offered a build only after control proved it, and
+    `control-always-latest` alarms on a control that does not take it. Silence is never a pass."""
     if ladder is None:
         return "waiting", "its compatibility ladder has not finished (or its run is unreadable)"
+    if ladder == "missing":
+        return "refused", ("its run has NO compatibility-ladder job — nobody linked the published module set "
+                           "against this platform, so there is no verdict to arm on")
+    if ladder == "ambiguous":
+        return "refused", ("its run has SEVERAL jobs answering to the ladder's name — one verdict cannot be read "
+                           "off them (a green leg must never mask a red one); fix the workflow, not the set")
     if ladder != "success":
         return "refused", (f"its compatibility ladder ended `{ladder}` — the published module set does not link "
                            "against this platform; fix compatibility (or declare an epoch bump), never re-bake")
@@ -643,7 +650,7 @@ def self_test() -> int:
     check("a ladder still running (absent from the map) is waiting, never a pass", chosen is b and "waiting" in lines[0],
           "\n".join(lines))
     chosen, lines = select(records, {**ok, 9461: "missing"}, ctl(a, b, c), armed_max=9458)
-    check("a run with NO ladder job is refused (nobody linked the modules against it)", chosen is b and "missing" in lines[0],
+    check("a run with NO ladder job is refused (nobody linked the modules against it)", chosen is b and "NO compatibility-ladder job" in lines[0],
           "\n".join(lines))
     chosen, lines = select(records, ok, ctl(a, b), armed_max=9460)
     check("a green set OLDER than the armed one is never armed (never backwards)",
@@ -695,6 +702,30 @@ def self_test() -> int:
     chosen, lines = select(records, {**ok, 9461: "ambiguous"}, ctl(a, b, c), armed_max=9458)
     check("...and an ambiguous ladder is REFUSED, the next older green set armed", chosen is b and "refused" in lines[0],
           "\n".join(lines))
+    st, text = judge(c, "missing", ctl(c))
+    check("judge: a MISSING ladder is refused with its OWN sentence, never 'does not link' advice",
+          st == "refused" and "NO compatibility-ladder job" in text and "does not link" not in text, text)
+    st, text = judge(c, "ambiguous", ctl(c))
+    check("judge: an AMBIGUOUS ladder is refused with its OWN sentence",
+          st == "refused" and "SEVERAL jobs" in text and "does not link" not in text, text)
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        decl = Path(tmp) / "ci.json"
+        for bad, why in (({"url": "https://c", "platformLagBoundMinutes": True}, "a boolean bound"),
+                         ({"url": "https://c", "platformLagBoundMinutes": 0}, "a zero bound"),
+                         ({"url": "http://c", "platformLagBoundMinutes": 5}, "a non-https url")):
+            decl.write_text(json.dumps(bad))
+            try:
+                load_control_instance(decl)
+                check(f"load_control_instance: {why} is RED", False)
+            except ValueError:
+                check(f"load_control_instance: {why} is RED", True)
+    shipped = Path(__file__).resolve().parents[1] / "control-instance.json"
+    try:
+        load_control_instance(shipped)
+        check("the shipped .github/control-instance.json validates", True)
+    except (OSError, ValueError) as e:
+        check("the shipped .github/control-instance.json validates", False, str(e))
     check("ladder_of: a run with no ladder job is `missing` (refused), an unreadable run None",
           ladder_of([{"name": "Promote: tag", "status": "completed", "conclusion": "success"}]) == "missing"
           and ladder_of(None) is None)

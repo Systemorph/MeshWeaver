@@ -2575,7 +2575,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          # `select` reads which instance is control from `.github/control-instance.json`, which
+          # lives BESIDE the scripts — without it the arming refuses (RED), so it is checked out too.
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
       - name: "The selection can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
       - name: An override carries its reason

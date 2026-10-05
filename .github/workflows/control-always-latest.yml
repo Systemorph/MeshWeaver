@@ -49,7 +49,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          # The declaration of which instance is control lives BESIDE the scripts, not under them —
+          # without it `control-lag` refuses (RED), so it is checked out explicitly.
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
       - name: Is control on the newest platform build?
