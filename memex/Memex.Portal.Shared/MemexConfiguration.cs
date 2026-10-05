@@ -314,7 +314,7 @@ public static class MemexConfiguration
                 entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleSet] DEGRADED module '{module}': {reason}"));
-            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntriesForPlatform(
+            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntriesAgainstImage(
                 moduleAssemblies,
                 activationOnMeshSet,
                 // The ONE wording of the declared floor (ModulePlatformFloor) — ADVISORY since
@@ -365,7 +365,14 @@ public static class MemexConfiguration
                     PrebuiltAssemblySeeder.LiveFrameworkMvid,
                     MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedIdentity,
                     MeshWeaver.Compiler.FrameworkBuildIdentity.ProducerStatedProvenance,
-                ]);
+                ],
+                // 🚨 MeshWeaver#6044 — what the image's OWN copy of each module was built as (the
+                // module.seed.json stamp the closure lane writes beside it). Under the compatibility
+                // key the identity above is one value for a whole epoch, so it no longer tells an
+                // older store copy from the image's newer one; the version does. A store copy of an
+                // image-shipped module overrides only as a strictly newer release. No stamp (an
+                // image from before it) decides nothing.
+                ImageModuleSeed.OfImageCopy);
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
             // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
             // `Modules:Assemblies` takes the whole portal down before anything is serving —

@@ -54,6 +54,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
+| 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
@@ -74,6 +75,33 @@ advance only when the import's nodes **all** landed (`MayAdvanceBaseline`), the
 land had its hash recorded, the next attempt would read it as unchanged and the miss would become
 permanent. A declined module keeps the hash it had. The first import after this change has no hashes
 recorded, so every module syncs.
+
+### A dependency floor the loaded build does not meet (#6067)
+
+**Measured 2026-10-04 on the control instance.** Hosting 1.56 declared `requires: ["AI@^1.21.0"]`.
+Its sources were GitSync-imported and Roslyn-compiled at 20:00:50Z while AI 1.20.4 was the loaded
+build, and every thread start — reviews, watchdog fixers, the bug pool — then threw
+`MissingMethodException` (`ThreadPreparation.set_Group`). The module-set proposal already refused a
+set with an unmet floor ([Module Set Convergence](../ModuleSetConvergence)); the import that put the
+sources in front of the compiler never asked.
+
+So rule 1b runs in the same decision, after rule 1: a **Synced** module whose requirement the
+loaded dependency does not satisfy becomes **Declined**, exactly like a platform floor. Its sources
+are neither written nor pruned, so its NodeTypes keep serving their last good build; the baseline
+stays, so its files remain in the next diff; the decline is on the sync config
+(`LastSyncNote`, `ModuleOutcomes[].UnmetRequirement`) and in the `/health` module census, which
+escalates a decline that persists. Nothing has to be armed to release it: the next import judges
+again, and the import after the restart that activates a satisfying dependency syncs the module.
+
+🚨 **Loaded, never landed.** `LoadedPackageModuleReader` (MeshWeaver.PluginCatalog) maps each
+package to the generation its module actually LOADED from — the activation head's version when the
+head loaded, the retained previous generation's when that one did, and nothing otherwise. A landing
+is restart-as-activation, so judging against the head would let an import compile sources against a
+1.21 that is landed but not running — the very shape this rule exists to stop. A mesh with no module
+host registers no reader and judges nothing, which is the behaviour before the rule.
+
+The range rule is `PackageRequirement` (MeshWeaver.Plugin.Packaging), shared with the proposal's
+`ModuleDependencyFloor`: one reading, so the two checks can never disagree about the same range.
 
 ## What each lane does now
 

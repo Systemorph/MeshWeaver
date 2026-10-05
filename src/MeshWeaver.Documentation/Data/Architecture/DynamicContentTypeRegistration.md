@@ -87,6 +87,13 @@ falsifies both stated causes and is the cheapest way to recognise this failure �
   its type registers, and `Clear` removes one the moment a read of that type succeeds. Only the
   **×count** is cumulative since boot. Measured: over 2.7 h on one deployment the named set
   CHANGED and members left it — which a counter that never decayed could not do.
+- **Each entry prints its WINDOW** — `Store/Tier ×377 between 2026-09-21T07:45:16Z and
+  2026-09-21T07:47:04Z (last Admin/Tiers/free)`: the instants its first and its last counted read
+  degraded ([Plugins#2812](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2812)). Without it
+  the bare `×377` read as "failing now" when every one of those reads fell in the two minutes after
+  boot. A window whose end is long past is a type that is STILL unregistered here (the presence is
+  re-checked) but that nothing has read since — a latent gap, not reads failing now. A window whose
+  end is the last few seconds is reads degrading NOW. One probe tells them apart.
 - **A GROWING count is positive evidence, and it is the reading to take.** The ×count only rises
   when a read degrades, so comparing two probes turns the weakest part of this instrument into its
   strongest: measured on the public instance, `Hosting/DeploymentStatus` went ×260 and ×257 to

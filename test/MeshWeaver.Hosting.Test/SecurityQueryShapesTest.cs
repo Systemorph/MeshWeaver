@@ -190,8 +190,9 @@ public class SecurityQueryShapesTest
     /// source of any of these again. <c>PartitionAccessPolicy path:- scope:Children</c> WAS the
     /// fold's root policy leg (179 lines); the three <c>AccessAssignment path:-</c> shapes never
     /// were — <c>scope:Subtree</c> (313 lines) is unattributed in this repo and
-    /// <c>scope:Exact</c> is <c>UserActivityLayoutAreas.ObserveSharedTargets</c>, a home-page
-    /// band, not a permission read — but a fold shape that DESCRIBED to one would be exactly the
+    /// <c>scope:Exact</c> was <c>UserActivityLayoutAreas.ObserveSharedTargets</c>, a home-page
+    /// band (since 2026-10-04 issued once per logon by <c>RefreshSpacePathsLogonAction</c>), not a
+    /// permission read — but a fold shape that DESCRIBED to one would be exactly the
     /// regression this census exists to catch, so all four are pinned.
     /// </summary>
     [Theory]

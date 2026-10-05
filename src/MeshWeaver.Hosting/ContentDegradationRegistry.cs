@@ -26,6 +26,19 @@ public sealed record ContentDegradation(
     /// change). A property leaves the arity untouched.</para>
     /// </summary>
     public string? Discriminator { get; init; }
+
+    /// <summary>
+    /// When the FIRST read counted in <see cref="Count"/> degraded — the opening of the window the
+    /// count covers (Plugins#2812). <c>null</c> on an entry built by the 5-argument constructor
+    /// (an assembly compiled before this property existed), where <see cref="WindowStart"/> falls
+    /// back to <see cref="LastAt"/>. An <c>init</c> property for the same binary-compatibility
+    /// reason as <see cref="Discriminator"/>.
+    /// </summary>
+    public DateTimeOffset? FirstAt { get; init; }
+
+    /// <summary>The opening of the count's window: <see cref="FirstAt"/>, or <see cref="LastAt"/>
+    /// when the entry carries no first-seen instant.</summary>
+    public DateTimeOffset WindowStart => FirstAt ?? LastAt;
 }
 
 /// <summary>
@@ -58,7 +71,7 @@ public sealed class ContentDegradationRegistry
         var now = DateTimeOffset.UtcNow;
         byNodeType.AddOrUpdate(
             key,
-            _ => new ContentDegradation(key, seam, 1, nodePath, now) { Discriminator = discriminator },
+            _ => new ContentDegradation(key, seam, 1, nodePath, now) { Discriminator = discriminator, FirstAt = now },
             (_, existing) => existing with
             {
                 Count = existing.Count + 1,
@@ -128,7 +141,18 @@ public sealed class ContentDegradationRegistry
     /// is composed here so a test can pin it without a host).</summary>
     public const string HealthCheckName = "content-types";
 
-    /// <summary>The one sentence an operator reads on <c>/health</c>. Pure.</summary>
+    /// <summary>
+    /// The one sentence an operator reads on <c>/health</c>. Pure.
+    ///
+    /// <para>🚨 <b>Every entry carries its WINDOW — when its first and its last counted read degraded
+    /// (Plugins#2812).</b> An entry's PRESENCE is a live verdict (<see cref="Unresolved"/> re-asks the
+    /// registry on every probe), but its <c>×count</c> is cumulative over the entry's lifetime. Printed
+    /// bare, <c>Store/Tier ×377</c> could not tell "reads of this type are degrading now" from "377
+    /// reads degraded in the two minutes after boot and nothing has read it since" — two readings an
+    /// operator acts on differently, and the second was repeatedly taken for the first. With the
+    /// window in the sentence one probe answers it; before, it took two probes and a diff of the
+    /// counts.</para>
+    /// </summary>
     public static string Describe(IReadOnlyList<ContentDegradation> degraded) =>
         degraded.Count == 0
             ? "every node content read on this replica typed"
@@ -142,7 +166,15 @@ public sealed class ContentDegradationRegistry
               + "the type is not loaded here: its prebuilt bundle was declined, or its compiled assembly "
               + "is not on this replica. 🚨 bake-report DECIDES between them — if its no-usable-assembly "
               + "list does not name a type below, that type's assembly is present and the first cause is "
-              + "the answer: "
-              + string.Join("; ", degraded.Select(d => $"{d.NodeType} ×{d.Count} (last {d.LastPath})"));
-}
+              + "the answer. Each type below is re-checked against the registry on every probe, so its "
+              + "PRESENCE is current; its ×count is cumulative and its window says WHEN those reads "
+              + "degraded — a window that closed long ago is a type still unregistered here that nothing "
+              + "has read since, not reads failing now: "
+              + string.Join("; ", degraded.Select(d =>
+                  $"{d.NodeType} ×{d.Count} between {Stamp(d.WindowStart)} and {Stamp(d.LastAt)} "
+                  + $"(last {d.LastPath})"));
 
+    /// <summary>A UTC second-precision instant, culture-invariant (never the process culture).</summary>
+    private static string Stamp(DateTimeOffset at) =>
+        at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+}

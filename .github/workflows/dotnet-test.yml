@@ -4204,63 +4204,6 @@ jobs:
         echo "::error::The precheck ended ${PRECHECK_RESULT}; its selection/reuse verdict is unverified. The suites may still run, but this required check cannot pass."
         exit 1
 
-    # ─────────────────── RECORD THE GREEN TREE ────────────────────
-    # Only reached when every gate above passed AND every upstream job actually
-    # SUCCEEDED. The job-result condition is not redundant with the gates: a shard
-    # that infra-fails (runner dies, artifact upload lost) leaves NOTHING for the
-    # trx/exit-marker gates to parse, so they pass on the surviving shards' green
-    # results. Marking that tree green would let a genuinely untested tree skip
-    # its main run.
-    - name: "Record green tree"
-      if: >-
-        needs.precheck.outputs.skip != 'true' &&
-        needs.build.result == 'success' &&
-        needs.test.result == 'success'
-      # Best-effort: a fork PR's read-only GITHUB_TOKEN cannot push the marker.
-      # Losing a marker only costs a redundant run — never correctness.
-      continue-on-error: true
-      run: |
-        set -euo pipefail
-        tree="${{ needs.precheck.outputs.tree }}"
-        # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
-        # REUSES this marker can name the run that actually gathered the evidence instead of
-        # leaving the reader to infer it from a run list that cannot distinguish the two
-        # kinds of green. Readers split on the first `-`; a bare `<epoch>` (legacy) still parses.
-        ref="refs/ci-green/$tree/$(date +%s)-${{ github.run_id }}"
-        # github.sha is this run's commit — the merge commit on a pull_request run,
-        # which is exactly the commit whose tree we tested. Marker refs live
-        # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
-        # they trigger no workflow (a GITHUB_TOKEN push never does anyway).
-        git push origin "${{ github.sha }}:$ref"
-        echo "Recorded green tree: $ref"
-        echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
-
-    # ── RECORD THE LAST MAIN COMMIT WHOSE TESTS ACTUALLY RAN ──────────────────────────────
-    # The other half of #1491. `refs/ci-green` is keyed by TREE, so it can say "these bytes
-    # passed" but never "main was verified at this commit" — and the bisect window a human (or
-    # an agent) reaches for is `git log <last-green>..<red>`, taken from the run list. On
-    # 2026-08-14 that window contained exactly one PR, and it was the wrong one: the preceding
-    # main run had REUSED a marker, so main's tip had never been tested as a whole, and the
-    # regression came from the change set BEFORE the one the window named.
-    #
-    # This ref is written only when the suite genuinely executed AND passed on main, so the
-    # newest one is, by construction, the last main commit whose tests actually ran.
-    - name: "Record executed-and-green main commit"
-      if: >-
-        github.ref == 'refs/heads/main' &&
-        github.event_name == 'push' &&
-        needs.precheck.outputs.skip != 'true' &&
-        needs.build.result == 'success' &&
-        needs.test.result == 'success'
-      # Same rationale as the marker push: losing one costs a less precise bisect hint, never
-      # correctness.
-      continue-on-error: true
-      run: |
-        set -euo pipefail
-        ref="refs/ci-executed/main/$(date +%s)-${{ github.run_id }}"
-        git push origin "${{ github.sha }}:$ref"
-        echo "Recorded executed-and-green main commit ${{ github.sha }} at $ref"
-
     # Keep the marker namespace small. Anything past the prune horizon is long
     # past the TTL — it can never be honoured again, it only slows the ls-remote.
     - name: "Prune stale green markers"
@@ -4457,6 +4400,67 @@ jobs:
       run: |
         echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. The clients tree is now just the Python SDK (the GUI clients moved to MeshWeaver.Plugins, MeshWeaver#2169), so a red verdict is a real SDK regression rather than the image-publication stopper it used to be."
         exit 1
+
+    # ─────────────────── RECORD THE GREEN TREE ────────────────────
+    # This MUST follow every collector gate verdict: the implicit success() guard
+    # prevents a marker when any prior gate failed (#5988). The precheck reuses
+    # this marker as proof for the WHOLE tree, so writing it before a later red
+    # gate would make that same tree appear green on its next run.
+    # It also requires every upstream job to have succeeded. The job-result
+    # condition is not redundant with the gates: a shard
+    # that infra-fails (runner dies, artifact upload lost) leaves NOTHING for the
+    # trx/exit-marker gates to parse, so they pass on the surviving shards' green
+    # results. Marking that tree green would let a genuinely untested tree skip
+    # its main run.
+    - name: "Record green tree"
+      if: >-
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Best-effort: a fork PR's read-only GITHUB_TOKEN cannot push the marker.
+      # Losing a marker only costs a redundant run — never correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        tree="${{ needs.precheck.outputs.tree }}"
+        # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
+        # REUSES this marker can name the run that actually gathered the evidence instead of
+        # leaving the reader to infer it from a run list that cannot distinguish the two
+        # kinds of green. Readers split on the first `-`; a bare `<epoch>` (legacy) still parses.
+        ref="refs/ci-green/$tree/$(date +%s)-${{ github.run_id }}"
+        # github.sha is this run's commit — the merge commit on a pull_request run,
+        # which is exactly the commit whose tree we tested. Marker refs live
+        # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
+        # they trigger no workflow (a GITHUB_TOKEN push never does anyway).
+        git push origin "${{ github.sha }}:$ref"
+        echo "Recorded green tree: $ref"
+        echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # ── RECORD THE LAST MAIN COMMIT WHOSE TESTS ACTUALLY RAN ──────────────────────────────
+    # The other half of #1491. `refs/ci-green` is keyed by TREE, so it can say "these bytes
+    # passed" but never "main was verified at this commit" — and the bisect window a human (or
+    # an agent) reaches for is `git log <last-green>..<red>`, taken from the run list. On
+    # 2026-08-14 that window contained exactly one PR, and it was the wrong one: the preceding
+    # main run had REUSED a marker, so main's tip had never been tested as a whole, and the
+    # regression came from the change set BEFORE the one the window named.
+    #
+    # This ref is written only when the suite genuinely executed AND passed on main, so the
+    # newest one is, by construction, the last main commit whose tests actually ran.
+    - name: "Record executed-and-green main commit"
+      if: >-
+        github.ref == 'refs/heads/main' &&
+        github.event_name == 'push' &&
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Same rationale as the marker push: losing one costs a less precise bisect hint, never
+      # correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        ref="refs/ci-executed/main/$(date +%s)-${{ github.run_id }}"
+        git push origin "${{ github.sha }}:$ref"
+        echo "Recorded executed-and-green main commit ${{ github.sha }} at $ref"
 
     # ── STATE THE BISECT WINDOW ON A RED ────────────────────────────────────────────────────
     # #1491's diagnostic half. The natural first move on a red main is

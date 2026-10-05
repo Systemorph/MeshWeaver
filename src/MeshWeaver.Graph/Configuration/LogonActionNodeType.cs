@@ -72,7 +72,10 @@ public static class LogonActionNodeType
             .AddSingleton<ILogonAction, DefaultAppIconRefreshLogonAction>()
             .AddSingleton<SignInNotificationTargets>()
             .AddSingleton<ILogonAction, AnnounceSignInLogonAction>()
-            .AddSingleton<ILogonAction, AppIconAdoptionLogonAction>());
+            .AddSingleton<ILogonAction, AppIconAdoptionLogonAction>()
+            // The home's path manifests (User.SpacePaths / SharedPaths): the two mesh-wide reads
+            // the home used to run per render, once per logon instead.
+            .AddSingleton<ILogonAction, RefreshSpacePathsLogonAction>());
         return builder;
     }
 
