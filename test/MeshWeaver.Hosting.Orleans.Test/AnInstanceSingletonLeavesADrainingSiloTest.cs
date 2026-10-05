@@ -41,7 +41,7 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
             .FirstAsync().Await(ct);
         await access.RunAsSystem(() => hubB.NodeOperationIssuingHub()
                 .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
-            .Should().Within(TimeSpan.FromSeconds(30))
+            .Should().Within(TestTimeouts.Convergence)
             .Emit($"{name} answers on silo B — the precondition", ct);
         hubB.GetHostedHub(new Address(path), HostedHubCreation.Never).Should().NotBeNull($"{name} must be activated on silo B, the silo that drains");
         return path;
@@ -106,7 +106,7 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
             // The ordinary hub keeps serving from the draining silo — the drain waits for exactly such work.
             await accessA.RunAsSystem(() => hubA.NodeOperationIssuingHub()
                     .Observe(new PingRequest(), o => o.WithTarget(new Address(ordinary))))
-                .Should().Within(TimeSpan.FromSeconds(30))
+                .Should().Within(TestTimeouts.CrossSilo)
                 .Emit("an ordinary hub still answers", ct);
             hubB.GetHostedHub(new Address(ordinary), HostedHubCreation.Never).Should().NotBeNull(
                 "an ordinary hub is NOT moved by drain — only hubs that RelocateOnDrain");
@@ -169,7 +169,7 @@ public class AnInstanceSingletonWithNowhereToGoKeepsServingTest(SharedOrleansFix
             .FirstAsync().Await(ct);
         await access.RunAsSystem(() => hub.NodeOperationIssuingHub()
                 .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
-            .Should().Within(TimeSpan.FromSeconds(30))
+            .Should().Within(TestTimeouts.Convergence)
             .Emit("the singleton answers before the drain — the precondition", ct);
 
         var signal = silo.GetRequiredService<HostDrainSignal>();
