@@ -39,8 +39,10 @@ the control instance. main-cd's `arm` job writes those, for the set this script 
   * or the one set named by `--override` (a workflow_dispatch carrying its reason) — an
     instruction, so a set that is not promoted is a RED, never a substitution.
 
-A set whose ladder or control reading is absent is WAITING, one whose ladder is red is REFUSED:
-neither is armed, and a newer green set supersedes both. Silence is never a pass.
+A set whose ladder is still running (or unreadable), or whose control reading is absent, is
+WAITING; one whose ladder is red, MISSING (the run has no ladder job) or AMBIGUOUS (several jobs
+answer to the ladder's name) is REFUSED: neither is armed, and a newer green set supersedes both.
+Silence is never a pass.
 
 CONTROL FIRST. `control-first` decides the control image's tags for THIS run's accepted build:
 every platform build that passed the control image's own acceptance is tagged
@@ -344,13 +346,17 @@ def read_run_jobs(get: Get, core_token: str, run_id: object) -> list[dict] | Non
 
 def ladder_of(jobs: list[dict] | None) -> str | None:
     """The ladder's conclusion in one run's jobs: its `conclusion` once completed, `missing` when the
-    run has no ladder job at all (a refusal — a promoted set nobody linked the modules against), None
+    run has no ladder job at all (a refusal — a promoted set nobody linked the modules against),
+    `ambiguous` when SEVERAL jobs answer to the ladder's name (a refusal — a green first one must
+    never mask a red later one; a matrix ladder would need this reading rewritten, not guessed), None
     while it runs or when the run could not be read. Pure."""
     if jobs is None:
         return None
     hits = [j for j in jobs if str(j.get("name", "")).rstrip().endswith(LADDER_JOB_SUFFIX)]
     if not hits:
         return "missing"
+    if len(hits) > 1:
+        return "ambiguous"
     j = hits[0]
     return str(j.get("conclusion")) if j.get("status") == "completed" and j.get("conclusion") else None
 
@@ -509,7 +515,10 @@ def control_lag(newest: dict | None, control: dict, now: float, bound_minutes: i
     `control` is the same reading `judge` uses. RED (`lag`) when control does not contain that
     build and it was given more than `bound_minutes` ago — or when control's running build cannot
     be read at all (an instance that cannot say what it runs cannot be shown to be latest; silence
-    is never a pass). Within the bound it is `converging`, said out loud."""
+    is never a pass). Within the bound it is `converging`, said out loud. Control ON the newest build
+    but with `/health` not 200 is `lag` too: `judge` offers the fleet nothing from an unhealthy
+    control, so that state blocks every later arming and must be red, never an `ok` that closes the
+    issue (review on MeshWeaver#6143)."""
     if newest is None:
         return "lag", ("no promoted set among the examined runs has a successful `Deploy control first` job — "
                        "nothing proves control was given a build")
@@ -519,6 +528,10 @@ def control_lag(newest: dict | None, control: dict, now: float, bound_minutes: i
                        f"it cannot be shown to be on {newest['v_portal']}")
     contains = (control.get("contains") or {}).get(newest["core_sha"])
     age_min = int(max(0.0, now - float(newest["given_at"])) // 60)
+    if contains is True and not control.get("healthy"):
+        return "lag", (f"control runs {commit[:9]}, which contains the newest platform build {newest['v_portal']}, "
+                       f"but /health is not 200 ({control.get('why') or 'unhealthy'}) — the fleet is offered nothing "
+                       "until control is healthy (policy platform-deploy-control-first)")
     if contains is True:
         return "ok", (f"control runs {commit[:9]}, which contains the newest platform build "
                       f"{newest['v_portal']} ({newest['core_sha'][:9]})")
@@ -675,6 +688,13 @@ def self_test() -> int:
                       "status": "completed", "conclusion": "success"}]) == "success")
     check("ladder_of: a running ladder is None (waiting)",
           ladder_of([{"name": "x (ladder)", "status": "in_progress", "conclusion": None}]) is None)
+    two = [{"name": "Compatibility: a (ladder)", "status": "completed", "conclusion": "success"},
+           {"name": "Compatibility: b (ladder)", "status": "completed", "conclusion": "failure"}]
+    check("ladder_of: SEVERAL ladder-named jobs are `ambiguous` — a green first one never masks a red later one",
+          ladder_of(two) == "ambiguous" and ladder_of(list(reversed(two))) == "ambiguous")
+    chosen, lines = select(records, {**ok, 9461: "ambiguous"}, ctl(a, b, c), armed_max=9458)
+    check("...and an ambiguous ladder is REFUSED, the next older green set armed", chosen is b and "refused" in lines[0],
+          "\n".join(lines))
     check("ladder_of: a run with no ladder job is `missing` (refused), an unreadable run None",
           ladder_of([{"name": "Promote: tag", "status": "completed", "conclusion": "success"}]) == "missing"
           and ladder_of(None) is None)
@@ -701,6 +721,9 @@ def self_test() -> int:
     newest = {"core_sha": c["core_sha"], "v_portal": c["v_portal"], "given_at": 1_000_000.0}
     st, text = control_lag(newest, ctl(c), now=1_000_000.0 + 9 * 3600, bound_minutes=120)
     check("control-always-latest: control on the newest build is ok, however long ago it was given", st == "ok", text)
+    st, text = control_lag(newest, ctl(c, healthy=False), now=1_000_000.0, bound_minutes=120)
+    check("control-always-latest: control ON the newest build but /health not 200 is RED — it blocks every arming",
+          st == "lag" and "/health" in text, text)
     st, text = control_lag(newest, ctl(b), now=1_000_000.0 + 60 * 60, bound_minutes=120)
     check("control-always-latest: behind INSIDE the bound is converging (said, not red)", st == "converging", text)
     st, text = control_lag(newest, ctl(b), now=1_000_000.0 + 121 * 60, bound_minutes=120)

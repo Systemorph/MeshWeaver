@@ -15,7 +15,9 @@
 # Behind past `platformLagBoundMinutes` → RED, and the ONE open `control-lag` issue gets a comment
 # naming control's commit, the newest build, and how long ago it was given. Converging inside the
 # bound is said, not red. A control whose running build cannot be read is RED too — an instance that
-# cannot say what it runs cannot be shown to be latest. Green closes the issue.
+# cannot say what it runs cannot be shown to be latest. Control ON the newest build but with `/health`
+# not 200 is RED as well: the arming offers the fleet nothing from an unhealthy control, so that state
+# blocks every later roll. Green closes the issue.
 #
 # THE MODULE HALF is alarmed on the control instance itself (MeshWeaver.Plugins Hosting
 # `FleetTarget.ControlBreaches`, filed as a `fleet-behind-target` triage item): it needs the

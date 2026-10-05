@@ -65,7 +65,7 @@ How each state is read:
 
 - A ladder that is still running is **waiting**.
 - A red ladder is **refused**.
-- A missing ladder job is **refused**.
+- A missing ladder job, or several jobs answering to the ladder's name, is **refused**.
 - A control that has not taken the set yet is **waiting**. So is one whose `/health` is not 200, and one whose state cannot be read.
 - A newer green set supersedes all of these.
 - No reading ever counts as a pass when there was silence.
@@ -106,7 +106,9 @@ commit contains that set. The results:
 - **ok**: control contains the set, however long ago it was given.
 - **converging**: control does not contain it yet, and the build was given inside
   `platformLagBoundMinutes`. This is reported, not red.
-- **lag**: control does not contain it past the bound, or control's state cannot be read. The
+- **lag**: control does not contain it past the bound, control's state cannot be read, or control
+  runs it but `/health` is not 200 (the arming offers the fleet nothing from an unhealthy control,
+  so that state blocks every roll). The
   check goes **RED**, and the one open `control-lag` issue is commented with control's commit, the
   newest build and how long ago it was given. The next green reading closes the issue.
 
