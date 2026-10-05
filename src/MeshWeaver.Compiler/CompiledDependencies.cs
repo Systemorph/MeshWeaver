@@ -80,6 +80,30 @@ public static class CompiledDependencies
     /// </summary>
     public const string MinVersionScheme = "min:";
 
+    /// <summary>
+    /// 🚨 Scheme prefix for a module's PACKAGE-VERSION floor — <c>pkg:&lt;version&gt;</c>, the
+    /// version of the store package that declares the module, stamped into the module assembly at
+    /// its build (<c>InstalledModuleAssembly.PackageVersion</c>). Same floor semantics as
+    /// <see cref="MinVersionScheme"/>, and a DIFFERENT scheme on purpose.
+    ///
+    /// <para><b>Why <c>min:</c> was not enough.</b> The <c>min:</c> floor is read off the module's
+    /// informational version, which a module build inherits from the PLATFORM (#3732): every build
+    /// of <c>MeshWeaver.AI</c> states the same <c>3.0.0.0</c>. A floor that never moves is satisfied
+    /// by every build, so a prebuilt compiled against AI 1.21 (which added
+    /// <c>ThreadPreparation.Group</c>) was adopted on an instance running AI 1.20.4 and failed at
+    /// call time with <c>MissingMethodException</c> instead of being declined
+    /// (<c>Doc/Architecture/DependencyRecordFloor</c>, section "A floor must move with the
+    /// module").</para>
+    ///
+    /// <para>🚨 <b>Why a separate scheme rather than a better <c>min:</c> value.</b> During the
+    /// transition an instance still runs module bytes that carry no package stamp and so resolve
+    /// <c>min:3.0.0.0</c>. Were the package version written as <c>min:1.21.0</c>, that old module
+    /// would SATISFY it (3.0.0.0 ≥ 1.21.0) — the incident again. Across the two schemes
+    /// <see cref="Satisfies"/> refuses to compare, so the mixed case is NOT CHECKED and the bytes
+    /// are declined: inconclusive stays on the rebuild side.</para>
+    /// </summary>
+    public const string PackageVersionScheme = "pkg:";
+
     /// <summary>Recorded when a name is in scope but nothing resolves an id for it — absence is
     /// part of the record, never silently skipped (two environments with different presence sets
     /// must never validate against each other).</summary>
@@ -346,17 +370,28 @@ public static class CompiledDependencies
     {
         if (string.Equals(stamped, live, StringComparison.Ordinal))
             return true;
-        if (!IsFloor(stamped) || !IsFloor(live))
+        if (!IsComparableFloorPair(stamped, live))
             return false;
         return NuGetVersionComparer.Instance.Compare(VersionOf(live), VersionOf(stamped)) >= 0;
     }
 
-    /// <summary>True for a <see cref="MinVersionScheme"/> id.</summary>
-    private static bool IsFloor(string id) =>
-        id.StartsWith(MinVersionScheme, StringComparison.Ordinal);
+    /// <summary>True for a floor id of either scheme (<see cref="MinVersionScheme"/>,
+    /// <see cref="PackageVersionScheme"/>).</summary>
+    private static bool IsFloor(string id) => FloorSchemeOf(id) is not null;
 
-    /// <summary>The version text of a <see cref="MinVersionScheme"/> id.</summary>
-    private static string VersionOf(string id) => id[MinVersionScheme.Length..];
+    /// <summary>The floor scheme an id is in, or null for an exact id.</summary>
+    private static string? FloorSchemeOf(string id) =>
+        id.StartsWith(PackageVersionScheme, StringComparison.Ordinal) ? PackageVersionScheme
+        : id.StartsWith(MinVersionScheme, StringComparison.Ordinal) ? MinVersionScheme
+        : null;
+
+    /// <summary>Two floors of the SAME scheme — the only pair the floor relaxation compares.</summary>
+    private static bool IsComparableFloorPair(string stamped, string live) =>
+        FloorSchemeOf(stamped) is { } scheme
+        && string.Equals(scheme, FloorSchemeOf(live), StringComparison.Ordinal);
+
+    /// <summary>The version text of a floor id.</summary>
+    private static string VersionOf(string id) => FloorSchemeOf(id) is { } scheme ? id[scheme.Length..] : id;
 
     /// <summary>
     /// The per-entry verdict: null when the entry holds, else the outcome naming WHY it does not.
@@ -368,7 +403,7 @@ public static class CompiledDependencies
     {
         if (Satisfies(stamped, live))
             return null;
-        if (IsFloor(stamped) && IsFloor(live))
+        if (IsComparableFloorPair(stamped, live))
             // Compared, and genuinely below. The remedy names itself: land a newer module.
             return DependencyRecordOutcome.FloorNotMet(name,
                 $"'{name}' needs at least {VersionOf(stamped)} — this environment has "
@@ -485,6 +520,7 @@ public static class CompiledDependencies
     /// <param name="id">A record entry's value.</param>
     public static bool IsModuleLaneId(string id) =>
         id.StartsWith(MinVersionScheme, StringComparison.Ordinal)
+        || id.StartsWith(PackageVersionScheme, StringComparison.Ordinal)
         || id.StartsWith(MvidScheme, StringComparison.Ordinal);
 
     /// <summary>
@@ -525,18 +561,49 @@ public static class CompiledDependencies
         string compatibilityKey,
         IReadOnlyDictionary<string, string> moduleMvidByName,
         Func<string, string?> moduleVersionOf)
+        => CreateCompatibilityIdResolver(compatibilityKey, moduleMvidByName, moduleVersionOf, static _ => null);
+
+    /// <summary>
+    /// <see cref="CreateCompatibilityIdResolver(string, IReadOnlyDictionary{string, string}, Func{string, string})"/>
+    /// with the module lane preferring the module's PACKAGE version
+    /// (<see cref="PackageVersionScheme"/>) — the one module id that moves between module builds.
+    /// <see cref="ModuleIdOf"/> states the order.
+    /// </summary>
+    /// <param name="compatibilityKey">The environment's platform compatibility key.</param>
+    /// <param name="moduleMvidByName">Installed module assembly simple name → MVID ("N").</param>
+    /// <param name="moduleVersionOf">Installed module assembly simple name → its build version.</param>
+    /// <param name="modulePackageVersionOf">Installed module assembly simple name → the package
+    /// version stamped into it (<c>InstalledModuleAssembly.PackageVersion</c>), or null.</param>
+    public static Func<string, string?> CreateCompatibilityIdResolver(
+        string compatibilityKey,
+        IReadOnlyDictionary<string, string> moduleMvidByName,
+        Func<string, string?> moduleVersionOf,
+        Func<string, string?> modulePackageVersionOf)
     {
         ArgumentException.ThrowIfNullOrEmpty(compatibilityKey);
+        ArgumentNullException.ThrowIfNull(modulePackageVersionOf);
         var platformId = CompatScheme + compatibilityKey;
         return name =>
         {
             if (moduleMvidByName.TryGetValue(name, out var moduleMvid))
-                return moduleVersionOf(name) is { Length: > 0 } version
-                    ? MinVersionScheme + version
-                    : MvidScheme + moduleMvid;
+                return ModuleIdOf(moduleMvid, modulePackageVersionOf(name), moduleVersionOf(name));
             return name.StartsWith("MeshWeaver.", StringComparison.Ordinal) ? platformId : null;
         };
     }
+
+    /// <summary>
+    /// 🚨 THE ONE module-lane id, for producer and consumer alike: the PACKAGE version floor
+    /// (<see cref="PackageVersionScheme"/>) when the module states one, else the build-version
+    /// floor (<see cref="MinVersionScheme"/>), else the exact build (<see cref="MvidScheme"/>).
+    /// Pure.
+    /// </summary>
+    /// <param name="moduleMvid">The module assembly's MVID ("N").</param>
+    /// <param name="packageVersion">The package version stamped into the module, or null.</param>
+    /// <param name="buildVersion">The module's informational build version, or null.</param>
+    public static string ModuleIdOf(string moduleMvid, string? packageVersion, string? buildVersion) =>
+        !string.IsNullOrWhiteSpace(packageVersion) ? PackageVersionScheme + packageVersion.Trim()
+        : !string.IsNullOrWhiteSpace(buildVersion) ? MinVersionScheme + buildVersion
+        : MvidScheme + moduleMvid;
 
     /// <summary>
     /// The toolchain id for <see cref="ToolchainKey"/> under the compatibility key:

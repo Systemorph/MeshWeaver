@@ -43,6 +43,39 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
     /// </summary>
     public string? Version => VersionOf(Assembly);
 
+    /// <summary>
+    /// 🚨 The <c>AssemblyMetadata</c> key a module build stamps its PACKAGE version under — the
+    /// <c>version</c> of the <c>manifest.lock</c> of the store package whose <c>index.json</c>
+    /// declares this assembly as its <c>module</c>.
+    /// </summary>
+    public const string PackageVersionMetadataKey = "MeshWeaver.PackageVersion";
+
+    /// <summary>
+    /// 🚨 THE ONE READER of the module's PACKAGE version: the value of
+    /// <c>[assembly: AssemblyMetadata("MeshWeaver.PackageVersion", "…")]</c>, or null when the
+    /// module carries no such stamp.
+    ///
+    /// <para><b>Why it exists next to <see cref="Version"/>.</b> A module build inherits its
+    /// informational version from the PLATFORM (#3732), so <see cref="Version"/> is identical for
+    /// every build of a module and a floor over it never moves: a NodeType compiled against AI 1.21
+    /// recorded <c>min:3.0.0.0</c> and was adopted on an instance running AI 1.20.4, failing at
+    /// call time (<c>MissingMethodException</c>). The package version DOES move with the module,
+    /// and it is read from the module's own bytes, so producer (the bake host) and consumer (the
+    /// portal) derive it identically by construction. It resolves to the
+    /// <c>CompiledDependencies.PackageVersionScheme</c> floor
+    /// (<c>Doc/Architecture/DependencyRecordFloor</c>).</para>
+    /// </summary>
+    public string? PackageVersion => PackageVersionOf(Assembly);
+
+    /// <summary>The pure half of <see cref="PackageVersion"/>.</summary>
+    /// <param name="assembly">The module assembly.</param>
+    public static string? PackageVersionOf(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        var value = AssemblyMetadataOf(assembly, PackageVersionMetadataKey);
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
     /// <summary>The pure half, so a producer holding a bare <see cref="Assembly"/> resolves the
     /// identical value.</summary>
     /// <param name="assembly">The module assembly.</param>
@@ -115,6 +148,50 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
             // The single-string constructor's blob: the 0x0001 prolog, then a SerString.
             var blob = metadata.GetBlobReader(attribute.Value);
             if (blob.RemainingBytes < sizeof(ushort) || blob.ReadUInt16() != CustomAttributeProlog)
+                continue;
+            return blob.ReadSerializedString();
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The value of the <see cref="AssemblyMetadataAttribute"/> whose key is
+    /// <paramref name="key"/>, read out of the assembly's own metadata for the same reason as
+    /// <see cref="InformationalVersionOf"/>: on the file-backed path no attribute TYPE is resolved,
+    /// so an incomplete attribute closure cannot throw here. An assembly with no file behind
+    /// <see cref="Assembly.Location"/> keeps the typed reflection lookup, with the same hazard and
+    /// the same reason it is unreachable for a module as <see cref="InformationalVersionOf"/>
+    /// states. Null when absent.
+    /// </summary>
+    private static string? AssemblyMetadataOf(Assembly assembly, string key)
+    {
+        var location = assembly.Location;
+        if (location.Length == 0 || !File.Exists(location))
+            return assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => string.Equals(a.Key, key, StringComparison.Ordinal))?.Value;
+
+        using var stream = File.OpenRead(location);
+        using var peReader = new PEReader(stream);
+        if (!peReader.HasMetadata)
+            return null;
+        var metadata = peReader.GetMetadataReader();
+        foreach (var handle in metadata.GetAssemblyDefinition().GetCustomAttributes())
+        {
+            var attribute = metadata.GetCustomAttribute(handle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+                continue;
+            var member = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (member.Parent.Kind != HandleKind.TypeReference)
+                continue;
+            var type = metadata.GetTypeReference((TypeReferenceHandle)member.Parent);
+            if (!metadata.StringComparer.Equals(type.Name, nameof(AssemblyMetadataAttribute))
+                || !metadata.StringComparer.Equals(type.Namespace, InformationalVersionNamespace))
+                continue;
+            // The (string key, string value) constructor's blob: the prolog, then two SerStrings.
+            var blob = metadata.GetBlobReader(attribute.Value);
+            if (blob.RemainingBytes < sizeof(ushort) || blob.ReadUInt16() != CustomAttributeProlog)
+                continue;
+            if (!string.Equals(blob.ReadSerializedString(), key, StringComparison.Ordinal))
                 continue;
             return blob.ReadSerializedString();
         }
