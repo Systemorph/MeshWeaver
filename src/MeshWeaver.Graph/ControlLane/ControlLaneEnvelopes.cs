@@ -22,6 +22,10 @@ public static class ControlLaneOperation
 
     /// <summary>Delete one space on the target, as system — <see cref="SpaceDeletion"/>.</summary>
     public const string DeleteSpace = "DeleteSpace";
+
+    /// <summary>Reboot the target — file ONE <c>InstanceReboot</c> request there (<see cref="RebootOperation"/>,
+    /// Doc/Architecture/InstanceReboot). The person's request IS the signature: no second approver.</summary>
+    public const string Reboot = "Reboot";
 }
 
 /// <summary>

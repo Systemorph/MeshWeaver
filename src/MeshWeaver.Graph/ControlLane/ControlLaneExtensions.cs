@@ -12,8 +12,8 @@ public static class ControlLaneExtensions
 
     /// <summary>
     /// Registers both halves of the lane on this mesh: the target's receiver, its ledger record
-    /// type, the platform's two operations (<see cref="ControlLaneOperation.Recycle"/>,
-    /// <see cref="ControlLaneOperation.DeleteSpace"/>), the HTTP report sink and the HTTP transport.
+    /// type, the platform's operations (<see cref="ControlLaneOperation.Recycle"/>,
+    /// <see cref="ControlLaneOperation.DeleteSpace"/>, <see cref="ControlLaneOperation.Reboot"/>), the HTTP report sink and the HTTP transport.
     /// Registering it arms NOTHING: the receiver refuses every delivery until
     /// <see cref="ControlLaneKeys.TargetKey"/> and <see cref="ControlLaneKeys.DeploymentKey"/> are
     /// set, and the control half signs only with a deployment's own key. A module adds an operation
@@ -28,6 +28,7 @@ public static class ControlLaneExtensions
         {
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IControlLaneOperation, RecycleOperation>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IControlLaneOperation, DeleteSpaceOperation>());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IControlLaneOperation, RebootOperation>());
             services.TryAddSingleton<IControlLaneReportSink, HttpControlLaneReportSink>();
             services.TryAddSingleton<IControlLaneTransport, HttpControlLaneTransport>();
             services.TryAddSingleton<ControlLaneReceiver>();
