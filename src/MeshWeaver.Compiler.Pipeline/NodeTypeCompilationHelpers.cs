@@ -31,6 +31,106 @@ namespace MeshWeaver.Graph.Configuration;
 public record DispatchCompileTrigger(MeshNode PendingNode);
 
 /// <summary>
+/// Re-establish backoff for a watcher whose query provider stalled (#5344). After a
+/// <c>QueryProviderStalledException</c> the watcher is re-subscribed with a bounded, growing delay
+/// plus jitter instead of straight away, so a stalled watcher does not go back into the same
+/// saturated pg-read queue every 16 s. Any other fault adds no delay (the re-establish primitive
+/// keeps its own schedule). One instance per watcher install; the count resets on the first element
+/// a re-established subscription delivers.
+/// </summary>
+public sealed class SourcesWatcherStallBackoff
+{
+    /// <summary>First extra delay after a stall, before jitter.</summary>
+    public static readonly TimeSpan DefaultBaseDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>Upper bound of the extra delay, before jitter.</summary>
+    public static readonly TimeSpan DefaultCap = TimeSpan.FromSeconds(120);
+
+    private readonly TimeSpan baseDelay;
+    private readonly TimeSpan cap;
+    private readonly Func<double> nextRandom;
+    private readonly Func<Exception, bool> isStall;
+    private readonly System.Reactive.Concurrency.IScheduler scheduler;
+    private int consecutiveStalls;
+
+    /// <summary>Creates the backoff. Every argument has a production default; they exist so a test can pin them.</summary>
+    public SourcesWatcherStallBackoff(
+        TimeSpan? baseDelay = null,
+        TimeSpan? cap = null,
+        Func<double>? nextRandom = null,
+        Func<Exception, bool>? isStall = null,
+        System.Reactive.Concurrency.IScheduler? scheduler = null)
+    {
+        this.baseDelay = baseDelay ?? DefaultBaseDelay;
+        this.cap = cap ?? DefaultCap;
+        this.nextRandom = nextRandom ?? (() => Random.Shared.NextDouble());
+        this.isStall = isStall ?? (e => IsQueryStall(e));
+        this.scheduler = scheduler ?? System.Reactive.Concurrency.DefaultScheduler.Instance;
+    }
+
+    /// <summary>Stalls seen since the last element was delivered.</summary>
+    public int ConsecutiveStalls => Volatile.Read(ref consecutiveStalls);
+
+    /// <summary>True when the exception, or one it wraps, is a query-provider stall.</summary>
+    public static bool IsQueryStall(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is QueryProviderStalledException)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The extra delay before the next attempt: zero while no stall is outstanding.</summary>
+    public TimeSpan NextDelay()
+    {
+        var stalls = ConsecutiveStalls;
+        if (stalls <= 0)
+            return TimeSpan.Zero;
+        var ceilingTicks = Math.Min(cap.Ticks, (long)(baseDelay.Ticks * Math.Pow(2, Math.Min(stalls - 1, 20))));
+        var jitter = Math.Clamp(nextRandom(), 0d, 1d);
+        // Equal jitter: between half the ceiling and the ceiling.
+        return TimeSpan.FromTicks((long)(ceilingTicks * (0.5 + 0.5 * jitter)));
+    }
+
+    /// <summary>Records one more stall.</summary>
+    public void OnStall() => Interlocked.Increment(ref consecutiveStalls);
+
+    /// <summary>Records a delivered element: the watcher is healthy again.</summary>
+    public void OnDelivered() => Interlocked.Exchange(ref consecutiveStalls, 0);
+
+    /// <summary>
+    /// Wraps ONE subscription attempt of the watcher's stream: waits <see cref="NextDelay"/> first,
+    /// then subscribes; counts a stall fault and resets on the first delivered element.
+    /// </summary>
+    public IObservable<T> Apply<T>(IObservable<T> source)
+        => Observable.Defer(() =>
+        {
+            var delay = NextDelay();
+            var attempt = delay > TimeSpan.Zero
+                ? Observable.Timer(delay, scheduler).SelectMany(_ => source)
+                : source;
+            return attempt.Do(
+                _ => OnDelivered(),
+                ex =>
+                {
+                    if (isStall(ex))
+                        OnStall();
+                });
+        });
+}
+
+/// <summary>Operator form of <see cref="SourcesWatcherStallBackoff.Apply{T}"/>.</summary>
+public static class SourcesWatcherStallBackoffExtensions
+{
+    /// <summary>Applies the stall backoff to one subscription attempt of a watcher stream.</summary>
+    public static IObservable<T> WithStallBackoff<T>(this IObservable<T> source, SourcesWatcherStallBackoff backoff)
+        => backoff.Apply(source);
+}
+
+/// <summary>
 /// Static helpers for NodeType compilation, owned by the per-NodeType hub
 /// (the actor that "is" the NodeType). The hub is at <c>Address(nodeTypePath)</c>;
 /// its own <see cref="MeshNode"/> carries every property the compile needs
@@ -1960,6 +2060,11 @@ internal static class NodeTypeCompilationHelpers
         // watcher; it issues nothing at all for a source set with no `@@` in it.
         var includeReader = SourceFingerprintIncludeReader.For(hub, logger);
 
+        // #5344 - after a QueryProviderStalledException this watcher re-establishes with a bounded,
+        // jittered, growing delay instead of straight into the saturated pg-read queue. One
+        // instance per install, so the failure count survives the primitive's re-subscriptions.
+        var stallBackoff = new SourcesWatcherStallBackoff();
+
         // Outer subscription: discover the source path set via the shared
         // synced query (NodeSources.GetSources). When the path set changes
         // (sources added / removed), we re-subscribe to per-path streams.
@@ -2108,7 +2213,8 @@ internal static class NodeTypeCompilationHelpers
                 // root keeps the previous value, exactly as an unreadable include does.
                 .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
                     .Select(mv => (p.Snapshot, p.Fingerprint, p.Includes, ModuleVersion: mv))))
-            .Switch(),
+            .Switch()
+            .WithStallBackoff(stallBackoff),
                 published =>
                 {
                     var snapshot = published.Snapshot;
