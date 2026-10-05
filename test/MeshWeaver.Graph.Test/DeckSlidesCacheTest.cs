@@ -115,7 +115,10 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
     private DeckSlidesCache MakeCache(IMeshService mesh) =>
         new(() => mesh,
             _ => Observable.Never<MeshNode?>(),
-            () => JsonOptions);
+            () => JsonOptions,
+            // The real access service: the cache captures the caller's viewer from it (here the
+            // test host's DevLogin identity) and reads the deck as that viewer.
+            () => Mesh.ServiceProvider.GetRequiredService<AccessService>());
 
     /// <summary>
     /// 🚨 <b>The overlap is ESTABLISHED, never assumed.</b> Both subscribers reduce with
@@ -244,7 +247,8 @@ public class DeckSlidesCacheTest(ITestOutputHelper output) : MonolithMeshTestBas
                 Observable.Return<MeshNode?>(parent),
                 "DeckC",
                 JsonOptions,
-                accessService: null)
+                Mesh.ServiceProvider.GetRequiredService<AccessService>(),
+                TestUsers.Admin)
             .Where(list => list.Select(n => n.Path).SequenceEqual(["DeckC/s1", "DeckC/s2"]))
             .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
 

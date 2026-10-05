@@ -93,7 +93,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// budget one above the file and put the free slot back. The seed is EXACT against the file
     /// again (62).</para>
     /// </summary>
-    private const int TotalBudget = 62;
+    private const int TotalBudget = 61;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
