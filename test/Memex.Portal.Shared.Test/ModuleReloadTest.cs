@@ -620,13 +620,13 @@ public class ModuleReloadLiveTest(ITestOutputHelper output) : ModuleReloadScenar
 
         public bool CanSwap(string module) => true;
 
-        public IObservable<ModuleSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
+        public IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
         {
             Interlocked.Increment(ref swaps);
             if (Failure is { } failure)
-                return Observable.Return(new ModuleSwapOutcome(false, failure));
+                return Observable.Return(new ModuleReloadSwapOutcome(false, failure));
             OnSwap?.Invoke();
-            return Observable.Return(new ModuleSwapOutcome(true));
+            return Observable.Return(new ModuleReloadSwapOutcome(true));
         });
     }
 }

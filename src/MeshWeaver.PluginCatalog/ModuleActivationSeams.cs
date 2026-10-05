@@ -9,7 +9,7 @@ namespace MeshWeaver.PluginCatalog;
 /// <para>This interface is the reload's call site, never a second loader: the swap itself (load
 /// N+1 into a fresh context, recycle the hubs its contributions configure, retire N) belongs to
 /// the loader alone. A swap that cannot complete must leave generation N serving and answer a
-/// <see cref="ModuleSwapOutcome"/> naming why — never throw past the reload, never half-swap.</para>
+/// <see cref="ModuleReloadSwapOutcome"/> naming why — never throw past the reload, never half-swap.</para>
 /// </summary>
 public interface IModuleLiveActivation
 {
@@ -28,7 +28,7 @@ public interface IModuleLiveActivation
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="reason">Why — for the loader's own log lines and the hubs' quiesce reason.</param>
-    IObservable<ModuleSwapOutcome> Swap(string module, string reason);
+    IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason);
 
     /// <summary>
     /// Retires <paramref name="module"/> from this process for an UNINSTALL: its hubs are disposed
@@ -38,15 +38,18 @@ public interface IModuleLiveActivation
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="reason">Why.</param>
-    IObservable<ModuleSwapOutcome> Retire(string module, string reason) =>
-        System.Reactive.Linq.Observable.Return(new ModuleSwapOutcome(false,
+    IObservable<ModuleReloadSwapOutcome> Retire(string module, string reason) =>
+        System.Reactive.Linq.Observable.Return(new ModuleReloadSwapOutcome(false,
             "this live loader cannot retire a module in place"));
 }
 
-/// <summary>What one live swap did.</summary>
+/// <summary>What one live swap did, as the reload and the uninstall read it — the seam's two-field
+/// answer, distinct from the loader's own <see cref="MeshWeaver.Graph.Configuration.ModuleSwapOutcome"/>
+/// (module, kind, reason), which an implementation of <see cref="IModuleLiveActivation"/> folds into
+/// this one.</summary>
 /// <param name="Swapped">The new generation is serving in this process.</param>
 /// <param name="Failure">Why it is not, by name — null when <paramref name="Swapped"/>.</param>
-public sealed record ModuleSwapOutcome(bool Swapped, string? Failure = null);
+public sealed record ModuleReloadSwapOutcome(bool Swapped, string? Failure = null);
 
 /// <summary>
 /// 🚨 The RESTART half of a module reload: ask the deployment to re-create its pods on the image

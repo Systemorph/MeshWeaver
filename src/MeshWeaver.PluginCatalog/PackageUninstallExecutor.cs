@@ -289,8 +289,8 @@ public static class PackageUninstallExecutor
                 var reason = $"package uninstall {ModuleReloadExecutor.PathOf(hub)}: {request.Reason}";
                 var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
                 var liveTry = live is not null && live.CanSwap(module)
-                    ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleSwapOutcome(false, ex.Message)))
-                    : Observable.Return(new ModuleSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
+                    ? live.Retire(module, reason).Take(1).Catch((Exception ex) => Observable.Return(new ModuleReloadSwapOutcome(false, ex.Message)))
+                    : Observable.Return(new ModuleReloadSwapOutcome(false, live is null ? "this process has no live module loader" : "it cannot be unloaded in place"));
                 return liveTry.SelectMany(outcome => outcome.Swapped
                     ? Observable.Return($"{module}: {landed}; retired LIVE")
                     : Restart(reason).Select(restart => $"{module}: {landed}; not retired live ({outcome.Failure}) — {restart}"));
