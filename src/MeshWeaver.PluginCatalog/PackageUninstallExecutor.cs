@@ -93,8 +93,9 @@ public static class PackageUninstallExecutor
                 .MergeBounded(8)
                 .ToList())
             .Select(requests => requests
-                .Where(r => r is { Status: PackageUninstallStatus.AwaitingConfirmation or PackageUninstallStatus.TearingDown or PackageUninstallStatus.Done })
-                .Select(r => r!.Package)
+                .OfType<PackageUninstallRequest>()
+                .Where(r => r.Status is PackageUninstallStatus.AwaitingConfirmation or PackageUninstallStatus.TearingDown or PackageUninstallStatus.Done)
+                .Select(r => r.Package)
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
             .SelectMany(uninstalled => uninstalled.IsEmpty
                 ? Observable.Return(uninstalled)
@@ -177,8 +178,8 @@ public static class PackageUninstallExecutor
                             $"refused: partition '{partition}' is shared with the installed package(s) {string.Join(", ", sharers)} — uninstalling '{record.Id}' would destroy their content; nothing was touched");
                     if (PartitionTeardown.Refusal(hub, partition, requireSystem: false) is { } never)
                         return Finish(PackageUninstallStatus.Failed, $"refused: {never}; nothing was touched");
-                    return Measure(partition).SelectMany(measured => measured.Refusal is { } refused
-                        ? Finish(PackageUninstallStatus.Failed, $"refused: {refused}; nothing was touched")
+                    return Measure(partition).SelectMany(measured => measured is not { Preview: { } preview }
+                        ? Finish(PackageUninstallStatus.Failed, $"refused: {measured.Refusal ?? "the partition could not be measured"}; nothing was touched")
                         : RetireModule(request, record)
                             .SelectMany(moduleOutcome => CloseHubs(partition).Select(closed => (moduleOutcome, closed)))
                             .SelectMany(x => PackageInstaller.RemoveInstalledRecord(hub, record.Id, logger).Take(1)
@@ -187,15 +188,22 @@ public static class PackageUninstallExecutor
                                 {
                                     Module = string.IsNullOrWhiteSpace(record.Module) ? null : record.Module,
                                     ModuleOutcome = x.moduleOutcome,
-                                    Partitions = [measured.Preview!],
+                                    Partitions = [preview],
                                     ConfirmationRequired = partition,
                                     Status = PackageUninstallStatus.AwaitingConfirmation,
+                                    // 🚨 The preview is what a confirmation answers (#6124 review): a
+                                    // confirmation recorded BEFORE it existed is discarded here, and the
+                                    // instant is stamped so phase 2 can re-check the order.
+                                    AwaitingConfirmationAt = DateTimeOffset.UtcNow,
+                                    Confirmation = null,
+                                    ConfirmedBy = null,
+                                    ConfirmedAt = null,
                                 },
                                 Line($"module: {x.moduleOutcome}"),
                                 Line($"closed {x.closed} hub(s) under '{partition}'"),
                                 Line(x.removed ? $"install record {PackageInstaller.InstalledPartition}/{record.Id} removed — unattended passes will not re-install it"
                                                : $"install record {PackageInstaller.InstalledPartition}/{record.Id} was already gone"),
-                                Line($"UNINSTALLED, data RETAINED. Phase 2 drops partition '{partition}' ({Describe(measured.Preview!)}) — "
+                                Line($"UNINSTALLED, data RETAINED. Phase 2 drops partition '{partition}' ({Describe(preview)}) — "
                                      + $"send the confirmation '{partition}' to run it"))));
                 })
                 .Catch((Exception ex) => Finish(PackageUninstallStatus.Failed, $"phase 1 faulted: {ex.Message}"));
@@ -221,12 +229,21 @@ public static class PackageUninstallExecutor
                         $"partition '{partition}' holds {paths.Count} nodes, more than the {MaxInspectedNodes} this uninstall verifies for user data"))
                     : paths.ToObservable()
                         .Select(p => storage.Read(p, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null)
-                            .Select(n => (Path: p, n?.CreatedBy))
-                            .Catch((Exception _) => Observable.Return((Path: p, CreatedBy: (string?)null))))
+                            .Select(n => (Path: p, n?.CreatedBy, Fault: (string?)null))
+                            // 🚨 A FAULT is not an absence (#6124 review): it is recorded, and any one of
+                            // them refuses the uninstall below — the user-data check fails CLOSED, the
+                            // same direction as the size cap.
+                            .Catch((Exception ex) => Observable.Return((Path: p, CreatedBy: (string?)null, Fault: (string?)ex.Message))))
                         .MergeBounded(8)
                         .ToList()
                         .SelectMany(read => storeExists.Select(exists =>
                         {
+                            var faults = read.Where(x => x.Fault is not null).OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
+                            if (faults.Count > 0)
+                                return new Measured(null,
+                                    $"{faults.Count} node(s) under '{partition}' could not be read (e.g. "
+                                    + string.Join(", ", faults.Take(5).Select(f => $"{f.Path}: {f.Fault}"))
+                                    + ") — the partition is not verified free of user data");
                             var user = read.Where(x => IsUserCreated(x.CreatedBy)).OrderBy(x => x.Path, StringComparer.Ordinal).ToList();
                             if (user.Count > 0)
                                 return new Measured(null,
@@ -321,7 +338,21 @@ public static class PackageUninstallExecutor
                     ConfirmationRefusal = $"refused: the confirmation '{request.Confirmation}' does not match the required "
                                           + $"'{request.ConfirmationRequired}' — nothing was dropped; the data is retained",
                 }, Line($"confirmation '{request.Confirmation}' refused (required '{request.ConfirmationRequired}')"));
-            if (request.RequestedBy is { Length: > 0 } requester && !string.Equals(request.ConfirmedBy, requester, StringComparison.OrdinalIgnoreCase))
+            if (request.AwaitingConfirmationAt is not { } previewed || request.ConfirmedAt is not { } confirmedAt || confirmedAt < previewed)
+                return Write(r => r with
+                {
+                    Confirmation = null,
+                    ConfirmationRefusal = "refused: the confirmation was recorded before the preview it must answer — nothing was dropped; "
+                                          + "read the preview and confirm again",
+                }, Line("confirmation refused: it predates the preview"));
+            if (request.RequestedBy is not { Length: > 0 } requester)
+                return Write(r => r with
+                {
+                    Confirmation = null,
+                    ConfirmationRefusal = "refused: the request names no requester, so nobody can be checked as the one confirming — "
+                                          + "nothing was dropped; the data is retained",
+                }, Line("confirmation refused: the request names no requester"));
+            if (!string.Equals(request.ConfirmedBy, requester, StringComparison.OrdinalIgnoreCase))
                 return Write(r => r with
                 {
                     Confirmation = null,

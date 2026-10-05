@@ -4205,8 +4205,8 @@ public partial class MeshOperations
                 ? Observable.Return(Error("a confirmation is required to drop the partition data — send the exact string the preview named"))
                 : Gate(() => PackageUninstall.Confirm(hub, requestPath.Trim(), confirmation,
                         string.IsNullOrWhiteSpace(caller) ? null : caller)
-                    .SelectMany(ticket => ticket.Accepted
-                        ? AwaitUninstall(ticket.Path!, r => PackageUninstallStatus.IsTerminal(r.Status) || r.ConfirmationRefusal is not null)
+                    .SelectMany(ticket => ticket is { Accepted: true, Path: { } confirmed }
+                        ? AwaitUninstall(confirmed, r => PackageUninstallStatus.IsTerminal(r.Status) || r.ConfirmationRefusal is not null)
                         : Observable.Return(Error(ticket.Refusal ?? "refused"))));
 
         if (string.IsNullOrWhiteSpace(package) || string.IsNullOrWhiteSpace(reason))
@@ -4217,9 +4217,9 @@ public partial class MeshOperations
                 Reason = reason,
                 RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
             })
-            .SelectMany(ticket => ticket.Accepted
-                ? AwaitUninstall(ticket.Path!, r => PackageUninstallStatus.IsTerminal(r.Status)
-                                                    || r.Status == PackageUninstallStatus.AwaitingConfirmation)
+            .SelectMany(ticket => ticket is { Accepted: true, Path: { } filed }
+                ? AwaitUninstall(filed, r => PackageUninstallStatus.IsTerminal(r.Status)
+                                             || r.Status == PackageUninstallStatus.AwaitingConfirmation)
                 : Observable.Return(Error(ticket.Refusal ?? "refused"))));
     }
 
@@ -4228,12 +4228,13 @@ public partial class MeshOperations
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => hub.GetMeshNodeStream(path))
             .Select(n => n.ContentAs<PackageUninstallRequest>(hub.JsonSerializerOptions))
-            .Where(r => r is not null && until(r))
+            .OfType<PackageUninstallRequest>()
+            .Where(until)
             .Take(1)
             .Timeout(UninstallPreviewBudget)
             .Select(r => JsonSerializer.Serialize(new
             {
-                status = r!.Status,
+                status = r.Status,
                 path,
                 package = r.Package,
                 module = r.Module,

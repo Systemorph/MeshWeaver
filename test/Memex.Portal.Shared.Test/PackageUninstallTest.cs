@@ -82,14 +82,15 @@ public class PackageUninstallTest(ITestOutputHelper output) : ModuleReloadScenar
             })
             .Timeout(TestTimeouts.Convergence).Await(ct);
         ticket.Refusal.Should().BeNull();
-        return ticket.Path!;
+        ticket.Path.Should().NotBeNull();
+        return ticket.Path ?? "";
     }
 
     private Task<PackageUninstallRequest> Await(string path, Func<PackageUninstallRequest, bool> until, CancellationToken ct) =>
         Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
             .Select(n => n.ContentAs<PackageUninstallRequest>(Mesh.JsonSerializerOptions))
-            .Where(r => r is not null && until(r))
-            .Select(r => r!)
+            .OfType<PackageUninstallRequest>()
+            .Where(until)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
     [Fact(Timeout = 240_000)]
@@ -176,6 +177,39 @@ public class PackageUninstallTest(ITestOutputHelper output) : ModuleReloadScenar
         red.Status.Should().Be(PackageUninstallStatus.Failed);
         red.Failure.Should().Contain("'NotInstalledHere' is not an installed package here");
         Updater.Restarts.Should().Be(0);
+
+        // A confirmation for a request that does not AWAIT one is refused and records nothing —
+        // the preview is what a confirmation answers (#6124 review).
+        var early = await PackageUninstall.Confirm(Mesh, path, "NotInstalledHere", Requester).Timeout(TestTimeouts.Convergence).Await(ct);
+        early.Accepted.Should().BeFalse();
+        early.Refusal.Should().Contain("does not await a confirmation");
+        (await Await(path, _ => true, ct)).Confirmation.Should().BeNull("nothing was recorded");
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARequestNamingNoRequester_CannotBeConfirmedByAnyone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await Content(ct);
+        var ticket = await PackageUninstall.Request(Mesh, new PackageUninstallRequest
+            {
+                Package = Package,
+                Reason = "retired from Plugins main",
+                RequestedBy = null,
+            })
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        ticket.Path.Should().NotBeNull(ticket.Refusal ?? "");
+        var path = ticket.Path ?? "";
+        var preview = await Await(path, r => r.Status == PackageUninstallStatus.AwaitingConfirmation || PackageUninstallStatus.IsTerminal(r.Status), ct);
+        preview.Status.Should().Be(PackageUninstallStatus.AwaitingConfirmation, preview.Failure ?? "");
+        preview.AwaitingConfirmationAt.Should().NotBeNull("the preview's instant is stamped");
+
+        (await PackageUninstall.Confirm(Mesh, path, Package, "any-admin").Timeout(TestTimeouts.Convergence).Await(ct)).Accepted.Should().BeTrue();
+        var refused = await Await(path, r => r.ConfirmationRefusal is not null, ct);
+        refused.ConfirmationRefusal.Should().Contain("names no requester");
+        refused.Status.Should().Be(PackageUninstallStatus.AwaitingConfirmation);
+        (await Exists($"{Package}/Guide", ct)).Should().BeTrue("nothing is dropped without a named requester");
     }
 
     [Fact(Timeout = 240_000)]

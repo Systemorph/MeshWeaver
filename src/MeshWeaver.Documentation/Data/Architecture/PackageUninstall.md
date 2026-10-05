@@ -27,7 +27,9 @@ Refused by name, before anything is touched:
 - the platform never tears the partition down (`PartitionTeardown.Refusal`: a mirror, a configured
   partition, an invalid segment);
 - the partition holds **user data** — any node whose `createdBy` is not the installer's system
-  identity (the first five are named) — or more nodes than the uninstall verifies (20 000).
+  identity (the first five are named) — or more nodes than the uninstall verifies (20 000);
+- any node under it **cannot be read** while it is measured: a fault is not an absence, so the
+  partition is not verified free of user data (the first five faults are named).
 
 Then, in order: the **module** is retired (its landed generation disabled; unloaded live through
 `IModuleLiveActivation.Retire` where the loader can, else exactly one automatic restart through the
@@ -50,8 +52,12 @@ applies while no install record exists.
 ## Phase 2 — drop the data, on confirmation
 
 `ConfirmationRequired` is the partition name. The requester sends it back (`PackageUninstall.Confirm`,
-recorded with who and when). A different string, or a confirmation from anyone but the requester, is
-refused by name (`confirmationRefusal`) and nothing is dropped. A matching one runs the platform's
+recorded with who and when). A confirmation is accepted only while the request AWAITS one — it answers
+the preview, so one sent before the preview exists is refused and records nothing, and phase 1 clears
+any confirmation it finds and stamps `awaitingConfirmationAt`. The executor is the authority: a
+different string, a confirmation from anyone but the requester, a request that names no requester, or
+a confirmation older than the preview is refused by name (`confirmationRefusal`) and nothing is
+dropped. A matching one runs the platform's
 governed whole-partition teardown, as System, after closing the partition's hubs again:
 `PartitionTeardown.TearDownPartition` — the store dropped on every storage provider (Postgres
 `DROP SCHEMA … CASCADE`, satellite tables with it, so the `_GitSync` configuration and the

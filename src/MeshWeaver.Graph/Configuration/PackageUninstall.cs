@@ -95,6 +95,10 @@ public record PackageUninstallRequest
     /// <summary>When it was confirmed.</summary>
     public DateTimeOffset? ConfirmedAt { get; init; }
 
+    /// <summary>When phase 1 reached <see cref="PackageUninstallStatus.AwaitingConfirmation"/> — the
+    /// preview a confirmation answers. A confirmation recorded before it is refused by phase 2.</summary>
+    public DateTimeOffset? AwaitingConfirmationAt { get; init; }
+
     /// <summary>Why a confirmation was refused (a mismatch), by name. Executor-owned.</summary>
     public string? ConfirmationRefusal { get; init; }
 
@@ -199,10 +203,14 @@ public static class PackageUninstall
     }
 
     /// <summary>
-    /// Records the requester's confirmation for phase 2, as System, with who and when. The CALLER
-    /// checks that <paramref name="confirmedBy"/> is the requester and a platform admin; the
-    /// executor checks the string against <see cref="PackageUninstallRequest.ConfirmationRequired"/>
-    /// and refuses a mismatch by name. Cold; emits once.
+    /// Records a confirmation for phase 2, as System, with who and when — only while the request
+    /// AWAITS one (a confirmation sent before the preview exists is refused here, writing nothing).
+    /// The CALLER checks that <paramref name="confirmedBy"/> is a platform admin. The EXECUTOR is
+    /// the authority on everything else and refuses by name: a string that is not
+    /// <see cref="PackageUninstallRequest.ConfirmationRequired"/>, a confirmer who is not the
+    /// request's <see cref="PackageUninstallRequest.RequestedBy"/> (or a request that names none),
+    /// and a confirmation recorded before <see cref="PackageUninstallRequest.AwaitingConfirmationAt"/>.
+    /// Cold; emits once.
     /// </summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="path">The request node.</param>
@@ -213,16 +221,22 @@ public static class PackageUninstall
         if (string.IsNullOrWhiteSpace(path) || !path.StartsWith(PackageUninstallRequest.Namespace + "/", StringComparison.OrdinalIgnoreCase))
             return Observable.Return(new PackageUninstallTicket(null, $"'{path}' is not a package uninstall request"));
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
-                .Update<PackageUninstallRequest>(current => current with
-                {
-                    Confirmation = confirmation ?? "",
-                    ConfirmedBy = confirmedBy,
-                    ConfirmedAt = DateTimeOffset.UtcNow,
-                    ConfirmationRefusal = null,
-                }))
-            .Take(1)
-            .Select(_ => new PackageUninstallTicket(path, null))
+        return access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+            .Select(node => node.ContentAs<PackageUninstallRequest>(hub.JsonSerializerOptions))
+            .SelectMany(current => current is { Status: PackageUninstallStatus.AwaitingConfirmation }
+                ? access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                        .Update<PackageUninstallRequest>(latest => latest with
+                        {
+                            Confirmation = confirmation ?? "",
+                            ConfirmedBy = confirmedBy,
+                            ConfirmedAt = DateTimeOffset.UtcNow,
+                            ConfirmationRefusal = null,
+                        }))
+                    .Take(1)
+                    .Select(_ => new PackageUninstallTicket(path, null))
+                : Observable.Return(new PackageUninstallTicket(null,
+                    $"'{path}' does not await a confirmation (status '{current?.Status ?? "unreadable"}') — confirm only after phase 1 "
+                    + "has answered its preview; nothing was recorded")))
             .Catch((Exception ex) => Observable.Return(new PackageUninstallTicket(null, $"the confirmation could not be recorded: {ex.Message}")));
     }
 }
