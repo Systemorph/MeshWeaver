@@ -121,94 +121,11 @@ public static class ModuleReloadExecutor
             Write(r => r with { Status = ModuleReloadStatus.Landing }, Line(
                 $"resolving {(request.Module is null ? "every installed module" : $"'{request.Module}'")} "
                 + $"against the configured registries — reason: {request.Reason}"))
-            .SelectMany(_ => Targets(request.Module))
-            .SelectMany(targets =>
-            {
-                if (targets.Problem is { } problem)
-                    return Finish(ModuleReloadStatus.Failed, problem);
-                var reconciler = hub.ServiceProvider.GetService<RegistryUpdateReconciler>();
-                var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
-                if (reconciler is null || landing is null)
-                    return Finish(ModuleReloadStatus.Failed,
-                        "this host registers no registry reconciler or module landing service — nothing can be resolved or landed here");
-                return targets.Modules.ToObservable()
-                    .Select(t => reconciler.ReloadModule(t.Package, t.Module).Select(outcome => (t.Package, t.Module, Outcome: outcome)))
-                    .Concat()
-                    .ToList()
-                    .SelectMany(outcomes => landing.GetActivation().Take(1)
-                        .Select(activation =>
-                        {
-                            // What THIS process runs — read through the agent, the one per-process
-                            // reader, so the executor and every replica report measure alike.
-                            var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
-                            return Items(outcomes, activation,
-                                agent?.LoadedGenerations() ?? ModuleActivationStatus.LoadedModuleGenerations(),
-                                agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames());
-                        }))
-                    .SelectMany(Decide);
-            })
+            .SelectMany(_ => ResolveAndLand(hub, request.Module))
+            .SelectMany(landed => landed.Problem is { } problem
+                ? Finish(ModuleReloadStatus.Failed, problem)
+                : Decide(landed.Items))
             .Catch((Exception ex) => Finish(ModuleReloadStatus.Failed, $"the landing step faulted: {ex.Message}"));
-
-        private IObservable<(ImmutableList<(string Package, string Module)> Modules, string? Problem)> Targets(string? wanted) =>
-            ModuleDependencyFloor.ReadInstalled(hub)
-                .Select(installed =>
-                {
-                    var declaring = installed
-                        .SelectMany(m => m.Module is { } module && !string.IsNullOrWhiteSpace(module)
-                            ? [(Package: m.Id, Module: module.Trim())]
-                            : Array.Empty<(string Package, string Module)>())
-                        .OrderBy(t => t.Module, StringComparer.OrdinalIgnoreCase)
-                        .ToImmutableList();
-                    if (wanted is null)
-                        return declaring.IsEmpty
-                            ? (declaring, (string?)"no installed package declares a compiled module here — nothing to reload")
-                            : (declaring, null);
-                    var match = declaring
-                        .Where(t => string.Equals(t.Module, wanted, StringComparison.OrdinalIgnoreCase)
-                                    || string.Equals(t.Package, wanted, StringComparison.OrdinalIgnoreCase))
-                        .ToImmutableList();
-                    return match.IsEmpty
-                        ? (match, $"'{wanted}' is not an installed module here — no Plugins/* install record declares it "
-                                  + "as its module or is that package; install it first")
-                        : (match, null);
-                });
-
-        /// <summary>The per-module rows, from what the adopt answered and what the record and this process now say.</summary>
-        private static ImmutableList<ModuleReloadItem> Items(
-            IList<(string Package, string Module, ModuleAdoptOutcome Outcome)> outcomes,
-            ModuleActivationList activation,
-            IReadOnlyDictionary<string, string> loadedGenerations,
-            IReadOnlySet<string> loadedNames)
-        {
-            var running = ModuleReloadAgent.LoadedVersions(outcomes.Select(o => o.Module), activation, loadedGenerations, loadedNames);
-            return outcomes.Select(o =>
-                {
-                    var entry = activation.Entries.FirstOrDefault(e => string.Equals(e.Name, o.Module, StringComparison.OrdinalIgnoreCase));
-                    var verdict = o.Outcome.Verdict;
-                    var failure = o.Outcome.Failure ?? verdict?.Action switch
-                    {
-                        ModuleUpdateAction.SkipPlatformBelowFloor => $"declined — {verdict.Reason}",
-                        ModuleUpdateAction.SkipNoBundle => $"declined — {verdict.Reason}",
-                        ModuleUpdateAction.SkipUninstalled => $"declined — {verdict.Reason}",
-                        ModuleUpdateAction.SkipUnloadable => $"declined — {verdict.Reason}",
-                        _ => null,
-                    };
-                    return new ModuleReloadItem
-                    {
-                        Module = o.Module,
-                        Package = o.Package,
-                        RunningVersion = running.TryGetValue(o.Module, out var r) ? r : null,
-                        FoundVersion = o.Outcome.ServedVersion,
-                        FoundFloor = o.Outcome.ServedFloor,
-                        Registry = o.Outcome.Registry,
-                        TargetVersion = entry?.Version,
-                        Landed = o.Outcome.FilesLanded > 0,
-                        Decision = verdict is null ? null : $"{verdict.Action}: {verdict.Reason}",
-                        Failure = failure,
-                    };
-                })
-                .ToImmutableList();
-        }
 
         private IObservable<Unit> Decide(ImmutableList<ModuleReloadItem> items)
         {
@@ -397,6 +314,107 @@ public static class ModuleReloadExecutor
         private static string Line(string text) => $"{DateTimeOffset.UtcNow:u} {text}";
     }
 
+    /// <summary>
+    /// 🚨 The ONE resolve-and-land of a module reload, shared by every caller that lands modules on
+    /// purpose (<see cref="ModuleReloadExecutor"/> and the instance reboot, <c>Doc/Architecture/InstanceReboot</c>)
+    /// — never forked. Resolves the modules <paramref name="module"/> names from the install records
+    /// (blank = every installed module), asks <see cref="RegistryUpdateReconciler.ReloadModule"/> for the
+    /// newest COMPATIBLE published version of each, lands it, and answers one
+    /// <see cref="ModuleReloadItem"/> per module, measured against the activation record and what THIS
+    /// process has loaded. It does NOT activate anything: activation is the caller's decision.
+    /// <see cref="ModuleReloadLanding.Problem"/> names why nothing could be resolved (no install
+    /// declares a module, an unknown name, no reconciler on this host). Cold; emits once.
+    /// </summary>
+    /// <param name="hub">A hub of the mesh whose services land the modules.</param>
+    /// <param name="module">The module or package to land, or null for every installed module.</param>
+    public static IObservable<ModuleReloadLanding> ResolveAndLand(IMessageHub hub, string? module) =>
+        Targets(hub, module)
+            .SelectMany(targets =>
+            {
+                if (targets.Problem is { } problem)
+                    return Observable.Return(new ModuleReloadLanding(ImmutableList<ModuleReloadItem>.Empty, problem));
+                var reconciler = hub.ServiceProvider.GetService<RegistryUpdateReconciler>();
+                var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+                if (reconciler is null || landing is null)
+                    return Observable.Return(new ModuleReloadLanding(ImmutableList<ModuleReloadItem>.Empty,
+                        "this host registers no registry reconciler or module landing service — nothing can be resolved or landed here"));
+                return targets.Modules.ToObservable()
+                    .Select(t => reconciler.ReloadModule(t.Package, t.Module).Select(outcome => (t.Package, t.Module, Outcome: outcome)))
+                    .Concat()
+                    .ToList()
+                    .SelectMany(outcomes => landing.GetActivation().Take(1)
+                        .Select(activation =>
+                        {
+                            // What THIS process runs — read through the agent, the one per-process
+                            // reader, so the executor and every replica report measure alike.
+                            var agent = hub.ServiceProvider.GetService<ModuleReloadAgent>();
+                            return new ModuleReloadLanding(Items(outcomes, activation,
+                                agent?.LoadedGenerations() ?? ModuleActivationStatus.LoadedModuleGenerations(),
+                                agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()), null);
+                        }));
+            });
+
+    private static IObservable<(ImmutableList<(string Package, string Module)> Modules, string? Problem)> Targets(IMessageHub hub, string? wanted) =>
+        ModuleDependencyFloor.ReadInstalled(hub)
+            .Select(installed =>
+            {
+                var declaring = installed
+                    .SelectMany(m => m.Module is { } module && !string.IsNullOrWhiteSpace(module)
+                        ? [(Package: m.Id, Module: module.Trim())]
+                        : Array.Empty<(string Package, string Module)>())
+                    .OrderBy(t => t.Module, StringComparer.OrdinalIgnoreCase)
+                    .ToImmutableList();
+                if (wanted is null)
+                    return declaring.IsEmpty
+                        ? (declaring, (string?)"no installed package declares a compiled module here — nothing to reload")
+                        : (declaring, null);
+                var match = declaring
+                    .Where(t => string.Equals(t.Module, wanted, StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(t.Package, wanted, StringComparison.OrdinalIgnoreCase))
+                    .ToImmutableList();
+                return match.IsEmpty
+                    ? (match, $"'{wanted}' is not an installed module here — no Plugins/* install record declares it "
+                              + "as its module or is that package; install it first")
+                    : (match, null);
+            });
+
+    /// <summary>The per-module rows, from what the adopt answered and what the record and this process now say.</summary>
+    private static ImmutableList<ModuleReloadItem> Items(
+        IList<(string Package, string Module, ModuleAdoptOutcome Outcome)> outcomes,
+        ModuleActivationList activation,
+        IReadOnlyDictionary<string, string> loadedGenerations,
+        IReadOnlySet<string> loadedNames)
+    {
+        var running = ModuleReloadAgent.LoadedVersions(outcomes.Select(o => o.Module), activation, loadedGenerations, loadedNames);
+        return outcomes.Select(o =>
+            {
+                var entry = activation.Entries.FirstOrDefault(e => string.Equals(e.Name, o.Module, StringComparison.OrdinalIgnoreCase));
+                var verdict = o.Outcome.Verdict;
+                var failure = o.Outcome.Failure ?? verdict?.Action switch
+                {
+                    ModuleUpdateAction.SkipPlatformBelowFloor => $"declined — {verdict.Reason}",
+                    ModuleUpdateAction.SkipNoBundle => $"declined — {verdict.Reason}",
+                    ModuleUpdateAction.SkipUninstalled => $"declined — {verdict.Reason}",
+                    ModuleUpdateAction.SkipUnloadable => $"declined — {verdict.Reason}",
+                    _ => null,
+                };
+                return new ModuleReloadItem
+                {
+                    Module = o.Module,
+                    Package = o.Package,
+                    RunningVersion = running.TryGetValue(o.Module, out var r) ? r : null,
+                    FoundVersion = o.Outcome.ServedVersion,
+                    FoundFloor = o.Outcome.ServedFloor,
+                    Registry = o.Outcome.Registry,
+                    TargetVersion = entry?.Version,
+                    Landed = o.Outcome.FilesLanded > 0,
+                    Decision = verdict is null ? null : $"{verdict.Action}: {verdict.Reason}",
+                    Failure = failure,
+                };
+            })
+            .ToImmutableList();
+    }
+
     /// <summary>A hub's node path (its address without the silo host).</summary>
     internal static string PathOf(IMessageHub hub) => ActivationRecycle.PathOf(hub);
 }
@@ -576,3 +594,8 @@ public sealed class ModuleReloadAgent
             .Select(_ => Unit.Default);
     }
 }
+
+/// <summary>What <see cref="ModuleReloadExecutor.ResolveAndLand"/> answers: one row per module, or why nothing could be resolved.</summary>
+/// <param name="Items">One row per module — found, landed and target version, or its named failure.</param>
+/// <param name="Problem">Why nothing could be resolved or landed (then <paramref name="Items"/> is empty), or null.</param>
+public sealed record ModuleReloadLanding(ImmutableList<ModuleReloadItem> Items, string? Problem);
