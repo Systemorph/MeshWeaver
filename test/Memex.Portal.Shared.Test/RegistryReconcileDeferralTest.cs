@@ -148,7 +148,14 @@ public class RegistryReconcileDeferralTest(ITestOutputHelper output) : MonolithM
             Version = "1.0.0",
             ModuleVersion = InstalledModuleVersion,
             TargetPartition = PackageId,
+            // The reminder path the drain's witness reads (step 4). Since policy
+            // packages-auto-update a seeded reminder-only record is moved to Auto by the boot repair
+            // pass (PackageAutoUpdateMigration) — and whether that pass lands before or after the
+            // drain decided whether this test saw a reminder or a failed auto-update. Only an
+            // administrator's DELIBERATE, stamped opt-out is kept, so that is what is seeded.
             AutoUpdate = false,
+            UpdatePolicy = PackageUpdatePolicy.Notify,
+            UpdatePolicySetAt = DateTimeOffset.UtcNow,
         };
         var record = MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{PackageId}") with
         {

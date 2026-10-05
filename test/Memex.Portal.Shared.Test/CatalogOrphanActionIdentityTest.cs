@@ -34,7 +34,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
 
     private static string RemoveArea => $"{Area}/orphans/{ItemTemplateControl.ViewArea}/remove";
 
-    private static string AutoArea => $"{Area}/cards/{ItemTemplateControl.ViewArea}/updatePolicy/choices/auto";
+    private static string PinArea => $"{Area}/cards/{ItemTemplateControl.ViewArea}/updatePolicy/choices/none";
 
     private static readonly ImmutableList<PackageManifest> Listed = [Package("ListedA", "Listed A"), Package("ListedB", "Listed B")];
 
@@ -120,11 +120,11 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// The update-policy choices are row-scoped too: "Auto" clicked on card k re-pins package k, for
+    /// The update-policy choices are row-scoped too: "None" (the pin) clicked on card k pins package k — installs are Auto by default (policy packages-auto-update), for
     /// every k, and leaves the other card's policy as it was.
     /// </summary>
     [Fact]
-    public async Task TheAutoChoiceInRowK_SetsPackageKsPolicy()
+    public async Task ThePinChoiceInRowK_SetsPackageKsPolicy()
     {
         foreach (var package in Listed)
             await Install(package);
@@ -132,18 +132,18 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
         var cards = await Rows(stream, CatalogLayoutAreas.CardsDataId, Listed.Count);
         var records = Records();
         await records.Where(items => Listed.All(p => items.Any(i => i.Id == p.Id
-                && i.EffectiveUpdatePolicy != PackageUpdatePolicy.Auto)))
+                && i.EffectiveUpdatePolicy != PackageUpdatePolicy.None)))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         for (var k = 0; k < Listed.Count; k++)
         {
             var id = Listed[k].Id;
-            Submit(stream, AutoArea, RowOf(cards, CatalogLayoutAreas.CardsDataId, id));
-            var now = await records.Where(items => items.Any(i => i.Id == id && i.EffectiveUpdatePolicy == PackageUpdatePolicy.Auto))
+            Submit(stream, PinArea, RowOf(cards, CatalogLayoutAreas.CardsDataId, id));
+            var now = await records.Where(items => items.Any(i => i.Id == id && i.EffectiveUpdatePolicy == PackageUpdatePolicy.None))
                 .Should().Within(TestTimeouts.Convergence).Emit();
             Assert.NotNull(now);
             foreach (var other in Listed.Skip(k + 1))
-                Assert.NotEqual(PackageUpdatePolicy.Auto, now.Single(i => i.Id == other.Id).EffectiveUpdatePolicy);
+                Assert.NotEqual(PackageUpdatePolicy.None, now.Single(i => i.Id == other.Id).EffectiveUpdatePolicy);
         }
     }
 

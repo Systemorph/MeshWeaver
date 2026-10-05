@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -41,6 +42,9 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             .AddMeshNodes(CreateRegistryReconcileLedgerNodeType())
+            // "Reload module M on this instance" — the request node, its executor and the
+            // per-process reporter (Doc/Architecture/ModuleReload).
+            .AddModuleReload()
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
@@ -372,8 +376,55 @@ public static class PluginCatalogConfigurationExtensions
         Icon = "/static/NodeTypeIcons/box.svg",
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
-            .AddMeshDataSource(s => s.WithContentType<PackageManifest>()),
+            .AddMeshDataSource(s => s.WithContentType<PackageManifest>())
+            .AddModuleReloadViews(),
     };
+
+    /// <summary>
+    /// Registers the module reload (<c>Doc/Architecture/ModuleReload</c>): the request node type —
+    /// whose own hub runs <see cref="ModuleReloadExecutor"/> — the per-process
+    /// <see cref="ModuleReloadAgent"/> armed on the mesh hub, and the content types on every hub that
+    /// reads a request.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder.</param>
+    public static TBuilder AddModuleReload<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(new MeshNode(ModuleReloadRequest.NodeType)
+        {
+            Name = "Module Reload",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<ModuleReloadRequest>())
+                .WithInitialization(ModuleReloadExecutor.Arm),
+        });
+        builder.AddMeshNodes(new MeshNode(PackageUninstallRequest.NodeType)
+        {
+            Name = "Package Uninstall",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<PackageUninstallRequest>())
+                .WithInitialization(PackageUninstallExecutor.Arm),
+        });
+        builder.AddAutocompleteExcludedTypes(ModuleReloadRequest.NodeType);
+        builder.AddAutocompleteExcludedTypes(PackageUninstallRequest.NodeType);
+        builder.ConfigureServices(services => services.AddSingleton<ModuleReloadAgent>());
+        builder.ConfigureHub(config => AddModuleReloadTypes(config)
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<ModuleReloadAgent>().Arm(hub)));
+        builder.ConfigureDefaultNodeHub(AddModuleReloadTypes);
+        return builder;
+    }
+
+    private static MessageHubConfiguration AddModuleReloadTypes(MessageHubConfiguration config) => config
+        .WithType<ModuleReloadRequest>(nameof(ModuleReloadRequest))
+        .WithType<ModuleReloadItem>(nameof(ModuleReloadItem))
+        .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica))
+        .WithType<PackageUninstallRequest>(nameof(PackageUninstallRequest))
+        .WithType<PackageUninstallPartition>(nameof(PackageUninstallPartition));
 
     private static MeshNode CreateCatalogNodeType() => new(CatalogNodeType)
     {
