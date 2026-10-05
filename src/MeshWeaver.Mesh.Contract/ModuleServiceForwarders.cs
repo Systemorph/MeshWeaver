@@ -89,7 +89,7 @@ internal static class ModuleServiceForwarding
                 case ModuleServiceRoute.Hosted:
                     root.Add(ServiceDescriptor.Singleton<IHostedService>(sp => new ModuleHostedServiceForwarder(
                         sp.GetRequiredService<ModuleContexts>(), module, index,
-                        sp.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.IncompatibleModule"))));
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleHostedServiceForwarder>())));
                     break;
             }
         }

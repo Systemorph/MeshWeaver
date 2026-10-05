@@ -381,7 +381,7 @@ public sealed class ModuleLiveUpdater : IDisposable
             .ToImmutableList();
 
         var generations = plan.Retiring.Concat(plan.Serving).ToImmutableList();
-        var everyHub = generations.Any(g => g.Contributions?.DefaultNodeHubConfigurations.Count > 0)
+        var everyHub = generations.Any(g => g.Contributions?.AllDefaultNodeHubConfigurations.Count > 0)
                        // Module-owned service types are forwarded into every per-node hub's scope.
                        || generations.Any(g => g.Services?.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned) == true)
                        || InMeshBuildsReference(plan.Serving.Select(g => g.Name).ToImmutableHashSet(StringComparer.Ordinal));
