@@ -3219,13 +3219,16 @@ internal static class NodeTypeCompilationHelpers
     internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub)
     {
         var versions = ModuleVersionsOf(hub);
+        var packageVersions = ModulePackageVersionsOf(hub);
         // 🚨 Platform entries are keyed on the COMPATIBILITY KEY (policy
         // platform-backwards-compatibility), never on per-build ref-asm hashes: a platform roll
-        // within one epoch must not move a single type's record.
+        // within one epoch must not move a single type's record. Module entries prefer the
+        // module's PACKAGE version (pkg:), the one module id that moves between module builds.
         return Compiler.CompiledDependencies.CreateCompatibilityIdResolver(
             FrameworkVersion,
             ModuleMvidsOf(hub),
-            name => versions.TryGetValue(name, out var version) ? version : null);
+            name => versions.TryGetValue(name, out var version) ? version : null,
+            name => packageVersions.TryGetValue(name, out var version) ? version : null);
     }
 
     /// <summary>Installed module simple name → implementation MVID ("N"), the resolver's fallback
@@ -3257,6 +3260,24 @@ internal static class NodeTypeCompilationHelpers
         {
             var name = module.Assembly.GetName().Name;
             if (!string.IsNullOrEmpty(name) && module.Version is { Length: > 0 } version)
+                map[name] = version;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Installed module simple name → the PACKAGE version stamped into it
+    /// (<see cref="InstalledModuleAssembly.PackageVersion"/>), for the resolver's <c>pkg:</c>
+    /// floor ids. A module carrying no stamp is absent and resolves as before.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ModulePackageVersionsOf(IMessageHub hub)
+    {
+        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name) && module.PackageVersion is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;
