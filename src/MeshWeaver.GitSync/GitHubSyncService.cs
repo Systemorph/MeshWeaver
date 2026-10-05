@@ -791,6 +791,19 @@ public sealed class GitHubSyncService
         });
     }
 
+    /// <summary>
+    /// The commit <paramref name="branch"/> of <paramref name="repositoryUrl"/> points at RIGHT NOW —
+    /// one ref lookup (<see cref="IGitHubRepoClient.GetHeadSha"/>), no tree read. The branch
+    /// reconcile (policy <c>sources-sync-on-push</c>) asks this to catch a push whose webhook never
+    /// arrived, and then imports AT the sha it got back, never at the branch.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="branch">The branch to resolve.</param>
+    /// <param name="userId">Whose GitHub credential authenticates the lookup (the App when they
+    /// have none).</param>
+    public IObservable<string> GetBranchHead(string repositoryUrl, string branch, string userId)
+        => ResolveAuth(userId).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
+
     /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
     private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
 
@@ -810,13 +823,38 @@ public sealed class GitHubSyncService
                         "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
                         "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
+    /// <summary>
+    /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a
+    /// mesh that registers no module host — and on one whose reading FAULTS, said at Warning: an
+    /// import must not stop because the module host could not be read, and an empty reading judges
+    /// nothing, which is exactly the behaviour before the dependency rule existed.
+    /// </summary>
+    private IObservable<ImmutableDictionary<string, LoadedPackageModule>> LoadedPackageModulesNow()
+        => hub.ServiceProvider.GetService<ILoadedPackageModules>() is { } loaded
+            ? loaded.Read().Take(1)
+                .DefaultIfEmpty(ImmutableDictionary<string, LoadedPackageModule>.Empty)
+                .Catch((Exception exception) =>
+                {
+                    logger?.LogWarning(exception,
+                        "[ModuleSync] the loaded package modules could not be read — this import judges "
+                        + "no dependency floor (MeshWeaver#6067)");
+                    return Observable.Return(ImmutableDictionary<string, LoadedPackageModule>.Empty);
+                })
+            : Observable.Return(ImmutableDictionary<string, LoadedPackageModule>.Empty);
+
     private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
         SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
         string? baseSha = null, IReadOnlyDictionary<string, string>? heldModuleVersions = null)
     {
-        return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
+        // 🚨 #6067 follow-up — what this process RUNS for each package, read once per import, so a
+        // package whose declared dependency floor the loaded build does not meet is declined below
+        // instead of having its sources compiled against that build.
+        return repoClient.Fetch(repoUrl, commitish, subdirectory, token)
+            .SelectMany(fetched => LoadedPackageModulesNow().Select(loaded => (Snapshot: fetched, Loaded: loaded)))
+            .SelectMany(read =>
         {
+            var snapshot = read.Snapshot;
             // 🚨 A CONFIGURED SUBDIRECTORY THAT MATCHES NOTHING IS A CONFIGURATION ERROR, NOT AN
             // EMPTY REPO (issue #1326). The tree filter compares the configured prefix against repo
             // paths with StringComparison.Ordinal — correct, because git paths ARE case-sensitive —
@@ -853,11 +891,15 @@ public sealed class GitHubSyncService
             // a platform floor above the running one is the ONE decline — its paths are neither
             // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
             // module and imports exactly as before.
-            var modules = ModuleSyncDecision.Decide(
-                ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content))),
-                heldModuleVersions,
-                PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                reconcile: policy is { Force: true } or { Reconcile: true });
+            var readings = ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content)));
+            var modules = ModuleSyncDecision.DeclineUnmetRequirements(
+                ModuleSyncDecision.Decide(
+                    readings,
+                    heldModuleVersions,
+                    PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                    reconcile: policy is { Force: true } or { Reconcile: true }),
+                readings,
+                read.Loaded);
             var notWritten = modules
                 .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
                 .ToList();
@@ -865,7 +907,9 @@ public sealed class GitHubSyncService
             foreach (var decline in declined)
                 logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
             var declinedNames = declined
-                .Select(m => $"{m.Module} (≥ {m.Floor})")
+                .Select(m => m.UnmetRequirement is { } requirement
+                    ? $"{m.Module} (requires {requirement})"
+                    : $"{m.Module} (≥ {m.Floor})")
                 .ToImmutableList();
             // Nothing of this tree is written when every file sits under a module that is unchanged
             // or declined — the whole import is a no-op, and says which.

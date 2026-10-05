@@ -617,7 +617,11 @@ TESTS_FIRST_LABEL = "tests-before-review"
 #: Minutes after the head's CI run was created with NO completed review, after which stage 2
 #: starts anyway (loudly). Derived from the measured review latency — see the design doc.
 STAGE_FALLBACK_MINUTES = 120
-STAGE_GATE_JOB = "Stage 1: review landed and answered"
+STAGE_GATE_JOB = "Stage gate: may the suites start"
+#: Every name the gate job has carried. Renamed under policy suites-parallel-with-review (by
+#: default the gate no longer waits for the review, so "review landed" on a green tick would lie);
+#: runs held under the OLD name before that change must still be found and released by the event half.
+STAGE_GATE_JOBS = (STAGE_GATE_JOB, "Stage 1: review landed and answered")
 #: Every hold's error MESSAGE starts with this (stage gate, Plugins `admission`, core `Consolidate test
 #: results`), so a hold is recognisable from the annotations alone — Plugins' PrBabysitter reads it.
 STAGE_HOLD_MARKER = "STAGE 2 HELD ("
@@ -1008,7 +1012,7 @@ def stage_gate_job(gh: Gh, run_id: int) -> dict | None:
             break
     if len(flat) < (data.get("total_count") or 0):
         raise ReadError(f"actions/runs/{run_id}/jobs returned {len(flat)} of {data.get('total_count')} jobs")
-    gates = [j for j in flat if str(j.get("name") or "").endswith(STAGE_GATE_JOB)]
+    gates = [j for j in flat if str(j.get("name") or "").endswith(STAGE_GATE_JOBS)]
     return max(gates, key=lambda j: (j.get("started_at") or "", j.get("id") or 0)) if gates else None
 
 
@@ -1711,6 +1715,10 @@ def self_test() -> int:
     open_pr = dict(_pr(0), state="open")
     done_run = {"id": 7, "head_sha": HEAD, "status": "completed", "created_at": T0}
     failed_gate = {"status": "completed", "conclusion": "failure", "name": f"stage-gate / {STAGE_GATE_JOB}"}
+    for legacy, expect in ((f"stage-gate / {STAGE_GATE_JOBS[1]}", True), ("stage-gate / Stage 1: something else", False)):
+        ok = legacy.endswith(STAGE_GATE_JOBS) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} gate-name: {legacy!r} recognised={expect}")
     adv_case("held run + green stage 1 -> rerun", "rerun", open_pr, done_run, failed_gate, GREEN_S, "re-running")
     adv_case("held run + stage 1 still held -> none", "none", open_pr, done_run, failed_gate, HELD_S, "still holds")
     adv_case("run of an OLDER head -> none (no stale verdict)", "none", open_pr, dict(done_run, head_sha="b" * 40),

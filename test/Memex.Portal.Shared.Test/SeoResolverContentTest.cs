@@ -17,6 +17,7 @@ namespace Memex.Portal.Shared.Test;
 public class SeoResolverContentTest
 {
     private sealed record FakePluginContent(string? Poster, decimal? Price);
+    private sealed record FakeSocialPost(string Text, string? MediaUrl);
 
     private static MeshNode Node(object? content, string? description = null) =>
         new("Overview", "Space") { NodeType = "Markdown", Description = description, Content = content };
@@ -28,6 +29,17 @@ public class SeoResolverContentTest
     {
         Assert.Equal("/api/content/S/p.png", SeoResolver.ExtractImage(Node(Json(new { poster = "/api/content/S/p.png" }))));
         Assert.Equal("/api/content/S/t.png", SeoResolver.ExtractImage(Node(Json(new { thumbnail = "/api/content/S/t.png" }))));
+    }
+
+    [Fact]
+    public void ExtractImage_SocialPost_ReadsMediaUrl()
+    {
+        const string media = "https://cdn.example.com/post-images/visual.png";
+        Assert.Equal(media, SeoResolver.ExtractImage(Node(Json(new { text = "post", mediaUrl = media }))));
+        Assert.Equal(media, SeoResolver.ExtractImage(Node(new FakeSocialPost("post", media))));
+        // An explicitly authored share image still wins over the post's visual.
+        Assert.Equal("/api/content/S/og.png",
+            SeoResolver.ExtractImage(Node(Json(new { ogImage = "/api/content/S/og.png", mediaUrl = media }))));
     }
 
     [Fact]

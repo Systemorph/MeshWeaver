@@ -206,11 +206,11 @@ public static class ModuleLoadReport
         // it asked for lands the same bytes and is declined again.
         imageCopyPreferred
             ? "This entry is loading the image's own copy because the landed store copy was "
-              + "DECLINED on its framework identity — the [ModuleActivation] SKIPPED line for this "
-              + "module names both identities. Re-installing lands the same bytes and reaches the "
-              + "same verdict, and so does a restart; the module is running, from the copy this "
-              + "image ships. It changes when the module is published built against this platform "
-              + "build."
+              + "DECLINED — on its framework identity, or (#6044) because it is not a newer release "
+              + "than the copy this image ships; the [ModuleActivation] SKIPPED line for this module "
+              + "names which. Re-installing lands the same bytes and reaches the same verdict, and "
+              + "so does a restart; the module is running, from the copy this image ships. It "
+              + "changes when the module is published as what that line names."
         : string.Equals(source, ModuleActivationSources.Store, StringComparison.Ordinal)
             // The sidecar's Directory pointer names the generation to load. A newer generation on
             // disk means landing wrote the bytes but this entry is still pointing at the previous

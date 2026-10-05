@@ -181,7 +181,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
             + "transfers the whole repository (#3945)");
 
         var again = await DeliverGreenBuild(BuiltSha, TestContext.Current.CancellationToken);
-        again.Should().Be(1, "the build completion is still recorded — only the IMPORT is skipped");
+        again.Should().Be(0, "the delivery triggers no import — the source is settled at this commit");
         await noSecondClone;
 
         // ── 3. THE CONTROL THAT KEEPS THIS FROM BEING 'NEVER SYNC AGAIN'. The repository moves.
@@ -313,7 +313,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         accessService.SetContext(null);
         try
         {
-            return await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
+            return await Webhooks.Process("push", PushPayload(headSha))
                 .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
         }
         finally
@@ -322,16 +322,18 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         }
     }
 
-    private static JsonElement GreenBuildPayload(string headSha) => JsonDocument.Parse($$"""
+    /// <summary>
+    /// One verified <c>push</c> to the configured branch — the sync trigger since policy
+    /// <c>sources-sync-on-push</c> (a green build no longer imports; it only records the build).
+    /// </summary>
+    private static JsonElement PushPayload(string headSha) => JsonDocument.Parse($$"""
         {
-          "action": "completed",
+          "ref": "refs/heads/main",
+          "before": "0123456789abcdef0123456789abcdef01234567",
+          "after": "{{headSha}}",
           "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
-          "workflow_run": {
-            "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
-            "id": 39450000001, "run_number": 3945, "name": "Content CI", "event": "push",
-            "path": ".github/workflows/ci.yml",
-            "updated_at": "2026-09-10T17:35:00Z"
-          }
+          "commits": [],
+          "size": 0
         }
         """).RootElement;
 
