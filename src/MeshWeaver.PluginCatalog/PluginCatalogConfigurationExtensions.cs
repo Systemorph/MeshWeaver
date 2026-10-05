@@ -380,7 +380,18 @@ public static class PluginCatalogConfigurationExtensions
                 .AddMeshDataSource(source => source.WithContentType<ModuleReloadRequest>())
                 .WithInitialization(ModuleReloadExecutor.Arm),
         });
+        builder.AddMeshNodes(new MeshNode(PackageUninstallRequest.NodeType)
+        {
+            Name = "Package Uninstall",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<PackageUninstallRequest>())
+                .WithInitialization(PackageUninstallExecutor.Arm),
+        });
         builder.AddAutocompleteExcludedTypes(ModuleReloadRequest.NodeType);
+        builder.AddAutocompleteExcludedTypes(PackageUninstallRequest.NodeType);
         builder.ConfigureServices(services => services.AddSingleton<ModuleReloadAgent>());
         builder.ConfigureHub(config => AddModuleReloadTypes(config)
             .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<ModuleReloadAgent>().Arm(hub)));
@@ -391,7 +402,9 @@ public static class PluginCatalogConfigurationExtensions
     private static MessageHubConfiguration AddModuleReloadTypes(MessageHubConfiguration config) => config
         .WithType<ModuleReloadRequest>(nameof(ModuleReloadRequest))
         .WithType<ModuleReloadItem>(nameof(ModuleReloadItem))
-        .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica));
+        .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica))
+        .WithType<PackageUninstallRequest>(nameof(PackageUninstallRequest))
+        .WithType<PackageUninstallPartition>(nameof(PackageUninstallPartition));
 
     private static MeshNode CreateCatalogNodeType() => new(CatalogNodeType)
     {
