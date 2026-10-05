@@ -650,19 +650,22 @@ class Carry:
     run: dict | None = None
 
 
-#: Titles of `internal-review` runs the reviewer's App posts when NO review happened: the
-#: reviewer-unavailable degradation, and the steward's own failure exit (MeshWeaver.Plugins
-#: `PullRequestSweep.NotCompletedTitle`). Neither is a review, so neither is ever carried — measured
-#: on the replay of 40 core pull requests, 4 of the 6 clean merges sat on a "Review not completed".
-NOT_A_REVIEW_TITLES = (DEGRADATION_TITLE_PREFIX, "Review not completed")
+#: Titles of `internal-review` runs that ARE a review — an ALLOW-list, so the carry fails SAFE. The
+#: App also posts runs that are not a review (the *Reviewer unavailable* degradation, the steward's
+#: *Review not completed* exit — on the replay of the last 60 core pull requests three clean merges sat
+#: on that exit), and their titles are owned by MeshWeaver.Plugins. A deny-list would turn a reworded
+#: exit into a carried "review" in silence; with an allow-list a reworded REVIEW title only means a
+#: fresh round. The shapes are Plugins `PullRequestActions` (`No blocking findings`,
+#: `{n} blocking finding(s)`) and `ReviewCarryOver.CarriedTitlePrefix` (a carried review carries on).
+REVIEW_TITLES = re.compile(r"^(?:No blocking findings|[1-9]\d* blocking finding\(s\)|Review carried from )")
 
 
 def real_review_run(check_runs, sha: str) -> dict | None:
-    """The newest COMPLETED `internal-review` run of the reviewer's App on `sha` — None when there is
-    none, or when the newest says no review happened (NOT_A_REVIEW_TITLES)."""
+    """The newest COMPLETED `internal-review` run of the reviewer's App on `sha` when it is a REVIEW
+    (REVIEW_TITLES); None when there is none, or when the newest is anything else."""
     run = newest_internal_review_run(internal_review_runs(check_runs, sha), None)
     title = ((run or {}).get("output") or {}).get("title") or ""
-    return run if run is not None and not title.strip().startswith(NOT_A_REVIEW_TITLES) else None
+    return run if run is not None and REVIEW_TITLES.match(title.strip()) else None
 
 
 def pr_diff_id(files) -> tuple[str | None, str]:
@@ -683,7 +686,9 @@ def pr_diff_id(files) -> tuple[str | None, str]:
                 return None, f"{f.get('filename')} has neither a patch nor a blob id"
             body = "blob " + str(f.get("sha"))
         else:
-            body = "\n".join("@@" if HUNK_HEADER.match(line) else line.rstrip() for line in patch.splitlines())
+            # Every byte of every line is hashed — trailing whitespace too (a hard line break in
+            # Markdown, content in a docstring or a YAML scalar); only the hunk header is reduced.
+            body = "\n".join("@@" if HUNK_HEADER.match(line) else line for line in patch.split("\n"))
         parts.append("\0".join((str(f.get("status")), str(f.get("previous_filename") or ""), str(f.get("filename")), body)))
     return hashlib.sha256("\n\0\n".join(parts).encode("utf-8")).hexdigest(), ""
 
@@ -2085,6 +2090,12 @@ def self_test() -> int:
     carry_case("the reviewed head's run is 'Review not completed' -> nothing to carry", False,
                carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="failure", title="Review not completed — a round ended for a cause …")]}),
                "is not a merge commit")
+    carry_case("a REWORDED no-review exit is not carried (allow-list fails safe)", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="failure", title="Review could not finish — …")]}), "is not a merge commit")
+    carry_case("a carried review carries on", True,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, title=f"Review carried from {P1[:10]} — No blocking findings")]}), "CARRIED")
+    carry_case("a merge that only changed TRAILING WHITESPACE on a changed line -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED.replace("+new line", "+new line  ")))), "own diff changed")
     carry_case("another App's internal-review on the old head -> nothing to carry", False,
                carry_of(NEW_CMP, runs={O: [dict(REVIEW_O, app={"id": 15368, "slug": "github-actions"})]}), "is not a merge commit")
     M2 = sha("9")

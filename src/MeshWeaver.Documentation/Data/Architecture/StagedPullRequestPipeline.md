@@ -240,8 +240,10 @@ each computed from the repository through REST — never from a commit message o
 (`check-review-answered.py` `find_reviewed_ancestor` + `carry_over`, read by `read_carry`):
 
 1. **Walking back from the head through MERGE commits only** reaches a commit whose newest
-   `internal-review` run from the reviewer's App is a real review — not the *Reviewer unavailable*
-   degradation, not the steward's *Review not completed* exit. Every merge walked has exactly ONE
+   `internal-review` run from the reviewer's App is a review — its title is on an ALLOW-list
+   (`No blocking findings`, `N blocking finding(s)`, `Review carried from …`), so the *Reviewer
+   unavailable* degradation, the steward's *Review not completed* exit, and any title Plugins rewords
+   later are NOT carried: the list fails safe, a fresh round. Every merge walked has exactly ONE
    parent on the pull request's side (the other is in the base branch), so a merge of another
    feature branch does not carry.
 2. **Every commit on the pull request now that was not on it at the reviewed head is a merge.** One
@@ -249,8 +251,9 @@ each computed from the repository through REST — never from a commit message o
 3. **The pull request's OWN diff is byte-identical**: compare(base...head) and compare(base...reviewed
    head) — each merge-base..head, as GitHub computes it — have the same patch-id. The patch-id hashes
    every file's status, names and patch with each hunk header reduced to `@@` (line numbers move when
-   main changes elsewhere in the file; the change does not); context lines are kept, as the git
-   patch-id keeps them. A file sent without a patch (binary, too large) contributes its blob id.
+   main changes elsewhere in the file; the change does not); every other byte is hashed — context
+   lines and trailing whitespace included (two trailing spaces are a Markdown line break). A file sent
+   without a patch (binary, too large) contributes its blob id.
 
 Anything unreadable does NOT carry: a short commit listing, the compare API's 300-file cap, a file
 with neither patch nor blob id, a failed read. The head is then reviewed fresh, exactly as before.
