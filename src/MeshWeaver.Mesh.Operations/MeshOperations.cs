@@ -4121,6 +4121,56 @@ public partial class MeshOperations
     }
 
     /// <summary>
+    /// "Reload module M on this instance" (<c>Doc/Architecture/ModuleReload</c>) — or every installed
+    /// module when <paramref name="module"/> is blank. Files ONE durable request at
+    /// <c>Admin/_ModuleReload/{id}</c>; the instance's executor resolves the newest COMPATIBLE
+    /// published version (declared platform floor ≤ the running platform), lands it, activates it —
+    /// live when the module can be swapped, otherwise exactly one automatic restart, no approval —
+    /// and reports on the request node: the version found, what landed, how it was activated, what
+    /// every replica loaded, or why it could not (RED, by name). Returns a JSON
+    /// <c>{status, path, message}</c> envelope at once; read the request node for the outcome.
+    ///
+    /// <para>🚨 Global admins only (<c>IsGlobalAdmin</c> — a platform admin on the Admin partition):
+    /// a reload restarts the instance when it cannot swap live. The request is written as System on
+    /// the caller's behalf, carrying the caller as <c>RequestedBy</c>; the executor acts only on a
+    /// request written that way.</para>
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name (<c>MeshWeaver.AI</c>) or its package
+    /// id; blank reloads every installed module.</param>
+    /// <param name="reason">Why — required; carried into the restart announcement and every log line.</param>
+    public IObservable<string> ReloadModule(string? module, string? reason)
+    {
+        logger.LogInformation("ReloadModule called with module={Module}", module ?? "(all)");
+        if (string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
+                hub.JsonSerializerOptions));
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        return hub.IsGlobalAdmin().Take(1)
+            .Catch((Exception _) => Observable.Return(false))
+            .SelectMany(admin => admin
+                ? ModuleReload.Request(hub, new ModuleReloadRequest
+                {
+                    Module = module,
+                    Reason = reason,
+                    RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+                })
+                : Observable.Return(new ModuleReloadTicket(null,
+                    "reloading a module requires a platform admin (an admin on the Admin partition) — it can restart this instance")))
+            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+                    ? new
+                    {
+                        status = "Requested",
+                        path = ticket.Path,
+                        message = "Read the request node: status, items (found / landed / target version), "
+                                  + "activation (Live / Restart / NotNeeded), replicas (what each process loaded) and failure.",
+                    }
+                    : new { status = "Error", path = (string?)null, message = ticket.Refusal ?? "refused" },
+                hub.JsonSerializerOptions));
+    }
+
+    /// <summary>
     /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
     /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
     /// DEFINITIVE denial re-decided through the node's <c>INodeTypeAccessRule</c> exactly as the owner's

@@ -1120,6 +1120,104 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <summary>
+    /// 🚨 The module half of an EXPLICIT reload (<c>Doc/Architecture/ModuleReload</c>): resolve the
+    /// newest COMPATIBLE version the configured registries publish for <paramref name="packageId"/>,
+    /// land it through the one landing path, and propose the module set — on this service's
+    /// serialised lane, so it never interleaves with a boot, broadcast or safety-net wave.
+    ///
+    /// <para><b>Attended, not unattended.</b> The reload is an authorised request, exactly like a
+    /// Provision click, so the package's own update policy does not decline it
+    /// (<see cref="PluginBundleClient.AdoptModuleOutcome"/> with <c>unattended: false</c>). The
+    /// declared platform FLOOR still holds: a bundle whose <c>minMeshVersion</c> is above the running
+    /// platform is not downloaded, the landed generation keeps serving, and the outcome names the
+    /// floor and the running version (policy <c>package-min-mesh-version</c>). Neither a seal nor a
+    /// green platform build is consulted — compatibility is the floor and the link probe.</para>
+    ///
+    /// <para>Registries are asked in order and the first that SERVES the package answers, the same
+    /// rule <c>ModuleRefresh</c> follows. Never faults: an unreachable registry, a refused bundle and
+    /// a refused module-set proposal each come back as <see cref="ModuleAdoptOutcome.Failure"/>.</para>
+    /// </summary>
+    /// <param name="packageId">The package (<c>Plugins/{packageId}</c>) declaring the module.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    public IObservable<ModuleAdoptOutcome> ReloadModule(string packageId, string moduleName)
+    {
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        var tokenResolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
+        if (tokenResolver is null || registries.Count == 0)
+            return Observable.Return(new ModuleAdoptOutcome
+            {
+                Failure = "this installation reads no plugin registry (PluginCatalog:Registries is empty) — "
+                          + "there is no published version to resolve",
+            });
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{packageId}";
+
+        IObservable<ModuleAdoptOutcome> Ask(PluginRegistryReference registry) =>
+            Observable.Defer(() => tokenResolver.ResolveToken(registry).Take(1)
+                    .SelectMany(token => new PluginBundleClient(hub, registry.Url, token)
+                        .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: false))
+                    .Timeout(PerPackageAdoptBudget))
+                // Per registry, INSIDE the Concat: one registry's failure must not leave the next untried.
+                .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
+                {
+                    Registry = registry.Url,
+                    Failure = $"{DisplayName(registry)} could not be asked: {ex.Message}",
+                }));
+
+        IObservable<ModuleAdoptOutcome> Resolve() =>
+            registries.Select(Ask).ToObservable().Concat()
+                .Scan(ImmutableList<ModuleAdoptOutcome>.Empty, (seen, outcome) => seen.Add(outcome))
+                .Where(seen => !seen[^1].NotServed || seen.Count == registries.Count)
+                .Take(1)
+                .Select(seen => seen[^1].NotServed
+                    ? seen[^1] with
+                    {
+                        Failure = $"no configured registry publishes a module bundle for '{packageId}' "
+                                  + $"({string.Join(", ", registries.Select(DisplayName))})",
+                    }
+                    : seen[^1]);
+
+        IObservable<ModuleAdoptOutcome> ProposeSet(ModuleAdoptOutcome outcome)
+        {
+            var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+            if (outcome.Failure is not null || landing is null)
+                return Observable.Return(outcome);
+            // 🚨 #3395 — a landing reaches a boot (or a swap) only through the mesh's module set, and
+            // the set is checked against what installed packages require (#6067). A refusal here
+            // means a restart would NOT load the module, so it is the reload's failure, named.
+            return ModuleDependencyFloor.ProposeChecked(hub, landing)
+                .Select(_ => outcome)
+                .DefaultIfEmpty(outcome)
+                .Catch((Exception ex) => Observable.Return(outcome with
+                {
+                    Failure = $"the module set could not be proposed, so neither a swap nor a restart "
+                              + $"would load {moduleName}: {ex.Message}",
+                }));
+        }
+
+        return Observable.Defer(() =>
+        {
+            // The pass runs on the lane and hands its answer out through this slot; the lane's own
+            // completion (which follows the pass) is what reads it. A pass enqueued during teardown
+            // never runs, and says so instead of leaving the caller waiting.
+            ModuleAdoptOutcome? answer = null;
+            return OnLane(() => Resolve()
+                    .SelectMany(ProposeSet)
+                    .Do(outcome => Volatile.Write(ref answer, outcome))
+                    .Select(_ => Unit.Default))
+                .Select(_ => Volatile.Read(ref answer) ?? new ModuleAdoptOutcome
+                {
+                    Failure = "the reload pass did not run (the reconcile lane is shutting down)",
+                })
+                .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
+                {
+                    Failure = $"the reload pass faulted: {ex.Message}",
+                }))
+                .Take(1);
+        });
+    }
+
+    /// <summary>
     /// One package's module adopt on the unattended lane — the decision, the download when it
     /// decides Land, the landing — bounded and failure-tolerant, so one package can neither hang
     /// nor fail the packages after it. Shared by the boot pass and the broadcast drain, so the two
