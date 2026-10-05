@@ -1,0 +1,60 @@
+name: Fresh merge with the current base
+description: >-
+  On a pull_request run, replace the checkout (GitHub's refs/pull/N/merge, built when the head was
+  pushed) with the head merged onto the base branch's CURRENT tip — computed locally, pushed nowhere,
+  byte-identical for every job handed the same main sha. Red on a conflict with the current base.
+  A no-op, said in green, for every other event and for a caller-named content ref.
+# Policy `suites-test-fresh-merge` — Doc/Architecture/FreshMergeUnderTest. The mechanism and its
+# self-test live in .github/scripts/ci-fresh-merge.py (beside this action, at the ref `uses:` named).
+#
+# 🚨 ORDER: run it RIGHT AFTER the checkout of the repository under test and BEFORE anything that
+# reads the tree (lock materialization, a build key, a scope diff). A selector that diffs
+# `origin/<base>...HEAD` then sees exactly the pull request's effect on the CURRENT main.
+#
+# 🚨 ONE MAIN PER RUN: the first job resolves the tip (main-sha empty) and passes its `main-sha`
+# output to every job that must test the SAME tree (a build and the tests that read its artifacts).
+inputs:
+  path:
+    description: The checkout of the repository under test.
+    default: .
+  main-sha:
+    description: The base tip to merge onto; empty = read the tip from origin now.
+    default: ''
+  content-ref:
+    description: A ref the caller named explicitly (a lane's content-ref); non-empty = tested as given.
+    default: ''
+  resolve-only:
+    description: "'true' = only name the base tip (main-sha) for later jobs; the checkout is left as it is."
+    default: 'false'
+  token:
+    description: Token for the one compare read a shallow checkout needs (the merge-base).
+    default: ${{ github.token }}
+outputs:
+  main-sha:
+    description: The base tip the merge was built on ('' when not a pull request).
+    value: ${{ steps.merge.outputs.main-sha }}
+  merge-sha:
+    description: The commit now checked out ('' when not a pull request).
+    value: ${{ steps.merge.outputs.merge-sha }}
+  mode:
+    description: not-a-pull-request | content-ref | resolved | already-fresh | merged
+    value: ${{ steps.merge.outputs.mode }}
+runs:
+  using: composite
+  steps:
+    - name: Merge the head onto the current base tip
+      id: merge
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        FRESH_PATH: ${{ inputs.path }}
+        FRESH_MAIN: ${{ inputs.main-sha }}
+        FRESH_CONTENT_REF: ${{ inputs.content-ref }}
+        FRESH_ACTION_PATH: ${{ github.action_path }}
+        FRESH_VERB: ${{ inputs.resolve-only == 'true' && 'resolve' || 'apply' }}
+      run: |
+        set -euo pipefail
+        script="$FRESH_ACTION_PATH/../../scripts/ci-fresh-merge.py"
+        head -c 400 "$script" | grep -q "ci-fresh-merge" \
+          || { echo "::error::ci-fresh-merge.py is missing beside this action ($script)"; exit 1; }
+        python3 "$script" "$FRESH_VERB" --path "$FRESH_PATH" --main-sha "$FRESH_MAIN" --content-ref "$FRESH_CONTENT_REF"

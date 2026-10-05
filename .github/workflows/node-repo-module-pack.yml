@@ -417,6 +417,16 @@ name: node-repo module pack
 on:
   workflow_call:
     inputs:
+      merge-main-sha:
+        description: >-
+          Pull requests only (policy suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest): the
+          base tip every job of this lane merges the head onto before testing it, so the lane tests the
+          head + the CURRENT main and not GitHub's merge ref from push time. Empty = the lane resolves
+          the tip itself, once, in its first job. Ignored when `content-ref` names a ref, and off pull
+          requests.
+        required: false
+        type: string
+        default: ''
       modules:
         description: >
           JSON array of {package, module, project}: the Store package id, the module's entry
@@ -903,6 +913,8 @@ jobs:
       # The matrix the pack job expands: the scope's selection, each entry annotated by the ledger
       # (`ledger.decision` build|reuse, `ledger.key`, …) when the ledger is on.
       modules: ${{ steps.reuse.outputs.modules }}
+      # The base tip every job of this lane merges the head onto (empty off pull requests).
+      merge-main-sha: ${{ steps.fresh.outputs.main-sha }}
       # The SUBSET the one-workspace build compiles — every entry the ledger did not hand a reusable
       # bundle for. The postcondition in build-workspace is fed the SAME list.
       build-modules: ${{ steps.reuse.outputs.build }}
@@ -1070,6 +1082,14 @@ jobs:
           fi
           [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
           echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the current base tip (the keys below hash the tested tree)
+        id: fresh
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          path: repo
+          main-sha: ${{ inputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
@@ -1741,6 +1761,12 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the base tip `select` tested
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          main-sha: ${{ needs.select.outputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
       # The workspace build reads each package's lock (see `select`): this tree's, never the base's,
       # by the generator at the build-logic ref (a disposable checkout the action removes, so it
       # never enters the workspace mount).
@@ -2136,6 +2162,12 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the base tip `select` tested
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          main-sha: ${{ needs.select.outputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -4391,6 +4423,12 @@ jobs:
           repository: ${{ inputs.content-repository || github.repository }}
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the base tip `select` tested
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          main-sha: ${{ needs.select.outputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
