@@ -20,7 +20,7 @@ To materialize partition **`P`** from a static repo:
 1. **Implement `IStaticRepoSource`:**
    - `Partition` → **the target partition name** (e.g. `"Doc"`). This *is* the target; it defaults to the repo's own partition — there is no separate "target" argument, you set it here.
    - `Versioned` → `false` for authored content (fingerprint on content hash so an edited file re-imports); `true` if the nodes carry meaningful versions.
-   - `SyncMode` (optional) → the partition's [`PartitionSyncMode`](#per-partition-sync-mode-what-gets-pruned) — what the import PRUNES. Defaults to `FullReplace` (mirror the partition to the repo). Override to `Additive` if users add their own nodes to this partition (the built-in AI catalogs do), or `UpsertOnly` to never prune.
+   - `SyncMode` (optional) → the partition's [`PartitionSyncMode`](#per-partition-sync-mode-what-gets-pruned) — what the import PRUNES. Defaults to `FullReplace` (mirror what the source owns — since policy `prune-requires-provenance` it prunes only nodes the source previously put there). Override to `Additive` if users add their own nodes to this partition (the built-in AI catalogs do), or `UpsertOnly` to never prune.
    - `EnumerateSourceNodes()` → the partition's **children, with full `Content`** (e.g. `MarkdownContent`). Children + satellites only — never the `namespace=""` root.
    - `PartitionRoot` (optional) → a curated `Space` root (`NodeType = "Space"`, `MarkdownContent` welcome). Return `null` to get a generic synthesized root.
 2. **Register it:** `services.AddSingleton<IStaticRepoSource>(new MyRepoSource())`, gated behind `Features:StaticRepoSync:Partitions` via `AddStaticRepoSync(serveFromPartition)`. For a synced partition the in-memory read-only static provider is skipped so Postgres serves + accepts the import.
@@ -68,7 +68,7 @@ Upserting the source's nodes is the same in every partition; what **differs is t
 
 | `PartitionSyncMode` | Prune behavior | Use it when |
 |---|---|---|
-| `FullReplace` *(default)* | **Mirror.** Prune EVERY live node absent from the current source. The partition is an exact copy of the repo. | The partition is fully build-owned (e.g. `Doc`) — anything not in the repo is stale and should be removed. |
+| `FullReplace` *(default)* | **Mirror what the source owns.** Prune every live node the source PREVIOUSLY put there (the prior import manifest) that is absent from the current source. Since policy `prune-requires-provenance` this is the same set `Additive` prunes: a node created in the partition at runtime is never the repository's to delete ([Sources Sync on Push](../SourcesSyncOnPush)). | The partition is build-owned (e.g. `Doc`). |
 | `Additive` | Prune ONLY nodes the source **previously** owned (recorded in the prior import's *manifest*) that are now absent. A node a **user added** — never in any manifest — is **kept**. | Users add their own nodes alongside the shipped ones (the built-in AI catalogs). |
 | `UpsertOnly` | **Never prune.** The source can only add/update; nothing is ever removed. | You want the repo to seed content but never delete anything. |
 
@@ -80,7 +80,7 @@ Upserting the source's nodes is the same in every partition; what **differs is t
 
 ### Add your own skill/agent that survives sync
 
-Because `Skill`/`Agent`/`Provider`/`Harness` are `Additive`, you can simply **create a node in that partition** (e.g. a new `nodeType:Skill` node under `Skill`, from the GUI or MCP `create`) and it **survives every re-import** — it was never in a shipped manifest, so the importer never prunes it. Editing a *shipped* node instead? Claim it with `SyncBehavior = ExcludeThisAndChildren` (see below) so the next content-version doesn't overwrite your edit. (In a `FullReplace` partition like `Doc`, a hand-added node WOULD be pruned — claim its subtree or switch the partition's mode if you need it to persist.)
+Because `Skill`/`Agent`/`Provider`/`Harness` are `Additive`, you can simply **create a node in that partition** (e.g. a new `nodeType:Skill` node under `Skill`, from the GUI or MCP `create`) and it **survives every re-import** — it was never in a shipped manifest, so the importer never prunes it. Editing a *shipped* node instead? Claim it with `SyncBehavior = ExcludeThisAndChildren` (see below) so the next content-version doesn't overwrite your edit. (Since policy `prune-requires-provenance` a hand-added node survives a `FullReplace` partition like `Doc` too — no manifest records it, so no import prunes it.)
 
 ## Decoupling a partition (sync: none)
 
@@ -476,7 +476,7 @@ Shipped and enabled for `Doc` / `Agent` / `Model` on the distributed portal. The
 - Only the **lowercased** partition schema is provisioned — never a verbatim/capital ghost.
 - A **changed** source re-imports and **increments the Version** of updated nodes (the canonical-upsert guarantee).
 - An import over a **content-NULL row refills its content** (the migration-backfill shadow case).
-- A node **absent from the source is pruned** in `FullReplace`; in `Additive` only a node the source **previously owned** is pruned (a user-added node survives); `UpsertOnly` prunes nothing (`StaticRepoImporterSyncModeTest`).
+- A node absent from the source is pruned only when the source **previously owned** it (the prior import manifest), in `FullReplace` and `Additive` alike — a node created at runtime survives (policy `prune-requires-provenance`); `UpsertOnly` prunes nothing (`StaticRepoImporterSyncModeTest`, `ARuntimeNodeSurvivesAnImportTest`).
 - A **NodeType definition that still has instances is held, not pruned** — kept, stamped `pendingRetirement`, counted as preserved (not converged) — and **is pruned by the next import once the instances are gone**; a type with no instances is pruned on the first pass (`ImportDanglingNodeTypeTest`).
 - Re-run with an unchanged source is a **no-op** (fingerprint short-circuit).
 - The import runs on the **dedicated `import/{meshHubId}` hub**, not the root mesh hub — the bulk create/upsert traffic never touches the router (verified end-to-end by `OrleansStaticRepoImportTest` / `OrleansContentImportSyncTest`, which complete only because the import hub is reachable).

@@ -101,13 +101,13 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
     private static ImportConflictPolicy TwoWaySince(DateTimeOffset horizon) =>
         new(PreserveServerNewer: true, Since: horizon);
 
-    /// <summary>Creates a node AS A PERSON — the identity is captured on the calling thread, so the
+    /// <summary>Edits a node AS A PERSON — the identity is captured on the calling thread, so the
     /// scope has to be open across the call that builds the write, not across the subscribe.</summary>
-    private async Task CreateAsAuthor(MeshNode node)
+    private async Task EditAsAuthor(string path)
     {
         IObservable<MeshNode> write;
         using (Access.SwitchAccessContext(Author))
-            write = MeshService.CreateNode(node);
+            write = Mesh.GetMeshNodeStream(path).Update(n => n with { Description = "edited by Alice" });
         await write.FirstAsync().Timeout(60.Seconds()).Await();
     }
 
@@ -130,7 +130,9 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// 🚨 <b>THE OWNERSHIP TEST, end to end.</b> The repository retires two nodes at once: one the
     /// IMPORT wrote (the <c>Crm/Source/Mail*</c> shape — system identity, or no author at all) and
-    /// one a PERSON authored on the portal. Both are absent from the source; both are newer than the
+    /// one the repository shipped and a PERSON then edited on the portal (since policy
+    /// <c>prune-requires-provenance</c> a node the repository never shipped is not a candidate at
+    /// all). Both are absent from the source; both are newer than the
     /// sync horizon. Only authorship separates them, and it must: the import's own writes are the
     /// import's to retire, a person's are not.
     ///
@@ -149,22 +151,26 @@ public class RetiredSourceLeavesTheMeshTest(ITestOutputHelper output) : Monolith
         var retired = $"{partition}/Retired";
         var authored = $"{partition}/Authored";
 
-        // Pass 1 — the repository ships both files; the import writes both, as the import.
+        // Pass 1 — the repository ships all three files; the import writes them, as the import.
+        // 🚨 Authored is SHIPPED too (policy prune-requires-provenance): a node no manifest records
+        // is never a prune candidate at all, so the authorship protection can only be exercised on a
+        // node the repository DID put there and a person then edited.
         var first = await StaticRepoImporter
             .ImportSource(Mesh, new RepoSource(partition)
             {
                 Root = Space(partition),
-                Nodes = [Page(partition, "Kept"), Page(partition, "Retired")],
+                Nodes = [Page(partition, "Kept"), Page(partition, "Retired"), Page(partition, "Authored")],
             })
             .FirstAsync().Timeout(240.Seconds()).Await(TestContext.Current.CancellationToken);
         Output.WriteLine($"pass 1 = {first.Outcome} ({first.Count} node(s))");
         first.Outcome.Should().Be("Imported");
 
-        // A person adds a node of their own, on the portal, that the repository has never carried.
-        await CreateAsAuthor(Page(partition, "Authored"));
+        // A person edits the shipped node on the portal.
+        await EditAsAuthor(authored);
 
-        // Pass 2 — the repository has DELETED Retired. Two prune candidates now: the node the import
-        // wrote, and the node the person wrote. Both are newer than the horizon.
+        // Pass 2 — the repository has DELETED Retired AND Authored. Two prune candidates, both in the
+        // prior manifest: the node only the import wrote, and the node a person edited since. Both
+        // are newer than the horizon.
         var afterRetirement = new RepoSource(partition)
         {
             Root = Space(partition),
