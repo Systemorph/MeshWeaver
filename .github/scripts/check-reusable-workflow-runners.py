@@ -42,7 +42,9 @@ In every workflow under `.github/workflows/` that is triggered by `workflow_call
 A literal label (`ubuntu-latest`, `ubuntu-24.04`, `aks-silos`, a list, a group mapping), a matrix- or
 needs-derived label, and a selected-visibility variable (`MW_RUNNER_HEAVY`, `MW_RUNNER_GATE` — a
 repository added to their selection would silently change where THIS repository's own runs go) are
-all refused, each by name.
+all refused, each by name. So are the RETIRED lanes (`MW_RUNNER_TRUNK`, `MW_RUNNER_TRUNK_DOCKER`,
+`MW_RUNNER_CORE_GATE`): there are exactly two pools, and priority comes from the CI queue's tiers,
+never a pool (policy `ci-two-pools-priority-queues`, Doc/Architecture/RunnerPoolsAndDispatchQueues).
 
 USAGE
 -----
@@ -250,6 +252,11 @@ def _unit_cases() -> list[tuple[str, bool]]:
         ("label-list", wf("[self-hosted, linux]"), True),
         ("group-mapping", wf("{group: arc}"), True),
         ("selected-visibility-var", wf("${{ vars.MW_RUNNER_HEAVY || 'ubuntu-latest' }}"), True),
+        # 🚦 the retired lanes (policy ci-two-pools-priority-queues): priority comes from the CI queue's
+        # tiers, never from a pool — a lane variable may not come back into a shared lane.
+        ("retired-trunk-lane", wf("${{ (github.event_name != 'pull_request' && vars.MW_RUNNER_TRUNK) || vars.MW_RUNNER || 'ubuntu-latest' }}"), True),
+        ("retired-trunk-docker-var", wf("${{ vars.MW_RUNNER_TRUNK_DOCKER || 'ubuntu-latest' }}"), True),
+        ("retired-gate-var", wf("${{ vars.MW_RUNNER_CORE_GATE || 'ubuntu-latest' }}"), True),
         ("self-hosted-fallback", wf("${{ vars.MW_RUNNER || 'aks-silos' }}"), True),
         ("no-fallback", wf("${{ vars.MW_RUNNER }}"), True),
         ("matrix-label", wf("${{ matrix.os }}"), True),
