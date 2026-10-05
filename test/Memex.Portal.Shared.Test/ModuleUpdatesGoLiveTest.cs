@@ -128,7 +128,7 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
         updater.Restarts.Should().Be(0, "a live-updatable module's update must schedule NO restart");
         verdict.Should().Contain("went LIVE");
         (await NameAt(ProbePath, ct)).Should().Be("v2", "M@N+1 serves in the running process");
-        Contexts.Current(Module)!.Location.Should().Contain($"{Module}@", "the landed generation is the current one");
+        (Contexts.Current(Module)?.Location).Should().Contain($"{Module}@", "the landed generation is the current one");
         AssertNothingStuck();
     }
 
@@ -354,8 +354,9 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
                             .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
                             .Subscribe(observer);
                 })
-                .Where(c => c.LastCheckVerdict is not null && c.LastCheckedAt >= before)
-                .Select(c => c.LastCheckVerdict!)
+                .Where(c => c.LastCheckedAt >= before)
+                .Select(c => c.LastCheckVerdict)
+                .OfType<string>()
                 .FirstAsync()
                 .Timeout(Budget)
                 .Await(ct);

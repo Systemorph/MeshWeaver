@@ -113,7 +113,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
         (await first.Timeout(Budget).Await(TestContext.Current.CancellationToken)).Kind.Should().Be(ModuleSwapKind.Live);
         (await second.Timeout(Budget).Await(TestContext.Current.CancellationToken)).Kind.Should().Be(ModuleSwapKind.Live,
             "the second update is applied AFTER the first, never interleaved with it");
-        Contexts.Current(Module)!.Location.Should().Be(Path.GetFullPath(v3), "the newest update wins");
+        (Contexts.Current(Module)?.Location).Should().Be(Path.GetFullPath(v3), "the newest update wins");
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v3");
     }
 
@@ -128,7 +128,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
 
         var answered = await inFlight.Timeout(Budget).Await(TestContext.Current.CancellationToken);
         answered.Should().NotBeNull("a read in flight across the swap must be answered, by N or N+1");
-        answered!.Name.Should().BeOneOf("v1", "v2");
+        (answered?.Name).Should().BeOneOf("v1", "v2");
         outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v2");
     }
@@ -145,7 +145,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
         outcome.Kind.Should().Be(ModuleSwapKind.RestartRequired);
         outcome.NeedsRestart.Should().BeTrue("only a restart can activate a mesh-hub configuration");
         outcome.Reason.Should().Contain(Module).And.Contain("configures the mesh hub");
-        Contexts.Current(Module)!.Location.Should().Be(Path.GetFullPath(v1), "never a half-swapped state");
+        (Contexts.Current(Module)?.Location).Should().Be(Path.GetFullPath(v1), "never a half-swapped state");
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v1", "N keeps serving until the restart");
     }
 
@@ -160,7 +160,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
         outcome.NeedsRestart.Should().BeTrue();
         outcome.Reason.Should().Contain("contributions of this generation cannot be built",
             "the recorded reason must name the cause");
-        Contexts.Current(Module)!.Location.Should().Be(Path.GetFullPath(v1));
+        (Contexts.Current(Module)?.Location).Should().Be(Path.GetFullPath(v1));
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v1");
     }
 
@@ -174,7 +174,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
 
         outcome.Kind.Should().Be(ModuleSwapKind.RestartRequired);
         outcome.Reason.Should().Contain("holds a process-wide handle", "the declaration is the explanation the restart carries");
-        Contexts.Current(Module)!.Location.Should().Be(Path.GetFullPath(v1));
+        (Contexts.Current(Module)?.Location).Should().Be(Path.GetFullPath(v1));
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v1");
     }
 
@@ -252,7 +252,8 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
         await Mesh.GetMeshNodeStream(typePath)
             .Update(node => node with
             {
-                Content = node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with
+                Content = (node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                           ?? throw new InvalidOperationException($"{typePath} carries no NodeTypeDefinition")) with
                 {
                     RequestedReleaseAt = DateTimeOffset.UtcNow,
                     RequestedReleaseForce = true,
@@ -264,7 +265,8 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
             .Should().Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                 is { CompilationStatus: CompilationStatus.Ok }, cancellationToken: TestContext.Current.CancellationToken);
-        onN1.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.CompilationError.Should().BeNull(
+        onN1.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions).Should().BeOfType<NodeTypeDefinition>()
+            .Which.CompilationError.Should().BeNull(
             "the compile after the swap must see N+1's metadata — in the running process");
     }
 
@@ -282,15 +284,19 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
             .Should().Within(120.Seconds())
             .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
                 is { CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error }, cancellationToken: TestContext.Current.CancellationToken);
-        return settled.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        return settled.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+               ?? throw new InvalidOperationException($"{typePath} carries no NodeTypeDefinition");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private WeakReference WeakContextOf(string module) => new(Contexts.Current(module)!.Context);
+    private WeakReference WeakContextOf(string module) =>
+        new(Contexts.Current(module)?.Context ?? throw new InvalidOperationException($"{module} is not held in its own context"));
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private object HoldGeneration(string module) =>
-        Activator.CreateInstance(Contexts.Current(module)!.Assembly.GetType("MeshWeaver.Test.LiveSwap.Api+Token")!)!;
+        (Contexts.Current(module)?.Assembly.GetType("MeshWeaver.Test.LiveSwap.Api+Token") is { } token
+            ? Activator.CreateInstance(token)
+            : null) ?? throw new InvalidOperationException($"{module}'s Api+Token type could not be instantiated");
 
     private static string ModuleSource(int version, bool withGroup = false, bool throwingNodes = false, bool configuresMeshHub = false) => $$"""
         [assembly: MeshWeaver.Test.LiveSwap.Module]
