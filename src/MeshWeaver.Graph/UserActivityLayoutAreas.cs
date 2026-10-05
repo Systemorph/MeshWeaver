@@ -58,6 +58,12 @@ public static class UserActivityLayoutAreas
     /// <summary>Area that clears the owner's <see cref="User.Body"/> override so the default welcome home returns.</summary>
     public const string ResetHomeArea = "ResetHome";
 
+    /// <summary>Sub-area of the home page that holds the header actions row (Edit and the More dropdown).</summary>
+    public const string HomeActionsArea = "HomeActions";
+
+    /// <summary>Sub-area of the home page that holds its body: the owner dashboard or the visitor profile.</summary>
+    public const string HomeBodyArea = "HomeBody";
+
     /// <summary>
     /// Area name for the public profile page (<c>/{user}/Profile</c>) — the polished, read-only
     /// showcase every visitor sees, and the owner's preview + entry point to the editor.
@@ -129,7 +135,15 @@ public static class UserActivityLayoutAreas
     /// Renders the user's page. Shows a personal dashboard to the owner,
     /// or a public profile to visitors.
     /// </summary>
-    public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext ctx)
+        => Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%")
+            // This page declined the standard header, so nothing else draws the Edit + More row. It sits in a
+            // stable sub-area outside the body's Select: the body is rebuilt on every edit of the user node.
+            .WithView(MeshNodeLayoutAreas.HeaderActionsSlot(host), area => area.WithId(HomeActionsArea))
+            .WithView(ActivityBody(host, ctx), area => area.WithId(HomeBodyArea)));
+
+    /// <summary>The page body: the owner dashboard or the visitor profile, rebuilt as the user node changes.</summary>
+    internal static IObservable<UiControl?> ActivityBody(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
         // Extract the owner ID from the hub address (e.g., "User/Alice" → "Alice")
