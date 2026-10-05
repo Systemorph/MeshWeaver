@@ -608,34 +608,24 @@ public class ConfiguredModuleActivationTest
     }
 
     /// <summary>
-    /// 🚨 <b>THE repro of #3911, through the real loader.</b> <c>Assembly.LoadFrom</c> does not
-    /// promise to load the path it is handed: an assembly of that identity already in the default
-    /// load context is returned instead — same instance, its own location, NO exception (measured
-    /// 2026-09-10; only a copy carrying DIFFERENT bytes throws, and that path already falls back).
-    /// So a boot handed a generation whose name is already held runs a generation nobody asked for,
-    /// and before this the loader recorded the one it ASKED for.
+    /// 🚨 <b>#3911 cannot recur for a module in its own context — through the real loader.</b>
+    /// <c>Assembly.LoadFrom</c> does not promise to load the path it is handed: an assembly of that
+    /// identity already in the DEFAULT load context is returned instead, silently. That was the
+    /// control instance's 2026-09-10 outage — a MeshModuleClosure seed (MeshWeaver.AI among them) at
+    /// <c>modules/&lt;name&gt;/</c> took the name, and every later landed generation of it was
+    /// substituted. Since policy <c>module-live-update-default</c> every module the image does not
+    /// bind loads into its OWN collectible context, so a copy the default context already holds
+    /// decides nothing: the loader runs exactly the generation it was asked for, and says nothing.
     ///
-    /// <para><b>The live shape.</b> Four modules ship as <c>MeshModuleClosure</c> SEEDS in the
-    /// portal image — MeshWeaver.AI among them — under <c>modules/&lt;name&gt;/</c>, and the registry
-    /// lands the same module again under <c>modules/&lt;name&gt;@&lt;generation&gt;/</c>. Whichever
-    /// path a boot reaches first takes the name for the whole process, and every later reading of
-    /// "which generation is running" — <see cref="InstalledModuleAssembly"/>, the loaded-generation
-    /// map, the per-NodeType dependency record, the module-set adoption — inherited the requested
-    /// answer rather than the real one. The activation report then read the difference as an
-    /// ordinary pending update and promised a restart that cannot clear it, which is what left the
-    /// control instance recycling on 2026-09-10 with nothing in any log naming a cause.</para>
-    ///
-    /// <para><b>The control runs in both directions here.</b> The first arrangement below is a
-    /// deployment whose landed generation is the only copy of its name: the loader is handed the
-    /// generation it then loads, and must report NOTHING. A detector that flagged every load would
-    /// satisfy every assertion in the second half and fail that one.</para>
+    /// <para><b>The control runs in both directions.</b> The undisturbed deployment loads what it
+    /// asked for with nothing else holding the name; the second one pre-loads the identical seed
+    /// into the default context — the arrangement that substituted before — and must STILL run the
+    /// generation it asked for. The report-level half of #3911 (a substitution an image-bound module
+    /// can still suffer) is pinned by the test after this one.</para>
     /// </summary>
     [Fact]
-    public async Task WhenTheLoadContextAlreadyHoldsTheName_TheLoaderSaysWhichGenerationIsRunning()
+    public async Task WhenTheDefaultContextAlreadyHoldsTheName_TheModuleStillRunsTheGenerationItAskedFor()
     {
-        // ── The negative control: nothing else holds this name, so the loader loads what it asked
-        //    for and says nothing at all. Its own Deployment, because a module simple name can be
-        //    held only once per process and that is the whole subject here.
         using (var undisturbed = new Deployment())
         {
             var landed = await Land(
@@ -651,58 +641,50 @@ public class ConfiguredModuleActivationTest
         }
 
         using var deployment = new Deployment();
-        var (asked, running, services) = await SubstitutedHead(deployment);
+        var (asked, seeded, services) = await SubstitutedHead(deployment);
 
-        // The module is PRESENT — refusing it would take the module away over a diagnosis.
         var installed = Assert.Single(services.GetServices<InstalledModuleAssembly>(),
             m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
-        Assert.Equal(running, Path.GetFileName(Path.GetDirectoryName(installed.Assembly.Location)));
+        Assert.Equal(asked, Path.GetFileName(Path.GetDirectoryName(installed.Assembly.Location)));
+        Assert.NotEqual(seeded, asked);
+        Assert.IsType<ModuleLoadContext>(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(installed.Assembly));
         Assert.Empty(services.GetServices<IncompatibleModule>());
+        Assert.Empty(services.GetServices<FallbackModule>());
 
-        // …and the loader now says WHICH generation that is, and which one it is not.
-        var fallback = Assert.Single(services.GetServices<FallbackModule>());
-        Assert.True(fallback.RunsAlreadyLoadedCopy);
-        Assert.False(fallback.RunsImageBaseline,
-            "the image copy was never TRIED — it was already loaded, which is a different fact");
-        Assert.Equal(deployment.Module, fallback.Name);
-        Assert.Equal(asked, fallback.Generation);
-        Assert.Equal(running, fallback.PreviousGeneration);
-        Assert.Equal("1.4.0", fallback.Version);
-        Assert.StartsWith(
-            $"'{deployment.Module}' runs the copy already loaded here (",
-            fallback.Report(), StringComparison.Ordinal);
-        Assert.Contains(
-            "was requested and never entered the process", fallback.Report(), StringComparison.Ordinal);
-        Assert.Contains(
-            "the default load context holds one copy per name",
-            fallback.Report(), StringComparison.Ordinal);
-
-        // 🚨 The adoption records the generation that RUNS, not the one that was asked for.
+        // The adoption records the generation that RUNS — which is now the one that was asked for.
         var index = ModuleSetStore.Read(deployment.Root);
-        Assert.Equal(running, index.RunningGenerations[deployment.Module]);
-
-        // 🚨 And the head's bytes were NOT measured, so NOTHING claims they are unloadable — that
-        // verdict would make the update reconcile skip every rebuild of 1.4.0 for good, on the
-        // strength of a test that never ran.
+        Assert.Equal(asked, index.RunningGenerations[deployment.Module]);
         Assert.Null(ModuleActivationSidecar.ReadUnloadable(deployment.Root, deployment.Module));
-        Assert.Null(Entry(deployment).UnloadableFrameworkMvid);
     }
 
     /// <summary>
-    /// The activation report NAMES the substituted generation and never calls it "restart
-    /// required" (#3911) — a restart resolves the same two paths, and the surface must not promise
-    /// what it cannot deliver. The blind reading at the end is the control: without the loader's
-    /// record the identical state reads as an ordinary pending update, which is precisely the
-    /// false prompt the control instance sat on for an hour with nothing else to go on.
+    /// The activation report NAMES a substituted generation and never calls it "restart required"
+    /// (#3911) — a restart resolves the same two paths, and the surface must not promise what it
+    /// cannot deliver. Since policy <c>module-live-update-default</c> only an IMAGE-BOUND module (one
+    /// in the application's own closure, still loaded into the default context) can be substituted,
+    /// and a test cannot place an emitted module in this process's trusted-platform list — so the
+    /// loader's record is stated here exactly as the default-context branch of
+    /// <c>MeshBuilder.InstallModules</c> writes it. The blind reading at the end is the control:
+    /// without that record the identical state reads as an ordinary pending update.
     /// </summary>
     [Fact]
     public async Task TheActivationReport_NamesASubstitutedGeneration_AndNeverCallsItRestartRequired()
     {
         using var deployment = new Deployment();
-        var (asked, running, services) = await SubstitutedHead(deployment);
-
-        var fallbacks = services.GetServices<FallbackModule>().ToArray();
-        // What the process actually runs — the generation the loader handed back, not the head.
+        var build = ModuleBuiltAgainstThisPlatform(deployment.Module);
+        var runningEntry = deployment.ShipInImage(build);
+        var running = Path.GetFileName(Path.GetDirectoryName(runningEntry))!;
+        var asked = await Land(deployment, build, "1.4.0");
+        var askedEntry = Path.Combine(deployment.GenerationDirectory(asked), deployment.Module + ".dll");
+        var fallbacks = new[]
+        {
+            new FallbackModule(deployment.Module, askedEntry, runningEntry,
+                "this process had already loaded an assembly of that name, and the default load context holds one copy per name")
+            {
+                Version = "1.4.0",
+                RunsAlreadyLoadedCopy = true,
+            },
+        };
         var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { deployment.Module };
         var generations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -715,8 +697,6 @@ public class ConfiguredModuleActivationTest
         Assert.False(report.IsUndetermined, report.UndeterminedReason);
         Assert.True(report.HasFallbacks);
         var row = Assert.Single(report.Fallbacks);
-        Assert.Equal(asked, row.Generation);
-        Assert.Equal(running, row.PreviousGeneration);
         Assert.Contains(
             "was requested and never entered the process", row.Reason, StringComparison.Ordinal);
         Assert.False(report.HasPending,
@@ -1271,15 +1251,15 @@ public class ConfiguredModuleActivationTest
     }
 
     /// <summary>
-    /// 🚨 The shape the fallback CANNOT reach, pinned so nobody reads the absent module as "the
-    /// image had nothing": a generation whose assembly LOADED and whose install then threw
-    /// (#2234) holds its simple name in the default load context, and the image copy of the same
-    /// name cannot be loaded beside it. The module is incompatible — the install exception on the
-    /// record, not a link refusal — and no fallback is claimed. A loader that reported the image
-    /// copy as running here would be lying: the bytes in the process are the broken generation's.
+    /// 🚨 A generation whose assembly LOADED and whose install then threw (#2234) no longer strands
+    /// the module. In the default context it held the simple name, so the image copy of the same name
+    /// could never be loaded beside it and the module was simply absent. In its own context
+    /// (policy <c>module-live-update-default</c>) the failed generation is unloaded on the spot and
+    /// never took the name, so the fallback order reaches the image copy — which RUNS, and the row
+    /// carries the install exception as the reason the landed generation is not in effect.
     /// </summary>
     [Fact]
-    public async Task AGenerationThatLoadedAndThenFailedToInstall_IsNotReplacedByTheImageCopy()
+    public async Task AGenerationThatLoadedAndThenFailedToInstall_FallsBackToTheImageCopy()
     {
         using var deployment = new Deployment();
         deployment.ShipInImage(ModuleBuiltAgainstThisPlatform(deployment.Module));
@@ -1287,12 +1267,12 @@ public class ConfiguredModuleActivationTest
 
         var (services, _) = Boot(deployment);
 
-        Assert.Empty(services.GetServices<FallbackModule>());
-        var broken = Assert.Single(services.GetServices<IncompatibleModule>());
-        Assert.Equal(deployment.Module, broken.Name);
-        Assert.False(broken.RefusedBeforeLoad);
-        Assert.Equal("Void MeshWeaver.Mesh.Gone..ctor()", broken.MissingMember);
-        Assert.DoesNotContain(services.GetServices<InstalledModuleAssembly>(),
+        Assert.Empty(services.GetServices<IncompatibleModule>());
+        var fallback = Assert.Single(services.GetServices<FallbackModule>());
+        Assert.Equal(deployment.Module, fallback.Name);
+        Assert.True(fallback.RunsImageBaseline);
+        Assert.Contains("Void MeshWeaver.Mesh.Gone..ctor()", fallback.Reason, StringComparison.Ordinal);
+        Assert.Contains(services.GetServices<InstalledModuleAssembly>(),
             m => string.Equals(m.Assembly.GetName().Name, deployment.Module, StringComparison.Ordinal));
     }
 
