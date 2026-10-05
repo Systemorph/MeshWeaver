@@ -32,7 +32,7 @@ USAGE
 -----
   ci-fresh-merge.py apply [--path DIR] [--main-sha SHA] [--content-ref REF]
       Reads GITHUB_EVENT_NAME / GITHUB_EVENT_PATH / GITHUB_REPOSITORY (and GH_TOKEN for the one
-      compare read a shallow checkout needs). Writes main-sha, merge-sha, mode to $GITHUB_OUTPUT
+      last-resort compare read; a shallow checkout deepens over git first). Writes main-sha, merge-sha, mode to $GITHUB_OUTPUT
       and one summary line. Not a pull request, or a caller that named a content ref → mode
       `not-a-pull-request` / `content-ref`, nothing changed, said in green.
   ci-fresh-merge.py resolve [--path DIR] [--main-sha SHA] [--content-ref REF]
@@ -92,19 +92,21 @@ def fetch(path: str, *shas: str) -> None:
 
 
 def parents(path: str, sha: str) -> list[str]:
-    return git(path, "rev-list", "--parents", "-n", "1", sha).stdout.split()[1:]
+    # Read from the commit object, not `rev-list --parents`: a shallow checkout grafts its tip's
+    # parents away, and the stale-merge and already-fresh readings would then never fire.
+    body = git(path, "cat-file", "-p", sha).stdout
+    return [l.split()[1] for l in body.split("\n\n", 1)[0].splitlines() if l.startswith("parent ")]
 
 
 def merge_base(path: str, main: str, head: str, compare) -> str:
     r = git(path, "merge-base", main, head, check=False)
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
-    # A shallow checkout cannot walk to the merge-base. The compare read names it in one REST call;
-    # when that read fails, deepen the two tips step by step until git can walk to it itself.
-    mb = compare(main, head)
-    if mb:
-        return mb
-    errors = [getattr(compare, "last_error", "") or "the compare read returned nothing"]
+    # A shallow checkout cannot walk to the merge-base: deepen the two tips step by step until git can.
+    # Git transport, not REST — the run's GITHUB_TOKEN shares ONE per-repository REST budget with every
+    # other PR's run (measured 2026-10-05: every PR-body read of every core PR run failed in the same
+    # minutes), so the compare read is only the last resort.
+    errors = []
     for depth in (64, 512, 4096):
         d = git(path, "fetch", "--no-tags", "--quiet", f"--deepen={depth}", "origin", main, head, check=False)
         if d.returncode != 0:
@@ -113,6 +115,10 @@ def merge_base(path: str, main: str, head: str, compare) -> str:
         r = git(path, "merge-base", main, head, check=False)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
+    mb = compare(main, head)
+    if mb:
+        return mb
+    errors.append(getattr(compare, "last_error", "") or "the compare read returned nothing")
     raise Refused(f"the merge-base of main {main[:12]} and head {head[:12]} could not be read ({'; '.join(errors)}) — the fresh merge cannot be computed")
 
 
@@ -281,7 +287,16 @@ def self_test() -> int:
         shallow = clone("shallow", shallow=True)
         mode2, merged2 = fresh_merge(shallow, main, head, compare)
         check(merged2 == merged, "a shallow checkout computes the IDENTICAL merge commit (one tree per run)")
-        check(compare_calls == [(main, head)], "a shallow checkout reads the merge-base through the compare (once)")
+        check(compare_calls == [], "a shallow checkout deepens to the merge-base over git — no REST read")
+
+        # 2a. A SHALLOW checkout already on the fresh merge (GitHub's merge ref when it is fresh) is
+        #     recognised from the commit object — a shallow tip's parents are grafted away otherwise.
+        git(full, "push", "-q", "origin", f"{merged}:refs/heads/pr-merge")
+        sm = clone("shallow-merge", shallow=True)
+        git(sm, "fetch", "-q", "--depth=1", "origin", merged)
+        git(sm, "checkout", "-q", "--detach", merged)
+        mode_sm, _ = fresh_merge(sm, main, head, compare)
+        check(mode_sm == "already-fresh", "a shallow checkout already on the fresh merge is recognised (already-fresh)")
 
         # 2b. The compare read fails (no gh, a refusal): the tips are deepened until git walks to the base.
         def failing(m: str, h: str) -> str:

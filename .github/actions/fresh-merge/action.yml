@@ -27,7 +27,7 @@ inputs:
     description: "'true' = only name the base tip (main-sha) for later jobs; the checkout is left as it is."
     default: 'false'
   token:
-    description: Token for the one compare read a shallow checkout needs (the merge-base).
+    description: Token for the last-resort compare read (a shallow checkout deepens over git first).
     default: ${{ github.token }}
 outputs:
   main-sha:

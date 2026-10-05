@@ -36,7 +36,7 @@ after the checkout of the repository under test and before anything reads the tr
 
 ```text
 main   = the base tip handed in, or `git ls-remote origin refs/heads/<base>` now
-base   = git merge-base main head          (or the compare API on a shallow checkout)
+base   = git merge-base main head          (a shallow checkout deepens over git; REST is the last resort)
 tree   = git merge-tree --write-tree --merge-base=<base> <main> <head>
 commit = git commit-tree <tree> -p <main> -p <head>     (fixed identity, the head's commit date)
 git checkout --detach <commit>
