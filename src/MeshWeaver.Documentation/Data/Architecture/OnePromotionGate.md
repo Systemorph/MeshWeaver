@@ -53,7 +53,7 @@ Plugins push to main ──(image-relevant?)──► main-cd rebuild ───�
                                                                    │   Plugins seal, satellites …
                                                                    │   (CI reads the set NOW)
                                                                    ▼
-   Plugins promotion-candidate.yml (poll) ──► core-candidate.yml: dependent suites against the pair
+   Plugins promotion-candidate.yml (poll, RETIRED) ──► core-candidate.yml: suites against the pair
                                                                    │ verdict at
                                                                    │ refs/core-candidate/pair-<core7>-p<plugins7>
                                                                    ▼
@@ -117,7 +117,9 @@ and arms the newest promoted set that is
    (the core commit of the newest ARMED set — below) and Plugins commit all checked
    (`.github/scripts/arm-promoted-set.py`, `--self-test`).
 
-A missing verdict WAITS, a red one is REFUSED, a newer green one supersedes both. The verdict is
+A missing verdict WAITS, a red one is REFUSED, a newer green one supersedes both. *(Historical:
+`arm` no longer reads this verdict, and the poller that produced it was retired. See
+[Platform and Module Deploy](../PlatformAndModuleDeploy), migration step 6.)* The verdict was
 produced asynchronously by MeshWeaver.Plugins' `promotion-candidate.yml`, which polls for the newest
 promoted-but-unarmed pair without a verdict and runs `core-candidate.yml` against it; when that run
 finishes it dispatches main-cd so the arming does not wait for the hourly reconcile. Core sends
@@ -230,8 +232,7 @@ exist — it was not armed yet. A set the fleet cannot run is not a target.
 
 **The candidate and the target are one pipeline, not two definitions.** Without `--armed` the
 resolver returns the newest sealed set — the CANDIDATE every CI run (and `stamp-floors`, which writes
-it onto each package as `minMeshVersion`) tests, so that `promotion-candidate.yml`'s verdict can ARM
-it. Arming is what turns the candidate into the target. A host that cannot read an armed tag (no
+it onto each package as `minMeshVersion`) tests, so that the platform verdict can ARM it. Arming is what turns the candidate into the target. A host that cannot read an armed tag (no
 self-update) falls back to the newest served floor, which is still the resolver's own answer.
 
 **An instance has CONVERGED** when its running platform is at or above `P*` and every installed

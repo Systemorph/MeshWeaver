@@ -5,7 +5,6 @@
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
     python3 .github/scripts/arm-promoted-set.py control-first --control-manifests control.json --version V
     python3 .github/scripts/arm-promoted-set.py control-lag        # policy control-always-latest (platform half)
-    python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller (advisory)
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
     python3 .github/scripts/arm-promoted-set.py --self-test
 
@@ -62,7 +61,7 @@ again — the control instance consumes a repeated build fact idempotently). A n
 wins: arming it moves the pointers and sends the event past the incomplete one.
 
 THE BUNDLE'S BASE — the newest ARMED set, never the first parent. A promoted set usually carries
-several core merges (the batch window; `pending` supersedes older pairs instead of queueing them), and
+several core merges (the batch window), and
 every one of them reaches the fleet when the set is armed. So the record's `base` — the commit the
 Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
 core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
@@ -74,28 +73,25 @@ manifest with a core sha or pair tag). The record says which rule produced `base
   * `first-parent`  — no set has ever been armed, or the candidate IS the armed set: nothing wider
                       exists to measure, said out loud;
   * `unresolved`    — the armed set could not be read. The record keeps the first parent so CI still
-                      promotes, but `select` REFUSES to arm it and `pending` does not measure it: a
+                      promotes, but `select` REFUSES to arm it: a
                       narrower bundle than the truth would arm merges nobody measured. The next
                       promoted set tries again.
 
 A record written before this rule carries no `base_kind` and is judged as before (legacy, first
 parent), so a set promoted in the transition is never stranded.
 
-`pending` is the other consumer's half: MeshWeaver.Plugins' `promotion-candidate.yml` asks it for
-the newest promoted-but-unarmed pair that has NO verdict yet, and runs its suites against it. So a
-burst of merges coalesces: the poller always takes the newest pair, and the older ones are simply
-superseded — never queued.
+There is no second consumer any more. MeshWeaver.Plugins' advisory poller (`promotion-candidate.yml`)
+and the `pending` command that answered it were retired once no verdict it wrote decided anything
+(Doc/Architecture/PlatformAndModuleDeploy, migration step 6).
 
 "Does armed set X contain core commit C / Plugins commit P?" is answered by ANCESTRY against the
 record's two commits — Memex `scripts/image-contains.py`, which reads the same record.
 
-API budget: one runs page, one artifact listing per run examined (+1 download per record), two
-reads per verdict ref. REST only (AGENTS.md: never GraphQL).
+API budget: one runs page, one artifact listing per run examined (+1 download per record). REST only (AGENTS.md: never GraphQL).
 """
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import io
 import json
 import os
@@ -108,7 +104,6 @@ from pathlib import Path
 from typing import Callable
 
 CORE = "Systemorph/MeshWeaver"
-PLUGINS = "Systemorph/MeshWeaver.Plugins"
 API = "https://api.github.com"
 WORKFLOW = "main-cd.yml"
 RECORD_ARTIFACT = "promotion-record"
@@ -120,13 +115,6 @@ SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
 PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
-
-# The waiter's validation is THE definition of a valid verdict — imported, never restated.
-_spec = importlib.util.spec_from_file_location(
-    "await_dependent_verdict", Path(__file__).with_name("await-dependent-verdict.py"))
-_adv = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_adv)  # type: ignore[union-attr]
-validate_verdict = _adv.validate
 
 Get = Callable[[str, str], tuple[int, object]]
 
@@ -318,21 +306,6 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
         out.append(rec)
     out.sort(key=lambda r: int(r["run_number"]), reverse=True)
     return out
-
-
-def read_verdict(get: Get, plugins_token: str, key: str) -> tuple[object | None, str]:
-    code, ref = get(f"repos/{PLUGINS}/git/ref/core-candidate/{key}", plugins_token)
-    if code == 404:
-        return None, "no verdict yet"
-    if code != 200 or not isinstance(ref, dict):
-        return None, f"verdict ref unreadable (HTTP {code})"
-    code, commit = get(f"repos/{PLUGINS}/git/commits/{ref['object']['sha']}", plugins_token)
-    if code != 200 or not isinstance(commit, dict):
-        return None, f"verdict commit unreadable (HTTP {code})"
-    try:
-        return json.loads(commit.get("message", "")), "found"
-    except ValueError as e:
-        return {"malformed": str(e)}, "found"
 
 
 def read_run_jobs(get: Get, core_token: str, run_id: object) -> list[dict] | None:
@@ -553,19 +526,6 @@ def control_lag(newest: dict | None, control: dict, now: float, bound_minutes: i
                    "(policy control-always-latest)")
 
 
-def pending(records: list[dict], verdicts: dict[str, tuple[object | None, str]], armed_max: int) -> dict | None:
-    """The newest promoted, unarmed pair with NO verdict at all — what the Plugins poller runs. Pure.
-    Only the NEWEST unarmed record is ever a candidate: an older one is superseded by construction."""
-    newer = [r for r in records if int(r["run_number"]) > armed_max]
-    if not newer:
-        return None
-    top = newer[0]
-    if top.get("base_kind") == "unresolved":
-        return None
-    v, why = verdicts.get(top["key"], (None, "not read"))
-    return top if v is None and why == "no verdict yet" else None
-
-
 def write_outputs(rec: dict | None, lines: list[str]) -> None:
     out = os.environ.get("GITHUB_OUTPUT")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -599,15 +559,6 @@ def self_test() -> int:
         return {"run_number": n, "core_sha": c, "plugins_sha": p, "short": c[:10], "plugins_short": p[:10],
                 "staging": f"staging-{c[:7]}-{n}", "v_portal": f"3.0.0-ci.{n}", "v_migration": f"3.0.0-ci.{n}",
                 "v_plugin": f"3.0.0-ci.{n}", "key": verdict_key(c[:10], p[:10]), "base": "b" * 40}
-
-    counts = {"selected": 5, "universe": 83, "legs": 1, "drift": 0, "preExisting": 0, "missingEvidence": 0}
-
-    def green(r: dict, **kw) -> tuple[object, str]:
-        v = {"schema": 1, "key": r["key"], "candidate": r["core_sha"], "base": r["base"], "conclusion": "success",
-             "summary": "5 of 83", "run": f"https://github.com/{PLUGINS}/actions/runs/1", "counts": counts,
-             "pluginsSha": r["plugins_sha"]}
-        v.update(kw)
-        return v, "found"
 
     a, b, c = rec(9459, "a", "1"), rec(9460, "c", "2"), rec(9461, "d", "3")
     records = [c, b, a]
@@ -766,17 +717,6 @@ def self_test() -> int:
     check("control-always-latest: unknown containment is RED, never read as contained", st == "lag", text)
     st, text = control_lag(None, ctl(c), now=1_000_000.0, bound_minutes=120)
     check("control-always-latest: no build ever given to control is RED", st == "lag", text)
-    # pending (the Plugins poller) — ADVISORY since the separation: its verdict decides nothing here
-    check("pending: the newest unarmed pair without a verdict is returned",
-          pending(records, {c["key"]: (None, "no verdict yet")}, armed_max=9458) is c)
-    check("pending: a verdict ref that could not be READ is not 'no verdict' — nothing is re-run on doubt",
-          pending(records, {c["key"]: (None, "verdict ref unreadable (HTTP 502)")}, armed_max=9458) is None)
-    check("pending: a newest pair that HAS a verdict is not re-run (red or green)",
-          pending(records, {c["key"]: green(c, conclusion="failure")}, armed_max=9458) is None)
-    check("pending: an older pair is superseded — only the newest is ever a candidate",
-          pending(records, {c["key"]: green(c)}, armed_max=9458) is None)
-    check("pending: nothing newer than the armed set means nothing to run",
-          pending(records, {}, armed_max=9461) is None)
     # read_records against a scripted API
     blob = io.BytesIO()
     with zipfile.ZipFile(blob, "w") as z:
@@ -830,8 +770,6 @@ def self_test() -> int:
     check("a record with an unknown base_kind is refused", check_record({**a, "base_kind": "nope"}) is not None)
     check("an `armed` and a legacy (no base_kind) record are both accepted",
           check_record({**a, "base_kind": "armed"}) is None and check_record(a) is None)
-    check("pending: an UNRESOLVED newest record is not measured (the next promotion retries)",
-          pending([u, b, a], {u["key"]: (None, "no verdict yet")}, armed_max=9458) is None)
     st = armed_state(live)
     check("armed-state: the newest armed set WITHOUT its marker is incomplete", st == (9538, "3.0.0-ci.9538", False), str(st))
     marked = [{"tags": live[0]["tags"] + ["arm-complete-3.0.0-ci.9538"]}] + live[1:]
@@ -883,7 +821,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("command", nargs="?",
-                    choices=("select", "pending", "armed-base", "armed-state", "control-first", "control-lag"))
+                    choices=("select", "armed-base", "armed-state", "control-first", "control-lag"))
     ap.add_argument("--manifests", type=Path, help="armed-base/armed-state: memex-portal-ai manifest metadata (JSON list)")
     ap.add_argument("--control-manifests", type=Path, help="control-first: memex-control manifest metadata (JSON list)")
     ap.add_argument("--version", default="", help="control-first: THIS run's accepted platform version")
@@ -942,24 +880,6 @@ def main() -> int:
     if not core_token:
         print("::error::GH_TOKEN is empty — the promotion records cannot be read; refusing to decide on nothing")
         return 1
-    if a.command == "pending":
-        # MeshWeaver.Plugins' poller (promotion-candidate.yml). ADVISORY since policy
-        # `platform-module-deploy-separate`: the dependent suites it starts still run and report,
-        # but no verdict they write is read by `select` — the fleet is armed on the platform verdict.
-        plugins_token = os.environ.get("PLUGINS_TOKEN") or core_token
-        try:
-            records = read_records(http_get, core_token, above=a.armed_max)
-        except RuntimeError as e:
-            print(f"::error::{e}")
-            return 1
-        verdicts = {r["key"]: read_verdict(http_get, plugins_token, r["key"]) for r in records[:10]}
-        rec = pending(records, verdicts, a.armed_max)
-        rows = {"due": "true" if rec else "false"}
-        if rec:
-            rows.update({k: str(rec[k]) for k in RECORD_KEYS})
-        _write_rows(rows)
-        print(json.dumps(rows, indent=1))
-        return 0
     try:
         ci = load_control_instance(a.control_instance)
     except (OSError, ValueError) as e:
