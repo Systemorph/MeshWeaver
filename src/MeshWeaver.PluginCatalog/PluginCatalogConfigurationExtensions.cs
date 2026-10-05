@@ -2,6 +2,7 @@ using MeshWeaver.Mesh.Services;
 using System.Collections.Immutable;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
@@ -45,6 +46,9 @@ public static class PluginCatalogConfigurationExtensions
             // "Reload module M on this instance" — the request node, its executor and the
             // per-process reporter (Doc/Architecture/ModuleReload).
             .AddModuleReload()
+            // "Reboot this instance" — sync, land, roll, verify in one step; plus the instance's own
+            // wedge watchdog (Doc/Architecture/InstanceReboot).
+            .AddInstanceReboot()
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
@@ -392,6 +396,53 @@ public static class PluginCatalogConfigurationExtensions
         .WithType<ModuleReloadRequest>(nameof(ModuleReloadRequest))
         .WithType<ModuleReloadItem>(nameof(ModuleReloadItem))
         .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica));
+
+    /// <summary>
+    /// Registers the instance reboot (<c>Doc/Architecture/InstanceReboot</c>): the request node type —
+    /// whose own hub runs <see cref="InstanceRebootExecutor"/> — the per-process
+    /// <see cref="InstanceRebootAgent"/> (step 5's verification) and <see cref="RebootWatchdog"/>
+    /// armed on the mesh hub, the platform's own verification checks, the <see cref="WedgeSignals"/>
+    /// sink components report load/binding faults to, and the content types on every hub that reads a
+    /// request. A host binds <see cref="InstanceRebootOptions"/> to change the defaults.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder.</param>
+    public static TBuilder AddInstanceReboot<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(new MeshNode(InstanceRebootRequest.NodeType)
+        {
+            Name = "Instance Reboot",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<InstanceRebootRequest>())
+                .WithInitialization(InstanceRebootExecutor.Arm),
+        });
+        builder.AddAutocompleteExcludedTypes(InstanceRebootRequest.NodeType);
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddSingleton<InstanceRebootOptions>();
+            services.TryAddSingleton<WedgeSignals>();
+            services.AddSingleton<InstanceRebootAgent>();
+            services.AddSingleton<RebootWatchdog>();
+            services.AddSingleton<IInstanceRebootCheck, NodeTypeBakeRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, PendingModuleActivationRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, ContentTypesRebootCheck>();
+            return services;
+        });
+        builder.ConfigureHub(config => AddInstanceRebootTypes(config)
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<InstanceRebootAgent>().Arm(hub))
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<RebootWatchdog>().Arm(hub)));
+        builder.ConfigureDefaultNodeHub(AddInstanceRebootTypes);
+        return builder;
+    }
+
+    private static MessageHubConfiguration AddInstanceRebootTypes(MessageHubConfiguration config) => config
+        .WithType<InstanceRebootRequest>(nameof(InstanceRebootRequest))
+        .WithType<InstanceRebootStep>(nameof(InstanceRebootStep))
+        .WithType<InstanceRebootReplica>(nameof(InstanceRebootReplica))
+        .WithType<InstanceRebootCheck>(nameof(InstanceRebootCheck));
 
     private static MeshNode CreateCatalogNodeType() => new(CatalogNodeType)
     {
