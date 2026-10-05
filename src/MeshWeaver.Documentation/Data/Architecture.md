@@ -540,6 +540,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [A Probe Must Answer Inside Its Own Timeout](AProbeMustAnswerInsideItsOwnTimeout) — `/health` reached 8-10 s against the 5 s the startup probe waits, so a healthy replica could never leave startup and was killed at its 3 h budget; why a startup timeout is the unrecoverable one, why a HEALTHY slow check is the one nothing could name, and the timing line the endpoint now publishes
 - [What a Synthetic Probe May Assert](SyntheticProbeTargets) — a probe naming one deployment's installed content is broken by construction; the platform floor, the negative control that tells "absent" from "down", and reading the target's own declaration
 - [Why a GC-Bound Pod Stays in Rotation](WhyAGcBoundPodStaysInRotation) — the GC's hard limit sits below the container limit, so a portal short of memory is defended rather than restarted
+- [Runner Pools and Dispatch Queues](RunnerPoolsAndDispatchQueues) — two runner pools sharing all capacity; priority from the control instance's CI queue (express > trunk > gate > pr), dispatched in tier order with express headroom, re-orderable through MCP, failing open
 - [Self-hosted CI runners on AKS](SelfHostedRunners) — ARC beside the portals on one pool; three brakes, a negative priority class, and the reserve arithmetic that decides the cap
 - [Candidate Release Protocol](CandidateReleaseProtocol)
 - [Chart Drift — what a deploy actually does](ChartDriftSemantics)

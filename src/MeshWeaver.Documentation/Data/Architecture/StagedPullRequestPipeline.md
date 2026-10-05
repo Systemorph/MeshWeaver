@@ -306,30 +306,20 @@ that release.
 A repository that has the gate but not the listener would hold forever, which is why the two are
 adopted together and why the Plugins pin (`check-build-queue-admission.py`) names the lane.
 
-## Trunk outranks pull requests for runners
+## Trunk outranks pull requests — through the CI queue, not a lane
 
-Staging stops a pull request from STARTING expensive work too early; it does not decide who gets a
-runner when the pools are full. On 2026-10-04 13:44Z both ARC sets were at their cap (aks-silos-dind
-39/40, aks-silos 31/32) with 11 Plugins runs queued on them (the same snapshot counted 13 core runs
-queued too — on GitHub-hosted capacity, a separate line: core's jobs run on `ubuntu-latest`), and a
-label's queued jobs are handed
-out first-come-first-served — there is no job priority. Measured over 06:00–14:00Z (19 main and 133
-pull-request runs of `Plugin Catalog CI`): a main run's worst queued job waited a median 1.9 min (p90
-4.7, max 5.6) against 1.4 / 4.4 / 9.7 for pull requests — the same line, so under saturation the run
-that publishes the modules waits behind every pull request queued before it.
+Staging stops a pull request from STARTING expensive work too early. It does not decide who gets a
+runner when the pools are full. That is the CI queue's job, under policy
+[`ci-two-pools-priority-queues`](../PolicyNotProse) ([Runner Pools and Dispatch Queues](../RunnerPoolsAndDispatchQueues)).
+There are two shared pools, and runs are dispatched in tier order: express, trunk, gate, pr.
 
-The mechanism is the one the merge-queue gate lane already proved (`aks-silos-dind-gate`, 2026-09-27):
-
-| Piece | Where |
-|---|---|
-| Own labels `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), overlays on the ordinary values so a runner is the same pod | Memex `deployments/aks/ci-runners/` (Systemorph/Memex#653) |
-| PriorityClass `arc-runner-trunk` −7: after the queue gate (−5), before PR work (−10), `preemptionPolicy: Never` — the next freed slot goes to trunk, nothing running is evicted | same |
-| Every job of Plugins' `ci.yml` selects `(github.event_name != 'pull_request' && vars.MW_RUNNER_TRUNK[_DOCKER]) || <the ordinary expression>` | Systemorph/MeshWeaver.Plugins#2863 |
-| Switch-on: apply the two sets (`-f set=silos-trunk`, then `dind-trunk`), prove them, set `MW_RUNNER_TRUNK` / `MW_RUNNER_TRUNK_DOCKER`; rollback = delete the variables. Each step is a maintainer go (it changes the running cluster) | Memex `.github/workflows/ci-runners-apply.yml` + MeshWeaver.Plugins repository variables |
-
-Until the variables are set, nothing routes differently. Not yet routed: the light orchestration jobs
-INSIDE core's reusable lanes (validate, the gate's plan) read `vars.MW_RUNNER` directly; they run
-for seconds. Core's own runs are on hosted runners and are not affected by these pools.
+> 🗄️ **Superseded: the trunk lanes.** On 2026-10-04, with both ARC sets at their cap and a label's
+> queue first-come-first-served, a main run's worst queued job waited like a pull request's (median
+> 1.9 vs 1.4 min, p90 4.7 vs 4.4 min over 19 main and 133 PR runs). The first answer was two reserved
+> lanes, `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), with a higher PriorityClass. Measured
+> overnight after they went live, trunk jobs on them waited p90 6.6 / 3.8 min against 0.6 / 1.0 min for
+> pull requests on the shared sets: the reservation was too small for its own work. The lanes are
+> retired, and every runner gate of the fleet refuses their names.
 
 ## What it does not do (residue, stated)
 
