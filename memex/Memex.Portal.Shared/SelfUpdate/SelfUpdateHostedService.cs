@@ -507,7 +507,14 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     .SelectMany(selection => selection.Candidates.Length == 0
                         ? Observable.Return(new RebootImageChoice(installed, null, NothingToRoll(selection).Message + waived))
                         : FirstRollable(policy, [.. selection.Candidates], ignoreCombo: wedged)
-                            .SelectMany(target => ChooseGated(policy, target!, installed, wedged, waived)));
+                            // The walk answers null when EVERY admitted candidate is condemned (each one
+                            // already recorded RED by the combo gate) — a hold, named as one; a held
+                            // release is never forced and never reported as an Image-step failure.
+                            .SelectMany(target => target is { } rollable
+                                ? ChooseGated(policy, rollable, installed, wedged, waived)
+                                : Observable.Return(new RebootImageChoice(installed, null,
+                                    $"every release the update policy admits ({string.Join(", ", selection.Candidates)}) is already "
+                                    + "recorded RED in the combo gate for this instance's modules — restart on the running image." + waived))));
             })
             .Catch((Exception ex) => Observable.Return(new RebootImageChoice(installed, null,
                 $"the image could not be selected ({ex.GetType().Name}: {ex.Message}) — restart on the running image", Failed: true)));

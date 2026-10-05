@@ -156,8 +156,11 @@ public static class RebootWatchdogRules
     /// The fault, as one line, when <paramref name="exception"/> (or an inner one) is a LOAD/BINDING
     /// fault — <see cref="MissingMemberException"/> (method, field), <see cref="TypeLoadException"/>,
     /// <see cref="BadImageFormatException"/>, or a <see cref="FileNotFoundException"/>/<see cref="FileLoadException"/>
-    /// for an ASSEMBLY (a display name or a <c>.dll</c>) — else null. Unwraps aggregate, target-invocation
-    /// and type-initialization wrappers. Pure.
+    /// for an ASSEMBLY (a display name or a <c>.dll</c>) — else null. Unwraps aggregate, target-invocation,
+    /// type-initialization and <see cref="InvalidOperationException"/> wrappers (DI activation and Rx
+    /// operators surface a binding fault as an <see cref="InvalidOperationException"/>'s inner exception);
+    /// a wrapper is only ever looked THROUGH, never classified itself, so an <see cref="InvalidOperationException"/>
+    /// with no load/binding fault inside is not a wedge signal. Pure.
     /// </summary>
     public static string? LoadOrBindingFault(Exception? exception)
     {

@@ -120,7 +120,9 @@ holds when EITHER leg holds:
   load or binding fault within `ThreadStartWindow` (default 15 minutes). Load and binding faults are
   `MissingMemberException` (method or field), `TypeLoadException`, `BadImageFormatException`, and a
   `FileNotFoundException` or `FileLoadException` for an ASSEMBLY, unwrapped from aggregate,
-  invocation and type-initialisation wrappers. A component reports these faults through
+  invocation, type-initialisation and `InvalidOperationException` wrappers (dependency injection and
+  Rx operators surface a binding fault inside one). A wrapper is only looked through, never counted
+  itself: an `InvalidOperationException` with no load or binding fault inside is not a wedge signal. A component reports these faults through
   `hub.ReportWedgeFault(WedgeSignalKinds.ThreadStart, source, exception)`. Anything else is
   dropped at the sink: a model error or a refusal is never evidence of a wedge.
 - **compile leg:** a critical NodeType is in compile Error on EVERY pass for at least
@@ -205,6 +207,13 @@ These lessons come from the control-instance recovery attempts on the day this w
 
 ## What is NOT established
 
+- **Without the smoke check, every reboot is `Failed` at Verify — by design.** The thread-start
+  smoke check ships in MeshWeaver.Plugins (the AI module). On a host where it is not registered yet,
+  every counted process reads "no smoke check was measured (none registered on this host)", and
+  the request ends `Failed` even when everything else is green. That is the instrument missing, not
+  the instance broken: the rest of the verdict says which readings passed. The two halves therefore
+  merge in order — this core half, then the MeshWeaver.Plugins half — and a green reboot is
+  meaningful only once both are rolled.
 - **No real cross-process run.** The scenario tests (`Memex.Portal.Shared.Test` → `InstanceReboot*`)
   run the real registry client, landing, reconciler, request node, executor, agent and
   self-updater in one monolith process. They simulate the process that boots after the restart,

@@ -111,7 +111,11 @@ public static class ModuleSourceUpdate
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .ToImmutableList())
             .SelectMany(paths => paths.ToObservable()
-                .Select(path => One(hub, access, path))
+                // A path that names no space never reaches One: the parse is matched HERE, once,
+                // so One receives the parsed parts and has nothing left to assume.
+                .Select(path => SpaceOf(path) is { } parsed
+                    ? One(hub, access, path, parsed.Space, parsed.SourceId)
+                    : Observable.Empty<ModuleSourceUpdateRow>())
                 .Concat()
                 .ToList()
                 .Select(rows => rows.ToImmutableList()))
@@ -121,9 +125,9 @@ public static class ModuleSourceUpdate
                 + "and this is not a statement that there is nothing to sync"))));
     }
 
-    private static IObservable<ModuleSourceUpdateRow> One(IMessageHub hub, AccessService access, string configPath)
+    private static IObservable<ModuleSourceUpdateRow> One(IMessageHub hub, AccessService access, string configPath,
+        string space, string? sourceId)
     {
-        var (space, sourceId) = SpaceOf(configPath)!.Value;
         ModuleSourceUpdateRow Row(string outcome, string detail) => new(configPath, space, sourceId, outcome, detail);
         IObservable<GitHubSyncConfig?> ReadConfig() =>
             // CQRS: the config's CONTENT is read from its own node stream, never from the listing.
@@ -137,13 +141,14 @@ public static class ModuleSourceUpdate
                     .Take(1)
                     .SelectMany(activity => access.RunAsSystem(() => hub.GetMeshNodeStream(activity))
                         .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions))
-                        .Where(log => log is not null && log.Status.IsTerminal())
+                        .OfType<ActivityLog>()
+                        .Where(log => log.Status.IsTerminal())
                         .Take(1)
                         .Timeout(ActivityBudget)
                         .SelectMany(log => ReadConfig().Select(after =>
                         {
                             var commit = after?.LastSyncCommitSha is { Length: > 8 } sha ? sha[..8] : after?.LastSyncCommitSha ?? "?";
-                            var tail = log!.Messages.LastOrDefault(m => m.LogLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)?.Message;
+                            var tail = log.Messages.LastOrDefault(m => m.LogLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)?.Message;
                             var detail = $"{log.Status}: {after?.LastSyncOutcome ?? "no outcome recorded"} at {commit}; {DescribeModules(after)}"
                                          + (tail is null ? "" : $"; last notice: {tail}") + $" (activity {activity})";
                             return log.Status.IsError()
