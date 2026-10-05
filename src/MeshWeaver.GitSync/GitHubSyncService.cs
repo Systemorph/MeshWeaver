@@ -791,6 +791,19 @@ public sealed class GitHubSyncService
         });
     }
 
+    /// <summary>
+    /// The commit <paramref name="branch"/> of <paramref name="repositoryUrl"/> points at RIGHT NOW —
+    /// one ref lookup (<see cref="IGitHubRepoClient.GetHeadSha"/>), no tree read. The branch
+    /// reconcile (policy <c>sources-sync-on-push</c>) asks this to catch a push whose webhook never
+    /// arrived, and then imports AT the sha it got back, never at the branch.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="branch">The branch to resolve.</param>
+    /// <param name="userId">Whose GitHub credential authenticates the lookup (the App when they
+    /// have none).</param>
+    public IObservable<string> GetBranchHead(string repositoryUrl, string branch, string userId)
+        => ResolveAuth(userId).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
+
     /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
     private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
 

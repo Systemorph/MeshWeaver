@@ -79,7 +79,7 @@ recorded, so every module syncs.
 
 | Lane | Before | Now |
 |---|---|---|
-| Green-build webhook (`DecideBuild`) | landed on the sealed commit, or held | imports the **built commit**; `SealedCommit` reports whether this identity's bytes were baked from it |
+| Green-build webhook (`DecideBuild`) | landed on the sealed commit, or held | imports the **built commit**; `SealedCommit` reports whether this identity's bytes were baked from it. **Superseded** by policy `sources-sync-on-push`: the `push` webhook (and a periodic branch reconcile) imports at the pushed commit, and a green build only records the build — see [Sources Sync on Push](../SourcesSyncOnPush) |
 | A person's Update / Re-import (`DecideRequestedImport`) | redirected onto the seal, or held | imports **exactly what was asked** |
 | First import (`DecideFirstImport`: discovery and boot install) | landed on the seal, or held | resolves the **configured branch** |
 | Seal arrival (`SealedSyncReconcile`) | imported the sealed commit when the source sat elsewhere or had no commit | imports **nothing by itself**. A source on another commit is usually AHEAD of the seal, and a source with no commit yet is brought by its first import or its next green build, which an import at the seal would race. What remains: re-importing a source AT the seal whose types were declined, and releasing a bundle hold at the commit whose sources were held |
