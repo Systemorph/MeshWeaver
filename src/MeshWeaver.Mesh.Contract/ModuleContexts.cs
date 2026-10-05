@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
@@ -16,7 +17,20 @@ namespace MeshWeaver.Mesh;
 /// <param name="Location">The entry DLL this generation was loaded from.</param>
 /// <param name="Context">The collectible context it runs in.</param>
 /// <param name="Assembly">The module's entry assembly, loaded in <paramref name="Context"/>.</param>
-public sealed record ModuleGeneration(string Name, string Location, ModuleLoadContext Context, Assembly Assembly);
+public sealed record ModuleGeneration(string Name, string Location, ModuleLoadContext Context, Assembly Assembly)
+{
+    /// <summary>What this generation contributes, once materialised; null while it is being loaded.</summary>
+    public ModuleContributions? Contributions { get; internal set; }
+
+    /// <summary>This generation's root services, served from a scope of its own (see
+    /// <see cref="ModuleServices"/>); null when it registers none, or when they could not be
+    /// converted and went straight into the root (then the module is restart-required).</summary>
+    public ModuleServices? Services { get; internal set; }
+
+    /// <summary>Why this generation's root services went straight into the root container instead of
+    /// a scope of its own — empty when they did not.</summary>
+    public System.Collections.Immutable.ImmutableList<string> RootServiceBlockers { get; internal set; } = [];
+}
 
 /// <summary>
 /// The mesh's modules, each in its OWN collectible load context — the registry a live module
@@ -46,10 +60,55 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 public sealed class ModuleContexts : IDisposable
 {
     private readonly ConcurrentDictionary<string, ModuleGeneration> current = new(StringComparer.Ordinal);
+    // Which module contributed a mesh node — by REFERENCE, weakly: the seed node list asks it so a
+    // module's nodes can be served from its CURRENT generation once the generation that contributed
+    // them at boot has been swapped out (see StaticMeshNodeListProvider).
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MeshNode, string> nodeOwners = new();
     private long sequence;
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
+    private IServiceProvider? root;
     private int disposed;
+
+    private long version;
+    private readonly System.Reactive.Subjects.Subject<long> versionChanged = new();
+
+    /// <summary>
+    /// Emits the new <see cref="Version"/> whenever which generation is current changes. A cache of a
+    /// module's contributions DROPS what it holds here — waiting for its next read to notice would keep
+    /// the swapped-out generation referenced, and so loaded, until something happened to ask
+    /// (measured: the static-node query catalog pinned a retired generation exactly that way).
+    /// </summary>
+    public IObservable<long> VersionChanged => versionChanged;
+
+    private void Bump()
+    {
+        var now = Interlocked.Increment(ref version);
+        versionChanged.OnNext(now);
+    }
+
+    /// <summary>Moves on every change of which generation is current — what a cached view of the
+    /// modules' contributions (the static-node query catalog) compares against.</summary>
+    public long Version => Interlocked.Read(ref version);
+
+    /// <summary>
+    /// Makes a SLOT — a boot-time stand-in for <paramref name="node"/>, one of <paramref name="moduleName"/>'s
+    /// nodes, stripped of everything that can reference module code — as owned by that module, so the
+    /// static-node list serves the module's CURRENT nodes in its place and never pins a generation.
+    /// </summary>
+    public MeshNode SlotFor(MeshNode node, string moduleName)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        var slot = node with
+        {
+            Content = null,
+            HubConfiguration = null,
+            GlobalServiceConfigurations = [],
+            ExcludeFromContext = node.ExcludeFromContext?.ToArray(),
+        };
+        nodeOwners.AddOrUpdate(slot, moduleName);
+        return slot;
+    }
 
     /// <summary>Who is executing inside which module generation — the quiescence an unload waits on.</summary>
     public AlcLeaseRegistry Leases { get; } = new();
@@ -84,10 +143,116 @@ public sealed class ModuleContexts : IDisposable
     /// before this are still unloaded; they are just not observable as collected.
     /// </summary>
     public ModuleContexts Attach(CollectibleContextUnloads? collectibleUnloads, ILogger? log)
+        => Attach(collectibleUnloads, log, null);
+
+    /// <summary>As <see cref="Attach(CollectibleContextUnloads?, ILogger?)"/>, plus the ROOT provider
+    /// a module's service scope is a child of.</summary>
+    public ModuleContexts Attach(CollectibleContextUnloads? collectibleUnloads, ILogger? log, IServiceProvider? rootProvider)
     {
         unloads ??= collectibleUnloads;
         logger ??= log;
+        root ??= rootProvider;
         return this;
+    }
+
+    private IServiceProvider Root => root ?? throw new InvalidOperationException(
+        "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
+
+    /// <summary>The instance behind forwarded registration <paramref name="index"/> of
+    /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>
+    public object ResolveModuleService(string module, int index) =>
+        (Current(module)?.Services ?? throw new InvalidOperationException(
+            $"Module {module} holds no service scope in this mesh."))
+        .Resolve(Root, index);
+
+    /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
+    public IServiceProvider? ModuleScope(string module) =>
+        Current(module)?.Services?.Scope(Root);
+
+    internal Task StartModuleHosted(string module, int index, CancellationToken ct, ILogger? log) =>
+        Current(module)?.Services is { } services
+            ? services.StartHosted(Root, index, ct, log)
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Prepares the root services of <paramref name="to"/> — the generation replacing
+    /// <paramref name="from"/> — for a live swap: its delegates run against the SAME root prefix the
+    /// boot generation saw, and the result must route the same way and keep the same shape, because
+    /// the root's forwarders were laid out at boot and are what every consumer holds. Returns why it
+    /// cannot be swapped live, or null when <paramref name="to"/> now carries its services.
+    /// </summary>
+    public string? PrepareServices(ModuleGeneration from, ModuleGeneration to, ModuleContributions contributions)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(contributions);
+        var configurations = contributions.ServiceConfigurations;
+        if (from.Contributions is { } running && !running.BuilderHooks.Shape.SequenceEqual(contributions.BuilderHooks.Shape))
+            return "the new generation's builder hook changed what was applied once at boot (autocomplete exclusions) — "
+                   + $"was [{string.Join(", ", running.BuilderHooks.Shape)}], is [{string.Join(", ", contributions.BuilderHooks.Shape)}]";
+        if (!from.RootServiceBlockers.IsEmpty)
+            return "the running generation's root services went straight into the root container at boot: "
+                   + string.Join("; ", from.RootServiceBlockers);
+        if (from.Services is not { } old)
+            return configurations.Count == 0
+                ? null
+                : "the new generation registers root services and the running one did not — the root's forwarders are laid out at boot";
+        ModuleServices fresh;
+        try
+        {
+            fresh = ModuleServices.Probe(to.Name, to.Context, configurations, old.Prefix);
+        }
+        catch (Exception exception)
+        {
+            return $"the new generation's root services could not be built: {exception.GetType().Name}: {exception.Message}";
+        }
+        if (!fresh.Blockers.IsEmpty)
+            return "the new generation's root services cannot be served from its own scope: " + string.Join("; ", fresh.Blockers);
+        if (!fresh.Shape.SequenceEqual(old.Shape))
+            return "the new generation's root services changed shape (the platform services it forwards to the root differ) — "
+                   + $"was [{string.Join(", ", old.Shape)}], is [{string.Join(", ", fresh.Shape)}]";
+        to.Services = fresh;
+        return null;
+    }
+
+    /// <summary>
+    /// Re-applies <paramref name="generation"/>'s MESH-level contributions to the RUNNING mesh: its mesh-hub
+    /// configuration (attributes, address types, builder hook — each measured at load to mutate only the
+    /// configuration it is handed, i.e. its type registry) to <paramref name="meshHub"/>'s live
+    /// configuration, and its mesh types to the mesh's shared type registry. The retired generation's
+    /// entries are demoted by the registries themselves when its context unloads.
+    /// </summary>
+    public void ApplyToRunningMesh(ModuleGeneration generation, MeshWeaver.Messaging.IMessageHub meshHub)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        ArgumentNullException.ThrowIfNull(meshHub);
+        if (generation.Contributions is not { } contributions)
+            return;
+        foreach (var configure in contributions.AllMeshHubConfigurations)
+            configure(meshHub.Configuration);
+        if (contributions.BuilderHooks.MeshTypes.IsEmpty)
+            return;
+        var registry = Root.GetRequiredService<MeshWeaver.Domain.ITypeRegistry>();
+        foreach (var (type, name) in contributions.BuilderHooks.MeshTypes)
+            registry.WithType(type, name);
+    }
+
+    /// <summary>
+    /// Moves the hosted services of a swapped module from <paramref name="from"/> to
+    /// <paramref name="to"/>: stops what the old generation started, then starts the same registrations
+    /// from the new one. Task-shaped because <c>IHostedService</c> is.
+    /// </summary>
+    public Task HandOverHosted(ModuleGeneration from, ModuleGeneration to, CancellationToken ct)
+    {
+        if (from.Services is not { } old)
+            return Task.CompletedTask;
+        var indices = old.StartedHosted;
+        return old.StopHosted(ct, logger).ContinueWith(
+                _ => to.Services is { } fresh
+                    ? Task.WhenAll(indices.Select(i => fresh.StartHosted(Root, i, ct, logger)))
+                    : Task.CompletedTask,
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
+            .Unwrap();
     }
 
     /// <summary>
@@ -95,13 +260,31 @@ public sealed class ModuleContexts : IDisposable
     /// context. Not yet current — the caller materialises its contributions and then calls
     /// <see cref="Commit"/>, or <see cref="Discard"/> when they fail. Throws what the load throws.
     /// </summary>
-    public ModuleGeneration Load(string entryLocation)
+    public ModuleGeneration Load(string entryLocation) => LoadInto(entryLocation, null);
+
+    /// <summary>
+    /// Loads like <see cref="Load(string)"/>, but INSIDE <paramref name="stage"/>. A distinct name,
+    /// never an overload of <c>Load</c>: an added overload turns every existing
+    /// <c>&lt;see cref="Load"/&gt;</c> into CS0419 under <c>-warnaserror</c>, here and in dependents.
+    /// The new context
+    /// binds every module the stage holds to the STAGED generation rather than the current one, so a
+    /// swap can load and materialise a module's dependents against the module's new generation
+    /// before ANY of them is made current (#6128 review: committing first published N+1, its
+    /// endpoints included, while the swap could still fail).
+    /// </summary>
+    public ModuleGeneration LoadStaged(string entryLocation, ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        return LoadInto(entryLocation, stage);
+    }
+
+    private ModuleGeneration LoadInto(string entryLocation, ModuleSwapStage? stage)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         var fullPath = Path.GetFullPath(entryLocation);
         var name = Path.GetFileNameWithoutExtension(fullPath);
         var directory = Path.GetDirectoryName(fullPath) ?? AppContext.BaseDirectory;
-        var context = new ModuleLoadContext(this, name, directory, Interlocked.Increment(ref sequence));
+        var context = new ModuleLoadContext(this, name, directory, Interlocked.Increment(ref sequence), stage);
         try
         {
             var assembly = context.LoadFromAssemblyPath(fullPath);
@@ -115,6 +298,28 @@ public sealed class ModuleContexts : IDisposable
             throw;
         }
     }
+
+    /// <summary>Records <paramref name="contributions"/> as what <paramref name="generation"/>
+    /// contributes, and each of its nodes as owned by its module.</summary>
+    public void SetContributions(ModuleGeneration generation, ModuleContributions contributions)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        ArgumentNullException.ThrowIfNull(contributions);
+        generation.Contributions = contributions;
+        foreach (var node in contributions.AllNodes)
+            nodeOwners.AddOrUpdate(node, generation.Name);
+    }
+
+    /// <summary>The module that contributed <paramref name="node"/> (by reference), or null.</summary>
+    public string? OwnerOf(MeshNode node) =>
+        nodeOwners.TryGetValue(node, out var owner) ? owner : null;
+
+    /// <summary>
+    /// The nodes the CURRENT generation of <paramref name="moduleName"/> contributes — empty when
+    /// the module is not held or its contributions are not materialised.
+    /// </summary>
+    public IReadOnlyCollection<MeshNode> CurrentNodes(string moduleName) =>
+        Current(moduleName)?.Contributions?.AllNodes ?? [];
 
     /// <summary>
     /// Makes <paramref name="generation"/> the current one for its module and returns the one it
@@ -130,7 +335,34 @@ public sealed class ModuleContexts : IDisposable
             replaced = previous;
             return generation;
         });
+        Bump();
         return ReferenceEquals(replaced, generation) ? null : replaced;
+    }
+
+    /// <summary>
+    /// Makes every generation <paramref name="stage"/> holds current, in the order they were staged,
+    /// only AFTER all of them loaded, materialised and prepared, with ONE <see cref="VersionChanged"/>
+    /// emission, so no reader of the generations (the module endpoint table, the view registrations,
+    /// the static-node catalog) ever observes part of a swap, or a swap that can still fail. Seals
+    /// the stage: from here on its contexts resolve modules through the current generations.
+    /// </summary>
+    public void CommitAll(ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        foreach (var generation in stage.Seal())
+            current[generation.Name] = generation;
+        Bump();
+    }
+
+    /// <summary>
+    /// Unloads every generation <paramref name="stage"/> holds. None of them was ever current, so
+    /// nothing was routed to them and <see cref="Discard"/>'s "loaded but never committed" holds.
+    /// </summary>
+    public void DiscardStaged(ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        foreach (var generation in stage.Seal())
+            Discard(generation);
     }
 
     /// <summary>
@@ -141,7 +373,8 @@ public sealed class ModuleContexts : IDisposable
     public void Uncommit(ModuleGeneration generation)
     {
         ArgumentNullException.ThrowIfNull(generation);
-        current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
+        if (current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation)))
+            Bump();
     }
 
     /// <summary>Unloads a generation that was loaded but never committed (its contributions failed).</summary>
@@ -151,6 +384,7 @@ public sealed class ModuleContexts : IDisposable
         if (current.TryGetValue(generation.Name, out var live) && ReferenceEquals(live, generation))
             throw new InvalidOperationException(
                 $"'{generation.Context.Name}' is the current generation of {generation.Name}; retire it instead.");
+        generation.Services?.Dispose();
         RetireCore(generation.Context);
         generation.Context.Unload();
     }
@@ -166,6 +400,8 @@ public sealed class ModuleContexts : IDisposable
         {
             ArgumentNullException.ThrowIfNull(generation);
             current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
+            // Its singletons go first — they are this generation's objects and must not outlive it.
+            generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)
                 .Do(unloaded =>
@@ -215,8 +451,13 @@ public sealed class ModuleContexts : IDisposable
     /// </summary>
     internal Assembly? ResolveForDependent(string name, ModuleLoadContext requester)
     {
+        // A staged context binds the stage's generation first: the swap it belongs to makes them
+        // current together, so this is the binding it will have once the swap commits.
+        ModuleGeneration? Held(string module) =>
+            requester.Stage?.Get(module) ?? (current.TryGetValue(module, out var generation) ? generation : null);
+
         if (!string.Equals(name, requester.ModuleName, StringComparison.Ordinal)
-            && current.TryGetValue(name, out var module))
+            && Held(name) is { } module)
         {
             requester.RecordDependency(name);
             return module.Assembly;
@@ -224,7 +465,7 @@ public sealed class ModuleContexts : IDisposable
 
         foreach (var dependency in requester.DependsOn)
         {
-            if (!current.TryGetValue(dependency, out var held))
+            if (Held(dependency) is not { } held)
                 continue;
             foreach (var assembly in held.Context.Assemblies)
                 if (string.Equals(assembly.GetName().Name, name, StringComparison.Ordinal))
@@ -266,6 +507,7 @@ public sealed class ModuleContexts : IDisposable
         foreach (var generation in current.Values.ToArray())
         {
             current.TryRemove(generation.Name, out _);
+            generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             var inFlight = Leases.InFlight(generation.Context);
             if (inFlight > 0)
@@ -279,5 +521,41 @@ public sealed class ModuleContexts : IDisposable
             }
             generation.Context.Unload();
         }
+    }
+}
+
+/// <summary>
+/// The generations of ONE live swap, loaded and materialised but not yet current. A context loaded
+/// into the stage (<see cref="ModuleContexts.LoadStaged"/>) binds these in place
+/// of the current generations, so a module's dependents re-bind to its new generation before anything
+/// is published. Made current all at once by <see cref="ModuleContexts.CommitAll"/>, or unloaded by
+/// <see cref="ModuleContexts.DiscardStaged"/>; either seals it. Used by one swap at a time (the swap
+/// pipeline is serial).
+/// </summary>
+public sealed class ModuleSwapStage
+{
+    private ImmutableList<ModuleGeneration> staged = ImmutableList<ModuleGeneration>.Empty;
+    private int sealedFlag;
+
+    /// <summary>Adds <paramref name="generation"/> to the stage; later contexts in the stage bind it.</summary>
+    public void Add(ModuleGeneration generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        if (Volatile.Read(ref sealedFlag) != 0)
+            throw new InvalidOperationException("The swap stage is sealed: it was committed or discarded.");
+        ImmutableInterlocked.Update(ref staged, list => list.Add(generation));
+    }
+
+    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once sealed.</summary>
+    public ModuleGeneration? Get(string moduleName) =>
+        Volatile.Read(ref sealedFlag) != 0
+            ? null
+            : Volatile.Read(ref staged).LastOrDefault(g => string.Equals(g.Name, moduleName, StringComparison.Ordinal));
+
+    internal ImmutableList<ModuleGeneration> Seal()
+    {
+        if (Interlocked.Exchange(ref sealedFlag, 1) != 0)
+            throw new InvalidOperationException("The swap stage was already committed or discarded.");
+        return Volatile.Read(ref staged);
     }
 }
