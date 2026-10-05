@@ -745,7 +745,16 @@ jobs:
             git@github.com:Systemorph/MeshWeaver.Plugins.git "$RUNNER_TEMP/plugins-settle"
           settled_out="$RUNNER_TEMP/plugins-settled.env"
           : > "$settled_out"
-          bash .github/scripts/resolve-settled-content.sh --repo-dir "$RUNNER_TEMP/plugins-settle" \
+          # 🔒 The resolver EXECUTES the content repository's own scripts (gen-manifests.py,
+          # mesh-floors.py) from the commit under judgement, so it runs with a SCRUBBED environment:
+          # this job holds `id-token: write`, and the runner puts ACTIONS_ID_TOKEN_REQUEST_TOKEN/URL
+          # (an Azure OIDC mint) and ACTIONS_RUNTIME_TOKEN into every step's env. `env -i` passes
+          # only what the settle check needs — PATH, HOME, the locale, RUNNER_TEMP and the git SSH
+          # command over the READ-ONLY Plugins deploy key (`ls-remote --tags` / trunk fetch are part
+          # of the settle derivation). Nothing that can mint, write or publish reaches that code.
+          env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 RUNNER_TEMP="$RUNNER_TEMP" \
+            GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" GIT_SSH_COMMAND="$GIT_SSH_COMMAND" \
+            bash .github/scripts/resolve-settled-content.sh --repo-dir "$RUNNER_TEMP/plugins-settle" \
             --tip "$full" --max-walk 10 --output "$settled_out"
           full=$(sed -n 's/^sha=//p' "$settled_out")
           case "$full" in

@@ -50,8 +50,8 @@ exactly what Plugins' `settle-locks` job runs to decide `own`:
 
 | Check | Unsettled when |
 |---|---|
-| `python3 scripts/gen-manifests.py --settle` | any `*/manifest.lock` would move |
-| `python3 scripts/mesh-floors.py check --require-stamped` (where present) | it fails — a floor is not stamped for its sources |
+| `python3 scripts/gen-manifests.py --settle` | any `manifest.lock` would move — at a package root (`*/manifest.lock`) or at the repository root (`manifest.lock`) |
+| `python3 scripts/mesh-floors.py check --require-stamped` (where present) | it returns its VERDICT: exit 1 with its own line *"package floors (minMeshVersion) are not computed facts"* |
 
 The scripts are read **from the commit being judged**, never from a copy here, so core's verdict is
 Plugins' verdict by construction, and a change to Plugins' settle rule changes this answer with it.
@@ -65,9 +65,18 @@ Plugins' verdict by construction, and a change to Plugins' settle rule changes t
 * **No settled commit inside the walk** — **red**, naming the tip and its moving locks. Ten
   unsettled merges in a row means the settle pull request is stuck, and that is exactly what must be
   seen rather than sealed around.
-* **The settle check fails** (exit ≠ 0 — it could not read its baseline or the remote) or **the
-  commit has no `scripts/gen-manifests.py`** — **red**. An instrument that cannot decide is never
-  read as "settled", and never walked past.
+* **The settle check fails** (exit ≠ 0 — it could not read its baseline or the remote), **the floor
+  check exits non-zero WITHOUT its verdict line** (a crash, a traceback, an unreadable input), or
+  **the commit has no `scripts/gen-manifests.py`** — **red**. An instrument that cannot decide is
+  never read as "settled" or as "floors pending", and never walked past.
+
+**The judged code runs with a scrubbed environment.** The resolver executes the content
+repository's own scripts from the commit under judgement, inside a job that holds `id-token: write`
+(the runner exposes `ACTIONS_ID_TOKEN_REQUEST_TOKEN`/`_URL` — an Azure OIDC mint — and
+`ACTIONS_RUNTIME_TOKEN` to every step). `main-cd` therefore starts it under `env -i`, passing only
+`PATH`, `HOME`, the locale, `RUNNER_TEMP`, `GITHUB_ACTIONS` and the git SSH command over the
+**read-only** Plugins deploy key, which the settle derivation needs (`ls-remote --tags`, the trunk
+fetch). Nothing that can mint, write or publish reaches that code.
 
 Only the first parent is walked: a settled commit reachable only through a merged branch never
 reached `main` as a tree of its own, and Plugins never published it.

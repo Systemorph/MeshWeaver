@@ -39,7 +39,12 @@ print("ok")
 '''
 FLOORS = r'''#!/usr/bin/env python3
 import sys, pathlib
-sys.exit(1 if "floors-pending" in pathlib.Path("settle-state").read_text().split() else 0)
+state = pathlib.Path("settle-state").read_text().split()
+if "floors-crash" in state:
+    raise RuntimeError("cannot read the floor baseline")  # a traceback, exit 1, no verdict line
+if "floors-pending" in state:
+    print("::error::package floors (minMeshVersion) are not computed facts", file=sys.stderr)
+    sys.exit(1)
 '''
 
 failures: list[str] = []
@@ -73,6 +78,7 @@ def new_repo(tmp: Path, name: str) -> Path:
     for pkg in ("AI", "Hosting"):
         (repo / pkg).mkdir()
         (repo / pkg / "manifest.lock").write_text(f"{pkg}\n")
+    (repo / "manifest.lock").write_text("root\n")
     return repo
 
 
@@ -159,6 +165,21 @@ def cases(script: Path, tmp: Path, label: str) -> list[str]:
     tip = commit(r, "fail", "settle check cannot run")
     rc, log, v = run(script, r, tip)
     check("a failing settle check is RED, not a walk past", rc == 1 and "sha" not in v and "Settle check failed" in log, log)
+
+    # 6b. a floor check that CRASHES is an instrument fault ⇒ RED, never "floors pending" walked past
+    r = new_repo(tmp, f"{label}-floorcrash")
+    commit(r, "ok", "settled")
+    tip = commit(r, "floors-crash", "floor check cannot run")
+    rc, log, v = run(script, r, tip)
+    check("a crashing floor check is RED, not read as pending floors", rc == 1 and "sha" not in v and "Floor check failed" in log, log)
+
+    # 6c. a lock at the repository ROOT that would move makes the commit unsettled
+    r = new_repo(tmp, f"{label}-rootlock")
+    parent = commit(r, "ok", "settled")
+    tip = commit(r, "unsettled:.", "root lock moves")
+    rc, log, v = run(script, r, tip)
+    check("a moving ROOT manifest.lock makes the tip unsettled",
+          rc == 0 and v.get("sha") == parent and v.get("tip_settled") == "false", log)
 
     # 7. no settle script ⇒ RED
     r = new_repo(tmp, f"{label}-noscript")

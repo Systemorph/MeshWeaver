@@ -83,12 +83,29 @@ for commit in "${chain[@]}"; do
     exit 1
   fi
   rm -f "$log"
-  moved="$(git -C "$repo_dir" status --porcelain --untracked-files=all -- '*/manifest.lock' | sed -e 's/^...//' | tr '\n' ' ' | sed -e 's/ *$//')"
+  # Both pathspecs: `*/manifest.lock` needs a `/` before the name, so a lock at the repository
+  # ROOT would otherwise move unseen and the tip read as settled.
+  moved="$(git -C "$repo_dir" status --porcelain --untracked-files=all -- 'manifest.lock' '*/manifest.lock' | sed -e 's/^...//' | tr '\n' ' ' | sed -e 's/ *$//')"
   restore
   floors=stamped
   if [ -f "$repo_dir/scripts/mesh-floors.py" ]; then
-    ( cd "$repo_dir" && python3 scripts/mesh-floors.py check --require-stamped ) > /dev/null 2>&1 || floors=pending
+    # Only the check's own VERDICT reads as pending: exit 1 together with the line it prints for
+    # unstamped/uncomputed floors. Any other non-zero (a crash, a traceback, an unreadable input) is
+    # an instrument fault — RED, exactly like the settle check above, never walked past.
+    flog="$(mktemp)"; frc=0
+    ( cd "$repo_dir" && python3 scripts/mesh-floors.py check --require-stamped ) > "$flog" 2>&1 || frc=$?
     restore
+    if [ "$frc" -ne 0 ]; then
+      if [ "$frc" -eq 1 ] && grep -q "package floors (minMeshVersion) are not computed facts" "$flog"; then
+        floors=pending
+      else
+        tail -n 40 "$flog"
+        echo "::error title=Floor check failed::mesh-floors.py check --require-stamped exited ${frc} on $short without its verdict line — an instrument fault, not 'floors pending', so no seal may bind to it."
+        rm -f "$flog"
+        exit 1
+      fi
+    fi
+    rm -f "$flog"
   fi
   if [ "$commit" = "$tip_full" ]; then tip_moved="$moved"; tip_floors="$floors"; fi
   if [ -z "$moved" ] && [ "$floors" = stamped ]; then
