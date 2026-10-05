@@ -34,9 +34,10 @@ public record DispatchCompileTrigger(MeshNode PendingNode);
 /// Re-establish backoff for a watcher whose query provider stalled (#5344). After a
 /// <c>QueryProviderStalledException</c> the watcher is re-subscribed with a bounded, growing delay
 /// plus jitter instead of straight away, so a stalled watcher does not go back into the same
-/// saturated pg-read queue every 16 s. Any other fault adds no delay (the re-establish primitive
-/// keeps its own schedule). One instance per watcher install; the count resets on the first element
-/// a re-established subscription delivers.
+/// saturated pg-read queue every 16 s. Only an UNBROKEN run of stalls adds delay: the count resets on
+/// any other outcome of an attempt — the first element it delivers, a fault that is not a stall, or a
+/// completion — so a non-stall fault never pays an earlier stall's delay (the re-establish primitive
+/// keeps its own schedule). One instance per watcher install.
 /// </summary>
 public sealed class SourcesWatcherStallBackoff
 {
@@ -71,17 +72,19 @@ public sealed class SourcesWatcherStallBackoff
     /// <summary>Stalls seen since the last element was delivered.</summary>
     public int ConsecutiveStalls => Volatile.Read(ref consecutiveStalls);
 
-    /// <summary>True when the exception, or one it wraps, is a query-provider stall.</summary>
-    public static bool IsQueryStall(Exception ex)
+    /// <summary>
+    /// True when the exception, or any exception it wraps, is a query-provider stall. Walks the
+    /// <see cref="Exception.InnerException"/> chain AND every member of an
+    /// <see cref="AggregateException"/> — whose <see cref="Exception.InnerException"/> is only its
+    /// first member — so a stall surfacing beside other faults is still recognised.
+    /// </summary>
+    public static bool IsQueryStall(Exception ex) => ex switch
     {
-        for (Exception? e = ex; e is not null; e = e.InnerException)
-        {
-            if (e is QueryProviderStalledException)
-                return true;
-        }
-
-        return false;
-    }
+        QueryProviderStalledException => true,
+        AggregateException aggregate => aggregate.InnerExceptions.Any(IsQueryStall),
+        { InnerException: { } inner } => IsQueryStall(inner),
+        _ => false,
+    };
 
     /// <summary>The extra delay before the next attempt: zero while no stall is outstanding.</summary>
     public TimeSpan NextDelay()
@@ -101,9 +104,14 @@ public sealed class SourcesWatcherStallBackoff
     /// <summary>Records a delivered element: the watcher is healthy again.</summary>
     public void OnDelivered() => Interlocked.Exchange(ref consecutiveStalls, 0);
 
+    /// <summary>Records an attempt that ended without a stall (another fault, or a completion): the
+    /// run of stalls is broken, so the next attempt pays no stall delay.</summary>
+    public void OnNotStalled() => Interlocked.Exchange(ref consecutiveStalls, 0);
+
     /// <summary>
     /// Wraps ONE subscription attempt of the watcher's stream: waits <see cref="NextDelay"/> first,
-    /// then subscribes; counts a stall fault and resets on the first delivered element.
+    /// then subscribes; counts a stall fault and resets on a delivered element, a non-stall fault or a
+    /// completion.
     /// </summary>
     public IObservable<T> Apply<T>(IObservable<T> source)
         => Observable.Defer(() =>
@@ -118,7 +126,10 @@ public sealed class SourcesWatcherStallBackoff
                 {
                     if (isStall(ex))
                         OnStall();
-                });
+                    else
+                        OnNotStalled();
+                },
+                OnNotStalled);
         });
 }
 

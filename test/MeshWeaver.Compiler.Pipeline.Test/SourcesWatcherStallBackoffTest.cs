@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 
@@ -111,6 +112,76 @@ public class SourcesWatcherStallBackoffTest
 
         Assert.Equal(new[] { 1 }, values);
         Assert.Equal(TimeSpan.Zero, backoff.NextDelay());
+    }
+
+    private static QueryProviderStalledException Stall() =>
+        new("pg", TimeSpan.FromSeconds(16), "nodeType:NodeType", "system");
+
+    public static TheoryData<string, Exception, bool> DefaultClassifierCases() => new()
+    {
+        { "the stall itself", Stall(), true },
+        { "a stall wrapped as InnerException", new InvalidOperationException("outer", Stall()), true },
+        { "a stall as an aggregate's FIRST member", new AggregateException(Stall()), true },
+        // AggregateException.InnerException is only the first member: a stall behind another fault
+        // is invisible to an InnerException-only walk (review of #6182).
+        { "a stall as an aggregate's SECOND member",
+            new AggregateException(new TimeoutException(), Stall()), true },
+        { "a stall nested in an aggregate inside a wrapper",
+            new InvalidOperationException("outer", new AggregateException(new ArgumentException(), Stall())), true },
+        { "an unrelated fault", new InvalidOperationException("boom"), false },
+        { "an aggregate of unrelated faults",
+            new AggregateException(new TimeoutException(), new ArgumentException()), false },
+    };
+
+    [Theory]
+    [MemberData(nameof(DefaultClassifierCases))]
+    public void The_production_classifier_recognises_a_stall_through_every_wrapping(
+        string because, Exception fault, bool expected)
+        => Assert.True(SourcesWatcherStallBackoff.IsQueryStall(fault) == expected, because);
+
+    [Fact]
+    public void The_default_classifier_is_the_one_Apply_uses()
+    {
+        // No isStall injected: the production predicate decides, and a stall behind another fault counts.
+        var scheduler = new HistoricalScheduler(new DateTimeOffset(2026, 10, 5, 0, 0, 0, TimeSpan.Zero));
+        var backoff = new SourcesWatcherStallBackoff(Seconds(5), Seconds(120), () => 1.0, scheduler: scheduler);
+
+        backoff.Apply(Observable.Throw<int>(new AggregateException(new TimeoutException(), Stall())))
+            .Subscribe(_ => { }, _ => { });
+        scheduler.AdvanceBy(Seconds(1));
+
+        Assert.Equal(1, backoff.ConsecutiveStalls);
+    }
+
+    [Fact]
+    public void A_fault_that_is_not_a_stall_breaks_the_run_and_pays_no_earlier_stall_delay()
+    {
+        var scheduler = new HistoricalScheduler(new DateTimeOffset(2026, 10, 5, 0, 0, 0, TimeSpan.Zero));
+        var backoff = new SourcesWatcherStallBackoff(
+            Seconds(5), Seconds(120), () => 1.0, ex => ex is InvalidOperationException, scheduler);
+        backoff.OnStall();
+        backoff.OnStall();
+
+        // The attempt waits its 10 s (the run so far), then faults with something that is NOT a stall.
+        backoff.Apply(Observable.Throw<int>(new ArgumentException())).Subscribe(_ => { }, _ => { });
+        scheduler.AdvanceBy(Seconds(10));
+
+        Assert.Equal(0, backoff.ConsecutiveStalls);
+        Assert.Equal(TimeSpan.Zero, backoff.NextDelay());
+    }
+
+    [Fact]
+    public void A_completion_without_an_element_breaks_the_run()
+    {
+        var scheduler = new HistoricalScheduler(new DateTimeOffset(2026, 10, 5, 0, 0, 0, TimeSpan.Zero));
+        var backoff = new SourcesWatcherStallBackoff(
+            Seconds(5), Seconds(120), () => 1.0, ex => ex is InvalidOperationException, scheduler);
+        backoff.OnStall();
+
+        backoff.Apply(Observable.Empty<int>()).Subscribe(_ => { }, _ => { });
+        scheduler.AdvanceBy(Seconds(5));
+
+        Assert.Equal(0, backoff.ConsecutiveStalls);
     }
 
     // Models SubscribeWithReEstablish's schedule on the virtual clock: on every fault, a FIXED 1 s timer
