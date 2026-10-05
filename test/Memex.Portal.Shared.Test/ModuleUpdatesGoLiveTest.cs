@@ -259,7 +259,7 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
                     ? "throw new System.InvalidOperationException(\"contributions of this generation cannot be built\")"
                     : "[new MeshWeaver.Mesh.MeshNode(\"" + ProbePath + "\") { Name = \"v" + version + "\", NodeType = \"Markdown\" }]")}};
             {{(configuresMeshHub
-                ? "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c];"
+                ? "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c with { }];"
                 : "")}}
         }
         """;

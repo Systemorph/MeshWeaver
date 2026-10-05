@@ -169,7 +169,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
     {
         (await NameAt(ProbePath, TestContext.Current.CancellationToken)).Should().Be("v1");
 
-        var outcome = await Swap(Write("g2", "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(\"holds a process-wide handle\")]\n"
+        var outcome = await Swap(Write("g2", "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(MeshWeaver.Mesh.ModuleBootCategory.StorageDriver, \"holds a process-wide handle\")]\n"
             + ModuleSource(version: 2)), TestContext.Current.CancellationToken);
 
         outcome.Kind.Should().Be(ModuleSwapKind.RestartRequired);
@@ -275,7 +275,7 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
                     ? "throw new System.InvalidOperationException(\"contributions of this generation cannot be built\")"
                     : "[new MeshWeaver.Mesh.MeshNode(\"" + ProbePath + "\") { Name = \"v" + version + "\", NodeType = \"Markdown\" }]")}};
             {{(configuresMeshHub
-                ? "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c];"
+                ? "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c with { }];"
                 : "")}}
         }
         public static class Api

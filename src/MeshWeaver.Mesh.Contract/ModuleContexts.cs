@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Mesh.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
@@ -20,6 +21,15 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 {
     /// <summary>What this generation contributes, once materialised; null while it is being loaded.</summary>
     public ModuleContributions? Contributions { get; internal set; }
+
+    /// <summary>This generation's root services, served from a scope of its own (see
+    /// <see cref="ModuleServices"/>); null when it registers none, or when they could not be
+    /// converted and went straight into the root (then the module is restart-required).</summary>
+    public ModuleServices? Services { get; internal set; }
+
+    /// <summary>Why this generation's root services went straight into the root container instead of
+    /// a scope of its own — empty when they did not.</summary>
+    public System.Collections.Immutable.ImmutableList<string> RootServiceBlockers { get; internal set; } = [];
 }
 
 /// <summary>
@@ -57,7 +67,48 @@ public sealed class ModuleContexts : IDisposable
     private long sequence;
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
+    private IServiceProvider? root;
     private int disposed;
+
+    private long version;
+    private readonly System.Reactive.Subjects.Subject<long> versionChanged = new();
+
+    /// <summary>
+    /// Emits the new <see cref="Version"/> whenever which generation is current changes. A cache of a
+    /// module's contributions DROPS what it holds here — waiting for its next read to notice would keep
+    /// the swapped-out generation referenced, and so loaded, until something happened to ask
+    /// (measured: the static-node query catalog pinned a retired generation exactly that way).
+    /// </summary>
+    public IObservable<long> VersionChanged => versionChanged;
+
+    private void Bump()
+    {
+        var now = Interlocked.Increment(ref version);
+        versionChanged.OnNext(now);
+    }
+
+    /// <summary>Moves on every change of which generation is current — what a cached view of the
+    /// modules' contributions (the static-node query catalog) compares against.</summary>
+    public long Version => Interlocked.Read(ref version);
+
+    /// <summary>
+    /// Makes a SLOT — a boot-time stand-in for <paramref name="node"/>, one of <paramref name="moduleName"/>'s
+    /// nodes, stripped of everything that can reference module code — as owned by that module, so the
+    /// static-node list serves the module's CURRENT nodes in its place and never pins a generation.
+    /// </summary>
+    public MeshNode SlotFor(MeshNode node, string moduleName)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        var slot = node with
+        {
+            Content = null,
+            HubConfiguration = null,
+            GlobalServiceConfigurations = [],
+            ExcludeFromContext = node.ExcludeFromContext?.ToArray(),
+        };
+        nodeOwners.AddOrUpdate(slot, moduleName);
+        return slot;
+    }
 
     /// <summary>Who is executing inside which module generation — the quiescence an unload waits on.</summary>
     public AlcLeaseRegistry Leases { get; } = new();
@@ -92,10 +143,116 @@ public sealed class ModuleContexts : IDisposable
     /// before this are still unloaded; they are just not observable as collected.
     /// </summary>
     public ModuleContexts Attach(CollectibleContextUnloads? collectibleUnloads, ILogger? log)
+        => Attach(collectibleUnloads, log, null);
+
+    /// <summary>As <see cref="Attach(CollectibleContextUnloads?, ILogger?)"/>, plus the ROOT provider
+    /// a module's service scope is a child of.</summary>
+    public ModuleContexts Attach(CollectibleContextUnloads? collectibleUnloads, ILogger? log, IServiceProvider? rootProvider)
     {
         unloads ??= collectibleUnloads;
         logger ??= log;
+        root ??= rootProvider;
         return this;
+    }
+
+    private IServiceProvider Root => root ?? throw new InvalidOperationException(
+        "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
+
+    /// <summary>The instance behind forwarded registration <paramref name="index"/> of
+    /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>
+    public object ResolveModuleService(string module, int index) =>
+        (Current(module)?.Services ?? throw new InvalidOperationException(
+            $"Module {module} holds no service scope in this mesh."))
+        .Resolve(Root, index);
+
+    /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
+    public IServiceProvider? ModuleScope(string module) =>
+        Current(module)?.Services?.Scope(Root);
+
+    internal Task StartModuleHosted(string module, int index, CancellationToken ct, ILogger? log) =>
+        Current(module)?.Services is { } services
+            ? services.StartHosted(Root, index, ct, log)
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Prepares the root services of <paramref name="to"/> — the generation replacing
+    /// <paramref name="from"/> — for a live swap: its delegates run against the SAME root prefix the
+    /// boot generation saw, and the result must route the same way and keep the same shape, because
+    /// the root's forwarders were laid out at boot and are what every consumer holds. Returns why it
+    /// cannot be swapped live, or null when <paramref name="to"/> now carries its services.
+    /// </summary>
+    public string? PrepareServices(ModuleGeneration from, ModuleGeneration to, ModuleContributions contributions)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+        ArgumentNullException.ThrowIfNull(contributions);
+        var configurations = contributions.ServiceConfigurations;
+        if (from.Contributions is { } running && !running.BuilderHooks.Shape.SequenceEqual(contributions.BuilderHooks.Shape))
+            return "the new generation's builder hook changed what was applied once at boot (autocomplete exclusions) — "
+                   + $"was [{string.Join(", ", running.BuilderHooks.Shape)}], is [{string.Join(", ", contributions.BuilderHooks.Shape)}]";
+        if (!from.RootServiceBlockers.IsEmpty)
+            return "the running generation's root services went straight into the root container at boot: "
+                   + string.Join("; ", from.RootServiceBlockers);
+        if (from.Services is not { } old)
+            return configurations.Count == 0
+                ? null
+                : "the new generation registers root services and the running one did not — the root's forwarders are laid out at boot";
+        ModuleServices fresh;
+        try
+        {
+            fresh = ModuleServices.Probe(to.Name, to.Context, configurations, old.Prefix);
+        }
+        catch (Exception exception)
+        {
+            return $"the new generation's root services could not be built: {exception.GetType().Name}: {exception.Message}";
+        }
+        if (!fresh.Blockers.IsEmpty)
+            return "the new generation's root services cannot be served from its own scope: " + string.Join("; ", fresh.Blockers);
+        if (!fresh.Shape.SequenceEqual(old.Shape))
+            return "the new generation's root services changed shape (the platform services it forwards to the root differ) — "
+                   + $"was [{string.Join(", ", old.Shape)}], is [{string.Join(", ", fresh.Shape)}]";
+        to.Services = fresh;
+        return null;
+    }
+
+    /// <summary>
+    /// Re-applies <paramref name="generation"/>'s MESH-level contributions to the RUNNING mesh: its mesh-hub
+    /// configuration (attributes, address types, builder hook — each measured at load to mutate only the
+    /// configuration it is handed, i.e. its type registry) to <paramref name="meshHub"/>'s live
+    /// configuration, and its mesh types to the mesh's shared type registry. The retired generation's
+    /// entries are demoted by the registries themselves when its context unloads.
+    /// </summary>
+    public void ApplyToRunningMesh(ModuleGeneration generation, MeshWeaver.Messaging.IMessageHub meshHub)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        ArgumentNullException.ThrowIfNull(meshHub);
+        if (generation.Contributions is not { } contributions)
+            return;
+        foreach (var configure in contributions.AllMeshHubConfigurations)
+            configure(meshHub.Configuration);
+        if (contributions.BuilderHooks.MeshTypes.IsEmpty)
+            return;
+        var registry = Root.GetRequiredService<MeshWeaver.Domain.ITypeRegistry>();
+        foreach (var (type, name) in contributions.BuilderHooks.MeshTypes)
+            registry.WithType(type, name);
+    }
+
+    /// <summary>
+    /// Moves the hosted services of a swapped module from <paramref name="from"/> to
+    /// <paramref name="to"/>: stops what the old generation started, then starts the same registrations
+    /// from the new one. Task-shaped because <c>IHostedService</c> is.
+    /// </summary>
+    public Task HandOverHosted(ModuleGeneration from, ModuleGeneration to, CancellationToken ct)
+    {
+        if (from.Services is not { } old)
+            return Task.CompletedTask;
+        var indices = old.StartedHosted;
+        return old.StopHosted(ct, logger).ContinueWith(
+                _ => to.Services is { } fresh
+                    ? Task.WhenAll(indices.Select(i => fresh.StartHosted(Root, i, ct, logger)))
+                    : Task.CompletedTask,
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
+            .Unwrap();
     }
 
     /// <summary>
@@ -131,7 +288,7 @@ public sealed class ModuleContexts : IDisposable
         ArgumentNullException.ThrowIfNull(generation);
         ArgumentNullException.ThrowIfNull(contributions);
         generation.Contributions = contributions;
-        foreach (var node in contributions.Nodes)
+        foreach (var node in contributions.AllNodes)
             nodeOwners.AddOrUpdate(node, generation.Name);
     }
 
@@ -144,7 +301,7 @@ public sealed class ModuleContexts : IDisposable
     /// the module is not held or its contributions are not materialised.
     /// </summary>
     public IReadOnlyCollection<MeshNode> CurrentNodes(string moduleName) =>
-        Current(moduleName)?.Contributions?.Nodes ?? [];
+        Current(moduleName)?.Contributions?.AllNodes ?? [];
 
     /// <summary>
     /// Makes <paramref name="generation"/> the current one for its module and returns the one it
@@ -160,6 +317,7 @@ public sealed class ModuleContexts : IDisposable
             replaced = previous;
             return generation;
         });
+        Bump();
         return ReferenceEquals(replaced, generation) ? null : replaced;
     }
 
@@ -171,7 +329,8 @@ public sealed class ModuleContexts : IDisposable
     public void Uncommit(ModuleGeneration generation)
     {
         ArgumentNullException.ThrowIfNull(generation);
-        current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
+        if (current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation)))
+            Bump();
     }
 
     /// <summary>Unloads a generation that was loaded but never committed (its contributions failed).</summary>
@@ -181,6 +340,7 @@ public sealed class ModuleContexts : IDisposable
         if (current.TryGetValue(generation.Name, out var live) && ReferenceEquals(live, generation))
             throw new InvalidOperationException(
                 $"'{generation.Context.Name}' is the current generation of {generation.Name}; retire it instead.");
+        generation.Services?.Dispose();
         RetireCore(generation.Context);
         generation.Context.Unload();
     }
@@ -196,6 +356,8 @@ public sealed class ModuleContexts : IDisposable
         {
             ArgumentNullException.ThrowIfNull(generation);
             current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
+            // Its singletons go first — they are this generation's objects and must not outlive it.
+            generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)
                 .Do(unloaded =>
@@ -296,6 +458,7 @@ public sealed class ModuleContexts : IDisposable
         foreach (var generation in current.Values.ToArray())
         {
             current.TryRemove(generation.Name, out _);
+            generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             var inFlight = Leases.InFlight(generation.Context);
             if (inFlight > 0)

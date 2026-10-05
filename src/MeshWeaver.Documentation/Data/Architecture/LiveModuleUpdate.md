@@ -31,8 +31,8 @@ against the new member failed with `CS0117 'ThreadPreparation' does not contain 
 
 1. **Live by default.** Every module the image does not bind runs in its own collectible
    `ModuleLoadContext`; an update swaps the generation in place. Nothing has to be enabled.
-2. **A restart is DECLARED, never assumed.** A module that cannot be swapped in-process carries
-   `[assembly: ModuleRestartRequired("<why>")]` — on its own assembly, so the declaration travels
+2. **A restart is DECLARED, never assumed — and only for boot-time infrastructure.** A module that
+   cannot be swapped in-process carries `[assembly: ModuleRestartRequired(ModuleBootCategory.X, "<why>")]` — on its own assembly, so the declaration travels
    with the bytes it describes — and `ModuleLiveUpdateGuard` fails any module that blocks a live
    swap without it (or declares it with a blank reason). The runtime honours the declaration even
    where the measurement sees nothing (process-wide state, an owned thread). *(Guard shipped; running
@@ -107,6 +107,94 @@ recorded; two updates before the restart are one restart and the record names th
 during an in-flight restart schedules no second one; and the negative control — no check runs, and
 the guard names the stuck landed-not-loaded module. Mutation check: forcing the old restart path makes
 the live test fail (`Restarts` 1, expected 0).
+
+## What is shipped (slice 4 — root services, and only boot-time may restart)
+
+**Root services are converted.** The most common blocker — a module registering ROOT services
+(`WithGlobalServiceRegistry`; 21 of the 37 measured) — no longer forces a restart:
+
+| Piece | What it does |
+|---|---|
+| `ModuleServices` (`MeshWeaver.Mesh.Contract`) | The module's registration delegates run against a COPY of the root collection as it stands when the module installs, so every `TryAdd` decision is the boot one; what they ADDED is the module's set, routed (`ModuleServiceRoute`, open vocabulary): a platform **interface** → `Proxy`, a platform **class** → `Current`, `IHostedService` → `Hosted`, a type the module declares itself → `ModuleOwned`, an open generic or infrastructure → `Private`. |
+| Root forwarders (`ModuleServiceForwarding`) | The root gets exactly the platform-typed registrations it would have had — as forwarders that never name a module type. `Proxy` is ONE stable `DispatchProxy` per registration that forwards every call to the CURRENT generation, so a platform singleton that cached it follows a swap. `Hosted` is started at boot and, on a swap, the old generation's instance is STOPPED and the same registration STARTED from the new one. |
+| `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
+| Per-node hubs | Every per-node hub's scope gets forwarders for the module-owned types (and their options) of each module's CURRENT generation, so module code resolving its own service from `hub.ServiceProvider` finds it; a swap recycles the hubs. |
+| The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
+
+What still blocks root services (measured, named): a delegate that removes or replaces a registration it
+did not add, a keyed registration, a class-typed platform service the module implements, an interface
+implementation that also implements another platform interface (a proxy would hide it), an open generic
+the module implements.
+
+**Three pins found and fixed on the way — each caught by the collection assertion failing, then read off
+a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
+
+1. An Autofac CHILD scope of the root — isolated and load-context scopes included — caches every service
+   it asks its parent about in the PARENT's registered-services tracker, by type, forever
+   (`TypedService(IOptions<GreeterOptions>)` in the root registry). Hence the module's own container.
+2. Autofac.Extensions.DependencyInjection's `FromKeyedServicesUsageCache` registers with the weakly-held
+   `ReflectionCacheSet.Shared` once; after `Shared` is re-created, a `Clear` never reaches it — and its
+   keys (`OptionsFactory<ModuleOptions>`) name only `Microsoft.Extensions.Options`, so an
+   assembly-only predicate never matches. `ReflectionCacheEviction` now clears it directly and matches
+   on generic arguments; a test pins that the cache stays reachable.
+3. The static-node query catalog snapshotted the boot generation's nodes and was re-taken only on the
+   next query, so a swapped-out generation stayed referenced until something asked. It is now dropped on
+   `ModuleContexts.VersionChanged`, and a module's nodes enter the boot node list only as SLOTS (content,
+   hub configuration and service delegates stripped) — the provider serves the current generation's nodes
+   in their place.
+
+**Only boot-time infrastructure may be restart-required.** `[ModuleRestartRequired(category, reason)]`
+takes a `ModuleBootCategory` — `StorageDriver`, `Orleans`, `Authentication`, `Host` — a deliberately
+closed list; the guard fails any other category ("a declaration whose reason is not boot-time
+infrastructure is a defect to remove") and names the conversions an undeclared blocked module owes.
+
+**Tests:** `ModuleRootServicesSwapTest` (3): a module registering a platform interface, options over its
+own type and a hosted service swaps LIVE — a platform singleton that cached the interface answers from
+N+1, the hosted service is stopped and restarted in order, and N is really collected; the negative
+control: an N+1 that changes the forwarded shape is refused with N serving; a class-typed root service
+the module implements is a blocker the guard names. `ModuleLiveUpdateGuardTest` (+1): a declared
+non-boot-time category fails. `ReflectionCacheEvictionReachesAutofacsKeyedServicesCacheTest` (1).
+
+## What is shipped (slice 5 — the builder hook, decomposed; the mesh hub's type registry re-applied)
+
+**The builder hook** (`BuilderConfigurations` — MeshWeaver.AI, Graph.Views, Observability, Publish,
+Stripe, Notifications, Hosting.Instance, Indexing, …) is no longer a blanket blocker.
+`MeshBuilder.CaptureBuilderHooks` runs it against a CAPTURE builder and decomposes what it did
+(`BuilderHookCapture`): the nodes it added, the root services it registered, its mesh-hub and
+per-node-hub configuration, the mesh types it registered and its autocomplete exclusions. Each flows
+through the same re-appliable seam an attribute contribution does — nodes as slots served from the
+current generation, services through `ModuleServices`, per-node-hub configuration through the
+current-generation indirection, mesh types through the shared type registry's factory (and, on a swap,
+registered on the running registry). Anything else the hook touches is a NAMED blocker:
+`ConfigureMesh`, node-type access gates, query routing rules, stream-routed or client-hosted address
+types, installing modules itself, or returning a different builder. A hook that does not fully decompose
+keeps ONLY its blockers and runs against the real builder as before — its parts never flow through
+both paths.
+
+**The mesh hub's configuration** — attribute `HubConfigurations`, `AddressTypes`, and the hook's
+`ConfigureHub` — is re-applied to the RUNNING mesh hub on a swap when it MUTATES the configuration it is
+handed (its type registry) and returns that same object; a dry run on a throwaway configuration
+measures it at load. A delegate that returns a NEW configuration (the view packs' `AddViews`) is a
+blocker: the mesh hub is built once per process.
+
+**Measured after this slice** — the guard's own measurement over the 41 shipped module entry
+assemblies, built from MeshWeaver.Plugins `origin/main` against this change's core: **25 live** (up
+from 4), including **MeshWeaver.AI** (as measured; its full live swap with dependents and the
+incident scenario is the next slice), every AI provider but Acp, Graph.Views, Observability, Publish,
+Stripe, Notifications, Hosting.Instance, Indexing.PostgreSql, Markdown.Export, Speech, AppleMessages,
+SelfUpdate.Aks, Testing, Import, Maps, Northwind, OgCard. **16 still blocked:**
+
+| Blocker | Modules | Conversion owed |
+|---|---|---|
+| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | a view-registration seam read per render / per client hub instead of folded into the mesh hub's immutable configuration |
+| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | a dynamic endpoint data source the swap updates |
+| Root services could not be measured | Acp (`TryAddEnumerable` with a factory typed as the interface throws), Azure.Blob, Mcp, Radzen (their dependency DLLs were absent from the measured Debug output — an artefact of the measurement, not of the modules) | Acp: register the harness by implementation type; the others re-measure against a published closure |
+
+**Tests:** `ModuleBuilderHookSwapTest` (2): a module contributing ONLY through its builder hook — a node,
+a root service, a mesh-hub type registration, per-node-hub configuration, an autocomplete exclusion —
+swaps live: the service answers from N+1, the node is served from N+1, the running mesh hub's type
+registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
+query routing rule is a blocker the guard names.
 
 ## What is owed
 

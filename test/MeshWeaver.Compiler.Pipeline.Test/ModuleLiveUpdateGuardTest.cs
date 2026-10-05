@@ -8,7 +8,7 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// 🚨 Live update is THE default (policy <c>module-live-update-default</c>), so the exception must
 /// be DECLARED: a module whose contributions cannot be re-applied in the running process carries
-/// <c>[assembly: ModuleRestartRequired("&lt;why&gt;")]</c>, and <see cref="ModuleLiveUpdateGuard"/>
+/// <c>[assembly: ModuleRestartRequired(ModuleBootCategory.X, "&lt;why&gt;")]</c>, and <see cref="ModuleLiveUpdateGuard"/>
 /// fails one that does not. The second case is the guard's NEGATIVE CONTROL — the same module without
 /// the declaration must FAIL, naming the module and what was measured; a guard that never fails
 /// enforces nothing. The satellite repositories run this guard over every module they ship.
@@ -33,14 +33,29 @@ public sealed class ModuleLiveUpdateGuardTest
         violation.Should().NotBeNull("an undeclared blocker is exactly what the guard exists to refuse");
         violation!.Should().Contain("MeshWeaver.Test.GuardUndeclared")
             .And.Contain("configures the mesh hub")
-            .And.Contain("ModuleRestartRequired");
+            .And.Contain("convert");
+    }
+
+    /// <summary>
+    /// 🚨 A declaration is not an excuse: only BOOT-TIME infrastructure may be restart-required. A
+    /// module that declares any other category — "it configures the mesh hub", an AI provider, a view
+    /// pack — FAILS, because the declaration is a defect to remove, not a reason to keep restarting.
+    /// </summary>
+    [Fact]
+    public void ADeclarationWhoseCategoryIsNotBootTimeInfrastructure_FailsTheGuard()
+    {
+        var contributions = ModuleContributions.Of(Load("MeshWeaver.Test.GuardNotBootTime",
+            MeshHubConfiguration, "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(\"ViewPack\", \"it configures the mesh hub\")]"));
+
+        ModuleLiveUpdateGuard.Violation("MeshWeaver.Test.GuardNotBootTime", contributions)
+            .Should().NotBeNull().And.Contain("not boot-time infrastructure").And.Contain("ViewPack");
     }
 
     [Fact]
     public void AModuleThatBlocksALiveSwap_AndDeclaresIt_PassesTheGuard_AndIsNeverSwappedLive()
     {
         var contributions = ModuleContributions.Of(Load("MeshWeaver.Test.GuardDeclared",
-            MeshHubConfiguration, "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(\"the mesh hub is configured once\")]"));
+            MeshHubConfiguration, "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(MeshWeaver.Mesh.ModuleBootCategory.StorageDriver, \"the mesh hub is configured once\")]"));
 
         ModuleLiveUpdateGuard.Violation("MeshWeaver.Test.GuardDeclared", contributions).Should().BeNull();
         contributions.LiveUpdateBlockers().Should().Contain(b => b.Contains("the mesh hub is configured once"),
@@ -51,14 +66,14 @@ public sealed class ModuleLiveUpdateGuardTest
     public void ADeclarationWithABlankReason_FailsTheGuard()
     {
         var contributions = ModuleContributions.Of(Load("MeshWeaver.Test.GuardBlank",
-            "", "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(\" \")]"));
+            "", "[assembly: MeshWeaver.Mesh.ModuleRestartRequired(MeshWeaver.Mesh.ModuleBootCategory.Host, \" \")]"));
 
         ModuleLiveUpdateGuard.Violation("MeshWeaver.Test.GuardBlank", contributions)
             .Should().NotBeNull().And.Contain("BLANK");
     }
 
     private const string MeshHubConfiguration =
-        "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c];";
+        "public override System.Collections.Generic.IEnumerable<System.Func<MeshWeaver.Messaging.MessageHubConfiguration, MeshWeaver.Messaging.MessageHubConfiguration>> HubConfigurations => [c => c with { }];";
 
     private static System.Reflection.Assembly Load(string name, string members, string assemblyAttributes = "")
     {
@@ -84,4 +99,17 @@ public sealed class ModuleLiveUpdateGuardTest
         buffer.Position = 0;
         return context.LoadFromStream(buffer);
     }
+}
+
+/// <summary>
+/// The Autofac.Extensions.DependencyInjection cache that <c>ReflectionCacheSet.Shared</c> can lose is
+/// cleared directly by <see cref="MeshWeaver.ServiceProvider.ReflectionCacheEviction"/> — it was the
+/// last strong root of a swapped-out module generation. If a future Autofac renames it, this fails
+/// instead of every module swap leaking silently.
+/// </summary>
+public sealed class ReflectionCacheEvictionReachesAutofacsKeyedServicesCacheTest
+{
+    [Fact]
+    public void TheKeyedServicesUsageCacheIsReachable() =>
+        MeshWeaver.ServiceProvider.ReflectionCacheEviction.FromKeyedServicesUsageCacheIsReachable.Should().BeTrue();
 }

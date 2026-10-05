@@ -27,6 +27,9 @@ public sealed record ModuleContributions(
     /// (<see cref="ModuleRestartRequiredAttribute"/>), or null — live, the default.</summary>
     public string? DeclaredRestartReason { get; init; }
 
+    /// <summary>The <see cref="ModuleBootCategory"/> the module declares, or null.</summary>
+    public string? DeclaredRestartCategory { get; init; }
+
     /// <summary>The simple name of the attribute type a host maps module endpoints from. Matched by
     /// NAME through the base-type chain, because it lives in <c>MeshWeaver.Hosting.AspNetCore</c>,
     /// which this assembly does not reference.</summary>
@@ -34,10 +37,27 @@ public sealed record ModuleContributions(
 
     /// <summary>Materialises every contribution of <paramref name="assembly"/>. Throws what a
     /// contribution getter throws — the caller treats that as the generation failing.</summary>
-    public static ModuleContributions Of(Assembly assembly)
+    public static ModuleContributions Of(Assembly assembly) => Of(assembly, null);
+
+    /// <summary>As <see cref="Of(Assembly)"/>, decomposing the module's builder hook against
+    /// <paramref name="configuration"/> — what the real builder would expose to it.</summary>
+    public static ModuleContributions Of(Assembly assembly, Microsoft.Extensions.Configuration.IConfiguration? configuration)
     {
         ArgumentNullException.ThrowIfNull(assembly);
         var attributes = assembly.GetCustomAttributes<MeshNodeProviderAttribute>().ToArray();
+        var hooks = attributes.SelectMany(a => a.BuilderConfigurations).ToArray();
+        BuilderHookCapture capture;
+        try
+        {
+            capture = MeshBuilder.CaptureBuilderHooks(hooks, configuration);
+        }
+        catch (Exception exception)
+        {
+            capture = BuilderHookCapture.Empty with
+            {
+                Blockers = [$"its builder hook could not be decomposed ({exception.GetType().Name}: {exception.Message})"],
+            };
+        }
         return new ModuleContributions(
             attributes.SelectMany(a => a.Nodes).ToArray(),
             attributes.SelectMany(a => a.AddressTypes).ToArray(),
@@ -47,8 +67,54 @@ public sealed record ModuleContributions(
             CarriesEndpointProvider(assembly))
         {
             DeclaredRestartReason = assembly.GetCustomAttribute<ModuleRestartRequiredAttribute>()?.Reason,
+            DeclaredRestartCategory = assembly.GetCustomAttribute<ModuleRestartRequiredAttribute>()?.Category,
+            ModuleContext = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(assembly),
+            ModuleName = assembly.GetName().Name ?? "",
+            // A hook that could not be fully decomposed keeps ONLY its blockers: it is applied to the
+            // real builder as before (and the module stays restart-required), so none of its parts
+            // may ALSO flow through the re-appliable seams — they would be applied twice.
+            BuilderHooks = capture.Blockers.IsEmpty ? capture : BuilderHookCapture.Empty with { Blockers = capture.Blockers },
         };
     }
+
+    /// <summary>The builder hook, decomposed (<see cref="MeshBuilder.CaptureBuilderHooks"/>).</summary>
+    public BuilderHookCapture BuilderHooks { get; init; } = BuilderHookCapture.Empty;
+
+    /// <summary>Every node the module contributes — its attributes' and its builder hook's.</summary>
+    public IReadOnlyList<MeshNode> AllNodes => [.. Nodes, .. BuilderHooks.Nodes];
+
+    /// <summary>Every configuration of every per-node hub — its attributes' and its builder hook's.</summary>
+    public IReadOnlyList<Func<MessageHubConfiguration, MessageHubConfiguration>> AllDefaultNodeHubConfigurations =>
+        [.. DefaultNodeHubConfigurations, .. BuilderHooks.DefaultNodeHubConfigurations];
+
+    /// <summary>Every configuration of the MESH hub — its attributes', its address types, its builder
+    /// hook's. Re-appliable to the running mesh hub only when each one MUTATES the configuration it is
+    /// given (its type registry) and returns it — see <see cref="MeasuredLiveUpdateBlockers"/>.</summary>
+    public IReadOnlyList<Func<MessageHubConfiguration, MessageHubConfiguration>> AllMeshHubConfigurations =>
+    [
+        .. (AddressTypes.Count > 0
+            ? new Func<MessageHubConfiguration, MessageHubConfiguration>[] { RegisterAddressTypes }
+            : []),
+        .. HubConfigurations,
+        .. BuilderHooks.MeshHubConfigurations,
+    ];
+
+    private MessageHubConfiguration RegisterAddressTypes(MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithTypes(AddressTypes);
+        return config;
+    }
+
+    /// <summary>The load context the contributions' assembly lives in — what "the module's own type"
+    /// means when its root services are routed (<see cref="ModuleServices"/>).</summary>
+    public System.Runtime.Loader.AssemblyLoadContext? ModuleContext { get; init; }
+
+    /// <summary>The module's entry-assembly name.</summary>
+    public string ModuleName { get; init; } = "";
+
+    /// <summary>Every root-service delegate the module's nodes carry, in node order.</summary>
+    public IReadOnlyList<Func<Microsoft.Extensions.DependencyInjection.IServiceCollection, Microsoft.Extensions.DependencyInjection.IServiceCollection>> ServiceConfigurations =>
+        [.. AllNodes.SelectMany(n => n.GlobalServiceConfigurations), .. BuilderHooks.Services];
 
     private static bool CarriesEndpointProvider(Assembly assembly)
     {
@@ -71,11 +137,11 @@ public sealed record ModuleContributions(
     /// (a swap then recycles every per-node hub of the process). What is not, as the platform
     /// stands: root services (the container is built once), the mesh hub's configuration and address
     /// types (the mesh hub lives as long as the process), the builder hook (arbitrary boot-time
-    /// mutation), and HTTP endpoints (the endpoint map is built once).</para>
+    /// mutation).</para>
     /// </summary>
     public ImmutableList<string> LiveUpdateBlockers() =>
         DeclaredRestartReason is { } declared
-            ? MeasuredLiveUpdateBlockers().Insert(0, $"declares [ModuleRestartRequired]: {declared}")
+            ? MeasuredLiveUpdateBlockers().Insert(0, $"declares [ModuleRestartRequired] ({DeclaredRestartCategory}): {declared}")
             : MeasuredLiveUpdateBlockers();
 
     /// <summary>The blockers the platform MEASURES from the contributions alone — what
@@ -83,16 +149,55 @@ public sealed record ModuleContributions(
     public ImmutableList<string> MeasuredLiveUpdateBlockers()
     {
         var blockers = ImmutableList.CreateBuilder<string>();
-        foreach (var node in Nodes.Where(n => !n.GlobalServiceConfigurations.IsEmpty))
-            blockers.Add($"registers root services through node '{node.Path}' (WithGlobalServiceRegistry) — the root container is built once");
-        if (HubConfigurations.Count > 0)
-            blockers.Add("configures the mesh hub (HubConfigurations) — the mesh hub lives as long as the process");
-        if (AddressTypes.Count > 0)
-            blockers.Add("registers address types on the mesh hub (AddressTypes)");
-        if (BuilderConfigurations.Count > 0)
-            blockers.Add("uses the builder hook (BuilderConfigurations) — arbitrary boot-time configuration");
+        // Root services are served from a scope of the module's own and re-bound on a swap
+        // (ModuleServices) — unless what they register cannot be, which the probe names.
+        if (ServiceConfigurations.Count > 0 && ModuleContext is { } context)
+        {
+            ModuleServices? probed = null;
+            string? fault = null;
+            try
+            {
+                probed = ModuleServices.Probe(ModuleName, context, ServiceConfigurations, []);
+            }
+            catch (Exception exception)
+            {
+                fault = $"{exception.GetType().Name}: {exception.Message}";
+            }
+            if (fault is not null)
+                blockers.Add($"its root-service registration could not be measured ({fault})");
+            foreach (var blocker in probed?.Blockers ?? [])
+                blockers.Add($"root services: {blocker}");
+        }
+        // The mesh hub lives as long as the process; what a module contributes to it is re-applied to
+        // the RUNNING mesh hub on a swap — which is sound only for a delegate that mutates the
+        // configuration it is handed (its type registry) and returns that same object. A dry run on a
+        // throwaway configuration measures it.
+        foreach (var configure in HubConfigurations.Concat(BuilderHooks.MeshHubConfigurations))
+            if (MeshHubBlocker(configure) is { } meshHub)
+            {
+                blockers.Add(meshHub);
+                break;
+            }
+        blockers.AddRange(BuilderHooks.Blockers.Select(b => $"builder hook: {b}"));
         if (MapsEndpoints)
             blockers.Add("maps HTTP endpoints (MeshEndpointProviderAttribute) — the endpoint map is built once");
         return blockers.ToImmutable();
+    }
+
+    /// <summary>Why <paramref name="configure"/> cannot be re-applied to the running mesh hub, or null:
+    /// measured on a throwaway configuration — it must return the SAME configuration it was given.</summary>
+    private static string? MeshHubBlocker(Func<MessageHubConfiguration, MessageHubConfiguration> configure)
+    {
+        try
+        {
+            var probe = new MessageHubConfiguration(null, new Address("module-probe", Guid.NewGuid().ToString("N")));
+            return ReferenceEquals(configure(probe), probe)
+                ? null
+                : "configures the mesh hub beyond its type registry (it returns a new configuration) — the mesh hub is built once per process";
+        }
+        catch (Exception exception)
+        {
+            return $"configures the mesh hub, and the configuration could not be measured ({exception.GetType().Name}: {exception.Message})";
+        }
     }
 }

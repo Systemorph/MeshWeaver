@@ -94,6 +94,7 @@ public sealed class ModuleLiveUpdater : IDisposable
     private readonly ModuleContexts contexts;
     private readonly IIoPool pool;
     private readonly ILogger<ModuleLiveUpdater>? logger;
+    private readonly Microsoft.Extensions.Configuration.IConfiguration? configuration;
     private readonly ISubject<Job> jobs = Subject.Synchronize(new Subject<Job>());
     private readonly IDisposable pipeline;
 
@@ -106,6 +107,7 @@ public sealed class ModuleLiveUpdater : IDisposable
         this.meshHub = meshHub;
         this.contexts = contexts;
         this.logger = logger;
+        configuration = meshHub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
         pool = pools.Get(IoPoolNames.FileSystem);
         pipeline = jobs
             .Select(job => Run(job.EntryLocation, job.Reason)
@@ -156,8 +158,9 @@ public sealed class ModuleLiveUpdater : IDisposable
                 return Observable.Return(new ModuleSwapOutcome(name, ModuleSwapKind.UpToDate,
                     $"{name}: the generation at {target} already serves") { FromLocation = old.Location, ToLocation = target });
 
-            var running = old.Contributions?.LiveUpdateBlockers()
-                          ?? ImmutableList.Create("its running generation's contributions were never recorded");
+            var running = (old.Contributions?.LiveUpdateBlockers()
+                           ?? ImmutableList.Create("its running generation's contributions were never recorded"))
+                .AddRange(old.RootServiceBlockers.Select(b => $"root services: {b}"));
             if (!running.IsEmpty)
                 return Observable.Return(Restart(name, old.Location, target, "the running generation", running));
             foreach (var dependent in contexts.DependentsOf(name))
@@ -201,7 +204,7 @@ public sealed class ModuleLiveUpdater : IDisposable
         ModuleContributions contributions;
         try
         {
-            contributions = ModuleContributions.Of(fresh.Assembly);
+            contributions = ModuleContributions.Of(fresh.Assembly, configuration);
         }
         catch (Exception ex)
         {
@@ -213,6 +216,12 @@ public sealed class ModuleLiveUpdater : IDisposable
         {
             contexts.Discard(fresh);
             return refused with { Outcome = Restart(name, old.Location, target, "the new generation", blockers) };
+        }
+
+        if (contexts.PrepareServices(old, fresh, contributions) is { } servicesRefused)
+        {
+            contexts.Discard(fresh);
+            return refused with { Outcome = Restart(name, old.Location, target, "the new generation", ImmutableList.Create(servicesRefused)) };
         }
 
         var dependents = contexts.DependentsOf(name);
@@ -227,7 +236,12 @@ public sealed class ModuleLiveUpdater : IDisposable
             foreach (var dependent in dependents)
             {
                 var reloaded = contexts.Load(dependent.Location);
-                var reloadedContributions = ModuleContributions.Of(reloaded.Assembly);
+                var reloadedContributions = ModuleContributions.Of(reloaded.Assembly, configuration);
+                if (contexts.PrepareServices(dependent, reloaded, reloadedContributions) is { } dependentRefused)
+                {
+                    contexts.Discard(reloaded);
+                    throw new InvalidOperationException($"{dependent.Name}: {dependentRefused}");
+                }
                 contexts.Commit(reloaded);
                 contexts.SetContributions(reloaded, reloadedContributions);
                 committed = committed.Add(reloaded);
@@ -253,7 +267,21 @@ public sealed class ModuleLiveUpdater : IDisposable
 
     /// <summary>Steps 4–5: recycle the hubs bound to the swapped generations, wait for them to die,
     /// then retire the old generations.</summary>
-    private IObservable<ModuleSwapOutcome> RecycleAndRetire(string name, SwapPlan plan, string reason)
+    private IObservable<ModuleSwapOutcome> RecycleAndRetire(string name, SwapPlan plan, string reason) =>
+        // The hosted services move first: the old generation's are STOPPED, the same registrations
+        // STARTED from the new one — before any hub re-binds, so nothing runs two generations of one
+        // background service at once.
+        Observable.Defer(() =>
+            {
+                // The mesh-level contributions first — mesh-hub type registrations and mesh types — so
+                // a hub that re-instantiates below already resolves the new generation's types.
+                foreach (var generation in plan.Serving)
+                    contexts.ApplyToRunningMesh(generation, meshHub);
+                return pool.Invoke(ct => Task.WhenAll(plan.Retiring.Zip(plan.Serving, (from, to) => contexts.HandOverHosted(from, to, ct))));
+            })
+            .SelectMany(_ => RecycleThenRetire(name, plan, reason));
+
+    private IObservable<ModuleSwapOutcome> RecycleThenRetire(string name, SwapPlan plan, string reason)
     {
         var hubs = HubsToRecycle(plan);
         var issuing = meshHub.NodeOperationIssuingHub();
@@ -312,12 +340,14 @@ public sealed class ModuleLiveUpdater : IDisposable
 
         var generations = plan.Retiring.Concat(plan.Serving).ToImmutableList();
         var everyHub = generations.Any(g => g.Contributions?.DefaultNodeHubConfigurations.Count > 0)
+                       // Module-owned service types are forwarded into every per-node hub's scope.
+                       || generations.Any(g => g.Services?.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned) == true)
                        || InMeshBuildsReference(plan.Serving.Select(g => g.Name).ToImmutableHashSet(StringComparer.Ordinal));
         if (everyHub)
             return perNode;
 
         var paths = generations
-            .SelectMany(g => g.Contributions?.Nodes ?? [])
+            .SelectMany(g => g.Contributions?.AllNodes ?? [])
             .Select(n => n.Path)
             .Where(p => !string.IsNullOrEmpty(p))
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
