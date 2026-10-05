@@ -43,6 +43,12 @@
          `landed-modules-gate` job now compiles that repo's projects against this one, so the
          coupling is checked here rather than discovered there. -->
     <InternalsVisibleTo Include="MeshWeaver.OgCard.Test" />
+    <!-- ModuleLiveUpdater.Swap(path) loads and runs the bytes at a path as platform-classified
+         code, so it is INTERNAL: a public method on a mesh singleton would let any code that can
+         resolve it (a NodeType's layout area included) name the bytes (#6123 review). The one
+         production caller is PluginCatalog's ModuleLiveActivation, which feeds only the pinned
+         copy of a generation the landing service landed; its own public surface takes no path. -->
+    <InternalsVisibleTo Include="MeshWeaver.PluginCatalog" />
   </ItemGroup>
 
   <ItemGroup>

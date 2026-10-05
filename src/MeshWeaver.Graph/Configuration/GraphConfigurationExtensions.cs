@@ -127,7 +127,10 @@ public static class GraphConfigurationExtensions
             builder.AddActivationRecycle();
             // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
             // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
-            builder.ConfigureServices(s => s.AddSingleton<InstalledModulesFingerprint>());
+            builder.ConfigureServices(s => s.AddSingleton(sp => InstalledModulesFingerprint.Live(sp)));
+            // The live module swap (policy module-live-update-default): the default update path of
+            // every module this process holds in its own load context. Mesh-scoped.
+            builder.ConfigureServices(s => s.AddSingleton<ModuleLiveUpdater>());
 
             // Satellite permission delegation for the annotation satellites. Registered HERE and not
             // with their node types, for the same reason the key protector below is: the node types

@@ -146,6 +146,29 @@ public class StaticNodePrecedenceTest
         factory.Warnings[0].Should().Contain(Contested).And.Contain(nameof(PlatformProvider));
     }
 
+    /// <summary>
+    /// A live module swap re-takes the catalog (#6127 review): the rebuild must not repeat the
+    /// once-per-mesh warning. Before the fix the gate read the catalog field, which a swap nulls,
+    /// so every swap followed by a query warned again — two warnings here.
+    /// </summary>
+    [Fact]
+    public void A_catalog_rebuilt_after_a_module_swap_does_NOT_warn_again()
+    {
+        var sp = BuildContested(HomeConfig("platform seed"), HomeConfig("host override"));
+        var factory = new CapturingLoggerFactory();
+        using var modules = new ModuleContexts();
+        var provider = new StaticNodeQueryProvider(sp.GetServices<IStaticNodeProvider>(), _ => true,
+            new MeshConfiguration([HomeConfig("host override")]), factory, modules);
+        factory.Warnings.Should().ContainSingle("the arrangement: the contested path warns at construction");
+
+        // Any commit moves the registry's version — what a live swap does — and the next read rebuilds.
+        var generation = modules.Load(typeof(StaticNodePrecedenceTest).Assembly.Location);
+        modules.Commit(generation);
+        QueryPath(provider, Contested).Should().NotBeEmpty("the rebuilt catalog still serves the path");
+
+        factory.Warnings.Should().ContainSingle("a rebuild after a swap is not a new mesh");
+    }
+
     [Fact]
     public void Two_providers_offering_the_SAME_declaration_are_redundant_not_contested()
     {
