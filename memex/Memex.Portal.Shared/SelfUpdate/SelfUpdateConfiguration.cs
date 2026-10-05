@@ -90,6 +90,8 @@ public static class SelfUpdateConfiguration
                 services.AddSingleton<SelfUpdateHostedService>();
                 services.AddHostedService(sp => sp.GetRequiredService<SelfUpdateHostedService>());
                 services.AddSingleton<IModuleActivationRestart>(sp => sp.GetRequiredService<SelfUpdateHostedService>());
+                // …and the image + roll halves of an instance reboot (Doc/Architecture/InstanceReboot).
+                services.AddSingleton<IInstanceRebootActivation>(sp => sp.GetRequiredService<SelfUpdateHostedService>());
             }
             return services;
         });

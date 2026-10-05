@@ -345,6 +345,11 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
             Interlocked.Increment(ref restarts);
             return Task.FromResult(true);
         }
+
+        /// <summary>The portal Deployment's rollout strategy an instance reboot reads — non-disruptive by default.</summary>
+        public RolloutStrategyReading? Strategy { get; set; } = new("RollingUpdate", "1", "0", 2);
+
+        public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) => Task.FromResult(Strategy);
     }
 
     /// <summary>The plugin registry: an empty feed, and ONE module bundle at a settable version and
