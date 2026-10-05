@@ -75,7 +75,10 @@ public class PodHubUnclaimedDeliveryTest(TwoSiloCacheUpdateFixture fixture, ITes
         var directoryType = Assembly.Load("Orleans.Runtime").GetType("Orleans.Runtime.ActivationDirectory", true)!;
         var directory = (IEnumerable<KeyValuePair<GrainId, IGrainContext>>)Services(0).GetRequiredService(directoryType);
         var context = directory.Single(entry => entry.Key.Equals(grain.GetGrainId())).Value;
-        var keepAlive = context.GetType().GetProperty("KeepAliveUntil");
+        // Orleans 10.4 made ActivationData.KeepAliveUntil internal (it was public through 10.3.1), so
+        // the lookup names NonPublic too — the property and its DateTime.MaxValue pin are unchanged.
+        var keepAlive = context.GetType().GetProperty(
+            "KeepAliveUntil", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(keepAlive);
         ((DateTime)keepAlive.GetValue(context)!).Should().Be(DateTime.MaxValue,
             "the owner claim must really have pinned this activation");
