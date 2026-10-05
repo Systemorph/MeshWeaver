@@ -1796,7 +1796,27 @@ public sealed class InstanceAutoRegistrationService(
             : package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
-    private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates)
+    private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates) =>
+        candidates.Count == 0
+            ? Observable.Return(DefaultInstallSummary.Empty)
+            // 🚨 An UNINSTALLED package is never re-installed by an unattended pass — not by the
+            // seed, not by the platform baseline, not by a feature flag (PackageUninstallExecutor,
+            // Doc/Architecture/PackageUninstall). Only a person installing it again lifts this.
+            : PackageUninstallExecutor.UninstalledHere(hub)
+                .SelectMany(uninstalled =>
+                {
+                    var blocked = candidates.Where(c => uninstalled.Contains(c.Package.Id)).Select(c => c.Package.Id).ToList();
+                    if (blocked.Count > 0)
+                        logger.LogInformation(
+                            "[DefaultInstall] {Count} declared package(s) were UNINSTALLED on this instance and are not "
+                            + "re-installed by an unattended pass: [{Ids}]. Installing one from the catalog lifts this.",
+                            blocked.Count, string.Join(", ", blocked));
+                    return InstallAllCore(blocked.Count == 0
+                        ? candidates
+                        : candidates.Where(c => !uninstalled.Contains(c.Package.Id)).ToList());
+                });
+
+    private IObservable<DefaultInstallSummary> InstallAllCore(IReadOnlyList<InstallCandidate> candidates)
     {
         if (candidates.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
