@@ -502,6 +502,15 @@ public record PackageManifest
     public PackageUpdatePolicy? UpdatePolicy { get; init; }
 
     /// <summary>
+    /// When a global administrator last set <see cref="UpdatePolicy"/> explicitly
+    /// (<c>PackageInstaller.SetUpdatePolicy</c>) — null for a policy the installer SEEDED. Policy
+    /// <c>packages-auto-update</c> moves every seeded reminder-only record to Auto
+    /// (<see cref="PackageAutoUpdateMigration"/>) and keeps a policy an administrator chose; this
+    /// stamp is how the two are told apart.
+    /// </summary>
+    public DateTimeOffset? UpdatePolicySetAt { get; init; }
+
+    /// <summary>
     /// The policy this package actually follows. Every reconciler branches on THIS, never on a
     /// field. Pure.
     ///
