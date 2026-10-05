@@ -110,6 +110,59 @@ That is exactly what clause 1 asks for: every build of a line satisfies every re
 and the floor still orders across lines and across a module that versions independently of the
 platform.
 
+## A floor must move with the module
+
+**The informational version does not.** Because every module build of one platform line states the
+same ordered value, a `min:` floor over it is satisfied by **every** build of the module — including
+an older one that lacks members the prebuilt calls. Measured 2026-10-05 on the control instance:
+installed store package AI **1.20.4**; the Hosting prebuilt adopted from the sealed set had been
+compiled against an AI build that added `ThreadPreparation.Group` and recorded
+`"MeshWeaver.AI": "min:3.0.0.0"`. The record was satisfied, the bytes were adopted, and the first
+call failed with `MissingMethodException: set_Group` — the PR reviewer could not start. A decline
+would have named the cause; the adoption hid it until call time.
+
+**The fix: the module entry prefers the PACKAGE version, under its own scheme.**
+
+| module states | id | compared |
+|---|---|---|
+| `[assembly: AssemblyMetadata("MeshWeaver.PackageVersion", "1.21.0")]` | `pkg:1.21.0` | floor, SemVer, against another `pkg:` only |
+| no package stamp, an informational version | `min:3.0.0` | floor, SemVer, against another `min:` only |
+| neither | `mvid:<guid>` | exact |
+
+* **One reader, both sides.** `InstalledModuleAssembly.PackageVersion` reads the stamp out of the
+  module's own metadata (no attribute type is resolved — the same rule as `Version`), and
+  `CompiledDependencies.ModuleIdOf` is the one function that turns it into an id. The portal
+  (`NodeTypeCompilationHelpers.DependencyIdResolverOf`) and the bake host (`BakeHost` via
+  `TreeBake.ModulePackageVersionResolverOf`) both go through them, so the floor a bake records is the
+  value every portal computes.
+* **An unmet package floor is `FloorNotMet`**, through the same decline every adopt-time reader
+  already takes: `'MeshWeaver.AI' needs at least 1.21.0 — this environment has 1.20.4, below the
+  recorded floor`. The prebuilt is not adopted; the type recompiles against what is installed (and
+  fails its compile by name if the source needs the newer module), or, where no local compile is
+  possible, stays declined with that sentence.
+* 🚨 **Why `pkg:` is a separate scheme.** During the transition an instance runs module bytes that
+  carry no stamp and resolve `min:3.0.0.0`. Written as `min:1.21.0`, the new floor would be
+  *satisfied* by that old module (3.0.0.0 ≥ 1.21.0) — the incident again. `Satisfies` refuses to
+  compare across schemes, so the mixed case is `NotChecked` and declined: inconclusive stays on the
+  rebuild side. The cost is a one-time decline of records written before the stamp, until the next
+  bake writes `pkg:` records.
+* 🚨 **That window opens per node repository, when it imports the stamping targets — so the
+  import ships WITH a re-bake.** From the first stamped publication of a module, every
+  already-published `min:` record bound to it reads `NotChecked` on a mesh running the stamped
+  module, and its type recompiles (or, under `Modules:RequirePrebuilt`, stays declined) until a
+  bake writes `pkg:` records for it. The import pull request therefore carries the re-bake of
+  that repository's types in the same publication rather than leaving it to the next unrelated
+  change. This change does not perform any import, and the length of the window on a live mesh
+  has not been measured; whoever lands the first import measures it there.
+* **The producer half is the module build.** A module that carries no stamp behaves exactly as
+  before, so this change is inert until a module build writes the attribute — the `version` of the
+  `manifest.lock` of the package whose `index.json` declares the assembly as its `module`.
+
+**What it does not close.** A publication built from a commit whose locks are **unsettled** stamps
+the lock's *old* version over new sources, so a prebuilt bound to the new sources records the same
+`pkg:` value the old installed copy satisfies. Never sealing or publishing an unsettled commit is
+what closes that; this floor relies on it.
+
 ## What the floor deliberately does NOT relax
 
 The relaxation lives in exactly one function, `CompiledDependencies.Satisfies`, and it **refuses to

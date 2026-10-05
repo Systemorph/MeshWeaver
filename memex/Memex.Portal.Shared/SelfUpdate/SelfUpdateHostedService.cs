@@ -396,7 +396,7 @@ public class SelfUpdateHostedService : IHostedService
             return landing.GetActivation()
                 .Take(1)
                 .SelectMany(activation => activation.PendingRestart
-                    ? Restart(platform)
+                    ? LiveFirst(platform)
                     : Observable.Return(platform))
                 .Catch((Exception ex) =>
                 {
@@ -406,6 +406,33 @@ public class SelfUpdateHostedService : IHostedService
                     return Observable.Return(platform);
                 });
         });
+
+    /// <summary>
+    /// The live module activation, resolved from the mesh's services — the seam through which a
+    /// pending module is swapped in LIVE before any restart is considered. Null on a host without
+    /// the plugin catalog, which keeps the restart path exactly as it was. Virtual for the same
+    /// reason <see cref="ResolveLandingService"/> is.
+    /// </summary>
+    protected virtual ModuleLiveActivation? ResolveLiveActivation() =>
+        _hub.ServiceProvider.GetService<ModuleLiveActivation>();
+
+    /// <summary>
+    /// 🚨 LIVE FIRST (policy <c>module-live-update-default</c>): a landed module generation is swapped
+    /// into the running process, and ONLY what does not go live — a module that cannot be swapped
+    /// in-process, a swap that failed at runtime, a module this process does not hold in its own
+    /// context — is left to the automatic restart, which still needs no approval (#4607). A pass that
+    /// cannot establish what is pending keeps the restart that was always taken.
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> LiveFirst(SelfUpdateVerdict platform)
+    {
+        var live = ResolveLiveActivation();
+        if (live is null)
+            return Restart(platform);
+        return live.ActivatePending("self-update: a landed module generation is pending activation")
+            .SelectMany(result => result.NeedsRestart
+                ? Restart(platform, result.Describe())
+                : Observable.Return(SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
+    }
 
     /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):
     /// the plan-tier sentence when the patcher's package was refused by the instance's plan, else
@@ -420,7 +447,7 @@ public class SelfUpdateHostedService : IHostedService
 
     /// <summary>The restart itself: detect-only says so; the floor defers; otherwise the updater rolls
     /// the running image, or reports that it cannot.</summary>
-    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform)
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform, string? why = null)
     {
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
         var handover = ResolveHandover();
@@ -437,7 +464,7 @@ public class SelfUpdateHostedService : IHostedService
                     "[SelfUpdate] a landed module generation is pending activation — handing the restart to the "
                     + "control lane ({Destination}); this install does not roll its own pods.",
                     DescribeRoute(route, settings));
-                return handover.Announce(RestartAnnouncement(installed))
+                return handover.Announce(RestartAnnouncement(installed, why))
                     .Select(outcome => SelfUpdateVerdict.RestartHandedOver(
                         platform, installed, outcome.Destination, outcome.Detail))
                     .Catch((Exception ex) =>
@@ -1315,13 +1342,15 @@ public class SelfUpdateHostedService : IHostedService
     }
 
     /// <summary>The <c>self-update-restart-pending</c> event: the image this install runs, and why the pods should be re-created on it.</summary>
-    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed) =>
+    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed, string? why = null) =>
         new()
         {
             Event = SelfUpdateHandover.RestartEvent,
             CurrentVersion = installed,
             CurrentImage = _options.PortalImage(installed.Split('+')[0]),
-            Reason = "a landed module generation is pending activation (restart-as-activation, #3650)",
+            Reason = why is null
+                ? "a landed module generation is pending activation (restart-as-activation, #3650)"
+                : $"a landed module generation did not go live in the running process — {why}",
             DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
         };
 

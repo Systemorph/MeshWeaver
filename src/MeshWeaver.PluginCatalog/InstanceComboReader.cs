@@ -107,8 +107,13 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
                 + $"nodeType:{PackageInstaller.PackageNodeType}",
                 $"install records ({PackageInstaller.InstalledPartition}/*)"),
             // Enrichment only — see the type remarks.
-            // Discovery records are written next to the space they describe — mesh-wide (#3202).
-            QuerySet(MeshWideQuery.OfType(ModuleDiscovery.NodeType), "module-discovery records"),
+            // 🚨 ANCHORED: every discovery record lives at Admin/_Discovery/{owner}.{repo}
+            // (ModuleDiscovery.PathFor). The mesh-wide form this replaces could never find one —
+            // a declared fan-out never includes the Admin partition — and still unioned every
+            // partition schema once an hour (measured on memex 2026-10-04: 6 slow runs in 12 h).
+            QuerySet(
+                $"path:Admin/{ModuleDiscovery.SatelliteSegment} scope:children nodeType:{ModuleDiscovery.NodeType}",
+                "module-discovery records (Admin/_Discovery/*)"),
             (sync, installs, discovery) => Fold(readAt, sync, installs, discovery));
     }
 

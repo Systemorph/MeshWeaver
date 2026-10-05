@@ -94,6 +94,10 @@ public static class GitHubSyncConfiguration
             sp.GetService<TimeProvider>(),
             sp.GetService<ILogger<GitHubRepoIdentityResolver>>()));
         services.AddSingleton<GitHubWebhookProcessor>();
+        // Sources sync on PUSH (policy sources-sync-on-push); GitHub never redelivers a lost webhook
+        // by itself, so a periodic pass resolves each configured branch's head and imports where a
+        // source is not on it. Idempotent: a source already there costs one ref lookup.
+        services.AddHostedService<GitSyncBranchReconcileService>();
         // The seal-triggered sync (2026-09-08): the hosting layer's publication sweep hands what
         // the registry sealed for this identity — and which types it declined — to this seam, and
         // the sources of those repositories are brought onto the sealed commit. Registered here

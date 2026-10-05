@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Compiler;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.ServiceProvider;
@@ -387,6 +388,10 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     // See Pin().
     private int _pins;
     private ImmutableArray<string> _probingDirs = ImmutableArray<string>.Empty;
+    // The mesh's module registry: a NodeType compiled against a module (MeshWeaver.AI, a view pack)
+    // binds that module's CURRENT generation, which lives in its own collectible context and is
+    // therefore invisible to the default context this one otherwise falls back to.
+    private readonly ModuleContexts? _modules;
 
     // Opt-in diagnostic (env MESHWEAVER_ALC_UNLOAD_GC_PROBE=1) — OFF by default, so zero cost in
     // prod and normal CI. When on, Dispose drives a synchronous full GC right after Unload so a
@@ -632,10 +637,11 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         ~RetirementSentinel() => retirement.Collected();
     }
 
-    public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
+    public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null, ModuleContexts? modules = null)
         : base(name: $"{MeshWeaver.Messaging.InMeshImpersonationGuard.NodeTypeLoadContextPrefix}{nodeName}", isCollectible: true)
     {
         _nodeName = nodeName;
+        _modules = modules;
         _dllPath = dllPath;
         _logger = logger;
         _buildMvidFromFile = new Lazy<string?>(() => ServedBuildIdentity.OfFile(dllPath));
@@ -863,6 +869,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                 }
             }
         }
+        // A MODULE (policy module-live-update-default): its current generation, from its own
+        // context. Asked explicitly because no default-context binding may ever hand a module out —
+        // the default context would cache the first generation it saw for the life of the process.
+        if (!string.IsNullOrEmpty(name) && _modules?.Resolve(name) is { } module)
+            return module;
+
         // For other dependencies, delegate to the default context
         return null;
     }
@@ -1003,7 +1015,8 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
     ILogger<CompilationCacheService> logger,
-    CollectibleContextUnloads? unloads = null)
+    CollectibleContextUnloads? unloads = null,
+    ModuleContexts? modules = null)
     : ICompilationCacheService, IDisposable
 {
     /// <summary>Records <paramref name="context"/> as retired on the mesh's tracker (if any) so the
@@ -1345,7 +1358,7 @@ internal class CompilationCacheService(
         {
             var dllPath = GetDllPath(name);
             logger.LogDebug("Creating new AssemblyLoadContext for {NodeName}", name);
-            var ctx = new NodeAssemblyLoadContext(name, dllPath, logger);
+            var ctx = new NodeAssemblyLoadContext(name, dllPath, logger, modules);
             if (_probingDirs.TryGetValue(name, out var dirs) && !dirs.IsDefaultOrEmpty)
                 ctx.SetProbingDirectories(dirs);
             return ctx;
@@ -1408,7 +1421,7 @@ internal class CompilationCacheService(
         {
             created = true;
             logger.LogDebug("Creating new path-keyed AssemblyLoadContext for {NodeName} at {DllPath}", nodeName, path);
-            var c = new NodeAssemblyLoadContext(nodeName, path, logger);
+            var c = new NodeAssemblyLoadContext(nodeName, path, logger, modules);
             if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
                 c.SetProbingDirectories(dirs);
             return c;
@@ -1570,7 +1583,7 @@ internal class CompilationCacheService(
         var context = _loadContexts.GetOrAdd(nodeName, name =>
         {
             logger.LogDebug("Creating new in-memory AssemblyLoadContext for {NodeName}", name);
-            return new NodeAssemblyLoadContext(name, null, logger);
+            return new NodeAssemblyLoadContext(name, null, logger, modules);
         });
 
         return context.LoadFromBytes(assemblyBytes, pdbBytes);
@@ -1670,7 +1683,7 @@ internal class CompilationCacheService(
         {
             var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
             logger.LogDebug("Creating new AssemblyLoadContext for {ReleasePath} from release {ReleaseFolder}", release.Path, releaseFolder);
-            var ctx = new NodeAssemblyLoadContext(sanitizedPath, dllPath, logger);
+            var ctx = new NodeAssemblyLoadContext(sanitizedPath, dllPath, logger, modules);
 
             // Restore persisted NuGet probing directories so transitive deps resolve.
             var probingPath = Path.Combine(releaseFolder, "probing.json");
