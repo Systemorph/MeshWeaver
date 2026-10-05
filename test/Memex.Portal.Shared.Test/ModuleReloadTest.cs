@@ -748,18 +748,19 @@ public class ModuleReloadFaultedTest(ITestOutputHelper output) : ModuleReloadSce
         faulted.Failure.Should().Contain("503");
         faulted.Attempt.Should().Be(0);
         faulted.FaultedAt.Should().NotBeNull();
+        var faultedAt = faulted.FaultedAt ?? throw new InvalidOperationException("a Faulted request carries FaultedAt");
         faulted.CompletedAt.Should().BeNull("a fault is not an end");
         faulted.Items.Single().Transient.Should().BeTrue();
 
         // The pass before the backoff is due re-arms nothing — the backoff is honoured.
         var unit = TimeSpan.FromMinutes(30);
-        (await ModuleReload.RetryFaulted(Mesh, unit, faulted.FaultedAt!.Value.AddMinutes(1))
+        (await ModuleReload.RetryFaulted(Mesh, unit, faultedAt.AddMinutes(1))
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().BeEmpty("the first retry is due one pass interval after the fault");
 
         // The registry is back, and the next pass is due: the request is re-armed and finishes.
         Registry.IndexDown = false;
-        (await ModuleReload.RetryFaulted(Mesh, unit, faulted.FaultedAt!.Value + unit)
+        (await ModuleReload.RetryFaulted(Mesh, unit, faultedAt + unit)
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().Equal([path]);
 

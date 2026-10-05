@@ -216,5 +216,11 @@ modules; the sync-owned hold on the module lane was.
   registry/landing calls it makes. A bundle download that answers a transient error as a `Kind`
   (`the bundle X could not be fetched (…)`) is still reported as a decided `Failed`; a restart lane
   that answers "not scheduled" is `Failed` too. The Plugins-side self-update intake
-  (`FleetTargetIntake`) mirrors these status names and treats `Failed` as terminal; it does not yet
-  know `Faulted`.
+  (`FleetTargetIntake`) does not yet name `Faulted`, and that is harmless by its construction: it
+  never decides a request's fate from the status. It only files a request (the node id
+  `selfupdate-{module}-{version}` is the key, so a second filing collides) and, on a collision, LOGS
+  the existing request's state. `Failed` is logged at Error, an undated or overdue `Requested` and a
+  missing status at Warning, and any other status, `Faulted` included, as executor progress at
+  Information ("the executor has it at Faulted"). It never marks a request finished or red, and never
+  files a replacement, so core's re-arm of the same node is undisturbed. Teaching it the name is
+  logging only.
