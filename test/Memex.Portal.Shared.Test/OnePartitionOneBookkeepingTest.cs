@@ -330,37 +330,18 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// 🚨 <b>The MODULE half takes the same hold as the content half.</b> The platform's own rule is
-    /// that "a package never lands one half without the other"; a content hold that left the module
-    /// lane free would advance the package's CODE past the content the seal pins — the same
-    /// sources-and-bundle split MeshWeaver.Plugins#1430 removed, one level over.
+    /// 🚨 <b>The MODULE half no longer takes the content half's hold</b> (policy
+    /// <c>packages-auto-update</c>, which retired #4355's gate 1b on the module lane): a published,
+    /// compatible module lands whoever owns the partition's content. What still declines it is the
+    /// package's OWN policy — an administrator's deliberate pin — and, inside the adopt, the floor.
     /// </summary>
     [Fact]
-    public void TheModuleLaneDeclinesWhereTheContentHalfIsHeld()
+    public void TheModuleLaneDeclinesOnlyForThePackagesOwnPolicy()
     {
-        var owned = PartitionContentOwnership.Decide("Store", tracked: false, providerCount: 1);
-        RegistryUpdateReconciler.OwnershipDecline(owned).Should().BeNull(
-            "the control: where the installer owns the content, the module lands as before — a "
-            + "decline here would stop every module update on every deployment");
-
-        foreach (var held in new[]
-                 {
-                     PartitionContentOwnership.Decide("Store", tracked: true, providerCount: 1),
-                     PartitionContentOwnership.Decide("Store", tracked: null, providerCount: 1),
-                 })
-        {
-            var decline = RegistryUpdateReconciler.OwnershipDecline(held);
-            decline.Should().NotBeNull(
-                $"a {held.Owner} partition holds BOTH halves — landing the module alone is the "
-                + "split the one-bookkeeping invariant exists to prevent");
-            decline.Should().Contain(held.Because,
-                "and the decline carries the ownership reason, so the log says WHY rather than "
-                + "only that something declined");
-        }
-
-        // The package's OWN policy still speaks first: it is the more specific answer.
-        RegistryUpdateReconciler.PolicyDecline(new PackageManifest { Id = "X", AutoUpdate = false })
-            .Should().NotBeNull("a Notify record declines for its own reason, ownership aside");
+        RegistryUpdateReconciler.PolicyDecline(new PackageManifest { Id = "X", UpdatePolicy = PackageUpdatePolicy.Auto, AutoUpdate = true })
+            .Should().BeNull("an Auto record lands, sync-owned or not");
+        RegistryUpdateReconciler.PolicyDecline(new PackageManifest { Id = "X", UpdatePolicy = PackageUpdatePolicy.None })
+            .Should().NotBeNull("a deliberate pin is the one opt-out the policy keeps");
     }
 
     /// <summary>

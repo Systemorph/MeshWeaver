@@ -84,7 +84,12 @@ public static class SelfUpdateConfiguration
                 // IAcrTagLister above (module-supplied or the NoRegistry fallback) stays exactly
                 // what it was for an ACR host.
                 services.AddSingleton<OciTagLister>();
-                services.AddHostedService<SelfUpdateHostedService>();
+                // ONE instance, three roles: the hosted poller, and the restart half of an explicit
+                // module reload (IModuleActivationRestart, Doc/Architecture/ModuleReload) — so a
+                // reload restarts through exactly the path the poller does, never a second one.
+                services.AddSingleton<SelfUpdateHostedService>();
+                services.AddHostedService(sp => sp.GetRequiredService<SelfUpdateHostedService>());
+                services.AddSingleton<IModuleActivationRestart>(sp => sp.GetRequiredService<SelfUpdateHostedService>());
             }
             return services;
         });

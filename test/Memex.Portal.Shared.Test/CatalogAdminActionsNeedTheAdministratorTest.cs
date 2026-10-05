@@ -46,7 +46,7 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
 
     private static string RemoveArea => $"{Area}/orphans/{ItemTemplateControl.ViewArea}/remove";
 
-    private static string AutoArea => $"{Area}/cards/{ItemTemplateControl.ViewArea}/updatePolicy/choices/auto";
+    private static string PinArea => $"{Area}/cards/{ItemTemplateControl.ViewArea}/updatePolicy/choices/none";
 
     private static readonly ImmutableList<PackageManifest> Listed = [Package("GateListed", "Gate Listed")];
 
@@ -78,7 +78,7 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
 
     /// <summary>
     /// A viewer who is not a global administrator opens the ALL page and clicks Remove on a real
-    /// orphan row and "Auto" on a real card row. Neither acts. The administrator's same clicks then
+    /// orphan row and the pin ("None" — installs are Auto by default) on a real card row. Neither acts. The administrator's same clicks then
     /// remove the record and set the policy.
     /// </summary>
     [Fact(Timeout = 120000)]
@@ -88,7 +88,7 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         await Install(orphan);
         await Install(Listed[0]);
         var records = Records();
-        await records.Where(items => HasPolicyOtherThanAuto(items, Listed[0].Id) && items.Any(i => i.Id == orphan.Id))
+        await records.Where(items => HasPolicyOtherThanNone(items, Listed[0].Id) && items.Any(i => i.Id == orphan.Id))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         ActAs(TestUsers.Admin);
@@ -103,8 +103,8 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         await Rows(viewerStream, CatalogLayoutAreas.CardsDataId, Listed.Count);
 
         await Click(viewerStream, RemoveArea, orphanRow, Viewer);
-        await Click(viewerStream, AutoArea, cardRow, Viewer);
-        await records.Where(items => items.All(i => i.Id != orphan.Id) || !HasPolicyOtherThanAuto(items, Listed[0].Id))
+        await Click(viewerStream, PinArea, cardRow, Viewer);
+        await records.Where(items => items.All(i => i.Id != orphan.Id) || !HasPolicyOtherThanNone(items, Listed[0].Id))
             .Should().NotEmit(1.Seconds(),
                 "a viewer who is not a global administrator is offered neither action, so the "
                 + "click must remove nothing and re-pin nothing",
@@ -113,8 +113,8 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         // The control: the administrator's same two clicks act.
         ActAs(TestUsers.Admin);
         await Click(adminStream, RemoveArea, orphanRow, TestUsers.Admin);
-        await Click(adminStream, AutoArea, cardRow, TestUsers.Admin);
-        await records.Where(items => items.All(i => i.Id != orphan.Id) && !HasPolicyOtherThanAuto(items, Listed[0].Id))
+        await Click(adminStream, PinArea, cardRow, TestUsers.Admin);
+        await records.Where(items => items.All(i => i.Id != orphan.Id) && !HasPolicyOtherThanNone(items, Listed[0].Id))
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "the administrator's clicks remove the orphaned record and set the policy",
                 TestContext.Current.CancellationToken);
@@ -132,7 +132,7 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         await Install(orphan);
         await Install(Listed[0]);
         var records = Records();
-        await records.Where(items => HasPolicyOtherThanAuto(items, Listed[0].Id) && items.Any(i => i.Id == orphan.Id))
+        await records.Where(items => HasPolicyOtherThanNone(items, Listed[0].Id) && items.Any(i => i.Id == orphan.Id))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         ActAs(TestUsers.Admin);
@@ -144,17 +144,17 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
 
         (await Answer(adminStream, RemoveArea, orphanRow, Viewer)).Should().NotBeNull(
             "the page was opened by the administrator, so a click under another identity is refused");
-        (await Answer(adminStream, AutoArea, cardRow, Viewer)).Should().NotBeNull(
+        (await Answer(adminStream, PinArea, cardRow, Viewer)).Should().NotBeNull(
             "the page was opened by the administrator, so a click under another identity is refused");
-        await records.Where(items => items.All(i => i.Id != orphan.Id) || !HasPolicyOtherThanAuto(items, Listed[0].Id))
+        await records.Where(items => items.All(i => i.Id != orphan.Id) || !HasPolicyOtherThanNone(items, Listed[0].Id))
             .Should().NotEmit(1.Seconds(),
                 "the acting identity is not the administrator, so neither action runs",
                 TestContext.Current.CancellationToken);
 
         // The control: the same clicks, on the same stream, by the administrator.
         await Click(adminStream, RemoveArea, orphanRow, TestUsers.Admin);
-        await Click(adminStream, AutoArea, cardRow, TestUsers.Admin);
-        await records.Where(items => items.All(i => i.Id != orphan.Id) && !HasPolicyOtherThanAuto(items, Listed[0].Id))
+        await Click(adminStream, PinArea, cardRow, TestUsers.Admin);
+        await records.Where(items => items.All(i => i.Id != orphan.Id) && !HasPolicyOtherThanNone(items, Listed[0].Id))
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "the administrator's own clicks act", TestContext.Current.CancellationToken);
     }
@@ -167,8 +167,8 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
         Category = "Fixtures", TargetPartition = id, SourceFolder = id,
     };
 
-    private static bool HasPolicyOtherThanAuto(IReadOnlyList<PackageManifest> items, string id)
-        => items.Any(i => i.Id == id && i.EffectiveUpdatePolicy != PackageUpdatePolicy.Auto);
+    private static bool HasPolicyOtherThanNone(IReadOnlyList<PackageManifest> items, string id)
+        => items.Any(i => i.Id == id && i.EffectiveUpdatePolicy != PackageUpdatePolicy.None);
 
     /// <summary>
     /// Makes <paramref name="identity"/> the one the NEXT subscription is opened as: the host
