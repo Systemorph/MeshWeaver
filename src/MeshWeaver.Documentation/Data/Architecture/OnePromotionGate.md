@@ -45,9 +45,9 @@ core PR ──(core's own checks)──► core main ──► Build and Test �
 Plugins push to main ──(image-relevant?)──► main-cd rebuild ───────┤  coalesced: one run in flight,
                                                                    │  the newest pending supersedes
                                                                    ▼
-            gate: core main HEAD + Plugins main HEAD (at gate time) = the PAIR <core7>-p<plugins7>
+            gate: core main HEAD + Plugins main HEAD (at gate time), both in the promotion record
                                                                    │
-                         build ─► promote (phases A+B: identity + pair tag, CI pointers)
+                         build ─► promote (phases A+B: identity tags, CI pointers)
                                   + promotion record (artifact)    │
                                                                    ├─► verify, platform bake,
                                                                    │   Plugins seal, satellites …
@@ -78,7 +78,8 @@ endpoint, which answers 404 for this repository.
 ### Always build latest
 
 - **The image** — `main-cd`'s `gate` resolves core `main` HEAD and MeshWeaver.Plugins `main` HEAD at
-  gate time, and stamps both into the pair tag `<core7>-p<plugins7>` on `memex-portal-ai`. A push to
+  gate time, and records both in the promotion record (the `<core7>-p<plugins7>` pair tag that
+  used to carry them is retired — [Platform and Module Deploy](../PlatformAndModuleDeploy)). A push to
   Plugins `main` that can change the image dispatches a rebuild (Plugins
   `portal-image-rebuild.yml`, `scripts/portal-image-relevance.py`); main-cd's concurrency keeps one
   run in flight and ONE pending, so a burst of merges collapses to the newest — never a queue of
@@ -86,10 +87,11 @@ endpoint, which answers 404 for this repository.
 - **CI** — the platform resolver (`.github/scripts/resolve-platform.py`) takes the newest set whose
   platform trio is sealed (promote, verify, platform bake: every one of them runs ~5–30 minutes after
   a green core main commit and none waits for the fleet's gate), resolving a set that is promoted
-  but not yet ARMED by the portal's `<core7>-p<plugins7>` tag from that run's promotion-record
-  artifact. The run head can differ from the commit whose image the gate built, and the portal's
-  bare core tag can move when Plugins changes. The resolver checks the recorded pair and refuses
-  a missing pair instead of selecting the moving bare tag. A red core `main` publishes nothing, so
+  but not yet ARMED by the portal's staging tag `staging-<core7>-<run id>` from that run's
+  promotion-record artifact (a set promoted before the pair tag's retirement: its
+  `<core7>-p<plugins7>` tag). The run head can differ from the commit whose image the gate built, and
+  the portal's bare core tag can move on a rebuild of the same core. The resolver checks the recorded
+  identity and refuses a missing one instead of selecting the moving bare tag. A red core `main` publishes nothing, so
   the last green set is taken. Plugins pull requests no longer hold back to the set Plugins `main` last
   passed on by default; the label `platform:main-passed` asks for that ceiling.
 
@@ -153,10 +155,11 @@ first-parent base would therefore measure one merge of the bundle and arm every 
 unmeasured — exactly how #5635/#5647/#5655 would reach the fleet if they landed in one set.
 
 So `promote`'s record step takes `base` from the newest armed set: `arm-promoted-set.py armed-base`
-reads memex-portal-ai's manifests (the armed `<version>` tag shares its manifest with the
-`<core7>-p<plugins7>` pair tag). The bare core sha tag can move to a newer pair for the same core;
+reads memex-portal-ai's manifests (the armed `<version>` tag shares its manifest with the build's
+staging tag, which `arm` writes it FROM; a set armed before the pair tag's retirement carries the
+`<core7>-p<plugins7>` tag instead). The bare core sha tag can move to a newer build for the same core;
 this happened on `3.0.0-ci.9564`, leaving its armed manifest with only the pair tag. The core commit
-is resolved from that tag and checked to be an ANCESTOR of the candidate. `base..candidate` is then
+is resolved from the staging (or legacy pair) tag and checked to be an ANCESTOR of the candidate. `base..candidate` is then
 exactly the merges the fleet has not seen. The record says which rule produced `base` in `base_kind`:
 
 | `base_kind` | when | what happens |
@@ -186,14 +189,14 @@ a `Roll` `Hosting/InstanceAction`, not here.
   Those tags are written only by `arm`.
 - A new instance seeds from `3.0.0-latest`, resolved to its concrete `3.0.0-ci.N` by Memex
   `scripts/resolve-line-pointer.sh`; the pointer moves only in `arm`'s phase D.
-- `memex-portal-ai:main` and the identity/pair tags move at promote — they are CI pointers, not a
+- `memex-portal-ai:main` and the identity tags move at promote — they are CI pointers, not a
   roll target of any instance.
 - **The control image follows the same gate.** `memex-control` is the same build as
   `memex-portal-ai` under another repository name (`-p:MemexControlImage=true`, which adds
   `MeshWeaver.Fleet.Control` and `MeshWeaver.SelfUpdate.Aks` and closes the type set — see
   [Closed Type Set](../ClosedTypeSet)). Its own lane (`control-image` → `control-acceptance` →
   `control-promote`) stays outside the fleet's delivery verdict, and `control-promote` writes only
-  identity tags: `<core7>`, the pair `<core7>-p<plugins7>` and `main`. The version tag and the line
+  identity tags: `<core7>` and `main`. The version tag and the line
   pointers are written by `control-arm`, which runs after `arm` in every main-cd run
   (`arm-promoted-set.py control-follow`): it reads the newest ARMED version and its pair tag off
   memex-portal-ai and tags the accepted control image of that pair. An armed set without an accepted
@@ -205,8 +208,9 @@ a `Roll` `Hosting/InstanceAction`, not here.
 
 ### Containment is answerable
 
-Every armed set carries its pair — the tag `<core7>-p<plugins7>`, the promotion record's full
-`core_sha` / `plugins_sha`, and the release event's `coreSha` / `pluginsSha`. "Does image
+Every armed set carries its pair — the promotion record's full `core_sha` / `plugins_sha`, and the
+release event's `coreSha` / `pluginsSha` (sets promoted before its retirement also carry the
+`<core7>-p<plugins7>` tag). "Does image
 `3.0.0-ci.N` contain core commit C / Plugins commit P?" is `git merge-base --is-ancestor` of C
 against the record's core commit (P against its Plugins commit) — Systemorph/Memex
 `scripts/image-contains.py`, which also resolves the tag an instance runs.

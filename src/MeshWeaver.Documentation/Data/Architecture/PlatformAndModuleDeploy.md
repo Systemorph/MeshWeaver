@@ -201,15 +201,43 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
    `Modules:Required` names a module must be able to land it from the registry before readiness.
    Until #6124's reload lands that, a seed is the bootstrap copy. The ratchet shrinks one entry
    per module as each is proven to land on a fresh instance.
-5. **Owed — the pair tag `<core7>-p<plugins7>`.** The portal HOST still lives in
-   MeshWeaver.Plugins, so the tag now names the host commit: platform provenance, which no
-   delivery decision joins on any more. The `gate` hosts-stale probe still rebuilds the image when
-   *any* Plugins commit moves. Narrowing that to host-relevant changes, then retiring the tag
-   (Memex `image-contains.py` and Plugins `portal-image-rebuild.yml` read it), is the next step.
+5. **Done — the pair tag `<core7>-p<plugins7>` is retired.** main-cd no longer mints it on
+   `memex-portal-ai` (`promote` phase A) or `memex-control` (`control-promote`). See
+   "The pair tag, retired" below.
 6. **Owed — Plugins' `promotion-candidate.yml` / `core-candidate.yml`.** They still run the
    dependent suites against each promoted pair, and `arm-promoted-set.py pending` still answers
    them, but no verdict they write decides anything. They report only, and they can be retired by
    Plugins.
+
+## The pair tag, retired
+
+`<core7>-p<plugins7>` named the MeshWeaver.Plugins commit a portal image's HOST was built from. After
+the separation it answered no delivery question, but three mechanisms still leaned on it. Each now
+reads something else:
+
+| What leaned on it | What it reads now |
+|---|---|
+| `gate`'s completeness probe: a set was "stale" when Plugins `main` had moved at all, so the portal was rebuilt on every Plugins merge (MeshWeaver#4688) | Core's sha only. A host change reaches the image through MeshWeaver.Plugins' `portal-image-rebuild.yml`, which classifies each push (`scripts/portal-image-relevance.py`) and dispatches main-cd with `rebuild: true` only when a changed path can enter the image |
+| `arm`'s source for `memex-portal-ai:<version>`: the one tag that names THIS build after a rebuild of the same core commit moves the bare `<core7>` tag | The build's staging tag `staging-<core7>-<run id>`, recorded as `staging` in the promotion record. It is unique per run, and `arm` refuses a staging tag that does not name the selected core |
+| Recovering the core commit of the newest ARMED manifest (`arm-promoted-set.py armed-base`), resolving an unarmed set (`resolve-platform.py`), and a tagged release (`release.yml`) | The bare `<core7>` tag or the staging tag on the same manifest. A legacy pair tag is still read, so sets promoted before the retirement resolve unchanged |
+
+The host commit is still recorded: the promotion record keeps `plugins_sha`, and the release event
+carries `pluginsSha`. Readers outside core (Memex `scripts/image-contains.py`) answer from the
+promotion record first and treat a pair tag as a legacy fallback.
+
+**Consumer sweep before the retirement** (repositories at `origin/main`, the live mesh read through
+the control instance):
+
+| Where | Readers of a pair tag |
+|---|---|
+| core `main-cd.yml` | 4 writers/readers: `promote` phase A, `control-promote`, `arm`'s source tag, `gate`'s probe (via `check-image-set.sh`) |
+| core scripts | `check-image-set.sh`, `arm-promoted-set.py` (`armed_commit`), `resolve-platform.py` (portal identity), `release.yml`, `lock-pinned-digests.py` (protects `<core7>-p*` as part of a commit's closure; kept for legacy manifests) |
+| MeshWeaver.Plugins | 0 code readers. `portal-image-rebuild.yml` and `portal-image-relevance.py` mention it in comments; `promotion-candidate.yml`, `core-candidate.yml` and `core-release-attribution.py` use the record's verdict KEY `pair-<core7>-p<plugins7>`, which is a record field, not a registry tag |
+| Memex | 1 code reader: `scripts/image-contains.py`. Comments and historical notes in `helm-release.yml`, two `values.*.public.yaml` files and `mesh/Deployments/memex.json` |
+| Education, Reinsurance, SocialMedia, Manufacturing, Crm | 0 |
+| live `Deployments/*` on the control instance (5 `Hosting/Deployment` records) | 0 pins; 1 prose mention in `Deployments/memex` |
+
+No Hosting/Deployment record pins an image tag of either shape, and none may.
 
 ## Tests and self-tests
 

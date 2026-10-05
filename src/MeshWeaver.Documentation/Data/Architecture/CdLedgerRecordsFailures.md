@@ -270,6 +270,12 @@ self-updating install stays on the previous image"* for a commit no publisher ha
 
 ## The decision that is still open
 
+> **Decided: option 2.** MeshWeaver.Plugins' `portal-image-rebuild.yml` dispatches core's `main-cd`
+> with `rebuild: true` for a host-relevant push, and core no longer mints or probes the pair tag, so
+> a Plugins merge no longer rebuilds the portal by itself. See
+> [Platform and Module Deploy → The pair tag, retired](../PlatformAndModuleDeploy).
+> The rest of this section is the record of the options as they stood.
+
 **This does not stop the rebuild loop, and stopping it needs a decision nobody has made.** It is
 tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which carries the same
 three options and the measurements below.

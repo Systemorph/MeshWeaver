@@ -15,7 +15,8 @@ Doc/Architecture/PlatformAndModuleDeploy (and Doc/Architecture/OnePromotionGate 
 mechanics this file still owns: the cursor, the completion marker, the resume, the base).
 
 WHAT A SET IS. main-cd builds core main HEAD together with MeshWeaver.Plugins main HEAD as of its
-`gate` job (the pair tag `<core7>-p<plugins7>` on memex-portal-ai names both). `promote` tags the
+`gate` job (both full commits are in the promotion record; the `<core7>-p<plugins7>` pair tag that
+used to name them on memex-portal-ai is retired). `promote` tags the
 set for CI — identity tags, `main`, `mw-plugin-test:latest`, the tester's and the migration's
 version tags — and uploads a PROMOTION RECORD (artifact `promotion-record`, one JSON object: the
 run number, both full commits, the staging tag, the three image versions and the verdict key).
@@ -67,7 +68,8 @@ every one of them reaches the fleet when the set is armed. So the record's `base
 Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
 core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
 seen. `armed-base` resolves it from memex-portal-ai's manifests (the armed version tag shares its
-manifest with a core sha or pair tag). The record says which rule produced `base` in
+manifest with a core sha or staging tag — or, for a set armed before the pair tag's retirement, a
+pair tag). The record says which rule produced `base` in
 `base_kind`:
 
   * `armed`         — the newest armed set's commit (the normal case);
@@ -117,7 +119,14 @@ RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugin
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
+# LEGACY — the retired `<core7>-p<plugins7>` pair tag (policy `platform-module-deploy-separate`).
+# main-cd no longer mints it; sets promoted before the retirement still carry it, so it is READ,
+# never written. The per-run identity that replaced it is the staging tag below.
 PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
+# `staging-<core7>-<run id>` — the build's own tag, written before promote, unique per run and never
+# moved to another build, so it names the core of the manifest it sits on even after a rebuild of the
+# same core commit re-points the bare `<core7>` tag. `arm` writes the version tag FROM it.
+STAGING_TAG = re.compile(r"^staging-([0-9a-f]{7})-[0-9]+$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
 
@@ -189,9 +198,11 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
 
-    The version tag is written by `arm` onto the promoted image's manifest. `promote` writes both a
-    core sha tag and a core/Plugins pair tag, but a later pair for the SAME core moves the sha tag
-    to that later manifest. The pair tag remains on the armed manifest and still names its core.
+    The version tag is written by `arm` onto the promoted image's manifest, FROM its staging tag
+    `staging-<core7>-<run id>`. `promote` also writes the bare core sha tag, but a rebuild of the SAME
+    core commit (a host-relevant MeshWeaver.Plugins change, or an operator's `rebuild`) moves that tag
+    to the later manifest. The staging tag stays on the armed manifest and still names its core. Sets
+    armed before the pair tag was retired are read through their legacy `<core7>-p<plugins7>` tag.
     Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle)."""
     if not isinstance(manifests, list):
         raise ValueError("the manifest metadata is not a JSON list")
@@ -210,6 +221,7 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
         return best[1], ""
     shas = {t for t in best[2] if SHORT_SHA_TAG.match(t)}
     shas.update(m.group(1) for t in best[2] if (m := PAIR_TAG.match(t)))
+    shas.update(m.group(1) for t in best[2] if (m := STAGING_TAG.match(t)))
     if len(shas) != 1:
         raise ValueError(f"the newest armed manifest {best[1]} names {len(shas)} distinct core commits "
                          f"({best[2]}) — cannot name its core commit")
@@ -586,6 +598,14 @@ def write_outputs(rec: dict | None, lines: list[str]) -> None:
 
 # ───────────────────────────────── self-test ──────────────────────────────────────────────
 
+def _raises(f: Callable[[], object]) -> bool:
+    try:
+        f()
+    except ValueError:
+        return True
+    return False
+
+
 def self_test() -> int:
     failures = 0
 
@@ -814,6 +834,17 @@ def self_test() -> int:
                  {"tags": ["f0f9a7b", "f0f9a7b-pb7390a0"]}]
     check("armed-base: pair tag names the armed core after its bare sha tag moves to a newer pair",
           armed_commit(pair_only) == ("3.0.0-ci.9564", "f0f9a7b"))
+    # After the pair tag's retirement: `arm` writes the version FROM the staging tag, and a rebuild of
+    # the same core moves the bare sha tag away — the staging tag alone must still name the core.
+    staging_only = [{"tags": ["3.0.0-ci.9970", "staging-260b3c4-41000000001", "arm-complete-3.0.0-ci.9970"]},
+                    {"tags": ["260b3c4", "staging-260b3c4-41000000002", "main"]}]
+    check("armed-base: with NO pair tag, the staging tag names the armed core after its sha tag moved",
+          not _raises(lambda: armed_commit(staging_only))
+          and armed_commit(staging_only) == ("3.0.0-ci.9970", "260b3c4"))
+    check("armed-base: a version tag with neither a sha, a pair nor a staging tag is RED (negative control)",
+          _raises(lambda: armed_commit([{"tags": ["3.0.0-ci.9970", "arm-complete-3.0.0-ci.9970"]}])))
+    check("armed-base: a staging tag naming a DIFFERENT core than the sha tag is RED, never a guess",
+          _raises(lambda: armed_commit([{"tags": ["3.0.0-ci.9970", "260b3c4", "staging-1111111-4"]}])))
     check("armed-base: newest by RUN NUMBER, not by listing order",
           armed_commit(list(reversed(live))) == ("3.0.0-ci.9538", "b9fe5ed"))
     check("armed-base: no version tag anywhere means nothing was ever armed (None, not a guess)",
