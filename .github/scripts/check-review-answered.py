@@ -642,13 +642,79 @@ def parse_stamp(stamp: str | None) -> datetime.datetime | None:
         return None
 
 
+# 🚨 GENERATED-ONLY BOT PULL REQUESTS (2026-10-04, Plugins #2860): main's own jobs propose generated
+# files as pull requests — `settle-locks` (every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock`
+# plus each package root's `minMeshVersion`). There is nothing for a reviewer to read, the settle job
+# REWRITES the head on every main merge (so a per-head fallback clock restarts forever), and during a
+# review outage the stage-1 hold deadlocked module publishing (AI 1.21 stuck behind #2860). Such a
+# pull request skips stage 1 — on PROVENANCE, never on a title or a branch name: authored by the App
+# that writes them, every commit by that App, and every changed file generated (a lock, or a root
+# `index.json` whose changed lines are all `minMeshVersion`). Anything else — a person's PR that
+# touches a lock, a bot PR with one hand-written line — is staged like any other.
+GENERATED_BOT_IDS = frozenset({300054957})          # meshweaver-cloud[bot] (GET /users/meshweaver-cloud%5Bbot%5D)
+GENERATED_BOT_LOGINS = frozenset({"meshweaver-cloud[bot]"})
+GENERATED_BASENAMES = frozenset({"manifest.lock", "mesh-floor.lock"})
+
+
+def is_generated_bot(user: dict | None) -> bool:
+    return bool(user) and user.get("type") == "Bot" and user.get("id") in GENERATED_BOT_IDS \
+        and user.get("login") in GENERATED_BOT_LOGINS
+
+
+# A changed line of a floor stamp is NOTHING BUT the key/value — never a line that merely CONTAINS the
+# key (`"minMeshVersion": "3.0.0", "requires": [...]`, or a minified single-line index.json), whose
+# other content no validator backs (#6097 review).
+FLOOR_LINE = re.compile(r'\s*"minMeshVersion"\s*:\s*"[^"]*"\s*,?\s*')
+
+
+def _floor_only_patch(patch: str | None) -> bool:
+    changed = [l for l in (patch or "").splitlines()
+               if l[:1] in "+-" and not l.startswith(("+++", "---")) and l[1:].strip()]
+    return bool(changed) and all(FLOOR_LINE.fullmatch(l[1:]) for l in changed)
+
+
+def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[bool, str]:
+    """(True, why) when the pull request is a generated-files proposal by the App. Pure."""
+    if not is_generated_bot(pr.get("user")):
+        return False, "not authored by the generated-files App"
+    if not files:
+        return False, "its file listing is empty or unread"
+    if len(files) < int(pr.get("changed_files") or 0):
+        return False, f"the file listing returned {len(files)} of {pr.get('changed_files')} files"
+    if not commits:
+        return False, "its commit listing is empty or unread"
+    if len(commits) < int(pr.get("commits") or 0):
+        return False, f"the commit listing returned {len(commits)} of {pr.get('commits')} commits"
+    if not all(is_generated_bot(c.get("author")) for c in commits):
+        return False, "a commit on it is not the App's"
+    for f in files:
+        name = str(f.get("filename") or "")
+        base = name.rsplit("/", 1)[-1]
+        if base in GENERATED_BASENAMES:
+            continue
+        if base == "index.json" and name.count("/") == 1 and _floor_only_patch(f.get("patch")):
+            continue
+        return False, f"{name} is not a generated file"
+    return True, f"{len(files)} generated file(s) by {pr['user'].get('login')}, every commit the App's"
+
+
 def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
-                    fallback_minutes: int = STAGE_FALLBACK_MINUTES) -> StageVerdict:
+                    fallback_minutes: int = STAGE_FALLBACK_MINUTES,
+                    files: list | None = None, commits: list | None = None) -> StageVerdict:
     """May stage 2 start for this head? Pure; `now` and `since` are ISO-8601 UTC stamps (`since` =
-    when the head's CI run was created, i.e. when stage 1 began)."""
+    when the head's CI run was created, i.e. when stage 1 began — for a pull request the App
+    authored, when the PULL REQUEST was created: its head is rewritten on every main merge, and a
+    per-head clock would restart forever)."""
     number = pr.get("number")
     head = str((pr.get("head") or {}).get("sha") or "")
     short = head[:10] or "(unknown)"
+    if is_generated_bot(pr.get("user")):
+        since = min(since, str(pr.get("created_at") or since)) if since else str(pr.get("created_at") or "")
+        ok, why = generated_only(pr, files, commits)
+        # A DRAFT is held like any other (#6097 review): the skip removes the review, never the
+        # author's own "not ready yet".
+        if ok and not pr.get("draft"):
+            return StageVerdict(True, "generated", "", notes=(f"stage 1 skipped: {why} — nothing to review",))
     labels = {l.get("name") for l in pr.get("labels") or []}
     if TESTS_FIRST_LABEL in labels:
         return StageVerdict(True, "label", "", (
@@ -880,13 +946,24 @@ def _append(env_key: str, text: str) -> None:
             f.write(text)
 
 
+def read_stage_inputs(gh: Gh, number: int):
+    """The arm gate's reads, plus — only for a pull request the generated-files App authored — its
+    files (with patches) and commits, so `generated_only` can judge provenance. A failed read raises."""
+    pr, comments, check_runs = read_arm_inputs(gh, number)
+    files = commits = None
+    if is_generated_bot(pr.get("user")):
+        files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
+        commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
+    return pr, comments, check_runs, files, commits
+
+
 def run_stage_gate(repo: str, number: int, since: str, fallback_minutes: int) -> int:
     """The stage gate job: exit 0 when stage 2 may start, 1 (RED, named) when it may not. A RED here
     is a HOLD, not a defect: the heavy legs skip, the required aggregators read red naming this line,
     and the event half (`--stage-advance`) re-runs the failed jobs when stage 1 turns green."""
     try:
-        pr, comments, check_runs = read_arm_inputs(Gh(repo), number)
-        verdict = stage_readiness(pr, comments, check_runs, utc_now(), since, fallback_minutes)
+        pr, comments, check_runs, files, commits = read_stage_inputs(Gh(repo), number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), since, fallback_minutes, files, commits)
     except (ReadError, KeyError) as e:
         verdict = StageVerdict(False, "unreadable", f"cannot read #{number}'s review state, so stage 2 is not started on a guess: {e}")
     for n in verdict.notes:
@@ -894,6 +971,8 @@ def run_stage_gate(repo: str, number: int, since: str, fallback_minutes: int) ->
     if verdict.ready and verdict.loud:
         print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::{verdict.loud}")
         line = f"⚠️ Stage 2 started for #{number} — {verdict.loud}"
+    elif verdict.ready and verdict.mode == "generated":
+        line = f"✅ Stage 1 not owed for #{number}: {verdict.notes[0] if verdict.notes else 'generated files only'} — stage 2 starts."
     elif verdict.ready:
         line = f"✅ Stage 1 green for #{number}: the head's review landed and every reviewer thread is answered — stage 2 starts."
     else:
@@ -940,8 +1019,9 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
     job = stage_gate_job(gh, int(run["id"])) if run else None
     verdict = StageVerdict(False, "unread", "not evaluated")
     if job is not None and job.get("status") == "completed" and job.get("conclusion") == "failure":
-        _, comments, check_runs = read_arm_inputs(gh, number)
-        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
+        _, comments, check_runs, files, commits = read_stage_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes,
+                                  files, commits)
     action, why = advance_action(pr, run, job, verdict)
     deadline = time.monotonic() + wait_minutes * 60
     waited = action == "wait"
@@ -957,8 +1037,9 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
         # new head (and cancelled this run), the PR may be closed, an answer may have been deleted.
         # Re-read the pull request and re-judge stage 1 before POSTing, never on the snapshot.
         pr = gh.api(f"pulls/{number}")
-        _, comments, check_runs = read_arm_inputs(gh, number)
-        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes)
+        _, comments, check_runs, files, commits = read_stage_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes,
+                                  files, commits)
         action, why = advance_action(pr, run, job, verdict)
     if action == "rerun":
         if not post_rerun(gh, run["id"]):
@@ -1573,6 +1654,46 @@ def self_test() -> int:
     stage_case("draft -> held even after the fallback", "draft", dict(_pr(0), draft=True), [], [], now=T_LATE, says="is a draft")
     stage_case("label tests-before-review -> released (loud)", "label",
                dict(_pr(0), draft=True, labels=[{"name": TESTS_FIRST_LABEL}]), [], [])
+    # ── generated-only bot PRs (Plugins #2860): skip stage 1 on PROVENANCE, never on a branch name.
+    BOT = {"login": "meshweaver-cloud[bot]", "type": "Bot", "id": 300054957}
+    HUMAN = {"login": "rbuergi", "type": "User", "id": 6334612}
+    def gpr(user=BOT, n_files=2, created="2026-10-04T08:00:00Z"):
+        return dict(_pr(0), user=user, changed_files=n_files, created_at=created)
+    LOCKS = [{"filename": "AI/manifest.lock", "patch": "-a\n+b"}, {"filename": "Hosting/manifest.lock", "patch": "-a\n+b"}]
+    FLOOR = [{"filename": "AI/mesh-floor.lock", "patch": "+x"},
+             {"filename": "AI/index.json", "patch": '@@ -3 +3 @@\n-    "minMeshVersion": "3.0.0-ci.9900",\n+    "minMeshVersion": "3.0.0-ci.9939",'}]
+    BOT_COMMITS = [{"author": BOT}]
+    def gen_case(name, mode, pr, files, commits, now=T_EARLY):
+        nonlocal failures
+        v = stage_readiness(pr, [], [], now, T0, 60, files, commits)
+        ok = v.mode == mode
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage: {name:53} expected={mode} got={v.mode}")
+    gen_case("settle PR (App, locks only) -> stage 1 not owed", "generated", gpr(), LOCKS, BOT_COMMITS)
+    gen_case("floor stamp (App, mesh-floor.lock + minMeshVersion) -> not owed", "generated", gpr(), FLOOR, BOT_COMMITS)
+    gen_case("a PERSON's PR touching only locks -> waits for the review", "waiting", gpr(user=HUMAN), LOCKS, [{"author": HUMAN}])
+    gen_case("App PR with one non-generated file -> waits", "waiting", gpr(),
+             LOCKS[:1] + [{"filename": "Hosting/Deployment/Source/X.cs", "patch": "+x"}], BOT_COMMITS)
+    gen_case("App PR whose index.json changes more than the floor -> waits", "waiting", gpr(),
+             [{"filename": "AI/index.json", "patch": '-    "minMeshVersion": "a",\n+    "minMeshVersion": "b",\n+    "requires": []'}], BOT_COMMITS)
+    gen_case("App PR with a person's commit on it -> waits", "waiting", gpr(), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    gen_case("App PR whose file listing is short -> waits", "waiting", gpr(n_files=3), LOCKS, BOT_COMMITS)
+    gen_case("a look-alike bot (another id) -> waits", "waiting", gpr(user=dict(BOT, id=1)), LOCKS, BOT_COMMITS)
+    gen_case("a generated-only App DRAFT -> held as a draft", "draft", dict(gpr(), draft=True), LOCKS, BOT_COMMITS)
+    gen_case("App PR whose commit listing is short -> waits", "waiting", dict(gpr(), commits=2), LOCKS, BOT_COMMITS)
+    gen_case("a floor line carrying more than the floor -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-    "minMeshVersion": "a",\n+    "minMeshVersion": "b", "requires": ["x"],'}],
+             BOT_COMMITS)
+    gen_case("a minified index.json change -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-{"minMeshVersion": "a", "id": "AI"}\n+{"minMeshVersion": "b", "id": "AI"}'}],
+             BOT_COMMITS)
+    # The fallback clock keys on the PULL REQUEST for the App's PRs: a head rewritten 1 min ago on a
+    # PR opened 4 h ago is past the fallback (the per-head clock would restart forever).
+    v = stage_readiness(gpr(created="2026-10-04T04:00:00Z"), [], [], T_EARLY, "2026-10-04T08:19:00Z", 60,
+                        LOCKS[:1] + [{"filename": "Hosting/X.cs"}], BOT_COMMITS)
+    ok = v.mode == "fallback"
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an App PR falls back on the PR clock, not the head clock':53} got={v.mode}")
     v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
     ok = (not v.ready) and v.mode == "unreadable"
     failures += 0 if ok else 1
