@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Reactive.Linq;
 using System.Threading;
@@ -49,6 +47,12 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
         return path;
     }
 
+    /// <summary>
+    /// A singleton on a silo that begins to drain is handed off to the live silo within seconds, with no
+    /// message to trigger it, and answers the next message from there; an ordinary hub on the same silo
+    /// stays. Also pins that a per-node hub resolves the SAME <see cref="HostDrainSignal"/> as its silo
+    /// host — the one instance <c>/drain</c>, <c>RelocateOnDrain()</c> and the grain must share.
+    /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task ASingleton_MovesToALiveSilo_WhenItsSiloBeginsToDrain_AndOrdinaryHubsStay()
     {
@@ -67,6 +71,11 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
         var ordinary = await NodeOnB(siloB, hubB, "Ordinary", ct);
 
         var signalB = siloB.GetRequiredService<HostDrainSignal>();
+        var singletonHub = hubB.GetHostedHub(new Address(singleton), HostedHubCreation.Never);
+        singletonHub.Should().NotBeNull();
+        singletonHub!.ServiceProvider.GetService<HostDrainSignal>().Should().BeSameAs(signalB,
+            "the per-node hub (what RelocateOnDrain registers through and the grain reads) and the silo host "
+            + "(what /drain begins) must hold ONE signal — two instances would make the drain do nothing");
         signalB.Relocate(new Address(singleton));
         siloA.GetRequiredService<HostDrainSignal>().Begun.Should().BeFalse("only silo B drains");
 
@@ -108,6 +117,7 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
         }
     }
 
+    /// <summary>The signal begins once, replays to late subscribers, and names only registered singletons.</summary>
     [Fact]
     public void TheSignal_BeginsOnce_AndNamesOnlyRegisteredSingletons()
     {
@@ -126,5 +136,57 @@ public class AnInstanceSingletonLeavesADrainingSiloTest(TwoSiloCacheUpdateFixtur
         var late = 0;
         using var __ = signal.WhenBegun.Subscribe(_ => late++);
         late.Should().Be(1, "a late subscriber still learns that drain began");
+    }
+}
+
+/// <summary>
+/// The other side of the drain (#6092 review): a singleton whose pod begins to drain with NO other silo
+/// Active — a single-pod instance, or a roll whose survivor is still joining — has nowhere to go. It must
+/// keep SERVING, exactly as before the drain signal existed, until SIGTERM's <c>IsLeaving()</c> takes over;
+/// refusing there would only bounce every delivery for the whole grace period with no relocation to show
+/// for it.
+/// </summary>
+public class AnInstanceSingletonWithNowhereToGoKeepsServingTest(SharedOrleansFixture fixture)
+    : IClassFixture<SharedOrleansFixture>
+{
+    /// <summary>One silo, drain begun, the singleton registered: it still answers and is still hosted there.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASingletonOnTheOnlySilo_KeepsAnswering_AfterItsDrainBegins()
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(110));
+        var ct = deadline.Token;
+        var cluster = fixture.Cluster;
+        cluster.Silos.Count.Should().Be(1, "the case under test is a drain with no other silo to move to");
+
+        var silo = ((InProcessSiloHandle)cluster.Silos[0]).SiloHost.Services;
+        var hub = silo.GetRequiredService<IMessageHub>();
+        var access = silo.GetRequiredService<AccessService>();
+        var ns = $"drain-alone-{Guid.NewGuid():N}";
+        var path = $"{ns}/Singleton";
+        await access.RunAsSystem(() => silo.GetRequiredService<IMeshService>().CreateNode(
+                new MeshNode("Singleton", ns) { Name = "Singleton", NodeType = "Markdown", State = MeshNodeState.Active }))
+            .FirstAsync().Await(ct);
+        await access.RunAsSystem(() => hub.NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+            .Should().Within(TimeSpan.FromSeconds(30))
+            .Emit("the singleton answers before the drain — the precondition", ct);
+
+        var signal = silo.GetRequiredService<HostDrainSignal>();
+        signal.Relocate(new Address(path));
+        signal.Begin().Should().BeTrue("the only silo begins to drain");
+
+        // Several drain-watch ticks pass: with no survivor the activation must NOT leave.
+        await Observable.Interval(TimeSpan.FromMilliseconds(250))
+            .Select(_ => hub.GetHostedHub(new Address(path), HostedHubCreation.Never) is null)
+            .Where(gone => gone)
+            .Take(1)
+            .Should().NotEmit(TimeSpan.FromSeconds(6),
+                "with no other Active silo there is nowhere to hand the singleton to — it stays and serves");
+
+        await access.RunAsSystem(() => hub.NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Emit("🚨 a drained singleton with nowhere to go still ANSWERS — never refused for the whole grace period", ct);
     }
 }

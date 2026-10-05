@@ -677,6 +677,22 @@ public static class ServiceDefaults
     }
 
     /// <summary>
+    /// True when this <c>/drain</c> request is the pod's own <c>preStop</c> probe: it arrived on a
+    /// loopback connection and was never forwarded. Loopback alone is not proof — the portal trusts
+    /// <c>X-Forwarded-For</c> from any proxy, so a caller through the ingress can present itself as
+    /// <c>127.0.0.1</c>; the forwarded-headers middleware then records the original peer in
+    /// <c>X-Original-For</c>, and an unprocessed forward still carries <c>X-Forwarded-For</c>. Either
+    /// header means the request came through a proxy, never from inside the pod.
+    /// </summary>
+    /// <param name="context">The request.</param>
+    /// <returns>True for an in-pod, unforwarded loopback probe.</returns>
+    public static bool IsInPodProbe(HttpContext context) =>
+        context.Connection.RemoteIpAddress is { } peer
+        && System.Net.IPAddress.IsLoopback(peer)
+        && !context.Request.Headers.ContainsKey("X-Forwarded-For")
+        && !context.Request.Headers.ContainsKey("X-Original-For");
+
+    /// <summary>
     /// <c>/drain</c> — "may this pod stop without cutting anyone off?" Answers <b>200 drained</b>
     /// when no Blazor circuit is live here, <b>503</b> with the count while sessions remain.
     ///
@@ -709,7 +725,7 @@ public static class ServiceDefaults
         // the right place to notice that this pod is terminating.
         var progress = new DrainProgress();
 
-        app.MapGet("/drain", (IServiceProvider services, ILogger<DrainProgress> logger) =>
+        app.MapGet("/drain", (HttpContext context, IServiceProvider services, ILogger<DrainProgress> logger) =>
         {
             // GetService, not GetRequired: a host without Blazor (a worker, a test host) has no
             // tracker and is trivially drained — never a 500 that a preStop would read as "keep
@@ -721,7 +737,12 @@ public static class ServiceDefaults
             // 🚨 The first probe IS "this pod has begun terminating" (preStop, before SIGTERM). Publish it
             // process-wide, so an always-on singleton hub (RelocateOnDrain) leaves this pod NOW instead of
             // serving — or stalling — from it for the whole grace period (HostDrainSignal).
-            if (services.GetService<HostDrainSignal>() is { } signal && signal.Begin())
+            // 🚨 Only the pod's OWN preStop may begin it (#6092 review): the route is anonymous and reachable
+            // through the ingress, and beginning is permanent — any other caller would evict the singletons
+            // from a healthy pod (and, probing every pod, bounce them between all of them). preStop curls
+            // 127.0.0.1 from inside the container; IsInPodProbe says why loopback alone is not enough.
+            if (IsInPodProbe(context)
+                && services.GetService<HostDrainSignal>() is { } signal && signal.Begin())
                 logger.LogWarning("Drain: termination began — instance singletons (RelocateOnDrain) are handed off to a live pod now");
 
             return live == 0

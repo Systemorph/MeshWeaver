@@ -7,6 +7,7 @@ using MeshWeaver.Hosting;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -188,22 +189,61 @@ public class DrainEndpointTest
     }
 
     /// <summary>
-    /// 🚨 The first <c>/drain</c> probe publishes "this pod has begun TERMINATING" process-wide
-    /// (<see cref="MeshWeaver.Mesh.HostDrainSignal"/>), so an instance singleton (RelocateOnDrain) leaves the pod NOW —
-    /// at preStop, not 30 minutes later at SIGTERM (maintainer, 2026-10-04: "babysitter should be 1 process per cloud").
+    /// 🚨 The first <c>/drain</c> probe from the pod's own <c>preStop</c> (loopback, unforwarded) publishes
+    /// "this pod has begun TERMINATING" process-wide (<see cref="MeshWeaver.Mesh.HostDrainSignal"/>), so an
+    /// instance singleton (RelocateOnDrain) leaves the pod NOW — at preStop, not 30 minutes later at SIGTERM.
     /// </summary>
     [Fact]
-    public async Task TheFirstDrainProbe_BeginsTermination_ForTheSingletonsToLeave()
+    public async Task TheFirstInPodDrainProbe_BeginsTermination_ForTheSingletonsToLeave()
     {
         using var signal = new MeshWeaver.Mesh.HostDrainSignal();
         var app = BuildApp(new ActiveCircuitTracker(), signal);
         await using (app)
         {
             await app.StartAsync(TestContext.Current.CancellationToken);
-            using var client = app.GetTestClient();
             signal.Begun.Should().BeFalse("nothing has probed /drain yet");
-            await client.GetAsync(DrainRoute, TestContext.Current.CancellationToken);
-            signal.Begun.Should().BeTrue("the first probe IS termination beginning — the singletons must leave now");
+            var probe = await Probe(app, IPAddress.Loopback, forwardedFor: null);
+            probe.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+            signal.Begun.Should().BeTrue("the first in-pod probe IS termination beginning — the singletons must leave now");
         }
     }
+
+    /// <summary>
+    /// 🚨 <c>/drain</c> is anonymous and reachable through the ingress, and beginning termination is
+    /// permanent — so a probe from anywhere but the pod itself only REPORTS (#6092 review). A remote peer,
+    /// and a loopback peer that arrived through a proxy (a forged or real <c>X-Forwarded-For</c>), both
+    /// still get the drain answer and leave the singletons where they are.
+    /// </summary>
+    [Fact]
+    public async Task ADrainProbeFromOutsideThePod_Reports_ButNeverBeginsTermination()
+    {
+        using var signal = new MeshWeaver.Mesh.HostDrainSignal();
+        var app = BuildApp(new ActiveCircuitTracker(), signal);
+        await using (app)
+        {
+            await app.StartAsync(TestContext.Current.CancellationToken);
+
+            var remote = await Probe(app, IPAddress.Parse("10.244.1.7"), forwardedFor: null);
+            remote.Response.StatusCode.Should().Be(StatusCodes.Status200OK, "the report itself stays open to anyone");
+            signal.Begun.Should().BeFalse("a remote caller must not evict the singletons from a healthy pod");
+
+            var forwarded = await Probe(app, IPAddress.Loopback, forwardedFor: "127.0.0.1");
+            forwarded.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+            signal.Begun.Should().BeFalse("a request that came through a proxy is never the pod's own preStop, whatever peer it claims");
+
+            var noPeer = await Probe(app, null, forwardedFor: null);
+            noPeer.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+            signal.Begun.Should().BeFalse("an unknown peer is not proof of an in-pod probe");
+        }
+    }
+
+    private static Task<HttpContext> Probe(WebApplication app, IPAddress? peer, string? forwardedFor) =>
+        app.GetTestServer().SendAsync(c =>
+        {
+            c.Request.Method = HttpMethods.Get;
+            c.Request.Path = DrainRoute;
+            c.Connection.RemoteIpAddress = peer;
+            if (forwardedFor is not null)
+                c.Request.Headers["X-Forwarded-For"] = forwardedFor;
+        }, TestContext.Current.CancellationToken);
 }

@@ -285,9 +285,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         _drainWatchTimer = this.RegisterGrainTimer(
             _ =>
             {
+                // HandOffTheAddress is latched once a target is asked for and a cheap no-op without one,
+                // so this tick re-asks only while no survivor is Active (a single-pod instance, or one
+                // still joining) — never a repeated migration.
                 if (MustLeaveOnDrain())
                 {
-                    if (Interlocked.Exchange(ref _leavingReported, 1) == 0)
+                    if (Interlocked.Exchange(ref _drainReported, 1) == 0)
                         logger.LogWarning(
                             "Grain {GrainId}: this pod has begun to DRAIN and this hub is an instance singleton "
                             + "(RelocateOnDrain) — handing it off to a live silo now, not at SIGTERM",
@@ -1127,7 +1130,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // 🚨 …and an always-on SINGLETON leaves a pod the moment it begins to DRAIN (HostDrainSignal, the
         // first /drain probe) — not 30 minutes later at SIGTERM: the same refusal and hand-off, opted in
         // per hub (RelocateOnDrain), so the sessions that hold the pod open are not disturbed.
-        if (meshHub.IsLeaving() || MustLeaveOnDrain())
+        if (meshHub.IsLeaving() || MustRefuseOnDrain())
             return Task.FromResult(RefuseBecauseTheHostIsLeaving(delivery));
 
         EnsureActivationStarted();
@@ -1360,8 +1363,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         && built.ServiceProvider.GetService(typeof(HostDrainSignal)) is HostDrainSignal signal
         && signal.MustLeave(built.Address);
 
+    /// <summary>
+    /// True when a delivery to this drain-bound singleton must be REFUSED rather than served: drain has
+    /// begun AND the activation can actually leave — a hand-off is already under way, or another silo is
+    /// Active to take it (#6092 review). With nowhere to go (a single-pod instance, or every survivor
+    /// still joining) it keeps serving exactly as before drain existed, until SIGTERM's
+    /// <c>IsLeaving()</c> takes over — a refusal there would only bounce the work for the whole grace
+    /// period with no relocation to show for it.
+    /// </summary>
+    private bool MustRefuseOnDrain() =>
+        MustLeaveOnDrain()
+        && (Volatile.Read(ref _handOffRequested) != 0 || AnotherActiveSilo() is not null);
+
     /// <summary>0 until this activation has reported that its host is leaving — the report is once per activation.</summary>
     private int _leavingReported;
+
+    /// <summary>
+    /// 0 until this activation has reported that its pod began to DRAIN. Kept apart from
+    /// <see cref="_leavingReported"/> so the drain report never swallows the later SIGTERM report.
+    /// </summary>
+    private int _drainReported;
 
     /// <summary>0 until this activation has asked Orleans to move it off its leaving host.</summary>
     private int _handOffRequested;
