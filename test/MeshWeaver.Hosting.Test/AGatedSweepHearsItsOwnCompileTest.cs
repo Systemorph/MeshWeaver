@@ -109,14 +109,26 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
         outcome.Duration.Should().BeLessThan(Budget,
             "a Compiled that arrives only at the deadline would be the timeout wearing another label");
 
+        // 🚨 WAIT for the hold, never sample it. The local witness answers Compiled as soon as the
+        // compile settles, but the stamp is OFFERED to the gate only after the release-create
+        // observation completes (NodeTypeCompilationHelpers: `admission.Publish("NodeType compile
+        // stamp …")` runs in that subscription) — so an instantaneous HeldCount read could land in
+        // between and see 0 (core #6132, shard 5: "Expected 0 to be greater than 0"). The hold is
+        // read first, so the record check below is made once the stamp is known to be held.
+        var gate = Mesh.ServiceProvider.GetRequiredService<MeshPublicationGate>();
+        await Observable.Interval(100.Milliseconds()).StartWith(0L)
+            .Select(_ => gate.HeldCount)
+            .Where(held => held > 0)
+            .FirstAsync()
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the compile stamp waits for the bake's verdict", TestContext.Current.CancellationToken);
+
         var record = await Mesh.GetMeshNodeStream(typePath).Take(1)
             .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
         var def = record?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions);
         CarriesThisProcessBuild(def).Should().BeFalse(
                 "the shared record must NOT show the build — its stamp is held — or this case would "
                 + "not prove the answer came from the local witness");
-        Mesh.ServiceProvider.GetRequiredService<MeshPublicationGate>().HeldCount.Should().BeGreaterThan(0,
-            "the compile stamp waits for the bake's verdict");
     }
 
     /// <summary>🚨 CONTROL — unarmed: the stamp is written and the record answers, as it always did.</summary>
