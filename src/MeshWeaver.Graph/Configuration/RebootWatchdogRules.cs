@@ -25,6 +25,20 @@ public sealed record InstanceRebootOptions
     /// <summary>How long one verification check may take.</summary>
     public TimeSpan CheckBudget { get; init; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// The singleton passes a reboot must see RESUME: each names a node and the content field its pass
+    /// stamps; after the restart, that stamp must become newer than the restart. A node this instance does
+    /// not have is reported not measured, by name. Defaults: the control instance's PR babysitter
+    /// (<c>Hosting/Babysitter</c>.<c>lastRunAt</c>) and PR review sweep (<c>Hosting/Triage/Status</c>.<c>lastPrSweepAt</c>).
+    /// </summary>
+    public ImmutableArray<RebootSingletonPass> SingletonPasses { get; init; } = ImmutableArray.Create(
+        new RebootSingletonPass("PR babysitter", "Hosting/Babysitter", "lastRunAt"),
+        new RebootSingletonPass("PR review sweep", "Hosting/Triage/Status", "lastPrSweepAt"));
+
+    /// <summary>How long the verification waits for every singleton's first pass after the restart
+    /// (the babysitter's first pass comes minutes after boot and may run for its whole run budget).</summary>
+    public TimeSpan SingletonResumeBudget { get; init; } = TimeSpan.FromMinutes(35);
+
     /// <summary>Whether the watchdog may file a reboot by itself. On by default: it fires only on the
     /// explicit predicate (<see cref="RebootWatchdogRules.Evaluate"/>) and is rate-limited.</summary>
     public bool WatchdogEnabled { get; init; } = true;
@@ -47,6 +61,12 @@ public sealed record InstanceRebootOptions
     /// <summary>The same evidence that survived a self-reboot within this window does not fire another — a reboot did not clear it.</summary>
     public TimeSpan WatchdogRepeatWindow { get; init; } = TimeSpan.FromHours(24);
 }
+
+/// <summary>A singleton pass a reboot verifies resumed: the node whose content <paramref name="Field"/> its pass stamps.</summary>
+/// <param name="Name">What the singleton is, as reported.</param>
+/// <param name="Path">The node the pass stamps.</param>
+/// <param name="Field">The content field holding the last pass's instant.</param>
+public sealed record RebootSingletonPass(string Name, string Path, string Field);
 
 /// <summary>The kinds of wedge signal a component reports — open string constants.</summary>
 public static class WedgeSignalKinds

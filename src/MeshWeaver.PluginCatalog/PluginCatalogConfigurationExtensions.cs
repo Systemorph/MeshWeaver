@@ -429,6 +429,7 @@ public static class PluginCatalogConfigurationExtensions
             services.AddSingleton<IInstanceRebootCheck, NodeTypeBakeRebootCheck>();
             services.AddSingleton<IInstanceRebootCheck, PendingModuleActivationRebootCheck>();
             services.AddSingleton<IInstanceRebootCheck, ContentTypesRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, SingletonsResumedRebootCheck>();
             return services;
         });
         builder.ConfigureHub(config => AddInstanceRebootTypes(config)

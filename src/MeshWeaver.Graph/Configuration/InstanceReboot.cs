@@ -421,5 +421,12 @@ public interface IInstanceRebootCheck
     string Name { get; }
 
     /// <summary>Runs the check in THIS process. Cold; emits ONE result; never faults (a fault is a <see cref="InstanceRebootCheckOutcome.Failed"/> result naming it).</summary>
-    IObservable<InstanceRebootCheck> Run(IMessageHub meshHub);
+    /// <param name="meshHub">This process's mesh hub.</param>
+    /// <param name="request">The reboot being verified — its <see cref="InstanceRebootRequest.RestartRequestedAt"/>
+    /// is what "after the reboot" means.</param>
+    IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request);
+
+    /// <summary>How long this check may take, or null for the reboot's default check budget. A check that
+    /// waits for something to happen AFTER the restart (a singleton's next pass) states its own.</summary>
+    TimeSpan? Budget => null;
 }

@@ -146,9 +146,12 @@ public abstract class InstanceRebootScenario(ITestOutputHelper output) : ModuleR
                 CheckBudget = TestTimeouts.Convergence,
                 WatchdogEnabled = false,
             })
-            .AddSingleton<IInstanceRebootActivation>(sp => new SelfUpdateHostedService(
-                sp.GetRequiredService<IMessageHub>(), new NoTags(), RebootUpdater, new SelfUpdateOptions()))
+            .AddSingleton<IInstanceRebootActivation>(CreateActivation)
             .AddSingleton<IInstanceRebootCheck>(new ThreadStartStandIn(this)));
+
+    /// <summary>The image + restart path of the reboot: the real self-updater on the recorded updater.</summary>
+    protected virtual IInstanceRebootActivation CreateActivation(IServiceProvider sp) =>
+        new SelfUpdateHostedService(sp.GetRequiredService<IMessageHub>(), new NoTags(), RebootUpdater, new SelfUpdateOptions());
 
     /// <summary>The update policy the Image step reads — Stable, so the empty tag listing admits nothing newer.</summary>
     protected async Task PolicyExists(CancellationToken ct) =>
@@ -184,7 +187,7 @@ public abstract class InstanceRebootScenario(ITestOutputHelper output) : ModuleR
         await booted.Handle(Mesh, path).DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
-    private sealed class NoTags : IAcrTagLister
+    protected sealed class NoTags : IAcrTagLister
     {
         public Task<IReadOnlyList<string>> ListTagsAsync(string repository, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<string>>([]);
@@ -198,7 +201,7 @@ public abstract class InstanceRebootScenario(ITestOutputHelper output) : ModuleR
     {
         public string Name => InstanceReboot.SmokePrefix + "thread-start";
 
-        public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub) => Observable.Defer(() =>
+        public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request) => Observable.Defer(() =>
         {
             var head = scenario.Head();
             var loads = scenario.bootedLoads.TryGetValue(Module, out var leaf) ? leaf : null;
@@ -344,5 +347,95 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
             Interlocked.Increment(ref attempts);
             return Task.FromResult(false);
         }
+
+        public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
+            Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));
+    }
+}
+
+/// <summary>
+/// 🚨 Keep serving: a reboot's roll is issued only when the portal Deployment's rollout cannot take it below
+/// its serving replicas (maxSurge ≥ 1, maxUnavailable 0) — otherwise the Restart step is REFUSED by name and
+/// nothing is rolled. The acceptance scenario (non-disruptive strategy, one restart) is its control.
+/// </summary>
+public class InstanceRebootDisruptiveRolloutTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    [Fact(Timeout = 240_000)]
+    public async Task ADisruptiveRolloutStrategy_RefusesTheRestart_ByName_AndRollsNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Updater.Strategy = new RolloutStrategyReading("RollingUpdate", "25%", "25%", 4);
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var red = await AwaitReboot(path, r => InstanceRebootStatus.IsTerminal(r.Status), ct);
+
+        red.Status.Should().Be(InstanceRebootStatus.Failed);
+        var restart = InstanceRebootTest.Step(red, InstanceRebootSteps.Restart);
+        restart.Outcome.Should().Be(InstanceRebootStepOutcome.Failed);
+        restart.Detail.Should().StartWith(RebootActivationKinds.Refused).And.Contain("maxUnavailable resolves to 1 of 4");
+        Updater.Restarts.Should().Be(0, "a roll that would drop serving pods is never issued");
+    }
+}
+
+/// <summary>
+/// 🚨 The self-hand-over loop: a CONTROL instance (its hand-over route is its own inbox) that cannot
+/// self-patch must not hand its own restart to its own control lane — refused loudly, nothing handed over.
+/// </summary>
+public class InstanceRebootControlSelfHandoverTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    protected override IInstanceRebootActivation CreateActivation(IServiceProvider sp) =>
+        new ControlInstanceThatCannotPatch(sp.GetRequiredService<IMessageHub>(), new NoTags(), Updater);
+
+    [Fact(Timeout = 240_000)]
+    public async Task AControlInstanceThatCannotSelfPatch_RefusesToHandItsRestartToItself()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var red = await AwaitReboot(path, r => InstanceRebootStatus.IsTerminal(r.Status), ct);
+
+        red.Status.Should().Be(InstanceRebootStatus.Failed);
+        var restart = InstanceRebootTest.Step(red, InstanceRebootSteps.Restart);
+        restart.Detail.Should().StartWith(RebootActivationKinds.Refused).And.Contain("IS the control instance").And.Contain("nothing was handed over");
+        Updater.Restarts.Should().Be(0);
+    }
+
+    /// <summary>The real self-updater, configured as the control instance (local inbox route) with patching off.</summary>
+    private sealed class ControlInstanceThatCannotPatch(IMessageHub hub, IAcrTagLister tags, IDeploymentUpdater updater)
+        : SelfUpdateHostedService(hub, tags, updater, new SelfUpdateOptions { CanPatch = false })
+    {
+        private readonly SelfUpdateHandover local = new LocalRoute(hub);
+
+        protected override SelfUpdateHandover ResolveHandover() => local;
+
+        private sealed class LocalRoute(IMessageHub hub) : SelfUpdateHandover(hub)
+        {
+            public override Settings ReadSettings() =>
+                new("memex", null, SecretPresent: false, LocalTargetListed: true, LocalSecretPresent: true, "https://memex.example")
+                {
+                    LocalSecretKey = LocalSecretKey,
+                };
+        }
+    }
+}
+
+/// <summary>The rollout rule, pure — each refusal with its control.</summary>
+public class RolloutStrategyRuleTest
+{
+    [Fact]
+    public void OnlyASurgingRollWithNoUnavailablePods_IsNonDisruptive()
+    {
+        RolloutStrategyReading.NonDisruptiveRefusal(new("RollingUpdate", "1", "0", 2)).Should().BeNull();
+        RolloutStrategyReading.NonDisruptiveRefusal(new("RollingUpdate", "25%", "0", 4)).Should().BeNull("25% of 4 rounds UP to a surge of 1");
+        RolloutStrategyReading.NonDisruptiveRefusal(new(null, "1", "25%", 1)).Should().BeNull("25% of 1 rounds DOWN to 0 unavailable");
+        RolloutStrategyReading.NonDisruptiveRefusal(null).Should().Contain("could not be read");
+        RolloutStrategyReading.NonDisruptiveRefusal(new("Recreate", null, null, 2)).Should().Contain("Recreate");
+        RolloutStrategyReading.NonDisruptiveRefusal(new("RollingUpdate", null, null, 4)).Should().Contain("maxUnavailable resolves to 1 of 4");
+        RolloutStrategyReading.NonDisruptiveRefusal(new("RollingUpdate", "0", "0", 2)).Should().Contain("maxSurge resolves to 0");
+        RolloutStrategyReading.NonDisruptiveRefusal(new("RollingUpdate", "x", "0", 2)).Should().Contain("could not be resolved");
     }
 }

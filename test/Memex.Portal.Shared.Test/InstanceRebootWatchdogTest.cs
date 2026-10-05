@@ -114,7 +114,14 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
             {
                 services.AddGitHubSyncServices();
                 // Enabled, but never armed on a timer here: each pass is driven by the test.
-                return services.AddSingleton(new InstanceRebootOptions { WatchdogEnabled = true, WatchdogInterval = TimeSpan.Zero });
+                return services.AddSingleton(new InstanceRebootOptions
+                {
+                    WatchdogEnabled = true,
+                    WatchdogInterval = TimeSpan.Zero,
+                    SingletonPasses = [new RebootSingletonPass("PR babysitter", BabysitterPath, "lastRunAt"),
+                        new RebootSingletonPass("PR review sweep", "Ops/Triage/Status", "lastPrSweepAt")],
+                    SingletonResumeBudget = TestTimeouts.Quick,
+                });
             });
 
     private RebootWatchdog Watchdog => Mesh.ServiceProvider.GetRequiredService<RebootWatchdog>();
@@ -161,6 +168,45 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
         var filed = (await Reboots()).Should().ContainSingle().Subject;
         filed.Trigger.Should().Be(InstanceRebootTrigger.Person);
         filed.RequestedBy.Should().Be("alice");
+    }
+
+    private const string BabysitterPath = "Ops/Babysitter";
+
+    private Task Stamp(string path, DateTimeOffset at, System.Threading.CancellationToken ct) =>
+        Access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(
+                MeshNode.FromPath(path) with
+                {
+                    NodeType = "Markdown",
+                    Content = System.Text.Json.JsonSerializer.SerializeToElement(new { lastRunAt = at }),
+                }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>
+    /// 🚨 Singletons must RESUME after the reboot: a pass stamped BEFORE the restart is not evidence — the
+    /// check waits for a pass newer than the restart (green once one lands), stays RED naming the stale
+    /// pass when none lands in time, and reports a singleton this instance does not have as not measured.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ASingletonMustPassAfterTheRestart_AStalePassIsRed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var restart = DateTimeOffset.UtcNow;
+        var request = new InstanceRebootRequest { Reason = "x", RestartRequestedAt = restart };
+        var check = new SingletonsResumedRebootCheck();
+
+        // Negative control: the last pass is 49 minutes before the restart, and nothing passes again.
+        await Stamp(BabysitterPath, restart.AddMinutes(-49), ct);
+        var stale = await check.Run(Mesh, request).Timeout(TestTimeouts.Convergence).Await(ct);
+        stale.Outcome.Should().Be(InstanceRebootCheckOutcome.Failed);
+        stale.Detail.Should().Contain("PR babysitter: Failed").And.Contain("did NOT resume")
+            .And.Contain("PR review sweep: NotMeasured");
+
+        // A fresh pass after the restart lands while the check waits → green.
+        var waiting = check.Run(Mesh, request).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Stamp(BabysitterPath, DateTimeOffset.UtcNow.AddSeconds(1), ct);
+        var resumed = await waiting;
+        resumed.Outcome.Should().Be(InstanceRebootCheckOutcome.Passed, resumed.Detail ?? "");
+        resumed.Detail.Should().Contain("PR babysitter: Passed");
     }
 
     [Fact(Timeout = 240_000)]

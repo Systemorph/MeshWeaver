@@ -75,6 +75,11 @@ process drives a request.
    This goes through the self-updater's one path: a self-patch, or a hand-over to the control lane
    (`self-update-available` or `self-update-restart-pending`). The roll floor does not defer it.
    If no roll or restart could be scheduled, the reboot is `Failed`, with the step naming why.
+   Two refusals come before anything is issued:
+   - a disruptive rollout strategy on the portal Deployment;
+   - a control instance that cannot self-patch, which would otherwise hand its restart to itself.
+
+   Both are described under "Operating lessons" below.
 5. **Verify.** Every process that booted after the stamp runs the registered checks
    (`InstanceRebootAgent`, `IInstanceRebootCheck`) and reports under its own key:
    - `health:nodetype_bake` waits for this process's bake to settle and is red when any CRITICAL
@@ -83,6 +88,8 @@ process drives a request.
    - `health:pending_module_activation` is red while a landed module still waits for activation,
      or the state is undetermined.
    - `health:content-types` is red when a NodeType's content degraded to untyped on this process.
+   - `health:singletons-resumed` is red when a configured singleton (the PR babysitter, the PR
+     review sweep) has not stamped a pass newer than the restart within its budget.
    - `smoke:thread-start` (registered by the AI module in MeshWeaver.Plugins) starts a thread and
      is red when the start throws.
 
@@ -161,19 +168,40 @@ These lessons come from the control-instance recovery attempts on the day this w
   self-patch:
   - When it can self-patch (`SelfUpdate:CanPatch` and an updater that can patch), the restart goes
     through the Kubernetes API under the instance's own service account. That path signs nothing.
-  - When it cannot, the restart is handed to the control lane, and that hand-over is signed.
-  The Restart step names which path was taken (`Rolled`/`Restarted` = self-patch, `HandedOver` =
-  control lane). The control-lane `Reboot` operation is the route for a HEALTHY control instance
-  rebooting another instance.
-- **Keep serving until the new pods are Ready.** A reboot is one rolling update of the portal
-  Deployment, so availability during the roll is whatever the Deployment's rollout strategy
-  declares. The reboot itself never deletes a pod. The chart must declare `maxUnavailable: 0`
-  with a surge for the portal to keep answering 200 throughout the roll. This change does not
-  verify that setting (see below).
+  - When it cannot, an ordinary instance hands the restart to the control lane, and that
+    hand-over is signed.
+  - 🚨 **A CONTROL instance never hands its own restart to itself.** Its hand-over route is its
+    own inbox (`SelfUpdateHandover.Route.Local`), so the control plane that would execute the
+    hand-over is the one being rebooted. A control instance that cannot self-patch is therefore
+    **refused** by name (`Refused: this instance IS the control instance …`), and nothing is
+    handed over. Self-patch through its own service account is REQUIRED for the control instance.
+  The Restart step names which path was taken: `Rolled`/`Restarted` = self-patch, `HandedOver` =
+  control lane, `Refused` = neither, with the reason. The control-lane `Reboot` operation is the
+  route for a HEALTHY control instance rebooting another instance.
+- **Keep serving until the new pods are Ready.** Before a self-patched roll or restart, the
+  Restart step reads the portal Deployment's `spec.strategy` and `spec.replicas`
+  (`IDeploymentUpdater.ReadRolloutStrategyAsync`, with the same GET and the same service account
+  as the last-rolled read). It rolls ONLY when `RolloutStrategyReading.NonDisruptiveRefusal` is
+  null, which needs:
+  - a RollingUpdate whose `maxUnavailable` resolves to 0;
+  - a `maxSurge` that resolves to at least 1 for the declared replicas.
+
+  Kubernetes rounds a percentage down for maxUnavailable and up for maxSurge, and an unset value
+  is 25%. `Recreate`, the 25%/25% default on more than three replicas, a zero surge, an
+  unresolvable value and an UNREADABLE strategy are each refused by name, and nothing is rolled.
+  The reboot itself never deletes a pod.
 - **Verify that the singletons resumed.** A health check reported "Healthy" while the last pass of a
-  singleton was 49 minutes old. Step 5 therefore takes any number of `IInstanceRebootCheck`s. A
-  module that owns a singleton (the PlatformBuilds hub's babysitter and review sweep) should
-  register a check that its pass ran AFTER the restart stamp. That check is owed; see below.
+  singleton was 49 minutes old, so "healthy" is not evidence. `health:singletons-resumed`
+  (`SingletonsResumedRebootCheck`) waits, on each node's own stream and for at most
+  `SingletonResumeBudget` (default 35 min), until every configured pass stamps an instant NEWER
+  than the restart:
+  - the PR babysitter: `Hosting/Babysitter`.`lastRunAt`;
+  - the PR review sweep: `Hosting/Triage/Status`.`lastPrSweepAt`.
+
+  The check is red when a pass did not land in time, naming the singleton and its stale last pass.
+  A singleton whose node this instance does not have is reported not measured, by name. The list
+  is `InstanceRebootOptions.SingletonPasses`. The checks of one process run side by side, so this
+  wait does not delay the others.
 
 ## What is NOT established
 
@@ -193,12 +221,8 @@ These lessons come from the control-instance recovery attempts on the day this w
   compile, so the leg does not see a failure on a single replica only.
 - **Two replicas' watchdogs** could both fire within the seconds the request listing trails the
   store. Each process's own last-firing memory closes this only for that process.
-- **The rollout strategy is not checked.** The reboot does not read or assert `maxUnavailable: 0`
-  and the surge on the portal Deployment.
-- **No singleton-resumed check exists yet.** No check that the PlatformBuilds babysitter or review
-  sweep ran after the restart is registered. Until one is, step 5 does not cover the singleton
-  that "Healthy" misreported.
-- **A wedged control plane cannot process a hand-over.** When the instance being rebooted is the
-  control instance and it cannot self-patch, a roll or restart handed to the control lane goes to
-  the very instance that is wedged. The reboot then reads `AwaitingRestart` with the hand-over
-  sentence on its Restart step. A self-patching control instance is not affected.
+- **The rollout check covers the SELF-PATCH path only.** When an ordinary instance hands its roll
+  to the control lane, the control plane's `Roll`/`Restart` executes it, and this check does not
+  run there. Asserting the strategy on that path is the control plane's job and is not built here.
+- **A singleton whose node is absent is not measured, not red.** On a control instance whose
+  babysitter node is missing altogether, the check therefore names it but does not fail.

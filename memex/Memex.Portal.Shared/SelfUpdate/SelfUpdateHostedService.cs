@@ -514,7 +514,38 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// running image (<see cref="RequestRestart"/>'s path). The roll floor does not defer it: the reboot is
     /// one explicit request, stamped on its node before it asks.
     /// </summary>
-    public IObservable<RebootActivationOutcome> Activate(RebootImageChoice choice, string reason)
+    public IObservable<RebootActivationOutcome> Activate(RebootImageChoice choice, string reason) =>
+        Observable.Defer(() =>
+        {
+            var settings = ResolveHandover().ReadSettings();
+            var route = SelfUpdateHandover.RouteFor(settings);
+            var mode = SelfUpdateHandover.ApplyModeFor(_options.CanPatch, _updater.CanPatch, route);
+            // 🚨 THE SELF-HAND-OVER LOOP. Route.Local means THIS is the control instance: a hand-over would
+            // deliver its own restart into its own inbox, to be executed by the very control plane that is
+            // wedged. A control instance must self-patch through its own service account; when it cannot,
+            // the reboot is refused loudly rather than parked on itself.
+            if (mode != SelfUpdateApply.SelfPatch && route == SelfUpdateHandover.Route.Local)
+                return Observable.Return(new RebootActivationOutcome(RebootActivationKinds.Refused,
+                    "this instance IS the control instance (its hand-over route is its own inbox), and it cannot self-patch "
+                    + $"(SelfUpdate:CanPatch={_options.CanPatch}, updater can patch={_updater.CanPatch}) — handing its own restart to its own "
+                    + "control lane would depend on the instance being rebooted. Give the control instance self-patch through its own "
+                    + "service account (SelfUpdate:CanPatch and the portal Role's get,patch on apps/deployments); nothing was handed over"));
+            if (mode != SelfUpdateApply.SelfPatch)
+                return ActivateCore(choice, reason);
+            // 🚨 Keep serving: a self-patched roll is a rolling update of the portal Deployment, so it is issued
+            // only when that update cannot take the portal below its serving replicas (maxSurge ≥ 1, maxUnavailable 0).
+            return _http.Invoke(ct => _updater.ReadRolloutStrategyAsync(ct))
+                .Catch((Exception ex) =>
+                {
+                    _logger?.LogWarning(ex, "[SelfUpdate] could not read the portal rollout strategy for a reboot");
+                    return Observable.Return<RolloutStrategyReading?>(null);
+                })
+                .SelectMany(reading => RolloutStrategyReading.NonDisruptiveRefusal(reading) is { } why
+                    ? Observable.Return(new RebootActivationOutcome(RebootActivationKinds.Refused, why + " — nothing was rolled"))
+                    : ActivateCore(choice, reason));
+        });
+
+    private IObservable<RebootActivationOutcome> ActivateCore(RebootImageChoice choice, string reason)
     {
         if (choice.Target is not { } target)
             return Restart(new SelfUpdateVerdict(SelfUpdateOutcome.NoNewerRelease, $"Reboot ({reason}):"),

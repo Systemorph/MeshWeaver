@@ -70,6 +70,10 @@ public static class RebootActivationKinds
 
     /// <summary>Nothing could be rolled or restarted — the detail names why.</summary>
     public const string Unavailable = "Unavailable";
+
+    /// <summary>A roll or restart was REFUSED before anything was issued — a disruptive rollout strategy, or a
+    /// control instance that cannot self-patch (it would hand its own restart to itself). The detail names why.</summary>
+    public const string Refused = "Refused";
 }
 
 /// <summary>
@@ -408,30 +412,33 @@ public sealed class InstanceRebootAgent
                     || StartedAt <= restart
                     || !handled.TryAdd($"{path}|{restart:O}", 0))
                     return Observable.Empty<Unit>();
-                return Report(meshHub, path);
+                return Report(meshHub, path, request);
             });
     }
 
     /// <summary>Runs every registered check in this process and writes the report under this process's own key.</summary>
-    internal IObservable<Unit> Report(IMessageHub meshHub, string path)
+    internal IObservable<Unit> Report(IMessageHub meshHub, string path, InstanceRebootRequest request)
     {
         var access = meshHub.ServiceProvider.GetService<AccessService>();
         var options = meshHub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
         var checks = meshHub.ServiceProvider.GetServices<IInstanceRebootCheck>().ToImmutableList();
         var process = ProcessOf(meshHub);
         return checks.ToObservable()
-            .Select(check => check.Run(meshHub).Take(1)
-                .Timeout(options.CheckBudget)
+            // The checks run side by side — one may wait half an hour for a singleton's next pass — and
+            // are reported in name order.
+            .Select(check => check.Run(meshHub, request).Take(1)
+                .Timeout(check.Budget ?? options.CheckBudget)
                 .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
                 {
                     Name = check.Name,
                     Outcome = InstanceRebootCheckOutcome.Failed,
                     Detail = ex is TimeoutException
-                        ? $"did not answer within {options.CheckBudget.TotalMinutes:0} min — NOT proven"
+                        ? $"did not answer within {(check.Budget ?? options.CheckBudget).TotalMinutes:0} min — NOT proven"
                         : $"faulted: {ex.GetType().Name}: {ex.Message}",
                 })))
-            .Concat()
+            .Merge()
             .ToList()
+            .Select(results => results.OrderBy(r => r.Name, StringComparer.Ordinal).ToList())
             .Select(results => new InstanceRebootReplica
             {
                 Process = process,
@@ -454,7 +461,7 @@ public sealed class PendingModuleActivationRebootCheck : IInstanceRebootCheck
     public string Name => "health:pending_module_activation";
 
     /// <inheritdoc />
-    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub)
+    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request)
     {
         var activations = meshHub.ServiceProvider.GetService<PendingModuleActivations>();
         if (activations is null)
@@ -489,7 +496,7 @@ public sealed class ContentTypesRebootCheck : IInstanceRebootCheck
     public string Name => "health:" + ContentDegradationRegistry.HealthCheckName;
 
     /// <inheritdoc />
-    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub) => Observable.Defer(() =>
+    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request) => Observable.Defer(() =>
     {
         var registry = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
         if (registry is null)
@@ -525,7 +532,7 @@ public sealed class NodeTypeBakeRebootCheck : IInstanceRebootCheck
     public string Name => "health:" + NodeTypeBakeGateExtensions.HealthCheckName;
 
     /// <inheritdoc />
-    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub)
+    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request)
     {
         var state = meshHub.ServiceProvider.GetService<NodeTypeBakeGateState>();
         var options = meshHub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
@@ -570,4 +577,112 @@ public sealed class NodeTypeBakeRebootCheck : IInstanceRebootCheck
                      + (other.IsEmpty ? "" : $"; {other.Count} non-critical type(s) also failing: {string.Join(", ", other.Take(10))}"),
         };
     }
+}
+
+/// <summary>
+/// 🚨 Step 5's singleton reading: every configured singleton pass (<see cref="InstanceRebootOptions.SingletonPasses"/> —
+/// on the control instance, the PR babysitter and the PR review sweep) must stamp a pass NEWER than the
+/// reboot's restart. "Healthy" is not evidence that a singleton resumed: a health check once read healthy
+/// while the last pass was 49 minutes old. Waits (bounded by <see cref="InstanceRebootOptions.SingletonResumeBudget"/>)
+/// on each node's own stream; red, naming the singleton and its last pass, when one did not resume. A
+/// singleton whose node this instance does not have is reported not measured, by name.
+/// </summary>
+public sealed class SingletonsResumedRebootCheck : IInstanceRebootCheck
+{
+    /// <inheritdoc />
+    public string Name => "health:singletons-resumed";
+
+    /// <inheritdoc />
+    public TimeSpan? Budget => null;
+
+    /// <inheritdoc />
+    public IObservable<InstanceRebootCheck> Run(IMessageHub meshHub, InstanceRebootRequest request)
+    {
+        var options = meshHub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
+        if (options.SingletonPasses.IsDefaultOrEmpty)
+            return Observable.Return(new InstanceRebootCheck
+            {
+                Name = Name, Outcome = InstanceRebootCheckOutcome.NotMeasured, Detail = "no singleton pass is configured",
+            });
+        if (request.RestartRequestedAt is not { } restart)
+            return Observable.Return(new InstanceRebootCheck
+            {
+                Name = Name, Outcome = InstanceRebootCheckOutcome.Failed, Detail = "the reboot carries no restart stamp to compare passes against",
+            });
+        return options.SingletonPasses.ToObservable()
+            .Select(pass => One(meshHub, pass, restart, options.SingletonResumeBudget))
+            .Merge()
+            .ToList()
+            .Select(rows => Judge(Name, rows.OrderBy(r => r.Name, StringComparer.Ordinal).ToImmutableList()));
+    }
+
+    /// <summary>One singleton's reading: Passed (resumed), Failed (did not) or NotMeasured (no node here).</summary>
+    private static IObservable<InstanceRebootCheck> One(IMessageHub meshHub, RebootSingletonPass pass, DateTimeOffset restart, TimeSpan budget)
+    {
+        var mesh = meshHub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = meshHub.ServiceProvider.GetService<AccessService>();
+        var parent = pass.Path.Contains('/') ? pass.Path[..pass.Path.LastIndexOf('/')] : pass.Path;
+        DateTimeOffset? last = null;
+        // Existence is a LISTING (a point read of an absent node opens the storm breaker); the stamp is
+        // read from the node's own live stream.
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{parent} scope:children"))
+                .Take(1)
+                .Timeout(ActivationRecycle.ReadBudget))
+            .Select(change => change.Items.Any(n => string.Equals(n.Path, pass.Path, StringComparison.Ordinal)))
+            .SelectMany(exists => !exists
+                ? Observable.Return(new InstanceRebootCheck
+                {
+                    Name = pass.Name, Outcome = InstanceRebootCheckOutcome.NotMeasured,
+                    Detail = $"{pass.Path} does not exist on this instance",
+                })
+                : access.RunAsSystem(() => meshHub.GetMeshNodeStream(pass.Path))
+                    .Select(node => PassAt(node?.Content, pass.Field, meshHub))
+                    .Do(at => last = at ?? last)
+                    .Where(at => at > restart)
+                    .Take(1)
+                    .Timeout(budget)
+                    .Select(at => new InstanceRebootCheck
+                    {
+                        Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Passed,
+                        Detail = $"{pass.Path}.{pass.Field} = {at:u}, after the restart at {restart:u}",
+                    })
+                    .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
+                    {
+                        Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Failed,
+                        Detail = ex is TimeoutException
+                            ? $"no pass after the restart at {restart:u} within {budget.TotalMinutes:0} min — the last pass stamped on "
+                              + $"{pass.Path}.{pass.Field} is {(last is { } l ? $"{l:u}" : "none")}; the singleton did NOT resume"
+                            : $"{pass.Path} could not be read ({ex.GetType().Name}: {ex.Message})",
+                    })))
+            .Catch((Exception ex) => Observable.Return(new InstanceRebootCheck
+            {
+                Name = pass.Name, Outcome = InstanceRebootCheckOutcome.Failed,
+                Detail = $"whether {pass.Path} exists could not be established ({ex.GetType().Name}: {ex.Message}) — NOT proven",
+            }));
+    }
+
+    /// <summary>The instant a pass stamped in <paramref name="field"/> of <paramref name="content"/>, or null. Pure over the content.</summary>
+    public static DateTimeOffset? PassAt(object? content, string field, IMessageHub hub)
+    {
+        if (content is null)
+            return null;
+        var element = content is System.Text.Json.JsonElement e ? e : System.Text.Json.JsonSerializer.SerializeToElement(content, hub.JsonSerializerOptions);
+        return element.ValueKind == System.Text.Json.JsonValueKind.Object
+               && element.TryGetProperty(field, out var value)
+               && value.ValueKind == System.Text.Json.JsonValueKind.String
+               && DateTimeOffset.TryParse(value.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                   System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
+            ? at
+            : null;
+    }
+
+    /// <summary>The verdict over the per-singleton rows: red if any is red, not measured if none was measured. Pure.</summary>
+    public static InstanceRebootCheck Judge(string name, IReadOnlyList<InstanceRebootCheck> rows) => new()
+    {
+        Name = name,
+        Outcome = rows.Any(r => r.Outcome == InstanceRebootCheckOutcome.Failed) ? InstanceRebootCheckOutcome.Failed
+            : rows.All(r => r.Outcome == InstanceRebootCheckOutcome.NotMeasured) ? InstanceRebootCheckOutcome.NotMeasured
+            : InstanceRebootCheckOutcome.Passed,
+        Detail = string.Join("; ", rows.Select(r => $"{r.Name}: {r.Outcome} — {r.Detail}")),
+    };
 }
