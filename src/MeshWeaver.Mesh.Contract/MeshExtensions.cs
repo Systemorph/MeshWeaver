@@ -748,7 +748,12 @@ public static class MeshExtensions
             + "received that subscription (hand-off / recycle the subscriber was not told about); "
             + "announcing its end so the subscriber re-subscribes",
             hub.Address, streamId, subscriber);
-        hub.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+        // Issued from the stream seam (#4614/#4617): a heartbeat handled by the ROOT MESH HUB must not
+        // make the router the origin of a StreamEndedEvent. For every other owner the seam is the
+        // identity, and the subscriber matches the end on its StreamId alone
+        // (JsonSynchronizationStream's StreamEndedEvent registration), so the sender does not change
+        // what it does.
+        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
     }
 
     /// <summary>
