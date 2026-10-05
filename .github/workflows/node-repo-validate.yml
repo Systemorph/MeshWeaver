@@ -207,6 +207,32 @@ jobs:
       - name: Validate every node JSON (+ NodeType Source)
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 scripts/validate-repos.py
+      # ── NO TWO FILES IMPORT TO THE SAME NODE PATH ──
+      # The installer and GitSync derive a node's path from the FILE (NodeFileMapper: the extension
+      # stripped, `X/index.*` folded onto `X`, compared case-insensitively), so `Hosting/Foo.md` and
+      # `Hosting/Foo.json` are ONE node. Nothing refuses the pair at import: the write is
+      # last-writer-wins and one author's node silently replaces the other's. This names every
+      # colliding group with ALL its files. Fetched at the lane's SCRIPTS ref like every guard here;
+      # asserted RED when unavailable. It scans the whole Git-visible tree except top-level
+      # dot-directories and `src/` — wider than the package enumeration on purpose (two callers carry
+      # no gen-manifests config), and an empty scan is RED, never a clean zero.
+      - name: Fetch the platform's node-path collision guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the node-path collision guard has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-node-path-collisions.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-node-path-collisions.py" \
+            || { echo "::error::could not fetch .github/scripts/check-node-path-collisions.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-node-path-collisions.py" | grep -q "check-node-path-collisions" || { echo "::error::the fetched check-node-path-collisions.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+      - name: "Two files importing to one node path are caught — the gate can fail (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-node-path-collisions.py" --self-test
+      - name: "No two source files import to the same node path"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-node-path-collisions.py" --root .
       # ── NO COVER IS A WALL OF TEXT, AND EVERY heroCta PILL IS LEGIBLE ──
       # 🚨 ONE copy of the cover gate, fetched here (MeshWeaver#4027). It used to be hand-copied into
       # five repos as `scripts/check-covers.py`, and measured 2026-09-13 the copies had drifted to
