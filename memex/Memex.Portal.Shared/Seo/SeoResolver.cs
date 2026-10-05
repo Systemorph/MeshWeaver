@@ -704,7 +704,9 @@ public static class SeoResolver
     /// declare. This read used to check only <c>poster</c> and <c>thumbnail</c>, so every plugin's
     /// hand-made <c>og.png</c> was ignored and no store page has ever emitted an <c>og:image</c> —
     /// the tag is written only when this returns non-null. <c>poster</c> and <c>thumbnail</c>
-    /// remain for markdown pages and video nodes.</para>
+    /// remain for markdown pages and video nodes. <c>mediaUrl</c> is a social post's own visual
+    /// (<c>SocialPost.MediaUrl</c>): without it a shared post unfurled as the drawn text card while
+    /// the picture it was published with sat unread on the node (2026-10-05).</para>
     ///
     /// <para>Root-relative or absolute URLs only: a bare filename would resolve against whatever
     /// path the crawler happened to fetch.</para>
@@ -714,7 +716,8 @@ public static class SeoResolver
         var candidate = FirstNonEmpty(
             ContentString(node, "ogImage"),
             ContentString(node, "poster"),
-            ContentString(node, "thumbnail"));
+            ContentString(node, "thumbnail"),
+            ContentString(node, "mediaUrl"));
         return candidate is not null
             && (candidate.StartsWith('/') || candidate.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             ? candidate
