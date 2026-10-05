@@ -398,7 +398,10 @@ jobs:
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 25, not 10: the plugins step now runs Plugins' own settle check per first-parent commit it
+    # walks (≈30–40 s each on a blobless clone, measured on fd3dbd1e's chain; at most 10 commits —
+    # Doc/Architecture/SealOnlySettledContent). That is added WORK, not added headroom for a stall.
+    timeout-minutes: 25
     # Job-level permissions REPLACE the workflow-level map, so EVERY one this job needs is here —
     # an omission surfaces as a 403 at runtime, on main, in the job that decides whether anything
     # ships at all:
@@ -717,19 +720,40 @@ jobs:
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/plugins_key && chmod 600 ~/.ssh/plugins_key
+          trap 'rm -f ~/.ssh/plugins_key' EXIT
           ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/plugins_key -o IdentitiesOnly=yes"
-          # One network round trip; no clone. A ref that resolves to nothing is a hard error, not
-          # an empty string travelling downstream as "no pair to check".
+          # A ref that resolves to nothing is a hard error, not an empty string travelling
+          # downstream as "no pair to check".
           full=$(git ls-remote git@github.com:Systemorph/MeshWeaver.Plugins.git \
                    "refs/heads/$PLUGINS_REF" | awk '{print $1}' | head -1)
-          rm -f ~/.ssh/plugins_key
           if [ -z "$full" ]; then
             echo "::error::'refs/heads/$PLUGINS_REF' does not resolve in Systemorph/MeshWeaver.Plugins — check MW_PLUGINS_REF."
             exit 1
           fi
+          echo "plugins HEAD ($PLUGINS_REF) = $full"
+          # 🚨 SEAL ONLY A SETTLED TREE (incident 2026-10-04, doc Architecture/SealOnlySettledContent).
+          # The raw HEAD is not what this set may bind to: Plugins publishes, seals and tags only a
+          # commit whose manifest locks describe its tree and whose floors are stamped, and its own
+          # lane withholds every other one. This set used to bind to the raw HEAD — fd3dbd1e, which
+          # Plugins' lane had refused as "NOT settled (22 lock(s) would move)" — and sealed a Hosting
+          # prebuilt bound to an AI build no registry ever published. The resolver asks PLUGINS' OWN
+          # settle check (read from the commit being judged) down the first-parent chain and binds
+          # to the newest settled commit, naming the tip and every lock that would move; no settled
+          # commit inside the walk, or a settle check that cannot decide, is RED.
+          git clone -q --filter=blob:none --no-checkout \
+            git@github.com:Systemorph/MeshWeaver.Plugins.git "$RUNNER_TEMP/plugins-settle"
+          settled_out="$RUNNER_TEMP/plugins-settled.env"
+          : > "$settled_out"
+          bash .github/scripts/resolve-settled-content.sh --repo-dir "$RUNNER_TEMP/plugins-settle" \
+            --tip "$full" --max-walk 10 --output "$settled_out"
+          full=$(sed -n 's/^sha=//p' "$settled_out")
+          case "$full" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::resolve-settled-content.sh answered no commit — refusing to bind this set to anything"; exit 1 ;;
+          esac
           short="${full:0:7}"
-          echo "plugins HEAD ($PLUGINS_REF) = $full  short=$short"
+          echo "plugins commit this set binds to = $full  short=$short (tip settled: $(sed -n 's/^tip_settled=//p' "$settled_out"))"
           echo "plugins_short=$short" >> "$GITHUB_OUTPUT"
           echo "plugins_sha=$full" >> "$GITHUB_OUTPUT"
       - name: "Does main's HEAD already have a complete image set?"
