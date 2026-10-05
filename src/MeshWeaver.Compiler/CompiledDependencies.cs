@@ -391,7 +391,7 @@ public static class CompiledDependencies
         && string.Equals(scheme, FloorSchemeOf(live), StringComparison.Ordinal);
 
     /// <summary>The version text of a floor id.</summary>
-    private static string VersionOf(string id) => id[FloorSchemeOf(id)!.Length..];
+    private static string VersionOf(string id) => FloorSchemeOf(id) is { } scheme ? id[scheme.Length..] : id;
 
     /// <summary>
     /// The per-entry verdict: null when the entry holds, else the outcome naming WHY it does not.
