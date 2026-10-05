@@ -3632,8 +3632,8 @@ jobs:
           # MeshWeaver.Markdown.Collaboration, Maps ships MeshWeaver.Maps, Stripe ships
           # MeshWeaver.Payments.Stripe. Exactly one bundle per package, or RED.
           stage="$RUNNER_TEMP/module-bundles"; rm -rf "$stage"
-          for pair in AI=MeshWeaver.AI Essentials=MeshWeaver.Markdown.Collaboration Maps=MeshWeaver.Maps Stripe=MeshWeaver.Payments.Stripe; do
-            pkg="${pair%%=*}"; module="${pair#*=}"
+          for mapping in AI=MeshWeaver.AI Essentials=MeshWeaver.Markdown.Collaboration Maps=MeshWeaver.Maps Stripe=MeshWeaver.Payments.Stripe; do
+            pkg="${mapping%%=*}"; module="${mapping#*=}"
             found=$(find "$out" -maxdepth 1 -iname "$pkg.module.nupkg")
             [ "$(printf '%s' "$found" | grep -c . || true)" = "1" ] || { echo "::error::the sealed plugins publication for $identity yielded $(printf '%s' "$found" | grep -c . || true) bundle(s) for $pkg, expected exactly 1"; exit 1; }
             mkdir -p "$stage/$module" && cp "$found" "$stage/$module/"
