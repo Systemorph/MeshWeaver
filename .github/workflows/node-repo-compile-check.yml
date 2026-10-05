@@ -323,7 +323,7 @@ jobs:
         with:
           path: repo
           main-sha: ${{ inputs.merge-main-sha }}
-          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       # 🚨 The CONTENT commit, resolved once and recorded in the verdict. `content-ref` may be a
       # branch (the platform passes each satellite's `main`); the verdict is a fact about ONE tree,
       # so it names the sha — never "main", which has moved by the time anyone reads it.

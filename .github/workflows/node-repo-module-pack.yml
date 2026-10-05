@@ -1089,7 +1089,7 @@ jobs:
         with:
           path: repo
           main-sha: ${{ inputs.merge-main-sha }}
-          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       # A reusable workflow's `github` context belongs to its CALLER. The job context is the
       # identity of the reusable workflow that actually defines this job. Read the whole context
       # here because actionlint 1.7.x predates the workflow_* members and rejects direct property
@@ -1766,7 +1766,7 @@ jobs:
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
-          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       # The workspace build reads each package's lock (see `select`): this tree's, never the base's,
       # by the generator at the build-logic ref (a disposable checkout the action removes, so it
       # never enters the workspace mount).
@@ -2167,7 +2167,7 @@ jobs:
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
-          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
@@ -4428,7 +4428,7 @@ jobs:
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with:
           main-sha: ${{ needs.select.outputs.merge-main-sha }}
-          content-ref: ${{ inputs.content-ref || inputs.content-repository }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       - name: Check out Systemorph/MeshWeaver at the pinned ref
         uses: actions/checkout@v7
         with:
