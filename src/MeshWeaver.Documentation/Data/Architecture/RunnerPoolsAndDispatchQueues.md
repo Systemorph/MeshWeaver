@@ -94,10 +94,11 @@ Two rules differ from the CI queue:
   control instance's pods) scale with KEDA on the queues' waiting jobs: the chart's
   `keda.queueDepth`, a `metrics-api` trigger on the portal's `GET /api/queues/depth`, set from the
   record's `autoscaling.scaleOnQueueDepth`.
-- **Reviews spread over EU models.** GLM-5.3 reviews code. DeepSeek V4 Flash reviews small low-risk
-  diffs. A review is never done by the author's own model family. Each model is pinned per upstream,
-  so a 429 on one pair shifts the load to another instead of throttling every review. Every
-  candidate stays EU-only and ZDR (policy `code-review-eu-only`).
+- **Reviews stay on GLM-5.3 at effort max, spread over its EU upstreams.** Every review uses the same
+  model whatever the diff: a measured evaluation scored a smaller model far below it. GLM-5.3 is pinned
+  once per EU upstream (Inceptron, Mistral), so a 429 on one upstream shifts the load to the other
+  instead of throttling every review. The reviewer sends a 128k output cap, because a review at effort
+  max needs about 46k output tokens. Every candidate stays EU-only and ZDR (policy `code-review-eu-only`).
 
 Fail-safe as for CI: if the queue never stamps a job, the thread is started directly, with a
 warning. The mechanism, the bounds this removed and the tests are in MeshWeaver.Plugins
