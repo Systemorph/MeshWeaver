@@ -2,7 +2,9 @@ using MeshWeaver.Mesh.Services;
 using System.Collections.Immutable;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -41,6 +43,12 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             .AddMeshNodes(CreateRegistryReconcileLedgerNodeType())
+            // "Reload module M on this instance" — the request node, its executor and the
+            // per-process reporter (Doc/Architecture/ModuleReload).
+            .AddModuleReload()
+            // "Reboot this instance" — sync, land, roll, verify in one step; plus the instance's own
+            // wedge watchdog (Doc/Architecture/InstanceReboot).
+            .AddInstanceReboot()
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
@@ -358,8 +366,90 @@ public static class PluginCatalogConfigurationExtensions
         Icon = "/static/NodeTypeIcons/box.svg",
         HubConfiguration = config => config
             .AddDefaultLayoutAreas()
-            .AddMeshDataSource(s => s.WithContentType<PackageManifest>()),
+            .AddMeshDataSource(s => s.WithContentType<PackageManifest>())
+            .AddModuleReloadViews(),
     };
+
+    /// <summary>
+    /// Registers the module reload (<c>Doc/Architecture/ModuleReload</c>): the request node type —
+    /// whose own hub runs <see cref="ModuleReloadExecutor"/> — the per-process
+    /// <see cref="ModuleReloadAgent"/> armed on the mesh hub, and the content types on every hub that
+    /// reads a request.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder.</param>
+    public static TBuilder AddModuleReload<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(new MeshNode(ModuleReloadRequest.NodeType)
+        {
+            Name = "Module Reload",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<ModuleReloadRequest>())
+                .WithInitialization(ModuleReloadExecutor.Arm),
+        });
+        builder.AddAutocompleteExcludedTypes(ModuleReloadRequest.NodeType);
+        builder.ConfigureServices(services => services.AddSingleton<ModuleReloadAgent>());
+        builder.ConfigureHub(config => AddModuleReloadTypes(config)
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<ModuleReloadAgent>().Arm(hub)));
+        builder.ConfigureDefaultNodeHub(AddModuleReloadTypes);
+        return builder;
+    }
+
+    private static MessageHubConfiguration AddModuleReloadTypes(MessageHubConfiguration config) => config
+        .WithType<ModuleReloadRequest>(nameof(ModuleReloadRequest))
+        .WithType<ModuleReloadItem>(nameof(ModuleReloadItem))
+        .WithType<ModuleReloadReplica>(nameof(ModuleReloadReplica));
+
+    /// <summary>
+    /// Registers the instance reboot (<c>Doc/Architecture/InstanceReboot</c>): the request node type —
+    /// whose own hub runs <see cref="InstanceRebootExecutor"/> — the per-process
+    /// <see cref="InstanceRebootAgent"/> (step 5's verification) and <see cref="RebootWatchdog"/>
+    /// armed on the mesh hub, the platform's own verification checks, the <see cref="WedgeSignals"/>
+    /// sink components report load/binding faults to, and the content types on every hub that reads a
+    /// request. A host binds <see cref="InstanceRebootOptions"/> to change the defaults.
+    /// </summary>
+    /// <typeparam name="TBuilder">The concrete mesh builder type.</typeparam>
+    /// <param name="builder">The mesh builder.</param>
+    public static TBuilder AddInstanceReboot<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddMeshNodes(new MeshNode(InstanceRebootRequest.NodeType)
+        {
+            Name = "Instance Reboot",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddDefaultLayoutAreas()
+                .AddMeshDataSource(source => source.WithContentType<InstanceRebootRequest>())
+                .WithInitialization(InstanceRebootExecutor.Arm),
+        });
+        builder.AddAutocompleteExcludedTypes(InstanceRebootRequest.NodeType);
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddSingleton<InstanceRebootOptions>();
+            services.TryAddSingleton<WedgeSignals>();
+            services.AddSingleton<InstanceRebootAgent>();
+            services.AddSingleton<RebootWatchdog>();
+            services.AddSingleton<IInstanceRebootCheck, NodeTypeBakeRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, PendingModuleActivationRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, ContentTypesRebootCheck>();
+            services.AddSingleton<IInstanceRebootCheck, SingletonsResumedRebootCheck>();
+            return services;
+        });
+        builder.ConfigureHub(config => AddInstanceRebootTypes(config)
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<InstanceRebootAgent>().Arm(hub))
+            .WithInitialization(hub => hub.ServiceProvider.GetRequiredService<RebootWatchdog>().Arm(hub)));
+        builder.ConfigureDefaultNodeHub(AddInstanceRebootTypes);
+        return builder;
+    }
+
+    private static MessageHubConfiguration AddInstanceRebootTypes(MessageHubConfiguration config) => config
+        .WithType<InstanceRebootRequest>(nameof(InstanceRebootRequest))
+        .WithType<InstanceRebootStep>(nameof(InstanceRebootStep))
+        .WithType<InstanceRebootReplica>(nameof(InstanceRebootReplica))
+        .WithType<InstanceRebootCheck>(nameof(InstanceRebootCheck));
 
     private static MeshNode CreateCatalogNodeType() => new(CatalogNodeType)
     {

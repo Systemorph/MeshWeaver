@@ -4141,6 +4141,105 @@ public partial class MeshOperations
     }
 
     /// <summary>
+    /// "Reload module M on this instance" (<c>Doc/Architecture/ModuleReload</c>) — or every installed
+    /// module when <paramref name="module"/> is blank. Files ONE durable request at
+    /// <c>Admin/_ModuleReload/{id}</c>; the instance's executor resolves the newest COMPATIBLE
+    /// published version (declared platform floor ≤ the running platform), lands it, activates it —
+    /// live when the module can be swapped, otherwise exactly one automatic restart, no approval —
+    /// and reports on the request node: the version found, what landed, how it was activated, what
+    /// every replica loaded, or why it could not (RED, by name). Returns a JSON
+    /// <c>{status, path, message}</c> envelope at once; read the request node for the outcome.
+    ///
+    /// <para>🚨 Global admins only (<c>IsGlobalAdmin</c> — a platform admin on the Admin partition):
+    /// a reload restarts the instance when it cannot swap live. The request is written as System on
+    /// the caller's behalf, carrying the caller as <c>RequestedBy</c>; the executor acts only on a
+    /// request written that way.</para>
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name (<c>MeshWeaver.AI</c>) or its package
+    /// id; blank reloads every installed module.</param>
+    /// <param name="reason">Why — required; carried into the restart announcement and every log line.</param>
+    public IObservable<string> ReloadModule(string? module, string? reason)
+    {
+        logger.LogInformation("ReloadModule called with module={Module}", module ?? "(all)");
+        if (string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
+                hub.JsonSerializerOptions));
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        return hub.IsGlobalAdmin().Take(1)
+            .Catch((Exception _) => Observable.Return(false))
+            .SelectMany(admin => admin
+                ? ModuleReload.Request(hub, new ModuleReloadRequest
+                {
+                    Module = module,
+                    Reason = reason,
+                    RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+                })
+                : Observable.Return(new ModuleReloadTicket(null,
+                    "reloading a module requires a platform admin (an admin on the Admin partition) — it can restart this instance")))
+            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+                    ? new
+                    {
+                        status = "Requested",
+                        path = ticket.Path,
+                        message = "Read the request node: status, items (found / landed / target version), "
+                                  + "activation (Live / Restart / NotNeeded), replicas (what each process loaded) and failure.",
+                    }
+                    : new { status = "Error", path = (string?)null, message = ticket.Refusal ?? "refused" },
+                hub.JsonSerializerOptions));
+    }
+
+    /// <summary>
+    /// "Reboot this instance" (<c>Doc/Architecture/InstanceReboot</c>, policy <c>instance-reboot</c>) —
+    /// bring it to a known-good, NEWEST state in one step. Files ONE durable request at
+    /// <c>Admin/_Reboot/{id}</c>; the instance's executor then, in order and each step reported on the
+    /// request with a named reason when skipped or failed: syncs every GitSynced module source to its
+    /// branch HEAD, lands the newest compatible version of every installed module, picks the newest
+    /// image its update policy admits, takes ONE roll/restart that activates all of it, and verifies
+    /// every process booted after it (health readings plus a thread-start smoke check) — RED with the
+    /// named failure otherwise. Returns a JSON <c>{status, path, message}</c> envelope at once.
+    ///
+    /// <para>🚨 Global admins only (<c>IsGlobalAdmin</c>). The caller's own call IS the signature — no
+    /// second approver — and the request records who (<c>requestedBy</c>).</para>
+    /// </summary>
+    /// <param name="reason">Why — required; carried into the restart announcement and every log line.</param>
+    /// <param name="wedged">The instance is wedged: the image step does not wait for a dependent-suite verdict (and says so).</param>
+    public IObservable<string> RebootInstance(string? reason, bool wedged = false)
+    {
+        logger.LogInformation("RebootInstance called (wedged={Wedged})", wedged);
+        if (string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
+                hub.JsonSerializerOptions));
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        return hub.IsGlobalAdmin().Take(1)
+            .Catch((Exception _) => Observable.Return(false))
+            .SelectMany(admin => admin
+                ? InstanceReboot.Request(hub, new InstanceRebootRequest
+                {
+                    Reason = reason,
+                    RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+                    Trigger = InstanceRebootTrigger.Person,
+                    Wedged = wedged,
+                })
+                : Observable.Return(new InstanceRebootTicket(null,
+                    "rebooting an instance requires a platform admin (an admin on the Admin partition) — it restarts this instance")))
+            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+                    ? new
+                    {
+                        status = "Requested",
+                        path = ticket.Path,
+                        message = "Read the request node: status (Preparing / AwaitingRestart / Done / Failed), steps "
+                                  + "(Sync, Modules, Image, Restart, Verify — each Ok / Skipped / Failed with its reason), "
+                                  + "modules, targetImage, replicas (each booted process's checks) and failure.",
+                    }
+                    : new { status = "Error", path = (string?)null, message = ticket.Refusal ?? "refused" },
+                hub.JsonSerializerOptions));
+    }
+
+    /// <summary>
     /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
     /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
     /// DEFINITIVE denial re-decided through the node's <c>INodeTypeAccessRule</c> exactly as the owner's
