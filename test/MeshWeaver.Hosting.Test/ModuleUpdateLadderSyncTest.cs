@@ -60,7 +60,8 @@ public class ModuleUpdateLadderSyncTest(ITestOutputHelper output) : MonolithMesh
     private readonly string publishedRoot = Path.Combine(
         Path.GetTempPath(), "mw-ladder-sync-" + Guid.NewGuid().ToString("N")[..12]);
 
-    private static string UserId => TestUsers.Admin.ObjectId!;
+    private static string UserId => TestUsers.Admin.ObjectId
+        ?? throw new InvalidOperationException("the fixture contract: TestUsers.Admin carries an ObjectId");
 
     private GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
     private GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
@@ -285,8 +286,8 @@ public class ModuleUpdateLadderSyncTest(ITestOutputHelper output) : MonolithMesh
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{GitHubSyncService.ConfigPath(space)}"))
                 .Take(1))
             .SelectMany(c => c.Items.Select(n => n.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)))
-            .Where(cfg => cfg is not null && (cfg.LastSyncCommitSha == sha || cfg.LastAttemptedCommitSha == sha))
-            .Select(cfg => cfg!)
+            .OfType<GitHubSyncConfig>()
+            .Where(cfg => cfg.LastSyncCommitSha == sha || cfg.LastAttemptedCommitSha == sha)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence * 4)
             .Await(ct);
@@ -371,8 +372,13 @@ public class ModuleUpdateLadderSyncTest(ITestOutputHelper output) : MonolithMesh
                         $"the test repository has no tree at {commitish}"));
             });
 
+        /// <summary>The configured branch's head is <see cref="PushedSha"/>; any other commitish is a
+        /// dependency these tests did not declare, so it fails loudly instead of answering.</summary>
         public IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
-            => Observable.Return(PushedSha);
+            => commitish == "main"
+                ? Observable.Return(PushedSha)
+                : Observable.Throw<string>(new InvalidOperationException(
+                    $"the test repository resolves only the configured branch 'main', not '{commitish}'"));
 
         public IObservable<GitHubPushResult> Push(GitHubPushRequest request) => NotUsed<GitHubPushResult>();
         public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request) => NotUsed<GitHubBranchResult>();
