@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.Collections.Immutable;
 using System.IO;
@@ -70,18 +68,20 @@ public class PlatformRollKeepsModulesServingTest : IDisposable
     {
         await Land("1.0.0", floor: P1);
 
-        var onP1 = Boot(P1);
-        onP1.Served.Should().NotBeNull("the premise: the module serves on the platform that produced it");
-        var generation = onP1.Served!.Directory;
+        var onP1 = Assert.IsType<ModuleActivationEntry>(Boot(P1).Served);
+        // The landing always writes a FRESH generation directory; a null here would make the
+        // nothing-re-landed comparison below pass vacuously (null against null).
+        var generation = onP1.Directory;
+        generation.Should().NotBeNullOrWhiteSpace("the premise: the landing recorded the generation it wrote");
 
         foreach (var running in new[] { P2, P3 })
         {
             var boot = Boot(running);
             boot.Skips.Should().BeEmpty($"a roll to {running} keeps the landed module");
             boot.Advisories.Should().BeEmpty($"its floor {P1} is below {running}");
-            boot.Served.Should().NotBeNull();
-            boot.Served!.Version.Should().Be("1.0.0");
-            boot.Served.Directory.Should().Be(generation, "the SAME bytes keep serving — nothing re-landed");
+            var served = Assert.IsType<ModuleActivationEntry>(boot.Served);
+            served.Version.Should().Be("1.0.0");
+            served.Directory.Should().Be(generation, "the SAME bytes keep serving — nothing re-landed");
         }
     }
 
@@ -97,7 +97,7 @@ public class PlatformRollKeepsModulesServingTest : IDisposable
         var boot = Boot(P3);
         boot.Skips.Should().BeEmpty();
         boot.Advisories.Should().BeEmpty($"floor {P1} ≤ running {P3}");
-        boot.Served!.Version.Should().Be("1.2.0");
+        Assert.IsType<ModuleActivationEntry>(boot.Served).Version.Should().Be("1.2.0");
         ModulePlatformFloor.DeclineReason(P1, P3).Should().BeNull("the one floor rule agrees");
     }
 
@@ -114,7 +114,7 @@ public class PlatformRollKeepsModulesServingTest : IDisposable
 
         var boot = Boot(P2);
         boot.Skips.Should().BeEmpty("the boot never skips on the floor string (#3648)");
-        boot.Served!.Version.Should().Be("1.3.0");
+        Assert.IsType<ModuleActivationEntry>(boot.Served).Version.Should().Be("1.3.0");
         var (module, sentence) = Assert.Single(boot.Advisories);
         module.Should().Be(Module);
         sentence.Should().Contain(P3).And.Contain(P2);
@@ -131,7 +131,7 @@ public class PlatformRollKeepsModulesServingTest : IDisposable
     public async Task AModuleWhoseBytesAreGone_IsSkippedByName_TheChannelIsLive()
     {
         await Land("1.0.0", floor: P1);
-        var served = Boot(P1).Served!;
+        var served = Assert.IsType<ModuleActivationEntry>(Boot(P1).Served);
         Directory.Delete(Path.Combine(root, "modules", served.Directory ?? Module), recursive: true);
 
         var boot = Boot(P2);

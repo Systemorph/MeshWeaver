@@ -1,7 +1,7 @@
 ---
 Name: The Module Update Ladder — Rule Table
 Category: Architecture
-Description: Every rule that decides what an instance runs as platform and modules move independently — written as one precise table (platform roll, module publication, store copy against image copy, prebuilt adoption, seals, source sync, the control instance), each row tied to the policy that states it, the code that decides it and the tests that hold it, including the rows that fail today.
+Description: Every rule that decides what an instance runs as platform and modules move independently — written as one precise table (platform roll, module publication, store copy against image copy, prebuilt adoption, seals, source sync, the control instance, the 2026-10-05 incident end to end), each row tied to the policy that states it, the code that decides it and the tests that hold it, including the rows that fail today.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v18"/><path d="M17 3v18"/><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h10"/></svg>
 ---
 
