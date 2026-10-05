@@ -222,6 +222,15 @@ own rules, and takes only **`Content`** wholesale. So an omitted top-level field
 and *overwritten* by `update` on MCP/CLI. `Content` is the field that behaves like pattern 3 — which
 is exactly the field a fold needs.
 
+🚨 **One field is exempt from the `update` verb's "every field is written": the sync claim
+(`syncBehavior`).** It is ownership metadata, not authorable content, and the deserialiser fills an
+omitted key with the default `Include` — so an agent that sent back only the node it meant to change
+silently RELEASED the claim, and the next static-repo import pruned a runtime record as "absent from
+the repo" (MeshWeaver.Plugins#2803: a triage item's verdict write). `MeshOperations.Update` therefore
+carries the LIVE node's claim when the caller's JSON does not name `syncBehavior`, and writes an
+explicitly named value as given (naming `Include` is how a caller resumes sync). Pinned by
+`UpdateKeepsTheSyncClaimTest` (Memex.Portal.Shared.Test).
+
 ## Status
 
 **The fold half of the lowering is BUILT; the text splice and the general expression lowering are

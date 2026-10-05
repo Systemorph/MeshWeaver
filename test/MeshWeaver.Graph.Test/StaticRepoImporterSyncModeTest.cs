@@ -14,8 +14,9 @@ namespace MeshWeaver.Graph.Test;
 /// <list type="bullet">
 ///   <item><b>Additive</b> — a user-added node (never in a manifest) SURVIVES re-import; a node the
 ///     source PREVIOUSLY shipped but has since dropped IS pruned.</item>
-///   <item><b>FullReplace</b> (default) — every extra absent from the source is pruned (unchanged
-///     behavior, incl. a user-added node), so non-opted-in partitions do not regress.</item>
+///   <item><b>FullReplace</b> (default) — prunes the same set as Additive: only an extra the source
+///     PREVIOUSLY owned (policy <c>prune-requires-provenance</c>). A node created in the partition at
+///     runtime survives.</item>
 ///   <item><b>UpsertOnly</b> — nothing is ever pruned.</item>
 /// </list>
 /// The per-node <see cref="SyncBehavior"/> guard (claimed nodes) and governance/excluded-root guards
@@ -58,14 +59,37 @@ public class StaticRepoImporterSyncModeTest
         pruned.Should().BeEquivalentTo(new[] { "AI/Removed1" }, JsonSerializerOptions.Default);
     }
 
+    /// <summary>
+    /// 🚨 Policy <c>prune-requires-provenance</c>. FullReplace used to prune EVERY extra, and a manual
+    /// import of the control instance's <c>Hosting</c> partition deleted 16 runtime nodes that way —
+    /// the PR babysitter's live state (<c>Hosting/Babysitter</c>) and every <c>Hosting/Queues/*</c>
+    /// entry — because "they are not in the repository". The node the source DID own and dropped is
+    /// the positive control: if it were kept too, the assertion on the runtime node would be vacuous.
+    /// </summary>
     [Fact]
-    public void FullReplace_PrunesEveryExtra_IncludingUserAddedNode()
+    public void FullReplace_PrunesWhatTheSourceOwned_AndKeepsANodeCreatedAtRuntime()
     {
         var pruned = Prune(PartitionSyncMode.FullReplace, Shipped, Removed, UserAdded);
 
-        // Mirror behavior (the default for non-opted-in partitions): every node absent from the source
-        // is pruned — including a user-added one. This is the behavior we must NOT regress.
-        pruned.Should().BeEquivalentTo(new[] { "AI/Removed1", "AI/UserAdded" }, JsonSerializerOptions.Default);
+        pruned.Should().BeEquivalentTo(new[] { "AI/Removed1" }, JsonSerializerOptions.Default,
+            because: "the dropped source node was in the prior manifest and is pruned, while a node no "
+                     + "manifest records was created in the partition at runtime and is not the "
+                     + "repository's to delete");
+    }
+
+    /// <summary>
+    /// Unknown provenance is NOT prunable: with no prior manifest (first import, or a manifest that
+    /// could not be read) nothing is pruned in any mode — a retired node lingers one import rather than
+    /// a live one being guessed away.
+    /// </summary>
+    [Fact]
+    public void UnknownProvenance_PrunesNothing_InAnyMode()
+    {
+        foreach (var mode in new[] { PartitionSyncMode.FullReplace, PartitionSyncMode.Additive })
+            StaticRepoImporter.ComputePrunableNodes(
+                    new[] { Shipped, Removed, UserAdded }, CurrentSourcePaths,
+                    previouslyOwnedPaths: [], excludedRoots: [], mode)
+                .Should().BeEmpty($"no manifest says the source put any of these here ({mode})");
     }
 
     [Fact]

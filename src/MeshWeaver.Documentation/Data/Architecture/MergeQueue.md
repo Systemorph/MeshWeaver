@@ -62,6 +62,12 @@ step cannot fire on a queue run).
 | `merge_method` | `MERGE` | The repo's convention (`gh pr merge --merge`), keeps each PR's commits and `Co-Authored-By` trailers, and the commit the queue built is the commit `main` fast-forwards to — sha-identical, so [verifying an image by commit](../ContinuousDeliveryContract) needs no detour through the tree. |
 | `check_response_timeout_minutes` | 45 | Matches the fleet's hard per-job cap (`check-workflow-timeouts.py`): a queue build that has not reported in 45 minutes is stuck by the same doctrine, and the steward re-queues it once. 60 was the 08-30 value; the slowest honest PR run is 19 minutes. |
 
+The `refs/ci-green/<tree>` marker is written only after `Consolidate test results`
+passes every collector gate verdict, including documentation, compatibility, policy,
+shell, and client checks. A successful build and test matrix alone cannot mint the
+marker: a red gate leaves the tree unverified, so the queue must run its checks
+instead of reusing that result (#5988).
+
 Two properties of `dotnet-test.yml` matter for the queue and were checked rather than assumed:
 
 - **Concurrency cannot cancel a queue build.** The group is

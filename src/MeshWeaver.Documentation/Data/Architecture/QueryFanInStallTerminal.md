@@ -507,6 +507,88 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
   2026-09-24. The sweep that stalls runs rarely, so a quiet window says little; the next reading has
   to cover a sweep on an image carrying this change.
 
+## Head-of-line starvation of pg-read by the pedestrian satellite walk (2026-10-04)
+
+The terminal kept firing on the control instance: 200 `QueryProviderStalledException` lines between
+2026-09-27 and 2026-10-04, 167 of them on one pod. Two shapes recur. Both name a provider that missed
+the 15 s Initial bound:
+
+- `PostgreSqlPartitionedMeshQuery` on `path:Hosting/PlatformBuilds`, a one-row exact probe.
+- `StorageAdapterMeshQueryProvider` on `namespace:Admin scope:descendants nodeType:Thread
+  sort:LastModified-desc limit:500 select:…`.
+
+Routing (`PathResolutionService`) gates on every provider's Initial, so a stall here is also a
+routing stall.
+
+The second query is the thread supervisor's sweep (MeshWeaver.Plugins `ThreadSupervisor.Scan`): it
+reads the newest threads mesh-wide with `partitions:all`, and separately under `Admin`, which
+`partitions:all` leaves out.
+
+**The read that floods the pool.** `StorageAdapterMeshQueryProvider.DefersToNativeProvider` deferred
+unscoped and scoped-primary queries to the native partitioned provider, but kept every scoped
+SATELLITE read local (a `_` segment, a satellite nodeType such as `Thread`, or
+`source:activity`/`accessed`). The reason given in the code was that the native delegate's satellite
+Initial under-returned pre-existing rows. Plugins `SatelliteSyncedInitialTests` has since shown that
+claim was the access filter correctly dropping rows for an `Anonymous` caller, and both native
+providers (`PostgreSqlPartitionedMeshQuery`, `SnowflakePartitionedMeshQuery`) route scoped satellite
+reads to their per-schema delegate.
+
+The pedestrian's own shortcut for scoped adapters (`persistence is IScopedQueryStorageAdapter`)
+never fires on the partitioned backends: its persistence there is the path-routing adapter, which is
+only an `IStorageAdapter`. So the Admin/Thread query ran the full pedestrian walk: a
+`ListChildPaths` per node and a `Read` per path, about 2×N `pg-read:Postgres` admissions for a
+partition of N nodes. The walk expanded with unbounded `SelectMany`s, so every listing of a level
+and every read was subscribed at once and queued at once on the ONE process-wide FIFO pool (cap 16).
+Every read issued after it, including the one-row `path:Hosting/PlatformBuilds` probe, waited behind
+the walk's whole remainder.
+
+And the walk could not find a single thread. Threads live in the `threads` satellite table under
+node-less `_Thread` segments. A `mesh_nodes` child listing never returns those segments, so the walk
+never reaches them.
+
+**The fix (core, `StorageAdapterMeshQueryProvider`), two parts.**
+
+1. **Defer scoped satellite reads.** With `DeferToNativeProvider` set, the pedestrian now defers
+   every scoped read except `source:activity` / `source:accessed`. Those two the native provider
+   answers from its cross-schema fan-out, which is one-shot on Snowflake, so the pedestrian keeps
+   them rather than risk a live query losing its re-query trigger. Backends without a native
+   provider (in-memory, file system, single schema) are unchanged.
+2. **Bound the walk.** One query's walk now keeps at most `WalkConcurrency` (4) `ListChildPaths`
+   calls and at most 4 `Read` calls outstanding. The walk is breadth-first, one level at a time.
+   Leaves run in chunks joined by an enumerable `Concat`. This is deliberately not
+   `Merge(maxConcurrent)`: Rx's bounded `Merge` subscribes the next queued inner from inside the
+   previous inner's `OnCompleted`, so a run of synchronously completing leaves recurses once per
+   leaf. Measured on Rx 7, 4 delayed and 200,000 synchronous inners overflow the stack. The total
+   work is unchanged. This is fairness, not headroom: no pool cap and no timeout moved.
+
+`PedestrianWalkHeadOfLineTest` (`test/MeshWeaver.Hosting.Test`) pins both parts. The rig is a store
+that is NOT an `IScopedQueryStorageAdapter`, whose `ListChildPaths` and `Read` run through one
+`IoPool` of cap 2 with 20 ms latency, seeded with 1,020 nodes under `Admin`:
+
+| case | with the fix | unfixed provider (negative control) |
+|---|---|---|
+| Admin/Thread, `DeferToNativeProvider` on: storage requests | 0 | the full walk; no Initial within 5 s |
+| Admin/Thread, defer off: peak outstanding on the pool | ≤ 8 | 2,001 (about 2×N) |
+| a second scoped query's Initial while the walk runs | under 2 s | 14.4 s |
+
+The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**Not established.**
+
+- No production timing data. The control instance gave no per-query census of pool admissions, so
+  the share of the stalls this walk caused is inferred from the mechanism, not measured.
+- How often the Admin/Thread query ran on the stalled pod. Its issuer is the thread supervisor's
+  sweep (MeshWeaver.Plugins `ThreadSupervisor.Scan`, the `newest/Admin` query, run as the system
+  identity, `LookbackLimit` 500). The sweep was documented as running every 60 s when it shipped,
+  which would repeat the whole walk every minute. The interval in force on the control instance
+  was not read.
+- Whether the event log or the instance store share the 50-connection data source with
+  `pg-read:Postgres`. If they do, they compete for the same connections, which this change does not
+  touch.
+- The pedestrian's `source:activity` walk on the partitioned backends is now bounded but still
+  runs, and it cannot see satellite rows either. Retiring it needs a live native answer on Snowflake
+  first.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

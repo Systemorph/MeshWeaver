@@ -169,7 +169,11 @@ public sealed class UserOnboardingService(
         // System identity the write runs under, pinned by value before any scheduler hop.
         var captured = accessService.Context;
         var request = new CreateOrUpdateNodeRequest(partitionRootNode)
-            .WithFolds<User>(hub.JsonSerializerOptions, f => f.KeepExisting(u => u.PinnedPaths))
+            .WithFolds<User>(hub.JsonSerializerOptions, f => f
+                .KeepExisting(u => u.PinnedPaths)
+                // The home's path manifests — the logon action's, never the form's.
+                .KeepExisting(u => u.SpacePaths)
+                .KeepExisting(u => u.SharedPaths))
             with { RequestedBy = captured?.ObjectId };
         var target = hub.NodeOperationTarget();
         // Defer keeps the post cold — it fires on Subscribe, never on construction.
