@@ -193,11 +193,30 @@ internal class MeshNodeCompilationService(
     // which assemblies Roslyn can see is part of the compile input. This service only resolves
     // THIS mesh's installed-module composition from its service tree and threads it in. Lazy per
     // service instance: modules install at boot, before any compile runs.
-    private IReadOnlyList<MetadataReference> References => meshReferences.Value;
+    // 🚨 Keyed by the installed modules' MVIDs, not computed once: a module in its own load context
+    // answers with its CURRENT generation (policy module-live-update-default), so after a live swap
+    // the next compile must see the new generation's metadata — a once-per-service reference set is
+    // the boot generation for the life of the process, and a NodeType written against the new
+    // member would fail exactly as the 2026-10-05 incident did (CS0117). Unchanged module set ⇒ the
+    // same instance, so the steady state costs one MVID read per module.
+    private IReadOnlyList<MetadataReference> References
+    {
+        get
+        {
+            var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray();
+            var key = string.Join(";", modules.Select(m => m.Mvid.ToString("N")).OrderBy(x => x, StringComparer.Ordinal));
+            var cached = meshReferences;
+            if (cached is not null && string.Equals(cached.Key, key, StringComparison.Ordinal))
+                return cached.References;
+            var composed = new ModuleReferenceSet(key, CompileReferences.ComposeWithModules(modules));
+            Interlocked.Exchange(ref meshReferences, composed);
+            return composed.References;
+        }
+    }
 
-    private readonly Lazy<IReadOnlyList<MetadataReference>> meshReferences = new(() =>
-        CompileReferences.ComposeWithModules(
-            hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray()));
+    private ModuleReferenceSet? meshReferences;
+
+    private sealed record ModuleReferenceSet(string Key, IReadOnlyList<MetadataReference> References);
 
     /// <summary>
     /// Resolves every <c>@@</c> include via the toolchain's shaping

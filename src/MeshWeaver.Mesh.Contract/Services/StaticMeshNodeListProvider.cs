@@ -14,18 +14,56 @@ namespace MeshWeaver.Mesh.Services;
 internal sealed class StaticMeshNodeListProvider : IStaticNodeProvider
 {
     private readonly IReadOnlyList<MeshNode> _nodes;
+    private readonly ModuleContexts? _modules;
 
-    public StaticMeshNodeListProvider(IReadOnlyList<MeshNode> nodes)
+    public StaticMeshNodeListProvider(IReadOnlyList<MeshNode> nodes, ModuleContexts? modules = null)
     {
         _nodes = nodes;
+        _modules = modules;
     }
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         if (_nodes.Count == 0)
             return Enumerable.Empty<MeshNode>();
-        return _nodes
+        return WithCurrentModuleGenerations()
             .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.Last());
+    }
+
+    /// <summary>
+    /// The registered nodes, with every node a MODULE contributed served from that module's
+    /// CURRENT generation (policy <c>module-live-update-default</c>): at the position its first
+    /// boot-time node held, the current generation's nodes replace the ones the swapped-out
+    /// generation contributed. With no swap this is the list exactly as registered.
+    /// </summary>
+    private IEnumerable<MeshNode> WithCurrentModuleGenerations()
+    {
+        if (_modules is null)
+        {
+            foreach (var node in _nodes)
+                yield return node;
+            yield break;
+        }
+
+        HashSet<string>? substituted = null;
+        foreach (var node in _nodes)
+        {
+            if (_modules.OwnerOf(node) is not { } owner)
+            {
+                yield return node;
+                continue;
+            }
+            var currentNodes = _modules.CurrentNodes(owner);
+            if (currentNodes.Any(n => ReferenceEquals(n, node)))
+            {
+                yield return node;
+                continue;
+            }
+            // A swapped-out generation's node: emit the current generation's nodes once, here.
+            if ((substituted ??= new HashSet<string>(StringComparer.Ordinal)).Add(owner))
+                foreach (var replacement in currentNodes)
+                    yield return replacement;
+        }
     }
 }

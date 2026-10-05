@@ -53,10 +53,12 @@ public sealed class ModuleLoadContext : AssemblyLoadContext, IPlatformLoadContex
     private readonly object gate = new();
     private ImmutableHashSet<string> dependsOn = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
-    internal ModuleLoadContext(ModuleContexts owner, string moduleName, string directory, long sequence)
+    internal ModuleLoadContext(ModuleContexts owner, string moduleName, string directory, long sequence,
+        ModuleSwapStage? stage = null)
         : base($"{NamePrefix}{moduleName}#{sequence}", isCollectible: true)
     {
         this.owner = owner;
+        Stage = stage;
         ModuleName = moduleName;
         Directory = directory;
         // The same two process-static caches a NodeType context purges (CompilationCacheService):
@@ -66,6 +68,9 @@ public sealed class ModuleLoadContext : AssemblyLoadContext, IPlatformLoadContex
         Unloading += ReflectionCacheEviction.EvictFor;
         Unloading += JsonMemberAccessorCacheEviction.EvictFor;
     }
+
+    /// <summary>The live swap this context was loaded into, or null; see <see cref="ModuleSwapStage"/>.</summary>
+    internal ModuleSwapStage? Stage { get; }
 
     /// <summary>The module's entry-assembly simple name.</summary>
     public string ModuleName { get; }
