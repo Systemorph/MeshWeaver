@@ -1,0 +1,7 @@
+{
+  "$comment": "THE one declaration of which instance is CONTROL for the platform deploy (policies platform-deploy-control-first and control-always-latest; Doc/Architecture/PlatformAndModuleDeploy). `url` is the public base URL whose /api/version and /health the arming (`arm-promoted-set.py select`) and the alarm (`control-always-latest.yml`) read; it is the instance on the `memex-control` image line, which `Deploy control first` tags for every accepted platform build. `platformLagBoundMinutes` is how long control may run an older platform than the newest build it was given before the alarm goes RED — one self-update poll plus a roll with its migration Job; tighten it once measured rolls justify it. At the control-plane cutover (Systemorph/Memex `control` record, §8 step 6) this file does not change: it already names the memex-control instance.",
+  "deployment": "control",
+  "url": "https://control.systemorph.com",
+  "imageRepository": "memex-control",
+  "platformLagBoundMinutes": 180
+}

@@ -1677,5 +1677,17 @@ public class Workspace : IWorkspace
         }));
     }
 
+    /// <summary>
+    /// True when this workspace serves <paramref name="streamId"/> for <paramref name="subscriber"/>
+    /// — the owner-side half of the heartbeat liveness check (#6047). A subscriber's heartbeat
+    /// names the stream it believes this owner serves; an owner activation that has no such entry
+    /// (a fresh activation after a hand-off or a recycle whose goodbye never reached the
+    /// subscriber) answers it with <c>StreamEndedEvent</c>, so the subscriber re-asks without
+    /// depending on its process's change notification. Keyed exactly as
+    /// <see cref="RegisterClientSubscription"/> keys it.
+    /// </summary>
+    internal bool ServesClientSubscription(Address subscriber, string streamId)
+        => _clientSubscriptions.ContainsKey((subscriber.ToString(), streamId));
+
 
 }

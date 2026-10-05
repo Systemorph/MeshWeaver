@@ -366,10 +366,11 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   PR's head — Doc/Architecture/PairedChangeSets), sends `core-candidate-suites`, and reports the
   verdict Plugins writes at `refs/core-candidate/<key>`. It is NOT a `needs:` of `Consolidate test
   results` and blocks nothing: MeshWeaver#5807 sat four hours green in the queue and was ejected on
-  a 42-minute silence, which is why. The verdict that decides is the PROMOTION one — main-cd `arm`
-  reads `refs/core-candidate/pair-<core7>-p<plugins7>` (requested by Plugins' own poller, so core
-  sends nothing for it) and arms the fleet only for a green pair (policy `one-promotion-gate`,
-  Doc/Architecture/OnePromotionGate). The release wave is still memex's;
+  a 42-minute silence, which is why. No Plugins verdict decides a platform roll any more (policy
+  `platform-module-deploy-separate`): main-cd `arm` arms on the PLATFORM verdict — that run's
+  compatibility ladder plus the control instance RUNNING the set (`platform-deploy-control-first`;
+  Doc/Architecture/PlatformAndModuleDeploy). Plugins' poller still runs its suites against each
+  promoted pair; that verdict reports and decides nothing. The release wave is still memex's;
   `PlatformReleaseNotifyGuard.DispatchLedger` admits the one PR-side sender.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and

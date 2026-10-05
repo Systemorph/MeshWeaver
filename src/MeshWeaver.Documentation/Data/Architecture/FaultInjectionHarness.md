@@ -149,8 +149,8 @@ sweep re-fed exactly what the sender lost.
 | # | Incident | Test (`MeshWeaver.FaultInjection.Test`) | Injector | Negative control |
 |---|---|---|---|---|
 | 1 | Write during a pod roll (#5873) | `AWriteDuringAPodRollIsReDrivenTest` | `Linger` | #5873's two `ShuttingDown` arms reverted → red: `MeshNode Unknown … is shutting down … Rejecting now` |
-| 4 | Steward's first write after its create (Plugins#2530) | `ARoutedWriteRightAfterItsCreateTest` (5 cases) | `HidePath`, `Relay.Hold`, a real pre-create probe | `MeshNodeStreamCache.ResetFailureState` made a no-op → the probe case red: `No node found at '…/Item'` |
-| 6 | Fleet watch freeze (#5011) | `AHeldReadSurvivesItsSourceSilo{BeingKilled,Draining}Test`, `AHeldReadOnAThirdSilo…`, `AHeldReadFollowsItsOwnersHandOffTest`, `AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest` | `Kill`, `Drain`, `Linger`, `HoldChangeFeed`, `HandOffTarget` | held-stream heartbeat pushed beyond the budget → all four kill/drain cases red (the owner never re-activates) |
+| 4 | Steward's first write after its create (Plugins#2530, #6045, #6046) | `ARoutedWriteRightAfterItsCreateTest` (6 cases) | `HidePath`, `Relay.Hold`, a real pre-create probe | `MeshNodeStreamCache.ResetFailureState` made a no-op → the probe case red: `No node found at '…/Item'`; the read-window write fast-fail restored in `UpdateRaw` → the cross-replica case red with the same line; the cached-remainder route restored in `PathResolutionService` → the existing-parent case red: `… Closest ancestor is '…' (remainder='Item')` |
+| 6 | Fleet watch freeze (#5011) | `AHeldReadSurvivesItsSourceSilo{BeingKilled,Draining}Test`, `AHeldReadOnAThirdSilo…`, `AHeldReadFollowsItsOwnersHandOffTest`, `AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest` | `Kill`, `Drain`, `Linger`, `HoldChangeFeed`, `HandOffTarget` | held-stream heartbeat pushed beyond the budget → all four kill/drain cases red (the owner never re-activates); the owner's answer to a heartbeat for a stream it does not serve removed (`MeshExtensions.HandleHeartBeat`) → the withheld-feed hand-off case red: the held read emits nothing |
 
 Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins, which reaches this harness by
 `ProjectReference` through its platform checkout (`Requires-platform: MeshWeaver#5879`):
@@ -169,32 +169,43 @@ because the test mesh lacks it (case 8: the one GitHub read, as the sweep's pure
 
 ## What the cases found
 
-**#5011 — a held read's liveness across a roll is only as good as its process's change feed.** Held
-reads survive a killed, drained or lingering owner in every topology modelled, with notifications
-flowing. But with the holder's change feed withheld and the owner handed off to a THIRD silo, the
-held read freezes: no value, no error, no completion — the #5011 symptom, "reads as holding while
-it holds nothing". It delivers the moment the one withheld notification is released. The reason is
-structural: the sync stream's heartbeat is fire-and-forget (`JsonSynchronizationStream`: the
-change-feed resubscribe is "the sole recycled-grain detector"), and a lingering owner's goodbye
-rides the refused router. `AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest` PINS that gap,
-so a fix (a heartbeat that detects an owner which no longer knows the subscriber) flips it on
-purpose. The case was first written with the hand-off left to chance and passed alone while
-freezing in the suite: the hand-off target is a per-process ordinal string hash, which is why
-`HandOffTarget` exists. **Not modelled:** an in-process kill still writes `Dead` to the membership
-table, so a SIGSEGV whose row stays `Active` until the survivors vote it out is not exercised.
+**#5011 / #6047 — a held read's liveness across a roll WAS only as good as its process's change
+feed.** Held reads survive a killed, drained or lingering owner in every topology modelled, with
+notifications flowing. But with the holder's change feed withheld and the owner handed off to a THIRD
+silo, the held read froze: no value, no error, no completion — the #5011 symptom, "reads as holding
+while it holds nothing" — and delivered the moment the one withheld notification was released. The
+reason was structural: the sync stream's heartbeat was a bare keep-alive (`JsonSynchronizationStream`
+called the change-feed resubscribe "the sole recycled-grain detector"), and a lingering owner's goodbye
+rides the refused router. **Fixed (#6047):** while the owner has acknowledged a subscription, the
+heartbeat names the stream (`HeartBeatEvent.StreamId`), and an owner activation that serves no such
+stream for that subscriber (`Workspace.ServesClientSubscription`) answers `StreamEndedEvent` — the
+announced-end re-ask the subscriber already has (bounded, teardown-gated, run as System). The OWNER is
+now the detector, so `AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest` delivers the write while
+the notification is still withheld. A subscription still in flight is never named (the heartbeat is not
+deferred behind an owner's initialisation; a `SubscribeRequest` is), and a tearing-down owner stays
+silent. The case was first written with the hand-off left to chance and passed alone while freezing in
+the suite: the hand-off target is a per-process ordinal string hash, which is why `HandOffTarget`
+exists. **Not modelled:** an in-process kill still writes `Dead` to the membership table, so a SIGSEGV
+whose row stays `Active` until the survivors vote it out is not exercised.
 
-**Plugins#2530 — a pre-create probe's window, closed only by a notification.** A point read of a
-not-yet-existing path opens the storm breaker's window on the reading process, and that window
-fast-fails WRITES too. What closes it early is the create's change event reaching that process.
-When the probe, the create and the write all run in one process — the steward's shape — the
-harness shows the first write lands (`APreCreateProbe_DoesNotPoisonTheIssuersFirstWrite_WhenNotificationsAreLate`).
-When ANOTHER replica creates and its notification is late, the prober's first write fails with the
-steward's exact line, `No node found at '…/Item'`, until the notification arrives
-(`ACrossReplicaCreate_WithALateNotification_LeavesTheProbersWriteShut_UntilTheNotificationArrives`,
-pinned). Whether the steward met that second shape is **not established**. Separately, a write
-routed into a transient NotFound window fails loudly naming the path, and the write-side breaker
-then holds the path shut for one base cooldown (2 s, measured) because no change event follows to
-clear it; the next natural write after that lands.
+**Plugins#2530 / #6045 / #6046 — process-local negatives retracted only by a notification.** A point
+read of a not-yet-existing path leaves two verdicts on the reading process: a storm-breaker window in
+`MeshNodeStreamCache`, and — when the parent exists — an ancestor-plus-remainder route in the silo's
+`PathResolutionService` cache, which the router turns into `No node found at '…/Item'. Closest ancestor
+is '…'`. Both were retracted only by the create's change event reaching that process. When the probe,
+the create and the write all run in one process — the steward's shape — the first write lands
+(`APreCreateProbe_DoesNotPoisonTheIssuersFirstWrite_WhenNotificationsAreLate`). When ANOTHER replica
+created and its notification was late, the prober's first write failed with the steward's exact line
+until the notification arrived. **Fixed:** a write is never answered from a READ's window (only a
+write-minted window fast-fails writes), and a route-shape lookup re-asks the store for a cached
+remainder instead of serving it — see [MeshNode Stream Cache](../MeshNodeStreamCache), "A write is never
+answered from a READ's miss". `ACrossReplicaCreate_WithALateNotification_IsWritableByTheProber_BeforeTheNotificationArrives`
+and `ACrossReplicaCreate_UnderAnExistingParent_WithALateNotification_IsWritableByTheProber` hold the
+relay for the whole case and require the write to land. Whether the steward's production NotFound met
+the cross-replica shape is still **not established**; both halves are closed regardless. Separately, a
+write routed into a transient NotFound window fails loudly naming the path, and the write-side breaker
+then holds the path shut for one base cooldown (2 s, measured) because no change event follows to clear
+it; the next natural write after that lands.
 
 **Plugins#2403 — the resumer's hold, intermittently without a heartbeat.** The case-7 test (two
 silos; the action's hub live on the old pod; `RunningActionResumer` started on the new pod; the old

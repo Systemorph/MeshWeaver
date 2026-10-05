@@ -22,15 +22,17 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>needs</c>, TRANSITIVELY; <c>delivery-verdict</c> reads no result of one; the <c>handoff</c>
 /// step's <c>DELIVERY_LEGS</c> names none; the <c>ci-failure</c> alert keys on a DIRECT need failing
 /// (never <c>failure()</c>, which is true when any ANCESTOR failed — and the compatibility legs have
-/// <c>plugins-modules</c> as an ancestor); and the Plugins seal is judged by a report job no platform
-/// job needs, which records a failure on a durable ledger.</para>
+/// <c>published-modules</c> as an ancestor); and — policy <c>platform-module-deploy-separate</c> —
+/// the workflow carries NO job that packs, bakes or seals a MeshWeaver.Plugins module at all (no
+/// <c>plugins-*</c> job): modules publish on their own lanes, and core only READS the published set
+/// for its compatibility evidence.</para>
 ///
-/// <para>🚨 ONE deliberate reading of a Plugins VERDICT, and it is not a job edge (policy
-/// <c>one-promotion-gate</c>): <c>arm</c> writes the fleet's arming tags only
-/// for a promoted set whose MeshWeaver.Plugins dependent suites passed, and
+/// <para><c>arm</c> writes the fleet's arming tags only for a promoted set whose PLATFORM verdict is
+/// green (its ladder, and control running it — policies <c>platform-deploy-control-first</c> and
+/// <c>platform-module-deploy-separate</c>; no MeshWeaver.Plugins verdict is read), and
 /// <c>notify-platform-update</c> follows <c>arm</c>. Neither is a need of <c>delivery-verdict</c>
 /// (<see cref="TheArmingIsNeverAPlatformDeliveryLeg"/>), so the platform set is still promoted,
-/// verified, baked and judged on its own — what waits for Plugins is only the fleet's roll.</para>
+/// verified, baked and judged on its own.</para>
 ///
 /// <para>Measured before the split: CD 9309/9311/9313/9315/9316/9317/9320 each went red on
 /// <c>Plugins: pack … / Module tests</c> — a MeshWeaver.Plugins unit test — over platform sets that
@@ -46,8 +48,9 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     private static readonly ImmutableArray<string> PlatformJobs =
         ["promote", "verify-images", "publish-bake", "notify-platform-update", "delivery-verdict"];
 
-    /// <summary>The job that judges the Plugins seal — the only place a Plugins red may land.</summary>
-    private const string ReportJob = "report-plugins-seal";
+    /// <summary>The compatibility ladder — the half of the PLATFORM verdict that reads modules.</summary>
+    private const string Ladder = "platform-ladder-compat";
+
 
     [Fact]
     public void ThePlatformDelivery_NeverWaitsOn_NorFailsFor_APluginsJob()
@@ -72,11 +75,11 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
                 "            publish-bake, verify-images, plugins-bake]")),
             p => p.Contains("delivery-verdict", StringComparison.Ordinal) && p.Contains("plugins-bake", StringComparison.Ordinal));
 
-        // 2. a Plugins job reached TRANSITIVELY — through a need of a need (publish-bake → plugins-modules).
+        // 2. a module job reached TRANSITIVELY — through a need of a need (publish-bake → published-modules).
         Assert.Contains(Problems(Mutate(text,
                 "    needs: [gate, plugin-test-image, portal-image, promote]",
-                "    needs: [gate, plugin-test-image, portal-image, promote, plugins-modules]")),
-            p => p.Contains("publish-bake", StringComparison.Ordinal) && p.Contains("plugins-modules", StringComparison.Ordinal));
+                "    needs: [gate, plugin-test-image, portal-image, promote, published-modules]")),
+            p => p.Contains("publish-bake", StringComparison.Ordinal) && p.Contains("published-modules", StringComparison.Ordinal));
 
         // 3. a Plugins leg back in the handoff's DELIVERY_LEGS.
         Assert.Contains(Problems(Mutate(text,
@@ -90,9 +93,17 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
                 "    if: failure()")),
             p => p.Contains("alert-on-failure", StringComparison.Ordinal));
 
-        // 5. the report job deleted — a Plugins red would then be judged by nobody.
-        Assert.Contains(Problems(Mutate(text, "\n  report-plugins-seal:\n", "\n  report-plugins-seal-gone:\n")),
-            p => p.Contains(ReportJob, StringComparison.Ordinal));
+        // 6. the ladder (the arming chain's one sanctioned module read) reaching anything but the
+        //    published set — e.g. a satellite leg — is caught even though `notify` stops at it.
+        Assert.Contains(Problems(Mutate(text,
+                "    needs: [preflight, gate, promote, compat-images, published-modules]",
+                "    needs: [preflight, gate, promote, compat-images, published-modules, satellite-compat]")),
+            p => p.Contains("platform-ladder-compat", StringComparison.Ordinal) && p.Contains("satellite-compat", StringComparison.Ordinal));
+
+        // 5. a Plugins packing / sealing job back in the PLATFORM deploy (policy
+        //    platform-module-deploy-separate) — even one no platform job needs.
+        Assert.Contains(Problems(Mutate(text, "\n  published-modules:\n", "\n  plugins-modules:\n")),
+            p => p.Contains("plugins-modules", StringComparison.Ordinal) && p.Contains("platform-module-deploy-separate", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -167,9 +178,19 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
                 problems.Add($"platform job `{job}` is missing — the guard's subject moved; re-point it rather than let it pass on nothing");
                 continue;
             }
-            foreach (var reached in Closure(job, needs).Where(IsPluginsSide).OrderBy(x => x, StringComparer.Ordinal))
+            // The ONE sanctioned reach (policy `platform-module-deploy-separate`): the release event
+            // follows `arm`, and `arm` needs the compatibility LADDER — part of the PLATFORM verdict —
+            // which reads the PUBLISHED module set. So for the arming chain the ladder is a boundary:
+            // what it needs is judged on its own below, and nothing else module-side may be reached.
+            var boundary = job == "notify-platform-update" ? Ladder : null;
+            foreach (var reached in Closure(job, needs, boundary).Where(IsPluginsSide).OrderBy(x => x, StringComparer.Ordinal))
                 problems.Add($"`{job}` reaches `{reached}` through its needs (transitively)");
         }
+        if (needs.TryGetValue(Ladder, out var ladderNeeds))
+            foreach (var reached in Closure(Ladder, needs).Where(j => IsPluginsSide(j) && j != "published-modules").OrderBy(x => x, StringComparer.Ordinal))
+                problems.Add($"`{Ladder}` reaches `{reached}` — the ladder may read only the PUBLISHED module set (`published-modules`)");
+        else
+            problems.Add($"`{Ladder}` is missing — the platform verdict has no compatibility half; re-point the guard rather than let it pass on nothing");
 
         if (jobs.TryGetValue("delivery-verdict", out var verdict))
         {
@@ -189,34 +210,25 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
             if (!cond.Contains("contains(needs.*.result, 'failure')", StringComparison.Ordinal)
                 || Regex.IsMatch(cond, @"(^|[^.\w])failure\(\)"))
                 problems.Add("`alert-on-failure` must key on a DIRECT need failing (`always() && contains(needs.*.result, 'failure')`), never `failure()` — "
-                             + "that is true when any ANCESTOR failed, and the compatibility legs have `plugins-modules` as an ancestor");
+                             + "that is true when any ANCESTOR failed, and the compatibility legs have `published-modules` as an ancestor");
         }
         else
             problems.Add("`alert-on-failure` is missing — the guard's subject moved");
 
-        if (!jobs.TryGetValue(ReportJob, out var report))
-            problems.Add($"`{ReportJob}` is missing — a Plugins seal red would be judged by nobody");
-        else
-        {
-            var rb = Serialize(report);
-            if (!NeedsOf(report).Contains("plugins-bake"))
-                problems.Add($"`{ReportJob}` does not need `plugins-bake` — it cannot judge the seal");
-            if (!rb.Contains("cd-plugins-seal", StringComparison.Ordinal))
-                problems.Add($"`{ReportJob}` writes no `cd-plugins-seal` record — a failed seal would leave no durable artefact");
-            if (Regex.IsMatch(rb, @"(?m)^\s*-?\s*continue-on-error\s*:"))
-                problems.Add($"`{ReportJob}` carries `continue-on-error` — a skip-trapdoor");
-            foreach (var job in PlatformJobs.Where(j => needs.ContainsKey(j) && Closure(j, needs).Contains(ReportJob)))
-                problems.Add($"platform job `{job}` needs `{ReportJob}`");
-        }
+        // 🚨 Policy `platform-module-deploy-separate`: the platform deploy packs, bakes and seals NO
+        // module. A `plugins-*` job is that coupling by name, whether or not a platform job needs it.
+        foreach (var job in jobs.Keys.Where(j => j.StartsWith("plugins-", StringComparison.Ordinal)
+                                                 || j.StartsWith("report-plugins", StringComparison.Ordinal)).OrderBy(x => x, StringComparer.Ordinal))
+            problems.Add($"`{job}` is a MeshWeaver.Plugins packing/sealing job inside the platform deploy (policy platform-module-deploy-separate) — modules publish on their own lanes");
         return problems;
     }
 
     private static bool IsPluginsSide(string job) =>
         job.StartsWith("plugins-", StringComparison.Ordinal)
         || job.StartsWith("satellite-compat", StringComparison.Ordinal)
-        || job == ReportJob;
+        || job == "published-modules";
 
-    private static HashSet<string> Closure(string job, IReadOnlyDictionary<string, List<string>> needs)
+    private static HashSet<string> Closure(string job, IReadOnlyDictionary<string, List<string>> needs, string? boundary = null)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var stack = new Stack<string>(needs.TryGetValue(job, out var n) ? n : []);
@@ -224,6 +236,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
         {
             var next = stack.Pop();
             if (!seen.Add(next)) continue;
+            if (next == boundary) continue;
             if (needs.TryGetValue(next, out var more))
                 foreach (var m in more) stack.Push(m);
         }
