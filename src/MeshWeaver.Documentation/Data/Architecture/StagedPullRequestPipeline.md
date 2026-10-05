@@ -121,7 +121,7 @@ disagree about what "reviewed" or "answered" means:
 | | Merge gate (`Automatic review answered`) | **Stage gate** (`--stage-gate`) | Arm gate (`--arm-gate`, control) |
 |---|---|---|---|
 | Asks | may this merge? | may stage 2 start for THIS head? | may auto-merge be armed now? |
-| Review must be on | any head of the PR | **the current head** | the current head |
+| Review must be on | any head of the PR | **the current head** — or carried over a clean base merge | the current head — or carried over a clean base merge |
 | Reviewer unavailable (degradation) | releases | **releases, loudly** | refuses — a person merges |
 | No review after the fallback | red | **releases, loudly** | refuses |
 | `tests-before-review` label | — | **releases, loudly** | ignored |
@@ -222,8 +222,73 @@ Unchanged supersession rules, applied per head:
   its verdict (`change-set` mode `adopted`); the stage step is skipped for an adopted change set,
   because the verdict it carries already passed stage 1 on its parent head.
 - A review finding answered **by a fix push** is a new authored head: no stale verdict is carried. The
-  gate reads only `internal-review` runs on the current head sha, and the advance re-runs only a run
-  whose `head_sha` is the PR's current head.
+  gate reads `internal-review` runs on the current head sha — or carries one over a CLEAN MERGE of the
+  base branch, and over nothing else (next section) — and the advance re-runs only a run whose
+  `head_sha` is the PR's current head.
+
+## A clean merge of the base branch carries the review
+
+Policy [`review-carries-over-clean-base-merge`](../PolicyNotProse). Measured 2026-10-05 22:38Z: 25
+open non-draft pull requests across core, Plugins and Memex, and 7 merges in 2.5 hours — six of the
+25 DIRTY at the same moment. The loop that kept them there: main moves → a pull request goes DIRTY →
+main is merged into the branch → the new head has no `internal-review` → this gate holds it at stage 1
+→ a full review round queues behind admission → main moves again. A merge of the base branch that
+applied cleanly changes nothing the reviewer read, so it must not cost a review round.
+
+**The rule.** The review of an earlier head carries over to the current head when ALL of these hold,
+each computed from the repository through REST — never from a commit message or a branch name
+(`check-review-answered.py` `find_reviewed_ancestor` + `carry_over`, read by `read_carry`):
+
+1. **Walking back from the head through MERGE commits only** reaches a commit whose newest
+   `internal-review` run from the reviewer's App is a real review — not the *Reviewer unavailable*
+   degradation, not the steward's *Review not completed* exit. Every merge walked has exactly ONE
+   parent on the pull request's side (the other is in the base branch), so a merge of another
+   feature branch does not carry.
+2. **Every commit on the pull request now that was not on it at the reviewed head is a merge.** One
+   non-merge commit is new content and owes a fresh review.
+3. **The pull request's OWN diff is byte-identical**: compare(base...head) and compare(base...reviewed
+   head) — each merge-base..head, as GitHub computes it — have the same patch-id. The patch-id hashes
+   every file's status, names and patch with each hunk header reduced to `@@` (line numbers move when
+   main changes elsewhere in the file; the change does not); context lines are kept, as the git
+   patch-id keeps them. A file sent without a patch (binary, too large) contributes its blob id.
+
+Anything unreadable does NOT carry: a short commit listing, the compare API's 300-file cap, a file
+with neither patch nor blob id, a failed read. The head is then reviewed fresh, exactly as before.
+
+**What carries.** The reviewed head's run stands in for the current head's in the STAGE gate (mode
+`carried` — stage 2 starts at once) and the ARM gate; the pull request's threads are pull-request-wide
+already, so a thread answered on the earlier head stays answered. The head's own real review, when it
+has one, always wins; a carry replaces only an absent, running or degraded own run. The merge gate
+(`Automatic review answered`) never asked per head and is unchanged.
+
+**What is logged.** The stage gate's job summary and the arm gate's line name the reviewed head, its
+check run and conclusion, the merges since it, and the patch-id with both merge-base ranges:
+
+> ✅ Stage 1 green for #N by CARRY-OVER — no new review round: review CARRIED from head d4815d432e
+> (`internal-review` check run 111882997610: success "No blocking findings") to 4aff97fd03: the 1
+> commit(s) since it are all merges of the base branch (4aff97fd03), and the pull request's own diff is
+> byte-identical — patch-id … over N file(s), &lt;merge-base&gt;..d4815d432e = &lt;merge-base&gt;..4aff97fd03
+
+A refused carry is logged too (`no carry-over from reviewed head …: the pull request's own diff
+changed — patch-id X (…) vs Y (…)`), so a head that waits says why it waits.
+
+**No round is spent.** The PR steward (MeshWeaver.Plugins `Hosting/Deployment/Source/ReviewCarryOver`)
+applies the same rule before it claims a review slot: a carried head gets an `internal-review` run
+posted with the reviewed head's conclusion, titled `Review carried from <sha>`, and no reviewer
+thread — the required `internal-review` context of a plugin repository is satisfied by the evidence,
+not by a model.
+
+**Measured on the history** (replaying every reviewed-head → merge-of-main pair on the last 60 core
+pull requests, base = the merged main commit): 7 of 11 carry. The 4 that do not are each a change to
+the pull request's diff — a conflict resolution, or main editing a line inside a hunk's context (the
+policy register's last row, which every policy-adding pull request appends after: the added row is
+unchanged, its neighbour is not; strict by design). The same replay showed why the walk refuses
+*Review not completed*: three further clean merges sat on that exit, which is not a review.
+
+**Negative control.** `--no-carry` (stage gate and arm gate) disables the carry; the self-test runs
+the pure-merge fixture both ways — carried → stage 2, disabled → *waiting* — and a mutation of each
+condition (patch content ignored, non-merge commits allowed, hunk headers kept, either gate ignoring
+the carry) turns the self-test red.
 
 ## Required contexts stay satisfiable — a hold is RED, never skipped
 
@@ -304,6 +369,10 @@ There are two shared pools, and runs are dispatched in tier order: express, trun
 > retired, and every runner gate of the fleet refuses their names.
 
 ## What it does not do (residue, stated)
+
+- **A carry is strict on context.** A merge in which main edited a line next to one of the pull
+  request's hunks changes the patch-id, so that head is reviewed fresh although its own +/- lines are
+  unchanged.
 
 - **An answer on a branch that predates the listener.** `pull_request_review_comment` runs the
   workflow file from the pull request's own merge ref, so a branch cut before `stage-advance.yml`
