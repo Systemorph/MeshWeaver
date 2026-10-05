@@ -1,11 +1,20 @@
 ---
 Name: One Promotion Gate
 Category: Architecture
-Description: Never block a core merge, always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set whose MeshWeaver.Plugins dependent suites passed against that exact pair. What changed on 2026-09-27, why, and where each piece lives.
+Description: Never block a core merge, always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set on its platform verdict (no longer on MeshWeaver.Plugins' dependent suites for that exact pair, see Platform and Module Deploy). What changed on 2026-09-27, why, and where each piece lives.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h10"/><path d="M10 6l6 6-6 6"/><rect x="17" y="4" width="3" height="16" rx="1"/></svg>
 ---
 
 # One Promotion Gate
+
+> 🚨 **Superseded in part by [Platform and Module Deploy](../PlatformAndModuleDeploy)** (policies
+> `platform-deploy-control-first`, `platform-module-deploy-separate`, `control-always-latest`).
+> The arming mechanics below — the cursor, the completion marker, the resume, the bundle's base —
+> are unchanged. What changed: a set is armed on the PLATFORM verdict (its compatibility ladder,
+> and the control instance running it), not on a MeshWeaver.Plugins dependent-suites verdict; the
+> control image is tagged for every accepted build FIRST (`control-first`), not after the fleet's
+> arming; and core CD no longer packs, bakes or seals the Plugins publication. Where the text below
+> says otherwise, that page wins.
 
 **Three policies, one design** (register: [Policy Not Prose](../PolicyNotProse)):
 
