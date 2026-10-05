@@ -129,7 +129,8 @@ internal static class KernelScriptReferences
             // assembly was cell-visible only if it happened to load before the process's first
             // kernel session. Pack types join the surface exactly one way now — the explicit
             // per-session `cellSurface: true` opt-in; modules join per-session via
-            // MeshScriptEnvironment.SessionAssemblies (Default ALC, so unaffected here).
+            // MeshScriptEnvironment.SessionAssemblies — per session, and so unaffected here even
+            // now that a module runs in its own collectible context (module-live-update-default).
             .Where(asm => AssemblyLoadContext.GetLoadContext(asm)?.IsCollectible != true)
             .Select(TryGetOrCreate)
             .Where(r => r is not null)

@@ -114,7 +114,11 @@ container builds) and fed to `MeshBuilder.InstallAssemblies` as one list:
    > the whole answer to the empty list.
 
 The union dedupes by module name (a store install of an already-baseline module contributes
-nothing). **Activation is restart-based**: landing a module writes its assemblies into
+nothing). 🚨 **Superseded in progress — see [Live Module Update](../LiveModuleUpdate)** (policy
+`module-live-update-default`): every module the image does not bind now loads into its OWN
+collectible load context, and the self-update check swaps a landed generation in LIVE first; the
+restart path below is now the FALLBACK, taken only for a module that declares
+`[ModuleRestartRequired]`, measures as not re-appliable, or whose live swap fails. **Activation was restart-based**: landing a module writes its assemblies into
 `modules/<name>/` and its activation entry, flags `PendingRestart` in the sidecar, and the module
 loads on the NEXT restart — nothing is loaded into the running process (a genuinely dynamic
 loader collides with the kernel snapshot). Boot consumes the `PendingRestart` flag: applying the

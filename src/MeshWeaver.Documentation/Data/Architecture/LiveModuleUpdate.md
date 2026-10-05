@@ -1,0 +1,176 @@
+---
+Name: Live Module Update
+Category: Architecture
+Description: A module update goes live in the running process by default — each module in its own collectible load context, the old generation swapped out and unloaded — and only a declared or failed live swap falls back to an automatic restart. What is shipped, what is owed, and how each module is classified.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/><path d="M12 8v4l3 2"/></svg>
+---
+
+# Live Module Update
+
+> **The rule (policy `module-live-update-default`, [register](../PolicyNotProse)).** A module update
+> goes live **in the running process**: generation N+1 loads into a fresh collectible load context,
+> the hubs bound to N are disposed and re-instantiate on N+1, and N's context is unloaded. That is
+> THE update path for every module — no flag, no opt-in, no governed activity, no approval. A
+> restart is the exception, and it is taken only when (a) a module **declares** `restartRequired`
+> with a reason, or (b) the live swap **fails at runtime** — and then it is automatic, with N
+> serving until it happens. A module updates **independently of the platform**: it never needs a
+> new image, a platform roll or a seal for the running platform's identity.
+
+## Why this replaces restart-as-activation
+
+Until this change every landed module was `Assembly.LoadFrom`-ed into the **default** load context
+([Modules](../Modules), "Activation is restart-based"). The default context cannot unload an assembly
+and holds one copy per simple name ([Module Generation Substitution](../ModuleGenerationSubstitution)),
+so no module could change inside a running process: every update raised `pending_module_activation`,
+announced `self-update-restart-pending`, and waited for a restart. On 2026-10-05 that wait was the
+incident — AI 1.21.0 landed at 05:30Z while the process ran 1.20.4, and every NodeType compiled
+against the new member failed with `CS0117 'ThreadPreparation' does not contain a definition for
+'Group'` until somebody filed a restart by hand.
+
+## The four governing rules
+
+1. **Live by default.** Every module the image does not bind runs in its own collectible
+   `ModuleLoadContext`; an update swaps the generation in place. Nothing has to be enabled.
+2. **A restart is DECLARED, never assumed.** A module that cannot be swapped in-process carries
+   `[assembly: ModuleRestartRequired("<why>")]` — on its own assembly, so the declaration travels
+   with the bytes it describes — and `ModuleLiveUpdateGuard` fails any module that blocks a live
+   swap without it (or declares it with a blank reason). The runtime honours the declaration even
+   where the measurement sees nothing (process-wide state, an owned thread). *(Guard shipped; running
+   it over every module a satellite ships is slice 3.)*
+3. **Try live first; fall back only on a measured failure.** When the swap fails at runtime — the new
+   context will not load, a contribution cannot be re-applied, a hub cannot re-instantiate, the old
+   context does not unload inside its bound — generation N keeps serving (never a half-swapped
+   state), the reason is recorded by name, and an automatic restart loads N+1. The restart is the
+   self-update lane's routed Restart, which needs no confirmation and no approval (MeshWeaver#4607:
+   the routed action carries `origin: self-update` and is accepted only on a node created by
+   `system-security`).
+4. **Modules are independent of the platform.** A module bundle resolves every platform contract
+   from the running platform and never bundles one; it is admitted by its declared floor against the
+   running platform (`PlatformFloor`, policy `package-min-mesh-version`), never by framework-identity
+   equality; an image's baked module copy is only a boot baseline that a newer published generation
+   supersedes live. A platform roll is needed only for a platform change.
+
+## What is shipped (slice 1 — the load contexts)
+
+| Piece | What it does |
+|---|---|
+| `ModuleLoadContext` (`MeshWeaver.Mesh.Contract`) | Collectible context for ONE generation of ONE module, named `module:<Name>#<n>`. Resolves **platform first** (anything the default context can bind — one `MeshNodeProviderAttribute`, one `IMessageHub` in the process; a bundled platform copy is never used), then **another module** (the current generation of a module whose entry assembly is asked for, or an assembly a module it depends on already holds — each edge recorded as `DependsOn`), then the generation's **own directory**. Natives resolve through the same candidates as `ModuleNativeAssets`. Marked `IPlatformLoadContext`, so the impersonation guard classifies module code with the platform. Purges Autofac's and System.Text.Json's process-static caches on `Unloading`, as a NodeType context does. |
+| `ModuleContexts` | The mesh's registry (a mesh singleton, disposed with the mesh): `Load` a generation into a fresh context, `Commit` it as current (returning the one it replaces), `Retire` the old one — unloaded on a POSITIVE quiescence signal from its `AlcLeaseRegistry`, never on a timer, and recorded on `CollectibleContextUnloads` so "really collected" is observable. `Resolve(name)` is the explicit lookup NodeType builds and script sessions use; `DependentsOf(name)` is the set a swap has to take with it. |
+| `MeshBuilder.InstallModules` | Loads every module the image does not bind into its own context and commits it only after its contributions materialised. A generation whose contributions throw is unloaded and the serving one stays current. Because a failed generation never takes its name in the default context, the previous generation and the image copy stay reachable for the fallback (#3649, #3735). |
+| `NodeAssemblyLoadContext`, the kernel `ScriptSession` | Bind a module through `ModuleContexts.Resolve` — its CURRENT generation. |
+
+🚨 **Never a `Default.Resolving` handler that hands out a module assembly.** The default context
+caches a binding for the life of the process, so the first generation it saw would be pinned forever
+and no swap could take effect — and the runtime refuses a non-collectible assembly binding a
+collectible one in any case. Every context that needs a module asks the registry explicitly.
+
+**What stays in the default context.** A module whose entry assembly is in the application's own
+closure (`TRUSTED_PLATFORM_ASSEMBLIES` — `ModuleContexts.IsImageBound`) is bound by name for every
+platform assembly that references it; a second copy in its own context would split its identity. It
+loads into the default context exactly as before, and it is what a live update cannot reach until the
+image stops shipping it in its closure.
+
+**Tests** (`MeshWeaver.Compiler.Pipeline.Test` → `ModulesRunInTheirOwnContextTest`, real Roslyn emits
+and real collections): an installed module runs in a collectible `ModuleLoadContext` and still binds
+the one platform; two generations coexist and the retired one is really collected — and its
+**negative control** holds one instance of the retired generation and must see it reported RETAINED
+by context name (that control caught a first version of the retirement sentinel that reported
+"collected" the moment the unload started, because `Unload()` swaps the `Unloading` delegate out); a
+dependent binds its dependency's current generation and is recorded as its dependent; a generation
+whose contributions throw leaves the serving one current; and a NodeType compiled against a member
+only N+1 has fails to bind while N serves (the incident's shape, the negative half) and binds once
+N+1 is current — in the running process.
+
+## What is shipped (slice 2 — the swap, and live-first activation)
+
+| Piece | What it does |
+|---|---|
+| `ModuleContributions` (`MeshWeaver.Mesh.Contract`) | One generation's materialised contributions, and `LiveUpdateBlockers()` — the declared `[ModuleRestartRequired]` reason plus what the platform MEASURES it cannot re-apply in-process: root services through `WithGlobalServiceRegistry`, the mesh hub's configuration (`HubConfigurations`), address types, the builder hook, HTTP endpoints. Nodes and every-per-node-hub configuration ARE re-appliable. |
+| Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is TRANSIENT and answers the current generation, so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
+| `ModuleLiveUpdater` (`MeshWeaver.Graph`) | The swap: load N+1 → refuse (N untouched) on any blocker of N, N+1 or a dependent, or a load / materialisation failure → commit N+1 and re-load every dependent so it binds N+1, rolling ALL of it back on any failure → recycle this process's per-node hubs bound to the module's NodeTypes or nodes (every per-node hub when a generation configures every hub, or when an in-mesh build here is linked against a swapped module) → once those hubs are DEAD, retire the old generations. Serial (a subject and `Concat`, no gate), so a second update that arrives mid-swap is applied after it. Outcomes are an open vocabulary (`ModuleSwapKind`: `Live`, `UpToDate`, `RestartRequired`, `Failed`, `NotHeld`); `NeedsRestart` is the one question a caller asks. |
+| `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live. A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
+| `SelfUpdateHostedService.ConsiderRestart` | 🚨 **Live first.** Where a pending activation used to mean a restart, the check now calls `ModuleLiveActivation`; only when something did not go live does it take — or hand to the control lane — the automatic restart, whose announcement now names the modules and reasons. The verdict `ActivatedLive` records a pass that needed no restart. A host without the plugin catalog keeps the old path. |
+
+**Tests.** `ModuleLiveSwapTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running monolith mesh): N→N+1
+goes live and N's context is really collected (negative control: hold one reference into N → reported
+RETAINED by name); a second update mid-swap is applied after it and the newest serves; a read in
+flight across the swap is answered; a mesh-hub-configuring N+1 is refused with N serving; an N+1 whose
+contributions throw is a `Failed` swap with N serving; a declared `[ModuleRestartRequired]` is never
+swapped and its reason is the answer; and a NodeType written against a member only N+1 has fails to
+compile on N (CS0117 — the incident, and the negative half) and compiles after the swap, in the same
+process. `ModuleLiveUpdateGuardTest`: nodes-only passes; an undeclared blocker FAILS naming the module
+and the measurement (the guard's negative control); a declared one passes; a blank reason fails.
+`ModuleUpdatesGoLiveTest` (`Memex.Portal.Shared.Test`, the real landing path and the real self-update
+decision): a live-updatable update goes live with NO restart; a restart-required update and an
+injected live failure each schedule EXACTLY ONE automatic restart with N serving and the reason
+recorded; two updates before the restart are one restart and the record names the newest; an update
+during an in-flight restart schedules no second one; and the negative control — no check runs, and
+the guard names the stuck landed-not-loaded module. Mutation check: forcing the old restart path makes
+the live test fail (`Restarts` 1, expected 0).
+
+## What is owed
+
+- **Across replicas.** A replica swaps on its OWN self-update check (on a landing wave it proposed, and
+  on the safety-net cadence on every replica); a replica that is not the lander activates on its next
+  check, not instantly. The deployment-wide `PendingRestart` marker is still cleared only by a boot —
+  harmless, because each check now decides from what is pending in its own process.
+- **A brand-new module** (not installed at boot) is `NotHeld` and still activates by restart: there is
+  no boot position for its nodes yet.
+- **Slice 3 — the declarations (MeshWeaver.Plugins, branch `feat/module-live-plugins`).** All 37
+  blocked modules carry `[assembly: ModuleRestartRequired("<what was measured>")]`; re-measured after
+  the change, all 41 pass `ModuleLiveUpdateGuard` (4 live, 37 declared). It compiles only against a
+  platform pin that contains the attribute, so it lands after this change reaches that pin — core
+  first.
+- **Slice 4 — enforcement.** Run the guard where every satellite already passes every module: the
+  module pack step (`meshweaver-plugin-build`), so a module that blocks a live swap without declaring
+  it fails to pack, fleet-wide. It has to land AFTER slice 3, or it reds every satellite's pack lane
+  on modules that have not declared yet.
+- **Converting surfaces** so the 37 can drop their declarations: a re-appliable seam for mesh-hub
+  view and type registrations, hub-scoped instead of root service registration, and the builder hook
+  decomposed into re-appliable hooks. Also: the bundled-platform-assembly refusal at landing, and the
+  platform-fixed tests (P fixed while M goes N → N+1 → N+2 live, N+1 built against an older compatible
+  platform build, N+3 above its floor declined by name while siblings keep updating).
+
+## How the modules classify today (measured)
+
+Measured by running `ModuleContributions.Of(...).MeasuredLiveUpdateBlockers()` — the guard's own
+measurement — over every module the MeshWeaver.Plugins packages ship (41 entry assemblies: every
+`*/index.json` with a `content.module`, built from Plugins `origin/main` `f78c46725` against this
+change's core). **4 of 41 are live-updatable as the platform stands; 37 measure blocked**, and until
+they are converted each falls back to the automatic, approval-free restart:
+
+| Classification | Modules | Why |
+|---|---|---|
+| **Live** | Import, Maps, Northwind.Application, OgCard | nodes only, or nodes + every-per-node-hub configuration |
+| Blocked — root services (`WithGlobalServiceRegistry`) | the AI providers (Acp, Anthropic, AppleIntelligence, AzureFoundry, ClaudeCode, Codex, Copilot, OpenAI, WebSearch), Azure.Blob, Speech, Mcp, Teams, Courses, Mail.MicrosoftGraph, WhatsApp, AppleMessages, Markdown.Export, SelfUpdate.Aks, Blazor.AppleMaps, Blazor.GoogleMaps, Blazor.Radzen | the root container is built once |
+| Blocked — the mesh hub's configuration (`HubConfigurations`) | Blazor.Analysis, Blazor.Chat, Blazor.EntityViews, Blazor.Graph, Blazor.OpenStreetMap (+ AppleMaps, GoogleMaps, Radzen), Markdown.Collaboration | the mesh hub's configuration is immutable and folded once (`AddViews` returns a new `MessageHubConfiguration`) |
+| Blocked — the builder hook (`BuilderConfigurations`) | **MeshWeaver.AI**, Graph.Views, Hosting.Instance, Indexing.PostgreSql, Notifications.Channels, Observability, Payments.Stripe, Publish, Testing (+ AppleMessages, Mail, Markdown.Collaboration, Markdown.Export, SelfUpdate.Aks, WhatsApp) | arbitrary boot-time configuration |
+| Blocked — HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | the endpoint map is built once |
+
+`MeshWeaver.AI` additionally has dependents bound to it (every AI provider, `Blazor.Chat`, the in-mesh
+NodeTypes compiled against it), so even once its own contributions are re-appliable its swap is the
+swap of that whole set — the shape `DependentsOf` exists for.
+
+🚨 **This is the measured gap between the rule and the fleet.** Live is the default the platform now
+takes, but the modules as written contribute almost entirely through boot-time-only surfaces. Making
+"most modules live" true is platform work on those three surfaces — a re-appliable seam for mesh-hub
+view and type registrations, hub-scoped instead of root service registration, and decomposing the
+builder hook into the re-appliable hooks — and each converted module then drops its blocker. Until
+then the guard demands the declaration from all 37, which is what makes the gap visible rather than
+silent.
+
+## What is NOT established
+
+- Which of those 41 are IMAGE-BOUND on the running portal (in its `TRUSTED_PLATFORM_ASSEMBLIES`, so
+  loaded into the default context and never swappable whatever they contribute): the measurement ran
+  in a test process whose TPA is not the portal's. `Memex.Portal.Distributed` references
+  `MeshWeaver.Blazor.Views` directly (TPA); the `MeshModuleClosure` seeds (`MeshWeaver.AI`,
+  `Blazor.Chat`, `Markdown.Collaboration`, `Mcp`, …) live under `modules/` and are NOT in TPA, so they
+  now run in their own contexts.
+- Behaviour of Blazor component types and Orleans-serialised payloads from a collectible module
+  context in the running portal: no portal-level test of a module in its own context ran here (the
+  dev Monolith did not boot in this environment on `main` either — `IMeshService` unresolved — so it
+  could not serve as the control).
+- Boot ORDER between a module and a sibling it references during attribute materialisation: a
+  dependency must be installed before a dependent whose contribution GETTERS touch its types (the
+  same constraint the default context had); a dependency touched only at run time resolves lazily.

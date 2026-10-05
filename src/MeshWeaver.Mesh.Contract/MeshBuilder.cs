@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -37,7 +38,25 @@ public record MeshBuilder
         ConfigureHub(config => config.Set(
             new RouterCarrier(static router => router.NodeOperationExecutionHub())));
         Register();
+        // The registry of module generations is this mesh's singleton, and a FACTORY registration on
+        // purpose: the container then owns it and disposes it with the mesh, which retires every
+        // generation it still holds (Doc/Architecture/LiveModuleUpdate).
+        var modules = ModuleContexts;
+        ConfigureServices(services =>
+        {
+            services.TryAddSingleton(sp => modules.Attach(
+                sp.GetService<CollectibleContextUnloads>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>()));
+            return services;
+        });
     }
+
+    /// <summary>
+    /// The modules this mesh runs in their own collectible load contexts — every installed module
+    /// the image does not bind (policy <c>module-live-update-default</c>). Registered as this mesh's
+    /// singleton.
+    /// </summary>
+    public ModuleContexts ModuleContexts { get; } = new();
 
     private List<MeshNode> MeshNodes { get; } = new();
 
@@ -241,7 +260,7 @@ public record MeshBuilder
             : null;
         foreach (var module in modules)
         {
-            var newest = TryLoad(module.Location, surface);
+            var newest = TryLoad(ModuleContexts, module.Location, surface);
             if (newest.Loaded is not null)
             {
                 pending.Add(newest.Loaded);
@@ -288,7 +307,7 @@ public record MeshBuilder
                 // The previous generation lives in its own directory, which the surface above
                 // does not carry: a fresh one for the retry, so a sibling module it references is
                 // measured as present rather than as an absent platform assembly.
-                var retry = TryLoad(previous, SurfaceIncluding(probeDirectories, previous));
+                var retry = TryLoad(ModuleContexts, previous, SurfaceIncluding(probeDirectories, previous));
                 if (retry.Loaded is not null)
                 {
                     pending.Add(retry.Loaded);
@@ -323,7 +342,7 @@ public record MeshBuilder
 
             if (newest.NeverLoaded && ResolveImageBaseline(module) is { } baseline)
             {
-                var image = TryLoad(baseline, SurfaceIncluding(probeDirectories, baseline));
+                var image = TryLoad(ModuleContexts, baseline, SurfaceIncluding(probeDirectories, baseline));
                 if (image.Loaded is not null)
                 {
                     pending.Add(image.Loaded);
@@ -408,20 +427,12 @@ public record MeshBuilder
         // Only the modules that actually installed are recorded as installed. A skewed one is
         // deliberately NOT in this list: it contributes no nodes, and letting it into the in-mesh
         // compile reference set would hand every dynamic NodeType the same broken signatures.
-        var assemblies = installed.Select(p => p.Assembly).ToArray();
-        // Record every installed module for the runtime surfaces that must SEE modules the way
-        // they see the platform: the in-mesh compile reference set (a module leaving the publish
-        // closure leaves TRUSTED_PLATFORM_ASSEMBLIES, so compilation composes TPA + these) and
-        // the bake fingerprint (a module upgrade invalidates baked builds that could reference
-        // it). Registered even while a module still ALSO rides the app closure — the surfaces
-        // dedupe by identity.
-        ConfigureServices(services =>
-        {
-            foreach (var assembly in assemblies)
-                services.AddSingleton(new InstalledModuleAssembly(assembly));
-            return services;
-        });
-
+        // 🚨 Registered through helpers that capture ONLY what each registration needs. Every lambda
+        // in this method shares one compiler-generated closure over the method's captured locals, and
+        // several of those lambdas live as long as the container — so a local here that held a
+        // module generation's Assembly would root that generation for the life of the process and a
+        // live swap could never collect it (caught by ModuleLiveSwapTest's collection assertion).
+        RegisterInstalledModuleAssemblies(installed.Select(p => p.Assembly).ToArray());
         // Register address types from attributes
         var addressTypes = installed.SelectMany(p => p.AddressTypes).ToArray();
         if (addressTypes.Length > 0)
@@ -438,8 +449,8 @@ public record MeshBuilder
         // (Courses/Observability-shaped packs register types + default areas there).
         foreach (var hubConfiguration in installed.SelectMany(p => p.HubConfigurations))
             ConfigureHub(hubConfiguration);
-        foreach (var nodeHubConfiguration in installed.SelectMany(p => p.DefaultNodeHubConfigurations))
-            ConfigureDefaultNodeHub(nodeHubConfiguration);
+        foreach (var module in installed)
+            RegisterDefaultNodeHubConfigurations(module.Assembly, module.DefaultNodeHubConfigurations);
 
         // Attribute-carried BUILDER configuration — the full-surface hook. Applied last so a
         // builder-level hook observes the attribute's own nodes/services, mirroring the order a
@@ -629,12 +640,20 @@ public record MeshBuilder
     /// without reporting it — the caller decides whether the failure is a fault (nothing else
     /// loads) or a fallback (the previous generation does), and the two are reported differently.
     /// </summary>
-    private static LoadAttempt TryLoad(string location, ModulePlatformSurface? surface)
+    private static LoadAttempt TryLoad(ModuleContexts contexts, string location, ModulePlatformSurface? surface)
     {
         // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
         // check that could not be made can never be read as a check that passed.
         if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
             return new LoadAttempt(null, IncompatibleModule.FromLinkRefusal(location, verdict), NeverLoaded: true);
+
+        // 🚨 Live-update-by-default (policy module-live-update-default): every module the image does
+        // not bind runs in its OWN collectible context, so a later generation can be swapped in and
+        // this one unloaded without a restart. Only a module in the application's own closure stays
+        // in the default context — the platform's assemblies bind it there by name, and a second
+        // copy beside it would split its identity (ModuleContexts.IsImageBound).
+        if (!ModuleContexts.IsImageBound(Path.GetFileNameWithoutExtension(location)))
+            return TryLoadIntoOwnContext(contexts, location);
 
         Assembly assembly;
         try
@@ -687,6 +706,112 @@ public record MeshBuilder
         catch (Exception exception)
         {
             return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: false);
+        }
+    }
+
+    /// <summary>
+    /// Registers each installed module as an <see cref="InstalledModuleAssembly"/>. A module in its
+    /// own load context answers with its CURRENT generation every time it is asked — TRANSIENT on
+    /// purpose: the compile reference set, the installed-module fingerprint and a script session's
+    /// references must follow a live swap (policy <c>module-live-update-default</c>), and a singleton
+    /// would pin the boot generation for the life of the process. An image-bound module never changes
+    /// and stays a singleton.
+    /// </summary>
+    private void RegisterInstalledModuleAssemblies(Assembly[] assemblies)
+    {
+        foreach (var assembly in assemblies)
+        {
+            var name = assembly.GetName().Name ?? "";
+            if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
+                RegisterCurrentGeneration(ModuleContexts, name, new WeakReference<Assembly>(assembly));
+            else
+                RegisterImageBound(new InstalledModuleAssembly(assembly));
+        }
+    }
+
+    // Captures the registry, the name and a WEAK reference to the boot generation — never the
+    // Assembly itself, which would root generation N for as long as the container lives.
+    private void RegisterCurrentGeneration(ModuleContexts contexts, string name, WeakReference<Assembly> boot) =>
+        ConfigureServices(services => services.AddTransient(_ => new InstalledModuleAssembly(
+            contexts.Resolve(name)
+            ?? (boot.TryGetTarget(out var original)
+                ? original
+                : throw new InvalidOperationException($"Module {name} is no longer held by this mesh's module registry.")))));
+
+    private void RegisterImageBound(InstalledModuleAssembly module) =>
+        ConfigureServices(services => services.AddSingleton(module));
+
+    /// <summary>
+    /// Registers a module's every-per-node-hub configuration. A module in its own context goes
+    /// through ONE indirection that reads its CURRENT generation when a hub is built, so a hub
+    /// recycled after a live swap re-binds the new generation's configuration — and the indirection
+    /// captures the registry and the name only, never the boot generation's delegates.
+    /// </summary>
+    private void RegisterDefaultNodeHubConfigurations(
+        Assembly assembly,
+        IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> configurations)
+    {
+        if (configurations.Count == 0)
+            return;
+        var name = assembly.GetName().Name ?? "";
+        if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
+        {
+            var contexts = ModuleContexts;
+            ConfigureDefaultNodeHub(config =>
+                (contexts.Current(name)?.Contributions?.DefaultNodeHubConfigurations ?? [])
+                .Aggregate(config, (c, configure) => configure(c)));
+            return;
+        }
+        foreach (var configuration in configurations)
+            ConfigureDefaultNodeHub(configuration);
+    }
+
+    /// <summary>
+    /// Loads one generation into a fresh <see cref="ModuleLoadContext"/>, materialises its
+    /// contributions, and only then makes it the module's current generation. A generation that
+    /// fails either step is unloaded on the spot and reported as <c>NeverLoaded</c> — which, unlike a
+    /// default-context load, is TRUE here: its simple name was never taken in the default context, so
+    /// the previous generation and the image's copy remain reachable for the fallback (#3649, #3735).
+    /// </summary>
+    private static LoadAttempt TryLoadIntoOwnContext(ModuleContexts contexts, string location)
+    {
+        ModuleGeneration generation;
+        try
+        {
+            generation = contexts.Load(location);
+        }
+        catch (Exception exception)
+        {
+            return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: true);
+        }
+
+        // Committed BEFORE the attributes are materialised: a module's getters may already touch a
+        // type of a sibling module, and a sibling resolves through the registry's CURRENT generation.
+        var replaced = contexts.Commit(generation);
+        try
+        {
+            var contributions = ModuleContributions.Of(generation.Assembly);
+            contexts.SetContributions(generation, contributions);
+            return new LoadAttempt(
+                new PendingModuleInstall(
+                    generation.Assembly,
+                    contributions.Nodes,
+                    contributions.AddressTypes,
+                    contributions.HubConfigurations,
+                    contributions.DefaultNodeHubConfigurations,
+                    contributions.BuilderConfigurations),
+                null,
+                NeverLoaded: false);
+        }
+        catch (Exception exception)
+        {
+            // Put back what was serving (null at boot), then drop the failed generation.
+            if (replaced is not null)
+                contexts.Commit(replaced);
+            else
+                contexts.Uncommit(generation);
+            contexts.Discard(generation);
+            return new LoadAttempt(null, IncompatibleModule.From(location, exception), NeverLoaded: true);
         }
     }
 
@@ -987,7 +1112,7 @@ public record MeshBuilder
             // serviceProvider.EnumerateStaticNodes() — there is no Nodes
             // dictionary on MeshConfiguration. Last-write-wins by Path is
             // applied at iteration time inside the provider.
-            .AddSingleton<IStaticNodeProvider>(new StaticMeshNodeListProvider(MeshNodes))
+            .AddSingleton<IStaticNodeProvider>(new StaticMeshNodeListProvider(MeshNodes, ModuleContexts))
             .AddSingleton<ITypeRegistry>(_ =>
             {
                 // Register core mesh types on the shared registry so they're available to ALL hubs
