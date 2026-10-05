@@ -198,7 +198,7 @@ public class AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest(AHeldReadF
                 .Should().Within(TestTimeouts.Convergence)
                 .Emit("the write's notification reached the holder's feed and was WITHHELD — otherwise the "
                       + "delivery could have come through it and this case separated nothing", ct);
-            feed!.IsClosed.Should().BeTrue("the feed was still withheld when the held read delivered");
+            (feed?.IsClosed).Should().BeTrue("the feed was still withheld when the held read delivered");
         });
         held.Dispose();
         withheld?.IsClosed.Should().BeFalse("the feed hold was released in the fixture's finally");

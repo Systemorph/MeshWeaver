@@ -117,7 +117,7 @@ public class ARoutedWriteRightAfterItsCreateTest(ARoutedWriteRightAfterItsCreate
             inTheGap.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
                 "the first write after another replica's ACKNOWLEDGED create must reach the node even while "
                 + $"the create's notification is late: {inTheGap.Exception?.Message}");
-            inTheGap.Value!.Name.Should().Be("in-the-gap");
+            (inTheGap.Value?.Name).Should().Be("in-the-gap");
             await late.Arrivals.Where(a => a.Contains(path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
                 .Emit("the create's notification really is the one being held", ct);
