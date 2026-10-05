@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.IO;
 using System.Linq;
@@ -106,6 +104,27 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
         (await client.GetStringAsync("/live-endpoint")).Should().Be("v1",
             "a colliding re-map must not be published — never two registrations on one (verb, pattern)");
         (await client.GetStringAsync("/host-route")).Should().Be("host");
+    }
+
+    /// <summary>#6128 review: the dynamic source publishes its BOOT map without its own collision
+    /// check, so the boot routes of a held module must be caught by the host's startup refusal, which
+    /// reads the composite endpoint table the dynamic source is part of. The control: the same host
+    /// with a non-colliding held module keeps running.</summary>
+    [Fact]
+    public async Task AHeldModuleWhoseBootRouteCollidesWithTheHost_IsRefusedAtStartup()
+    {
+        using var colliding = new ModuleContexts();
+        colliding.Commit(colliding.Load(Write("g1", ModuleSource(1, collide: true))));
+        await using (var refused = await Start(colliding))
+            refused.Lifetime.ApplicationStopping.IsCancellationRequested.Should().BeTrue(
+                "a held module's boot route on the host's (verb, pattern) must take the app down at startup, "
+                + "never be resolved by registration order at request time");
+
+        using var clean = new ModuleContexts();
+        clean.Commit(clean.Load(Write("g2", ModuleSource(1))));
+        await using var served = await Start(clean);
+        served.Lifetime.ApplicationStopping.IsCancellationRequested.Should().BeFalse(
+            "the control: a held module whose routes collide with nothing starts and serves");
     }
 
     private static async Task<WebApplication> Start(ModuleContexts contexts)

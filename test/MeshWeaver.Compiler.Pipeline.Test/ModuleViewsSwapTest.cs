@@ -41,7 +41,9 @@ public sealed class ModuleViewsSwapTest : MonolithMeshTestBase
     public async Task AModulesViews_AreResolvedFromTheNewGeneration_AfterALiveSwap()
     {
         var ct = TestContext.Current.CancellationToken;
-        Contexts.Current(Module)!.Contributions!.LiveUpdateBlockers().Should().BeEmpty(
+        var contributions = Contexts.Current(Module)?.Contributions
+            ?? throw new Xunit.Sdk.XunitException($"{Module} is not held, or its contributions were never recorded");
+        contributions.LiveUpdateBlockers().Should().BeEmpty(
             "views declared through Views must not block a live swap");
         var client = GetClient(c => c.AddLayoutClient()).ServiceProvider.GetRequiredService<ILayoutClient>();
         ViewVersion(client).Should().Be(1);
@@ -69,7 +71,9 @@ public sealed class ModuleViewsSwapTest : MonolithMeshTestBase
     {
         var descriptor = client.GetViewDescriptor("live-views-probe", null, "area");
         descriptor.Should().NotBeNull("the module's view map must accept the probe");
-        return (int)descriptor!.Type.GetProperty("Version")!.GetValue(null)!;
+        return descriptor?.Type.GetProperty("Version")?.GetValue(null) is int version
+            ? version
+            : throw new Xunit.Sdk.XunitException("the probe view carries no static int Version");
     }
 
     private static string ModuleSource(int version, bool throughMeshHub = false) => $$"""
