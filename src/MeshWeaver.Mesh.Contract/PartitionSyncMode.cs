@@ -12,11 +12,14 @@ namespace MeshWeaver.Mesh;
 public enum PartitionSyncMode
 {
     /// <summary>
-    /// Default (mirror). Upsert every source node, then prune EVERY extra live node that is absent
-    /// from the current source — the partition is mirrored to the repo. Guards still apply (governance
-    /// <c>_Policy</c>/<c>_Access</c>/<c>_Activity</c>, claimed subtrees, and non-<see cref="SyncBehavior.Include"/>
-    /// nodes are never pruned). This is the behavior every partition had before sync modes existed, and
-    /// the default for any source that does not opt in.
+    /// Default (mirror what the source owns). Upsert every source node, then prune every node the
+    /// source PREVIOUSLY owned (recorded in the prior import's manifest) that is now absent from the
+    /// current source. Guards still apply (governance <c>_Policy</c>/<c>_Access</c>/<c>_Activity</c>,
+    /// claimed subtrees, and non-<see cref="SyncBehavior.Include"/> nodes are never pruned).
+    /// 🚨 It no longer prunes an extra the source never put there (policy
+    /// <c>prune-requires-provenance</c>): runtime state created in a synced partition survives every
+    /// import, so this mode now prunes the same set as <see cref="Additive"/>. Kept as its own value
+    /// because it is persisted and the default for any source that does not opt in.
     /// </summary>
     FullReplace = 0,
 

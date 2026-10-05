@@ -647,15 +647,22 @@ public static class StaticRepoImporter
     /// The nodes an import should PRUNE for a partition running <paramref name="mode"/>: existing
     /// partition nodes absent from the current source (<paramref name="sourcePaths"/>), still
     /// <see cref="SyncBehavior.Include"/>, not governance (<c>_Policy</c>/<c>_Access</c>/<c>_Activity</c>),
-    /// and not at/under a claimed/excluded root (<paramref name="excludedRoots"/>). The mode narrows the
-    /// candidate set:
+    /// not at/under a claimed/excluded root (<paramref name="excludedRoots"/>), AND recorded as the
+    /// source's own in the prior import manifest (<paramref name="previouslyOwnedPaths"/>).
     /// <list type="bullet">
-    ///   <item><see cref="PartitionSyncMode.FullReplace"/> — every such extra (mirror the partition to the repo).</item>
-    ///   <item><see cref="PartitionSyncMode.Additive"/> — ONLY extras the source PREVIOUSLY owned
-    ///     (<paramref name="previouslyOwnedPaths"/> = the prior manifest's keys); a user-added node
-    ///     that was never in any manifest is kept.</item>
+    ///   <item><see cref="PartitionSyncMode.FullReplace"/> and <see cref="PartitionSyncMode.Additive"/>
+    ///     — every such extra the source PREVIOUSLY owned. The two modes prune the same set.</item>
     ///   <item><see cref="PartitionSyncMode.UpsertOnly"/> — none (never prune).</item>
     /// </list>
+    ///
+    /// <para>🚨 <b>Provenance is required in every mode</b> (policy <c>prune-requires-provenance</c>;
+    /// <c>Doc/Architecture/SourcesSyncOnPush</c>). <c>FullReplace</c> used to prune EVERY extra, so a
+    /// node created in a synced partition at runtime was deleted by the next import because "it is
+    /// not in the repository" — on the control instance a manual import of <c>Hosting</c> pruned 16
+    /// such nodes, among them <c>Hosting/Babysitter</c> (the PR babysitter's live state) and every
+    /// <c>Hosting/Queues/*</c> entry. A repository can only own what it put there; an extra that no
+    /// manifest records — runtime state, a user's page, or a node whose provenance was lost with its
+    /// manifest — is kept, and lingers rather than being guessed away.</para>
     /// Pure + case-insensitive so the prune DECISION is unit-testable without a database. This is the
     /// per-partition policy; the per-node <see cref="SyncBehavior"/> guard above applies in every mode
     /// (a claimed node is never a candidate).
@@ -691,7 +698,8 @@ public static class StaticRepoImporter
     /// </summary>
     /// <param name="existing">The partition's current nodes (the prune candidate set).</param>
     /// <param name="sourcePaths">The paths the source ships THIS run.</param>
-    /// <param name="previouslyOwnedPaths">The prior manifest's keys (Additive only).</param>
+    /// <param name="previouslyOwnedPaths">The prior manifest's keys — what the source PUT in the
+    /// partition. Nothing outside it is ever pruned, in any mode.</param>
     /// <param name="excludedRoots">Claimed/excluded roots — nothing at or under one is pruned.</param>
     /// <param name="mode">The partition's <see cref="PartitionSyncMode"/>.</param>
     /// <param name="isExcludedFromMirror">The source's never-mirrored predicate (issue #1326).</param>
@@ -730,9 +738,13 @@ public static class StaticRepoImporter
                         && !IsMeshMintedRelease(t)
                         && isExcludedFromMirror?.Invoke(t.Path) != true
                         && !excluded.Any(root => IsAtOrUnder(t.Path, root))
-                        // Additive: only prune what the source PREVIOUSLY owned — a user-added node
-                        // (never in a manifest) survives. FullReplace prunes every extra.
-                        && (mode != PartitionSyncMode.Additive || previouslyOwned.Contains(t.Path)))
+                        // 🚨 PROVENANCE, in EVERY pruning mode (policy prune-requires-provenance): a
+                        // node is the source's to delete only when the source PUT it there — it is in
+                        // the prior import manifest. A node created in the partition at runtime (a
+                        // babysitter's state, a queue entry, a user's page) was never in any manifest,
+                        // so its absence from the repository is not evidence of anything. Unknown
+                        // provenance (no manifest, an unreadable one) is NOT prunable.
+                        && previouslyOwned.Contains(t.Path))
             .ToArray();
     }
 
