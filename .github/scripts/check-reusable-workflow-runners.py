@@ -42,8 +42,10 @@ In every workflow under `.github/workflows/` that is triggered by `workflow_call
 A literal label (`ubuntu-latest`, `ubuntu-24.04`, `aks-silos`, a list, a group mapping), a matrix- or
 needs-derived label, and a selected-visibility variable (`MW_RUNNER_HEAVY`, `MW_RUNNER_GATE` — a
 repository added to their selection would silently change where THIS repository's own runs go) are
-all refused, each by name. So are the RETIRED lanes (`MW_RUNNER_TRUNK`, `MW_RUNNER_TRUNK_DOCKER`,
-`MW_RUNNER_CORE_GATE`): there are exactly two pools, and priority comes from the CI queue's tiers,
+all refused: `RUNNER_VARS` is an ALLOWLIST of the two pool variables, and the refusal names the
+operand it did not admit. So are the RETIRED lanes (`MW_RUNNER_TRUNK`, `MW_RUNNER_TRUNK_DOCKER`,
+`MW_RUNNER_CORE_GATE`), by the same allowlist with no name list to keep current; the self-test pins
+them (`retired-*`): there are exactly two pools, and priority comes from the CI queue's tiers,
 never a pool (policy `ci-two-pools-priority-queues`, Doc/Architecture/RunnerPoolsAndDispatchQueues).
 
 USAGE

@@ -64,7 +64,10 @@ could deadlock. Its dependency on the control instance is cut by rule 4.
 ## How a run waits, and how it is dispatched
 
 - **A pull-request run is held.** Its admission step enqueues the run and ends the first attempt at
-  once, red, marked `HELD FOR DISPATCH (`. No runner is held, and the pull request cannot look green.
+  once, red, with an error line reading `HELD FOR DISPATCH (queue ci): run <id> of PR #<n> is queued on
+  the control instance's ci queue; …` — the readers (the PR babysitter, the dispatch fallback) match
+  its prefix `HELD FOR DISPATCH (` (`HOLD_MARKER` in MeshWeaver.Plugins `scripts/ci-queue-admission.py`).
+  No runner is held, and the pull request cannot look green.
   The queue dispatches it by re-running that attempt, and attempt 2 proceeds.
 - **A trunk or gate run waits in place** on one light runner for an admission check run that names
   it. A trunk run that was held and re-run would end every main run red on each push.
