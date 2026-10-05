@@ -209,7 +209,8 @@ activity finished, CI on both repositories was green. A per-NodeType `Error` is 
 | path | trigger | ref it reads | why |
 |---|---|---|---|
 | `GitHubActivityExtensions.UpdateToLatestFromGitHub` | a person clicks **Update to latest** (`GitHubActionArea`), the MCP `git_hub_sync` `update` verb, or a first import of an unattributable repository | the commit **sealed** for this identity when the repository is attributable (**held** while that seal is torn, at an unknown commit, or disagreeing); the configured **branch** otherwise | `SealedSyncGate.DecideRequestedImport` — MeshWeaver#3845 hole 3, below |
-| `GitHubActivityExtensions.UpdateToProvenCommitFromGitHub` | `GitHubWebhookProcessor` on a green `workflow_run` | the run's **`head_sha`** when it is sealed for this identity or the repository is unattributable; otherwise the commit **sealed** for this identity (**held** while that seal is unusable) | `SealedSyncGate.DecideBuild` — the webhook lane, below |
+| `GitHubActivityExtensions.UpdateToPushedCommitFromGitHub` | `GitHubWebhookProcessor` on a `push` to the configured branch, and `GitSyncBranchReconcileService` for a delivery that never arrived | the push's **`after`** sha, or the head the reconcile resolved with one ref lookup — never the branch at fetch time; no CI verdict is waited for | policy `sources-sync-on-push` — [Sources Sync on Push](../SourcesSyncOnPush) |
+| `GitHubActivityExtensions.UpdateToProvenCommitFromGitHub` | no unattended caller any more: a green `workflow_run` records the build and imports nothing (policy `sources-sync-on-push`) | the commit it is handed; it still refuses an empty one | kept as a public surface for callers in other repositories |
 | `GitHubActivityExtensions.ReimportFromGitHub` | a person names a commit or a branch (`GitHubSyncSettingsTab` → **Re-import at this commit**) | the same as **Update to latest**, with the typed **commitish** in place of the branch | `SealedSyncGate.DecideRequestedImport` |
 | `PluginUpdateWatcher` → `PackageUpdateReconciler` | the same green build, via the `BuildCompletion` node | `BuildCompletion.HeadSha` | already correct before #1430 — this is the path GitSync now agrees with |
 | `ModuleDiscoveryService.FirstImport` | AutoSync provisions a new Space (boot, or a green build) | the commit **sealed** for this identity; the branch only for a repository this instance runs no publication of | `SealedSyncGate.DecideFirstImport` — MeshWeaver#3845 hole 2, below |
@@ -553,8 +554,9 @@ about in its own words — *"The CONTENT commit, not `$GITHUB_SHA`. They differ 
 
 ## How to check it is still true
 
-- `test/MeshWeaver.Hosting.Test/BuildTriggeredSyncPinsTheBuiltCommitTest.cs` pins both halves: the
-  green build imports at the payload's sha, and the unattended import refuses an empty one. It
+- `test/MeshWeaver.Hosting.Test/BuildTriggeredSyncPinsTheBuiltCommitTest.cs` pins both halves: a
+  push imports at the payload's `after` sha (and the branch reconcile at the sha it resolved), and
+  the unattended import refuses an empty one. It
   asserts on the ref that reaches `IGitHubRepoClient.Fetch` — not on a log line and not on a decision
   function — because the defect was precisely that the decision and the fetch disagreed.
 - `test/MeshWeaver.Hosting.Test/APersonsImportLandsOnTheSealTest.cs` pins the withdrawn human
