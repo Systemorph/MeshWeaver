@@ -157,8 +157,11 @@ public sealed record InstalledModuleAssembly(Assembly Assembly)
     /// <summary>
     /// The value of the <see cref="AssemblyMetadataAttribute"/> whose key is
     /// <paramref name="key"/>, read out of the assembly's own metadata for the same reason as
-    /// <see cref="InformationalVersionOf"/> (no attribute TYPE is resolved, so an incomplete
-    /// attribute closure cannot throw here). Null when absent.
+    /// <see cref="InformationalVersionOf"/>: on the file-backed path no attribute TYPE is resolved,
+    /// so an incomplete attribute closure cannot throw here. An assembly with no file behind
+    /// <see cref="Assembly.Location"/> keeps the typed reflection lookup, with the same hazard and
+    /// the same reason it is unreachable for a module as <see cref="InformationalVersionOf"/>
+    /// states. Null when absent.
     /// </summary>
     private static string? AssemblyMetadataOf(Assembly assembly, string key)
     {

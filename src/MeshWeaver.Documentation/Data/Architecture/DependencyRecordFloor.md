@@ -146,6 +146,14 @@ would have named the cause; the adoption hid it until call time.
   compare across schemes, so the mixed case is `NotChecked` and declined: inconclusive stays on the
   rebuild side. The cost is a one-time decline of records written before the stamp, until the next
   bake writes `pkg:` records.
+* 🚨 **That window opens per node repository, when it imports the stamping targets — so the
+  import ships WITH a re-bake.** From the first stamped publication of a module, every
+  already-published `min:` record bound to it reads `NotChecked` on a mesh running the stamped
+  module, and its type recompiles (or, under `Modules:RequirePrebuilt`, stays declined) until a
+  bake writes `pkg:` records for it. The import pull request therefore carries the re-bake of
+  that repository's types in the same publication rather than leaving it to the next unrelated
+  change. This change does not perform any import, and the length of the window on a live mesh
+  has not been measured; whoever lands the first import measures it there.
 * **The producer half is the module build.** A module that carries no stamp behaves exactly as
   before, so this change is inert until a module build writes the attribute — the `version` of the
   `manifest.lock` of the package whose `index.json` declares the assembly as its `module`.
