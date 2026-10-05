@@ -99,11 +99,21 @@ def merge_base(path: str, main: str, head: str, compare) -> str:
     r = git(path, "merge-base", main, head, check=False)
     if r.returncode == 0 and r.stdout.strip():
         return r.stdout.strip()
-    # A shallow checkout cannot walk to the merge-base; the compare read names it (one REST call).
+    # A shallow checkout cannot walk to the merge-base. The compare read names it in one REST call;
+    # when that read fails, deepen the two tips step by step until git can walk to it itself.
     mb = compare(main, head)
-    if not mb:
-        raise Refused(f"the merge-base of main {main[:12]} and head {head[:12]} could not be read — the fresh merge cannot be computed")
-    return mb
+    if mb:
+        return mb
+    errors = [getattr(compare, "last_error", "") or "the compare read returned nothing"]
+    for depth in (64, 512, 4096):
+        d = git(path, "fetch", "--no-tags", "--quiet", f"--deepen={depth}", "origin", main, head, check=False)
+        if d.returncode != 0:
+            errors.append(f"deepen {depth}: {(d.stderr or d.stdout).strip()[:200]}")
+            continue
+        r = git(path, "merge-base", main, head, check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    raise Refused(f"the merge-base of main {main[:12]} and head {head[:12]} could not be read ({'; '.join(errors)}) — the fresh merge cannot be computed")
 
 
 def fresh_merge(path: str, main: str, head: str, compare) -> tuple[str, str]:
@@ -134,9 +144,18 @@ def fresh_merge(path: str, main: str, head: str, compare) -> tuple[str, str]:
 
 def gh_compare(repo: str):
     def read(main: str, head: str) -> str:
-        r = subprocess.run(["gh", "api", f"repos/{repo}/compare/{main}...{head}", "--jq", ".merge_base_commit.sha"],
-                           capture_output=True, text=True)
-        return r.stdout.strip() if r.returncode == 0 else ""
+        try:
+            r = subprocess.run(["gh", "api", f"repos/{repo}/compare/{main}...{head}?per_page=1", "--jq", ".merge_base_commit.sha"],
+                               capture_output=True, text=True)
+        except OSError as e:  # no gh on this runner
+            read.last_error = f"compare read: {e}"
+            return ""
+        out = r.stdout.strip()
+        if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", out):
+            return out
+        read.last_error = f"compare read ({r.returncode}): {(r.stderr or out).strip()[:200]}"
+        return ""
+    read.last_error = ""
     return read
 
 
@@ -263,6 +282,14 @@ def self_test() -> int:
         mode2, merged2 = fresh_merge(shallow, main, head, compare)
         check(merged2 == merged, "a shallow checkout computes the IDENTICAL merge commit (one tree per run)")
         check(compare_calls == [(main, head)], "a shallow checkout reads the merge-base through the compare (once)")
+
+        # 2b. The compare read fails (no gh, a refusal): the tips are deepened until git walks to the base.
+        def failing(m: str, h: str) -> str:
+            return ""
+        failing.last_error = "compare read (1): HTTP 403"
+        deep = clone("deepen", shallow=True)
+        _, merged_deep = fresh_merge(deep, main, head, failing)
+        check(merged_deep == merged, "with the compare read failing, deepening finds the merge-base (the identical commit)")
 
         # 3. Idempotent: already on the fresh merge → nothing recomputed.
         mode3, merged3 = fresh_merge(full, main, head, compare)
