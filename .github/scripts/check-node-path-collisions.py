@@ -18,8 +18,9 @@ The rule mirrored here, and where each half lives in core:
     claims `.md` only, so a new contributed extension must be added here too);
   * a `.json` is a node only when it is an object carrying `$type` (exact), `id` or `nodeType`
     (case-insensitive) — JsonFileParser.LooksLikeMeshNode; a `.json` that is not JSON is not a
-    node either (the installer counts it unreadable), and is reported here as a count, not a
-    collision;
+    node either (the installer counts it unreadable); each one is NAMED on a ::warning:: line,
+    never compared — the hub's options may accept a comment-bearing file this parser refuses, so
+    a same-stem pair beside one is the gap this gate cannot close and must not hide;
   * not a node by design (PackageInstaller.IsNotANodeFile): the tree-root `README.md`, any
     `manifest.lock`, every file under a `content/` segment (ContentAssetMapper), and — in a node
     repo — the top-level `src/` module sources (IsModuleSourcePath);
@@ -50,7 +51,6 @@ from pathlib import Path, PurePosixPath
 
 NODE_EXTENSIONS = {".md", ".cs", ".json"}
 CONTENT_SEGMENT = "content"
-MANIFEST_FILE = "manifest.lock"
 
 
 def node_path(relative: str) -> str:
@@ -89,7 +89,8 @@ def candidate_kind(path: Path, relative: str) -> str:
     ext = PurePosixPath(relative).suffix.lower()
     if ext not in NODE_EXTENSIONS:
         return "skip"
-    if relative.lower() == "readme.md" or PurePosixPath(relative).name.lower() == MANIFEST_FILE:
+    # `manifest.lock` (IsNotANodeFile) needs no arm here: `.lock` is not a node extension.
+    if relative.lower() == "readme.md":
         return "skip"
     if is_content_asset(relative):
         return "skip"
@@ -134,17 +135,18 @@ def is_filesystem_split(files: list[str]) -> bool:
             and a[:-len(".json")].lower() == str(PurePosixPath(b).parent).lower())
 
 
-def scan(base: Path, dirs: list[Path], filesystem_layout: bool = False) -> tuple[list[str], int, int]:
-    """Returns (findings, node files seen, unreadable .json count); paths relative to BASE.
+def scan(base: Path, dirs: list[Path], filesystem_layout: bool = False) -> tuple[list[str], int, list[str]]:
+    """Returns (findings, node files seen, unreadable .json paths); paths relative to BASE.
     FILESYSTEM_LAYOUT admits the one pair FileSystemStorageAdapter merges (see is_filesystem_split)."""
     groups: dict[str, list[str]] = {}
-    nodes = unreadable = 0
+    nodes = 0
+    unreadable: list[str] = []
     for directory in dirs:
         for f in visible_files(directory):
             relative = f.relative_to(base).as_posix()
             kind = candidate_kind(f, relative)
             if kind == "unreadable":
-                unreadable += 1
+                unreadable.append(relative)
             if kind != "node":
                 continue
             nodes += 1
@@ -178,10 +180,13 @@ def repo_dirs(root: Path) -> list[Path]:
                   if e.is_file() or (e.is_dir() and not e.name.startswith(".") and e.name != "src"))
 
 
-def report(label: str, findings: list[str], nodes: int, unreadable: int, scope: int) -> int:
+def report(label: str, findings: list[str], nodes: int, unreadable: list[str], scope: int) -> int:
     for finding in findings:
         print(f"::error::{finding}")
-    note = f", {unreadable} unreadable .json not counted as nodes" if unreadable else ""
+    for path in unreadable:
+        print(f"::warning::{path} is not strict JSON, so this gate did not compare it — if the "
+              "importer reads it as a node, a same-stem sibling would collide with it unseen")
+    note = f", {len(unreadable)} unreadable .json named above, not compared" if unreadable else ""
     verdict = "FAIL" if findings or nodes == 0 else "ok"
     print(f"check-node-path-collisions [{label}]: {verdict} — {len(findings)} collision(s) over "
           f"{nodes} node file(s) in {scope} root(s){note}")
@@ -227,6 +232,8 @@ def self_test() -> int:
         case("distinct", {"A.md": "#", "B.json": node_json, "A/C.cs": "//"}, 0)
         case("non-node-json", {"P.md": "#", "P.json": '{"name": "pkg", "version": "1.0.0"}'}, 0)
         case("not-json", {"Q.md": "#", "Q.json": "this is not json"}, 0)
+        if scan(base / "not-json", [base / "not-json"])[2] != ["Q.json"]:
+            failures.append("not-json: the unreadable .json must be NAMED, not only counted")
         # `R/content/index.md` would fold onto `R/content` — but it is an ASSET, never a node.
         case("content-asset", {"R/content.md": "#", "R/content/index.md": "#",
                                 "content.json": node_json, "content/index.json": node_json}, 0)
@@ -256,14 +263,14 @@ def self_test() -> int:
         empty = base / "empty"
         empty.mkdir()
         with contextlib.redirect_stdout(io.StringIO()):   # its ::error:: line is the EXPECTED outcome here
-            vacuous = report("self-test empty", [], 0, 0, 1)
+            vacuous = report("self-test empty", [], 0, [], 1)
         if vacuous != 1 or scan(empty, [empty])[1] != 0:
             failures.append("an empty tree passed")
 
     for f in failures:
         print(f"✗ {f}")
     print(f"check-node-path-collisions --self-test: {'FAIL' if failures else 'ok'} "
-          f"(18 cases + vacuity guard; {len(failures)} failure(s))")
+          f"(19 cases + vacuity guard; {len(failures)} failure(s))")
     return 1 if failures else 0
 
 

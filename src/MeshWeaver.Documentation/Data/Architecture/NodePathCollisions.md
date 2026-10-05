@@ -32,13 +32,15 @@ so one author's node silently replaces another's: no error, no log line, nothing
   claims `.md` only; a module that contributes a NEW extension must add it to the guard too.
 - **A `.json` is a node only when it looks like one** — an object carrying `$type`, `id` or
   `nodeType` (`JsonFileParser.LooksLikeMeshNode`). A package manifest beside a node never collides.
-  A `.json` that is not JSON at all is not a node either; the guard counts it, it does not compare it.
+  A `.json` that is not strict JSON is not compared — but it is NAMED on a warning line, because
+  the hub's serializer options may accept a comment-bearing file this parser refuses, and a
+  same-stem sibling of one would then be exactly the silent collision this guard exists for.
 - **Not a node by design** (`PackageInstaller.IsNotANodeFile`): the tree-root `README.md`, any
   `manifest.lock`, every file under a `content/` segment (an asset, `ContentAssetMapper`), and a node
   repo's top-level `src/` (module sources).
 
 Every colliding group is reported with ALL its files, and an empty scan is red — a gate over nothing
-passes vacuously. The self-test proves each half of the rule can fail: 18 cases, and each of eight
+passes vacuously. The self-test proves each half of the rule can fail: 19 cases, and each of eight
 mutants of the rule (no extension strip, no case fold, no `index` fold, no content filter, every
 `.json` a node, `src/` scanned, the file-system pair admitted everywhere, the vacuity line removed)
 reds it.
