@@ -74,6 +74,35 @@ could deadlock. Its dependency on the control instance is cut by rule 4.
 - **Dispatch is idempotent.** The dispatcher reads the run first, and a later attempt that already
   exists is adopted rather than dispatched again. GitHub refuses to re-run a run that is in progress.
 
+## Agent work: the same queue model, no limit
+
+The same queue model, tiers and MCP re-ordering apply to every control-plane **agent thread**:
+
+- review rounds;
+- fixer and validator hand-offs;
+- bug-fix threads and their re-drive rounds;
+- triage rounds.
+
+Each one is a job on `Hosting/Queues/operator/agents`, which the queue's hub dispatches in tier order.
+Two rules differ from the CI queue:
+
+- **No limit.** An agent queue carries no concurrency bound and no pre-set share: everything waiting
+  is dispatched at once. The only thing that holds work back is a **live refusal** from a model
+  provider — a 429, a 402 or a quota answer read off a finished round. That refusal backs off the one
+  (model, upstream) pair it came from. The backoff doubles per refusal from 30 s up to 15 min, and a
+  clean finish resets it. A slow, stalled or capped round holds nothing back. The executors (the
+  control instance's pods) scale with KEDA on the queues' waiting jobs: the chart's
+  `keda.queueDepth`, a `metrics-api` trigger on the portal's `GET /api/queues/depth`, set from the
+  record's `autoscaling.scaleOnQueueDepth`.
+- **Reviews spread over EU models.** GLM-5.3 reviews code. DeepSeek V4 Flash reviews small low-risk
+  diffs. A review is never done by the author's own model family. Each model is pinned per upstream,
+  so a 429 on one pair shifts the load to another instead of throttling every review. Every
+  candidate stays EU-only and ZDR (policy `code-review-eu-only`).
+
+Fail-safe as for CI: if the queue never stamps a job, the thread is started directly, with a
+warning. The mechanism, the bounds this removed and the tests are in MeshWeaver.Plugins
+`Hosting/CiDispatchQueue.md` §7a–7c.
+
 ## What the gates refuse
 
 - Core: `.github/scripts/check-reusable-workflow-runners.py`. A reusable lane's `runs-on` may read

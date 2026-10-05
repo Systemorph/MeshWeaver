@@ -199,6 +199,18 @@ public sealed record Autoscaling
     /// <summary>% memory utilisation to scale up past. Null → the chart's 80.</summary>
     [Description("Memory target %")]
     public int? MemoryTarget { get; init; }
+
+    /// <summary>
+    /// Also scale on the work queues' WAITING jobs (the chart's <c>keda.queueDepth</c>: a
+    /// <c>metrics-api</c> trigger on <c>GET /api/queues/depth</c>) — for the instance whose pods run the
+    /// agent threads the queues dispatch (Doc/Architecture/RunnerPoolsAndDispatchQueues). Null/false → off.
+    /// </summary>
+    [Description("Also scale on waiting work-queue jobs (the instance that holds the queues)")]
+    public bool? ScaleOnQueueDepth { get; init; }
+
+    /// <summary>The HPA's target of waiting jobs per pod when <see cref="ScaleOnQueueDepth"/> is on — a scaling target, never an admission bound. Null → the chart's 4.</summary>
+    [Description("Waiting jobs per replica (scaling target)")]
+    public int? WaitingPerReplica { get; init; }
 }
 
 /// <summary>
