@@ -215,6 +215,40 @@ an N+3 whose floor is above the platform is declined by name by the reconciler's
 sibling module updates live in the same pass; a bundle carrying a platform assembly is refused naming
 it, and the same bundle without it lands.
 
+## What is shipped (slice 7 — the REAL MeshWeaver.AI update goes live; keyed services; added background services)
+
+**Measured on the actual incident pair.** MeshWeaver.AI was published twice against this core — from
+MeshWeaver.Plugins `b7a083d98~1` (no `ThreadPreparation.Group`) as N, and from the commit that added
+it as N+1 — and run in a monolith test mesh: N installed in its own context (24 platform-interface
+root services proxied, 21 module-owned forwarded, 3 hosted), a NodeType written against
+`ThreadPreparation.Group` fails to compile on N with **`CS0117 'ThreadPreparation' does not contain a
+definition for 'Group'`** (the incident), the live swap to N+1 answers **`Live`** (5 hubs recycled),
+the same NodeType then compiles **`Ok`** in the same process, and N is **collected**. Three changes
+made that true, each found by running it:
+
+1. **Added background services are not a shape change.** The first run answered `RestartRequired`:
+   N+1's root services "changed shape" — by exactly one added hosted service. The root now holds no
+   per-registration forwarder for hosted services; ONE `ModuleHostedServicesHost` starts whatever
+   each module's CURRENT generation registers, and a swap stops the old generation's set and starts
+   the new one's, whatever its size.
+2. **The content-type registry let go of nothing.** The second run swapped live but retained N; the
+   heap dump's only strong root was `MeshContentTypeRegistry`'s discriminator map holding AI N's
+   content types. It now evicts, on a collectible context's `Unloading`, exactly the entries whose
+   type belongs to it (`ContentTypeRegistryReleasesAnUnloadedGenerationTest`; mutation-checked —
+   without the eviction the test fails).
+3. **Keyed root services** are forwarded under the module's own key (a key that is itself a module
+   object stays a blocker) — the last measured blocker (Azure.Blob's keyed `IStreamProviderFactory`).
+
+**Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
+Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
+published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations
+needed.**
+
+**Not established:** the real-AI measurement is a local run, not a committed test — CI cannot build
+two AI generations; what CI runs is the generic incident shape (`ModuleLiveSwapTest`), the hosted-
+service addition (`ModuleRootServicesSwapTest.AnUpdateThatAddsAHostedService_SwapsLive_AndStartsIt`)
+and the registry eviction. That a THREAD then runs end to end on N+1 (a model round) was not run.
+
 ## What is owed
 
 - **Across replicas.** A replica swaps on its OWN self-update check (on a landing wave it proposed, and

@@ -45,20 +45,22 @@ public class ModuleServiceProxy : DispatchProxy
 }
 
 /// <summary>
-/// The root's stand-in for a hosted service a module registered (<see cref="ModuleServiceRoute.Hosted"/>):
-/// the host starts it at boot, and a live swap STOPS the old generation's instance and STARTS the new
-/// one's. A failure costs the module's feature, never the host (#2449).
+/// The ONE hosted service the root holds for every module held in its own load context: at host start
+/// it starts every hosted registration of each module's CURRENT generation; a live swap stops the old
+/// generation's and starts the new one's (<see cref="ModuleContexts.HandOverHosted"/>). Because the root
+/// holds no per-registration forwarder, a generation may add or drop a background service and still swap
+/// live. A failure costs the module's feature, never the host (#2449).
 /// </summary>
-internal sealed class ModuleHostedServiceForwarder(
-    ModuleContexts contexts, string module, int index, ILogger? logger) : IHostedService
+internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger? logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken) =>
-        contexts.StartModuleHosted(module, index, cancellationToken, logger);
+        Task.WhenAll(contexts.Generations
+            .Where(g => g.Services is not null)
+            .Select(g => contexts.StartAllModuleHosted(g, cancellationToken, logger)));
 
     public Task StopAsync(CancellationToken cancellationToken) =>
-        contexts.Current(module)?.Services is { } services
-            ? services.StopHosted(cancellationToken, logger)
-            : Task.CompletedTask;
+        Task.WhenAll(contexts.Generations
+            .Select(g => g.Services?.StopHosted(cancellationToken, logger) ?? Task.CompletedTask));
 }
 
 /// <summary>Registers the forwarders for one module's root services.</summary>
@@ -75,6 +77,23 @@ internal static class ModuleServiceForwarding
         {
             var index = registration.Index;
             var type = registration.Descriptor.ServiceType;
+            if (registration.Descriptor.IsKeyedService)
+            {
+                // Forwarded under the module's OWN key, so a consumer asking by key gets the module's.
+                var key = registration.Descriptor.ServiceKey;
+                switch (registration.Route)
+                {
+                    case ModuleServiceRoute.Proxy:
+                        root.Add(ServiceDescriptor.KeyedSingleton(type, key, (sp, _) => ModuleServiceProxy.Create(
+                            type, sp.GetRequiredService<ModuleContexts>(), module, index)));
+                        break;
+                    case ModuleServiceRoute.Current:
+                        root.Add(ServiceDescriptor.KeyedTransient(type, key, (sp, _) =>
+                            sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index)));
+                        break;
+                }
+                continue;
+            }
             switch (registration.Route)
             {
                 case ModuleServiceRoute.Proxy:
@@ -85,11 +104,6 @@ internal static class ModuleServiceForwarding
                     break;
                 case ModuleServiceRoute.Current:
                     root.Add(ServiceDescriptor.Transient(type, sp => sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index)));
-                    break;
-                case ModuleServiceRoute.Hosted:
-                    root.Add(ServiceDescriptor.Singleton<IHostedService>(sp => new ModuleHostedServiceForwarder(
-                        sp.GetRequiredService<ModuleContexts>(), module, index,
-                        sp.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.IncompatibleModule"))));
                     break;
             }
         }
@@ -111,8 +125,17 @@ internal static class ModuleServiceForwarding
             if (generation.Services is not { } module)
                 continue;
             var name = generation.Name;
+            foreach (var keyed in module.Registrations
+                         .Where(r => r.Route == ModuleServiceRoute.ModuleOwned && r.Descriptor.IsKeyedService))
+            {
+                var keyedType = keyed.Descriptor.ServiceType;
+                var key = keyed.Descriptor.ServiceKey;
+                services.Add(ServiceDescriptor.KeyedTransient(keyedType, key, (_, _) =>
+                    (contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."))
+                    .GetRequiredKeyedService(keyedType, key)));
+            }
             var owned = module.Registrations
-                .Where(r => r.Route == ModuleServiceRoute.ModuleOwned)
+                .Where(r => r.Route == ModuleServiceRoute.ModuleOwned && !r.Descriptor.IsKeyedService)
                 .Select(r => r.Descriptor.ServiceType)
                 .Distinct()
                 .ToArray();

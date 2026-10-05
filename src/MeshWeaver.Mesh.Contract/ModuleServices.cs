@@ -47,7 +47,8 @@ public sealed record ModuleServiceRegistration(int Index, ServiceDescriptor Desc
     /// which is a different <see cref="Type"/> in every generation.</summary>
     public string Shape => Route == ModuleServiceRoute.ModuleOwned || Route == ModuleServiceRoute.Private
         ? $"{Route}:{Descriptor.ServiceType.FullName}"
-        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}";
+        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}"
+          + (Descriptor.IsKeyedService ? $":key={Descriptor.ServiceKey}" : "");
 }
 
 /// <summary>
@@ -107,7 +108,11 @@ public sealed class ModuleServices : IDisposable
 
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>).</summary>
     public ImmutableList<string> Shape => Registrations
-        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+        // Hosted services are NOT part of the shape: the root holds no per-registration forwarder for
+        // them — one ModuleHostedServicesHost starts whatever the CURRENT generation registers — so a
+        // generation may add or drop a background service and still swap live (measured: the AI
+        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else).
+        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
         .Select(r => r.Shape)
         .ToImmutableList();
 
@@ -161,9 +166,11 @@ public sealed class ModuleServices : IDisposable
     {
         blocker = null;
         var type = descriptor.ServiceType;
-        if (descriptor.IsKeyedService)
+        // A keyed registration is forwarded under its OWN key — unless the key itself is a module
+        // object, which a root registration would then hold (and pin) for the life of the process.
+        if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key && IsOwned(key.GetType(), module))
         {
-            blocker = "keyed root services are not forwarded";
+            blocker = $"its service key is a module type ({key.GetType().Name}) — the root would hold it";
             return ModuleServiceRoute.Private;
         }
         var implementation = ImplementationTypeOf(descriptor);
@@ -198,9 +205,13 @@ public sealed class ModuleServices : IDisposable
     }
 
     private static Type? ImplementationTypeOf(ServiceDescriptor descriptor) =>
-        descriptor.ImplementationType
-        ?? descriptor.ImplementationInstance?.GetType()
-        ?? descriptor.ImplementationFactory?.Method.ReturnType;
+        descriptor.IsKeyedService
+            ? descriptor.KeyedImplementationType
+              ?? descriptor.KeyedImplementationInstance?.GetType()
+              ?? descriptor.KeyedImplementationFactory?.Method.ReturnType
+            : descriptor.ImplementationType
+              ?? descriptor.ImplementationInstance?.GetType()
+              ?? descriptor.ImplementationFactory?.Method.ReturnType;
 
     /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from
     /// <paramref name="module"/>.</summary>
@@ -226,7 +237,10 @@ public sealed class ModuleServices : IDisposable
             foreach (var registration in Registrations)
             {
                 var d = registration.Descriptor;
-                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+                // A keyed registration keeps its own key — the root forwards by that key; an unkeyed
+                // forwarded one is held under its index key so the root can ask for exactly it.
+                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted
+                    && !d.IsKeyedService)
                     services.Add(Keyed(d, registration.Key));
                 else
                     services.Add(d);
@@ -252,7 +266,9 @@ public sealed class ModuleServices : IDisposable
     public object Resolve(IServiceProvider root, int index)
     {
         var registration = Registrations[index];
-        return Scope(root).GetRequiredKeyedService(registration.Descriptor.ServiceType, registration.Key);
+        var descriptor = registration.Descriptor;
+        return Scope(root).GetRequiredKeyedService(
+            descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
     }
 
     /// <summary>Starts hosted registration <paramref name="index"/> from this generation and records
@@ -288,6 +304,13 @@ public sealed class ModuleServices : IDisposable
         logger?.LogError(exception,
             "[MeshWeaver.Mesh.IncompatibleModule] a hosted service of module {Module} could not start — its feature is absent",
             ModuleName);
+
+    /// <summary>Starts EVERY hosted registration of this generation — the host at boot, and the swap
+    /// for the generation it puts in service.</summary>
+    public Task StartAllHosted(IServiceProvider root, CancellationToken ct, ILogger? logger) =>
+        Task.WhenAll(Registrations
+            .Where(r => r.Route == ModuleServiceRoute.Hosted)
+            .Select(r => StartHosted(root, r.Index, ct, logger)));
 
     /// <summary>The hosted registrations this generation has started.</summary>
     public ImmutableList<int> StartedHosted

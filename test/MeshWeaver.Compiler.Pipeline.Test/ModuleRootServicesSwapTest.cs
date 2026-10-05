@@ -85,6 +85,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             "the module's root services must be served from a scope of its own — the conversion under test");
         Contexts.Current(Module)!.RootServiceBlockers.Should().BeEmpty();
         consumer.Ask().Should().Be("hello v1 (options v1)");
+        var keyed = Mesh.ServiceProvider.GetRequiredKeyedService<ILiveGreeter>("keyed-greeter");
+        keyed.Greet().Should().Be("hello v1 (options v1)");
         journal.Entries.Should().Equal(["start v1"], "the host started the module's hosted service once, through its forwarder");
         var weakN = WeakContextOf(Module);
 
@@ -93,6 +95,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
         consumer.Ask().Should().Be("hello v2 (options v2)",
             "a platform singleton that CACHED the module's service must follow the swap — the root holds a forwarding proxy");
+        keyed.Greet().Should().Be("hello v2 (options v2)",
+            "a KEYED root service is forwarded under the module's own key and follows the swap too");
         journal.Entries.Should().Equal(["start v1", "stop v1", "start v2"],
             "the old generation's hosted service is stopped and the new one's started, in that order");
 
@@ -136,7 +140,26 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     [MethodImpl(MethodImplOptions.NoInlining)]
     private WeakReference WeakContextOf(string module) => new(Contexts.Current(module)!.Context);
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false) => $$"""
+    /// <summary>
+    /// A new generation that ADDS a background service still swaps live: the root holds no
+    /// per-registration forwarder for hosted services, so the shape is unchanged — the shape of the
+    /// real MeshWeaver.AI update behind the 2026-10-05 incident, which added exactly one.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateThatAddsAHostedService_SwapsLive_AndStartsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var journal = Mesh.ServiceProvider.GetRequiredService<HostedServiceJournal>();
+        journal.Entries.Should().Equal(["start v1"]);
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, extraHosted: true)), "test: added hosted service")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        journal.Entries.Should().Equal(["start v1", "stop v1", "start v2", "start extra v2"]);
+    }
+
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
@@ -152,6 +175,11 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken ct) { journal.Write("stop v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
         }
         public class Journal2 : MeshWeaver.Graph.Test.HostedServiceJournalBase { }
+        public sealed class ExtraJournaling(MeshWeaver.Graph.Test.HostedServiceJournal journal) : Microsoft.Extensions.Hosting.IHostedService
+        {
+            public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken ct) { journal.Write("start extra v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
+            public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken ct) { journal.Write("stop extra v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
+        }
         public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute
         {
             public override System.Collections.Generic.IEnumerable<MeshWeaver.Mesh.MeshNode> Nodes =>
@@ -160,9 +188,11 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                     {
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
                         services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();
+                        services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>("keyed-greeter");
                         {{(extraGreeter ? "services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();" : "")}}
                         {{(classService ? "services.AddSingleton<MeshWeaver.Graph.Test.HostedServiceJournalBase, Journal2>();" : "")}}
                         services.AddHostedService<Journaling>();
+                        {{(extraHosted ? "services.AddHostedService<ExtraJournaling>();" : "")}}
                         return services;
                     })];
         }
