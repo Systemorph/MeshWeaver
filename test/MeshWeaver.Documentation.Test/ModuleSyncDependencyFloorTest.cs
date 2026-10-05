@@ -81,4 +81,47 @@ public class ModuleSyncDependencyFloorTest
                 ("index.json", """{"content":{"requires":["Store@^1.0.0","AI@^1.21.0"],"minMeshVersion":"3.0.0-ci.9917"}}"""),
             ])
             .Single().Requires.Should().Equal("Store@^1.0.0", "AI@^1.21.0");
+
+    /// <summary>Non-string and blank entries of <c>requires</c> are dropped, never read as a requirement.</summary>
+    [Fact]
+    public void Read_DropsNonStringAndBlankRequirements()
+        => ModuleSyncDecision.Read([
+                ("manifest.lock", """{"module":"Hosting","moduleVersion":"5e0c0ffee5e0c0ff"}"""),
+                ("index.json", """{"content":{"requires":[" AI@^1.21.0 ",null,42,"  ",{"x":1}]}}"""),
+            ])
+            .Single().Requires.Should().Equal("AI@^1.21.0");
+
+    /// <summary>A module with no index.json states no floor and no requirement.</summary>
+    [Fact]
+    public void Read_WithoutAnIndex_StatesNoFloorAndNoRequirement()
+    {
+        var reading = ModuleSyncDecision.Read([("manifest.lock", """{"module":"Hosting","moduleVersion":"5e0c0ffee5e0c0ff"}""")]).Single();
+        reading.Floor.Should().BeNull();
+        reading.Requires.Should().BeEmpty();
+    }
+
+    /// <summary>The loaded dependency is found case-insensitively, as the exact key is.</summary>
+    [Fact]
+    public void TheLoadedDependency_IsMatchedCaseInsensitively()
+        => Judge(Hosting("ai@^1.21.0"), AiAt1204).Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+
+    /// <summary>
+    /// #6111 review: an import held ONLY on an unmet requirement is not a platform-floor decline —
+    /// its outcome and its activity line name the dependency, never "rolled forward".
+    /// </summary>
+    [Fact]
+    public void ARequirementHold_IsNotReportedAsAPlatformFloorDecline()
+    {
+        GitHubSyncService.NoOpOutcome(0, 1).Should().Be(GitHubSyncService.RequirementUnmetOutcome);
+        GitHubSyncService.NoOpOutcome(1, 1).Should().Be(GitHubSyncService.DeclinedOutcome);
+        GitHubSyncService.NoOpOutcome(0, 0).Should().Be("Skipped");
+
+        var held = new MeshWeaver.Graph.StaticRepoImportResult("Space", "manifest:Hosting=5e0c", GitHubSyncService.RequirementUnmetOutcome)
+        {
+            UnmetRequirementModules = ["Hosting (requires AI@^1.21.0)"],
+        };
+        GitHubActivityExtensions.ModulesRequirementUnmetLine(held)?.Message
+            .Should().Contain("Hosting (requires AI@^1.21.0)").And.NotContain("rolled forward");
+        GitHubActivityExtensions.ModulesRequirementUnmetLine(held with { UnmetRequirementModules = [] }).Should().BeNull();
+    }
 }

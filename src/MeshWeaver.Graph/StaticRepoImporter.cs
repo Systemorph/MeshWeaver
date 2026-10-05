@@ -82,6 +82,15 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> DeclinedModules { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The modules this import did NOT write because each requires a module version this instance
+    /// has not loaded (a <c>requires</c> entry its loaded dependency does not satisfy). A different
+    /// remedy from <see cref="DeclinedModules"/>: the platform is not behind — the dependency is, and
+    /// the import after a satisfying version loads syncs them. Each entry is
+    /// <c>module (requires …)</c>. Empty when nothing was held on a requirement.
+    /// </summary>
+    public ImmutableList<string> UnmetRequirementModules { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///

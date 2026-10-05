@@ -142,10 +142,13 @@ way (see the per-NodeType page).
 
 - **The sync config** (`_GitSync`): `ModuleOutcomes` lists every module of the last attempt as
   `Unchanged`, `Synced` or `Declined` with its reason, and `ModuleVersions` holds the recorded hashes.
-  `LastSyncOutcome` is the import's own outcome (`Declined` only when every module was declined) and
+  `LastSyncOutcome` is the import's own outcome (`Declined` only when every module was declined, and
+  at least one on its platform floor; `RequirementUnmet` when every decline was an unmet `requires` —
+  a loaded dependency below the range, whose remedy is loading that dependency, not a roll) and
   never the whole-Space `Held` the gate used to write. `LastSyncNote` names each declined module.
-- **The activity**: one keyed Warning line, `activity.gitsync.modulesDeclined`, rendered in the
-  viewer's language.
+- **The activity**: one keyed Warning line per kind of decline, rendered in the viewer's language —
+  `activity.gitsync.modulesDeclined` for a platform floor, `activity.gitsync.modulesRequirementUnmet`
+  for an unmet requirement.
 - **The settings tab**: `ui.gitSync.modulesDeclined` and `ui.gitSync.modulesUnchanged`.
 - **`/health`** (`publication-seal`): every module's last outcome, by Space. A decline that outlives
   the 45-minute CI job cap reads Degraded, never Unhealthy.
