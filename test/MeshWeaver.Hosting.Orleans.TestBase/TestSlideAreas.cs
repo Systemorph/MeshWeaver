@@ -58,7 +58,11 @@ public static class TestSlideAreas
         if (cut <= 0)
             return Observable.Return<IReadOnlyList<MeshNode>>([]);
         var cache = host.Hub.ServiceProvider.GetRequiredService<IDeckSlidesCache>();
-        return cache.GetOrderedSlides(hubPath[..cut]);
+        // The deck is read as the viewer this area renders for — captured by the host, since the
+        // render may run off the viewer's delivery (IDeckSlidesCache.GetOrderedSlides).
+        var access = host.Hub.ServiceProvider.GetRequiredService<AccessService>();
+        using (host.ViewerContext is { } viewer ? access.SwitchAccessContext(viewer) : null)
+            return cache.GetOrderedSlides(hubPath[..cut]);
     }
 
     private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> slides)

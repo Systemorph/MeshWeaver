@@ -143,7 +143,8 @@ internal sealed class BakeHost
             IdOf = CompiledDependencies.CreateCompatibilityIdResolver(
                 PrebuiltAssemblySeeder.LiveFrameworkMvid,
                 TreeBake.ModuleMvidsOf(modules),
-                TreeBake.ModuleVersionResolverOf(modules)),
+                TreeBake.ModuleVersionResolverOf(modules),
+                TreeBake.ModulePackageVersionResolverOf(modules)),
             ToolchainId = CompiledDependencies.ToolchainIdOf(PrebuiltAssemblySeeder.LiveFrameworkMvid),
             References = CompileReferences.ComposeWithModules(modules),
             Description =
@@ -273,7 +274,8 @@ internal sealed class BakeHost
             FrameworkIdentity = identity,
             AppDirectory = app,
             IdOf = CompiledDependencies.CreateCompatibilityIdResolver(
-                identity, TreeBake.ModuleMvidsOf(modules), TreeBake.ModuleVersionResolverOf(modules)),
+                identity, TreeBake.ModuleMvidsOf(modules), TreeBake.ModuleVersionResolverOf(modules),
+                TreeBake.ModulePackageVersionResolverOf(modules)),
             ToolchainId = CompiledDependencies.ToolchainIdOf(identity),
             References = references,
             Description =

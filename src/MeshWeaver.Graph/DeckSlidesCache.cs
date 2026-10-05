@@ -29,6 +29,14 @@ public interface IDeckSlidesCache
     /// <see cref="DeckSlidesCache.OrderSlides"/>). Shared per parent: concurrent
     /// subscribers ride ONE underlying query; a warm entry replays the latest
     /// list synchronously on Subscribe.
+    ///
+    /// <para>🚨 <b>Read as the VIEWER.</b> The list is the slides the CALLER may read: the
+    /// caller's ambient <see cref="AccessContext"/> (request, then circuit) is captured at
+    /// THIS call, and the sibling query runs as that viewer whenever it is subscribed. Entries
+    /// are shared per (viewer, parent), never across viewers. With no ambient viewer the read
+    /// is the anonymous view. A caller that renders off its viewer's delivery (a layout area's
+    /// deferred continuation) captures the viewer first (<c>LayoutAreaHost.ViewerContext</c>)
+    /// and calls this inside <c>AccessService.SwitchAccessContext(viewer)</c>.</para>
     /// </summary>
     IObservable<IReadOnlyList<MeshNode>> GetOrderedSlides(string parentPath);
 }
@@ -69,8 +77,13 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
     // fault to every later viewer of that deck for the life of the process — the deck simply
     // never renders again (#1369). The cache evicts a faulted entry so the next view rebuilds the
     // pipeline; it never re-subscribes on its own.
-    private readonly PromiseCache<string, IReadOnlyList<MeshNode>> cache =
-        new(StringComparer.Ordinal);
+    //
+    // Keyed by (viewer, parent): a shared Replay entry holds ONE viewer's row-level-security view,
+    // so an entry shared across viewers would serve one user's readable slides to another
+    // (Systemorph/MeshWeaver.Plugins#2802 — the sibling query used to run as System for exactly
+    // that reason).
+    private readonly PromiseCache<(string Viewer, string Parent), IReadOnlyList<MeshNode>> cache =
+        new();
 
     /// <summary>
     /// DI constructor: binds the cache to the mesh hub. The parent node stream
@@ -106,11 +119,24 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
     }
 
     /// <inheritdoc />
-    public IObservable<IReadOnlyList<MeshNode>> GetOrderedSlides(string parentPath) =>
-        cache.GetOrAdd(parentPath, path =>
-            BuildOrderedSlides(meshService(), parentNodes(path), path, serializerOptions(), accessService())
+    public IObservable<IReadOnlyList<MeshNode>> GetOrderedSlides(string parentPath)
+    {
+        var access = accessService();
+        var viewer = ViewerOf(access?.Context ?? access?.CircuitContext);
+        return cache.GetOrAdd((viewer?.ObjectId ?? "", parentPath), key =>
+            BuildOrderedSlides(meshService(), parentNodes(key.Parent), key.Parent, serializerOptions(), access, viewer)
                 .Replay(1)
                 .RefCount());
+    }
+
+    // A viewer is a real principal. A context without an id, a hub credential or a platform
+    // principal reads the anonymous view: this cache never answers with System's view of a deck.
+    private static AccessContext? ViewerOf(AccessContext? context) =>
+        context is { ObjectId: { Length: > 0 } id, IsHub: false }
+        && id != WellKnownUsers.System
+        && id != WellKnownUsers.Anonymous
+            ? context
+            : null;
 
     /// <summary>
     /// The (uncached) sibling-slide pipeline — shared by the cache above and by
@@ -131,40 +157,37 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
         IObservable<MeshNode?> parentNode,
         string parentPath,
         JsonSerializerOptions serializerOptions,
-        AccessService? accessService)
+        AccessService? accessService,
+        AccessContext? viewer)
     {
-        // 🚨 The sibling query MUST bypass access control — same sanctioned pattern
-        // (and justification) as PathResolutionService's routing query. The deck's
-        // slide order / prev-next / counter is NAVIGATION CHROME, not data access:
-        // the actual slide CONTENT is access-checked by the target hub when the
-        // user navigates there. Two reasons System is required, not just nice:
-        //  1. The layout host consumes this stream in DEFERRED Rx continuations
-        //     where the per-circuit AsyncLocal AccessContext does not flow — under
-        //     the PG per-schema access clause the query then runs as Anonymous and
-        //     returns an EMPTY deck forever (counter stuck at "Slide 1 / 1", no
-        //     Prev/Next; repro: OrleansSlideNavigationPostgresTest).
-        //  2. The cache above is shared ACROSS users — a shared Replay entry must
-        //     hold user-INDEPENDENT results, or one user's RLS view would be
-        //     served to another. Bypass requires BOTH UserId=System on the request
-        //     AND the ImpersonateAsSystem AsyncLocal scope (defense-in-depth, see
-        //     PathResolutionService).
+        // 🚨 The sibling query runs as the VIEWER, never as System. It used to bypass access
+        // control on the argument that slide order / prev-next / counter is "navigation chrome".
+        // But the list IS data: every sibling's path, name and order, served to a viewer who may
+        // read none of them, and the cache shared it across users. Row-level security decides
+        // which slides a viewer sees; a slide the viewer cannot read is not in their deck.
+        //  - The viewer is CAPTURED by the caller (GetOrderedSlides) and stamped explicitly
+        //    (ForViewer), because this stream is consumed in deferred Rx continuations where the
+        //    ambient AccessContext does not flow. Resolving it there reads as Anonymous and
+        //    answers an EMPTY deck (repro: OrleansSlideNavigationPostgresTest).
+        //  - The same viewer is installed around the SUBSCRIBE, which is when the synced query is
+        //    issued: opened and closed on the subscribing thread (never Observable.Using, #1790).
+        //  - No viewer means explicitly the anonymous view (UserId ""), never the ambient identity
+        //    of whatever thread happens to subscribe.
         // 🚨 No `nodeType:` term: the query language's nodeType filter is EQUALITY, and a
         // plugin-installed slide type's identity is its install path (`Publish/Slide`), so a
         // `nodeType:Slide` sibling query silently excluded every plugin-typed slide (education's
         // 116 Publish/Slide nodes rendered "Slide 1 / 1" with no Prev/Next). Query the parent's
         // children and apply the suffix-aware SlideNodeType.Matches in the fold instead — the
         // candidate set is one deck's children, so the wider query costs nothing.
-        var request = MeshQueryRequest.FromQuery(
-            $"namespace:{parentPath}") with
-        {
-            UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
-        };
+        var request = MeshQueryRequest.FromQuery($"namespace:{parentPath}")
+            .ForViewer(viewer?.ObjectId ?? "");
 
         // Candidate set: the sibling slide nodes (built-in or plugin-typed) sharing this parent.
-        var siblingSlides = Observable.Using(
-                () => accessService?.ImpersonateAsSystem()
-                      ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => meshService.Query<MeshNode>(request))
+        var siblingSlides = Observable.Create<QueryResultChange<MeshNode>>(observer =>
+            {
+                using (viewer is not null ? accessService?.SwitchAccessContext(viewer) : null)
+                    return meshService.Query<MeshNode>(request).Subscribe(observer);
+            })
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)

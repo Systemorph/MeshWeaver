@@ -260,6 +260,99 @@ public class ALateReleaseIsAdoptedWhenItLandsTest(ITestOutputHelper output) : Mo
                 "the retained marker must keep the watch live until this build's release arrives");
     }
 
+    /// <summary>
+    /// 🚨 #6056 — A STAMP WHOSE CREATE WAS NEVER WRITTEN IS CUT BY THE NEXT ACTIVATION. The
+    /// incident: a replica being rolled away settled two NodeTypes, and both the release create and
+    /// its same-id re-cut were answered "cancelled before it completed" by the draining host. The
+    /// stamp landed, the node never would, and the only thing that ever repaired it was a recompile.
+    /// Seeded here exactly so: a settled, usable build of THIS framework whose bytes are in the
+    /// assembly store, stamped with an id for those bytes, and no release node anywhere. Activating
+    /// the owner must cut that release at the stamped id and adopt it. Without
+    /// <see cref="LateReleaseAdoption.CompleteInheritedRelease"/> this fails at the <c>Match</c>:
+    /// the landing watch waits for a create nobody will ever make.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnInheritedStamp_WhoseCreateNeverLanded_IsCutByTheNextActivation()
+    {
+        var typePath = $"{TestPartition}/InheritedRelease{Guid.NewGuid().ToString("N")[..8]}";
+        var bytes = File.ReadAllBytes(typeof(ALateReleaseIsAdoptedWhenItLandsTest).Assembly.Location);
+        var location = await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
+            .PutWithLocation(typePath, 3729, bytes, null)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit();
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            location.LocalPath, [], Collection: location.Collection, ContentPath: location.ContentPath));
+        var unreleased = ReleasePathFor(typePath, $"20261003231557-{hash}");
+
+        var typeNode = MeshNode.FromPath(typePath) with
+        {
+            Name = typePath,
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = Stamped(typePath, unreleased) with
+            {
+                LastCompiledVersion = 3729,
+                LatestAssemblyCollection = location.Collection,
+                LatestAssemblyPath = location.ContentPath,
+                CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                UnreleasedBuildReason = $"the create at '{unreleased}' failed: InvalidOperationException: "
+                    + $"Node creation at '{unreleased}' was cancelled before it completed.",
+            },
+        };
+        await MeshService.CreateNode(typeNode)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the stamped NodeType must exist", cancellationToken: TestContext.Current.CancellationToken);
+
+        var adopted = await Mesh.GetMeshNodeStream(typePath)
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && string.Equals(d.LatestReleasePath, unreleased, StringComparison.Ordinal),
+                "the activation that inherits a build with no release must cut it at the stamped id "
+                + "and adopt it — nothing else ever creates that node (#6056)");
+        var def = adopted.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        def.UnreleasedBuildPath.Should().BeNull("the build has a release now");
+        def.UnreleasedBuildReason.Should().BeNull("the reason never outlives the path");
+        def.LastCompiledVersion.Should().Be(3729L, "completing the release recompiles nothing");
+
+        var release = await Mesh.GetMeshNodeStream(unreleased)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.ContentAs<NodeTypeRelease>(Mesh.JsonSerializerOptions) is not null,
+                "the release node exists at the stamped id");
+        var content = release.ContentAs<NodeTypeRelease>(Mesh.JsonSerializerOptions)!;
+        content.AssemblyStoreVersion.Should().Be(3729L, "the release names the recorded build");
+        content.AssemblyCollection.Should().Be(location.Collection);
+        content.AssemblyContentPath.Should().Be(location.ContentPath);
+    }
+
+    [Fact]
+    public void InheritedObligation_NamesTheStamp_OnlyForTheRecordedBytesOfThisFramework()
+    {
+        const string collection = "assemblies";
+        const string contentPath = "T/v1-build.dll";
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            null, [], Collection: collection, ContentPath: contentPath));
+        var stamped = $"T/Release/20261003231557-{hash}";
+        var framework = NodeTypeCompilationHelpers.FrameworkVersion;
+        var owed = Stamped("T", stamped) with
+        {
+            LatestAssemblyCollection = collection,
+            LatestAssemblyPath = contentPath,
+            CompiledFrameworkVersion = framework,
+        };
+
+        LateReleaseAdoption.InheritedObligation(owed, "T", framework).Should().Be(stamped);
+        LateReleaseAdoption.InheritedObligation(owed with { UnreleasedBuildPath = null }, "T", framework)
+            .Should().BeNull("no stamp, no obligation");
+        LateReleaseAdoption.InheritedObligation(owed with { CompilationStatus = CompilationStatus.Compiling }, "T", framework)
+            .Should().BeNull("a compile in flight rewrites the stamp at its own settle");
+        LateReleaseAdoption.InheritedObligation(owed, "T", framework + "-other")
+            .Should().BeNull("a build of another framework is about to be recompiled, not released");
+        LateReleaseAdoption.InheritedObligation(owed with { LatestAssemblyPath = "T/v2-build.dll" }, "T", framework)
+            .Should().BeNull("a stamp naming other bytes is never cut for these");
+        LateReleaseAdoption.InheritedObligation(owed with { LatestAssemblyCollection = null }, "T", framework)
+            .Should().BeNull("without store coordinates there are no recorded bytes to release");
+        LateReleaseAdoption.InheritedObligation(null, "T", framework).Should().BeNull();
+    }
+
     [Fact]
     public void Adopt_MovesThePointer_WhenTheStampNamesThePath()
     {

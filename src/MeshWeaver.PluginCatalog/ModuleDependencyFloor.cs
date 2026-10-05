@@ -50,32 +50,7 @@ public static class ModuleDependencyFloor
     /// <param name="range">The constraint half of a requirement (<c>^1.20.0</c>), or empty.</param>
     /// <param name="version">The co-loaded dependency's version.</param>
     public static bool? Satisfies(string? range, string version)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(version);
-        var constraint = range?.Trim() ?? "";
-        if (constraint.Length == 0 || constraint == "*")
-            return true;
-        var comparer = NuGetVersionComparer.Instance;
-        if (constraint.StartsWith(">=", StringComparison.Ordinal))
-            return VersionText.Parse(constraint[2..]) is { } floor ? comparer.Compare(version, floor.Text) >= 0 : null;
-        if (constraint.StartsWith('>'))
-            return VersionText.Parse(constraint[1..]) is { } floor ? comparer.Compare(version, floor.Text) > 0 : null;
-        if (constraint.StartsWith('^') || constraint.StartsWith('~'))
-        {
-            if (VersionText.Parse(constraint[1..]) is not { } floor)
-                return null;
-            var ceiling = constraint[0] == '^'
-                ? floor.Major > 0 ? $"{floor.Major + 1}.0.0"
-                : floor.Minor > 0 ? $"0.{floor.Minor + 1}.0"
-                : $"0.0.{floor.Patch + 1}"
-                : $"{floor.Major}.{floor.Minor + 1}.0";
-            return comparer.Compare(version, floor.Text) >= 0 && comparer.Compare(version, ceiling) < 0;
-        }
-        var exact = constraint.StartsWith('=') ? constraint[1..] : constraint;
-        return VersionText.Parse(exact) is { } pinned
-            ? comparer.Compare(version, pinned.Text) == 0
-            : null;
-    }
+        => PackageRequirement.Satisfies(range, version);
 
     /// <summary>
     /// Every requirement of <paramref name="installed"/> that the set <paramref name="landed"/>
@@ -100,8 +75,7 @@ public static class ModuleDependencyFloor
                     continue;
                 if (LandedModuleOf(dependencyId, installed, landed) is not { } entry)
                     continue;
-                var at = requirement.IndexOf('@');
-                var range = at < 0 ? "" : requirement[(at + 1)..];
+                var range = PackageRequirement.RangeOf(requirement);
                 if (Satisfies(range, entry.Version!) == false)
                     unmet.Add(new UnmetDependencyFloor(
                         dependent.Id, dependent.ReleasedVersion, requirement.Trim(),
@@ -197,31 +171,4 @@ public sealed record UnmetDependencyFloor(
         $"'{Dependent}'{(DependentVersion is { Length: > 0 } v ? $" {v}" : "")} requires {Requirement}, "
         + $"but this set loads '{Module}' (package '{Dependency}') at {LoadedVersion}, which does "
         + "not satisfy it";
-}
-
-/// <summary>A parsed <c>MAJOR.MINOR.PATCH[-pre]</c> version — the text and its numeric core.</summary>
-file sealed record ParsedVersion(string Text, int Major, int Minor, int Patch);
-
-/// <summary>Parsing kept out of the public surface.</summary>
-file static class VersionText
-{
-    internal static ParsedVersion? Parse(string? text)
-    {
-        var trimmed = text?.Trim();
-        if (string.IsNullOrEmpty(trimmed))
-            return null;
-        var core = trimmed;
-        var cut = core.IndexOfAny(['-', '+']);
-        if (cut >= 0)
-            core = core[..cut];
-        var parts = core.Split('.');
-        if (parts.Length is < 1 or > 3)
-            return null;
-        var numbers = new int[3];
-        for (var i = 0; i < parts.Length; i++)
-            if (!int.TryParse(parts[i], System.Globalization.NumberStyles.None,
-                    System.Globalization.CultureInfo.InvariantCulture, out numbers[i]))
-                return null;
-        return new ParsedVersion(trimmed, numbers[0], numbers[1], numbers[2]);
-    }
 }
