@@ -707,7 +707,53 @@ public static class MeshExtensions
             if (parent == current) break;
             current = parent;
         }
+        AnswerAHeartbeatForAStreamThisOwnerDoesNotServe(hub, delivery);
         return delivery.Processed();
+    }
+
+    /// <summary>
+    /// 🚨 The owner's half of the sync-stream liveness check (#6047, #5011). A subscriber's
+    /// heartbeat names the stream it believes this owner serves
+    /// (<see cref="HeartBeatEvent.StreamId"/>). When this activation serves no such stream — the
+    /// address was handed off or recycled and the previous activation's goodbye never reached the
+    /// subscriber (it rides the router a lingering host has already refused) — the subscriber holds
+    /// a read that receives nothing, and before this its ONLY way to learn so was its own process's
+    /// change notification (PostgreSQL LISTEN). Answering with <see cref="StreamEndedEvent"/> sends it
+    /// through the re-ask it already has for an announced end (bounded, teardown-gated, run as
+    /// System), so the held read follows its owner with no dependency on the change feed.
+    ///
+    /// <para>Silent in every other case, exactly as before: a heartbeat with no stream id (an
+    /// <c>_Exec</c> keep-alive, an older subscriber), a hub with no workspace, a stream this owner
+    /// does serve, and an owner that is itself tearing down — a dying hub must not speak for an
+    /// address it is leaving (routing a message to a deactivating grain resurrects it). Never a
+    /// watchdog: one answer per heartbeat the subscriber already sends, and the subscriber names a
+    /// stream only while it holds an ACKNOWLEDGED subscription, so a subscribe still in flight to a
+    /// slow-initialising owner is never answered "unknown".</para>
+    /// </summary>
+    private static void AnswerAHeartbeatForAStreamThisOwnerDoesNotServe(
+        IMessageHub hub, IMessageDelivery<HeartBeatEvent> delivery)
+    {
+        var streamId = delivery.Message.StreamId;
+        var subscriber = delivery.Sender;
+        if (string.IsNullOrEmpty(streamId) || subscriber is null)
+            return;
+        if (hub.RunLevel > MessageHubRunLevel.Started || hub is MessageHub { IsDisposing: true })
+            return;
+        if (hub.ServiceProvider.GetService<IWorkspace>() is not Workspace workspace
+            || workspace.ServesClientSubscription(subscriber, streamId))
+            return;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
+        logger?.LogInformation(
+            "HeartBeat: {Owner} serves no stream {StreamId} for {Subscriber} — this activation never "
+            + "received that subscription (hand-off / recycle the subscriber was not told about); "
+            + "announcing its end so the subscriber re-subscribes",
+            hub.Address, streamId, subscriber);
+        // Issued from the stream seam (#4614/#4617): a heartbeat handled by the ROOT MESH HUB must not
+        // make the router the origin of a StreamEndedEvent. For every other owner the seam is the
+        // identity, and the subscriber matches the end on its StreamId alone
+        // (JsonSynchronizationStream's StreamEndedEvent registration), so the sender does not change
+        // what it does.
+        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
     }
 
     /// <summary>

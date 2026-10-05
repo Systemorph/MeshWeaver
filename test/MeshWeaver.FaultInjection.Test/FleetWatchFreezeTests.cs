@@ -97,20 +97,22 @@ public class AHeldReadOnAThirdSiloSurvivesTheOwnerSiloKillWithoutInvalidationTes
 /// handed off to silo 2 — the path is CHOSEN so the hand-off lands there
 /// (<see cref="FaultInjectionCluster.HandOffTarget"/>), away from the holder (silo 0).
 ///
-/// <para>A held read learns that its owner moved from exactly one channel: the change feed. Its
-/// heartbeat is fire-and-forget (<c>JsonSynchronizationStream</c>: "the change-feed resubscribe is the
-/// sole recycled-grain detector"), and the lingering owner's goodbye rides the refused router. So:</para>
+/// <para>A held read used to learn that its owner moved from exactly one channel: the change feed.
+/// Its heartbeat was a bare keep-alive (<c>JsonSynchronizationStream</c>: "the change-feed resubscribe
+/// is the sole recycled-grain detector"), and the lingering owner's goodbye rides the refused router.
+/// So with the holder's feed withheld the held read FROZE — no value, no error, no end — until the
+/// feed was released: the #5011 symptom exactly ("reads as holding while it holds nothing"), a
+/// reader's liveness across a roll only as good as the LISTEN channel of the process holding it.</para>
+/// <para>Now the heartbeat NAMES the acknowledged stream and an owner activation that does not serve
+/// it answers <c>StreamEndedEvent</c> (#6047), so the OWNER detects the orphaned subscription:</para>
 /// <list type="bullet">
 ///   <item>with the cross-process notifications flowing (PostgreSQL LISTEN healthy), the held read
 ///     follows the owner and delivers the write;</item>
-///   <item>with the holder's feed withheld, the held read FREEZES — no value, no error, no end — for as
-///     long as the feed is withheld, and delivers the moment it is released.</item>
+///   <item>with the holder's feed withheld, it follows the owner ALL THE SAME, through the heartbeat,
+///     while the notification is still withheld.</item>
 /// </list>
-/// <para>That second behaviour is the #5011 symptom exactly ("reads as holding while it holds
-/// nothing"): a reader's liveness across a roll is only as good as the LISTEN channel of the process
-/// that holds it. The second case PINS it (so a fix — a heartbeat that detects an owner that no longer
-/// knows the subscriber — flips it deliberately). Found while the hand-off target was left to chance:
-/// the same case passed alone and froze in the suite, because the target is a per-process string hash.</para>
+/// <para>Found while the hand-off target was left to chance: the same case passed alone and froze in
+/// the suite, because the target is a per-process string hash.</para>
 /// </summary>
 public abstract class AHeldReadWhoseOwnerIsHandedOffToAThirdSilo(FaultInjectionCluster mesh)
 {
@@ -168,36 +170,37 @@ public class AHeldReadFollowsItsOwnersHandOffTest(AHeldReadFollowsItsOwnersHandO
     }
 }
 
-/// <summary>The #5011 shape: the holder's notifications are lost, and the held read freezes until they are not.</summary>
-public class AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest(AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest.Cluster mesh)
-    : AHeldReadWhoseOwnerIsHandedOffToAThirdSilo(mesh), IClassFixture<AHeldReadFreezesWhenItsOwnersHandOffIsNotNotifiedTest.Cluster>
+/// <summary>
+/// The #5011 shape (#6047): the holder's notifications are withheld across the hand-off, and the held
+/// read must follow its owner anyway — through the heartbeat the new activation answers.
+///
+/// <para><b>Negative control</b> (run by hand, recorded in Doc/Architecture/FaultInjectionHarness):
+/// with the owner's answer removed from <c>MeshExtensions.HandleHeartBeat</c>, this freezes — the held
+/// read delivers nothing until the feed is released, exactly the behaviour it used to pin.</para>
+/// </summary>
+public class AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest(AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest.Cluster mesh)
+    : AHeldReadWhoseOwnerIsHandedOffToAThirdSilo(mesh), IClassFixture<AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest.Cluster>
 {
-    /// <summary>Five heartbeats: long enough that a heartbeat-driven recovery would have happened.</summary>
-    private static readonly TimeSpan Frozen = TimeSpan.FromSeconds(5);
-
     protected override bool WithholdInvalidation => true;
 
     [Fact(Timeout = 180_000)]
-    public async Task WithoutTheChangeFeed_TheHeldReadFreezesSilently_AndRecoversOnlyWhenItArrives()
+    public async Task WithoutTheChangeFeed_TheHeldReadFollowsTheOwner_ThroughTheHeartbeat()
     {
         var ct = TestContext.Current.CancellationToken;
         var (held, withheld) = await RollAndWrite(ct, async (h, feed) =>
         {
-            await h.Delivers("v2").Should().NotEmit(Frozen,
-                "PINNED GAP (#5011): the heartbeat is fire-and-forget and the owner's goodbye cannot leave a "
-                + "lingering host, so with its change feed withheld the held read has NO channel that tells it "
-                + "the owner moved — it neither delivers nor ends", ct);
-            feed.Should().NotBeNull("the freeze variant withholds the holder's feed");
+            feed.Should().NotBeNull("this variant withholds the holder's feed");
+            await h.Delivers("v2").Should().Within(TestTimeouts.Convergence)
+                .Emit("with its change feed withheld, the held read must still follow its owner's hand-off: "
+                      + "the new activation does not serve the stream its heartbeat names, answers that the "
+                      + "stream ended, and the holder re-subscribes there (#6047, #5011)", ct);
             await (feed?.Arrivals ?? Observable.Empty<string>()).Where(a => a.Contains(h.Path, StringComparison.OrdinalIgnoreCase))
                 .Should().Within(TestTimeouts.Convergence)
-                .Emit("the write's notification reached the holder's feed and is being withheld — otherwise "
-                      + "the freeze is not attributable to it", ct);
+                .Emit("the write's notification reached the holder's feed and was WITHHELD — otherwise the "
+                      + "delivery could have come through it and this case separated nothing", ct);
+            (feed?.IsClosed).Should().BeTrue("the feed was still withheld when the held read delivered");
         });
-        using (held)
-            await held.Delivers("v2").Should().Within(TestTimeouts.Convergence)
-                .Emit("released, the one withheld notification is enough: the held read re-subscribes and "
-                      + "delivers — the change feed is the sole channel that recovers it", ct);
-        withheld.Should().NotBeNull("the freeze variant withholds the holder's feed");
+        held.Dispose();
         withheld?.IsClosed.Should().BeFalse("the feed hold was released in the fixture's finally");
     }
 
