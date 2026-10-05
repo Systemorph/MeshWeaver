@@ -130,11 +130,23 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// THIS process, live. Cold; emits one outcome. Never throws through the observable — a failure
     /// is an outcome (<see cref="ModuleSwapOutcome.NeedsRestart"/>), because the caller's next act is
     /// to fall back to the restart, not to handle an exception.
+    ///
+    /// <para>🚨 <b>INTERNAL on purpose — the path is a PROVENANCE claim this method cannot check.</b>
+    /// It loads and runs whatever bytes sit at <paramref name="entryLocation"/>, in a context the
+    /// in-mesh impersonation guard classifies with the platform. The updater is a mesh singleton,
+    /// so a public <c>Swap(path)</c> would hand any code that can resolve it — a NodeType's layout
+    /// area included — "run these bytes as platform code" or "roll this module back to an older
+    /// directory on disk", with none of the identity or provenance checks the landing and restart
+    /// lanes apply (#6123 review). The ONE production caller is
+    /// <c>MeshWeaver.PluginCatalog.ModuleLiveActivation</c>, which feeds only the PINNED copy of a
+    /// generation the landing service landed and the activation record names; its public surface
+    /// (<c>ActivatePending</c>) takes no path at all. The grant is
+    /// <c>InternalsVisibleTo MeshWeaver.PluginCatalog</c> (plus the swap's own test suite).</para>
     /// </summary>
     /// <param name="entryLocation">The landed generation's entry DLL.</param>
     /// <param name="reason">Why the swap is asked for — carried into every recycled hub's
     /// <c>[QUIESCE-START]</c>.</param>
-    public IObservable<ModuleSwapOutcome> Swap(string entryLocation, string reason) =>
+    internal IObservable<ModuleSwapOutcome> Swap(string entryLocation, string reason) =>
         Observable.Defer(() =>
         {
             var job = new Job(entryLocation, reason, new AsyncSubject<ModuleSwapOutcome>());
@@ -258,8 +270,12 @@ public sealed class ModuleLiveUpdater : IDisposable
         }
 
         var dependents = contexts.DependentsOf(name);
-        contexts.Commit(fresh);
+        // Contributions are recorded BEFORE the generation is made current, so no reader ever sees
+        // Current(name) with null contributions — which every reader treats as "contributes
+        // nothing", not "in flight" (#6123 review). Recording them on a not-yet-current generation
+        // is invisible: CurrentNodes and the per-node-hub indirection read through Current.
         contexts.SetContributions(fresh, contributions);
+        contexts.Commit(fresh);
         var committed = ImmutableList.Create(fresh);
         var retiring = ImmutableList.Create(old);
         try
@@ -275,8 +291,8 @@ public sealed class ModuleLiveUpdater : IDisposable
                     contexts.Discard(reloaded);
                     throw new InvalidOperationException($"{dependent.Name}: {dependentRefused}");
                 }
-                contexts.Commit(reloaded);
                 contexts.SetContributions(reloaded, reloadedContributions);
+                contexts.Commit(reloaded);
                 committed = committed.Add(reloaded);
                 retiring = retiring.Add(dependent);
             }
