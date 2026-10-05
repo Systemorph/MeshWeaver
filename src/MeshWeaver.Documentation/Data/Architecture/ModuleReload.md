@@ -180,6 +180,12 @@ modules; the sync-owned hold on the module lane was.
 - **The sync-owned hold.** An attended reload lands the module even when the package's partition is
   owned by a sync source whose content has not caught up — the same as a Provision click. The item's
   `decision` says what was landed; the content half follows the sync.
+- **The install record is not re-stamped.** A reload writes the ACTIVATION record only; `Plugins/{id}`
+  is written by the installer and the package reconciler/sync, because it also describes the content
+  install. After a Done live reload to 1.2.0 the install record still reads 1.1.0. The instance report
+  therefore carries each package row's running version separately (`runningVersion`, read off the
+  activation record against the loaded generation) — see
+  [DeploymentInventory → Installed version vs running version](../DeploymentInventory).
 - **A restart that never comes.** A restart handed to the control lane that the control plane never
   executes leaves the request `AwaitingRestart` with the hand-over sentence on it — visible, not
   retried.
