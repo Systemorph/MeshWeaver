@@ -160,6 +160,86 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
             "a swap of the library has to take its dependents with it — the edge must be recorded");
     }
 
+    // ───────────────────────────────────────────── a swap is staged, then published as ONE step
+
+    /// <summary>
+    /// #6128 review: a live swap used to make the module's N+1 current BEFORE re-binding its
+    /// dependents, so every reader of the generations (the module endpoint table, the view
+    /// registrations) saw N+1 while a dependent could still fail, and the rollback then unloaded a
+    /// generation requests had been routed to. Staged, a dependent re-binds to the STAGED N+1 while
+    /// nothing current moves; <see cref="ModuleContexts.CommitAll"/> publishes all of it at once.
+    /// </summary>
+    [Fact]
+    public void AStagedSwap_RebindsTheDependentToN1_WhileNothingCurrentMoves_ThenCommitsInOneStep()
+    {
+        using var contexts = new ModuleContexts();
+        var (libG2, depPath) = InstallLibAndDependent(contexts);
+        var lib1 = Held(contexts, Lib);
+        var dep1 = Held(contexts, Dependent);
+
+        var stage = new ModuleSwapStage();
+        var lib2 = contexts.LoadStaged(libG2, stage);
+        stage.Add(lib2);
+        var dep2 = contexts.LoadStaged(depPath, stage);
+        stage.Add(dep2);
+
+        LibVersionSeenBy(dep2).Should().Be(2,
+            "a dependent loaded into the swap's stage must bind the STAGED library, not the serving one");
+        contexts.Current(Lib).Should().BeSameAs(lib1, "nothing is current until the swap commits");
+        contexts.Current(Dependent).Should().BeSameAs(dep1);
+
+        contexts.CommitAll(stage);
+
+        contexts.Current(Lib).Should().BeSameAs(lib2);
+        contexts.Current(Dependent).Should().BeSameAs(dep2);
+    }
+
+    [Fact]
+    public void AStagedSwapThatIsDiscarded_LeavesTheServingGenerationsCurrent_AndPublishesNothing()
+    {
+        using var contexts = new ModuleContexts();
+        var (libG2, depPath) = InstallLibAndDependent(contexts);
+        var lib1 = Held(contexts, Lib);
+        var dep1 = Held(contexts, Dependent);
+
+        var stage = new ModuleSwapStage();
+        stage.Add(contexts.LoadStaged(libG2, stage));
+        stage.Add(contexts.LoadStaged(depPath, stage));
+        contexts.DiscardStaged(stage);
+
+        contexts.Current(Lib).Should().BeSameAs(lib1);
+        contexts.Current(Dependent).Should().BeSameAs(dep1);
+        LibVersionSeenBy(dep1).Should().Be(1, "the serving dependent never stopped binding the serving library");
+    }
+
+    private (string LibG2, string DepPath) InstallLibAndDependent(ModuleContexts contexts)
+    {
+        var libBytes = Emit(Lib, LibSource(version: 1));
+        var depPath = Write(Dependent, "g1", Emit(Dependent, """
+            [assembly: MeshWeaver.Test.LiveDependent.Module]
+            namespace MeshWeaver.Test.LiveDependent;
+            public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute { }
+            public static class Uses
+            {
+                public static int LibVersion() => MeshWeaver.Test.LiveLib.Api.Version;
+            }
+            """, MetadataReference.CreateFromImage(libBytes)));
+        contexts.Commit(contexts.Load(Write(Lib, "g1", libBytes)));
+        var dep = contexts.Load(depPath);
+        contexts.Commit(dep);
+        LibVersionSeenBy(dep).Should().Be(1);
+        return (Write(Lib, "g2", LibSource(version: 2)), depPath);
+    }
+
+    private static ModuleGeneration Held(ModuleContexts contexts, string module) =>
+        contexts.Current(module) ?? throw new Xunit.Sdk.XunitException($"{module} is not held by the module registry");
+
+    private static object? LibVersionSeenBy(ModuleGeneration dependent) =>
+        dependent.Assembly.GetType("MeshWeaver.Test.LiveDependent.Uses") is { } uses
+            && uses.GetMethod("LibVersion") is { } method
+            ? method.Invoke(null, null)
+            : throw new Xunit.Sdk.XunitException($"{dependent.Context.Name} carries no Uses.LibVersion");
+
     // ───────────────────────────────────────────── a generation that fails never displaces the serving one
 
     [Fact]
