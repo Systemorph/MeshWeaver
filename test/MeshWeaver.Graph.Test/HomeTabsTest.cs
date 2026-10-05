@@ -87,13 +87,16 @@ public class HomeTabsTest
         // User, so every OTHER root type leaked in and minted its own type group. A deny-list is
         // only as complete as the last person who remembered to extend it, so the root leg is an
         // ALLOW-list now — a new root NodeType has to opt in, not remember to opt out.
-        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, null, null, null, null);
+        // The root leg is the viewer's space manifest (User.SpacePaths) — still allow-listed: a
+        // manifest entry that stopped being a Space must not list.
+        var content = UserActivityLayoutAreas.BuildContentSection(
+            NodePath, null, null, null, null, spacePaths: ["Acme", "Posts"]);
 
         var all = content.ScopeTabs!.Single(t => t.Label == "All");
         foreach (var sort in all.SortOptions!)
         {
             var rootLeg = sort.Query.Split('\n')
-                .Single(leg => leg.StartsWith("namespace: ", StringComparison.Ordinal));
+                .Single(leg => leg.StartsWith("path:Acme|Posts ", StringComparison.Ordinal));
             rootLeg.Should().Contain("nodeType:Space",
                 "the root level of the home list is the workspaces you can reach");
             rootLeg.Should().NotContain("-nodeType:",
@@ -271,7 +274,7 @@ public class HomeTabsTest
         // space is something you OPEN, so it belongs on the launcher, and the launcher's filter
         // offers it after the categories (the GUI renders every scope past the first as one more
         // filter entry). A different QUERY, hence a scope and not a slice of the app records.
-        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null, ["Acme", "Contoso"]);
+        var apps = UserActivityLayoutAreas.BuildAppsBand(NodePath, null, ["Acme", "Contoso"], ["Globex", "Initech"]);
 
         apps.ScopeTabs.Should().HaveCount(2, "the apps themselves, then the spaces");
         var spaces = apps.ScopeTabs![1];
@@ -283,13 +286,15 @@ public class HomeTabsTest
             "the arrangement lives on App records — a space has none, so a drop would have nowhere to write");
 
         var legs = spaces.Query.Split('\n');
-        legs.Should().HaveCount(2, "the partition roots, then the spaces the viewer was invited into");
-        legs[0].Should().Contain("nodeType:Space").And.Contain("namespace:");
+        legs.Should().HaveCount(2, "the viewer's space manifest, then the spaces the viewer was invited into");
+        legs[0].Should().Contain("nodeType:Space").And.Contain("path:Globex|Initech");
         legs[1].Should().Contain("path:Acme|Contoso");
+        spaces.Query.Should().NotContain(ParsedQuery.CrossPartitionQualifier,
+            "both legs are anchored on the profile's manifests — no mesh-wide read on the home");
 
-        UserActivityLayoutAreas.SpacesQuery(null).Should().NotContain("\n",
-            "with no invitations there is only the roots leg");
-        UserActivityLayoutAreas.SpacesQuery([]).Should().NotContain("\n");
+        UserActivityLayoutAreas.SpacesQuery(NodePath, ["Globex"], null).Should().NotContain("\n",
+            "with no invitations there is only the manifest leg");
+        UserActivityLayoutAreas.SpacesQuery(NodePath, ["Globex"], []).Should().NotContain("\n");
     }
 
     [Fact]
