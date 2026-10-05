@@ -33,9 +33,28 @@ public static class MeshModuleEndpointExtensions
             .CreateLogger(typeof(MeshModuleEndpointExtensions));
 
         var contributed = 0;
+        // 🚨 A module held in its own load context maps its endpoints through ONE dynamic data source
+        // that re-maps them from the current generation on a live swap (policy
+        // module-live-update-default) — never onto the app directly, where they would be fixed for the
+        // life of the process. Image-bound modules map as before.
+        var held = app.Services.GetService<ModuleContexts>();
+        if (held is not null
+            && held.Generations.Any(g => g.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>().Any()))
+        {
+            var dynamicEndpoints = new ModuleEndpointDataSource(
+                app.Services, held, ((IEndpointRouteBuilder)app).CreateApplicationBuilder, logger);
+            ((IEndpointRouteBuilder)app).DataSources.Add(dynamicEndpoints);
+            contributed += dynamicEndpoints.Count;
+            logger.LogInformation(
+                "Mapped {Count} endpoint(s) from modules held in their own load contexts, re-mapped on every live swap",
+                dynamicEndpoints.Count);
+        }
         foreach (var module in app.Services.GetServices<InstalledModuleAssembly>())
         foreach (var attribute in module.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>())
         {
+            if (held?.Current(module.Assembly.GetName().Name ?? "") is { } generation
+                && ReferenceEquals(generation.Assembly, module.Assembly))
+                continue;
             // Authenticated-by-default: the group policy applies to every route the module maps
             // unless the route itself declares AllowAnonymous — a module cannot accidentally
             // publish an open route. The marker metadata scopes the collision refusal to groups

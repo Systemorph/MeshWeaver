@@ -57,7 +57,7 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 /// installs the modules, registered as that mesh's singleton, and disposed with it — which retires
 /// every generation it still holds.</para>
 /// </summary>
-public sealed class ModuleContexts : IDisposable
+public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IViewContributionSource
 {
     private readonly ConcurrentDictionary<string, ModuleGeneration> current = new(StringComparer.Ordinal);
     // Which module contributed a mesh node — by REFERENCE, weakly: the seed node list asks it so a
@@ -86,6 +86,13 @@ public sealed class ModuleContexts : IDisposable
         var now = Interlocked.Increment(ref version);
         versionChanged.OnNext(now);
     }
+
+    /// <summary>The view registrations of every module's CURRENT generation, ordered by module name —
+    /// what the layout client re-reads when <see cref="Version"/> moves.</summary>
+    public IReadOnlyList<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> ViewConfigurations =>
+        current.Values.OrderBy(g => g.Name, StringComparer.Ordinal)
+            .SelectMany(g => g.Contributions?.Views ?? [])
+            .ToArray();
 
     /// <summary>Moves on every change of which generation is current — what a cached view of the
     /// modules' contributions (the static-node query catalog) compares against.</summary>

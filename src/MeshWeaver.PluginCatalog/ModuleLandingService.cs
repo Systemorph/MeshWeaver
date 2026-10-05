@@ -997,6 +997,21 @@ public sealed class ModuleLandingService : IDisposable
         })
         .Do(_ => AnnounceActivationChanged());
 
+    /// <summary>
+    /// The MeshWeaver.* assemblies in <paramref name="assemblies"/> — other than the module's own entry
+    /// — that this running platform ships in its application closure. Pure over the process's
+    /// trusted-platform list.
+    /// </summary>
+    public static IReadOnlyList<string> BundledPlatformAssemblies(
+        string name, IReadOnlyList<(string FileName, byte[] Bytes)> assemblies) =>
+        assemblies
+            .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
+            .Where(simple => !string.Equals(simple, name, StringComparison.OrdinalIgnoreCase)
+                             && MeshWeaver.Compiler.PlatformShippedAssemblies.IsPlatformAssemblyName(simple)
+                             && MeshWeaver.Mesh.ModuleContexts.IsImageBound(simple))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     // Internal for the #4026 pin (InternalsVisibleTo): a second REPLICA's landing runs to
     // completion inside the first one's recording window, on the calling thread — a replica is
     // another process, and its pool is not this one's.
@@ -1032,6 +1047,19 @@ public sealed class ModuleLandingService : IDisposable
             throw new ArgumentException(
                 $"Module '{name}': the assembly list does not contain its entry '{entryDll}' — "
                 + "such a folder could never load.", nameof(assemblies));
+        // 🚨 A module never bundles a platform contract (policy module-live-update-default): it
+        // resolves every one from the RUNNING platform, which is what lets it update independently of
+        // the platform. A bundle carrying a MeshWeaver.* assembly this platform ships is refused, by
+        // name, before a byte is written — the packer drops them (`meshweaver-plugin-build
+        // --platform-app`), so one that arrives here was packed without the witness. Only the ADOPT
+        // path refuses: the registry's shelf stocks bundles for other platforms and the consumer's own
+        // landing measures them.
+        if (!holdUnloadable && BundledPlatformAssemblies(name, assemblies) is { Count: > 0 } bundled)
+            throw new InvalidOperationException(
+                $"Module '{name}' refused: its bundle carries platform assembl{(bundled.Count == 1 ? "y" : "ies")} "
+                + $"{string.Join(", ", bundled)} that this platform ships. A module resolves every platform "
+                + "contract from the running platform and never bundles one — re-pack it against the platform "
+                + "(meshweaver-plugin-build --platform-app).");
 
         // 🚨 THE PLATFORM GATE, at placement — MEASURED, never declared (#3538, #3648).
         // `minMeshVersion` is a CLAIM its author writes; the module's real requirement is the SET

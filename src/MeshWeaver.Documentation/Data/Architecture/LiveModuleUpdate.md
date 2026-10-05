@@ -186,8 +186,8 @@ SelfUpdate.Aks, Testing, Import, Maps, Northwind, OgCard. **16 still blocked:**
 
 | Blocker | Modules | Conversion owed |
 |---|---|---|
-| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | a view-registration seam read per render / per client hub instead of folded into the mesh hub's immutable configuration |
-| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | a dynamic endpoint data source the swap updates |
+| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | the seam shipped in slice 6 (`Views`); each pack moves its `AddViews` registrations to `Views` (MeshWeaver.Plugins) |
+| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | ✅ converted in slice 6 (`ModuleEndpointDataSource`) |
 | Root services could not be measured | Acp (`TryAddEnumerable` with a factory typed as the interface throws), Azure.Blob, Mcp, Radzen (their dependency DLLs were absent from the measured Debug output — an artefact of the measurement, not of the modules) | Acp: register the harness by implementation type; the others re-measure against a published closure |
 
 **Tests:** `ModuleBuilderHookSwapTest` (2): a module contributing ONLY through its builder hook — a node,
@@ -195,6 +195,25 @@ a root service, a mesh-hub type registration, per-node-hub configuration, an aut
 swaps live: the service answers from N+1, the node is served from N+1, the running mesh hub's type
 registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
 query routing rule is a blocker the guard names.
+
+## What is shipped (slice 6 — endpoints, views, platform independence)
+
+| Piece | What it does |
+|---|---|
+| `ModuleEndpointDataSource` (`MeshWeaver.Hosting.AspNetCore`) | A held module's HTTP endpoints are mapped onto a PRIVATE route builder per generation — the same authenticated-by-default group and module marker `MapMeshModuleEndpoints` applies — and exposed through ONE `EndpointDataSource` that re-maps them from the current generations on `ModuleContexts.VersionChanged` and fires its change token, so ASP.NET Core routing rebuilds its matcher. A re-map whose routes collide with another endpoint is NOT published (the previous endpoints keep serving; logged Critical, naming both). Image-bound modules map as before. Endpoints are no longer a blocker. |
+| `MeshNodeProviderAttribute.Views` + `IViewContributionSource` (`MeshWeaver.Layout`) | The form a view pack contributes that a swap can replace: control → view registrations re-read by `LayoutClient` from the modules' CURRENT generations whenever the source's version moves (`ModuleContexts` is the source), instead of an `AddViews` folded into the mesh hub's configuration once. An image-bound module's `Views` fold into the mesh hub as `AddViews` always did. `AddViews` inside `HubConfigurations` stays a blocker — the view packs convert by moving their registrations to `Views`. |
+| Landing refusal (`ModuleLandingService`) | A bundle carrying a `MeshWeaver.*` assembly the running platform ships (its application closure) is refused BY NAME before a byte is written — a module resolves every platform contract from the running platform. Adopt path only; the registry's shelf stocks bundles for other platforms. |
+
+**Tests:** `ModuleEndpointsSwapLiveTest` (2, real ASP.NET Core routing on a TestServer): the route answers
+from N+1 after the swap with no restart and N is collected; the negative control: a colliding re-map is
+not published and the previous route keeps serving. `ModuleViewsSwapTest` (2): the SAME layout client
+resolves the control to N+1's view after the swap; the negative control: views folded through
+`HubConfigurations`' `AddViews` are a named blocker. `ModulesUpdateIndependentlyOfThePlatformTest` (2): the
+platform stays fixed while M goes N → N+1 → N+2 live through the real landing path — N+2 recorded against
+an older platform build and a floor below the platform, so no identity-equality gate, no seal, no roll —
+an N+3 whose floor is above the platform is declined by name by the reconciler's own decision while a
+sibling module updates live in the same pass; a bundle carrying a platform assembly is refused naming
+it, and the same bundle without it lands.
 
 ## What is owed
 

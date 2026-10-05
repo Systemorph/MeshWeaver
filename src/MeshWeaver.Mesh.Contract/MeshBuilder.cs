@@ -48,6 +48,8 @@ public partial record MeshBuilder
                 sp.GetService<CollectibleContextUnloads>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
                 sp));
+            // The layout client re-reads held modules' views from their current generations.
+            services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             return services;
         });
         RegisterModuleOwnedServiceForwarders();
@@ -474,6 +476,10 @@ public partial record MeshBuilder
             ConfigureHub(hubConfiguration);
         foreach (var module in installed.Where(p => IsHeld(p.Assembly)))
             RegisterMeshHubConfigurations(module.Assembly.GetName().Name ?? "");
+        // An image-bound module's views fold into the mesh hub's configuration, as AddViews always did;
+        // a held module's are re-read from its current generation (IViewContributionSource).
+        foreach (var view in installed.Where(p => !IsHeld(p.Assembly)).SelectMany(p => p.Views))
+            ConfigureHub(config => MeshWeaver.Layout.LayoutExtensions.AddViews(config, view));
         foreach (var module in installed)
             RegisterDefaultNodeHubConfigurations(module.Assembly, module.DefaultNodeHubConfigurations);
 
@@ -538,7 +544,11 @@ public partial record MeshBuilder
         IReadOnlyCollection<KeyValuePair<string, Type>> AddressTypes,
         IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations,
         IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations,
-        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations);
+        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations)
+    {
+        /// <summary>The module's view registrations.</summary>
+        public IReadOnlyCollection<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> Views { get; init; } = [];
+    }
 
     /// <summary>
     /// The outcome of probing and loading ONE generation: what was materialised, or why not.
@@ -730,7 +740,10 @@ public partial record MeshBuilder
                     moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
                     moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
                     moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
-                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()),
+                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray())
+                {
+                    Views = moduleAttributes.SelectMany(a => a.Views).ToArray(),
+                },
                 null,
                 NeverLoaded: false,
                 LoadedFrom: substituted);
