@@ -285,7 +285,7 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         accessService.SetContext(null);
         try
         {
-            await Webhooks.Process("workflow_run", GreenBuildPayload(headSha))
+            await Webhooks.Process("push", PushPayload(headSha))
                 .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         }
         finally
@@ -295,16 +295,18 @@ public class SealArrivalReleasesHeldSourceTest(ITestOutputHelper output)
         }
     }
 
-    private static JsonElement GreenBuildPayload(string headSha) => JsonDocument.Parse($$"""
+    /// <summary>
+    /// One verified <c>push</c> to the configured branch — the sync trigger since policy
+    /// <c>sources-sync-on-push</c> (a green build no longer imports; it only records the build).
+    /// </summary>
+    private static JsonElement PushPayload(string headSha) => JsonDocument.Parse($$"""
         {
-          "action": "completed",
+          "ref": "refs/heads/main",
+          "before": "0123456789abcdef0123456789abcdef01234567",
+          "after": "{{headSha}}",
           "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
-          "workflow_run": {
-            "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
-            "id": 34668111508, "run_number": 5957, "name": "Content CI", "event": "push",
-            "path": ".github/workflows/ci.yml",
-            "updated_at": "2026-09-12T03:44:46Z"
-          }
+          "commits": [],
+          "size": 0
         }
         """).RootElement;
 

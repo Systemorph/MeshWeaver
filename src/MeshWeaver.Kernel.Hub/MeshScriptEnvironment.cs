@@ -64,8 +64,10 @@ public static class MeshScriptEnvironment
     /// every explicit <see cref="KernelScriptAssembly"/> registration AND every boot-installed
     /// module (<see cref="InstalledModuleAssembly"/>, #1653). Modules join the cell surface
     /// per-session by construction (issue #1649 part 1): a module published into
-    /// <c>modules/&lt;name&gt;/</c> is a Default-ALC file-backed assembly, so the runtime bind is
-    /// free — only its metadata reference has to be guaranteed here, immune to the process-wide
+    /// <c>modules/&lt;name&gt;/</c> is a file-backed assembly — in its own collectible context unless
+    /// the image binds it (policy <c>module-live-update-default</c>), in which case the session's
+    /// load context binds it through <c>ModuleContexts.Resolve</c> — so only its metadata reference
+    /// has to be guaranteed here, immune to the process-wide
     /// snapshot freeze in <see cref="KernelScriptReferences"/>. De-duplication against the
     /// snapshot and the anchors happens by file path in
     /// <see cref="KernelScriptReferences.GetReferencesAsync"/>.
