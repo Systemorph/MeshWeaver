@@ -71,7 +71,20 @@ public partial record MeshBuilder
             ClientHosted = capture.ClientHostedAddressTypes.Count,
         };
 
-        var result = hooks.Aggregate(capture, (builder, hook) => hook(builder));
+        // The capture's module registry is disposed on EVERY path (#6128 review): a hook that installs
+        // modules and then throws would otherwise leave those collectible contexts to unload only at
+        // GC, unobserved by CollectibleContextUnloads and outside the retire path.
+        MeshBuilder result;
+        bool installedModules;
+        try
+        {
+            result = hooks.Aggregate(capture, (builder, hook) => hook(builder));
+            installedModules = capture.ModuleContexts.Generations.Count > 0;
+        }
+        finally
+        {
+            capture.ModuleContexts.Dispose();
+        }
 
         var blockers = ImmutableList.CreateBuilder<string>();
         if (!ReferenceEquals(result, capture))
@@ -86,9 +99,8 @@ public partial record MeshBuilder
             blockers.Add("it adds stream-routed address types (AddStreamRoutedAddressType)");
         if (capture.ClientHostedAddressTypes.Count != before.ClientHosted)
             blockers.Add("it adds client-hosted address types (AddClientHostedAddressType)");
-        if (capture.ModuleContexts.Generations.Count > 0)
+        if (installedModules)
             blockers.Add("it installs modules itself (InstallAssemblies)");
-        capture.ModuleContexts.Dispose();
 
         return new BuilderHookCapture(
             [.. capture.MeshNodes.Skip(before.Nodes)],

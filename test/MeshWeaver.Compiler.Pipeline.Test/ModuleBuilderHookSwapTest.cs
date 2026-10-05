@@ -41,11 +41,14 @@ public sealed class ModuleBuilderHookSwapTest : MonolithMeshTestBase
 
     private ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
 
+    private ModuleGeneration HeldGeneration(string module) =>
+        Contexts.Current(module) ?? throw new Xunit.Sdk.XunitException($"{module} is not held by the module registry");
+
     [Fact(Timeout = 180_000)]
     public async Task AModuleContributingThroughTheBuilderHook_SwapsLive()
     {
         var ct = TestContext.Current.CancellationToken;
-        var held = Contexts.Current(Module)!;
+        var held = HeldGeneration(Module);
         held.Contributions!.BuilderHooks.Blockers.Should().BeEmpty("the hook must decompose — the conversion under test");
         held.Contributions.LiveUpdateBlockers().Should().BeEmpty();
         var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
@@ -64,7 +67,7 @@ public sealed class ModuleBuilderHookSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hook v2", "the hook's root service follows the swap");
         (await ReadNode("LiveHookProbe").Timeout(Budget).Await(ct))!.Name.Should().Be("v2",
             "the hook's node is served from the new generation");
-        MeshTypeName("HookMessage")!.Assembly.Should().BeSameAs(Contexts.Current(Module)!.Assembly,
+        MeshTypeName("HookMessage")!.Assembly.Should().BeSameAs(HeldGeneration(Module).Assembly,
             "the running mesh hub's type registry now maps the name to the new generation's type");
 
         var drained = await CollectibleUnloadDrain.WaitUntilCollectedAsync(Mesh.ServiceProvider.GetRequiredService<CollectibleContextUnloads>());
