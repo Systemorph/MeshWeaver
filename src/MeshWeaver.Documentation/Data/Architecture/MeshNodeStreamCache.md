@@ -431,6 +431,27 @@ and asserts the user-visible half: `get` answers the node and a follow-up write 
 Both carry the positive controls, because an admission path that refused *every* verdict would pass a
 one-directional test while deleting the storm protection this section exists to describe.
 
+### A write is never answered from a READ's miss (#6045, #6046)
+
+The window fast-fails **writes only when a write minted it** (`NegativeEntry.MintedByWrite`). A read's
+miss means "absent when I looked"; a write is the caller asserting the node exists — typically right
+after a create. On a multi-replica mesh the one event that retracts a read's miss is the create's
+change notification, and it reaches *this* process only when the cross-process relay (PostgreSQL
+LISTEN) delivers it. Answering the write from the read's verdict therefore failed the first write after
+another replica's **acknowledged** create with `No node found at '…'` for exactly as long as that
+notification was late. Now a write past a read-minted window evicts the read's faulted entry
+(`EvictFaultedEntry`) and re-asks the owner once. The storm bound is unchanged: a write that still
+meets a missing node mints its own window, and that one fast-fails every later write as before.
+
+The routing half of the same defect lived in `PathResolutionService`: it caches every non-null
+resolution, and an *ancestor-plus-remainder* resolution — which the router turns into `No node found at
+'X/Item'. Closest ancestor is 'X' (remainder='Item')` — is non-null. For a route-shape caller that entry
+is a cached negative, retracted only by the same late notification. A route-shape lookup now treats a
+cached remainder as a miss and re-asks the store (one query per route that is about to be refused; a
+node that exists stays a dictionary hit). Pinned by `ARoutedWriteRightAfterItsCreateTest`
+(MeshWeaver.FaultInjection.Test, two silos, relay held) — see
+[Fault-Injection Harness](../FaultInjectionHarness).
+
 ### A faulted entry is never served twice
 
 Both breakers *suppress* while their window is open. When no window is open, the opposite must hold: the read has to actually re-probe. `GetStreamRaw`'s third guard enforces that — an entry whose hydration terminated with an error is evicted before the read resolves, so `SharedView` opens a fresh upstream.

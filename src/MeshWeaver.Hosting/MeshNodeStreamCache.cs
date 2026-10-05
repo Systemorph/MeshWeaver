@@ -351,9 +351,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 
     /// <summary>
     /// True when the storm breaker's negative cache holds an OPEN window for
-    /// <paramref name="path"/> — i.e. a point read has minted a missing-node failure there and
-    /// both further reads AND further writes on that path are being fast-failed (see
-    /// <c>_negative</c> and the write-side check in <c>UpdateRaw</c>).
+    /// <paramref name="path"/> — i.e. a point read or a write has minted a missing-node failure
+    /// there and further reads on that path are being fast-failed; further WRITES are fast-failed
+    /// only when a write minted it (see <c>_negative</c>, <c>NegativeEntry.MintedByWrite</c> and
+    /// the write-side check in <c>UpdateRaw</c>).
     ///
     /// <para>Test seam, and the only DIRECT measurement of the half a log flood hides. A caller
     /// that must never open a window on an optional path — the node-bound GUI binding
@@ -418,8 +419,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // churn/storm that never lets the negative entry clear). Reset whenever RecordNegative writes
     // a fresh window; FailCount is carried across the reprobe so a genuinely-missing node still
     // backs off further when the fresh probe re-errors.
+    //
+    // MintedByWrite: whether the verdict that opened this window came from a WRITE's owner
+    // round-trip. Only such a window fast-fails a later write (see UpdateRaw). A READ's miss says
+    // "absent when I looked"; a write is the caller asserting the node exists — typically right
+    // after a create this process may not have heard about yet (#6045/#6046) — so it re-asks the
+    // owner once instead of being answered from another caller's verdict.
     private sealed record NegativeEntry(Exception Error, int FailCount, DateTimeOffset OpenUntil,
-        bool Reprobing = false, NegativeProbeClaim? Claim = null);
+        bool Reprobing = false, NegativeProbeClaim? Claim = null, bool MintedByWrite = false);
     private static readonly TimeSpan StormBaseCooldown = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StormMaxCooldown = TimeSpan.FromMinutes(5);
     private const int StormFailThreshold = 5;
@@ -1607,7 +1614,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// the claim, so even that short-lived entry can never fast-fail a caller (#3954).
     /// </summary>
     private bool TryRecordNegative(string path, Exception error, NegativeProbeClaim? claim) =>
-        TryRecordNegative(path, error, claim, afterClaimCheck: null);
+        TryRecordNegative(path, error, claim, afterClaimCheck: null, mintedByWrite: false);
 
     /// <summary>Test seam for the one CAS interleaving that cannot be held from outside the
     /// dictionary: <paramref name="afterClaimCheck"/> runs after the final claim check and after
@@ -1617,12 +1624,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         Exception error,
         NegativeProbeClaim claim,
         Action afterClaimCheck) =>
-        TryRecordNegative(path, error, claim, afterClaimCheck);
+        TryRecordNegative(path, error, claim, afterClaimCheck, mintedByWrite: false);
 
     /// <summary>The write-side admission stays a named seam so its independent use of the claim
-    /// protocol is pinned without having to substitute a mesh owner.</summary>
+    /// protocol is pinned without having to substitute a mesh owner. Its window is
+    /// <see cref="NegativeEntry.MintedByWrite"/>: the one kind that fast-fails later writes.</summary>
     private bool TryRecordWriteNegative(string path, Exception error, NegativeProbeClaim claim) =>
-        IsMissingNodeFailure(error) && TryRecordNegative(path, error, claim);
+        IsMissingNodeFailure(error)
+        && TryRecordNegative(path, error, claim, afterClaimCheck: null, mintedByWrite: true);
 
     internal bool TryRecordWriteNegativeForTest(
         string path, Exception error, NegativeProbeClaim claim) =>
@@ -1632,7 +1641,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         string path,
         Exception error,
         NegativeProbeClaim? claim,
-        Action? afterClaimCheck)
+        Action? afterClaimCheck,
+        bool mintedByWrite)
     {
         while (true)
         {
@@ -1665,7 +1675,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 error,
                 failCount,
                 DateTimeOffset.UtcNow + TimeSpan.FromTicks(backoffTicks),
-                Claim: claim);
+                Claim: claim,
+                MintedByWrite: mintedByWrite);
 
             if (claim is not null && !ClaimStillHeld(path, claim))
                 return false;
@@ -2327,11 +2338,28 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // activate. Same negative cache as the read-side GetStreamRaw breaker, so a missing-node
         // path can never storm the mesh from either direction. Only a real CreateNode brings a
         // non-existent node into being — an Update can't.
+        //
+        // 🚨 …but only a window a WRITE minted (#6045/#6046). A READ's miss is "absent when I
+        // looked", and on a multi-replica mesh the one event that retracts it — the create's
+        // change notification — reaches THIS process only when the cross-process relay
+        // (PostgreSQL LISTEN) delivers it. Answering a write from that verdict made the first
+        // write after another replica's ACKNOWLEDGED create fail "No node found" for as long as
+        // the notification was late: the steward's exact line. A write is the caller asserting
+        // the node exists, so it re-asks the OWNER once — the authoritative answer — and the
+        // storm bound is kept by the write's own verdict: a write that still meets a missing
+        // node records a MintedByWrite window, which fast-fails every later write as before.
         if (_negative.TryGetValue(path, out var negWrite)
             && IsCurrentNegative(path, negWrite)
             && negWrite.OpenUntil > DateTimeOffset.UtcNow
             && IsMissingNodeFailure(negWrite.Error))
-            return Observable.Throw<MeshNode>(negWrite.Error);
+        {
+            if (negWrite.MintedByWrite)
+                return Observable.Throw<MeshNode>(negWrite.Error);
+            // The read's faulted entry replays its terminal to whoever reuses it, so drop it:
+            // the write's dispatch then opens a FRESH upstream instead of failing on the read's
+            // stale error. Same teardown the breaker's own re-probe uses (EvictFaultedEntry).
+            EvictFaultedEntry(path, "write past a read-minted window");
+        }
 
         var result = new ReplaySubject<MeshNode>();
         var seq = System.Threading.Interlocked.Increment(ref _updateSeq);
