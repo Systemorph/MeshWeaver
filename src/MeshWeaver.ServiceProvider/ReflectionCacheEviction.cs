@@ -39,14 +39,44 @@ public static class ReflectionCacheEviction
     /// <param name="loadContext">The collectible context whose entries should be purged.</param>
     public static void EvictFor(AssemblyLoadContext loadContext)
     {
-        // Access Shared fresh each call — it is a WeakReference-backed singleton and must
-        // never be stored (Autofac's own guidance on the property).
-        ReflectionCacheSet.Shared.Clear((_, referencedAssemblies) =>
+        ReflectionCacheClearPredicate references = (member, referencedAssemblies) =>
         {
             foreach (var assembly in referencedAssemblies)
                 if (AssemblyLoadContext.GetLoadContext(assembly) == loadContext)
                     return true;
-            return false;
-        });
+            // 🚨 The assembly list is not enough: a key of OptionsFactory<ModuleOptions> names only
+            // Microsoft.Extensions.Options, while its generic ARGUMENT lives in the unloading context
+            // (measured — the cache entry that pinned a swapped-out module generation).
+            return member is Type type && Names(type, loadContext);
+        };
+        // Access Shared fresh each call — it is a WeakReference-backed singleton and must
+        // never be stored (Autofac's own guidance on the property).
+        ReflectionCacheSet.Shared.Clear(references);
+        // 🚨 …and the one cache that set can LOSE. Autofac.Extensions.DependencyInjection's
+        // FromKeyedServicesUsageCache registers its static cache with ReflectionCacheSet.Shared ONCE,
+        // in its static constructor. Shared is weakly held, so once it has been collected and
+        // re-created the new set no longer knows that cache, and the Clear above never reaches it.
+        // Measured (live module swap, policy module-live-update-default): a heap dump of a retained
+        // module generation showed this cache's ConcurrentDictionary as the ONLY strong root of the
+        // generation's LoaderAllocator. Cleared directly, through the same predicate.
+        if (FromKeyedServicesUsageCache is { } cache)
+            cache.Clear(references);
     }
+
+    private static bool Names(Type type, AssemblyLoadContext loadContext) =>
+        AssemblyLoadContext.GetLoadContext(type.Assembly) == loadContext
+        || (type.IsGenericType && !type.IsGenericTypeDefinition
+            && type.GetGenericArguments().Any(argument => Names(argument, loadContext)))
+        || (type.HasElementType && type.GetElementType() is { } element && Names(element, loadContext));
+
+    /// <summary>Whether the Autofac.Extensions.DependencyInjection static cache that
+    /// <see cref="ReflectionCacheSet.Shared"/> can lose is reachable — pinned true by a test, so a
+    /// future Autofac that renames it fails loudly instead of leaking silently.</summary>
+    public static bool FromKeyedServicesUsageCacheIsReachable => FromKeyedServicesUsageCache is not null;
+
+    private static IReflectionCache? FromKeyedServicesUsageCache =>
+        typeof(Autofac.Extensions.DependencyInjection.AutofacServiceProvider).Assembly
+            .GetType("Autofac.Extensions.DependencyInjection.FromKeyedServicesUsageCache")
+            ?.GetField("_reflectionCache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null) as IReflectionCache;
 }

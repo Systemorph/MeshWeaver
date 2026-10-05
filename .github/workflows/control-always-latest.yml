@@ -1,0 +1,103 @@
+# control-always-latest — policy `control-always-latest` (register: Doc/Architecture/PolicyNotProse;
+# design: Doc/Architecture/PlatformAndModuleDeploy).
+#
+#   "control will always be on latest platform and will always update to latest modules."
+#
+# THE PLATFORM HALF, alarmed here. `main-cd`'s `Deploy control first` job gives the control instance
+# (`.github/control-instance.json`) EVERY accepted platform build in the run that built it. This
+# workflow reads, on a schedule, whether control actually RUNS the newest build it was given:
+#
+#   * control's running core commit — its PUBLIC `/api/version` (no credential is sent to it);
+#   * the newest promoted set whose `Deploy control first` job SUCCEEDED, and when — the promotion
+#     records and job timestamps of `main-cd` (this repository's own token);
+#   * containment by ANCESTRY (GitHub compare), never by timestamps or version strings.
+#
+# Behind past `platformLagBoundMinutes` → RED, and the ONE open `control-lag` issue gets a comment
+# naming control's commit, the newest build, and how long ago it was given. Converging inside the
+# bound is said, not red. A control whose running build cannot be read is RED too — an instance that
+# cannot say what it runs cannot be shown to be latest. Control ON the newest build but with `/health`
+# not 200 is RED as well: the arming offers the fleet nothing from an unhealthy control, so that state
+# blocks every later roll. Green closes the issue.
+#
+# THE MODULE HALF is alarmed on the control instance itself (MeshWeaver.Plugins Hosting
+# `FleetTarget.ControlBreaches`, filed as a `fleet-behind-target` triage item): it needs the
+# instance's own installed-vs-served module versions, which only its inventory report carries.
+#
+# Not a gate on anything: no other workflow needs it, and its red never touches a delivery verdict.
+# It is the alarm that makes "control first" a property that is checked, not one that is hoped for.
+name: control-always-latest
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read     # main-cd's promotion records and job timestamps
+  issues: write     # the one `control-lag` issue
+
+concurrency:
+  group: control-always-latest
+  cancel-in-progress: false
+
+jobs:
+  platform:
+    name: "Control runs the newest platform build it was given (policy control-always-latest)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The declaration of which instance is control lives BESIDE the scripts, not under them —
+          # without it `control-lag` refuses (RED), so it is checked out explicitly.
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
+      - name: "The decision can say no (self-test)"
+        run: python3 .github/scripts/arm-promoted-set.py --self-test
+      - name: Is control on the newest platform build?
+        id: lag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/arm-promoted-set.py control-lag
+      - name: File, append to, or close the control-lag issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STATE: ${{ steps.lag.outputs.state }}
+          SENTENCE: ${{ steps.lag.outputs.sentence }}
+        run: |
+          set -euo pipefail
+          [ -n "${STATE:-}" ] || { echo "::error::the control-lag reading produced no state — refusing to call that green"; exit 1; }
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-lag --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          case "$STATE" in
+            ok)
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "✅ [run ${GITHUB_RUN_ID}](${RUN_URL}): ${SENTENCE}. Closing."
+                gh issue close "$existing" --repo "$GITHUB_REPOSITORY"
+              fi
+              echo "control is on the newest platform build"
+              ;;
+            converging)
+              echo "::notice title=Control converging::${SENTENCE}"
+              ;;
+            *)
+              gh label create control-lag --repo "$GITHUB_REPOSITORY" \
+                --description "Policy control-always-latest: control does not run the newest platform build" \
+                --color B60205 --force || echo "::warning::could not ensure the control-lag label (continuing — the issue is the alarm, not the label)"
+              body="🚨 [run ${GITHUB_RUN_ID}](${RUN_URL}) — policy \`control-always-latest\`: ${SENTENCE}.
+
+          Control is declared in \`.github/control-instance.json\`. Read, in order: did \`main-cd\`'s **Deploy control first** job tag \`memex-control:<version>\`; did control's self-update hand the roll over (its \`Admin/UpdatePolicy\`); did the \`Roll\` run on the control instance (\`Hosting/InstanceAction\`, and whether it parked at an approval — the control record carries no \`rollGate\`); did the migration Job complete. This issue closes itself on the first reading that finds control on the newest build."
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+              else
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "control-always-latest: control is behind the newest platform build" \
+                  --label control-lag --body "$body"
+              fi
+              echo "::error title=control-always-latest::${SENTENCE}"
+              exit 1
+              ;;
+          esac

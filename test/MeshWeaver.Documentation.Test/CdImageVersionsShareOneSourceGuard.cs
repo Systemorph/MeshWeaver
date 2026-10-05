@@ -151,8 +151,11 @@ public class CdImageVersionsShareOneSourceGuard
     {
         var pins = PluginRefs().Where(x => !x.InSatelliteCompat).ToList();
 
-        Assert.True(pins.Count >= 4,
-            $"Expected at least the two image legs and the two reusable calls to name a plugin "
+        // The three image legs that build the portal HOST (portal-ai, migration, control). The two
+        // reusable Plugins calls that used to be counted here left with policy
+        // `platform-module-deploy-separate` — the platform deploy packs and seals no module.
+        Assert.True(pins.Count >= 3,
+            $"Expected at least the three image legs to name a plugin "
             + $"repository in {Workflow}; found {pins.Count}. Either they were renamed or the "
             + "matcher no longer recognises them — in both cases this guard checks nothing.");
 
@@ -194,7 +197,7 @@ public class CdImageVersionsShareOneSourceGuard
         var plugins = register.Where(x => x.Repo.Equals("Systemorph/MeshWeaver.Plugins", StringComparison.OrdinalIgnoreCase)).ToList();
         Assert.True(plugins.Count == 0,
             "satellite-compat must never check MeshWeaver.Plugins: Plugins is BUILT in this run at "
-            + "gate's plugins_sha and its publication is sealed by plugins-bake — compiling it from "
+            + "gate's plugins_sha and its modules publish on Plugins' own lane — compiling it from "
             + "a moving branch here would judge a tree the set does not contain. Found:\n  "
             + string.Join("\n  ", plugins.Select(x => $"line {x.Line}")));
 

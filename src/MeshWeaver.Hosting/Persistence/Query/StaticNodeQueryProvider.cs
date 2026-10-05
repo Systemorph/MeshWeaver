@@ -46,13 +46,36 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         };
     }
 
+    // 🚨 The catalog is a SNAPSHOT taken from the providers, and it is re-taken whenever a module
+    // generation is swapped live (policy module-live-update-default): a module's static nodes are
+    // served from its CURRENT generation, and a snapshot taken once at construction would answer
+    // queries with the generation that booted — stale data, and a reference that pins it.
+    private sealed record Catalog(long Version, MeshNode[] ProviderNodes, MeshNode[] ConfigNodes, MeshNode[] AllNodes, HashSet<string> NodeTypes);
+    private Catalog? catalog;
+    private readonly IList<IStaticNodeProvider> _providerList;
+    private readonly MeshWeaver.Mesh.ModuleContexts? _modules;
+
+    private Catalog Current
+    {
+        get
+        {
+            var version = _modules?.Version ?? 0;
+            var snapshot = Volatile.Read(ref catalog);
+            if (snapshot is not null && snapshot.Version == version)
+                return snapshot;
+            var built = Build(version);
+            Volatile.Write(ref catalog, built);
+            return built;
+        }
+    }
+
     // Provider nodes (from IStaticNodeProvider) — global, no path/scope check
-    private readonly MeshNode[] _providerNodes;
+    private MeshNode[] _providerNodes => Current.ProviderNodes;
     // Config nodes (from MeshConfiguration.Nodes) — respect path/scope/context
-    private readonly MeshNode[] _configNodes;
+    private MeshNode[] _configNodes => Current.ConfigNodes;
     // All nodes combined for SelectAsync/nodeType index
-    private readonly MeshNode[] _allNodes;
-    private readonly HashSet<string> _nodeTypes;
+    private MeshNode[] _allNodes => Current.AllNodes;
+    private HashSet<string> _nodeTypes => Current.NodeTypes;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
@@ -85,12 +108,45 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         Func<IReadOnlyList<string>, bool> matches,
         MeshConfiguration? meshConfiguration = null,
         Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
+        : this(providers, matches, meshConfiguration, loggerFactory, null)
+    {
+    }
+
+    /// <summary>As the four-argument constructor, re-taking the catalog whenever a module generation
+    /// in <paramref name="modules"/> is swapped live.</summary>
+    public StaticNodeQueryProvider(
+        IEnumerable<IStaticNodeProvider> providers,
+        Func<IReadOnlyList<string>, bool> matches,
+        MeshConfiguration? meshConfiguration,
+        Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory,
+        MeshWeaver.Mesh.ModuleContexts? modules)
     {
         _meshConfiguration = meshConfiguration;
         _logger = loggerFactory?.CreateLogger<StaticNodeQueryProvider>();
         _matches = matches;
+        _providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
+        _modules = modules;
+        catalog = Build(_modules?.Version ?? 0);
+        // 🚨 LOUD, once per mesh: two providers claiming one path with DIFFERENT content means one
+        // of them is being dropped. Registration order is not something a host controls, so
+        // "append a node at the platform's path to override it" is not a supported pattern — and
+        // before this warning existed it looked like one, because the append was accepted and only
+        // half-honoured (MeshWeaver#2908).
+        // Emitted HERE, at construction, and never from Build: Build re-runs after every live module
+        // swap, so a gate inside it cannot tell the first build from a rebuild.
+        if (_logger is not null)
+            foreach (var collision in StaticNodeProviderExtensions.DescribeStaticProviderCollisions(_providerList))
+                _logger.LogWarning("[StaticNodeQueryProvider] {Collision}", collision);
 
-        var providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
+        // Dropped the moment a module generation changes — never held until the next query, which
+        // would keep the swapped-out generation's nodes, and so the generation, alive.
+        // The subscription lives as long as the registry that holds it — the same mesh as this provider.
+        _modules?.VersionChanged.Subscribe(_ => Volatile.Write(ref catalog, null));
+    }
+
+    private Catalog Build(long version)
+    {
+        var providerList = _providerList;
 
         // 🚨 The AddMeshNodes-seed-wins rule is NOT implemented here. It lives in
         // StaticNodeProviderExtensions.ResolveStaticNodeBuckets, which is also what
@@ -113,33 +169,25 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         // root, with no second claimant. They still CLAIMED their path in the resolution above,
         // so no lower-precedence provider slips a served node underneath them.
         // See Doc/Architecture/NodeTypeCatalogs.md.
-        _providerNodes = providedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
+        var providerNodes = providedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
         _logger?.LogDebug(
             "[StaticNodeQueryProvider] ctor: {Providers} provider(s) -> {Count} nodes; byType=[{ByType}]; byNamespace(top)=[{ByNs}]",
             providerList.Count,
-            _providerNodes.Length,
-            string.Join(", ", _providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
-            string.Join(", ", _providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
+            providerNodes.Length,
+            string.Join(", ", providerNodes.GroupBy(n => n.NodeType ?? "(null)").Select(g => $"{g.Key}={g.Count()}")),
+            string.Join(", ", providerNodes.GroupBy(n => n.Namespace ?? "(null)").OrderByDescending(g => g.Count()).Take(5).Select(g => $"{g.Key}={g.Count()}")));
 
         // See _providerNodes: a definition-only catalog type-def is never a query result.
-        _configNodes = seedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
+        var configNodes = seedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
 
-        // 🚨 LOUD, once per mesh: two providers claiming one path with DIFFERENT content means one
-        // of them is being dropped. Registration order is not something a host controls, so
-        // "append a node at the platform's path to override it" is not a supported pattern — and
-        // before this warning existed it looked like one, because the append was accepted and only
-        // half-honoured (MeshWeaver#2908).
-        if (_logger is not null)
-            foreach (var collision in StaticNodeProviderExtensions.DescribeStaticProviderCollisions(providerList))
-                _logger.LogWarning("[StaticNodeQueryProvider] {Collision}", collision);
+        var allNodes = providerNodes.Concat(configNodes).ToArray();
 
-        _allNodes = _providerNodes.Concat(_configNodes).ToArray();
-
-        _nodeTypes = new HashSet<string>(
-            _allNodes
+        var nodeTypes = new HashSet<string>(
+            allNodes
                 .Where(n => !string.IsNullOrEmpty(n.NodeType))
                 .Select(n => n.NodeType!),
             StringComparer.OrdinalIgnoreCase);
+        return new Catalog(version, providerNodes, configNodes, allNodes, nodeTypes);
     }
 
     /// <summary>

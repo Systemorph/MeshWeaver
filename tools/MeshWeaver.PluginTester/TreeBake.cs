@@ -384,7 +384,8 @@ public static class TreeBake
                 // work, so a failure anywhere in it names that unit.
                 composed =
                     $"bake: module {assembly.GetName().Name} mvid={module.Mvid:N} "
-                    + $"version={module.Version ?? "unstamped"} — composed into the reference set";
+                    + $"version={module.Version ?? "unstamped"} "
+                    + $"package={module.PackageVersion ?? "unstamped"} — composed into the reference set";
             }
             // 🚨 Catch EVERYTHING, deliberately. This was `when (ex is IOException or
             // BadImageFormatException)`, which named the argument for the two shapes
@@ -460,6 +461,23 @@ public static class TreeBake
     {
         var versions = ModuleVersionsOf(modules);
         return name => versions.TryGetValue(name, out var version) ? version : null;
+    }
+
+    /// <summary>The bake host's PACKAGE-version resolver over <paramref name="modules"/> — the
+    /// same projection <c>NodeTypeCompilationHelpers.ModulePackageVersionsOf</c> makes on a live
+    /// mesh, reading the same <see cref="InstalledModuleAssembly.PackageVersion"/>, so the
+    /// <c>pkg:</c> floor a bake records is the value every portal computes.</summary>
+    internal static Func<string, string?> ModulePackageVersionResolverOf(
+        IReadOnlyList<InstalledModuleAssembly> modules)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name) && module.PackageVersion is { Length: > 0 } version)
+                map[name] = version;
+        }
+        return name => map.TryGetValue(name, out var version) ? version : null;
     }
 
     private static Report BakeAll(

@@ -90,8 +90,10 @@ public class UnanchoredQueryCensusTest(ITestOutputHelper output) : MonolithMeshT
         yield return ("NodeTypeInstanceProbe", MeshWideQuery.OfType("Acme/Story"));
         yield return ("PluginUpdateWatcher", MeshWideQuery.OfType("PluginCatalog"));
         yield return ("InstanceGrantAdminSettingsTab / InstancePlanService", MeshWideQuery.Declare("nodeType:MeshWeaverInstance id:inst-1"));
-        yield return ("UserActivityLayoutAreas shared-with-me", MeshWideQuery.Declare("nodeType:AccessAssignment content.accessObject:rbuergi"));
-        yield return ("UserActivityLayoutAreas home root leg", "namespace: is:main is:content nodeType:Space sort:Name-asc partitions:all");
+        // The home's two mesh-wide reads, moved OFF the render path (2026-10-04): they run once per
+        // logon in RefreshSpacePathsLogonAction, and the home anchors on the profile's manifests.
+        yield return ("RefreshSpacePathsLogonAction shared grants (was the home's shared-with-me)", MeshWideQuery.Declare("nodeType:AccessAssignment content.accessObject:rbuergi"));
+        yield return ("RefreshSpacePathsLogonAction space roots (was the home's root leg)", "namespace: is:main is:content nodeType:Space select:path,id,namespace,nodeType partitions:all");
         yield return ("UserActivityLayoutAreas home subtree scope", "is:main is:content -nodeType:User sort:Name-asc partitions:all");
     }
 

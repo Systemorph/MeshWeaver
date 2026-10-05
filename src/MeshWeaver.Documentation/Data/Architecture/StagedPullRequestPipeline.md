@@ -2,17 +2,27 @@
 Name: Staged Pull Request Pipeline
 Category: Architecture
 Description: >-
-  Every pull request head moves through four stages in order — cheap static controls, the automatic
-  review landed and answered, the expensive suites, arming — so no runner is spent testing a head a
-  review is about to change, and nothing arms before the tests. What each stage runs, what moves a head
-  on (events, not polling), the three loud releases that keep a reviewer outage from freezing the
-  fleet, why a hold is red and never skipped, and the measured saving.
+  Every pull request head passes cheap static controls first (fail fast), then runs its expensive
+  suites IN PARALLEL with the automatic review, and arms only when both are green — the review stays a
+  required check for the merge. Why the review-first ordering was reversed (idle runners while ~50
+  reviews queued), what each stage runs, why a hold is red and never skipped, the review-first ordering
+  as a per-caller opt-in (event-driven advance, three loud releases), and the measurements.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/></svg>
 ---
 
 # Staged Pull Request Pipeline
 
-**Decision (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
+> **🔀 The suites now run IN PARALLEL with the review** — policy
+> [`suites-parallel-with-review`](../PolicyNotProse). The stage gate holds a head on **stage 0 only**;
+> the build, the shards and every heavy leg start as soon as the static controls are green, while the
+> automatic review runs beside them. **Merging is unchanged**: it still needs the green suites AND the
+> review landed with every thread answered (core's required `Automatic review answered`, Plugins'
+> required `internal-review`), and arming still waits for both. Every suite also tests the head merged
+> onto the CURRENT main — [Fresh Merge Under Test](../FreshMergeUnderTest). The review-first ordering
+> below stays available per caller as `review-before-suites: true`; see
+> [Suites in parallel with the review](#suites-in-parallel-with-the-review) for why and what changed.
+
+**The review-first decision this page was written for (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
 also other controls such as no client etc. must pass before we start test. and we arm only at end of
 test"*.
 
@@ -30,7 +40,46 @@ The order is the point. Stage 1 is the stage most likely to send the author back
 it runs before the stage that costs the most. A finding answered with a fix push makes a NEW head,
 and a new head restarts at stage 0 — the suites never ran on the head the review changed.
 
-## Measured — why this ordering saves runners
+## Suites in parallel with the review
+
+**Why it was reversed.** The review-first ordering saves runner-minutes only while runners are the
+scarce resource. Once the reviewer became the queue, it saved nothing and cost lead time: on
+2026-10-05 09:00Z, with ~50 reviews in flight, core had 31 jobs running and **0 waiting**, Plugins
+30 running and **0 waiting** — idle capacity — while every held pull request waited for its review
+before a single test ran. The maintainer's directive: run the PR test suites in parallel with the
+internal review instead of after it; merging still requires both.
+
+**What changed** (policy `suites-parallel-with-review`):
+
+| | Review-first (opt-in) | **Parallel (default)** |
+|---|---|---|
+| Stage gate holds on | stage 0 red, review missing, thread unanswered | **stage 0 red only** |
+| Suites start | when the review landed and was answered | **as soon as stage 0 is green** |
+| A review landing / a reply | re-runs the held run (`stage-advance.yml`) | **re-runs nothing** — the suites already ran |
+| Merge needs | green suites + answered review | green suites + answered review (unchanged) |
+| Arming needs | green checks + `arm_readiness` | unchanged |
+| Gate job name | `Stage gate: may the suites start` (was `Stage 1: review landed and answered`) | same |
+
+**Nothing became skippable.** The review requirement was never the stage gate: it is its own
+required context in both repositories, so a head whose review is missing or unanswered still reads
+red on that context and cannot merge or arm. The stage gate still FAILS on a red stage-0 control —
+never skips — and still answers `not-staged` in green off pull requests.
+
+**Expected effect on lead time.** A head's time to a green wall drops by the review wait that sat in
+front of the suites: the measured review latency was a median 16.6 min (p90 ~2 h) in core and 31.9 min
+(p90 ~2 h) in Plugins (table below). Time to MERGE drops by min(review + answers, suites): the two now
+overlap instead of adding. The cost is the one the table below measured — up to ~24 % of runner-minutes
+spent on heads a findings review then replaces — accepted while runners sit idle. A finding answered by
+a fix push makes a new head, which runs again; a reply alone re-runs nothing.
+
+**Transition.** Runs held under the review-first lane before the change keep failing their gate until
+their review lands or the head is pushed again. Core's and Plugins' `stage-advance.yml` stay deployed
+to release exactly those (`advance_action` re-runs only a run whose gate FAILED for stage 1, and
+recognises the gate's old job name), and are deleted once no open pull request's newest run carries
+such a hold. A caller that opts back into `review-before-suites: true` must carry the listener again
+— a gate without its listener holds forever.
+
+## Measured — why the review-first ordering saves runners (and when it does not)
 
 Sample (REST only, 2026-10-04; bot and lock-settle pull requests excluded): the newest **40 merged
 pull requests per repository** — core 2026-10-02 09:44Z → 10-04 07:05Z (130 CI heads), Plugins
@@ -155,6 +204,25 @@ quarter of all Plugins heads into stage 2 before their review — exactly the sp
 for the review anyway: the fallback buys an early test READING, never an earlier merge. A caller may
 pass `fallback-minutes` to both lanes (they must agree), and `tests-before-review` is the per-PR override.
 
+**Generated-only pull requests owe no review.** main's own jobs propose generated files as pull
+requests — `settle-locks` (every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock` plus each
+root's `minMeshVersion`). There is nothing to review, and the settle job rewrites the head on every
+main merge, so a per-head fallback clock restarted forever: during the 2026-10-04 review outage the
+held settle PR (Plugins #2860) stopped module publishing. Such a pull request skips stage 1 on
+PROVENANCE (`generated_only`): authored by the App that writes them (`meshweaver-cloud[bot]`, by id),
+every commit that App's (the commit listing must cover the pull request's own commit count), every
+changed file a lock or a root `index.json` whose changed lines are each NOTHING BUT a
+`"minMeshVersion": "…"` key/value. A person's pull request that touches a lock is staged like any
+other, a generated-only DRAFT is held as a draft, and for any pull request the App authored the
+fallback clock keys on the PULL REQUEST's creation, not the head.
+
+What this skip is NOT: a merge gate. The required `Automatic review answered` lane never consults
+`generated_only`, so the skip only starts stage 2's suites earlier. Its provenance reads GitHub's
+resolved commit author, which follows the author email — so it is as strong as the App's branch is
+closed to other pushers (the App's commits are unsigned today, so a signature cannot be required
+until the producing jobs commit through the API), and a lock's CONTENT is held exact by
+`Validate node repos`, not by this check.
+
 **Stage-0 blockers keep their own rules.** A control whose INPUT is absent (the confidential-terms
 denylist secret on a fork or a Dependabot run) already *skips with a notice* by its own design and so
 does not hold stage 2. A control that goes RED on infrastructure (an unreadable API, a lost runner) is
@@ -231,37 +299,27 @@ that release.
 
 | Repository | Stage gate | Event half | State |
 |---|---|---|---|
-| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | this change |
-| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | paired change (its roster rows land here first, `pending: ARRIVING`) |
+| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` (transition only) | parallel (default) |
+| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` (transition only) | parallel (default) |
 | the satellites | not yet — they run as before | — | adopt with the same two edits: a `stage-gate` job (`node-repo-stage-gate.yml@main`) that their heavy jobs need with `result == 'success'`, and the thin `stage-advance.yml`; plus their rows in `.github/lane-caller-grants.yml` |
 
 A repository that has the gate but not the listener would hold forever, which is why the two are
 adopted together and why the Plugins pin (`check-build-queue-admission.py`) names the lane.
 
-## Trunk outranks pull requests for runners
+## Trunk outranks pull requests — through the CI queue, not a lane
 
-Staging stops a pull request from STARTING expensive work too early; it does not decide who gets a
-runner when the pools are full. On 2026-10-04 13:44Z both ARC sets were at their cap (aks-silos-dind
-39/40, aks-silos 31/32) with 11 Plugins runs queued on them (the same snapshot counted 13 core runs
-queued too — on GitHub-hosted capacity, a separate line: core's jobs run on `ubuntu-latest`), and a
-label's queued jobs are handed
-out first-come-first-served — there is no job priority. Measured over 06:00–14:00Z (19 main and 133
-pull-request runs of `Plugin Catalog CI`): a main run's worst queued job waited a median 1.9 min (p90
-4.7, max 5.6) against 1.4 / 4.4 / 9.7 for pull requests — the same line, so under saturation the run
-that publishes the modules waits behind every pull request queued before it.
+Staging stops a pull request from STARTING expensive work too early. It does not decide who gets a
+runner when the pools are full. That is the CI queue's job, under policy
+[`ci-two-pools-priority-queues`](../PolicyNotProse) ([Runner Pools and Dispatch Queues](../RunnerPoolsAndDispatchQueues)).
+There are two shared pools, and runs are dispatched in tier order: express, trunk, gate, pr.
 
-The mechanism is the one the merge-queue gate lane already proved (`aks-silos-dind-gate`, 2026-09-27):
-
-| Piece | Where |
-|---|---|
-| Own labels `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), overlays on the ordinary values so a runner is the same pod | Memex `deployments/aks/ci-runners/` (Systemorph/Memex#653) |
-| PriorityClass `arc-runner-trunk` −7: after the queue gate (−5), before PR work (−10), `preemptionPolicy: Never` — the next freed slot goes to trunk, nothing running is evicted | same |
-| Every job of Plugins' `ci.yml` selects `(github.event_name != 'pull_request' && vars.MW_RUNNER_TRUNK[_DOCKER]) || <the ordinary expression>` | Systemorph/MeshWeaver.Plugins#2863 |
-| Switch-on: apply the two sets (`-f set=silos-trunk`, then `dind-trunk`), prove them, set `MW_RUNNER_TRUNK` / `MW_RUNNER_TRUNK_DOCKER`; rollback = delete the variables. Each step is a maintainer go (it changes the running cluster) | Memex `.github/workflows/ci-runners-apply.yml` + MeshWeaver.Plugins repository variables |
-
-Until the variables are set, nothing routes differently. Not yet routed: the light orchestration jobs
-INSIDE core's reusable lanes (validate, the gate's plan) read `vars.MW_RUNNER` directly; they run
-for seconds. Core's own runs are on hosted runners and are not affected by these pools.
+> 🗄️ **Superseded: the trunk lanes.** On 2026-10-04, with both ARC sets at their cap and a label's
+> queue first-come-first-served, a main run's worst queued job waited like a pull request's (median
+> 1.9 vs 1.4 min, p90 4.7 vs 4.4 min over 19 main and 133 PR runs). The first answer was two reserved
+> lanes, `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), with a higher PriorityClass. Measured
+> overnight after they went live, trunk jobs on them waited p90 6.6 / 3.8 min against 0.6 / 1.0 min for
+> pull requests on the shared sets: the reservation was too small for its own work. The lanes are
+> retired, and every runner gate of the fleet refuses their names.
 
 ## What it does not do (residue, stated)
 
@@ -279,8 +337,12 @@ for seconds. Core's own runs are on hosted runners and are not affected by these
 
 ## Reading a held pull request
 
+Under the parallel default a head is held only for a red **stage-0** control: fix it and push. The
+review's state is read on its own required check (`Automatic review answered` / `internal-review`).
+The steps below are for a run held under the review-first ordering:
+
 1. The red front door (`Consolidate test results` / `Admitted by the build queue`) names the stage.
-2. Open **`Stage 1: review landed and answered`** — it says *waiting* (with minutes of the fallback
+2. Open **`Stage gate: may the suites start`** (formerly `Stage 1: review landed and answered`) — it says *waiting* (with minutes of the fallback
    used), *unanswered* (with the first thread), *draft*, or *unreadable*.
 3. Do nothing for *waiting*; reply to each thread for *unanswered*. The suites start by themselves.
 4. If the review is down and you cannot wait for the fallback: `tests-before-review`. It buys the

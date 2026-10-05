@@ -46,4 +46,18 @@ spec:
       metricType: Utilization
       metadata:
         value: "{{ .Values.keda.memoryTarget | default 80 }}"
+    {{- /* QUEUE DEPTH (Doc/Architecture/RunnerPoolsAndDispatchQueues; MeshWeaver.Plugins
+           Hosting/CiDispatchQueue.md → "Scaling the executors"): on the control instance the agent
+           threads the work queues dispatch run on these pods, so the WAITING jobs are load the CPU
+           signal has not seen yet. The portal answers GET /api/queues/depth with the sum of every
+           queue's `depth.waiting` (anonymous, integers only). A scaler error leaves this metric out
+           and the HPA keeps scaling on cpu/memory — a broken queue never scales the instance. */}}
+    {{- if and .Values.keda.queueDepth .Values.keda.queueDepth.enabled }}
+    - type: metrics-api
+      metricType: AverageValue
+      metadata:
+        url: "{{ .Values.keda.queueDepth.url | default "http://memex-portal-service:8080/api/queues/depth" }}"
+        valueLocation: "waiting"
+        targetValue: "{{ .Values.keda.queueDepth.waitingPerReplica | default 4 }}"
+    {{- end }}
 {{- end }}

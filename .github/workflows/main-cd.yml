@@ -141,9 +141,9 @@ on:
       arm_override:
         description: >-
           ONE-PROMOTION-GATE OVERRIDE (policy `one-promotion-gate`, Doc/Architecture/OnePromotionGate).
-          Arm exactly this promoted set (e.g. 3.0.0-ci.9459) for the fleet WITHOUT a green
-          MeshWeaver.Plugins dependent-suites verdict. For an incident only — the ordinary path arms
-          the newest promoted set whose verdict passed, by itself. Requires arm_reason.
+          Arm exactly this promoted set (e.g. 3.0.0-ci.9459) for the fleet WITHOUT the platform
+          verdict (its ladder, and control running it). For an incident only — the ordinary path arms
+          the newest promoted set whose platform verdict is green, by itself. Requires arm_reason.
         type: string
         default: ""
       arm_reason:
@@ -349,8 +349,6 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
-          DEPENDENT_DISPATCH_APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-          DEPENDENT_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
@@ -362,9 +360,7 @@ jobs:
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
-          [ -n "$DEPENDENT_DISPATCH_APP_ID" ]          || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID          GitHub App whose installation token reads the Plugins content tree for plugins-modules / plugins-bake (content-app-id) — NOT a dispatch credential: core dispatches to no repository")
-          [ -n "$DEPENDENT_DISPATCH_APP_PRIVATE_KEY" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY that App's private key, PEM")
-          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares the Plugins publication is sealed to (<account>/<share>…)")
+          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and `published-modules` READS the sealed module publications from there (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
           # not the fleet — asserted here, RED, never discovered as `unauthorized` three jobs later.
@@ -432,15 +428,13 @@ jobs:
       bake_only: ${{ steps.decide.outputs.bake_only }}
       # The version of the ALREADY-PROMOTED set, read off its portal image — empty on every
       # publishing run, where `portal-image` mints the version instead. Resolved ONCE here because
-      # two consumers need it (the platform bake's release marker, and the seal probe) and because
+      # the platform bake's release marker needs it and because
       # it is the key of the `_releases/<version>` marker that names this set's framework identity.
       release_version: ${{ steps.bake_version.outputs.version }}
-      # 🚨 Does this sealed set still owe its `plugins` publication? (MeshWeaver#4539) Empty on every
-      # publishing run; on a bake-only reconcile it is `true` ONLY when the artifact store was
-      # ASKED, ANSWERED, and answered that `plugins` is not sealed for the identity the marker names
-      # — never on a refusal, and never past the re-attempt budget. The three `plugins-*` jobs read
-      # it, and nothing else may: it is a statement about ONE framework identity.
-      plugins_seal_due: ${{ steps.seal.outputs.plugins_seal_due }}
+      # (The `plugins_seal_due` output and its reconcile probe are GONE with the Plugins bake this
+      # workflow no longer runs — policy `platform-module-deploy-separate`: the `plugins`
+      # publication is sealed by MeshWeaver.Plugins' own lane, keyed on the epoch identity, and a
+      # platform reconcile has nothing of it to re-attempt.)
       # 🚨 THE tag every consumer of an image built for this commit must use — resolved ONCE, here.
       #
       # A publishing run reads its own staging tag, which exists only because this run pushed it.
@@ -1335,7 +1329,7 @@ jobs:
           # 🚨 Read off MEMEX-MIGRATION, which promote's phase A tags `<version>` + `<short-sha>` on
           # one digest (CdImageVersionsShareOneSourceGuard: every leg's version is the same). NOT the
           # portal: under policy `one-promotion-gate` the portal's version tag is the
-          # ARMING write, which `arm` makes only once the dependent suites pass — so a promoted but
+          # ARMING write, which `arm` makes only once the platform verdict is green — so a promoted but
           # not-yet-armed set would read "no version" here and stop a bake that is owed regardless.
           tags=$(az acr manifest list-metadata --registry meshweaver --name memex-migration \
                    --query "[?tags && contains(tags, '${SHORT_SHA}')].tags[]" -o tsv)
@@ -1346,205 +1340,6 @@ jobs:
           fi
           echo "release version $version (recovered from memex-migration:${SHORT_SHA}'s tag set — bake-only reconcile)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      # ── IS THE `plugins` PUBLICATION ACTUALLY THERE FOR THIS SET? (MeshWeaver#4539) ─────────
-      # 🚨 THE PLATFORM SEAL AND THE PLUGINS PUBLICATION CAN COME APART, AND NOTHING HEALED THAT.
-      # The platform seal is the TRIO — promote, verify, platform bake — and nothing else (maintainer
-      # rule, 2026-09-12, stated in resolve-platform.py). So the three `plugins-*` jobs can fail or
-      # be skipped while the set seals, and every satellite then resolves that newest sealed set and
-      # asks for `plugins` under ITS framework identity, which nobody published.
-      #
-      # Measured 2026-09-16 (#4539): CD 8765 promoted, verified and baked `3.0.0-ci.8765`, then lost
-      # `plugins-modules` to `dial tcp 51.12.25.82:443: connect: connection refused` pulling the
-      # tester image; `plugins-bake` was skipped; identity `s5ec352bb…` got no `plugins` publication,
-      # and four satellites reddened in the same second. The hole did not heal itself: #2452 gave the
-      # PLATFORM bake a reconcile path, but the three plugins jobs stayed `publish == 'true'`-only,
-      # so every hourly tick re-asserted the platform bake and left the publication missing. What
-      # healed it was a coincidence — MeshWeaver.Plugins merged, and its own CI republished.
-      #
-      # 🚨 AND IT IS NOT A ONE-OFF. Sweeping the 200 CD runs of 2026-09-14 → 09-17: NINE sets sealed
-      # with their Plugins seal not `success`. Three from infrastructure (the ACR refusal above; a
-      # failed registry push inside the seal, 8711; a failed promoted-digest resolve, 8601) and SIX
-      # from a genuine Plugins red (module tests / bundle build: 8599, 8647, 8663, 8666, 8670, 8674).
-      #
-      # 🚨 WHY THIS REPAIRS THE SET RATHER THAN REFUSING TO SEAL IT. Making the seal all-or-nothing —
-      # no platform set until its Plugins publication exists — removes the broken state, and it was
-      # rejected on that same measurement. Six of those nine were Plugins' OWN red, so core would
-      # have sealed NOTHING for each of those windows: a MeshWeaver.Plugins unit test would freeze
-      # the portal image every AKS install self-updates to, which is a strictly worse outage than the
-      # one being fixed. It also reverses the dated maintainer rule above and hands Plugins a veto
-      # over the platform's delivery — the dependency direction `PlatformNeverDependsOnPluginsGuard`
-      # forbids and `satellite-compat` below already refuses in exactly these words. And it could not
-      # even be an invariant: Plugins' own CI publishes for the same identity at any later time, so
-      # "sealed ⇒ published" is not a property core can maintain alone.
-      # The whole decision, its measurement and what this does NOT cover: Doc/Architecture/CdReconcilesThePluginsSeal.
-      #
-      # 🚨 THE PROBE NAMES THE IDENTITY, because an "is it sealed?" question that does not is
-      # answering confidently about something else. A seal is per FRAMEWORK IDENTITY (`s<hash>`, the
-      # API-surface hash of the portal's reference assemblies); the identity is a property of the
-      # BINARIES and cannot be computed from a tag or a commit (#1725); and the one thing outside the
-      # image that knows it is the `_releases/<version>` marker `publish-bake-bundles.sh` writes. So
-      # this asks `check-release-availability.sh <version> plugins` — the SAME script, against the
-      # SAME store, that `publish-bake` already uses for `meshweaver-content` and that `release.yml`
-      # already uses for BOTH sources. CD asking about only half of what it ships was the whole gap.
-      #
-      # 🚨 RECONCILE ONLY, and that is not a hole in coverage. On a publishing run the three legs run
-      # unconditionally and `delivery-verdict` reds the run when any of them did not reach `success`
-      # — the state is SEEN there already. It is the tick AFTER that had no instrument at all.
-      #
-      # 🚨 AND IT CANNOT PUBLISH BACKWARDS. On this path the plugins sha is PINNED BY THE PROBE THAT
-      # PUT US HERE: `bake_only` means `check-image-set.sh` found the pair tag
-      # `memex-portal-ai:<core-short>-p<plugins-short>` for plugins HEAD *now*, so the promoted set
-      # was built from exactly the commit a re-attempt would bake. A plugins merge moves HEAD, the
-      # pair tag stops resolving, the set reads INCOMPLETE and the ordinary full-publish path takes
-      # over instead. On top of that the publisher's own never-seal-backwards compare
-      # (publish-bake-bundles.sh, credentialled by the CONTENT repo's token since #4152) still runs,
-      # untouched by this change.
-      - name: "Is `plugins` sealed for the identity this set resolves?"
-        id: seal
-        if: steps.decide.outputs.bake_only == 'true'
-        env:
-          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
-          RELEASE_VERSION: ${{ steps.bake_version.outputs.version }}
-          SHORT: ${{ steps.target.outputs.short_sha }}
-          PSHORT: ${{ steps.plugins.outputs.plugins_short }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-          MAX_SEAL_ATTEMPTS: "3"
-        run: |
-          # 🚨 `-e` IS ON, and the two places that must survive a non-zero say so explicitly with
-          # `|| …`. Without it every `gh` read here fails OPEN: a transient `gh issue list` would
-          # yield an empty issue number and this step would CREATE A SECOND LEDGER ISSUE — once an
-          # hour, for as long as the API is unhappy. `decide` above holds the same discipline for
-          # the same reason.
-          set -euo pipefail
-          verdict() { echo "plugins_seal_due=$1" >> "$GITHUB_OUTPUT"; echo "$2"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; }
-
-          if [ -z "${RELEASE_VERSION:-}" ]; then
-            echo "::error::the bake-only path produced no release version, so the \`_releases/<version>\` marker has no key and this set's framework identity cannot be named. Refusing to probe: an availability answer that does not name the identity is an answer about some other identity. Read the 'Resolve the release version' step above."
-            exit 1
-          fi
-
-          # ── The probe. THREE outcomes, and only one of them licenses a re-attempt ──
-          # 🚨 Its `::error::` annotations are relayed as plain text (the `sed`) and NOTHING else
-          # about its output is touched. Here the script is asked a QUESTION whose "no" is this
-          # lane's ordinary, expected finding — the repair follows in the same run — so its red is
-          # not this step's verdict. The verdict is the annotation this step emits itself, over the
-          # script's whole log printed verbatim. Its EXIT CODE is what branches.
-          log="${RUNNER_TEMP:-/tmp}/plugins-availability.log"
-          # The probe's non-zero is an ANSWER, not a step failure — `|| probe=$?` is what exempts
-          # this one command from `-e`, and nothing else in this step is exempt.
-          probe=0
-          .github/scripts/check-release-availability.sh "$RELEASE_VERSION" plugins > "$log" 2>&1 || probe=$?
-          sed 's/^::error:://' "$log"
-          # awk exits on the FIRST match and reads the file itself: no pipe, so no SIGPIPE — `sed | head -1`
-          # under `pipefail` exits 141 whenever sed writes past head's one line, and `-e` would then
-          # abort this step on a log that merely printed the identity twice.
-          identity=$(awk '/^identity resolved: /{print $3; exit}' "$log")
-
-          if [ "$probe" -eq 0 ]; then
-            verdict false "✅ \`plugins\` IS sealed for \`${identity:-?}\` (release \`$RELEASE_VERSION\`) — nothing to re-attempt."
-            exit 0
-          fi
-          # 🚨 A REFUSAL IS NOT A VERDICT, in EITHER direction. The script distinguishes "CANNOT
-          # RESOLVE" / "CANNOT DETERMINE" (it could not ask its question) from "N of M source(s) are
-          # not available" (it asked, and the answer was no). Only the second says anything about the
-          # publication. Reporting a refusal as "nothing due" is the trapdoor AGENTS.md forbids;
-          # acting on one would bake against an identity nobody established.
-          #
-          # The one refusal that is NOT a defect is "no marker for this release at all": that means
-          # the PLATFORM content bake has never published for this version, which is precisely what
-          # `publish-bake` is running to fix on this same tick. The Plugins seal is judged on the
-          # NEXT tick, an hour later, by which time the marker exists — self-clearing, with no timer
-          # and no retry written here, and said out loud rather than folded into a green.
-          #
-          # 🚨 Match it by its OWN wording — `has no marker at` — never the shared `CANNOT RESOLVE`
-          # prefix. An EMPTY marker opens with the same prefix and is not "the bake has not run yet":
-          # the producer WROTE a marker and recorded no identity, which no later tick repairs. Keyed on
-          # the prefix, that producer defect was read as a pending bake and answered with a green.
-          if ! grep -q 'are not available for framework identity' "$log"; then
-            if grep -q 'has no marker at' "$log"; then
-              verdict false "⏭️ NOT MEASURED: release \`$RELEASE_VERSION\` has no \`_releases/\` marker yet, so this set's framework identity is not established and nothing can be said about its \`plugins\` publication. The platform bake on THIS tick writes that marker; the next reconcile judges the seal."
-              exit 0
-            fi
-            echo "::error::the availability probe could not ANSWER for release \`$RELEASE_VERSION\` (exit $probe) — see its CANNOT DETERMINE line above. Cannot determine is not clear to proceed, and it is not 'nothing to do' either: with the artifact store unreadable, nothing here says whether \`plugins\` is published for this set. Fix the access (az login / BAKE_PUBLISH_TARGETS / the share)."
-            exit 1
-          fi
-          if [ -z "$identity" ]; then
-            echo "::error::the probe reported \`plugins\` absent but printed no resolved identity, so the finding names no identity and cannot be acted on. Refusing — naming the identity is the one thing a seal check must never get wrong."
-            exit 1
-          fi
-
-          # ── BOUNDED. A re-attempt is repair, not a retry loop ──────────────────────────────
-          # The bake is DETERMINISTIC for this pair (see the pinning note above), so it either failed
-          # on infrastructure — three of the nine — and will likely pass, or on Plugins' own content —
-          # six of the nine — and will fail identically for as long as that commit is HEAD. A fourth
-          # attempt on the same pair buys no information and costs ~30 min of runner time an hour, so
-          # the budget is 3 PER PAIR and the slot is consumed when an attempt STARTS. A new core sha
-          # or a new plugins sha resets it naturally — and a new plugins sha makes the set incomplete
-          # anyway, which is the ordinary full-publish path.
-          #
-          # Its own label, NOT the `ci-failure` ledger: that one CLOSES ITSELF when an image heal
-          # succeeds (#3176), and an image heal says nothing about a publication — sharing it would
-          # silently grant a fresh budget on an unrelated event.
-          key="$SHORT-p$PSHORT"
-          count_seal() {
-            gh issue view "$1" --repo "$REPO" --json comments \
-              --jq "[.comments[] | select(.body | contains(\"$2\"))] | length"
-          }
-          gh label create cd-plugins-seal --repo "$REPO" \
-            --description "A sealed platform set whose Plugins publication is missing for its framework identity" \
-            --color D93F0B --force >/dev/null || echo "::warning::could not ensure the cd-plugins-seal label (continuing — the ledger is the comment, not the label)"
-          issue=$(gh issue list --repo "$REPO" --label cd-plugins-seal --state open \
-            --limit 1 --json number --jq '.[0].number // empty')
-          if [ -z "$issue" ]; then
-            url=$(gh issue create --repo "$REPO" --label cd-plugins-seal \
-              --title "CD: a sealed platform set has no \`plugins\` publication for its identity" \
-              --body "A core CD run sealed a platform set — promote, verify and the platform bake all succeeded — while its \`Plugins: bake + seal the publication for this identity\` leg did not. Every satellite resolves the newest sealed set and then asks for \`plugins\` under that set's framework identity, so each one holds until the publication exists. The reconciler re-attempts the seal; this issue collects those attempts. Closing it grants a fresh budget.")
-            issue="${url##*/}"
-          fi
-          attempts=$(count_seal "$issue" "<!-- cd-seal:$key -->")
-          case "${attempts:-}" in
-            ''|*[!0-9]*)
-              echo "::error::could not read the attempt ledger on issue #$issue (got '${attempts:-<nothing>}'). An attempt that is not written down is an attempt that can be repeated forever, so this refuses rather than defaulting the count to zero."
-              exit 1 ;;
-          esac
-          if [ "$attempts" -ge "$MAX_SEAL_ATTEMPTS" ]; then
-            if [ "$(count_seal "$issue" "<!-- cd-seal-stopped:$key -->")" = "0" ]; then
-              gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n\n%s\n\n%s' \
-                "<!-- cd-seal-stopped:$key -->" \
-                "🛑 **Re-attempts STOPPED for \`$key\`** after $MAX_SEAL_ATTEMPTS, with \`plugins\` still unpublished for framework identity \`$identity\` (release \`$RELEASE_VERSION\`)." \
-                "The bake is deterministic for this pair, so a further attempt would fail the same way: read the \`Plugins: pack …\` / \`Plugins: bake + seal …\` legs of the linked runs. A merge in MeshWeaver.Plugins moves the pair and grants a fresh budget on its own; so does closing this issue. Until then every satellite holds on this identity — which is the gate working, not a second fault.")"
-            fi
-            verdict false "🛑 \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`) and the re-attempt budget for \`$key\` is spent ($MAX_SEAL_ATTEMPTS) — not retrying. See the \`cd-plugins-seal\` issue."
-            exit 0
-          fi
-          # 🚨 CLAIM, THEN RANK (Copilot on #4565). Reading the count and then appending is not atomic:
-          # `schedule` runs in the `reconcile` concurrency group but `workflow_dispatch` in the ref-based
-          # one, so two reconciles can overlap, both read 2 and both launch "3/3". So this run writes its
-          # claim FIRST, then re-reads every claim for the pair in the order the SERVER recorded them and
-          # proceeds only if its own falls inside the budget. GitHub assigns that order, so both racers
-          # compute the same answer and at most $MAX_SEAL_ATTEMPTS ever proceed — under any overlap,
-          # without touching the workflow's concurrency model. A losing claim still counts afterwards.
-          claim="<!-- cd-seal-run:${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1} -->"
-          gh issue comment "$issue" --repo "$REPO" --body "$(printf '%s\n%s\n\n%s\n\n%s' \
-            "<!-- cd-seal:$key -->" "$claim" \
-            "🔁 **Re-attempt claim for the Plugins seal for \`$key\`** ([run]($RUN_URL)) — its rank among this pair's claims decides whether it proceeds." \
-            "The platform set for \`$SHORT\` is sealed, but the artifact store holds no sealed \`plugins\` publication for its framework identity \`$identity\` (release \`$RELEASE_VERSION\`). This run re-bakes and re-seals that one leg; no image is rebuilt and no tag moves.")"
-          rank=$(gh issue view "$issue" --repo "$REPO" --json comments \
-            --jq "[.comments[] | select(.body | contains(\"<!-- cd-seal:$key -->\"))] | map(.body | contains(\"$claim\")) | index(true)")
-          case "${rank:-}" in
-            ''|*[!0-9]*)
-              echo "::error::wrote this run's seal claim on issue #$issue but could not rank it among the pair's claims (got '${rank:-<nothing>}'). A claim that cannot be ranked cannot be bounded, so this refuses rather than proceeding."
-              exit 1 ;;
-          esac
-          n=$((rank + 1))
-          if [ "$n" -gt "$MAX_SEAL_ATTEMPTS" ]; then
-            verdict false "🛑 another reconcile claimed the last attempt for \`$key\` first (this run's claim ranked $n against a budget of $MAX_SEAL_ATTEMPTS) — standing down, not retrying."
-            exit 0
-          fi
-          verdict true "🔁 re-attempt $n/$MAX_SEAL_ATTEMPTS — \`plugins\` is NOT sealed for \`$identity\` (release \`$RELEASE_VERSION\`), so this reconcile bakes and seals it."
 
   portal-image:
     name: "Build + push portal-ai image"
@@ -2190,7 +1985,8 @@ jobs:
   # Tags the accepted image — `memex-control:<sha>`, `:<sha>-p<plugins>`, `:main` — on ACR and the
   # fleet registry (digest verified). Only after `control-acceptance` is green: an image that failed it
   # never receives a name at all. Its VERSION tag and line pointers — the names a record selects — are
-  # written by `control-arm`, only once `arm` armed this pair.
+  # written right after, in this same run, by `control-first` (policy `platform-deploy-control-first`):
+  # control is given every accepted platform build before the fleet is offered it.
   control-promote:
     name: "Promote the control image (after its acceptance test)"
     needs: [gate, control-image, control-acceptance]
@@ -2225,54 +2021,56 @@ jobs:
           PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
         run: |
           set -euo pipefail
-          # 🚨 IDENTITY TAGS ONLY — the same split `promote` makes for memex-portal-ai (policy
-          # `one-promotion-gate`). The VERSION tag (what a Continuous record with `updatePattern:
-          # 3.0.0-ci*` rolls to) and the line pointers are the ARMING write, made by `control-arm` only
-          # for a set `arm` armed — so an instance on this image follows the same release gate as the
-          # fleet instead of rolling to every promoted set. The PAIR tag `<core7>-p<plugins7>` is the
-          # join `control-arm` reads: the armed portal manifest carries the same pair tag, and unlike
-          # the bare sha a rebuild of the same core commit never re-points it.
-          # The SAME expression, from the SAME gate outputs, as `promote`'s portal pair tag — and held
-          # to the shape `control-arm` joins on (arm-promoted-set.py PAIR_TAG), so a drift in either
-          # output reds HERE instead of leaving every armed set `missing` with only a warning.
-          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7> — control-arm could never join it to the armed portal manifest"; exit 1; }
+          # 🚨 IDENTITY TAGS ONLY here. The VERSION tag (what a Continuous record with `updatePattern:
+          # 3.0.0-ci*` rolls to) and the line pointers are written by `control-first`, the next job of
+          # this run — for EVERY accepted build, never waiting for the fleet's arming (policy
+          # `platform-deploy-control-first`). The pair tag `<core7>-p<plugins7>` names the commit of
+          # the portal HOST (it lives in MeshWeaver.Plugins) — provenance, not a module coupling: no
+          # delivery decision joins on it any more. Same shape as `promote`'s portal pair tag.
+          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7>"; exit 1; }
           args=(); margs=()
           for t in "$SHA" "$SHA-p$PLUGINS_SHORT" main; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
           done
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
-          echo "- memex-control \`$SHA\`, \`$SHA-p$PLUGINS_SHORT\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written by \`control-arm\` once this pair is ARMED" >> "$GITHUB_STEP_SUMMARY"
+          echo "- memex-control \`$SHA\`, \`$SHA-p$PLUGINS_SHORT\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written next by \`control-first\`" >> "$GITHUB_STEP_SUMMARY"
 
-  # ────────── THE CONTROL IMAGE FOLLOWS THE ARMED SET (policy `one-promotion-gate`) ──────────
-  # `memex-control:<version>` and its line pointers are written HERE, for the set `arm` armed on
-  # memex-portal-ai and nothing else — the control instance runs this image under a Continuous
-  # policy, so a version tag written at promotion would roll it to sets the fleet gate refused.
-  # Runs in every main-cd run after `arm` (like `arm`, never waiting): it reads the newest ARMED
-  # version and its pair tag off memex-portal-ai, and tags the accepted control image of that pair.
-  #   done    → nothing to write (idempotent; control-arm writes the ACR version tag LAST, so for
-  #             its own writes presence on ACR implies the fleet registry got the same tags — a tag
-  #             written before control-arm existed was verified on cr by control-promote's mirror);
-  #   tag     → version (+ line pointers unless a newer control version exists — never backwards);
-  #   missing → no accepted control image for the armed pair: the control lane failed or has not
-  #             finished for it. NOT red here — the control lane reports its own failure
-  #             (`control-lane-report`) and must never block or re-trigger the fleet's delivery —
-  #             but said out loud: a warning and a summary line naming the version the control
-  #             image stays on. The next run re-reads and heals once the pair is accepted.
-  control-arm:
-    name: "Arm the control image: memex-control follows the armed set"
-    needs: [preflight, arm]
-    if: always() && needs.preflight.result == 'success' && needs.arm.result == 'success'
+  # ────────── CONTROL FIRST (policy `platform-deploy-control-first`) ──────────
+  # "after platform we always deploy control": EVERY platform build the control image's own
+  # acceptance passed (`control-acceptance`: empty DB · broken NodeType row · N−1 on the migrated
+  # DB) is the control instance's next image — written HERE, in the run that built it, as
+  # `memex-control:<version>` plus the line pointers (never backwards). It waits for nothing else:
+  # not `arm`, not a MeshWeaver.Plugins verdict, not a seal, not a module publication (policy
+  # `platform-module-deploy-separate`). The control record (Systemorph/Memex `control`) is
+  # Continuous on `3.0.0-ci*` with no `rollGate`, so its self-update rolls to this tag unattended.
+  #
+  # The FLEET is offered the build only after control RUNS it: `arm` reads control's
+  # `/api/version` + `/health` (`.github/control-instance.json`) as the control half of the platform
+  # verdict. And `control-always-latest.yml` is the alarm on the other end — control not on the
+  # newest build it was given, past the declared bound, files the `control-lag` issue and goes RED.
+  #
+  # Like the rest of the control lane it is outside `delivery-verdict` and `alert-on-failure`: a
+  # red here reports itself on the one open `control-image` issue and never reads as "the fleet's
+  # delivery failed". `control-always-latest` turns a control that never got the tag into a RED
+  # within the bound, so a failure here cannot go unseen.
+  control-first:
+    name: "Deploy control first: memex-control:<version> for every accepted platform build"
+    needs: [preflight, gate, control-image, control-promote]
+    if: always() && needs.preflight.result == 'success' && needs.gate.outputs.publish == 'true' && needs.control-promote.result == 'success'
     runs-on: ubuntu-latest
     # ~3× the measured cr copy of a portal-sized manifest, as control-promote.
     timeout-minutes: 25
     concurrency:
-      group: main-cd-control-arm
+      group: main-cd-control-first
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
       issues: write     # a red here reports itself on the control-image issue, as the control lane does
+    env:
+      STAGING: ${{ needs.gate.outputs.staging_tag }}
+      V_CONTROL: ${{ needs.control-image.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -2287,73 +2085,60 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: What must memex-control be told about the newest armed set?
-        id: follow
+      - name: Which tags does memex-control get for this build?
+        id: control_tags
         run: |
           set -euo pipefail
-          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
-            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          [ -n "${V_CONTROL:-}" ] || { echo "::error::control-image produced no version — refusing to tag memex-control with nothing"; exit 1; }
           az acr manifest list-metadata --registry meshweaver --name memex-control --top 300 --orderby time_desc \
             -o json --only-show-errors > "$RUNNER_TEMP/control-manifests.json"
-          python3 .github/scripts/arm-promoted-set.py control-follow \
-            --manifests "$RUNNER_TEMP/portal-manifests.json" --control-manifests "$RUNNER_TEMP/control-manifests.json"
-      - name: Already armed — say where memex-control is
-        if: steps.follow.outputs.action == 'done'
-        env:
-          V: ${{ steps.follow.outputs.version }}
-        run: echo "- memex-control already carries the armed set \`$V\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
-      - name: The armed set has no accepted control image — say so
-        if: steps.follow.outputs.action == 'missing'
-        env:
-          V: ${{ steps.follow.outputs.version }}
-          PAIR: ${{ steps.follow.outputs.pair }}
-          STAYS: ${{ steps.follow.outputs.control_newest }}
-        run: |
-          echo "::warning title=Control image not armed::the armed set $V (pair $PAIR) has no accepted memex-control image — the control image stays on ${STAYS:-nothing}. Its control lane failed or has not finished for that pair (see the open \`control-image\` issue); the next main-cd run re-reads this."
-          echo "- ⚠️ memex-control NOT armed for \`$V\` (pair \`$PAIR\`): no accepted control image of that pair; stays on \`${STAYS:-none}\`" >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/scripts/arm-promoted-set.py control-first \
+            --control-manifests "$RUNNER_TEMP/control-manifests.json" --version "$V_CONTROL"
+      - name: Already tagged — say where memex-control is
+        if: steps.control_tags.outputs.action == 'done'
+        run: echo "- memex-control already carries \`$V_CONTROL\` — nothing to write" >> "$GITHUB_STEP_SUMMARY"
       - name: ACR login
-        if: steps.follow.outputs.action == 'tag'
+        if: steps.control_tags.outputs.action == 'tag'
         run: bash .github/scripts/acr-login.sh
       - name: Log in to the fleet registry (publisher)
-        if: steps.follow.outputs.action == 'tag'
+        if: steps.control_tags.outputs.action == 'tag'
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
       - name: "Tag memex-control:<version> (+ the line pointers) — the fleet registry first, ACR's version tag LAST"
-        if: steps.follow.outputs.action == 'tag'
+        if: steps.control_tags.outputs.action == 'tag'
         env:
-          V: ${{ steps.follow.outputs.version }}
-          PAIR: ${{ steps.follow.outputs.pair }}
-          MOVE: ${{ steps.follow.outputs.move_pointers }}
+          MOVE: ${{ steps.control_tags.outputs.move_pointers }}
         run: |
           set -euo pipefail
           # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as `arm`'s phase D
-          # moves them for memex-portal-ai: a NEW instance seeds from the line pointer, never a
-          # specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
+          # moves them for memex-portal-ai: a NEW control instance seeds from the line pointer, never
+          # a specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
           line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
-          tags=("$V")
-          if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V")"; tags+=("${pointers[@]}"); fi
-          [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V only, the line pointers stay"
+          tags=("$V_CONTROL")
+          if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V_CONTROL")"; tags+=("${pointers[@]}"); fi
+          [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V_CONTROL only, the line pointers stay"
           margs=(); args=()
           for t in "${tags[@]}"; do margs+=("${{ env.REGISTRY }}/memex-control:$t"); args+=(--tag "${{ env.ACR }}/memex-control:$t"); done
-          # cr first: `done` is decided from ACR's version tag, so ACR must be the LAST write — a
-          # mirror failure then leaves `tag` for the next run instead of a `done` that never reached cr.
-          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$PAIR" "${margs[@]}"
-          docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$PAIR"
-          echo "- memex-control ARMED: \`$V\` ← pair \`$PAIR\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+          # The SOURCE is this run's accepted image (control-promote copied the same staging manifest
+          # to its identity tags a moment ago). cr first: `done` is decided from ACR's version tag, so
+          # ACR must be the LAST write — a mirror failure leaves `tag` for a re-run, never a `done`
+          # that never reached cr.
+          .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
+          docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
+          echo "- memex-control DEPLOYED FIRST: \`$V_CONTROL\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }}) — control rolls to it now; the fleet is offered it once control runs it" >> "$GITHUB_STEP_SUMMARY"
       # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
       # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
       # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
-      # the next promotion; a later green control-arm heals the tag itself.
-      - name: Report a red control-arm on the control-image issue
+      # the next promotion.
+      - name: Report a red control-first on the control-image issue
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          V: ${{ steps.follow.outputs.version }}
         run: |
           set -euo pipefail
-          body="control-arm failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — memex-control was not tagged for the armed set \`${V:-unknown}\`. The fleet's own delivery (memex-portal-ai) is NOT affected. The next main-cd run re-reads and re-tags; read the failed step for the cause."
+          body="control-first failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) — memex-control was not tagged \`${V_CONTROL:-unknown}\`, so the control instance is NOT being given this platform build and the fleet will not be offered it (control first). Read the failed step; a re-run of this job re-decides idempotently."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label control-image --state open --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
@@ -2361,9 +2146,10 @@ jobs:
             gh label create control-image --repo "$GITHUB_REPOSITORY" \
               --description "The control-instance image lane (main-cd control-*) failed" \
               --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-arm failed on main: run ${GITHUB_RUN_ID}" \
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-first failed on main: run ${GITHUB_RUN_ID}" \
               --label control-image --body "$body"
           fi
+
 
   # 📣 THE CONTROL LANE REPORTS ITSELF. It is outside `alert-on-failure` on purpose (its red must
   # not read as "the fleet did not ship"), so without this job a failure here would leave nothing
@@ -2630,7 +2416,7 @@ jobs:
           #
           # Additive: it names a tag nothing else writes, so it cannot disturb an existing one.
           # The portal's SHA tag, but NOT its version tag — that is the ARMING write, `arm`'s
-          # phase C, made only for a set whose dependent suites passed (policy `one-promotion-gate`).
+          # phase C, made only for a set whose platform verdict is green (policy `one-promotion-gate`).
           promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
@@ -2668,12 +2454,12 @@ jobs:
       # Phases A and B above promote the set for CI — every consumer that compiles, tests or bakes
       # against a platform reads it from there on. Phases C and D (the portal's version tag, which
       # SelfUpdateHostedService rolls to, and the `<line>-latest` pointers) and the release event
-      # moved to `arm`, which writes them only for a set whose MeshWeaver.Plugins dependent suites
-      # passed against exactly this PAIR (core + the Plugins commit gate built it with). This step
+      # moved to `arm`, which writes them only for a set whose PLATFORM verdict is green (its ladder,
+      # and control running it — policies `platform-module-deploy-separate`, `platform-deploy-control-first`). This step
       # hands `arm` — in this run or any later one — the facts it needs, as a record.
       # 🚨 THE BUNDLE'S BASE IS THE NEWEST ARMED SET, not the first parent. A promoted set usually
       # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
-      # base would diff, and control-arm, only the last one. `arm-promoted-set.py armed-base` names the
+      # base would name only the last one. `arm-promoted-set.py armed-base` names the
       # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
       # core/Plugins pair tag; the bare sha tag may have moved to a newer pair). `base_kind` records
       # which rule produced `base`, and an UNRESOLVED base still promotes for CI but is never armed
@@ -2728,30 +2514,37 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ────────── ARM THE FLEET: THE ONE PROMOTION GATE (policy `one-promotion-gate`) ──────────
-  # Policies `core-merge-never-blocked`, `build-latest-green` and `one-promotion-gate`
-  # (Doc/Architecture/PolicyNotProse). Core merges on its own checks; every CI consumer builds against the
-  # newest PROMOTED set; and the ONE place a MeshWeaver.Plugins verdict decides anything is here:
-  # a set is ARMED for the fleet — `memex-portal-ai:<version>` (what SelfUpdateHostedService rolls
-  # to, pattern `3.0.0-ci*`), the `<line>-latest` pointers, and the signed release event — only
-  # when Plugins' dependent suites passed against exactly the PAIR it was built from (core sha +
-  # the Plugins sha `gate` resolved; the pair tag `<core7>-p<plugins7>`).
+  # ────────── ARM THE FLEET: ONE PROMOTION GATE, ON THE PLATFORM VERDICT ──────────
+  # Policies `core-merge-never-blocked`, `build-latest-green`, `one-promotion-gate`,
+  # `platform-deploy-control-first` and `platform-module-deploy-separate`
+  # (Doc/Architecture/PolicyNotProse; design: Doc/Architecture/PlatformAndModuleDeploy). Core merges
+  # on its own checks; every CI consumer builds against the newest PROMOTED set; and a set is ARMED
+  # for the fleet — `memex-portal-ai:<version>` (what SelfUpdateHostedService rolls to, pattern
+  # `3.0.0-ci*`), the `<line>-latest` pointers, and the signed release event — on the PLATFORM
+  # verdict alone (`.github/scripts/arm-promoted-set.py judge`):
+  #   1. the platform's own tests (a set is promoted only from a commit whose required check is green);
+  #   2. that run's compatibility LADDER (`platform-ladder-compat`): the module set the fleet runs, as
+  #      PUBLISHED by the modules' own lanes, links unchanged against this platform image;
+  #   3. CONTROL FIRST: the control instance (`.github/control-instance.json`) RUNS a build that
+  #      contains the set's core commit and answers /health 200. `control-first` gave control the
+  #      build in the run that built it; the fleet is offered it only once control proved it.
+  # No MeshWeaver.Plugins dependent-suites verdict, seal or module publication decides anything here:
+  # a module's own problem never holds a platform roll, and a platform that breaks a module's
+  # declared compatibility is the ladder's red, answered by fixing compatibility.
   #
-  # 🚨 ASYNCHRONOUS BY CONSTRUCTION. Nothing here waits. The verdict is produced by MeshWeaver.Plugins'
-  # `promotion-candidate.yml`, which polls for the newest promoted-but-unarmed pair (this repo sends
-  # nothing — PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository stands) and writes
-  # `refs/core-candidate/pair-<core7>-p<plugins7>` in its own repository. This job runs in EVERY
-  # main-cd run — a publish, the hourly reconcile, a dispatch (Plugins' verdict job dispatches one
-  # when a pair turns green) — and arms the newest promoted set, NEWER than everything armed, whose
-  # verdict is green (`.github/scripts/arm-promoted-set.py`). A red verdict is refused; a missing
-  # one waits; a newer green one supersedes both. Never backwards.
+  # 🚨 ASYNCHRONOUS BY CONSTRUCTION. Nothing here waits. This job runs in EVERY main-cd run — a
+  # publish, the hourly reconcile, a dispatch — and arms the newest promoted set, NEWER than
+  # everything armed, whose platform verdict is green. A red ladder is refused; a ladder still
+  # running, or a control that has not taken the set yet, waits; a newer green one supersedes both.
+  # Never backwards. The ladder of THIS run is a need so this run can arm its own set when control
+  # already runs it (a rebuild of the commit control is on); otherwise a later tick arms it.
   #
-  # 🚨 WHAT IT DOES NOT GATE: promote, verify, the platform bake, the Plugins seal and every CI
+  # 🚨 WHAT IT DOES NOT GATE: promote, verify, the platform bake, control-first and every CI
   # resolver. Those read the promoted set immediately; `delivery-verdict` judges PLATFORM delivery
   # and deliberately does not need this job (policy `platform-backwards-compatibility`).
   arm:
-    name: "Arm the fleet: the newest promoted set whose dependent suites passed"
-    needs: [preflight, gate, promote]
+    name: "Arm the fleet: the newest promoted set control runs and whose ladder passed"
+    needs: [preflight, gate, promote, platform-ladder-compat]
     if: always() && needs.preflight.result == 'success' && needs.promote.result != 'failure' && needs.promote.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2782,13 +2575,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          # `select` reads which instance is control from `.github/control-instance.json`, which
+          # lives BESIDE the scripts — without it the arming refuses (RED), so it is checked out too.
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
       - name: "The selection can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
       - name: An override carries its reason
         if: env.OVERRIDE != ''
         run: |
-          [ -n "$OVERRIDE_REASON" ] || { echo "::error::arm_override=$OVERRIDE was given without arm_reason — an override of the promotion gate is recorded with its reason, or not taken."; exit 1; }
+          [ -n "$OVERRIDE_REASON" ] || { echo "::error::arm_override=$OVERRIDE was given without arm_reason — an override of the promotion gate (the platform verdict) is recorded with its reason, or not taken."; exit 1; }
           echo "### ⚠️ Promotion gate OVERRIDDEN: $OVERRIDE — $OVERRIDE_REASON" >> "$GITHUB_STEP_SUMMARY"
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -2808,20 +2606,13 @@ jobs:
           az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json"
-      - name: Mint a MeshWeaver.Plugins token (read the verdicts)
-        id: token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-          owner: Systemorph
-          repositories: MeshWeaver.Plugins
-          permission-contents: read
+      # The platform verdict reads only this repository (promotion records, each run's ladder job,
+      # compare for ancestry — the workflow's own token) and control's PUBLIC /api/version + /health.
+      # No MeshWeaver.Plugins credential: nothing of Plugins is read (policy `platform-module-deploy-separate`).
       - name: Which promoted set may the fleet roll to?
         id: select
         env:
           GH_TOKEN: ${{ github.token }}
-          PLUGINS_TOKEN: ${{ steps.token.outputs.token }}
           ARMED_MAX: ${{ steps.armed.outputs.max }}
           RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
         run: |
@@ -3567,7 +3358,7 @@ jobs:
     # `preflight` is what guarantees URL + SECRET exist, so nothing in this job checks for them.
     # 🚨 AFTER `arm`, never after promote (policy `one-promotion-gate`). This build fact
     # starts the fleet's rolls and names `memex-portal-ai:<version>`, which exists only once `arm`
-    # wrote it — for a set whose dependent suites passed, possibly in a LATER run than the one that
+    # wrote it — for a set whose platform verdict is green, possibly in a LATER run than the one that
     # built it. So the version and commits below are the ARMED set's, read from `arm`.
     needs: [preflight, arm]
     # The ONLY condition, and it is about the RUN, not about an input: notify when this run
@@ -3769,135 +3560,124 @@ jobs:
           docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
             "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
           echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
-
-  # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
-  # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
-  # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with a
-  # leg missing (#1026) while every job it had reported success.
+  # ────────── THE PUBLISHED MODULE SET — READ, NEVER BUILT HERE (policy `platform-module-deploy-separate`) ──────────
+  # "we separate platform deploy 100% from module deploy". This run does NOT pack, bake or seal any
+  # MeshWeaver.Plugins module: modules publish on their OWN lanes (MeshWeaver.Plugins `ci.yml`
+  # module-pack + publish-bake, and every satellite's), each version on its own, and every instance
+  # auto-updates them independently of any platform build (policy `packages-auto-update`). Compiled
+  # bytes are keyed on `c<major>e<epoch>` (policy `platform-backwards-compatibility`), so a
+  # publication sealed by those lanes for this identity IS the module set an instance on this
+  # platform lands — nothing here re-seals it per platform build.
   #
-  # `if: always()` on purpose: this runs whether the legs passed, failed or were cancelled, so the
-  # run's LAST word is a named list of what is missing from the registry rather than a stack trace
-  # from whichever leg died. That is the difference between "CD is red, go read four job logs" and
-  # "memex-migration:<sha> is missing".
+  # What the PLATFORM still needs from modules is EVIDENCE, not production: the compatibility ladder
+  # (`platform-ladder-compat`, which `arm` reads) and the satellite compile legs link those exact
+  # published bytes against this run's images. This job reads them from the sealed `plugins`
+  # publication for this run's framework identity (`compose-sealed-modules.sh` — the publication is
+  # the unit of consistency, no registry-package fallback) and hands them on as the
+  # `module-bundle-<Module>` artifacts every consumer already reads: the ladder and satellite legs
+  # here, the satellites' baseline next run, and every core pull request's ladder
+  # (`fetch-deployed-plugin-set.sh`). No Plugins checkout, no Plugins credential.
   #
-  # It also catches what a per-job red CANNOT: a leg that reports success while pushing nothing
-  # (Microsoft.NET.Build.Containers swallows a cancelled push as a warning and returns true — see
-  # the guard in the root Directory.Build.props), an index that lost an architecture, and a
-  # promotion that stopped between phases.
-  #
-  # The assertion itself lives in .github/scripts/check-image-set.sh because `gate` asks the SAME
-  # question to decide whether HEAD needs reconciling; the two must never disagree.
-  # ────────────────── PLUGINS: BUILT WITH THE PLATFORM ──────────────────
-  # "plugins is top level — built with platform" (maintainer, 2026-08-29). Plugins is NOT a
-  # subscriber that gets told to rebuild: its module bundles and its NodeType publication for the
-  # identity this run mints are produced HERE, from the same plugins-repo commit the portal image
-  # was built from, and sealed to the portals' storage before any dependent is dispatched. That is
-  # what makes "downstream must check that all dependencies are present" satisfiable — when a
-  # satellite wakes, the upstream it consumes is already sealed for the identity it is told to
-  # bake against. Both legs are the platform's reusable workflows pointed at the Plugins checkout
-  # (content-repository); a node repo calling them with no content-repository behaves as before.
-  #
-  # 🚨 "the same plugins-repo commit the portal image was built from" is now ENFORCED rather than
-  # hoped for: `content-ref` is the sha `gate` resolved, the identical value the two image legs
-  # check out. It used to be `vars.MW_PLUGINS_REF || 'main'`, re-resolved inside each reusable
-  # graph (node-repo-module-pack checks the content repo out THREE times), so a plugins merge
-  # landing mid-run could seal bundles from a tree the shipped image does not contain — the one
-  # thing this section exists to guarantee, quietly not guaranteed.
-
-  plugins-modules:
-    name: "Plugins: pack the module bundles the bake composes"
-    needs: [preflight, gate, promote, plugins-bake-image]
-    # 🚨 Two ways in, and the second is MeshWeaver#4539 — the same shape `publish-bake` above got
-    # from #2452, for the same reason and with the same `always()`:
-    #   * a real publish — the images were promoted, pack the bundles the bake composes;
-    #   * a RECONCILE whose image set is complete and whose `plugins` publication is MISSING for the
-    #     identity those images resolve (`gate.plugins_seal_due`, which names that identity, refuses
-    #     to answer on a refusal, and bounds the attempts). NEVER on an ordinary bake-only tick: a
-    #     re-pack costs ~30 min, and the probe is what keeps this off every tick where nothing is
-    #     wrong — it is a precondition, not a schedule.
-    # `always()` is required because `promote` is SKIPPED on the reconcile path — without it this
-    # job inherits the skip and the fix is inert, which is the exact shape it is fixing.
-    #
-    # 🚨 `preflight` is asserted too, though nothing reads its outputs: it is the GATE that proves this
-    # run's external inputs exist. `always()` stops a job inheriting a failed need's skip, so without
-    # this a FAILED preflight no longer stopped the Plugins legs — on the reconcile path they baked
-    # with inputs nobody had asserted (Copilot on #4565). A gating need is paid for like a consumed one.
-    # 🚨 AND `always()` MUST BE PAID FOR: it also stops this job inheriting the skip of a need that
-    # FAILED, so every need whose OUTPUT this job consumes has to be asserted by hand. Without the
-    # `plugins-bake-image` clause a failed digest resolution would run this job with EMPTY
-    # `platform-image-digest` / `tester-image-digest` — and those are OPTIONAL inputs of the lane,
-    # which resolves the platform ITSELF when they are empty. So it would not fail loudly; it would
-    # quietly pack the bundles against a set this run did not promote.
+  # 🚨 A publication that is absent for this identity is RED, naming the identity — never a skip
+  # and never a fallback to building the modules here. Within an epoch it cannot be absent (the
+  # identity does not move per build); across a DECLARED epoch bump it is the modules' lanes'
+  # coordinated rebuild that is owed, and the fleet is not armed until it lands — exactly the
+  # policy's "only a declared break obliges a rebuild and seal".
+  published-modules:
+    name: "Compatibility input: the published module set (sealed by the modules' own lanes)"
+    needs: [preflight, gate, promote, compat-images]
     if: >-
       always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
-      needs.plugins-bake-image.result == 'success' &&
-      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
-       needs.gate.outputs.plugins_seal_due == 'true')
+      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/node-repo-module-pack.yml
-    with:
-      content-repository: Systemorph/MeshWeaver.Plugins
-      content-ref: ${{ needs.gate.outputs.plugins_sha }}
-      platform-ref: ${{ needs.gate.outputs.sha }}
-      platform-image: meshweaver.azurecr.io/memex-portal-ai
-      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
-      tester-image: meshweaver.azurecr.io/mw-plugin-test
-      tester-image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
-      acr-login: oidc
-      # The compose set the bake needs — the same set Plugins' own ci.yml passes as
-      # module-artifacts; the rest of the catalog is content, baked below. Every entry MUST use
-      # the container workspace: an SDK entry recompiles its transitive siblings separately, so
-      # the bake can receive byte-distinct copies of one assembly from the same source commit.
-      # The consistency gate then correctly refuses the whole publication (#3732).
-      #
-      # 🚨 THE SET IS "EVERY MODULE THE CONTENT BINDS", not "the two we started with". The bake
-      # lane states the rule in its own input description: *"a repo whose NodeType source binds a
-      # module's types names that module here or in registry-modules, or its bake fails
-      # CS0103/CS0246 on every wave."* It listed two while the Plugins content binds four:
-      #   • MeshWeaver.Maps — the AppleMaps / GoogleMaps / OpenStreetMap galleries and
-      #     Cornerstone/Pricing bind it. It stopped being image-shipped in MeshWeaver#2941 and now
-      #     reaches a mesh only as a module bundle (its lines left MeshWeaver.Plugins'
-      #     src/platform-shipped.txt), so /app supplies nothing for those four to bind.
-      #   • MeshWeaver.Payments.Stripe — the Stripe protocol left Store/Order/Source for its own
-      #     module (MeshWeaver.Plugins#…), so Store/Order binds it, and Store/Catalog, Store/Plugin
-      #     and Store/Maintenance do too through shared=@Store/Order/Source.
-      # Neither gap was OBSERVED as a red compile: this job's bake has been dying earlier, on the
-      # MeshWeaver.Markdown.Collaboration one-producer FATAL (Plugins#1262/#1268), which masks
-      # everything downstream of it. Naming the modules the content binds is right independently of
-      # when that clears.
-      #
-      # 🚨 registry-modules is NOT the alternative here: composing the registry's own bytes would
-      # avoid rebuilding these for the seal, but this repo holds no registry credential
-      # (Doc/Architecture/ModuleBuildArchitecture → "What the gate still cannot see").
-      modules: >-
-        [{"package": "AI", "module": "MeshWeaver.AI", "project": "src/MeshWeaver.AI/MeshWeaver.AI.csproj", "build": "container", "accept": "targets"},
-         {"package": "Essentials", "module": "MeshWeaver.Markdown.Collaboration", "project": "src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj", "build": "container", "accept": "targets"},
-         {"package": "Maps", "module": "MeshWeaver.Maps", "project": "src/MeshWeaver.Maps/MeshWeaver.Maps.csproj", "build": "container", "accept": "targets"},
-         {"package": "Stripe", "module": "MeshWeaver.Payments.Stripe", "project": "src/MeshWeaver.Payments.Stripe/MeshWeaver.Payments.Stripe.csproj", "build": "container", "accept": "targets"}]
-      # Registry module PACKAGES are content-versioned and published by Plugins' own lane when a
-      # package changes; a platform release changes no package content. The bundles packed here
-      # are the bake's inputs (artifacts), nothing more.
-      publish: false
-    secrets:
-      # MeshWeaver.Plugins is PRIVATE: this run's GITHUB_TOKEN cannot check it out (the first wave
-      # died on `repository … not found`, run 33276813173). The dispatch App is installed on it
-      # with Contents: Read, so it doubles as the content credential; preflight asserts it.
-      content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-      content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          sparse-checkout: .github/scripts
+      - name: "The input must exist: this run's tester image"
+        env:
+          IMAGES_RESULT: ${{ needs.compat-images.result }}
+          TESTER: ${{ needs.compat-images.outputs.image }}
+        run: |
+          set -euo pipefail
+          [ "$IMAGES_RESULT" = "success" ] || { echo "::error::compat-images ended '$IMAGES_RESULT' — this run's framework identity is unknown, so no publication can be addressed."; exit 1; }
+          case "$TESTER" in *@sha256:*) ;; *) echo "::error::compat-images resolved no tester digest (got '$TESTER')"; exit 1 ;; esac
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: "Read the four module bundles from the SEALED `plugins` publication for this identity"
+        env:
+          TESTER: ${{ needs.compat-images.outputs.image }}
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+        run: |
+          set -euo pipefail
+          line=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$TESTER" --print-framework-identity)
+          identity="${line#*identity=}"; identity="${identity%% *}"
+          [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from $TESTER (got: '$line')"; exit 1; }
+          target="${BAKE_PUBLISH_TARGETS%% *}"
+          [ -n "$target" ] || { echo "::error::vars.BAKE_PUBLISH_TARGETS is empty — the sealed publications cannot be read (preflight asserts it)"; exit 1; }
+          out="$RUNNER_TEMP/published"; rm -rf "$out"; mkdir -p "$out"
+          bash .github/scripts/compose-sealed-modules.sh --identity "$identity" \
+            --packages "AI Essentials Maps Stripe" --upstreams plugins --out "$out" --storage-target "$target"
+          # One artifact per MODULE, under the names every consumer already reads
+          # (module-bundle-<Module>). The package → module map is the satellites' own declaration
+          # (`registry-modules: AI Essentials Stripe Maps`): AI ships MeshWeaver.AI, Essentials ships
+          # MeshWeaver.Markdown.Collaboration, Maps ships MeshWeaver.Maps, Stripe ships
+          # MeshWeaver.Payments.Stripe. Exactly one bundle per package, or RED.
+          stage="$RUNNER_TEMP/module-bundles"; rm -rf "$stage"
+          for mapping in AI=MeshWeaver.AI Essentials=MeshWeaver.Markdown.Collaboration Maps=MeshWeaver.Maps Stripe=MeshWeaver.Payments.Stripe; do
+            pkg="${mapping%%=*}"; module="${mapping#*=}"
+            found=$(find "$out" -maxdepth 1 -iname "$pkg.module.nupkg")
+            [ "$(printf '%s' "$found" | grep -c . || true)" = "1" ] || { echo "::error::the sealed plugins publication for $identity yielded $(printf '%s' "$found" | grep -c . || true) bundle(s) for $pkg, expected exactly 1"; exit 1; }
+            mkdir -p "$stage/$module" && cp "$found" "$stage/$module/"
+          done
+          echo "published module set for identity $identity: $(find "$stage" -name '*.module.nupkg' | wc -l | tr -d ' ') bundle(s) — read from the sealed plugins publication, built by its own lane" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: "Hand on: module-bundle-MeshWeaver.AI"
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-bundle-MeshWeaver.AI
+          path: ${{ runner.temp }}/module-bundles/MeshWeaver.AI/*.module.nupkg
+          if-no-files-found: error
+      - name: "Hand on: module-bundle-MeshWeaver.Markdown.Collaboration"
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-bundle-MeshWeaver.Markdown.Collaboration
+          path: ${{ runner.temp }}/module-bundles/MeshWeaver.Markdown.Collaboration/*.module.nupkg
+          if-no-files-found: error
+      - name: "Hand on: module-bundle-MeshWeaver.Maps"
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-bundle-MeshWeaver.Maps
+          path: ${{ runner.temp }}/module-bundles/MeshWeaver.Maps/*.module.nupkg
+          if-no-files-found: error
+      - name: "Hand on: module-bundle-MeshWeaver.Payments.Stripe"
+        uses: actions/upload-artifact@v7
+        with:
+          name: module-bundle-MeshWeaver.Payments.Stripe
+          path: ${{ runner.temp }}/module-bundles/MeshWeaver.Payments.Stripe/*.module.nupkg
+          if-no-files-found: error
 
-  plugins-bake-image:
-    name: "Plugins: resolve this run's tester + portal image digests"
+
+  compat-images:
+    name: "Compatibility: resolve this run's tester + portal image digests"
     needs: [preflight, gate, plugin-test-image, promote]
-    # Same two ways in as `plugins-modules` above (MeshWeaver#4539), same `always()`, same reason.
+    # The digests the compatibility legs link against (`published-modules`, `platform-ladder-compat`,
+    # `satellite-compat*`). Publishing runs only: a reconcile has no new platform to judge.
     if: >-
       always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
-      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
-       needs.gate.outputs.plugins_seal_due == 'true')
+      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -3957,101 +3737,10 @@ jobs:
           echo "platform_digest=$platform_digest" >> "$GITHUB_OUTPUT"
           echo "plugins bake reference set: $portal = $platform_digest"
 
-  plugins-bake:
-    name: "Plugins: bake + seal the publication for this identity"
-    needs: [preflight, gate, plugin-test-image, promote, plugins-modules, plugins-bake-image]
-    # Same two ways in as `plugins-modules` above (MeshWeaver#4539), same `always()`, same reason —
-    # plus the ordinary requirement that its own inputs actually ran: on the reconcile path
-    # `plugins-modules` and `plugins-bake-image` are what `always()` no longer waits for implicitly.
-    if: >-
-      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&
-      needs.plugins-modules.result == 'success' && needs.plugins-bake-image.result == 'success' &&
-      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||
-       needs.gate.outputs.plugins_seal_due == 'true')
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/node-repo-publish-bake.yml
-    with:
-      content-repository: Systemorph/MeshWeaver.Plugins
-      content-ref: ${{ needs.gate.outputs.plugins_sha }}
-      bake-source: plugins
-      module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
-      # 🚨 `gate.image_tag`, NEVER `plugin-test-image.outputs.version` — see `plugins-bake-image`'s
-      # digest step for why (MeshWeaver#4539). `test-image` and `platform-image` are REQUIRED inputs
-      # of the lane, so an empty version here does not even fail loudly: it produces `…/mw-plugin-test:`
-      # and the lane dies on a manifest it can never resolve.
-      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.gate.outputs.image_tag }}
-      image-digest: ${{ needs.plugins-bake-image.outputs.digest }}
-      # 🚨 The PORTAL of this run's promoted set (MeshWeaver#3022): the tester EXECUTES the bake,
-      # the portal SUPPLIES its reference set, its identity and the gate's runtime. The bake's
-      # identity is the portal's by construction — the address check that #1814 needed becomes
-      # an invariant the lane asserts rather than a comparison that can lose.
-      platform-image: meshweaver.azurecr.io/memex-portal-ai:${{ needs.gate.outputs.image_tag }}
-      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}
-      bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
-      platform-ref: ${{ needs.gate.outputs.sha }}
-      # 🚨 PHASE 4 OF MeshWeaver#3461, core's half. Each publication is written into its own
-      # run-named directory, sealed there, and `_current` — written after the seal — says which one
-      # applies. The prefix is never mutated in place again for a reader that follows the pointer,
-      # which is every portal (`ShippedPrebuiltBundles.PublicationDirectoryOf`) and both Azure-direct
-      # readers. 🚨 Since PHASE 5 the flat compatibility copy is DISPOSED OF rather than refreshed —
-      # `_complete` first, then its files, and only once `_current` has moved and been read back —
-      # so the prefix is not mutated in place for ANY reader. The deployment census that gated that
-      # is in Doc/Architecture/SealedPublicationGenerations (five records, 2026-09-17).
-      #
-      # 🚨 WHY THIS DOES NOT HAVE TO BE CO-ORDINATED WITH MeshWeaver.Plugins, whose `publish-bake`
-      # is the OTHER producer of this prefix. Since MeshWeaver#4249 the layout belongs to the PREFIX:
-      # a run that resolves a live `_current` publishes a generation whatever its caller passed,
-      # warning by name. So the satellite keeps publishing correctly from the merge of this line
-      # onward, with no change in its repository and in whichever order the two repos merge.
-      #
-      # 🚨 And the precondition that makes that true is MEASURED, not assumed: the mechanism lives in
-      # the PUBLISHER, so every producer must be running one that carries it. Measured 2026-09-14
-      # across all six node repos — Plugins, Crm, Education, Reinsurance, SocialMedia, Manufacturing
-      # — every lane is `@main` and every `scripts-ref:` is `main`, so no pinned publisher and no
-      # pinned reader of this prefix exists in the fleet. This lane is the one exception and it
-      # resolves its scripts at `platform-ref` above (`gate.outputs.sha`), i.e. the commit this run
-      # publishes; on a reconcile run that can be older, and a publisher predating #4249 would then
-      # refresh the flat copy without moving the pointer — which leaves pointer-following readers on
-      # the NEWER generation, the direction that is safe. Doc/Architecture/SealedPublicationGenerations.
-      publication-layout: generation
-      # Plugins is a ROOT: no upstream to wait for. And it does NOT dispatch its own dependents —
-      # on a platform release the job below wakes every repo once; a second, package-shaped wave
-      # from here would wake the same satellites twice for the same identity.
-      upstream-sources: ''
-      dispatch-dependents: false
-      # 🚨 THE ONE EVENT CORE EMITS. The preflight above already asserts vars.PLATFORM_WEBHOOK_URL
-      # and secrets.PLATFORM_WEBHOOK_SECRET are set — and then this call did not pass either, so
-      # every publication sealed and was NEVER registered: "the publication is sealed but memex was
-      # NOT told — provision on the calling repository" on a repository that HAS provisioned it
-      # (run 33883938454, 2026-09-04). Asserting an input EXISTS is not asserting it ARRIVES.
-      # Without this, memex never fans the release out and every satellite falls back to its
-      # schedule poll — silent, slow, and invisible from here.
-      webhook-url: ${{ vars.PLATFORM_WEBHOOK_URL }}
-    secrets:
-      # No acr-* secrets: the platform holds none, and the reusable bake pulls the image through
-      # the same OIDC identity that publishes to storage (its 'oidc' registry mode).
-      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      # The content checkout of the private Plugins repo — see plugins-modules.
-      content-app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-      content-app-private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-      # Signs X-Hub-Signature-256 on the publication record. Must be byte-identical to the control
-      # instance's Hosting:PlatformWebhookSecret — a mismatch is INVISIBLE from here (the POST still
-      # answers 2xx and the watcher drops every delivery as unverifiable), which is why the preflight
-      # asserts it and why it must actually reach this lane.
-      webhook-secret: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
-      # The fleet registry's publisher — the lane pushes the sealed `plugins` publication to
-      # cr.meshweaver.cloud after the share seal (its `bundle-registry` default is the same host
-      # as env.REGISTRY above). Asserted by `preflight` here AND by the lane's own preflight, RED.
-      bundle-registry-publisher-password: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
-
   # ────────── SATELLITE COMPATIBILITY: every satellite's NodeTypes against THIS set ──────────
   # 🚨 The per-build counterweight to the DAILY rebuild (maintainer decision, 2026-09-12). The fleet
   # assumes the platform is backwards compatible within a MAJOR, so the satellites (SocialMedia,
-  # Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild ONCE A
+  # Crm, Reinsurance, Education, Manufacturing) rebuild ONCE A
   # DAY, not per platform build. That removes the per-build wave's cost — and with it the only
   # per-build evidence that a core merge did not break them. Without something here a break is
   # found at 03:00 by the daily run, or on a portal at self-update, hours after the merge that
@@ -4059,15 +3748,15 @@ jobs:
   #
   # So every core build still MEASURES compatibility, cheaply: one leg per satellite, in parallel,
   # each compiling every NodeType of that satellite's `main` against the tester THIS run promoted
-  # plus the module bundles THIS run packed (`plugins-modules` — the same bytes `plugins-bake`
-  # seals, so a verdict here is a verdict about the publication the satellites will consume). It
+  # plus the PUBLISHED module set `published-modules` read from the sealed `plugins` publication
+  # (so a verdict here is a verdict about the very bytes the satellites consume). It
   # is the reusable compile gate the satellites run on their own pull requests, pointed at their
   # content from here; `compile-check.py` is fetched at THIS run's core sha. Measured on the same
   # lane (MeshWeaver.Crm run 34686027657, 2026-09-12): 1 min 50 s per leg.
   #
   # 🚨 RED, BUT NOT BLOCKING — and both halves are deliberate.
   #   * NOT blocking: it runs AFTER `promote` (the set is already armed), and neither
-  #     `notify-platform-update` nor `plugins-bake` waits for it. The set is published; each
+  #     `notify-platform-update` nor `arm` waits for it. The set is published; each
   #     instance gates ITSELF (Admin/UpdatePolicy, its own bake health). Blocking the publish on a
   #     satellite's compile would hand every satellite a veto over the platform's delivery — the
   #     dependency direction this repository forbids (PlatformNeverDependsOnPluginsGuard).
@@ -4092,7 +3781,7 @@ jobs:
   #   * 🚨 THE BASELINE COMPILES AGAINST THE BASELINE RUN'S MODULE BUNDLES (located by the run
   #     number in the baseline's 3.0.0-ci.<run> tag), NOT THIS RUN'S — even though this run's are
   #     already at hand. The four modules (AI, Markdown.Collaboration, Maps, Payments.Stripe) are
-  #     Plugins content packed per build; a Plugins-side move between the two sets (a type renamed
+  #     Plugins content published on its own lane; a Plugins-side move between the two sets (a type renamed
   #     in MeshWeaver.AI, say) would, with this run's bundles under the OLD image, fail the baseline
   #     reading too and be filed as "already broken" — misattributing a Plugins move as satellite
   #     debt, or, with new bundles that need new core surface, as a false baseline failure. "We
@@ -4100,8 +3789,8 @@ jobs:
   #     paragraph exists to refuse: it would break the attribution the whole control is for.
   #
   # Budget: ubuntu-latest in a public repository — unbilled. Five parallel legs of ~2 min per
-  # compile, two compiles each (~4–5 min a leg), add ≤ ~5 min of wall time beside `plugins-bake`
-  # (which they do not wait for), and five concurrent jobs per build against the org's job ceiling. Narrowing the matrix to the satellites whose
+  # compile, two compiles each (~4–5 min a leg), add ≤ ~5 min of wall time (nothing waits for
+  # them), and five concurrent jobs per build against the org's job ceiling. Narrowing the matrix to the satellites whose
   # NodeTypes reference the changed surface is the honest lever if that concurrency ever matters;
   # it is NOT done here — nothing in this run knows which satellite binds which surface, and a
   # matrix that guessed would skip exactly the leg it should have run.
@@ -4111,11 +3800,11 @@ jobs:
   # and OIDC inside the lane would demand `id-token: write` of every satellite caller, the #3933
   # startup-failure shape. `promote`'s phase B mirrors the tester to GHCR by digest (imagetools
   # copies the index), so the job below resolves the GHCR tag and ASSERTS it is the digest
-  # `plugins-bake-image` resolved on ACR; the legs then pull `ghcr.io/…@<that digest>` with
+  # `compat-images` resolved on ACR; the legs then pull `ghcr.io/…@<that digest>` with
   # GITHUB_TOKEN. One set, one digest, two registries — verified, not assumed.
   satellite-compat-image:
     name: "Compatibility: this run's tester on GHCR, and the baseline set"
-    needs: [preflight, gate, plugin-test-image, promote, plugins-bake-image]
+    needs: [preflight, gate, plugin-test-image, promote, compat-images]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -4145,12 +3834,12 @@ jobs:
         id: mirror
         env:
           VERSION: ${{ needs.plugin-test-image.outputs.version }}
-          ACR_DIGEST: ${{ needs.plugins-bake-image.outputs.digest }}
+          ACR_DIGEST: ${{ needs.compat-images.outputs.digest }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           [ -n "${VERSION:-}" ] || { echo "::error::plugin-test-image produced no version — cannot name the tester the satellites are checked against"; exit 1; }
-          case "$ACR_DIGEST" in sha256:*) ;; *) echo "::error::plugins-bake-image resolved no digest for the tester (got '$ACR_DIGEST') — nothing to assert the mirror against"; exit 1 ;; esac
+          case "$ACR_DIGEST" in sha256:*) ;; *) echo "::error::compat-images resolved no digest for the tester (got '$ACR_DIGEST') — nothing to assert the mirror against"; exit 1 ;; esac
           ns=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
           ref="ghcr.io/$ns/mw-plugin-test:$VERSION"
           digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')
@@ -4212,7 +3901,7 @@ jobs:
 
   satellite-compat:
     name: "Compatibility: ${{ matrix.satellite }}'s NodeTypes compile against this set"
-    needs: [preflight, gate, plugin-test-image, promote, plugins-bake-image, plugins-modules, satellite-compat-image]
+    needs: [preflight, gate, plugin-test-image, promote, compat-images, published-modules, satellite-compat-image]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     strategy:
       # 🚨 One red satellite must not cancel the other four's measurement.
@@ -4252,10 +3941,9 @@ jobs:
       platform-ref: ${{ needs.gate.outputs.sha }}
       test-image: ${{ needs.satellite-compat-image.outputs.image }}:${{ needs.plugin-test-image.outputs.version }}
       image-digest: ${{ needs.satellite-compat-image.outputs.digest }}
-      # THIS run's module bundles — the set `plugins-bake` seals (same pattern, same artifacts), and
-      # the four modules every satellite declares as `registry-modules: AI Essentials Stripe Maps`
-      # with `upstream-seed: plugins` on its own gate. From the artifacts, not the seal: the seal is
-      # being written by `plugins-bake` in parallel, and the bytes are the same by construction.
+      # THIS run's PUBLISHED module set (`published-modules`: read from the sealed `plugins`
+      # publication for this identity) — the four modules every satellite declares as
+      # `registry-modules: AI Essentials Stripe Maps` with `upstream-seed: plugins` on its own gate.
       module-artifacts: module-bundle-MeshWeaver.{AI,Markdown.Collaboration,Maps,Payments.Stripe}
       verdict-artifact: satellite-compat-${{ matrix.satellite }}
       # 🚨 THE CONTROL (maintainer pushback, 2026-09-12: "why fail compatibility?"). A red compile
@@ -4293,8 +3981,8 @@ jobs:
   # compatibility or a declared epoch bump — never a seal, pin or rebuild-everything fallback.
   # Doc/Architecture/PlatformCompatibilityLadder.
   platform-ladder-compat:
-    name: "Compatibility: newest deployed plugin set runs on this platform (ladder)"
-    needs: [preflight, gate, promote, plugins-bake-image, satellite-compat-image]
+    name: "Compatibility: the published module set links against this platform (ladder)"
+    needs: [preflight, gate, promote, compat-images, published-modules]
     # 🚨 `always()` so a FAILED input need does not SKIP this job into silence — a promoted image with no
     # rung-2 verdict and nothing red would be exactly the skip-trapdoor. Paid for: every need whose output
     # is consumed is asserted in the first step below, so a failed need turns this job RED, naming it.
@@ -4314,24 +4002,22 @@ jobs:
           sparse-checkout: |
             .github/scripts
             src/MeshWeaver.Compiler
-      # 🚨 No baseline = no verdict = RED, with the reason satellite-compat-image recorded. The satellite
-      # legs treat a missing baseline as "refuse to judge" because there the baseline is a CONTROL; here the
-      # baseline IS the subject (the plugin bytes the fleet runs), so a run without it has measured nothing.
-      - name: "The inputs must exist: the deployed plugin set and the promoted images"
+      # 🚨 No published module set = no verdict = RED. The module set IS the subject (the plugin bytes an
+      # instance on this platform lands — policy `packages-auto-update`), so a run without it has measured
+      # nothing, and `arm` reads this job's conclusion: a red or missing ladder is never armed.
+      - name: "The inputs must exist: the published module set and the promoted images"
         env:
-          IMAGES_RESULT: ${{ needs.plugins-bake-image.result }}
-          BASELINE_RESULT: ${{ needs.satellite-compat-image.result }}
-          BASELINE_DIGEST: ${{ needs.satellite-compat-image.outputs.baseline_digest }}
-          BASELINE_REASON: ${{ needs.satellite-compat-image.outputs.baseline_reason }}
+          IMAGES_RESULT: ${{ needs.compat-images.result }}
+          MODULES_RESULT: ${{ needs.published-modules.result }}
         run: |
           set -euo pipefail
-          [ "$IMAGES_RESULT" = "success" ] || { echo "::error::plugins-bake-image ended '$IMAGES_RESULT' — the promoted portal and tester digests are unknown, so there is nothing to link the deployed plugins against."; exit 1; }
-          [ "$BASELINE_RESULT" = "success" ] || { echo "::error::satellite-compat-image ended '$BASELINE_RESULT' — the plugin set the fleet ran before this promote was not verified."; exit 1; }
-          [ -n "${BASELINE_DIGEST:-}" ] || { echo "::error::the plugin set the fleet ran before this promote could not be established — ${BASELINE_REASON:-no reason recorded}. Rung 2 of the compatibility ladder measured NOTHING on this build."; exit 1; }
-      - name: "Download the deployed plugin set (the baseline bundles)"
+          [ "$IMAGES_RESULT" = "success" ] || { echo "::error::compat-images ended '$IMAGES_RESULT' — the promoted portal and tester digests are unknown, so there is nothing to link the published modules against."; exit 1; }
+          [ "$MODULES_RESULT" = "success" ] || { echo "::error::published-modules ended '$MODULES_RESULT' — the published module set for this identity was not read. Rung 2 of the compatibility ladder measured NOTHING on this build."; exit 1; }
+      - name: "Download the published module set (read from the sealed publication by published-modules)"
         uses: actions/download-artifact@v8
         with:
-          name: satellite-compat-baseline-bundles
+          pattern: module-bundle-*
+          merge-multiple: true
           path: ${{ runner.temp }}/deployed-plugins
       - name: "Read the compatibility epoch the deployed set was built on"
         id: epoch
@@ -4341,6 +4027,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # The published set is read for THIS run's identity (`c<major>e<epoch>`), so it was built on
+          # this epoch by construction; the base epoch below only matters when the fleet's set (the
+          # baseline) predates a declared bump. No baseline recorded = nothing older to declare against.
+          if [ -z "${BASELINE_RUN_NUMBER:-}" ]; then echo "base=" >> "$GITHUB_OUTPUT"; echo "no baseline run recorded — no base epoch"; exit 0; fi
           sha=$(gh api "repos/$REPO/actions/workflows/main-cd.yml/runs?per_page=100" \
             --jq "[.workflow_runs[] | select(.run_number == $BASELINE_RUN_NUMBER)] | .[0].head_sha // empty")
           [ -n "$sha" ] || { echo "::error::run #$BASELINE_RUN_NUMBER (the baseline) is not among the last 100 main-cd runs — its platform commit, and so its compatibility epoch, cannot be read"; exit 1; }
@@ -4361,13 +4051,13 @@ jobs:
         run: bash .github/scripts/acr-login.sh
       - name: "Link the deployed plugins against the PROMOTED portal image — types, versions, members"
         env:
-          PORTAL: ${{ env.ACR }}/memex-portal-ai@${{ needs.plugins-bake-image.outputs.platform_digest }}
-          TESTER: ${{ needs.plugins-bake-image.outputs.image }}
+          PORTAL: ${{ env.ACR }}/memex-portal-ai@${{ needs.compat-images.outputs.platform_digest }}
+          TESTER: ${{ needs.compat-images.outputs.image }}
           BASE_EPOCH: ${{ steps.epoch.outputs.base }}
         run: |
           set -euo pipefail
-          case "$PORTAL" in *@sha256:*) ;; *) echo "::error::plugins-bake-image resolved no portal digest — nothing to link against"; exit 1 ;; esac
-          case "$TESTER" in *@sha256:*) ;; *) echo "::error::plugins-bake-image resolved no tester digest — no platform-link to run"; exit 1 ;; esac
+          case "$PORTAL" in *@sha256:*) ;; *) echo "::error::compat-images resolved no portal digest — nothing to link against"; exit 1 ;; esac
+          case "$TESTER" in *@sha256:*) ;; *) echo "::error::compat-images resolved no tester digest — no platform-link to run"; exit 1 ;; esac
           n=$(find "$RUNNER_TEMP/deployed-plugins" -name '*.module.nupkg' | wc -l | tr -d ' ')
           [ "$n" -gt 0 ] || { echo "::error::the baseline artifact carried no module bundle"; exit 1; }
           STAGE="$RUNNER_TEMP/portal-image"
@@ -4415,7 +4105,7 @@ jobs:
         # `needs: promote`, so phases A and B are behind us and the promoted pointer set is whole:
         # `main` on all three repositories, the tester's `latest`, and `<version>` on the tester and
         # the migration. The PORTAL's `<version>` is not asserted: it is the arming write, made by
-        # `arm` only once the dependent suites pass (policy `one-promotion-gate`), and the script
+        # `arm` only once the platform verdict is green (policy `one-promotion-gate`), and the script
         # knows it. `gate`'s reconcile probe calls the SAME script and
         # must NOT pass it: that probe runs BEFORE promote, this run's version does not exist yet,
         # and a completeness probe that fails on a pointer a later phase has not written would make
@@ -4549,14 +4239,15 @@ jobs:
     # a need of a need (policy `platform-backwards-compatibility`, Doc/Architecture/ContinuousDeliveryContract
     # → "The ladder"). Platform builds are backwards compatible within a compatibility epoch, so the
     # platform set rolls FIRST and keeps the plugin bytes an install already runs; the Plugins
-    # re-seal for this build is an independent follow-up (`report-plugins-seal` below). Until this
+    # publication is not even produced here any more (policy `platform-module-deploy-separate`:
+    # MeshWeaver.Plugins seals it on its own lane, and `published-modules` only READS it). Until this
     # split a MeshWeaver.Plugins module test (CD 9309/9311/9313/9315/9316/9317/9320, all
     # `Plugins: pack … / Module tests`) turned the PLATFORM delivery red, handed HEAD on to a
     # re-publish and filed `ci-failure` ("no deployable image") over a set every install could
     # already roll to. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds this list, transitively.
     # 🚨 `notify-platform-update` (and `arm`, behind it) are NOT needs any more (policy
-    # `one-promotion-gate`): the fleet is armed asynchronously, when MeshWeaver.Plugins'
-    # dependent suites pass against the pair — possibly in a later run. PLATFORM delivery (build,
+    # `one-promotion-gate`): the fleet is armed asynchronously, once control runs the set and its
+    # ladder passed — possibly in a later run. PLATFORM delivery (build,
     # promote for CI, verify, bake) is judged here; arming is judged by `arm` itself and alerted by
     # `alert-on-failure`.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote,
@@ -4824,9 +4515,8 @@ jobs:
       # step above exists to close, on the path that now performs repairs.
       #
       # ONE leg on that path belongs to the PLATFORM: `publish-bake` runs on every bake-only tick, so
-      # it is always judged here. The three `plugins-*` legs a due seal re-attempt runs are judged by
-      # `report-plugins-seal` — never here — because a Plugins re-seal is not platform delivery
-      # (policy `platform-backwards-compatibility`). `gate` itself is not listed: this job cannot
+      # it is always judged here — and since policy `platform-module-deploy-separate` it is the only
+      # leg on it (no Plugins seal is re-attempted from this workflow). `gate` itself is not listed: this job cannot
       # reach this step with a gate that did not run (the first step refuses an empty verdict), and
       # `bake_only` is one of its outputs.
       - name: A reconcile that re-asserted anything must have RUN those legs
@@ -4951,13 +4641,13 @@ jobs:
           # The criterion for membership is "a failure here means HEAD's PLATFORM publication is
           # incomplete". Absent on purpose: `preflight`/`gate` (their failure leaves SHA empty, which
           # exits above), `notify-platform-update` (the release EVENT — rebuilding publishes nothing
-          # new), `satellite-compat*` (the per-build COMPATIBILITY measurement) and the three
-          # `plugins-*` legs. 🚨 Those last three USED to be here (run 35257430439 died in
-          # `plugins-modules` past promote), and that is the coupling policy
+          # new), `satellite-compat*` and `published-modules` (the per-build COMPATIBILITY
+          # measurement and its input). 🚨 The Plugins packing legs USED to be here (run 35257430439
+          # died in one past promote), and that is the coupling policy
           # `platform-backwards-compatibility` forbids: a Plugins red handed HEAD on to a FULL
           # re-publish of a platform set that was already complete, minting a new build number over
-          # identical bytes. A missing `plugins` publication is repaired by the reconcile's own seal
-          # probe (`gate.plugins_seal_due`), which re-bakes that one leg and moves no tag.
+          # identical bytes. Since policy `platform-module-deploy-separate` this workflow packs and
+          # seals no module at all; a missing `plugins` publication is the modules' own lane's to publish.
           DELIVERY_LEGS: >-
             ${{ needs.portal-image.result }} ${{ needs.portal-image-mirror.result }}
             ${{ needs.migration-image.result }} ${{ needs.plugin-test-image.result }}
@@ -5053,214 +4743,6 @@ jobs:
           fi
           say "   Dispatched \`$WORKFLOW_FILE\` on \`main\`. It enters the RECONCILE lane (so the push lane cannot discard it), resolves HEAD itself, and consumes the same per-commit heal budget as any other reconcile. It will NOT hand on again — the chain is bounded at one hop."
 
-  # ───────────── THE PLUGINS SEAL FOR THIS SET: REPORTED, NEVER GATING THE PLATFORM ─────────────
-  # 🚨 Policy `platform-backwards-compatibility` (Doc/Architecture/ContinuousDeliveryContract → "The
-  # ladder"): platform builds are backwards compatible within a compatibility epoch, so the PLATFORM
-  # set (build, promote, verify, platform content bake + release marker, the platform-update event)
-  # is delivered and announced on its own, and every install keeps the plugin bytes it already runs
-  # until a Plugins publication for a compatible identity arrives. The `plugins` re-seal this run
-  # attempts for the new identity is therefore an INDEPENDENT FOLLOW-UP: it is judged HERE, in a job
-  # no platform job needs, and its red never touches `delivery-verdict`, the `handoff` step or the
-  # `ci-failure` alert.
-  #
-  # 🚨 A follow-up is not a thing to forget. This job is RED when a DUE seal did not reach `success`
-  # (so the run says so), and its alert step writes the durable artefact — a comment on the open
-  # `cd-plugins-seal` issue, the same ledger the reconcile's seal probe (`gate.plugins_seal_due`)
-  # re-attempts from, under a marker that probe does not count as an attempt. Nothing here is a
-  # skip-trapdoor: a due leg that `skipped` is as red as one that failed, and "not due" is decided
-  # from the gate's own outputs, never from whether an input happens to be present.
-  #
-  # The satellite COMPATIBILITY relay lives here too, because its legs (`satellite-compat`) compile
-  # against THIS run's module bundles (`plugins-modules`): with the bundles missing the measurement
-  # cannot run, and that is a Plugins-side "not measured", never a platform delivery failure. A
-  # measured BREAK is still filed on `ci-failure` by `alert-on-failure`, which needs `satellite-compat`
-  # directly — that red is core's, by measurement.
-  report-plugins-seal:
-    name: "Plugins seal + satellite compatibility for this set (reported — never gates the platform)"
-    needs: [gate, portal-image, promote, plugins-modules, plugins-bake-image, plugins-bake,
-            satellite-compat-image, satellite-compat]
-    if: always() && needs.gate.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: A DUE Plugins seal must have RUN its legs
-        # 🚨 `seal_legs`, NOT `seal`: `gate` owns a step called `seal`, and `test-cd-steps.py`
-        # extracts a step by `id:` across EVERY job — a second `seal` would hand the harness
-        # whichever it met first, silently.
-        id: seal_legs
-        env:
-          PUBLISH: ${{ needs.gate.outputs.publish }}
-          PROMOTE_RESULT: ${{ needs.promote.result }}
-          SEAL_DUE: ${{ needs.gate.outputs.plugins_seal_due }}
-          SEAL_LEGS: >-
-            plugins-modules=${{ needs.plugins-modules.result }}
-            plugins-bake-image=${{ needs.plugins-bake-image.result }}
-            plugins-bake=${{ needs.plugins-bake.result }}
-        run: |
-          set -euo pipefail
-          # Due on exactly the two arms the legs' own `if:` run on: a publishing run whose promote
-          # succeeded, or a reconcile whose seal probe found `plugins` missing for this identity.
-          due=false
-          if [ "$PUBLISH" = "true" ] && [ "$PROMOTE_RESULT" = "success" ]; then due=true; fi
-          if [ "$SEAL_DUE" = "true" ]; then due=true; fi
-          if [ "$due" != "true" ]; then
-            echo "no Plugins seal was due on this run (publish=$PUBLISH promote=$PROMOTE_RESULT plugins_seal_due=${SEAL_DUE:-<none>}) — the legs are correctly skipped."
-            exit 0
-          fi
-          bad=""
-          for kv in $SEAL_LEGS; do
-            name="${kv%%=*}"; res="${kv#*=}"
-            if [ "$res" != "success" ]; then bad="$bad $name=$res"; fi
-          done
-          if [ -n "$bad" ]; then
-            echo "bad=$bad" >> "$GITHUB_OUTPUT"
-            echo "::error::the Plugins seal for this set was DUE but these legs did not run to success:$bad. The PLATFORM set is delivered regardless (policy platform-backwards-compatibility): installs roll to it and keep adopting the newest \`plugins\` publication sealed for a COMPATIBLE identity. The reconcile's seal probe re-attempts this one leg (bounded, ledgered on the \`cd-plugins-seal\` issue); read the named job for the cause."
-            exit 1
-          fi
-          echo "the due Plugins seal ran and succeeded: $SEAL_LEGS"
-      - name: Record a failed seal on the cd-plugins-seal ledger
-        if: failure() && steps.seal_legs.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SHORT: ${{ needs.gate.outputs.short_sha }}
-          PSHORT: ${{ needs.gate.outputs.plugins_short }}
-          BAD: ${{ steps.seal_legs.outputs.bad }}
-        run: |
-          set -euo pipefail
-          gh label create cd-plugins-seal --repo "$REPO" \
-            --description "A sealed platform set whose Plugins publication is missing for its framework identity" \
-            --color D93F0B --force >/dev/null || echo "::warning::could not ensure the cd-plugins-seal label (continuing to file the record)"
-          issue=$(gh issue list --repo "$REPO" --label cd-plugins-seal --state open \
-            --limit 1 --json number --jq '.[0].number // empty')
-          # 🚨 The marker is `cd-seal-leg-failed:`, NEVER `cd-seal:` — the gate's seal probe counts
-          # `<!-- cd-seal:<pair> -->` comments as ATTEMPTS, and a failure record must not spend budget.
-          body="$(printf '%s\n\n%s\n\n%s' \
-            "<!-- cd-seal-leg-failed:$SHORT-p$PSHORT -->" \
-            "🔴 **The Plugins seal for \`$SHORT-p$PSHORT\` failed** ([run]($RUN_URL)):$BAD" \
-            "The platform set was delivered regardless (policy \`platform-backwards-compatibility\`) — installs keep adopting the newest \`plugins\` publication sealed for a compatible identity. The hourly reconcile re-attempts this leg from the seal probe; read the named job for the cause.")"
-          if [ -n "$issue" ]; then
-            gh issue comment "$issue" --repo "$REPO" --body "$body"
-          else
-            gh issue create --repo "$REPO" --label cd-plugins-seal \
-              --title "CD: a sealed platform set has no \`plugins\` publication for its identity" \
-              --body "$body"
-          fi
-      # ─────────── Compatibility: every satellite's NodeTypes against this set ───────────
-      # The legs are `satellite-compat`'s (see that job): RED on a break, NOT blocking. This step
-      # RELAYS them — one table on the run page, one line per satellite in the log — and holds the
-      # one thing the legs' own colour cannot: that the gate RAN. A publishing run on which the
-      # compatibility job was skipped or cancelled certified nothing, and GitHub paints that grey
-      # like a pass; here it is red, naming the job's result. A leg that ran and FAILED is listed
-      # with its failing types and does NOT fail this step twice — its own red already carries the
-      # run, and `alert-on-failure` files it.
-      # `always()`: the table renders even when a verdict step above went red — a run that is
-      # already red for delivery still owes the reader the compatibility reading it took.
-      - name: Collect the satellite verdicts
-        if: ${{ always() && needs.gate.outputs.publish == 'true' }}
-        uses: actions/download-artifact@v8
-        with:
-          pattern: satellite-compat-*
-          path: ${{ runner.temp }}/satellite-compat
-      - name: "Compatibility: every satellite's NodeTypes compile against this set"
-        id: compat
-        if: ${{ always() && needs.gate.outputs.publish == 'true' }}
-        env:
-          COMPAT_RESULT: ${{ needs.satellite-compat.result }}
-          COMPAT_IMAGE_RESULT: ${{ needs.satellite-compat-image.result }}
-          # The same register as the job's matrix. A satellite named here with no verdict artifact
-          # is reported NOT MEASURED, never folded into a green.
-          SATELLITES: MeshWeaver.SocialMedia MeshWeaver.Crm MeshWeaver.Reinsurance MeshWeaver.Education MeshWeaver.Manufacturing
-          VERSION: ${{ needs.portal-image.outputs.version }}
-          VERDICTS: ${{ runner.temp }}/satellite-compat
-        run: |
-          set -euo pipefail
-          {
-            echo "### 🧩 Compatibility — every satellite's NodeTypes against \`${VERSION}\`, judged against the set the fleet is on (satellite-compat=${COMPAT_RESULT})"
-            echo ""
-            echo "| Satellite | Content | Verdict | NodeTypes | Types | Baseline → new |"
-            echo "|---|---|---|---:|---|---|"
-          } >> "$GITHUB_STEP_SUMMARY"
-          red=0; unmeasured=0; redlist=""; advisory=""
-          for sat in $SATELLITES; do
-            f="$VERDICTS/satellite-compat-$sat/compile-check-verdict.json"
-            if [ ! -f "$f" ]; then
-              unmeasured=$((unmeasured + 1))
-              echo "| $sat | | ⚪ NOT MEASURED — no verdict artifact | | | |" >> "$GITHUB_STEP_SUMMARY"
-              echo "compatibility: $sat — NOT MEASURED (no verdict artifact; read that leg)"
-              continue
-            fi
-            verdict=$(jq -r '.verdict // (if .gate_fail then "broke" else "compatible" end)' "$f")
-            csha=$(jq -r '.content.sha // "" | .[0:9]' "$f")
-            types=$(jq -r '.types' "$f")
-            images=$(jq -r --arg bt '`' '"\($bt)\((.images.baseline // "")[7:19] | if . == "" then "—" else . end)\($bt) → \($bt)\((.images.new // "")[7:19])\($bt)"' "$f")
-            case "$verdict" in
-              broke)
-                red=$((red + 1)); redlist="${redlist:+$redlist, }$sat"
-                list=$(jq -r --arg bt '`' '[.broke[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                absent=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | 🔴 **THIS BUILD BROKE IT** | $types | ${list:-?}${absent:+; unjudged (no per-type baseline): $absent} | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — BROKEN BY THIS BUILD ($VERSION): ${list:-?}"
-                jq -r '.broke[] | "    \(.type): \(.error)"' "$f" ;;
-              already-broken)
-                advisory="${advisory:+$advisory; }$sat"
-                list=$(jq -r --arg bt '`' '[.already_broken[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                absent=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | 🟡 already broken (satellite side, advisory) | $types | ${list:-?}${absent:+; unjudged (no per-type baseline): $absent} | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — ALREADY BROKEN on the baseline too (satellite side; its own daily run / ci-main-red issue own it): ${list:-?}${absent:+; unjudged, no per-type baseline: $absent}"
-                jq -r '.already_broken[] | "    \(.type) (baseline: \(.baseline)): \(.error)"' "$f" ;;
-              unjudged)
-                advisory="${advisory:+$advisory; }$sat (unjudged types)"
-                list=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | 🟡 unjudged (no per-type baseline — newer than the set the fleet is on) | $types | ${list:-?} | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — UNJUDGED: these types fail on the new image and are absent from the baseline report, so neither 'broke' nor 'already broken' is licensed: ${list:-?}"
-                jq -r '.unjudged[] | "    \(.type): \(.error)"' "$f" ;;
-              no-baseline)
-                advisory="${advisory:+$advisory; }$sat (no baseline)"
-                reason=$(jq -r '.images.baseline_reason // .baseline_reason // "?"' "$f")
-                list=$(jq -r --arg bt '`' '[.unjudged[].type] | map($bt + . + $bt) | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | ⚪ NO BASELINE — refused to judge: $reason | $types | ${list:-—} (unjudged) | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — could not establish a baseline ($reason); ${list:-no} new-image failure(s) left UNJUDGED" ;;
-              *)
-                stale=$(jq -r --arg bt '`' '[.stale_allow[]] | map($bt + . + $bt + " (compiles now — remove from allow)") | join(", ")' "$f")
-                echo "| $sat | \`${csha:-?}\` | ✅ compatible | $types | ${stale:-—} | $images |" >> "$GITHUB_STEP_SUMMARY"
-                echo "compatibility: $sat@${csha:-?} — compatible with $VERSION ($types NodeType(s))" ;;
-            esac
-          done
-          case "$COMPAT_RESULT" in
-            success|failure) ;;
-            *)
-              echo "- ❌ the compatibility gate did NOT run on this publishing run (satellite-compat=${COMPAT_RESULT}, satellite-compat-image=${COMPAT_IMAGE_RESULT}) — nothing above was measured" >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::the gate decided to PUBLISH, but satellite-compat=${COMPAT_RESULT} (satellite-compat-image=${COMPAT_IMAGE_RESULT}): the compatibility of this set with the satellites was NOT measured. A skipped gate is painted like a passed one; it is not one. Read satellite-compat-image / plugins-modules for why the legs never ran."
-              exit 1 ;;
-          esac
-          if [ "$COMPAT_RESULT" = "success" ] && [ "$unmeasured" -gt 0 ]; then
-            echo "::error::satellite-compat reports success but $unmeasured satellite(s) above have no verdict artifact — a leg that measured nothing must not read as a pass. Either the matrix and the SATELLITES register in this step diverged, or a leg uploaded no report."
-            exit 1
-          fi
-          echo "compat_red=$red" >> "$GITHUB_OUTPUT"
-          echo "compat_red_list=$redlist" >> "$GITHUB_OUTPUT"
-          if [ -n "$advisory" ]; then
-            echo "- 🟡 advisory (not this build's): $advisory" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          if [ "$red" -gt 0 ]; then
-            # 🚨 THE CONTRADICTION, STATED. A red leg fails `satellite-compat` (no continue-on-error,
-            # by rule), so the RUN's conclusion is `failure` — while promote, notify, bake and seal
-            # all completed. The run's colour then says COMPATIBILITY, not shipping. Said first,
-            # here and in the run's headline below, so nobody reads "CD failed" as "nothing shipped".
-            # And since the baseline control, red means ONE thing: these types compiled against the
-            # set the fleet is on and do not against this one — core's side, by measurement.
-            echo "🚨 **DELIVERY COMPLETED** — this run is red because this core build BROKE $red satellite(s): ${redlist} (previous image compiled, new image does not). Nothing failed to ship." >> "$GITHUB_STEP_SUMMARY"
-            echo "- The set IS published and every instance gates itself; the red is \`satellite-compat\`'s own and is filed on the \`ci-failure\` issue. The break is on CORE's side by measurement: fix the surface in core (or, if the move was intended, land the satellite's adaptation) — the daily rebuild will not repair it on its own." >> "$GITHUB_STEP_SUMMARY"
-            echo "🚨 DELIVERY COMPLETED — this run is red because this core build BROKE $red satellite(s): ${redlist} (previous image compiled, new image does not). Nothing failed to ship."
-          else
-            echo "compatibility: no satellite was broken by this build ($VERSION)${advisory:+; advisories: $advisory}"
-          fi
-
 
   alert-on-failure:
     name: "Alert: CD failed on main"
@@ -5277,11 +4759,10 @@ jobs:
     # Its verdict artifacts are read below so the alert names the satellite and the types.
     needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
-    # compatibility legs need `plugins-modules`, so under `failure()` a Plugins red filed THIS issue
-    # ("no deployable image was published") over a platform set that was delivered. A Plugins seal
-    # red is recorded by `report-plugins-seal` on its own ledger (policy
-    # `platform-backwards-compatibility`); a satellite-compat leg that RAN and went red is still a
-    # direct need here, so a measured break is still filed.
+    # compatibility legs need `published-modules`, so under `failure()` a missing module
+    # publication filed THIS issue ("no deployable image was published") over a platform set that
+    # was delivered (policy `platform-backwards-compatibility`); a satellite-compat leg that RAN and
+    # went red is still a direct need here, so a measured break is still filed.
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
