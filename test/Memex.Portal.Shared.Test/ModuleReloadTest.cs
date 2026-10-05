@@ -182,6 +182,87 @@ public class ModuleReloadRulesTest
         image["B"].Should().Contain("image's own copy");
         image["D"].Should().Be("not loaded");
     }
+
+    /// <summary>
+    /// 🚨 A CRASH is Faulted, a decided answer is Failed — and only Faulted is ever retried. The
+    /// rule is over the items: one crashed module makes the whole request Faulted, because its
+    /// answer is still unknown.
+    /// </summary>
+    [Fact]
+    public void ACrashedItem_IsFaulted_ADecidedFailure_IsFailed()
+    {
+        var crashed = new ModuleReloadItem { Module = "M", Failure = "landing failed: 503", Transient = true };
+        var declined = new ModuleReloadItem { Module = "N", Failure = "declined — floor above the platform" };
+        var fine = new ModuleReloadItem { Module = "O", TargetVersion = "1.0.0" };
+
+        ModuleReload.OutcomeOf([fine], failure: null).Should().Be(ModuleReloadStatus.Done);
+        ModuleReload.OutcomeOf([declined, fine], "N: declined").Should().Be(ModuleReloadStatus.Failed);
+        ModuleReload.OutcomeOf([crashed], "M: landing failed").Should().Be(ModuleReloadStatus.Faulted);
+        ModuleReload.OutcomeOf([declined, crashed], "both").Should().Be(ModuleReloadStatus.Faulted,
+            "the crashed module's answer is unknown, so the request is retried");
+        ModuleReloadStatus.IsTerminal(ModuleReloadStatus.Faulted).Should().BeFalse("a crash is never final");
+        ModuleReloadStatus.IsTerminal(ModuleReloadStatus.Failed).Should().BeTrue();
+    }
+
+    /// <summary>The retry is due on the pass cadence, doubled per attempt and capped in the doubling
+    /// only; nothing but Faulted is ever due.</summary>
+    [Fact]
+    public void AFaultedRequest_IsDue_OnThePassCadence_DoubledPerAttempt()
+    {
+        var at = new DateTimeOffset(2026, 10, 5, 20, 0, 0, TimeSpan.Zero);
+        var unit = TimeSpan.FromMinutes(30);
+        var faulted = new ModuleReloadRequest { Reason = "r", Status = ModuleReloadStatus.Faulted, FaultedAt = at };
+
+        ModuleReload.RetryDueAt(faulted, unit).Should().Be(at + unit);
+        ModuleReload.RetryDueAt(faulted with { Attempt = 1 }, unit).Should().Be(at + 2 * unit);
+        ModuleReload.RetryDueAt(faulted with { Attempt = 3 }, unit).Should().Be(at + 8 * unit);
+        ModuleReload.RetryDueAt(faulted with { Attempt = 50 }, unit)
+            .Should().Be(at + (1 << ModuleReload.MaxBackoffDoublings) * unit, "the doubling stops; the retries do not");
+
+        // Negative controls: a decided failure, a finished or a running request is never due.
+        ModuleReload.RetryDueAt(faulted with { Status = ModuleReloadStatus.Failed }, unit).Should().BeNull();
+        ModuleReload.RetryDueAt(faulted with { Status = ModuleReloadStatus.Done }, unit).Should().BeNull();
+        ModuleReload.RetryDueAt(faulted with { Status = ModuleReloadStatus.Landing }, unit).Should().BeNull();
+    }
+
+    /// <summary>The re-arm runs the request again from the top: next attempt, the faulted attempt's
+    /// executor-owned fields cleared, the audit log kept.</summary>
+    [Fact]
+    public void Rearm_StartsTheNextAttempt_FromRequested_KeepingTheLog()
+    {
+        var at = DateTimeOffset.UtcNow;
+        var faulted = new ModuleReloadRequest
+        {
+            Module = "M",
+            Reason = "r",
+            Status = ModuleReloadStatus.Faulted,
+            Attempt = 2,
+            FaultedAt = at,
+            Failure = "landing failed: 503",
+            Items = [new ModuleReloadItem { Module = "M", Failure = "landing failed: 503", Transient = true }],
+            RestartRequestedAt = at,
+            LiveSwapRequestedAt = at,
+            Activation = ModuleReloadActivation.Restart,
+            Replicas = ImmutableDictionary<string, ModuleReloadReplica>.Empty.Add("p", Replica("p", at, "1.0.0")),
+            Log = ["first line"],
+        };
+
+        var next = ModuleReload.Rearm(faulted, at.AddMinutes(30));
+
+        next.Status.Should().Be(ModuleReloadStatus.Requested);
+        next.Attempt.Should().Be(3);
+        next.Items.Should().BeEmpty();
+        next.Failure.Should().BeNull();
+        next.FaultedAt.Should().BeNull();
+        next.RestartRequestedAt.Should().BeNull();
+        next.LiveSwapRequestedAt.Should().BeNull();
+        next.Activation.Should().BeNull();
+        next.Replicas.Should().BeEmpty();
+        next.Module.Should().Be("M");
+        next.Reason.Should().Be("r");
+        next.Log.Should().HaveCount(2).And.Contain("first line");
+        next.Log[^1].Should().Contain("retry 3").And.Contain("landing failed: 503");
+    }
 }
 
 /// <summary>
@@ -362,6 +443,10 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
 
         public void Serve(string version, string? floor) => served = (version, floor);
 
+        /// <summary>While true, the bundle index answers 503 — a registry that is briefly down, the
+        /// TRANSIENT fault a reload must survive.</summary>
+        public bool IndexDown { get; set; }
+
         public bool Serves(string host) => string.Equals(host, RegistryHost, StringComparison.OrdinalIgnoreCase);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -370,6 +455,11 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
             var (version, floor) = served;
             if (request.Method == HttpMethod.Get && path == "/api/plugins")
                 return Ok(PluginRegistryPayloads.List(Feed));
+            if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json" && IndexDown)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent("registry briefly down", Encoding.UTF8, "text/plain"),
+                });
             if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json")
                 return Ok(JsonSerializer.Serialize(new
                 {
@@ -628,5 +718,71 @@ public class ModuleReloadLiveTest(ITestOutputHelper output) : ModuleReloadScenar
             OnSwap?.Invoke();
             return Observable.Return(new ModuleReloadSwapOutcome(true));
         });
+    }
+}
+
+/// <summary>
+/// 🚨 <b>A crashed reload step is never final</b> (Plugins#2893 review): a registry that is briefly
+/// down makes the request <see cref="ModuleReloadStatus.Faulted"/>, the reconcile pass's retry
+/// (<see cref="ModuleReload.RetryFaulted"/>) re-arms it, and the next attempt finishes — while a
+/// DECIDED failure stays <see cref="ModuleReloadStatus.Failed"/> and is never retried.
+/// </summary>
+public class ModuleReloadFaultedTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    [Fact(Timeout = 240_000)]
+    public async Task ATransientFault_IsFaulted_TheNextPassRetriesIt_AndItSucceeds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        Registry.IndexDown = true;
+
+        var path = await Reload(ct);
+        var faulted = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted || ModuleReloadStatus.IsTerminal(r.Status), ct);
+
+        faulted.Status.Should().Be(ModuleReloadStatus.Faulted, faulted.Failure ?? "");
+        faulted.Failure.Should().Contain("503");
+        faulted.Attempt.Should().Be(0);
+        faulted.FaultedAt.Should().NotBeNull();
+        faulted.CompletedAt.Should().BeNull("a fault is not an end");
+        faulted.Items.Single().Transient.Should().BeTrue();
+
+        // The pass before the backoff is due re-arms nothing — the backoff is honoured.
+        var unit = TimeSpan.FromMinutes(30);
+        (await ModuleReload.RetryFaulted(Mesh, unit, faulted.FaultedAt!.Value.AddMinutes(1))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the first retry is due one pass interval after the fault");
+
+        // The registry is back, and the next pass is due: the request is re-armed and finishes.
+        Registry.IndexDown = false;
+        (await ModuleReload.RetryFaulted(Mesh, unit, faulted.FaultedAt!.Value + unit)
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([path]);
+
+        var done = await AwaitRequest(path, r => ModuleReloadStatus.IsTerminal(r.Status), ct);
+        done.Status.Should().Be(ModuleReloadStatus.Done, done.Failure ?? "");
+        done.Attempt.Should().Be(1);
+        done.Items.Single().TargetVersion.Should().Be("1.1.0");
+        done.Log.Should().Contain(line => line.Contains("retry 1"));
+        Updater.Restarts.Should().Be(0);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ADecidedFailure_IsFailed_AndIsNeverRetried()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Above);
+
+        var path = await Reload(ct);
+        var red = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted || ModuleReloadStatus.IsTerminal(r.Status), ct);
+        red.Status.Should().Be(ModuleReloadStatus.Failed, "a floor above the platform is a decided answer");
+        red.Items.Single().Transient.Should().BeFalse();
+
+        (await ModuleReload.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow.AddDays(1))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("a decided failure is final — retrying it would get the same answer");
+        var after = await AwaitRequest(path, _ => true, ct);
+        after.Status.Should().Be(ModuleReloadStatus.Failed);
+        after.Attempt.Should().Be(0);
     }
 }

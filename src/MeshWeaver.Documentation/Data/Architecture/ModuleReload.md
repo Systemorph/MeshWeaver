@@ -36,12 +36,13 @@ A `ModuleReload` node at `Admin/_ModuleReload/{id}`, content `ModuleReloadReques
 | `module` | requester | the module's entry-assembly name (`MeshWeaver.AI`) or its package id (`AI`); blank = every installed module |
 | `reason` | requester | required; carried into the restart announcement and every log line |
 | `requestedBy` / `requestedAt` | requester | who asked — a user id, an agent, a watcher's name |
-| `status` | executor | `Requested` → `Landing` → `Activating` \| `AwaitingRestart` → `Done` \| `Failed` (open string constants, `ModuleReloadStatus`) |
+| `status` | executor | `Requested` → `Landing` → `Activating` \| `AwaitingRestart` → `Done` \| `Failed` \| `Faulted` (open string constants, `ModuleReloadStatus`; `Faulted` is never final — see "A crash is never final" below) |
 | `items[]` | executor | per module: `runningVersion` (what the executor's process ran), `foundVersion` + `foundFloor` + `registry` (what is published), `targetVersion` (what the activation record now names), `landed`, `decision`, `failure` |
 | `activation` / `activationDetail` | executor | `Live`, `Restart` or `NotNeeded`, and the lane's own sentence |
 | `liveSwapRequestedAt` / `restartRequestedAt` | executor | when each process was asked to swap, or when the ONE restart was requested |
 | `replicas{process}` | each process | what that process has LOADED, per module — written under its own key, so reports merge rather than clobber |
-| `failure` | executor | why the request is red, by name |
+| `failure` | executor | why the request is red (or faulted), by name |
+| `attempt` / `faultedAt` | re-arm / executor | how many times a `Faulted` request has been re-armed (drives the backoff, never a cap), and when the current attempt faulted |
 | `log[]` | executor | every step, in order |
 
 **The only writer is `ModuleReload.Request`**, which writes the node as System after its CALLER has
@@ -99,6 +100,34 @@ runs the step again when the node is next read.
    (monolith, no cluster) the counted reports are all there is. A running member that never reports
    leaves the request open — visible on the node, never silently `Done`.
    A failed live swap leaves the previous generation serving and falls back to the one restart.
+
+## A crash is never final
+
+The system repairs itself, so a step that CRASHED must never end a request. The executor tells two
+kinds of red apart:
+
+| status | what produced it | final? |
+|---|---|---|
+| `Failed` | a DECIDED answer: a floor above the running platform, no installed module of that name, a refused bundle, a replica that loads the wrong version after activation, a request not written by System, a host with no restart path | yes — asking again would get the same answer |
+| `Faulted` | a CRASH: an exception in the landing or restart step, a registry that could not be asked (e.g. a 503), a module-set proposal that faulted, a reconcile lane that was shutting down — any item whose `transient` flag is set (`ModuleAdoptOutcome.Transient`) | **never** — retried |
+
+A request with several modules is `Faulted` when ANY failing module crashed: that module's answer is
+still unknown (`ModuleReload.OutcomeOf`).
+
+**The retry has no timer of its own.** Every full reconcile pass of the plugin catalog
+(`RegistryUpdateReconciler`: the boot pass, each safety-net tick, `ReconcileNow`) ends by calling
+`ModuleReload.RetryFaulted`: a LISTING of `Admin/_ModuleReload`, a read of each open request from its
+own node stream, and a re-arm (`ModuleReload.Rearm`, written through `GetMeshNodeStream(path).Update`
+as System) of every `Faulted` request whose backoff is due. The backoff is the pass's own cadence,
+doubled per attempt — `faultedAt + interval × 2^min(attempt, 5)`, the interval being
+`PluginCatalog:ReconcileSafetyNetInterval` (30 min); the doubling stops at 32 intervals, the retries
+never do. With the safety net switched off, the boot pass is the retry.
+
+The re-arm keeps the node and its log, increments `attempt`, clears every executor-owned field of the
+faulted attempt (items, activation, replica reports, the restart stamp, the failure) and sets the
+status back to `Requested`; the executor then runs the new attempt from the top. 🚨 The one-restart
+rule therefore holds **per attempt**: a retry of a request that faulted after its restart was stamped
+asks for a restart again.
 
 ## Who can file one
 
@@ -182,4 +211,10 @@ modules; the sync-owned hold on the module lane was.
   `decision` says what was landed; the content half follows the sync.
 - **A restart that never comes.** A restart handed to the control lane that the control plane never
   executes leaves the request `AwaitingRestart` with the hand-over sentence on it — visible, not
-  retried.
+  retried (it did not crash; it is waiting).
+- **Every crash is classified.** `Faulted` covers the exceptions caught in the executor and in the
+  registry/landing calls it makes. A bundle download that answers a transient error as a `Kind`
+  (`the bundle X could not be fetched (…)`) is still reported as a decided `Failed`; a restart lane
+  that answers "not scheduled" is `Failed` too. The Plugins-side self-update intake
+  (`FleetTargetIntake`) mirrors these status names and treats `Failed` as terminal; it does not yet
+  know `Faulted`.

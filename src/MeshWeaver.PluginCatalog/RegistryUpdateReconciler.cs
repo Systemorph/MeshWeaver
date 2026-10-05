@@ -306,6 +306,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // Hop off whatever thread completed the default install before the reconcile chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ => Reconcile(options))
+            .SelectMany(_ => RetryFaultedReloads(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread — the chain is synchronous
             // up to its first genuinely-async leaf, so subscribing inline would run it ON the
             // startup thread and re-enter the hub schedulers mid-init. Same fix, same reason, as
@@ -592,6 +593,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
                 .LastAsync())
+            .SelectMany(_ => RetryFaultedReloads(options))
             .Repeat();
     }
 
@@ -610,8 +612,34 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .ToObservable()
             .Concat()
             .DefaultIfEmpty(Unit.Default)
-            .LastAsync();
+            .LastAsync()
+            .SelectMany(_ => RetryFaultedReloads(options));
     }
+
+    /// <summary>
+    /// 🚨 Ends every full reconcile pass (boot, safety net, <see cref="ReconcileNow"/>): re-arms each
+    /// module reload that CRASHED (<see cref="ModuleReloadStatus.Faulted"/>) and whose backoff is due
+    /// (<see cref="ModuleReload.RetryFaulted"/>). The backoff unit IS this pass's cadence — the
+    /// safety-net interval — doubled per attempt, so a retry needs no timer of its own: the pass
+    /// that already runs asks. With the safety net off, the boot pass is the retry. Never faults —
+    /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
+    /// </summary>
+    private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options) =>
+        ModuleReload.RetryFaulted(hub,
+                options.ReconcileSafetyNetInterval > TimeSpan.Zero ? options.ReconcileSafetyNetInterval : TimeSpan.Zero,
+                DateTimeOffset.UtcNow)
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted module reload(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[RegistryUpdate] faulted module reloads could not be re-armed this pass — the next pass asks again");
+                return Observable.Return(Unit.Default);
+            });
 
     /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
     private IObservable<Unit> SafetyNetReconcile(PluginRegistryReference registry)
@@ -1166,6 +1194,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 {
                     Registry = registry.Url,
                     Failure = $"{DisplayName(registry)} could not be asked: {ex.Message}",
+                    Transient = true,
                 }));
 
         IObservable<ModuleAdoptOutcome> Resolve() =>
@@ -1196,6 +1225,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 {
                     Failure = $"the module set could not be proposed, so neither a swap nor a restart "
                               + $"would load {moduleName}: {ex.Message}",
+                    Transient = true,
                 }));
         }
 
@@ -1212,10 +1242,12 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .Select(_ => Volatile.Read(ref answer) ?? new ModuleAdoptOutcome
                 {
                     Failure = "the reload pass did not run (the reconcile lane is shutting down)",
+                    Transient = true,
                 })
                 .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
                 {
                     Failure = $"the reload pass faulted: {ex.Message}",
+                    Transient = true,
                 }))
                 .Take(1);
         });

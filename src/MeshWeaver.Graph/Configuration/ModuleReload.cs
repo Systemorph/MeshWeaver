@@ -31,8 +31,21 @@ public static class ModuleReloadStatus
     /// replica that reported.</summary>
     public const string Done = "Done";
 
-    /// <summary>Red, with <see cref="ModuleReloadRequest.Failure"/> naming why.</summary>
+    /// <summary>Red, with <see cref="ModuleReloadRequest.Failure"/> naming why — a DETERMINISTIC
+    /// answer (a floor above the running platform, no installed module of that name, a refused
+    /// bundle, a version mismatch after activation, a request not written by System). Final for this
+    /// request: asking again would get the same answer.</summary>
     public const string Failed = "Failed";
+
+    /// <summary>
+    /// 🚨 A step CRASHED — an exception, an unreachable registry, a lane that was shutting down —
+    /// with <see cref="ModuleReloadRequest.Failure"/> naming the fault. NEVER final: a crash says
+    /// nothing about the version, and making it final stopped a module version updating itself on
+    /// one transient fault (Plugins#2893 review). The next reconcile pass re-arms the request
+    /// (<see cref="ModuleReload.RetryFaulted"/>) once its backoff (<see cref="ModuleReload.RetryDueAt"/>)
+    /// is due, and the executor runs it again from <see cref="Requested"/>.
+    /// </summary>
+    public const string Faulted = "Faulted";
 
     /// <summary>Whether <paramref name="status"/> is terminal. An unknown value is NOT terminal —
     /// it is reported, never silently treated as finished.</summary>
@@ -114,8 +127,16 @@ public record ModuleReloadRequest
     public ImmutableDictionary<string, ModuleReloadReplica> Replicas { get; init; } =
         ImmutableDictionary<string, ModuleReloadReplica>.Empty;
 
-    /// <summary>Why the request is red, by name. Executor-owned.</summary>
+    /// <summary>Why the request is red (or faulted), by name. Executor-owned.</summary>
     public string? Failure { get; init; }
+
+    /// <summary>How many times a <see cref="ModuleReloadStatus.Faulted"/> request has been re-armed
+    /// (0 on the first run). Drives the retry backoff; never a cap. Written by the re-arm.</summary>
+    public int Attempt { get; init; }
+
+    /// <summary>When the current attempt faulted — the instant <see cref="ModuleReload.RetryDueAt"/>
+    /// counts from. Executor-owned; cleared by the re-arm.</summary>
+    public DateTimeOffset? FaultedAt { get; init; }
 
     /// <summary>When the request reached a terminal status. Executor-owned.</summary>
     public DateTimeOffset? CompletedAt { get; init; }
@@ -158,6 +179,11 @@ public record ModuleReloadItem
 
     /// <summary>Why this module could not be reloaded, by name; null when it could.</summary>
     public string? Failure { get; init; }
+
+    /// <summary>True when <see cref="Failure"/> is a CRASH (an exception, an unreachable registry)
+    /// rather than a decided answer — such a failure makes the request
+    /// <see cref="ModuleReloadStatus.Faulted"/>, which is retried, never final.</summary>
+    public bool Transient { get; init; }
 }
 
 /// <summary>What ONE process reports it loaded for a reload — written by that process alone.</summary>
@@ -196,7 +222,7 @@ public sealed record ModuleReloadTicket(string? Path, string? Refusal)
 /// request, the instance's executor (registered by the plugin catalog) does the rest. See
 /// <see cref="ModuleReloadRequest"/> and <c>Doc/Architecture/ModuleReload</c>.
 /// </summary>
-public static class ModuleReload
+public static partial class ModuleReload
 {
     /// <summary>The longest caller-supplied request id; longer ids are refused rather than cut.</summary>
     public const int MaxIdLength = 80;
@@ -337,6 +363,118 @@ public static class ModuleReload
                 $"{counted.Count} replica(s) report "
                 + string.Join(", ", targets.Select(i => $"{i.Module} {i.TargetVersion}")) + " loaded")
             : new ModuleReloadVerdict(false, false, string.Join("; ", mismatches));
+    }
+}
+
+public static partial class ModuleReload
+{
+    /// <summary>
+    /// A request's end state over its items — pure: <see cref="ModuleReloadStatus.Done"/> with no
+    /// failure; <see cref="ModuleReloadStatus.Faulted"/> when any failing item CRASHED
+    /// (<see cref="ModuleReloadItem.Transient"/>) — retried, whatever else was decided, because the
+    /// crashed module's answer is still unknown; <see cref="ModuleReloadStatus.Failed"/> when every
+    /// failure is a decided answer.
+    /// </summary>
+    /// <param name="items">The per-module rows.</param>
+    /// <param name="failure">The request's failure sentence, or null.</param>
+    public static string OutcomeOf(IEnumerable<ModuleReloadItem> items, string? failure) =>
+        failure is null
+            ? ModuleReloadStatus.Done
+            : items.Any(i => i.Failure is not null && i.Transient)
+                ? ModuleReloadStatus.Faulted
+                : ModuleReloadStatus.Failed;
+
+    /// <summary>The longest wait between two retries of a faulted request, in backoff units
+    /// (<c>2^MaxBackoffDoublings</c> × the unit). The doubling stops here; the retries never do.</summary>
+    public const int MaxBackoffDoublings = 5;
+
+    /// <summary>
+    /// When a <see cref="ModuleReloadStatus.Faulted"/> request is next due — pure. The backoff is
+    /// the reconcile pass's own cadence, doubled per attempt: <c>FaultedAt + unit × 2^min(Attempt,
+    /// MaxBackoffDoublings)</c>. Null for any other status. No timer reads this: the reconcile pass
+    /// that already runs (boot, the safety net, an explicit reconcile) asks whether it is due.
+    /// </summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="unit">The backoff unit — production passes the safety-net interval.</param>
+    public static DateTimeOffset? RetryDueAt(ModuleReloadRequest request, TimeSpan unit)
+    {
+        if (!string.Equals(request.Status, ModuleReloadStatus.Faulted, StringComparison.Ordinal))
+            return null;
+        var since = request.FaultedAt ?? request.RequestedAt;
+        var factor = 1L << Math.Clamp(request.Attempt, 0, MaxBackoffDoublings);
+        return since + TimeSpan.FromTicks(Math.Max(0, unit.Ticks) * factor);
+    }
+
+    /// <summary>
+    /// The re-armed request — pure: the same node, the next attempt, every executor-owned field of
+    /// the faulted attempt cleared (its items, activation, replica reports, restart stamp, failure),
+    /// the audit log kept and extended. The executor then runs it from
+    /// <see cref="ModuleReloadStatus.Requested"/>. A retry may therefore issue its own restart: the
+    /// one-restart rule holds per attempt.
+    /// </summary>
+    /// <param name="request">The faulted request.</param>
+    /// <param name="now">The re-arm instant, for the log line.</param>
+    public static ModuleReloadRequest Rearm(ModuleReloadRequest request, DateTimeOffset now) => request with
+    {
+        Status = ModuleReloadStatus.Requested,
+        Attempt = request.Attempt + 1,
+        Items = ImmutableList<ModuleReloadItem>.Empty,
+        Activation = null,
+        ActivationDetail = null,
+        LiveSwapRequestedAt = null,
+        RestartRequestedAt = null,
+        Replicas = ImmutableDictionary<string, ModuleReloadReplica>.Empty,
+        Failure = null,
+        FaultedAt = null,
+        CompletedAt = null,
+        Log = request.Log.Add($"{now:u} retry {request.Attempt + 1}: re-armed after the fault '{request.Failure}'"),
+    };
+
+    /// <summary>
+    /// 🚨 The retry half of <see cref="ModuleReloadStatus.Faulted"/>: lists the requests (a LISTING
+    /// of <see cref="ModuleReloadRequest.Namespace"/> — the CQRS-sanctioned shape), reads each one
+    /// the listing does not show as finished from its OWN node stream (a listing's content can be
+    /// behind), and re-arms (<see cref="Rearm"/>) every one whose <see cref="RetryDueAt"/> is at or
+    /// before <paramref name="now"/> — a write through <c>GetMeshNodeStream(path).Update</c>, as
+    /// System, which also activates the request's own hub where the executor runs. Called by the
+    /// plugin catalog's reconcile pass; it has no timer of its own. Emits the paths it re-armed,
+    /// once; never faults (an unreadable listing re-arms nothing this pass, and the next pass asks
+    /// again).
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="unit">The backoff unit (<see cref="RetryDueAt"/>).</param>
+    /// <param name="now">The pass's clock.</param>
+    public static IObservable<ImmutableList<string>> RetryFaulted(IMessageHub hub, TimeSpan unit, DateTimeOffset now)
+    {
+        var mesh = hub.ServiceProvider.GetService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        if (mesh is null || access is null)
+            return Observable.Return(ImmutableList<string>.Empty);
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{ModuleReloadRequest.Namespace} scope:children nodeType:{ModuleReloadRequest.NodeType}"))
+                .Take(1)
+                .Timeout(ActivationRecycle.ReadBudget))
+            .SelectMany(change => change.Items
+                // A request the listing shows as finished is final either way; only the rest are read.
+                .Where(n => n.ContentAs<ModuleReloadRequest>(hub.JsonSerializerOptions) is not { } listed
+                            || !ModuleReloadStatus.IsTerminal(listed.Status))
+                .Select(n => n.Path)
+                .ToObservable()
+                .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                    .Select(node => node.ContentAs<ModuleReloadRequest>(hub.JsonSerializerOptions))
+                    .SelectMany(current => current is not null && RetryDueAt(current, unit) is { } due && due <= now
+                        ? access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                                .Update<ModuleReloadRequest>(r =>
+                                    RetryDueAt(r, unit) is { } stillDue && stillDue <= now ? Rearm(r, now) : r))
+                            .Take(1)
+                            .Select(_ => path)
+                        : Observable.Empty<string>())
+                    .Catch((Exception _) => Observable.Empty<string>()))
+                .Concat()
+                .ToList())
+            .Select(paths => paths.ToImmutableList())
+            .Catch((Exception _) => Observable.Return(ImmutableList<string>.Empty))
+            .Take(1);
     }
 }
 

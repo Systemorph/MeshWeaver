@@ -520,6 +520,7 @@ public sealed class PluginBundleClient
                 {
                     Registry = _registryUrl,
                     Failure = $"landing failed — the module is unchanged: {ex.Message}",
+                    Transient = true,
                 });
             });
     }
