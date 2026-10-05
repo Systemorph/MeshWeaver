@@ -1,11 +1,8 @@
 # Start core's stage 2 the moment stage 1 turns green for a held pull request head.
 #
-# 🔀 TRANSITION ONLY (policy suites-parallel-with-review): the stage gate no longer
-# holds a new head for its review, so this listener only releases runs that were HELD BEFORE that
-# change (their gate ran the old lane). It acts on nothing else — `advance_action` re-runs only a run
-# whose stage gate FAILED for stage 1 — and is deleted once no open pull request's newest run carries
-# such a hold (Doc/Architecture/StagedPullRequestPipeline → "Transition"). Re-adopt it together with
-# `review-before-suites: true`, never one without the other.
+# 🔀 REQUIRED (policy review-then-suites): the stage gate holds every pull request head for its
+# review by default, and this listener is what releases it — a gate without its listener holds
+# forever. Never delete one without the other.
 #
 # The thin caller of node-repo-stage-advance.yml (the lane carries the rationale). Core's held runs
 # are `dotnet-test.yml`'s pull_request runs, whose `stage-gate` job (node-repo-stage-gate.yml) failed

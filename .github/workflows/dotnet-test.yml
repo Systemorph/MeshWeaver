@@ -450,9 +450,9 @@ jobs:
       tests-mode: ${{ steps.scope.outputs.mode }}
       tests-projects: ${{ steps.scope.outputs.projects }}
       tests-reason: ${{ steps.scope.outputs.reason }}
-      # THE ONE MAIN THIS RUN TESTS AGAINST (policy suites-test-fresh-merge). On a pull request every
-      # suite job below merges the head onto THIS sha — resolved once, here, so the build and the
-      # shards that read its artifacts test the byte-identical tree. Empty on any other event.
+      # The main the green-tree PROBE merged onto (policy suites-test-fresh-merge). The suites do not
+      # use it: `build` resolves main again as the suites start (a held run is released hours later),
+      # and the shards, doc-gate, platform-compat and the marker take the build's. Empty off PRs.
       main-sha: ${{ steps.fresh.outputs.main-sha }}
     steps:
     - uses: actions/checkout@v7
@@ -601,11 +601,9 @@ jobs:
   # away from the gate that needs it is how a proof and its subject drift apart.
 
   # ── THE STAGE GATE of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
-  # 🔀 Under policy suites-parallel-with-review the lane holds on STAGE 0 only: the build
-  # and the shards start as soon as the static controls are green and run IN PARALLEL with the
-  # automatic review; `Automatic review answered` stays a required check, so the merge still waits for
-  # every finding answered. The paragraph below is the review-first ordering, now the lane's opt-in
-  # (`review-before-suites: true`).
+  # 🔀 Policy review-then-suites: review first (this gate), then the suites on a fresh merge with the
+  # current main (policy suites-test-fresh-merge), then the arm once the review is answered and every
+  # required check is green.
   # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
   # must pass before we start test. and we arm only at end of test". On a pull request the build and
   # the shards wait for (a) the cheap static controls below — stage 0, which fail fast — and (b) the
@@ -660,14 +658,23 @@ jobs:
     if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
     timeout-minutes: 25
     runs-on: ubuntu-latest
+    outputs:
+      # THE MAIN THE SUITES TEST AGAINST, resolved HERE — as the suites START. A run held at the stage
+      # gate (policy review-then-suites) is released by `rerun-failed-jobs`, which re-runs this job
+      # but NOT a green `precheck`, so precheck's main may be hours old by then. Every suite job and
+      # the green-tree marker take this one; empty off pull requests.
+      main-sha: ${{ steps.fresh.outputs.main-sha }}
+      tree: ${{ steps.tested.outputs.tree }}
     steps:
     - uses: actions/checkout@v7
-    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
-    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
-    - name: Merge the head onto the run's current main
+    # 🔀 Test the head merged onto the CURRENT main, resolved now (policy suites-test-fresh-merge,
+    # Doc/Architecture/FreshMergeUnderTest). A no-op off pull requests.
+    - name: Merge the head onto the current main
+      id: fresh
       uses: ./.github/actions/fresh-merge
-      with:
-        main-sha: ${{ needs.precheck.outputs.main-sha }}
+    - name: Record the tested tree
+      id: tested
+      run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
@@ -863,12 +870,12 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
-    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # 🔀 Test the head merged onto the main the BUILD compiled (build's main-sha) — policy
     # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
-    - name: Merge the head onto the run's current main
+    - name: Merge the head onto the main the build compiled
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.precheck.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha }}
     - name: Setup .NET
       uses: actions/setup-dotnet@v6
       with:
@@ -1888,12 +1895,12 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
-    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # 🔀 Test the head merged onto the main the BUILD compiled (build's main-sha) — policy
     # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
-    - name: Merge the head onto the run's current main
+    - name: Merge the head onto the main the build compiled
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.precheck.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 10.0.x
@@ -2085,12 +2092,12 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
-    # 🔀 Test the head merged onto the run's ONE current main (precheck's main-sha) — policy
+    # 🔀 Test the head merged onto the main the BUILD compiled (build's main-sha) — policy
     # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
-    - name: Merge the head onto the run's current main
+    - name: Merge the head onto the main the build compiled
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.precheck.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha }}
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: 10.0.x
@@ -3775,8 +3782,7 @@ jobs:
 
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
-    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too
-    # (stage 0 only since policy suites-parallel-with-review).
+    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for stage 1 too.
     needs: [preflight, stage-gate]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
@@ -4019,11 +4025,11 @@ jobs:
     # The green-tree marker below must point at the commit whose tree was TESTED — on a pull request
     # that is the fresh merge onto precheck's main sha (byte-identical: a pure function of that sha
     # and the head), not github.sha. Not a gate: it only re-derives the tested commit for the push.
-    - name: Re-derive the tested commit (fresh merge onto precheck's main)
-      if: needs.precheck.outputs.main-sha != ''
+    - name: Re-derive the tested commit (fresh merge onto the main the build compiled)
+      if: needs.build.outputs.main-sha != ''
       uses: ./.github/actions/fresh-merge
       with:
-        main-sha: ${{ needs.precheck.outputs.main-sha }}
+        main-sha: ${{ needs.build.outputs.main-sha }}
     # ── Reuse path: build+test skipped because the tree is already green ──
     # This job still runs (and succeeds), so it is the stable required check and
     # it keeps the run's conclusion `success` for main-cd's workflow_run gate.
@@ -4040,7 +4046,7 @@ jobs:
         if [ "$MODE" = "stage0-red" ]; then
           echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
-          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the stage gate job for exactly which (this run predates or opted into the review hold). The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
+          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
         fi
         echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
         exit 1
@@ -4479,7 +4485,9 @@ jobs:
       continue-on-error: true
       run: |
         set -euo pipefail
-        tree="${{ needs.precheck.outputs.tree }}"
+        # The TESTED tree is the build's (a held run's build resolves main when it is released);
+        # precheck's is only the tree it probed, and equals it on a run that was not held.
+        tree="${{ needs.build.outputs.tree || needs.precheck.outputs.tree }}"
         # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
         # REUSES this marker can name the run that actually gathered the evidence instead of
         # leaving the reader to infer it from a run list that cannot distinguish the two

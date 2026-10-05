@@ -2,27 +2,26 @@
 Name: Staged Pull Request Pipeline
 Category: Architecture
 Description: >-
-  Every pull request head passes cheap static controls first (fail fast), then runs its expensive
-  suites IN PARALLEL with the automatic review, and arms only when both are green — the review stays a
-  required check for the merge. Why the review-first ordering was reversed (idle runners while ~50
-  reviews queued), what each stage runs, why a hold is red and never skipped, the review-first ordering
-  as a per-caller opt-in (event-driven advance, three loud releases), and the measurements.
+  Every pull request head moves through four stages in order — cheap static controls, the automatic
+  review landed and answered, the expensive suites on a FRESH merge with the current main, and arming
+  only once the review is answered AND every required check is green (policy review-then-suites). What
+  each stage runs, what moves a head on (events, not polling), the three loud releases that keep a
+  reviewer outage from freezing the fleet, why a hold is red and never skipped, a day of running the
+  suites in parallel and why it was reverted, and the measured saving.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/></svg>
 ---
 
 # Staged Pull Request Pipeline
 
-> **🔀 The suites now run IN PARALLEL with the review** — policy
-> [`suites-parallel-with-review`](../PolicyNotProse). The stage gate holds a head on **stage 0 only**;
-> the build, the shards and every heavy leg start as soon as the static controls are green, while the
-> automatic review runs beside them. **Merging is unchanged**: it still needs the green suites AND the
-> review landed with every thread answered (core's required `Automatic review answered`, Plugins'
-> required `internal-review`), and arming still waits for both. Every suite also tests the head merged
-> onto the CURRENT main — [Fresh Merge Under Test](../FreshMergeUnderTest). The review-first ordering
-> below stays available per caller as `review-before-suites: true`; see
-> [Suites in parallel with the review](#suites-in-parallel-with-the-review) for why and what changed.
+> **🔀 Review first, then the suites, then the arm** — policy
+> [`review-then-suites`](../PolicyNotProse), the fleet-wide order. The stage gate holds a head until
+> its review landed and every finding is answered; the suites then test the head merged onto the
+> CURRENT main ([Fresh Merge Under Test](../FreshMergeUnderTest)); and auto-merge is armed only once
+> the review is answered AND every required check is green. A short-lived parallel default
+> (`suites-parallel-with-review`) was reverted the same day — see
+> [A day in parallel](#a-day-in-parallel-and-why-it-was-reverted).
 
-**The review-first decision this page was written for (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
+**Decision (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
 also other controls such as no client etc. must pass before we start test. and we arm only at end of
 test"*.
 
@@ -34,50 +33,33 @@ one before it is green **for that head**:
 | **0 — static controls** | shape/validate, confidential terms ("no client names"), AGENTS.md shared-rule blocks, generated files and locks, repo policy gates, CI inputs (core: shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell, cross-repo pair) | minutes, one light runner each | they finish; a red one **fails fast** — nothing heavy starts |
 | **1 — automatic review** | the head's `internal-review` (App `systemorph-com`, the steward on the control instance) has COMPLETED and every thread a reviewer opened has a reply from a person | the reviewer's time, no runner | `check_run: completed` of the review, a person's reply — see [the event half](#what-moves-a-head-on--events-not-polling) |
 | **2 — expensive suites** | core: build + test shards, doc gate, platform-compat, the dependent-suites request · Plugins: module bundles, compile-check, gate shards, portal hosts (every leg behind `admission`) | the run's runner-minutes, almost all of them | the suites finish |
-| **3 — arming** | the control plane's babysitter arms auto-merge (Plugins #2828) | none | every required check green AND the arm gate (`check-review-answered.py` → `arm_readiness`) |
+| **3 — arming** | the control plane's babysitter arms auto-merge (Plugins `PrArming`, #2828) | none | the arm gate (`check-review-answered.py` → `arm_readiness`): the review answered (conditions 1–3) AND every required status check of the base `success` on the head (condition 4, `required_checks_green`) |
 
 The order is the point. Stage 1 is the stage most likely to send the author back to the keyboard, so
 it runs before the stage that costs the most. A finding answered with a fix push makes a NEW head,
 and a new head restarts at stage 0 — the suites never ran on the head the review changed.
 
-## Suites in parallel with the review
+## A day in parallel, and why it was reverted
 
-**Why it was reversed.** The review-first ordering saves runner-minutes only while runners are the
-scarce resource. Once the reviewer became the queue, it saved nothing and cost lead time: on
-2026-10-05 09:00Z, with ~50 reviews in flight, core had 31 jobs running and **0 waiting**, Plugins
-30 running and **0 waiting** — idle capacity — while every held pull request waited for its review
-before a single test ran. The maintainer's directive: run the PR test suites in parallel with the
-internal review instead of after it; merging still requires both.
+On 2026-10-05 the suites briefly ran IN PARALLEL with the review (`suites-parallel-with-review`: the
+stage gate held on stage 0 only), because with ~50 reviews in flight the runners sat idle (09:00Z:
+core 31 jobs running / 0 waiting, Plugins 30 / 0). The maintainer corrected it the same day: the
+fleet-wide order is **review first → suites against a fresh merge with the current main → arm only
+when the review is answered and the suites are green** (policy `review-then-suites`, which replaces
+`suites-parallel-with-review` in the register). What survived the reversal:
 
-**What changed** (policy `suites-parallel-with-review`):
+- the **fresh merge** on every suite job ([Fresh Merge Under Test](../FreshMergeUnderTest)) — a held
+  run released hours later tests today's main, not the merge GitHub built at the push;
+- the gate job's name, `Stage gate: may the suites start` (formerly `Stage 1: review landed and
+  answered`; the event half recognises both);
+- the opt-out, `review-before-suites: false`, for a caller that wants a test reading early — it never
+  changes the merge or the arm, which still need the answered review.
 
-| | Review-first (opt-in) | **Parallel (default)** |
-|---|---|---|
-| Stage gate holds on | stage 0 red, review missing, thread unanswered | **stage 0 red only** |
-| Suites start | when the review landed and was answered | **as soon as stage 0 is green** |
-| A review landing / a reply | re-runs the held run (`stage-advance.yml`) | **re-runs nothing** — the suites already ran |
-| Merge needs | green suites + answered review | green suites + answered review (unchanged) |
-| Arming needs | green checks + `arm_readiness` | unchanged |
-| Gate job name | `Stage gate: may the suites start` (was `Stage 1: review landed and answered`) | same |
-
-**Nothing became skippable.** The review requirement was never the stage gate: it is its own
-required context in both repositories, so a head whose review is missing or unanswered still reads
-red on that context and cannot merge or arm. The stage gate still FAILS on a red stage-0 control —
-never skips — and still answers `not-staged` in green off pull requests.
-
-**Expected effect on lead time.** A head's time to a green wall drops by the review wait that sat in
-front of the suites: the measured review latency was a median 16.6 min (p90 ~2 h) in core and 31.9 min
-(p90 ~2 h) in Plugins (table below). Time to MERGE drops by min(review + answers, suites): the two now
-overlap instead of adding. The cost is the one the table below measured — up to ~24 % of runner-minutes
-spent on heads a findings review then replaces — accepted while runners sit idle. A finding answered by
-a fix push makes a new head, which runs again; a reply alone re-runs nothing.
-
-**Transition.** Runs held under the review-first lane before the change keep failing their gate until
-their review lands or the head is pushed again. Core's and Plugins' `stage-advance.yml` stay deployed
-to release exactly those (`advance_action` re-runs only a run whose gate FAILED for stage 1, and
-recognises the gate's old job name), and are deleted once no open pull request's newest run carries
-such a hold. A caller that opts back into `review-before-suites: true` must carry the listener again
-— a gate without its listener holds forever.
+**Arming after green.** Condition 4 of the arm gate (`required_checks_green`) refuses while any
+required status check of the base branch is missing, pending or red on the current head — read from
+BOTH rulesets and classic protection, the review's own contexts excluded (they are conditions 2–3),
+and an empty required set refused rather than read as "all green". MeshWeaver.Plugins' `PrArming`
+ports the same condition.
 
 ## Measured — why the review-first ordering saves runners (and when it does not)
 
@@ -299,8 +281,8 @@ that release.
 
 | Repository | Stage gate | Event half | State |
 |---|---|---|---|
-| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` (transition only) | parallel (default) |
-| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` (transition only) | parallel (default) |
+| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | review first (default) |
+| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | review first (default) |
 | the satellites | not yet — they run as before | — | adopt with the same two edits: a `stage-gate` job (`node-repo-stage-gate.yml@main`) that their heavy jobs need with `result == 'success'`, and the thin `stage-advance.yml`; plus their rows in `.github/lane-caller-grants.yml` |
 
 A repository that has the gate but not the listener would hold forever, which is why the two are
@@ -336,10 +318,6 @@ There are two shared pools, and runs are dispatched in tier order: express, trun
   exactly as before.
 
 ## Reading a held pull request
-
-Under the parallel default a head is held only for a red **stage-0** control: fix it and push. The
-review's state is read on its own required check (`Automatic review answered` / `internal-review`).
-The steps below are for a run held under the review-first ordering:
 
 1. The red front door (`Consolidate test results` / `Admitted by the build queue`) names the stage.
 2. Open **`Stage gate: may the suites start`** (formerly `Stage 1: review landed and answered`) — it says *waiting* (with minutes of the fallback
