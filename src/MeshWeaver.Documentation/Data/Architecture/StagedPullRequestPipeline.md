@@ -204,6 +204,25 @@ quarter of all Plugins heads into stage 2 before their review — exactly the sp
 for the review anyway: the fallback buys an early test READING, never an earlier merge. A caller may
 pass `fallback-minutes` to both lanes (they must agree), and `tests-before-review` is the per-PR override.
 
+**Generated-only pull requests owe no review.** main's own jobs propose generated files as pull
+requests — `settle-locks` (every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock` plus each
+root's `minMeshVersion`). There is nothing to review, and the settle job rewrites the head on every
+main merge, so a per-head fallback clock restarted forever: during the 2026-10-04 review outage the
+held settle PR (Plugins #2860) stopped module publishing. Such a pull request skips stage 1 on
+PROVENANCE (`generated_only`): authored by the App that writes them (`meshweaver-cloud[bot]`, by id),
+every commit that App's (the commit listing must cover the pull request's own commit count), every
+changed file a lock or a root `index.json` whose changed lines are each NOTHING BUT a
+`"minMeshVersion": "…"` key/value. A person's pull request that touches a lock is staged like any
+other, a generated-only DRAFT is held as a draft, and for any pull request the App authored the
+fallback clock keys on the PULL REQUEST's creation, not the head.
+
+What this skip is NOT: a merge gate. The required `Automatic review answered` lane never consults
+`generated_only`, so the skip only starts stage 2's suites earlier. Its provenance reads GitHub's
+resolved commit author, which follows the author email — so it is as strong as the App's branch is
+closed to other pushers (the App's commits are unsigned today, so a signature cannot be required
+until the producing jobs commit through the API), and a lock's CONTENT is held exact by
+`Validate node repos`, not by this check.
+
 **Stage-0 blockers keep their own rules.** A control whose INPUT is absent (the confidential-terms
 denylist secret on a fork or a Dependabot run) already *skips with a notice* by its own design and so
 does not hold stage 2. A control that goes RED on infrastructure (an unreadable API, a lost runner) is
