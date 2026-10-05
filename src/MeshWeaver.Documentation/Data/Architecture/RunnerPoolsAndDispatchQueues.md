@@ -93,9 +93,10 @@ Two rules differ from the CI queue:
   clean finish resets it. A slow, stalled or capped round holds nothing back. The same rule holds one
   layer down, where each dispatched ROUND is admitted (the AI engine's shared admission, MeshWeaver.Plugins
   `AI/AgentAdmission`): the relative per-lane share it applied once a model pool was measured exhausted
-  (floors, borrowing, a cost guard, a budget reserve) is removed, and so are the review ledger's share
+  (floors, borrowing, a cost guard, a budget reserve) goes, and so do the review ledger's share
   and the fleet coordinator's — a 429 backs off that one pool, a daily limit, credit or rejected key
-  closes the provider with a probe, and nothing else is a throttle. The executors (the
+  closes the provider with a probe, and nothing else is a throttle. That removal is MeshWeaver.Plugins#2896;
+  until it merges, the per-lane share still applies to admitted rounds. The executors (the
   control instance's pods) scale with KEDA on the queues' waiting jobs: the chart's
   `keda.queueDepth`, a `metrics-api` trigger on the portal's `GET /api/queues/depth`, set from the
   record's `autoscaling.scaleOnQueueDepth`.
