@@ -1475,7 +1475,8 @@ public sealed class GitHubSyncService
 
     /// <summary>
     /// The outcome literal recorded when an import wrote NOTHING and every module it declined was
-    /// held on an unmet <c>requires</c> — a loaded dependency below the stated range — rather than
+    /// held on an unmet <c>requires</c> — a LOADED dependency below the stated range (an absent
+    /// dependency is not judged; that module syncs) — rather than
     /// on a platform floor. Its remedy is loading a satisfying dependency, never rolling the
     /// platform, so it is never recorded as <see cref="DeclinedOutcome"/>.
     /// </summary>

@@ -100,10 +100,25 @@ public class ModuleSyncDependencyFloorTest
         reading.Requires.Should().BeEmpty();
     }
 
-    /// <summary>The loaded dependency is found case-insensitively, as the exact key is.</summary>
+    /// <summary>
+    /// The loaded dependency is found case-insensitively, as the exact key is. Observed directly
+    /// (#6173 review): the decline names the loaded 'AI' module and its version — an ABSENT
+    /// dependency is not judged at all and would sync (see <see cref="WhatCannotBeJudged_Syncs"/>),
+    /// and the reading states no platform floor, so only the case-insensitive match can produce
+    /// this outcome. Its converse: a SATISFYING version under the differently-cased key syncs.
+    /// </summary>
     [Fact]
     public void TheLoadedDependency_IsMatchedCaseInsensitively()
-        => Judge(Hosting("ai@^1.21.0"), AiAt1204).Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+    {
+        var declined = Judge(Hosting("ai@^1.21.0"), AiAt1204).Single();
+        declined.Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
+        declined.UnmetRequirement.Should().Be("ai@^1.21.0");
+        declined.Reason.Should().Contain("MeshWeaver.AI").And.Contain("1.20.4");
+
+        Judge(Hosting("ai@^1.21.0"),
+                ImmutableDictionary<string, LoadedPackageModule>.Empty.Add("AI", new("MeshWeaver.AI", "1.21.3")))
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
+    }
 
     /// <summary>
     /// #6111 review: an import held ONLY on an unmet requirement is not a platform-floor decline —
@@ -121,7 +136,9 @@ public class ModuleSyncDependencyFloorTest
             UnmetRequirementModules = ["Hosting (requires AI@^1.21.0)"],
         };
         GitHubActivityExtensions.ModulesRequirementUnmetLine(held)?.Message
-            .Should().Contain("Hosting (requires AI@^1.21.0)").And.NotContain("rolled forward");
+            .Should().Contain("Hosting (requires AI@^1.21.0)").And.NotContain("rolled forward")
+            .And.NotContain("Every other module synced",
+                "the line is emitted on the no-op path too, where nothing was written (#6173 review)");
         GitHubActivityExtensions.ModulesRequirementUnmetLine(held with { UnmetRequirementModules = [] }).Should().BeNull();
     }
 }
