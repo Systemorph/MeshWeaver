@@ -718,7 +718,8 @@ public static class PersistenceExtensions
                 providers,
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
-                sp.GetService<ILoggerFactory>());
+                sp.GetService<ILoggerFactory>(),
+                sp.GetService<ModuleContexts>());
         });
 
         // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
@@ -782,7 +783,8 @@ public static class PersistenceExtensions
                 providers,
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
-                sp.GetService<ILoggerFactory>());
+                sp.GetService<ILoggerFactory>(),
+                sp.GetService<ModuleContexts>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 

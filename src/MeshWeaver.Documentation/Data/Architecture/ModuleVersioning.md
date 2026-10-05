@@ -51,7 +51,7 @@ key** `c<major:D3>e<epoch:D3>` — e.g. `c003e001` — never on a per-build iden
 | `epoch` | `src/MeshWeaver.Compiler/platform-compatibility.json` → `"epoch"` — the ONE source: `Directory.Build.props` reads it into `$(PlatformCompatibilityEpoch)` and stamps `AssemblyMetadata("MeshWeaverCompatibilityEpoch")` into every assembly, and the runtime reads the same file embedded (`PlatformCompatibility.Declaration`) |
 | read off a foreign host | `FrameworkBuildIdentity.ResolveIdentityForDirectory(/app)` — the anchor `MeshWeaver.Compiler.dll`'s metadata, no manifest needed (`mw-plugin-test framework-identity … --expect` compares this) |
 | the store tag | the whole 8-char key (`v<version>-c003e001-<hash>.dll`), so every build of an epoch hits the previous build's bytes |
-| a dependency record's platform entries | `compat:c003e001` (`CompiledDependencies.CreateCompatibilityIdResolver`, `ToolchainIdOf`) — a platform build moves no record; a MODULE entry is still its `min:` floor |
+| a dependency record's platform entries | `compat:c003e001` (`CompiledDependencies.CreateCompatibilityIdResolver`, `ToolchainIdOf`) — a platform build moves no record; a MODULE entry is its `pkg:` package-version floor when the module carries one, else its `min:` floor ([A floor must move with the module](../DependencyRecordFloor)) |
 
 The per-build surface/commit identity (`s<hash>` / `g<sha>`) is **provenance only** —
 `FrameworkBuildIdentity.BuildProvenance`, `ProducerStatedProvenance`,

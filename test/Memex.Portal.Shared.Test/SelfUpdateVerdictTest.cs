@@ -48,6 +48,8 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.HandedOver, true)]
     [InlineData(SelfUpdateOutcome.HandoverFailed, true)]
     [InlineData(SelfUpdateOutcome.RestartHandedOver, false)]
+    // A module that went LIVE was already landed here — nothing newer was waiting in the registry.
+    [InlineData(SelfUpdateOutcome.ActivatedLive, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -83,6 +85,8 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.HandoverFailed("3.0.1", "401 Unauthorized"),
             SelfUpdateVerdict.RestartHandedOver(
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)"),
+            SelfUpdateVerdict.ActivatedLive(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "went live without a restart: MeshWeaver.Test.Widget"),
         ];
 
         Assert.Equal(
