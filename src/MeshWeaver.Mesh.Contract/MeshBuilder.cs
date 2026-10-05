@@ -993,6 +993,8 @@ public partial record MeshBuilder
     /// straight into the root — and the reason is recorded on the generation, which keeps it
     /// restart-required.
     /// </summary>
+    private bool moduleHostedServicesHostRegistered;
+
     private List<MeshNode> InstallModuleServices(ModuleGeneration generation)
     {
         var contributions = generation.Contributions
@@ -1009,6 +1011,15 @@ public partial record MeshBuilder
             if (probed.Blockers.IsEmpty)
             {
                 generation.Services = probed;
+                // ONE host for every held module's background services, registered where the first
+                // module's would have been — the position its hosted services always started at.
+                if (!moduleHostedServicesHostRegistered)
+                {
+                    moduleHostedServicesHostRegistered = true;
+                    services.AddSingleton<IHostedService>(sp => new ModuleHostedServicesHost(
+                        sp.GetRequiredService<ModuleContexts>(),
+                        sp.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.IncompatibleModule")));
+                }
                 return ModuleServiceForwarding.AddForwarders(services, probed);
             }
             generation.RootServiceBlockers = probed.Blockers;
