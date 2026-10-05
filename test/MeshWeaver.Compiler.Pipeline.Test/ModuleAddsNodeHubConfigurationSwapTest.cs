@@ -53,9 +53,9 @@ public sealed class ModuleAddsNodeHubConfigurationSwapTest : MonolithMeshTestBas
 
     private Type? PerNodeType()
     {
-        var configure = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>().DefaultNodeHubConfiguration;
-        configure.Should().NotBeNull();
-        var configuration = configure!(new MessageHubConfiguration(null, new Address("probe", "live-nodehub")));
+        var configure = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>().DefaultNodeHubConfiguration
+            ?? throw new InvalidOperationException("the mesh carries no default per-node hub configuration");
+        var configuration = configure(new MessageHubConfiguration(null, new Address("probe", "live-nodehub")));
         return configuration.TypeRegistry.GetType("LiveNodeHubMarker");
     }
 

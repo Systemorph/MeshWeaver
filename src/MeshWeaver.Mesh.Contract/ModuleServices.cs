@@ -166,11 +166,16 @@ public sealed class ModuleServices : IDisposable
     {
         blocker = null;
         var type = descriptor.ServiceType;
-        // A keyed registration is forwarded under its OWN key — unless the key itself is a module
-        // object, which a root registration would then hold (and pin) for the life of the process.
-        if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key && IsOwned(key.GetType(), module))
+        // A keyed registration is forwarded under its OWN key — unless the key pins the module: a key
+        // that is a module object, or a key that IS a module type (the keyed-by-marker-type shape,
+        // `AddKeyedSingleton<IService>(typeof(SomeModuleType), …)`, whose runtime type is CoreLib's
+        // RuntimeType and so passes an instance check). A root registration would hold either for the
+        // life of the process, and with it the module's collectible load context.
+        if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key
+            && (IsOwned(key.GetType(), module) || (key is Type keyType && IsOwned(keyType, module))))
         {
-            blocker = $"its service key is a module type ({key.GetType().Name}) — the root would hold it";
+            var named = key is Type t ? t.Name : key.GetType().Name;
+            blocker = $"its service key is a module type ({named}) — the root would hold it";
             return ModuleServiceRoute.Private;
         }
         var implementation = ImplementationTypeOf(descriptor);

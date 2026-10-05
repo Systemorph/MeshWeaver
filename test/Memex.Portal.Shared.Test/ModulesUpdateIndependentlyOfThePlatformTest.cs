@@ -1,5 +1,3 @@
-#pragma warning disable CS1591
-
 using System;
 using System.IO;
 using System.Linq;
@@ -30,8 +28,10 @@ namespace Memex.Portal.Shared.Test;
 /// <item>N+2 was built against an OLDER platform build (a different recorded framework identity, a floor
 /// below P) — compatible, so it lands and goes live: no identity-equality gate, no seal, no roll;</item>
 /// <item>N+3 declares a floor ABOVE P — declined BY NAME by the same decision the reconciler takes
-/// (<see cref="ModuleUpdateDecision"/> with <see cref="PlatformFloor"/>), M keeps serving N+2, while a
-/// SIBLING module S updates live in the same pass.</item>
+/// (<see cref="ModuleUpdateDecision"/> with <see cref="PlatformFloor"/>, called directly: the decline
+/// comes BEFORE anything lands, so no above-floor bundle reaches the landing path, and the reconciler's
+/// wiring of the decision is not exercised here). The next activation pass then takes only the
+/// SIBLING module S's landed update, while M keeps serving N+2.</item>
 /// </list>
 /// Plus the landing refusal: a bundle that carries a platform assembly is refused, naming it (negative
 /// control: the same bundle without it lands).
@@ -104,7 +104,8 @@ public sealed class ModulesUpdateIndependentlyOfThePlatformTest : MonolithMeshTe
         (await Probe(M, ct)).Should().Be("M v3",
             "a module built against an older compatible platform goes live with no new image, no roll and no seal");
 
-        // N+3: a floor ABOVE P — declined by name; the sibling S updates live in the same pass.
+        // N+3: a floor ABOVE P — declined by name BEFORE it lands (the reconciler's decision, called
+        // directly); the next activation pass takes only the sibling S, and M stays on N+2.
         var held = ModuleUpdateDecision.Decide(
             bundleVersion: "4",
             bundleMinMeshVersion: "99.0.0",

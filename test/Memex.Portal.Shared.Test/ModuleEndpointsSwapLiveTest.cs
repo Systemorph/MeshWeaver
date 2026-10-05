@@ -57,7 +57,7 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
         (await client.GetStringAsync("/live-endpoint")).Should().Be("v2",
             "the route must answer from the new generation, in the running process — no restart");
 
-        (await contexts.Retire(replaced!, Budget).Timeout(Budget).Await()).Should().BeTrue();
+        (await contexts.Retire(replaced ?? throw new InvalidOperationException("committing g2 must hand back the replaced g1"), Budget).Timeout(Budget).Await()).Should().BeTrue();
         replaced = null;
         first = null;
         var drained = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);

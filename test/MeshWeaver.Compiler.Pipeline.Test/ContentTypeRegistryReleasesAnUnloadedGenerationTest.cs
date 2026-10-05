@@ -60,6 +60,7 @@ public sealed class ContentTypeRegistryReleasesAnUnloadedGenerationTest
         compilation.Emit(buffer).Success.Should().BeTrue();
         buffer.Position = 0;
         context = new AssemblyLoadContext(assemblyName, isCollectible: true);
-        return context.LoadFromStream(buffer).GetType(typeName)!;
+        return context.LoadFromStream(buffer).GetType(typeName)
+            ?? throw new InvalidOperationException($"{typeName} is not in the emitted {assemblyName}");
     }
 }

@@ -91,8 +91,11 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
             fire = changed;
             changed = new CancellationTokenSource();
         }
+        // Cancelled, never disposed: its token was handed out through GetChangeToken, and a consumer
+        // that registers on it after a Dispose would get ObjectDisposedException. Once `changed` is
+        // swapped nothing references the old source, so it is simply collected — the shape the
+        // framework's own endpoint data sources use.
         fire.Cancel();
-        fire.Dispose();
     }
 
     private IReadOnlyList<Endpoint> Map()

@@ -204,16 +204,20 @@ query routing rule is a blocker the guard names.
 | `MeshNodeProviderAttribute.Views` + `IViewContributionSource` (`MeshWeaver.Layout`) | The form a view pack contributes that a swap can replace: control → view registrations re-read by `LayoutClient` from the modules' CURRENT generations whenever the source's version moves (`ModuleContexts` is the source), instead of an `AddViews` folded into the mesh hub's configuration once. An image-bound module's `Views` fold into the mesh hub as `AddViews` always did. `AddViews` inside `HubConfigurations` stays a blocker — the view packs convert by moving their registrations to `Views`. |
 | Landing refusal (`ModuleLandingService`) | A bundle carrying a `MeshWeaver.*` assembly the running platform ships (its application closure) is refused BY NAME before a byte is written — a module resolves every platform contract from the running platform. Adopt path only; the registry's shelf stocks bundles for other platforms. |
 
-**Tests:** `ModuleEndpointsSwapLiveTest` (2, real ASP.NET Core routing on a TestServer): the route answers
-from N+1 after the swap with no restart and N is collected; the negative control: a colliding re-map is
-not published and the previous route keeps serving. `ModuleViewsSwapTest` (2): the SAME layout client
-resolves the control to N+1's view after the swap; the negative control: views folded through
-`HubConfigurations`' `AddViews` are a named blocker. `ModulesUpdateIndependentlyOfThePlatformTest` (2): the
-platform stays fixed while M goes N → N+1 → N+2 live through the real landing path — N+2 recorded against
-an older platform build and a floor below the platform, so no identity-equality gate, no seal, no roll —
-an N+3 whose floor is above the platform is declined by name by the reconciler's own decision while a
-sibling module updates live in the same pass; a bundle carrying a platform assembly is refused naming
-it, and the same bundle without it lands.
+**Tests:** `ModuleEndpointsSwapLiveTest` (real ASP.NET Core routing on a TestServer): the route answers
+from N+1 after the swap with no restart and N is collected; a generation that ADDS endpoints is mapped
+live even when boot mapped none; a held module whose boot route collides with the host is refused at
+startup; the negative control: a colliding re-map is not published and the previous route keeps serving.
+`ModuleViewsSwapTest`: the SAME layout client resolves the control to N+1's view after the swap; the
+negative control: views folded through `HubConfigurations`' `AddViews` are a named blocker.
+`ModulesUpdateIndependentlyOfThePlatformTest`: the platform stays fixed while M goes N → N+1 → N+2 live
+through the real landing path — N+2 recorded against an older platform build and a floor below the
+platform, so no identity-equality gate, no seal, no roll. An N+3 whose floor is above the platform is
+declined by name by the reconciler's own decision function (`ModuleUpdateDecision`, called directly —
+the decline happens BEFORE anything lands, so no above-floor bundle reaches the landing path), and the
+next activation pass then takes only the sibling's landed update while M keeps serving N+2; the
+reconciler's own wiring of that decision is not exercised here. A bundle carrying a platform assembly is
+refused naming it, and the same bundle without it lands.
 
 ## What is shipped (slice 7 — the REAL MeshWeaver.AI update goes live; keyed services; added background services)
 
