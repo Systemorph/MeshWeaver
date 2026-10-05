@@ -168,16 +168,24 @@ public class ModuleUpdateLadderSyncTest(ITestOutputHelper output) : MonolithMesh
         repoClient.Trees = repoClient.Trees
             .SetItem(OlderSha, [Page("Page")])
             .SetItem(PushedSha, [Page("Page"), Page("Added")]);
-        var neverTheSeal = repoClient.FetchedRefs.Where(r => r == OlderSha)
-            .Should().NotEmit(within: TestTimeouts.Convergence, cancellationToken: ct);
+        // "Never the sealed commit" is bounded by the import itself, not by a time window: every
+        // fetch is recorded from before the push until the source has LANDED at the pushed commit,
+        // and a redirect to the seal could only happen inside that import. A NotEmit over a full
+        // Convergence window spent ~90 s of CI idling here (108 s for this one test) and pushed its
+        // Hosting.Test part past the shard's wall-clock cap.
+        var everyFetch = ImmutableList<string>.Empty;
+        using var recording = repoClient.FetchedRefs.Subscribe(r => ImmutableInterlocked.Update(ref everyFetch, l => l.Add(r)));
         var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
             .Emit("the pushed commit lands; an older seal is no reason to hold or redirect it");
         (await Anonymously(() => Webhooks.Process("push", PushPayload(PushedSha)), ct)).Should().Be(1);
         (await fetched).Should().Be(PushedSha);
-        await neverTheSeal;
 
         await SourceAt(space, PushedSha, ct);
+        Volatile.Read(ref everyFetch).Should().NotContain(r => r == OlderSha,
+            "an older seal decides only whether prebuilt bytes are adopted — the import never fetches it");
+        Volatile.Read(ref everyFetch).Should().Contain(r => r == PushedSha,
+            "the control: the recording saw the import's own fetch, so the absence above is measured");
     }
 
     /// <summary>
