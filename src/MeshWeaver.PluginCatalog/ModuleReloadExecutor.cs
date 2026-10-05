@@ -58,7 +58,13 @@ public static class ModuleReloadExecutor
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started)
-            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream())
+            // 🚨 The verdict waits for every RUNNING process to report (ModuleReload.Evaluate), so a
+            // roster change — an old pod finally gone after the restart — must re-evaluate too: no
+            // node write accompanies it. Hot and non-replaying, hence the StartWith.
+            .SelectMany(_ => hub.ServiceProvider.GetService<IClusterMembershipFeed>() is { } feed
+                ? hub.GetWorkspace().GetMeshNodeStream()
+                    .CombineLatest(feed.Changes.StartWith(0L), (node, _) => node)
+                : hub.GetWorkspace().GetMeshNodeStream())
             .Select(node => run.Step(node))
             .Concat()
             .Subscribe(
@@ -76,6 +82,7 @@ public static class ModuleReloadExecutor
         private int landingStarted;
         private int restartStarted;
         private int finished;
+        private int fallbackStarted;
 
         private AccessService? Access => hub.ServiceProvider.GetService<AccessService>();
 
@@ -234,9 +241,11 @@ public static class ModuleReloadExecutor
                     .Concat()
                     .ToList())
                 .Select(candidates => candidates
-                    .Where(x => x.Request is { Status: ModuleReloadStatus.AwaitingRestart, RestartRequestedAt: { } at } && at > started)
-                    .OrderByDescending(x => x.Request!.RestartRequestedAt)
-                    .Select(x => ((string, DateTimeOffset)?)(x.Path, x.Request!.RestartRequestedAt!.Value))
+                    .SelectMany(x => x.Request is { Status: ModuleReloadStatus.AwaitingRestart, RestartRequestedAt: { } at } && at > started
+                        ? [(x.Path, At: at)]
+                        : Array.Empty<(string Path, DateTimeOffset At)>())
+                    .OrderByDescending(x => x.At)
+                    .Select(x => ((string, DateTimeOffset)?)(x.Path, x.At))
                     .FirstOrDefault())
                 .Catch((Exception _) => Observable.Return<(string, DateTimeOffset)?>(null));
         }
@@ -247,11 +256,14 @@ public static class ModuleReloadExecutor
         {
             var membership = hub.ServiceProvider.GetService<IClusterMembership>();
             var verdict = ModuleReload.Evaluate(request,
-                process => membership is null || membership.StateOf(process) != ClusterMemberState.Gone);
+                process => membership is null || membership.StateOf(process) != ClusterMemberState.Gone,
+                membership?.AliveMembers);
             if (verdict is null)
                 return Observable.Empty<Unit>();
             if (verdict.SwapFailed && request.Status == ModuleReloadStatus.Activating)
-                return Write(r => r with
+                return Interlocked.Exchange(ref fallbackStarted, 1) != 0
+                    ? Observable.Empty<Unit>()
+                    : Write(r => r with
                 {
                     Status = ModuleReloadStatus.AwaitingRestart,
                     Activation = ModuleReloadActivation.Restart,
@@ -347,8 +359,9 @@ public static class ModuleReloadExecutor
             .Select(installed =>
             {
                 var declaring = installed
-                    .Where(m => !string.IsNullOrWhiteSpace(m.Module))
-                    .Select(m => (Package: m.Id, Module: m.Module!.Trim()))
+                    .SelectMany(m => m.Module is { } module && !string.IsNullOrWhiteSpace(module)
+                        ? [(Package: m.Id, Module: module.Trim())]
+                        : Array.Empty<(string Package, string Module)>())
                     .OrderBy(t => t.Module, StringComparer.OrdinalIgnoreCase)
                     .ToImmutableList();
                 if (wanted is null)

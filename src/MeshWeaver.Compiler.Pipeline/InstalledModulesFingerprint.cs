@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.Mesh;
@@ -30,7 +31,29 @@ public sealed class InstalledModulesFingerprint(IEnumerable<InstalledModuleAssem
     /// for a mesh with no installed modules (stable, distinguishable from the null of
     /// pre-feature definitions).
     /// </summary>
-    public string Hash { get; } = Compute(modules);
+    public string Hash => Compute(modules);
+
+    /// <summary>
+    /// The fingerprint over the modules the mesh's container answers AT EACH READ — the registration
+    /// <c>AddGraph</c> uses. A module in its own load context answers with its CURRENT generation
+    /// (policy <c>module-live-update-default</c>), so after a live swap the hash changes and every
+    /// build stamped with the old one reads as stale, which is what rebuilds a NodeType against the
+    /// new generation on its next activation. The enumerable passed to the primary constructor is
+    /// re-enumerated per read as well, so a caller handing a fixed list keeps a fixed hash.
+    /// </summary>
+    public static InstalledModulesFingerprint Live(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return new InstalledModulesFingerprint(new LiveModuleSet(services));
+    }
+
+    private sealed class LiveModuleSet(IServiceProvider services) : IEnumerable<InstalledModuleAssembly>
+    {
+        public IEnumerator<InstalledModuleAssembly> GetEnumerator() =>
+            services.GetServices<InstalledModuleAssembly>().GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
 
     private static string Compute(IEnumerable<InstalledModuleAssembly> modules)
     {

@@ -164,6 +164,13 @@ public enum SelfUpdateOutcome
     /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
     /// </summary>
     MigrationUnavailable,
+
+    /// <summary>
+    /// A landed module generation was pending and went LIVE in the running process (policy
+    /// <c>module-live-update-default</c>): swapped into its own load context, its hubs recycled —
+    /// no restart was announced or taken. Appended, never inserted.
+    /// </summary>
+    ActivatedLive,
 }
 
 /// <summary>
@@ -500,6 +507,16 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         + $"(last rolled {lastRolledAt?.ToString("O") ?? "never"}); the workloads were rolled on the "
         + "same image so it loads.",
         installed)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>The pending module generations went LIVE in the running process — no restart.</summary>
+    public static SelfUpdateVerdict ActivatedLive(SelfUpdateVerdict after, string detail) => new(
+        SelfUpdateOutcome.ActivatedLive,
+        $"{after.Message} A landed module generation was pending activation and went LIVE without a "
+        + $"restart ({detail}).",
+        after.Tag)
     {
         UnresolvedInstalledTag = after.UnresolvedInstalledTag,
     };

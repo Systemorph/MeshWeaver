@@ -90,6 +90,47 @@ public class ModuleReloadRulesTest
     }
 
     [Fact]
+    public void Loaded_WaitsForEveryRunningProcess_ButAFailureIsDecisiveAtOnce()
+    {
+        var swap = DateTimeOffset.UtcNow.AddMinutes(-1);
+        string[] roster = ["a", "b"];
+        var first = Request(Item("2.0.0")) with
+        {
+            LiveSwapRequestedAt = swap,
+            Replicas = ImmutableDictionary<string, ModuleReloadReplica>.Empty
+                .Add("a", Replica("a", swap.AddHours(-1), "2.0.0") with { ReportedAt = swap.AddSeconds(3) }),
+        };
+        ModuleReload.Evaluate(first, _ => true, roster)
+            .Should().BeNull("b is running and has not reported — its swap may yet fail and need the restart");
+        ModuleReload.Evaluate(first, _ => true)!.Loaded
+            .Should().BeTrue("the control: without a roster the one counted report is all there is");
+
+        var both = first with
+        {
+            Replicas = first.Replicas.Add("b", Replica("b", swap.AddHours(-1), "2.0.0") with { ReportedAt = swap.AddSeconds(5) }),
+        };
+        ModuleReload.Evaluate(both, _ => true, roster)!.Loaded.Should().BeTrue();
+
+        var bFailed = first with
+        {
+            Replicas = first.Replicas.Add("b", Replica("b", swap.AddHours(-1), "1.0.0", swapFailure: "M: would not load") with { ReportedAt = swap.AddSeconds(5) }),
+        };
+        ModuleReload.Evaluate(bFailed, _ => true, roster)!.SwapFailed.Should().BeTrue();
+
+        var restart = swap;
+        var oldStillUp = Request(Item("2.0.0")) with
+        {
+            RestartRequestedAt = restart,
+            Replicas = ImmutableDictionary<string, ModuleReloadReplica>.Empty
+                .Add("new", Replica("new", restart.AddMinutes(1), "2.0.0"))
+                .Add("old", Replica("old", restart.AddHours(-2), "1.0.0")),
+        };
+        ModuleReload.Evaluate(oldStillUp, _ => true, ["new", "old"])
+            .Should().BeNull("an old pod still running after the restart serves the old version");
+        ModuleReload.Evaluate(oldStillUp, _ => true, ["new"])!.Loaded.Should().BeTrue("once it is gone, the restart is complete");
+    }
+
+    [Fact]
     public void AReportFromAGoneProcess_DoesNotCount()
     {
         var restart = DateTimeOffset.UtcNow.AddMinutes(-10);
@@ -584,13 +625,13 @@ public class ModuleReloadLiveTest(ITestOutputHelper output) : ModuleReloadScenar
 
         public bool CanSwap(string module) => true;
 
-        public IObservable<ModuleSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
+        public IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
         {
             Interlocked.Increment(ref swaps);
             if (Failure is { } failure)
-                return Observable.Return(new ModuleSwapOutcome(false, failure));
+                return Observable.Return(new ModuleReloadSwapOutcome(false, failure));
             OnSwap?.Invoke();
-            return Observable.Return(new ModuleSwapOutcome(true));
+            return Observable.Return(new ModuleReloadSwapOutcome(true));
         });
     }
 }

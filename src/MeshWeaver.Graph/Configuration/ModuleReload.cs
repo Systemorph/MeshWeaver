@@ -287,10 +287,19 @@ public static class ModuleReload
     /// Considers only reports from processes <paramref name="isLive"/> says are still members and,
     /// after a restart, only processes STARTED after it was requested (an old pod reporting the old
     /// version on its way out is not evidence). Answers null while no counted report exists yet.
+    /// <para>🚨 <b>Loaded is a verdict over the WHOLE roster, never over the first report</b> (#6124
+    /// review): when <paramref name="aliveMembers"/> names the running processes, a Loaded verdict
+    /// waits until every one of them has a COUNTED report — so a second pod that is still booting,
+    /// or whose live swap is still running (and may yet fail and need the restart fallback), keeps
+    /// the request open, and an old pod still alive after a restart keeps it open until it is gone.
+    /// A swap failure or a version mismatch on a counted report is decisive at once. Without a
+    /// roster (<c>null</c>: no cluster) the counted reports are all there is.</para>
     /// </summary>
     /// <param name="request">The request as it stands.</param>
     /// <param name="isLive">Whether the process that wrote a report is still a member of the cluster.</param>
-    public static ModuleReloadVerdict? Evaluate(ModuleReloadRequest request, Func<string, bool> isLive)
+    /// <param name="aliveMembers">Every process the cluster records as running, or null when unknown.</param>
+    public static ModuleReloadVerdict? Evaluate(ModuleReloadRequest request, Func<string, bool> isLive,
+        IReadOnlyCollection<string>? aliveMembers = null)
     {
         var targets = request.Items
             .Where(i => i.Failure is null && !string.IsNullOrWhiteSpace(i.TargetVersion))
@@ -309,12 +318,20 @@ public static class ModuleReload
             return new ModuleReloadVerdict(false, true,
                 string.Join("; ", swapFailures.Select(r => $"the live swap failed on {r.Process}: {r.SwapFailure}")));
 
+        var unreported = aliveMembers is null
+            ? ImmutableList<string>.Empty
+            : aliveMembers.Where(m => !counted.Any(r => string.Equals(r.Process, m, StringComparison.Ordinal)))
+                .OrderBy(m => m, StringComparer.Ordinal)
+                .ToImmutableList();
+
         var mismatches = (from replica in counted
                           from item in targets
                           let loaded = replica.Loaded.TryGetValue(item.Module, out var v) ? v : "nothing reported"
                           where !string.Equals(loaded, item.TargetVersion, StringComparison.OrdinalIgnoreCase)
                           select $"{replica.Process} loads {item.Module} {loaded}, not {item.TargetVersion}")
             .ToImmutableList();
+        if (mismatches.IsEmpty && !unreported.IsEmpty)
+            return null;
         return mismatches.IsEmpty
             ? new ModuleReloadVerdict(true, false,
                 $"{counted.Count} replica(s) report "

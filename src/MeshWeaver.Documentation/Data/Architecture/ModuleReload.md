@@ -90,6 +90,14 @@ runs the step again when the node is next read.
    against the activation record. `ModuleReload.Evaluate` decides over the counted reports — reports
    from processes the cluster has recorded as gone are not counted — and the request is `Done` when
    every counted replica loads every target version, or `Failed` naming the replica and both versions.
+   🚨 `Done` is a verdict over the WHOLE roster: where the cluster can enumerate its running members
+   (`IClusterMembership.AliveMembers`), every one of them must have a counted report first, so a pod
+   still booting or still swapping keeps the request open (its swap may yet fail and need the restart
+   fallback), and an old pod still running after a restart keeps it open until it is gone. A roster
+   change re-evaluates the request (`IClusterMembershipFeed`), since no node write accompanies it. A
+   swap failure or a version mismatch on a counted report is decisive at once. Without a roster
+   (monolith, no cluster) the counted reports are all there is. A running member that never reports
+   leaves the request open — visible on the node, never silently `Done`.
    A failed live swap leaves the previous generation serving and falls back to the one restart.
 
 ## Who can file one
