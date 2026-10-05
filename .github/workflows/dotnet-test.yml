@@ -2782,6 +2782,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-sealed-module-compose.py
 
+    # main-cd's `gate` binds a set to the newest SETTLED Plugins commit through
+    # resolve-settled-content.sh, never the raw HEAD (Doc/Architecture/SealOnlySettledContent). The
+    # harness runs the REAL resolver against throw-away repositories, with a negative control that
+    # mutates it to ignore moved locks and must then fail the incident case.
+    - name: "Execute resolve-settled-content.sh against throw-away content repositories"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-settled-content-resolution.py
+
     # The lanes that run a SATELLITE's suites pick the test runner and the cwd `dotnet test` runs
     # from, and the platform they compile against pins the xunit.v3 version (#4414): xunit.v3 4.x
     # refuses VSTest on .NET 10, so a caller with no global.json must still run under

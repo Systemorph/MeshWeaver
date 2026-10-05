@@ -212,6 +212,8 @@ publication, never the hold.
 ## Related
 
 * [Reading CI Signals](../ReadingCiSignals) — how to read the satellites' 404 when it happens.
+* [Seal Only Settled Content](../SealOnlySettledContent) — which Plugins commit a set may seal: the
+  newest one Plugins' own settle check accepts, never the raw `main` HEAD.
 * [CI Content Bake](../CiContentBake) — what a framework identity is and how a bake is addressed.
 * [Bake Publication Receipt](../BakePublicationReceipt) — what a sealed publication contains.
 * [Module Build Architecture](../ModuleBuildArchitecture) — the one build shape every repo runs.
