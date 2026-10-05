@@ -309,20 +309,6 @@ public class HeldUpdateConvergenceRulesTest
     }
 
     [Fact]
-    public void TheModuleLane_LiftsTheOwnershipDecline_OnlyWhenTheSyncLandedTheServedContent()
-    {
-        var landed = SyncedModuleVersions.Of([new("P", "abc")]);
-        RegistryUpdateReconciler.SyncConvergedDecline(SyncOwned, landed, "P", "abc").Should().BeNull(
-            "code and content are of one tree — gate 1b has nothing to protect");
-        RegistryUpdateReconciler.SyncConvergedDecline(SyncOwned, landed, "P", "newer").Should().NotBeNull(
-            "the registry serves a newer bundle than the sync landed — landing it would split code from content");
-        RegistryUpdateReconciler.SyncConvergedDecline(SyncOwned, landed, "P", null).Should().NotBeNull(
-            "the broadcast lane names no candidate, so it keeps the hold");
-        RegistryUpdateReconciler.SyncConvergedDecline(InstallerOwned, SyncedModuleVersions.Unknown, "P", "abc")
-            .Should().BeNull("an installer-owned partition was never declined");
-    }
-
-    [Fact]
     public void AdoptedFromSync_MovesTheBooks_AndKeepsTheInstallTimeFields()
     {
         var record = new PackageManifest

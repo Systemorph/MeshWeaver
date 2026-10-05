@@ -84,6 +84,18 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     + "surfaces and the bundle index may read empty until the next boot");
                 return Observable.Return(Unit.Default);
             })
+            // 🚨 policy packages-auto-update — the seeded reminder-only records move to Auto before
+            // anything below reads a policy (PackageAutoUpdateMigration; deliberate opt-outs kept
+            // and named).
+            .SelectMany(_ => PackageAutoUpdateMigration.Run(hub, logger)
+                .Select(_ => Unit.Default)
+                .Catch<Unit, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[PackageAutoUpdate] the migration pass could not read the install records — "
+                        + "it runs again at the next boot");
+                    return Observable.Return(Unit.Default);
+                }))
             .SelectMany(_ => InstalledRecords(logger))
             .SelectMany(records => (records.Count == 0
                     ? Observable.Return(Unit.Default)
