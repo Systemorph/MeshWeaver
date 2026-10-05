@@ -29,6 +29,18 @@ public interface IModuleLiveActivation
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="reason">Why — for the loader's own log lines and the hubs' quiesce reason.</param>
     IObservable<ModuleSwapOutcome> Swap(string module, string reason);
+
+    /// <summary>
+    /// Retires <paramref name="module"/> from this process for an UNINSTALL: its hubs are disposed
+    /// and its context unloaded, with no generation taking its place. Cold; emits ONE outcome. A
+    /// module that cannot be retired live answers <c>Swapped: false</c> with the reason, and the
+    /// uninstall falls back to exactly one restart.
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="reason">Why.</param>
+    IObservable<ModuleSwapOutcome> Retire(string module, string reason) =>
+        System.Reactive.Linq.Observable.Return(new ModuleSwapOutcome(false,
+            "this live loader cannot retire a module in place"));
 }
 
 /// <summary>What one live swap did.</summary>

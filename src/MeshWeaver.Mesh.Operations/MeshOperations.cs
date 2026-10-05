@@ -4170,6 +4170,93 @@ public partial class MeshOperations
                 hub.JsonSerializerOptions));
     }
 
+    /// <summary>How long <see cref="UninstallPackage"/> waits for phase 1 to reach its preview.</summary>
+    internal static readonly TimeSpan UninstallPreviewBudget = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Uninstalls a package from THIS instance (<c>Doc/Architecture/PackageUninstall</c>), in two
+    /// phases. Called with <paramref name="package"/> and <paramref name="reason"/>: files the request
+    /// and waits for phase 1 — module retired, hubs closed, install record removed, re-install blocked
+    /// — then answers the PREVIEW of what phase 2 would destroy (partitions, store, rows per table,
+    /// sync configuration, what cannot be counted) and the EXACT confirmation string. Called with
+    /// <paramref name="requestPath"/> and <paramref name="confirmation"/>: records the confirmation;
+    /// phase 2 drops the partition storage only when it matches and comes from the requester. No
+    /// confirmation: the package stays uninstalled with its data retained.
+    ///
+    /// <para>🚨 Platform admins only (<c>IsGlobalAdmin</c>), both phases.</para>
+    /// </summary>
+    /// <param name="package">The package id (phase 1).</param>
+    /// <param name="reason">Why — required for phase 1.</param>
+    /// <param name="requestPath">The request to confirm (phase 2).</param>
+    /// <param name="confirmation">The exact confirmation string the preview named (phase 2).</param>
+    public IObservable<string> UninstallPackage(string? package, string? reason, string? requestPath = null, string? confirmation = null)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        string Error(string message) => JsonSerializer.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
+        IObservable<string> Gate(Func<IObservable<string>> act) =>
+            hub.IsGlobalAdmin().Take(1).Catch((Exception _) => Observable.Return(false))
+                .SelectMany(admin => admin
+                    ? act()
+                    : Observable.Return(Error("uninstalling a package requires a platform admin (an admin on the Admin partition)")));
+
+        if (!string.IsNullOrWhiteSpace(requestPath))
+            return string.IsNullOrWhiteSpace(confirmation)
+                ? Observable.Return(Error("a confirmation is required to drop the partition data — send the exact string the preview named"))
+                : Gate(() => PackageUninstall.Confirm(hub, requestPath.Trim(), confirmation,
+                        string.IsNullOrWhiteSpace(caller) ? null : caller)
+                    .SelectMany(ticket => ticket is { Accepted: true, Path: { } confirmed }
+                        ? AwaitUninstall(confirmed, r => PackageUninstallStatus.IsTerminal(r.Status) || r.ConfirmationRefusal is not null)
+                        : Observable.Return(Error(ticket.Refusal ?? "refused"))));
+
+        if (string.IsNullOrWhiteSpace(package) || string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(Error("a package id and a reason are required"));
+        return Gate(() => PackageUninstall.Request(hub, new PackageUninstallRequest
+            {
+                Package = package,
+                Reason = reason,
+                RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+            })
+            .SelectMany(ticket => ticket is { Accepted: true, Path: { } filed }
+                ? AwaitUninstall(filed, r => PackageUninstallStatus.IsTerminal(r.Status)
+                                             || r.Status == PackageUninstallStatus.AwaitingConfirmation)
+                : Observable.Return(Error(ticket.Refusal ?? "refused"))));
+    }
+
+    private IObservable<string> AwaitUninstall(string path, Func<PackageUninstallRequest, bool> until)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return access.RunAsSystem(() => hub.GetMeshNodeStream(path))
+            .Select(n => n.ContentAs<PackageUninstallRequest>(hub.JsonSerializerOptions))
+            .OfType<PackageUninstallRequest>()
+            .Where(until)
+            .Take(1)
+            .Timeout(UninstallPreviewBudget)
+            .Select(r => JsonSerializer.Serialize(new
+            {
+                status = r.Status,
+                path,
+                package = r.Package,
+                module = r.Module,
+                moduleOutcome = r.ModuleOutcome,
+                partitions = r.Partitions,
+                confirmationRequired = r.Status == PackageUninstallStatus.AwaitingConfirmation ? r.ConfirmationRequired : null,
+                confirmationRefusal = r.ConfirmationRefusal,
+                failure = r.Failure,
+                message = r.Status switch
+                {
+                    PackageUninstallStatus.AwaitingConfirmation =>
+                        $"UNINSTALLED, data RETAINED. To DROP the data listed in partitions (irreversible), call again with "
+                        + $"requestPath='{path}' and confirmation='{r.ConfirmationRequired}'.",
+                    PackageUninstallStatus.Done => "uninstalled and its partition storage dropped",
+                    _ => r.Failure ?? r.Status,
+                },
+            }, hub.JsonSerializerOptions))
+            .Catch((Exception ex) => Observable.Return(JsonSerializer.Serialize(
+                new { status = "Pending", path, message = $"the request is still running ({ex.Message}) — read {path}" },
+                hub.JsonSerializerOptions)));
+    }
+
     /// <summary>
     /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
     /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
