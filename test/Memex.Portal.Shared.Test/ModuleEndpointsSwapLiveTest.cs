@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Test;
 public sealed class ModuleEndpointsSwapLiveTest : IDisposable
 {
     private const string Module = "MeshWeaver.Test.LiveEndpoints";
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan Budget = TestTimeouts.Convergence;
     private readonly string root = Path.Combine(Path.GetTempPath(), "live-endpoints-" + Guid.NewGuid().ToString("N"));
 
     public void Dispose()
