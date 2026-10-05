@@ -70,7 +70,7 @@ two of the cases.
 
 | Repository / lane | Resolves the tip | Applies the merge |
 |---|---|---|
-| core `dotnet-test.yml` | `precheck` (its `main-sha` output) | `precheck` (so the green-tree probe keys the TESTED tree), `build`, every `test` shard, `doc-gate`, `platform-compat`, and `collect-results` (to point the `refs/ci-green` marker at the tested commit) |
+| core `dotnet-test.yml` | `build` (its `main-sha` output) — as the suites START; a run held for its review is released by `rerun-failed-jobs`, which re-runs `build` but not a green `precheck` | `precheck` (for the green-tree probe, on its own resolution), `build`, every `test` shard, `doc-gate`, `platform-compat` (all on the build's main), and `collect-results` (the `refs/ci-green` marker keys the BUILD's tree) |
 | `node-repo-gate.yml` | `plan` (resolve only — the shard plan is unchanged) | every gate shard |
 | `node-repo-module-pack.yml` | `select` | `select` (the build keys hash the tested tree), `build-workspace`, every `pack` and `tests` leg |
 | `node-repo-compile-check.yml` | the job itself | the job itself |
@@ -79,10 +79,11 @@ two of the cases.
 A caller may pass `merge-main-sha` to the three lanes; empty means the lane resolves the tip itself
 in its first job. Satellites need no change: they call the lanes at `@main`.
 
-**When is "now"?** When the suites START. A held run that a dispatch or a retry re-runs re-resolves
-in the job that re-runs: core's `precheck` is re-run only by "re-run all jobs", so a re-run of
-failed shards keeps the tree its build compiled — on purpose, since the shards read that build's
-binaries.
+**When is "now"?** When the suites START. Under policy `review-then-suites` a run is held at the
+stage gate until its review is answered and then released by `rerun-failed-jobs`; the job that
+resolves the tip is one that re-runs then (core's `build`, Plugins' `admission`), so the released
+suites test the main of the moment they start, not the main of the push. A re-run of failed shards
+alone keeps the tree its build compiled — on purpose, since the shards read that build's binaries.
 
 ## What it does not do (stated)
 
@@ -102,5 +103,5 @@ binaries.
 
 ## Related
 
-- [Staged Pull Request Pipeline](../StagedPullRequestPipeline) — the suites now run in parallel with the review
+- [Staged Pull Request Pipeline](../StagedPullRequestPipeline) — review first, then these suites, then the arm (policy `review-then-suites`)
 - [Review Findings Answered](../ReviewFindingsAnswered) — the required check that still gates the merge

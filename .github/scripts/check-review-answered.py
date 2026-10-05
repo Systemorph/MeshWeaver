@@ -550,7 +550,13 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      review, and arming on it would land an unreviewed change with nobody having decided to —
 #      a person who wants that merges by hand;
 #   3. every thread the automatic reviewer opened has a reply from a person (`reviewer_threads`,
-#      the SAME predicate as the merge gate), read from a provably complete listing.
+#      the SAME predicate as the merge gate), read from a provably complete listing;
+#   4. (policy `review-then-suites`) every REQUIRED status check of the base branch has COMPLETED
+#      with `success` on the current head — the suites ran (on a fresh merge with the current main,
+#      policy `suites-test-fresh-merge`) and are green. Review first, then the suites, then the arm:
+#      nothing is armed while a required check is pending, missing or red. The review's own
+#      contexts are conditions (2)/(3), never (4). `required_checks_green` is the predicate;
+#      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #
 # No waiver and no Copilot review stand in for (2): the question is about THIS head's internal
 # review, which is exactly what a push invalidates.
@@ -572,7 +578,36 @@ def internal_review_runs(check_runs, head_sha: str) -> list:
             and (not c.get("head_sha") or c.get("head_sha") == head_sha)]
 
 
-def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
+#: Contexts the arm gate judges through the REVIEW conditions (2)/(3), never as a suite in (4): the
+#: review itself, and the merge-gate check that reports on it (it turns green only after (3) holds,
+#: and its lane re-runs on review events — requiring it here would wait on a re-run nobody started).
+REVIEW_CONTEXTS = frozenset({DEGRADATION_CHECK_NAME, "Automatic review answered", "lane / Automatic review answered"})
+
+
+def required_checks_green(required, head_runs, head_sha: str) -> str:
+    """'' when every required context (minus REVIEW_CONTEXTS) has a check run on `head_sha` whose
+    NEWEST run completed `success`; otherwise ONE line naming the first that is missing, pending or
+    red. `required=None` means the caller did not ask (the pure review gate); an EMPTY list is
+    refused — 'no required check' must never read as 'all green'."""
+    if required is None:
+        return ""
+    wanted = [c for c in dict.fromkeys(required) if c not in REVIEW_CONTEXTS]
+    if not wanted:
+        return "no required status check could be read for the base branch, so the suites cannot be shown green — not armed on a guess"
+    short = head_sha[:10]
+    for ctx in wanted:
+        mine = [r for r in head_runs or () if r.get("name") == ctx and (not r.get("head_sha") or r.get("head_sha") == head_sha)]
+        if not mine:
+            return f"required check `{ctx}` has not reported on head {short} — the suites have not run (or not started) on this head"
+        newest = max(mine, key=lambda r: (r.get("started_at") or "", r.get("id") or 0))
+        if newest.get("status") != "completed":
+            return f"required check `{ctx}` is still {newest.get('status') or 'running'} on head {short} — arming waits for the suites"
+        if newest.get("conclusion") != "success":
+            return f"required check `{ctx}` concluded {newest.get('conclusion')} on head {short} — arming waits for green suites"
+    return ""
+
+
+def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs=None) -> ArmVerdict:
     number = pr.get("number")
     head = str((pr.get("head") or {}).get("sha") or "")
     short = head[:10] or "(unknown)"
@@ -603,6 +638,11 @@ def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
         first = unanswered[0]
         return ArmVerdict(False, f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person "
                                  f"(first: {first.get('html_url') or first.get('id')}) — reply to each (fixed, or why not)", notes)
+    suites = required_checks_green(required, head_runs, head)
+    if suites:
+        return ArmVerdict(False, suites, notes)
+    if required is not None:
+        notes += (f"every required check is green on head {short}",)
     return ArmVerdict(True, "", notes)
 
 
@@ -618,9 +658,9 @@ TESTS_FIRST_LABEL = "tests-before-review"
 #: starts anyway (loudly). Derived from the measured review latency — see the design doc.
 STAGE_FALLBACK_MINUTES = 120
 STAGE_GATE_JOB = "Stage gate: may the suites start"
-#: Every name the gate job has carried. Renamed under policy suites-parallel-with-review (by
-#: default the gate no longer waits for the review, so "review landed" on a green tick would lie);
-#: runs held under the OLD name before that change must still be found and released by the event half.
+#: Every name the gate job has carried (renamed: with the `review-before-suites: false` opt-out the
+#: gate does not wait for the review, so "review landed" on a green tick could lie). Runs held under
+#: the OLD name must still be found and released by the event half.
 STAGE_GATE_JOBS = (STAGE_GATE_JOB, "Stage 1: review landed and answered")
 #: Every hold's error MESSAGE starts with this (stage gate, Plugins `admission`, core `Consolidate test
 #: results`), so a hold is recognisable from the annotations alone — Plugins' PrBabysitter reads it.
@@ -913,19 +953,57 @@ def read_arm_inputs(gh: Gh, number: int):
     return pr, comments, check_runs
 
 
+def read_required_contexts(gh: Gh, base: str) -> list:
+    """The base branch's required status-check contexts, from BOTH places protection lives (rulesets
+    and classic protection — the fleet is split between them). A 404 from one is 'look in the
+    other'; nothing readable from either is an empty list, which the predicate refuses."""
+    names = []
+    try:
+        for rule in gh.api(f"rules/branches/{base}") or []:
+            if rule.get("type") == "required_status_checks":
+                names += [c.get("context") for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
+    except ReadError:
+        pass
+    try:
+        prot = (gh.api(f"branches/{base}") or {}).get("protection") or {}
+        names += list((prot.get("required_status_checks") or {}).get("contexts") or [])
+    except ReadError:
+        pass
+    return [n for n in dict.fromkeys(names) if n]
+
+
+def read_head_runs(gh: Gh, head_sha: str) -> list:
+    """Every check run on the head, all pages; a short listing is a ReadError, never a partial answer."""
+    runs, total = [], None
+    for page in range(1, 21):
+        data = gh.api(f"commits/{head_sha}/check-runs?filter=all&per_page=100&page={page}")
+        if not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
+            raise ReadError(f"commits/{head_sha[:10]}/check-runs page {page} did not return a listing")
+        total = data.get("total_count")
+        runs += data["check_runs"]
+        if not data["check_runs"] or (isinstance(total, int) and len(runs) >= total):
+            break
+    if not isinstance(total, int) or len(runs) < total:
+        raise ReadError(f"commits/{head_sha[:10]}/check-runs returned {len(runs)} of {total} runs")
+    return runs
+
+
 def run_arm_gate(repo: str, number: int) -> int:
     """Prints the verdict, writes ONE line to the job summary and `ready=true|false` to
     $GITHUB_OUTPUT. Exit 0 either way — not-ready is an answer, not a failure; a read that cannot
     complete is NOT ready (never armed on a guess) and says so."""
     try:
-        pr, comments, check_runs = read_arm_inputs(Gh(repo), number)
-        verdict = arm_readiness(pr, comments, check_runs)
+        gh = Gh(repo)
+        pr, comments, check_runs = read_arm_inputs(gh, number)
+        head = (pr.get("head") or {}).get("sha") or ""
+        required = read_required_contexts(gh, (pr.get("base") or {}).get("ref") or "main")
+        verdict = arm_readiness(pr, comments, check_runs, required, read_head_runs(gh, head))
     except (ReadError, KeyError) as e:
         verdict = ArmVerdict(False, f"cannot read #{number}'s review state, so it is not armed on a guess: {e}")
         print(f"::warning::{verdict.missing}")
     for n in verdict.notes:
         print(f"  {n}")
-    line = (f"Ready to arm #{number}: internal review completed on the current head and every reviewer thread is answered."
+    line = (f"Ready to arm #{number}: internal review completed on the current head, every reviewer thread is answered, and every required check is green."
             if verdict.ready else f"Not armed #{number}: {verdict.missing}")
     print(line)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -1617,6 +1695,32 @@ def self_test() -> int:
     arm_case("a degradation after a real round -> no arm", False, _pr(0), [],
              [_ir(at="2026-10-04T07:00:00Z", crid=940), _ir(conclusion="neutral", title=DEGRADED_TITLE)], "UNAVAILABLE")
     arm_case("draft -> no arm (even when reviewed and answered)", False, draft_pr, [], [_ir()], "is a draft")
+
+    # ── condition 4 (policy review-then-suites): reviewed AND answered is not enough — the required
+    # suites must be green on the SAME head. Each NO names the context it holds on.
+    def suite(name, conclusion="success", status="completed", sha=HEAD, at="2026-10-04T09:00:00Z", crid=990):
+        return {"name": name, "status": status, "conclusion": conclusion, "head_sha": sha, "started_at": at, "id": crid}
+    REQ = ["Consolidate test results", "Automatic review answered"]
+    def suites_case(name, ready, required, head_runs, says=""):
+        nonlocal failures
+        v = arm_readiness(_pr(0), [], [_ir()], required, head_runs)
+        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm+suites: {name:48} got={'ARM' if v.ready else 'no arm: ' + v.missing}")
+    suites_case("reviewed, suites green -> ARM", True, REQ, [suite("Consolidate test results")])
+    suites_case("reviewed, suite still running -> no arm", False, REQ,
+                [suite("Consolidate test results", conclusion=None, status="in_progress")], "still in_progress")
+    suites_case("reviewed, suite red -> no arm", False, REQ, [suite("Consolidate test results", "failure")], "concluded failure")
+    suites_case("reviewed, suite never reported -> no arm", False, REQ, [], "has not reported")
+    suites_case("suite green only on an OLDER head -> no arm", False, REQ,
+                [suite("Consolidate test results", sha="b" * 40)], "has not reported")
+    suites_case("newest re-run red after an older green -> no arm", False, REQ,
+                [suite("Consolidate test results", crid=1), suite("Consolidate test results", "failure", at="2026-10-04T10:00:00Z", crid=2)],
+                "concluded failure")
+    suites_case("NO required context readable -> no arm (never vacuous)", False, [], [suite("x")], "no required status check")
+    suites_case("only review contexts required -> no arm (never vacuous)", False, ["Automatic review answered", "internal-review"],
+                [], "no required status check")
+    suites_case("not asked (pure review gate) -> ARM on review alone", True, None, None)
 
     # ── the STAGE gate (node-repo-stage-gate.yml): stage 2 starts only on a reviewed, answered head —
     # or on one of the three LOUD releases (degradation, fallback, label). Each case names the mode
