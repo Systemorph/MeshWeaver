@@ -321,8 +321,8 @@ public sealed record ModuleActivationReport(
             + "image ships — the module RUNS, from the image's own copy, and the landed generation "
             + "is not in effect. 🚨 A RESTART DOES NOT CHANGE THIS and neither does re-installing: "
             + "both measure the same bytes and reach the same verdict. It clears when the module is "
-            + "published built against this platform build, which the platform's own build states "
-            + "for every module it packs: "
+            + "published as what each row names — built against this platform build, or (#6044) as a "
+            + "release newer than the image's own copy: "
             + string.Join("; ", rows.Take(Math.Max(1, maxNamed)))
             + (rows.Length > maxNamed ? $"; …(+{rows.Length - maxNamed})" : string.Empty);
     }
@@ -577,6 +577,14 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// decides nothing without a reading.
     /// </summary>
     public IReadOnlyCollection<string> PlatformIdentities { get; init; } = [];
+
+    /// <summary>
+    /// What the image's own copy of a module was built as (<see cref="ImageModuleSeed"/>,
+    /// MeshWeaver#6044) — the SAME reader the boot decides on, which is why it is the default: a
+    /// store copy the boot declines as not newer than the image's copy must not be reported as a
+    /// pending update a restart would activate. A test states what its scenario needs.
+    /// </summary>
+    public Func<string, ImageModuleSeed?> ImageSeedOf { get; init; } = ImageModuleSeed.OfImageCopy;
 
     /// <summary>
     /// The bounded IO pool every volume reading is TAKEN on, so no probe thread ever walks the
@@ -982,7 +990,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
         // platform states about itself, and whether the image ships this module — so the report and
         // the boot cannot reach different verdicts about one entry.
         var declined = ImmutableList.CreateBuilder<ModuleDecline>();
-        if (ImageShippedModules.Count > 0 && PlatformIdentities.Count > 0)
+        if (ImageShippedModules.Count > 0)
         {
             foreach (var entry in onMeshSet.Entries)
             {
@@ -995,13 +1003,23 @@ public sealed class PendingModuleActivations(string moduleRoot)
                 // here as declined would put one entry in two buckets with two different remedies.
                 if (!LandedDllExists(entry))
                     continue;
-                var identity = ModuleFrameworkIdentity.Compare(entry.FrameworkMvid, PlatformIdentities);
-                if (!identity.IsNotThisPlatform)
+                var generation = string.IsNullOrWhiteSpace(entry.Directory) ? entry.Name : entry.Directory!;
+                if (PlatformIdentities.Count > 0
+                    && ModuleFrameworkIdentity.Compare(entry.FrameworkMvid, PlatformIdentities) is
+                        { IsNotThisPlatform: true } identity)
+                {
+                    declined.Add(new ModuleDecline(
+                        entry.Name, entry.PackagePath, entry.Version, generation,
+                        entry.FrameworkMvid, identity.Describe(entry.FrameworkMvid)));
                     continue;
-                declined.Add(new ModuleDecline(
-                    entry.Name, entry.PackagePath, entry.Version,
-                    string.IsNullOrWhiteSpace(entry.Directory) ? entry.Name : entry.Directory!,
-                    entry.FrameworkMvid, identity.Describe(entry.FrameworkMvid)));
+                }
+                // 🚨 MeshWeaver#6044 — the boot's SECOND decline, re-applied from the same inputs
+                // (the entry's version and the image's own stamp) so this report cannot call
+                // "pending" a store copy the boot will decline in favour of a newer image copy.
+                if (ImageModuleSeed.DeclineReason(entry, ImageSeedOf(entry.Name)) is { } olderThanImage)
+                    declined.Add(new ModuleDecline(
+                        entry.Name, entry.PackagePath, entry.Version, generation,
+                        entry.FrameworkMvid, olderThanImage));
             }
         }
         if (declined.Count > 0)

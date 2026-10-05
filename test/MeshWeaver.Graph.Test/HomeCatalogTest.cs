@@ -51,7 +51,8 @@ public class HomeCatalogTest
 
         // A UNION of two first-level sub-queries (one per line): partition roots + the user's home
         // direct children — NEITHER spans a subtree, so no deep descendants leak in.
-        query.Should().Contain("namespace: is:main", "partition roots = the empty-namespace top level");
+        query.Should().NotContain("namespace: is:main",
+            "the root leg is anchored on the profile's space manifest — with none yet it is omitted");
         query.Should().Contain($"namespace:{NodePath} is:main", "the user's own top-level home items");
         query.Should().NotContain("scope:subtree");
         query.Should().NotContain("scope:descendants");
@@ -89,7 +90,6 @@ public class HomeCatalogTest
         // Every option stays first-level (union of roots + home children, no subtree).
         foreach (var o in options)
         {
-            o.Query.Should().Contain("namespace: is:main");
             o.Query.Should().Contain($"namespace:{NodePath} is:main");
             o.Query.Should().NotContain("scope:subtree");
         }
@@ -102,8 +102,9 @@ public class HomeCatalogTest
         // leg (`namespace:` = empty-namespace top level), so that leg must not list the user
         // itself. First-level says so by ALLOW-list — a User is not a Space — and the subtree
         // shape, which has no root leg to allow-list, still says so by exclusion.
-        var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
-        search.HiddenQuery!.ToString().Should().Contain("namespace: is:main is:content nodeType:Space");
+        var search = UserActivityLayoutAreas.BuildCatalog(NodePath, spacePaths: ["Acme"])
+            .Should().BeOfType<MeshSearchControl>().Subject;
+        search.HiddenQuery!.ToString().Should().Contain("path:Acme is:main is:content nodeType:Space");
 
         var subtree = UserActivityLayoutAreas
             .BuildCatalog(NodePath, new HomeConfig { Scope = HomeCatalogScope.Subtree })

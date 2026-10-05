@@ -95,6 +95,8 @@ node's own hub, and Recycle tears that hub down (#2202). Its ⋯ entry therefore
 stale-build banner uses (`MoreActionHref`). An unknown action id follows its `Href`, its documented
 graceful degradation.
 
+**A node type that replaces its landing page owns the actions row.** The row above is drawn by the standard header. A landing page registered with `WithNodePage(..., Declined)` or `(..., RenderedByThePage)` that does not call the standard header gets no More dropdown unless its own page draws one. The User home is the worked example: `UserActivityLayoutAreas.Activity` mounts `MeshNodeLayoutAreas.HeaderActionsSlot` (Edit plus More) in a stable `HomeActions` sub-area above the `HomeBody` sub-area, so a user's own home keeps its menu beside the page and the body's per-edit rebuild never re-creates it. On that protected root More carries Files, Data and the like, never Move, Copy or Delete.
+
 The top-bar cube still renders the same list while the portals roll; MeshWeaver.Plugins removes it
 once the header menu has reached a sealed platform.
 

@@ -707,6 +707,14 @@ data:
   {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled") (not (kindIs "invalid" $prSweep)) (ne ($prSweep | toString | trim) "") }}
   Hosting__Triage__PullRequestSweep__Enabled: "{{ $prSweep | toString | trim }}"
   {{- end }}
+  # The PR reviewer's admission share while the review pool is EXHAUSTED (MeshWeaver.Plugins
+  # Hosting/Deployment/Source/ReviewAdmission.cs, TargetLoadKey; code default 0.1). One provider 429
+  # marks the pool exhausted, and at 0.1 the bound drops to a tenth of the measured capacity until it
+  # recovers; "1.0" keeps the full measured capacity. Rendered only when set.
+  {{- $prReviewLoad := .Values.config.memex_portal.Hosting__Triage__PullRequestReview__TargetLoad }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestReview__TargetLoad") (not (kindIs "invalid" $prReviewLoad)) (ne ($prReviewLoad | toString | trim) "") }}
+  Hosting__Triage__PullRequestReview__TargetLoad: "{{ $prReviewLoad | toString | trim }}"
+  {{- end }}
   # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
   # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on
   # Hosting/_Access, so the triage items and their threads are readable (a global admin has no data

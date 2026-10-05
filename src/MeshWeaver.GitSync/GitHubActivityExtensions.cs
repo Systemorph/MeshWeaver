@@ -523,6 +523,69 @@ public static class GitHubActivityExtensions
     }
 
     /// <summary>
+    /// 🚨 <b>The unattended import a PUSH (or the branch reconcile) triggers — at the pushed commit,
+    /// with no CI verdict waited for</b> (policy <c>sources-sync-on-push</c>;
+    /// <c>Doc/Architecture/SourcesSyncOnPush</c>).
+    ///
+    /// <para>Same authorization, activity and conflict semantics as
+    /// <see cref="UpdateToProvenCommitFromGitHub"/>, and the same no-branch-fallback rule: the caller
+    /// names the commit (the push's <c>after</c>, or the head the reconcile resolved). A DISTINCT
+    /// surface rather than that method reused, because its activity calls the commit "the built
+    /// commit" and "the commit the build proved" — and a pushed commit is precisely the one no build
+    /// has proved yet. An activity that says otherwise misleads the person who reads it.</para>
+    ///
+    /// <para>Inside the import every module is judged alone by its manifest hash (policy
+    /// <c>module-sync-per-manifest-hash</c>): unchanged writes nothing, changed syncs, and a module
+    /// whose declared platform floor is above the running platform is declined alone.</para>
+    /// </summary>
+    /// <param name="hub">The hub the activity and the import run on.</param>
+    /// <param name="spacePath">The Space to bring to <paramref name="commitSha"/>.</param>
+    /// <param name="userId">The GitHub identity whose credential authenticates the pull.</param>
+    /// <param name="commitSha">The pushed commit. Required — there is no branch-HEAD fallback.</param>
+    /// <param name="trigger">What started it (<c>push</c>, <c>branch reconcile</c>) — shown on the
+    /// activity.</param>
+    /// <param name="onActivityCreated">Receives the activity path as soon as it exists.</param>
+    /// <param name="sourceId">The sync source (null = the primary).</param>
+    public static IObservable<string> UpdateToPushedCommitFromGitHub(
+        this IMessageHub hub, string spacePath, string userId, string commitSha, string trigger,
+        Action<string>? onActivityCreated = null, string? sourceId = null)
+    {
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return Observable.Throw<string>(new ArgumentException(
+                $"An unattended GitHub import of '{spacePath}' must name the pushed commit; there is no "
+                + "branch-HEAD fallback (MeshWeaver.Plugins#1430).", nameof(commitSha)));
+
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
+        var shortSha = Short(commitSha);
+        // 🚨 #3510 — hold the Space's root for the whole import; see HoldSpaceDuringImport.
+        return HoldSpaceDuringImport(hub, spacePath,
+            $"GitSync: an unattended import ({trigger}) is writing '{spacePath}' at the pushed commit {shortSha}",
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "update", requiresCommitAuthority: false,
+            () => hub.RunActivity(spacePath, ActivityCategory.Import,
+                new LogMessage(
+                        $"Update {spacePath} to the pushed commit {shortSha} ({trigger})", LogLevel.Information)
+                    .WithKey("activity.gitsync.updateToPushedCommit.title",
+                        ("space", spacePath), ("sha", shortSha), ("trigger", trigger)),
+                ctx =>
+                {
+                    ctx.Log(new LogMessage(
+                            $"Fetching {shortSha} — the pushed commit; no CI verdict is waited for, each "
+                            + "module is judged by its manifest hash — and importing the deltas…",
+                            LogLevel.Information)
+                        .WithKey("activity.gitsync.updateToPushedCommit.fetching", ("sha", shortSha)));
+                    // force: false — two-way conflict resolution still protects server-side edits.
+                    return sync.ReimportAtCommit(spacePath, commitSha, userId, sourceId, ctx.Log, force: false)
+                        .Select(r =>
+                        {
+                            if (r.PrunedPaths.Count > 0)
+                                ctx.Log(PrunedLine(r));
+                            LogImportOutcome(ctx, r, commitish: shortSha);
+                            return Unit.Default;
+                        });
+                }, onActivityCreated)));
+    }
+
+    /// <summary>
     /// 🚨 <b>An unattended import that lands on the SEALED commit rather than on the built one</b> —
     /// <see cref="UpdateToProvenCommitFromGitHub"/>'s sibling for the green-build lane's redirect
     /// (MeshWeaver#3845; review on #4576).

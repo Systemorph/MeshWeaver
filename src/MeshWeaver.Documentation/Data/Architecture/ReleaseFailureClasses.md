@@ -452,6 +452,72 @@ finding the stamp exists to make visible. Why a release create takes more than 2
 compile wave is **not** answered here. It is a slow owner, not a lost create, and it belongs to the
 compile-lane load work.
 
+## A release that will never land is cut by the next activation (#6056)
+
+### What was still live after late adoption
+
+Late adoption answers a create that is slow. It cannot answer a create that was never written, and
+the stamp says nothing about which of the two it is. Measured on the control instance on
+2026-10-03: at 23:15:58Z the replica `memex-portal-deployment-57d6d7f9cc-tslft` was being replaced
+by the roll to `3.0.0-ci.9887` (`Ops/Actions/selfupdate-roll-memex-3-0-0-ci-9887-5d9e2ac9`: run
+concluded 22:56Z, the observer was lost and resumed by a replacement process at 23:16:28Z, the new
+ReplicaSet is `7b74d6bfb7`). Two NodeTypes settled on it, `Store/Core` and
+`Signature/DeepSignCredential`. Both their release create and the same-id re-cut were answered
+*"Node creation at '…' was cancelled before it completed"*. That is the create handler's answer to
+a cooperative cancellation. A draining host's I/O pool cancels every leaf. The handler answers
+`Unavailable`, meaning nothing was written and a retry with the same id is meaningful. The settle
+stamped `unreleasedBuildPath`, which was correct, and nothing was left that would ever write that
+node:
+
+- late adoption waits for a landing that cannot come;
+- a non-forced release request is absorbed by the "already has a usable build" branch of the
+  release-request watcher, which cuts no release;
+- only a recompile mints a new release.
+
+The roll was a framework change, so both types recompiled minutes later on the new image. That is
+the only reason they recovered. A same-image restart would have left them advertising a build no
+release names. A timeout can strand a type the same way when its create is never written. The id
+`Edu/CourseCatalog/Release/20260928125119-xvYPDMt7` read `Not found` two days after its stamp.
+
+### The change: the stamp is an obligation the next activation honours
+
+`LateReleaseAdoption.Install` also runs `CompleteInheritedRelease`. On the FIRST emission of the hub's
+own record, if that record already carries a stamp, this activation inherited it. The activation that
+wrote the stamp is gone or recycled. The new activation cuts the release at exactly the stamped id,
+from the bytes the record names (`LatestAssemblyCollection`, `LatestAssemblyPath`,
+`LastCompiledVersion`, `CompiledSources`). It runs as System and through the same
+`TryCreateReleaseNode`. It then adopts the release in one owner write. `InheritedObligation` is the
+pure gate, and it requires:
+
+- the compile is settled (`Ok`), because a compile in flight rewrites the stamp at its own settle;
+- the build was compiled against THIS framework, because a stale one is about to be recompiled and a
+  release for it would name the wrong framework;
+- the stamped id's content hash names the recorded store coordinates (`IsReusableAttempt`), so a
+  stamp for other bytes is never cut.
+
+It is idempotent by construction. A late landing of the earlier attempt collides at the same id and
+is adopted, and a create that was never made is made there. It runs once per activation and never
+on the activation that wrote the stamp, so it is not a retry loop. A host that cannot create, such
+as a draining one, leaves the stamp standing for the next activation, and the stamp is still the
+report.
+
+### The control
+
+`ALateReleaseIsAdoptedWhenItLandsTest.AnInheritedStamp_WhoseCreateNeverLanded_IsCutByTheNextActivation`
+runs on a real monolith mesh. It seeds the incident's state: a settled build of this framework whose
+bytes are in the assembly store, stamped with an id for those bytes, and no release node anywhere.
+Activating the owner must leave `latestReleasePath` on the stamped id, the stamp cleared, and a
+release node there naming the recorded store version and coordinates. With the completion's
+subscription removed from `Install`, the test is red at that wait. The gate is covered as a table by
+`InheritedObligation_NamesTheStamp_OnlyForTheRecordedBytesOfThisFramework`.
+
+### Not established
+
+The draining host as the canceller is inferred from the roll's timeline. No log line records the
+SIGTERM on that replica against those two creates. The first attempts' failures named nested
+partition-root creates. #6088 stops a root-read fault from being misread as absence. Why those
+reads faulted is still not recorded.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was
