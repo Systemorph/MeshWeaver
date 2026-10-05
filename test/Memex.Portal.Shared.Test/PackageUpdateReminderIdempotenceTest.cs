@@ -202,8 +202,12 @@ public class PackageUpdateReminderIdempotenceTest(ITestOutputHelper output) : Mo
             Version = "1.0.0",
             ModuleVersion = InstalledModuleVersion,
             TargetPartition = PackageId,
-            // The reminder path — the one whose gate could never become true.
+            // The reminder path — the one whose gate could never become true. Since policy
+            // packages-auto-update it is reached only by an administrator's DELIBERATE choice
+            // (stamped), which the boot migration keeps; a seeded Notify would be moved to Auto.
             AutoUpdate = false,
+            UpdatePolicy = PackageUpdatePolicy.Notify,
+            UpdatePolicySetAt = DateTimeOffset.UtcNow,
         };
         var record = MeshNode.FromPath(RecordPath) with
         {

@@ -116,6 +116,48 @@ This request does not fork it: `IModuleLiveActivation` is the reload's CALL SITE
 loader once it can swap. Until a host registers it, every reload that needs activating takes the one
 restart — which is exactly the fallback rule 3 of that page prescribes.
 
+## Auto-update (policy `packages-auto-update`)
+
+Every installed package updates by itself as soon as a newer compatible version is published. The
+unattended lane is the same machinery as an explicit reload, driven by the registry instead of a
+person:
+
+- **When it runs.** `RegistryUpdateReconciler` reconciles on boot, on every `ModulePublished`
+  broadcast the registry posts to this instance's inbox (minutes after a publish), and on its
+  safety net (every 30 min). Each pass reads the registry's feed and bundle index — the package's
+  OWN publish is the only event it needs.
+- **What decides.** Two inputs and nothing else: a newer version is served, and its declared floor
+  is met (`ModuleUpdateDecision` with `PackagePlatformFloorGate.HoldFor`). An incompatible floor is
+  declined by name — on the install record (`heldUpdate`) and in the log — and the landed generation
+  keeps serving.
+- **What activates.** A pass that LANDED anything files ONE `ModuleReload` request for what it landed
+  (`auto-{hash of the landed set}`, so replicas and re-runs file it once). The request activates it —
+  live, else exactly one automatic restart. A second wave that lands before that restart has
+  happened RIDES it (the executor finds the open request's restart stamp and does not ask for
+  another).
+- **Defaults.** A fresh install is `Auto` (`PackageInstaller.SeedUpdatePolicy`); the deployment-wide
+  `DefaultUpdatePolicy` / `AutoUpdateByDefault` are no longer consulted. At boot,
+  `PackageAutoUpdateMigration` moves every record SEEDED with the old reminder-only default to `Auto`
+  through `stream.Update` (as System). It keeps — and names in one Warning per pass — a pin (`None`)
+  and any policy a global administrator CHOSE on the catalog card (`updatePolicySetAt`, stamped by
+  `SetUpdatePolicy` from now on).
+
+### What no longer holds an update — and what still does
+
+| dependency | status |
+|---|---|
+| a platform image build, deploy, roll, CD or "arm the fleet" step | never consulted by the package lanes |
+| a publication seal / a seal for the running framework identity | never consulted — the module lane decides on the floor and the link probe; the framework MVID is recorded, never a gate |
+| a green build of the platform or of the package repo's `main` | never consulted — only the package's own publish to the registry |
+| the partition's SYNC SOURCE (#4355 gate 1b: "its module waits for the same seal its content does") | **retired for the module half**: a published compatible module lands even when the partition's `_GitSync` still carries older content |
+| the package's own policy | `Auto` by default; a pin or an administrator's explicit choice still declines, by name |
+| the CONTENT half of a sync-owned partition | **still the sync's** — one writer per partition (#4355). The installer does not write content into a partition a sync source owns; that content follows its sync, and the sync source's own seal gate (`SealedSyncGate`) is not changed here. The code no longer waits for it. |
+
+Measured on the control instance before this change (read-only `search namespace:Plugins
+nodeType:Package`): **80 install records, 0 of them not Auto** (75 declare `updatePolicy: Auto`, 5
+predate the field and carry `autoUpdate: true`). The reminder-only default was not what held its
+modules; the sync-owned hold on the module lane was.
+
 ## What is NOT established
 
 - **A real cross-process run.** The scenario tests (`Memex.Portal.Shared.Test` → `ModuleReloadByRestartTest`,

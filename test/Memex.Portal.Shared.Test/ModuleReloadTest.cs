@@ -14,6 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Fixture;
+using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.SelfUpdate;
@@ -179,9 +180,11 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
     {
         Directory.CreateDirectory(landingRoot);
         return base.ConfigureMesh(builder)
+            .AddGitHubSyncTypes()
             .AddPluginCatalog()
             .ConfigureServices(services =>
             {
+                services.AddGitHubSyncServices();
                 services
                     .AddSingleton<IHttpClientFactory>(new HostRoutingClientFactory(Registry))
                     .AddSingleton(FloorFixture.Pin)
@@ -223,7 +226,7 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
         ModuleActivationSidecar.Read(landingRoot).Entries.Single(e => e.Name == Module);
 
     /// <summary>The instance runs M@1.1.0: installed, landed, and loaded by this process.</summary>
-    protected async Task RunningVersionOne(CancellationToken ct)
+    protected async Task RunningVersionOne(CancellationToken ct, Func<PackageManifest, PackageManifest>? shape = null)
     {
         FloorFixture.AssertTheFloorHolds(Mesh);
         var manifest = new PackageManifest
@@ -241,7 +244,7 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
             NodeType = PackageInstaller.PackageNodeType,
             Name = Package,
             State = MeshNodeState.Active,
-            Content = manifest,
+            Content = shape is null ? manifest : shape(manifest),
         };
         await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record)).Timeout(TestTimeouts.Convergence).Await(ct);
 
@@ -311,6 +314,9 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
         private ImmutableList<string> downloads = ImmutableList<string>.Empty;
         private (string Version, string? Floor) served = ("1.0.0", null);
 
+        /// <summary>What the registry FEED lists (`GET /api/plugins`) — empty unless a test publishes.</summary>
+        public IReadOnlyList<PackageManifest> Feed { get; set; } = [];
+
         public ImmutableList<string> Downloads => downloads;
 
         public void Serve(string version, string? floor) => served = (version, floor);
@@ -322,7 +328,7 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
             var path = request.RequestUri!.AbsolutePath;
             var (version, floor) = served;
             if (request.Method == HttpMethod.Get && path == "/api/plugins")
-                return Ok(PluginRegistryPayloads.List([]));
+                return Ok(PluginRegistryPayloads.List(Feed));
             if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json")
                 return Ok(JsonSerializer.Serialize(new
                 {

@@ -264,14 +264,63 @@ public static class ModuleReloadExecutor
                     + "(no IModuleActivationRestart is registered) — restart the workloads to load "
                     + string.Join(", ", request.Items.Where(i => i.Failure is null).Select(i => $"{i.Module} {i.TargetVersion}")));
             var reason = $"module reload {PathOf(hub)}: {request.Reason}";
-            // 🚨 Stamp FIRST, then ask. A resumed executor sees the stamp and never asks again — the
-            // "exactly one restart" property lives on the node, not in this process.
-            return Write(r => r with { RestartRequestedAt = DateTimeOffset.UtcNow }, Line("requesting ONE restart"))
-                .SelectMany(_ => restart.RequestRestart(reason).Take(1))
-                .SelectMany(outcome => outcome.Scheduled
-                    ? Write(r => r with { ActivationDetail = $"{outcome.Kind}: {outcome.Detail}" }, Line($"restart {outcome.Kind}: {outcome.Detail}"))
-                    : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}"))
+            // 🚨 Exactly ONE restart ACROSS requests too: an auto-update wave files a request per
+            // wave, and two waves minutes apart must not restart the instance twice. When another
+            // open request has already asked for a restart this process has not yet been through,
+            // that restart will boot every module landed so far — this request rides it.
+            return InFlightRestart()
+                .SelectMany(inFlight => inFlight is { } ride
+                    ? Write(r => r with
+                    {
+                        RestartRequestedAt = ride.At,
+                        ActivationDetail = $"rides the ONE restart already requested by {ride.Path}",
+                    }, Line($"a restart requested by {ride.Path} at {ride.At:u} is already on its way — riding it, not requesting another"))
+                    // 🚨 Stamp FIRST, then ask. A resumed executor sees the stamp and never asks
+                    // again — the "exactly one restart" property lives on the node, not in this process.
+                    : Write(r => r with { RestartRequestedAt = DateTimeOffset.UtcNow }, Line("requesting ONE restart"))
+                        .SelectMany(_ => restart.RequestRestart(reason).Take(1))
+                        .SelectMany(outcome => outcome.Scheduled
+                            ? Write(r => r with { ActivationDetail = $"{outcome.Kind}: {outcome.Detail}" }, Line($"restart {outcome.Kind}: {outcome.Detail}"))
+                            : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
                 .Catch((Exception ex) => Finish(ModuleReloadStatus.Failed, $"the restart request faulted: {ex.Message}"));
+        }
+
+        /// <summary>Another open request's restart that THIS process has not been through yet, or
+        /// null — read from a LISTING of the request namespace (the CQRS-sanctioned shape). A
+        /// listing that cannot be read answers null: the request then asks for its own restart,
+        /// which is the safe side (a second restart costs a roll; a missing one strands a module).</summary>
+        private IObservable<(string Path, DateTimeOffset At)?> InFlightRestart()
+        {
+            var mesh = hub.ServiceProvider.GetService<IMeshService>();
+            if (mesh is null)
+                return Observable.Return<(string, DateTimeOffset)?>(null);
+            var started = hub.ServiceProvider.GetService<ModuleReloadAgent>()?.StartedAt ?? DateTimeOffset.MinValue;
+            var own = PathOf(hub);
+            // CQRS: the LISTING answers which requests exist; each one's CONTENT is read from its
+            // own node stream — a listing's content can be minutes behind the restart stamp.
+            return Access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                        $"namespace:{ModuleReloadRequest.Namespace} scope:children nodeType:{ModuleReloadRequest.NodeType}"))
+                    .Take(1)
+                    .Timeout(ActivationRecycle.ReadBudget))
+                .SelectMany(change => change.Items
+                    // A terminal status is final, so even a stale listing that says so is right —
+                    // only the requests it does NOT show as finished are read.
+                    .Where(n => n.ContentAs<ModuleReloadRequest>(hub.JsonSerializerOptions) is not { } listed
+                                || !ModuleReloadStatus.IsTerminal(listed.Status))
+                    .Select(n => n.Path)
+                    .Where(p => !string.Equals(p, own, StringComparison.OrdinalIgnoreCase))
+                    .ToObservable()
+                    .Select(p => Access.RunAsSystem(() => hub.GetMeshNodeStream(p).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                        .Select(n => (Path: p, Request: n.ContentAs<ModuleReloadRequest>(hub.JsonSerializerOptions)))
+                        .Catch((Exception _) => Observable.Empty<(string Path, ModuleReloadRequest? Request)>()))
+                    .Concat()
+                    .ToList())
+                .Select(candidates => candidates
+                    .Where(x => x.Request is { Status: ModuleReloadStatus.AwaitingRestart, RestartRequestedAt: { } at } && at > started)
+                    .OrderByDescending(x => x.Request!.RestartRequestedAt)
+                    .Select(x => ((string, DateTimeOffset)?)(x.Path, x.Request!.RestartRequestedAt!.Value))
+                    .FirstOrDefault())
+                .Catch((Exception _) => Observable.Return<(string, DateTimeOffset)?>(null));
         }
 
         // ── Verdict over the replica reports ─────────────────────────────────────────────────
