@@ -732,7 +732,32 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// </summary>
     public ModuleActivationReport Read() => Read(
         ModuleActivationStatus.LoadedAssemblyNames(),
-        ModuleActivationStatus.LoadedModuleGenerations());
+        WithCurrentModuleGenerations(ModuleActivationStatus.LoadedModuleGenerations()));
+
+    /// <summary>
+    /// The mesh's module registry, when this reader runs inside a mesh (policy
+    /// <c>module-live-update-default</c>). Every module it holds runs in its own collectible context,
+    /// and after a live swap — or a refused one — the PROCESS can hold two generations of one name
+    /// until the old one is collected; the loaded-generation map derived from the AppDomain then
+    /// reads that name as ambiguous ("unknown"), which would hide a module that is genuinely pending.
+    /// The registry knows which generation SERVES, so for every module it holds its answer wins.
+    /// Null = no registry (a bare reader), which keeps the AppDomain-only answer.
+    /// </summary>
+    public MeshWeaver.Mesh.ModuleContexts? ModuleContexts { get; init; }
+
+    private IReadOnlyDictionary<string, string> WithCurrentModuleGenerations(IReadOnlyDictionary<string, string> fromDomain)
+    {
+        if (ModuleContexts is not { } contexts)
+            return fromDomain;
+        var held = contexts.Generations;
+        if (held.Count == 0)
+            return fromDomain;
+        var map = new Dictionary<string, string>(fromDomain, StringComparer.OrdinalIgnoreCase);
+        foreach (var generation in held)
+            if (Path.GetFileName(Path.GetDirectoryName(generation.Location)) is { Length: > 0 } leaf)
+                map[generation.Name] = leaf;
+        return map;
+    }
 
     /// <summary>
     /// How many times this instance has actually read the activation state off the volume — the

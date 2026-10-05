@@ -16,7 +16,11 @@ namespace MeshWeaver.Mesh;
 /// <param name="Location">The entry DLL this generation was loaded from.</param>
 /// <param name="Context">The collectible context it runs in.</param>
 /// <param name="Assembly">The module's entry assembly, loaded in <paramref name="Context"/>.</param>
-public sealed record ModuleGeneration(string Name, string Location, ModuleLoadContext Context, Assembly Assembly);
+public sealed record ModuleGeneration(string Name, string Location, ModuleLoadContext Context, Assembly Assembly)
+{
+    /// <summary>What this generation contributes, once materialised; null while it is being loaded.</summary>
+    public ModuleContributions? Contributions { get; internal set; }
+}
 
 /// <summary>
 /// The mesh's modules, each in its OWN collectible load context — the registry a live module
@@ -46,6 +50,10 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 public sealed class ModuleContexts : IDisposable
 {
     private readonly ConcurrentDictionary<string, ModuleGeneration> current = new(StringComparer.Ordinal);
+    // Which module contributed a mesh node — by REFERENCE, weakly: the seed node list asks it so a
+    // module's nodes can be served from its CURRENT generation once the generation that contributed
+    // them at boot has been swapped out (see StaticMeshNodeListProvider).
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MeshNode, string> nodeOwners = new();
     private long sequence;
     private CollectibleContextUnloads? unloads;
     private ILogger? logger;
@@ -115,6 +123,28 @@ public sealed class ModuleContexts : IDisposable
             throw;
         }
     }
+
+    /// <summary>Records <paramref name="contributions"/> as what <paramref name="generation"/>
+    /// contributes, and each of its nodes as owned by its module.</summary>
+    public void SetContributions(ModuleGeneration generation, ModuleContributions contributions)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        ArgumentNullException.ThrowIfNull(contributions);
+        generation.Contributions = contributions;
+        foreach (var node in contributions.Nodes)
+            nodeOwners.AddOrUpdate(node, generation.Name);
+    }
+
+    /// <summary>The module that contributed <paramref name="node"/> (by reference), or null.</summary>
+    public string? OwnerOf(MeshNode node) =>
+        nodeOwners.TryGetValue(node, out var owner) ? owner : null;
+
+    /// <summary>
+    /// The nodes the CURRENT generation of <paramref name="moduleName"/> contributes — empty when
+    /// the module is not held or its contributions are not materialised.
+    /// </summary>
+    public IReadOnlyCollection<MeshNode> CurrentNodes(string moduleName) =>
+        Current(moduleName)?.Contributions?.Nodes ?? [];
 
     /// <summary>
     /// Makes <paramref name="generation"/> the current one for its module and returns the one it

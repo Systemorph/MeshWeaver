@@ -208,6 +208,16 @@ public static class PluginCatalogConfigurationExtensions
                 // 🚨 It is registered rather than merely constructible so a NodeType's layout area
                 // can resolve it from hub.ServiceProvider — the Store's install step is the
                 // surface where the missing last step is actually met.
+                // 🚨 The LIVE-FIRST activation (policy module-live-update-default): what the
+                // self-update check calls before it would announce a restart — every landed module
+                // that can be swapped in live is, and only the rest still needs the restart.
+                .AddSingleton(sp => new ModuleLiveActivation(
+                    sp.GetRequiredService<PendingModuleActivations>(),
+                    sp.GetRequiredService<ModuleLandingService>(),
+                    sp.GetRequiredService<MeshWeaver.Mesh.ModuleContexts>(),
+                    sp.GetRequiredService<MeshWeaver.Graph.Configuration.ModuleLiveUpdater>(),
+                    sp.GetRequiredService<Mesh.Threading.IoPoolRegistry>(),
+                    sp.GetService<ILogger<ModuleLiveActivation>>()))
                 .AddSingleton(sp => new PendingModuleActivations(
                     ModuleRoot.Resolve(sp.GetService<IConfiguration>()))
                 {
@@ -220,6 +230,10 @@ public static class PluginCatalogConfigurationExtensions
                         ?.Get(Mesh.Threading.IoPoolNames.FileSystem)
                         ?? Mesh.Threading.IoPool.Unbounded,
                     Logger = sp.GetService<ILogger<PendingModuleActivations>>(),
+                    // The registry's answer for the modules it holds wins over the AppDomain's: two
+                    // generations of one name coexist after a live swap until the old one is
+                    // collected (policy module-live-update-default).
+                    ModuleContexts = sp.GetService<MeshWeaver.Mesh.ModuleContexts>(),
                     // 🚨 #3538 — the modules MeshBuilder.InstallAssemblies refused: its link probe
                     // declined them, or their registration threw. Without this set they read as
                     // PENDING, and every surface promises a restart that re-runs the same
