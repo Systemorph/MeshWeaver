@@ -290,6 +290,43 @@ groups by person, so anchoring it to the viewer's partition — what its line su
 it, and it should declare; and nothing in MeshWeaver.Plugins calls `ChatHistorySelector`'s query any
 more, so that row's caller can be deleted rather than fixed.
 
+## The 2026-10-04 census (the public instance, 12 h, image ci.9939)
+
+Asked as "it takes forever to load apps — where is the time going, is it logging?". Logging was
+not it: steady-state volume was under 0.5 line/s per pod. The time was the fan-outs. Every slow
+query below is a `UNION ALL` over **251** partition schemas (`[CrossSchema] SLOW`, Loki,
+12:30–14:30Z plus a 6 h count), and only queries above the slow threshold are counted:
+
+| Shape (`nodeType:` …) | Slow runs / 12 h | Median (max) | Issuer |
+|---|---|---|---|
+| `Thread` (threads table) | 204 | 1.5 s (2.5 s) | `ThreadChatView` "my other open threads", subscribed by EVERY composer — the home page's included — **fixed in MeshWeaver.Plugins#2869** (now only where the thread side menu renders); `ThreadSupervisor` 60 s sweep; `ChatHistorySelector` |
+| `NodeType` | 171 | 1.6 s (2.7 s) | `CompileProgressIndicator`'s global mode, mounted by every not-yet-loaded `LayoutAreaView` — **fixed in MeshWeaver.Plugins#2869** (watches the area's own type); plus boot/periodic System sweeps |
+| `GitHubSyncConfig` | 118 | 1.6 s (2.7 s) | `GitHubWebhookProcessor` — **one fan-out per GitHub webhook delivery**; `ModuleDiscoveryService`, `InstanceComboReader` |
+| `Store/Plugin` (± `is:main`) | 83 | 1.3–1.9 s (3.0 s) | `PluginHubWarmer`, `PluginFeedQuery`, `StandardPacks`, `AppTileRefresh`, Store/Edu page renders |
+| `Code` (Subtree + Exact) | 14 | 1.2–2.2 s | `NodeTypeBatchBake`, `CompletionUsageIndex` |
+| `Hosting/Deployment` | 11 | 1.8 s | `DeploymentPinnedReferences`, fleet pages |
+| `NotificationRule` | 10 | 1.7 s | `NotificationTriageService` (one live query per process) |
+| `Email` | 10 | 2.2 s | generic per-type callers (event subscriptions, recycle cascade) |
+| `Hosting/ModuleInventory` | 8 | 1.8 s | `DeploymentPinnedReferences` |
+| `PluginCatalog` | 8 | 1.6 s | `PluginUpdateWatcher` (once per boot) |
+| `GroupMembership` (Subtree) | 7 | 2.2 s | the security fold — **must not be narrowed** (plan 2 below) |
+| `ModuleDiscovery` | 6 | — | `InstanceComboReader` — and very likely ALWAYS EMPTY: `partitions:all` never includes `Admin`, where the records live (`Admin/_Discovery`); anchor it with `path:Admin/_Discovery scope:children` |
+| `Space` root leg (`namespace:` … `partitions:all`) | — | 1.3 s | the home page's content list and Spaces scope — **fixed here** (below) |
+
+**The home page no longer issues a mesh-wide query.** The two reads it ran on every render — the
+root-Space leg and the shared-targets `AccessAssignment` read — run once per logon session in
+`RefreshSpacePathsLogonAction`, as the user, and land on the user's OWN profile as
+`User.SpacePaths` / `User.SharedPaths`. The home anchors on them (`path:a|b|c`), omits the root
+leg while the list is empty, and falls back to the viewer's own partition, never to a fan-out.
+The apps band was already one partition (`{owner}/_App`) — what made it slow was waiting in the
+lock manager behind the fan-outs above (see "lock bomb").
+
+**Anchorable next, on a manifest that already exists:** `Store/Plugin`, `NodeType`, `Code` and
+`UiContribution` all live in installed package partitions, which the `Plugins/{id}` install records
+name (`content.targetPartition` — `PackageAnchor` already reads it); `GitHubSyncConfig` always lives
+at `{space}/_GitSync`, so a repo → spaces index written on config save removes the per-webhook
+fan-out.
+
 ## The elimination plan
 
 ### 1. The bell: deliver notifications to the RECIPIENT's partition

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
@@ -14,37 +16,32 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// 🚨 <b>A build-triggered GitSync import reads the commit THAT BUILD proved — never the branch tip
-/// at the moment the fetch happens.</b> Systemorph/MeshWeaver.Plugins#1430, measured on production.
+/// 🚨 <b>Sources sync on PUSH, at the pushed commit — a red build of the branch holds nothing, and a
+/// lost delivery is caught by the branch reconcile</b> (policy <c>sources-sync-on-push</c>;
+/// <c>Doc/Architecture/SourcesSyncOnPush</c>).
 ///
-/// <para><b>What went wrong.</b> The <c>workflow_run</c> green-build trigger selected its candidate
-/// sync sources against the run's <c>head_sha</c> and then asked for "update to latest", which
-/// resolves <c>GitHubSyncConfig.Branch</c> inside the fetch. Those are the same tree only while
-/// nothing merges in between. On 2026-09-06 a MeshWeaver.Plugins <c>main</c> run for
-/// <c>8d4920c93</c> finished at 22:38:18Z with <c>main</c> already past #1413 (the Payments split,
-/// merged 22:17:21Z). Both production portals imported #1413's <c>Store/*</c> sources — against a
-/// platform carrying neither <c>IPaymentProvider</c> nor the Payments module — and
-/// <c>Store/Catalog</c>, <c>Order</c>, <c>Plugin</c> and <c>Maintenance</c> sat in compile
-/// <c>Error</c> for roughly five hours, with the catalog and the checkout path dark on the
-/// commercial portal.</para>
+/// <para><b>What went wrong (measured on the control instance, 2026-10-04/05).</b> The import was
+/// triggered only by a GREEN build of the branch. MeshWeaver.Plugins' main was red on every push from
+/// 14:39Z, so <c>AI/_GitSync</c> and <c>Hosting/_GitSync</c> last attempted at 14:56Z and then
+/// nothing for 15 h while main moved twice; a manual update at 05:29Z imported at once with 18
+/// NodeTypes recompiled and 0 compile errors. The green-build trigger had re-introduced the
+/// whole-repository hold policy <c>module-sync-per-manifest-hash</c> removed.</para>
 ///
-/// <para><b>What this test measures, and why it could fail.</b> The assertion is on the ref the
-/// import actually asks GitHub for — <see cref="IGitHubRepoClient.Fetch(string,string,string?,string)"/>'s
-/// <c>commitish</c> — not on a log line or a decision function, because the defect was precisely
-/// that the decision and the fetch disagreed. Against the pre-fix code the recorded ref is the
-/// branch name <c>main</c>; against the fix it is the sha the payload carried. The second assertion
-/// (<c>NotBe("main")</c>) is not redundant: it is the one that states the failure mode in the words
-/// the incident used, so a future regression reads as itself rather than as a mismatched string.</para>
+/// <para><b>What every assertion measures.</b> The ref the import asks GitHub for — the
+/// <c>commitish</c> of <see cref="IGitHubRepoClient.Fetch(string,string,string?,string)"/> — because
+/// the defects here are all "the fetch did or did not happen, at that ref". The class keeps its name
+/// for the #1430 half it still pins: a machine trigger imports the commit it NAMES, never the branch
+/// tip resolved at fetch time.</para>
 ///
 /// <para>The fake repo client is the IO boundary — a GitHub transport, not a mesh interface — which
-/// is the one seam this codebase does substitute. Everything else is the real mesh: the real
-/// webhook processor, the real sync service, the real activity runner.</para>
+/// is the one seam this codebase does substitute. Everything else is the real mesh.</para>
 /// </summary>
 public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -53,12 +50,11 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     private const string RepoUrl = $"https://github.com/{RepoFullName}";
 
     /// <summary>A real-shaped 40-hex sha, so nothing downstream can mistake it for a branch name.</summary>
-    private const string BuiltSha = "8d4920c93a1b2c3d4e5f60718293a4b5c6d7e8f9";
+    private const string PushedSha = "8d4920c93a1b2c3d4e5f60718293a4b5c6d7e8f9";
 
     private readonly RecordingRepoClient repoClient = new();
 
-    /// <summary>The DevLogin user the test base logs in — read directly, since
-    /// <c>AccessService.Context</c> is circuit-scoped and null on the test-method thread.</summary>
+    /// <summary>The DevLogin user the test base logs in.</summary>
     private static string UserId => TestUsers.Admin.ObjectId!;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -67,8 +63,7 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             .ConfigureServices(services =>
             {
                 services.AddGitHubSyncServices();
-                // Last registration wins: the recording client replaces the git/Octokit transport,
-                // so the test observes the ref without ever reaching the network.
+                // Last registration wins: the recording client replaces the git/Octokit transport.
                 services.AddSingleton<IGitHubRepoClient>(repoClient);
                 return services;
             });
@@ -81,113 +76,168 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     private GitHubWebhookProcessor Webhooks =>
         Mesh.ServiceProvider.GetRequiredService<GitHubWebhookProcessor>();
 
-    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
-    // constant, and the inner waits below already carry the adaptive bound. This outer one
-    // only has to stop a WEDGE.
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+    /// <summary>
+    /// 🚨 <b>A push imports at the pushed commit, and a RED build of that commit does not hold it.</b>
+    ///
+    /// <para>The red build is delivered FIRST, under a <c>NotEmit</c>: it must fetch nothing (a
+    /// failed run is no signal of any kind). Then the push — which before this change logged and
+    /// imported nothing — must reach GitHub at its own sha. Against the old code this test fails on
+    /// the second assertion: the push answered 0 and nothing was ever fetched.</para>
+    /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task GreenBuild_ImportsAtTheBuiltCommit_NeverAtTheBranchTip()
+    public async Task APush_ImportsAtThePushedCommit_EvenThoughTheBranchsBuildIsRed()
     {
-        var space = "GbPin" + Guid.NewGuid().ToString("N")[..8];
-        await NodeFactory.CreateNode(new MeshNode(space)
-        {
-            NodeType = "Space",
-            Name = "Pinned build space",
-            State = MeshNodeState.Active,
-            Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        await Arrange("PushRed", TestContext.Current.CancellationToken);
 
-        var configNode = await Sync
-            .SaveConfig(space, RepoUrl, "main", null,
-                createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        var redFetchesNothing = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var red = await Anonymously(() => Webhooks.Process("workflow_run",
+            BuildPayload(PushedSha, conclusion: "failure")));
+        red.Should().Be(0, "a red build is no publish signal and records nothing");
+        await redFetchesNothing;
 
-        // The import authenticates as the sync config's CREATOR — read it off the node rather than
-        // assuming which identity the write landed under, so the credential below is seeded for the
-        // user the production path will actually resolve.
-        var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
-        Output.WriteLine($"sync config {configNode.Path} createdBy={syncOwner}");
-        await Credentials
-            .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("the push must import although the branch's CI is red (policy sources-sync-on-push)");
+        var triggered = await Anonymously(() => Webhooks.Process("push", PushPayload(PushedSha)));
 
-        // Arm the observation BEFORE the trigger: the fetch is the thing under test and it happens
-        // on a background activity, so the assertion must already be subscribed when it fires.
-        var fetchedRef = repoClient.FetchedRefs.Should().Within(TestTimeouts.Convergence * 2)
-            .Emit("the build-triggered import must reach GitHub with a ref");
-
-        // 🚨 The webhook request is ANONYMOUS — its authorization is the verified HMAC signature.
-        // Drop every ambient identity so the processor's own System impersonation is what carries
-        // the lookups and the write, exactly as it must on an access-gated portal.
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.ClearHostIdentity();
-        accessService.SetHostIdentity(null);
-        accessService.SetContext(null);
-        int triggered;
-        try
-        {
-            triggered = await Webhooks.Process("workflow_run", GreenBuildPayload(BuiltSha))
-                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            accessService.SetHostIdentity(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
-        }
-
-        triggered.Should().Be(1, "the one sync source of this repository is selected by the green build");
-
-        var requested = await fetchedRef;
-        Output.WriteLine($"import asked GitHub for '{requested}' (built sha {BuiltSha})");
-
-        requested.Should().Be(BuiltSha,
-            "the import must read the tree the build proved, not whatever the branch points at when "
-            + "the fetch happens (MeshWeaver.Plugins#1430)");
-        requested.Should().NotBe("main",
-            "resolving the configured branch a second time is the defect: main had moved past the "
-            + "built commit, and two live portals received sources no build had ever compiled");
+        triggered.Should().Be(1, "the one sync source of this repository is selected by the push");
+        var requested = await fetched;
+        requested.Should().Be(PushedSha,
+            "the import must read the commit the push named, never the branch resolved at fetch time "
+            + "(MeshWeaver.Plugins#1430)");
+        requested.Should().NotBe("main");
     }
 
     /// <summary>
-    /// The unattended import has NO branch-HEAD fallback: a caller that cannot name the proven
-    /// commit fails instead of degrading to the behaviour #1430 removed. This is the third state
-    /// stated as a test — "we could not read a proven commit" must never collapse into "then use
-    /// the branch", which is the shape that turns an unread value into a confident wrong answer.
+    /// 🚨 <b>A green build RECORDS the build and imports nothing</b> — under every admitted trigger.
+    /// A green build of an older commit finishing after a newer push had landed would otherwise move
+    /// the Space backwards, and the push already brought the sources.
+    ///
+    /// <para><b>Positive control in the same mesh:</b> a push at one of the very same shas DOES
+    /// fetch, so the <c>NotEmit</c> above it cannot pass on a mesh that could not import at all. The
+    /// scheduled PR-updater (#3978) is still refused outright: no build record.</para>
     /// </summary>
-    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
-    // constant, and the inner waits below already carry the adaptive bound. This outer one
-    // only has to stop a WEDGE.
     [Fact(Timeout = 120_000)]
-    public async Task UnattendedImport_WithoutAProvenCommit_Refuses_RatherThanFallingBackToTheBranch()
+    public async Task AGreenBuild_RecordsTheBuild_ButNoLongerImports()
     {
-        var space = "GbNoSha" + Guid.NewGuid().ToString("N")[..8];
+        await Arrange("Green", TestContext.Current.CancellationToken);
+
+        var shas = new (string Trigger, string Sha)[]
+        {
+            ("push", "1111111111111111111111111111111111111111"),
+            ("repository_dispatch", "2222222222222222222222222222222222222222"),
+            ("schedule", "3333333333333333333333333333333333333333"),
+        };
+
+        var noImport = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
+            cancellationToken: TestContext.Current.CancellationToken);
+        foreach (var (trigger, sha) in shas)
+        {
+            var recorded = await Anonymously(() => Webhooks.Process("workflow_run",
+                BuildPayload(sha, trigger: trigger)));
+            recorded.Should().Be(1,
+                $"a green content-CI run started by '{trigger}' is still RECORDED as a build fact");
+        }
+        var updater = await Anonymously(() => Webhooks.Process("workflow_run", BuildPayload(
+            "4444444444444444444444444444444444444444",
+            workflowPath: ".github/workflows/auto-update-green-prs.yml", trigger: "schedule")));
+        updater.Should().Be(0, "a green PR updater proves no content and is not recorded (#3978)");
+        await noImport;
+
+        // ── the positive control ──
+        var pushFetches = repoClient.FetchedRefs.Where(r => r == shas[2].Sha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("a push at the same sha must import — the mesh above COULD import, it was told not to");
+        (await Anonymously(() => Webhooks.Process("push", PushPayload(shas[2].Sha))))
+            .Should().Be(1);
+        (await pushFetches).Should().Be(shas[2].Sha);
+    }
+
+    /// <summary>
+    /// 🚨 <b>A lost push delivery is caught by the branch reconcile</b> — and a source already on the
+    /// head costs the reconcile one ref lookup and no fetch.
+    ///
+    /// <para>No webhook is delivered at all (the lost delivery). The reconcile resolves the branch
+    /// head through <see cref="IGitHubRepoClient.GetHeadSha"/> and imports AT that sha. Then, once
+    /// the source records the head, a second pass must NOT fetch — the negative control that keeps
+    /// "reconcile" from meaning "re-clone every repository every ten minutes".</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ALostPushDelivery_IsCaughtByTheBranchReconcile_AndASettledSourceIsNotFetchedAgain()
+    {
+        var space = await Arrange("Lost", TestContext.Current.CancellationToken);
+        repoClient.Head = PushedSha;
+
+        var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("the reconcile must bring the source to the head the lost push would have");
+        var triggered = await Anonymously(() => Webhooks.ReconcileBranches());
+        triggered.Should().Be(1, "the one source of this repository is behind the branch head");
+        (await fetched).Should().Be(PushedSha,
+            "the reconcile imports AT the sha it resolved, never at the branch (#1430)");
+
+        // The source records the head once the import lands; the reconcile selects from the
+        // eventually-consistent config QUERY, so wait for the query too, not just the node.
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => MeshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{GitHubSyncService.ConfigPath(space)}"))
+                .Take(1))
+            .Where(c => c.Items.Any(n =>
+                n.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)?.LastSyncCommitSha == PushedSha))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence * 2)
+            .Await(TestContext.Current.CancellationToken);
+
+        var noRefetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var again = await Anonymously(() => Webhooks.ReconcileBranches());
+        again.Should().Be(0, "the source is already at the head");
+        await noRefetch;
+    }
+
+    /// <summary>
+    /// The pushed-commit surface has NO branch-HEAD fallback: a caller that cannot name the commit
+    /// fails before any fetch instead of degrading to the behaviour #1430 removed.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task UnattendedImport_WithoutACommit_Refuses_RatherThanFallingBackToTheBranch()
+    {
+        var space = "PushNoSha" + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
         {
             NodeType = "Space",
-            Name = "No proven commit",
+            Name = "No commit",
             State = MeshNodeState.Active,
             Content = new Space(),
         }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
+        var nothingFetched = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
+            cancellationToken: TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            Mesh.UpdateToPushedCommitFromGitHub(space, UserId, commitSha: "", trigger: "push")
+                .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Mesh.UpdateToProvenCommitFromGitHub(space, UserId, commitSha: "")
                 .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
-
-        // Nothing was asked of GitHub — the refusal is BEFORE any fetch, not a failed fetch.
-        await repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick, cancellationToken: TestContext.Current.CancellationToken);
+        await nothingFetched;
     }
 
     /// <summary>
-    /// A green workflow that did not compile the repository's content is not a weaker build signal;
-    /// it is no build signal at all. This is the live #3978 shape: the scheduled PR updater wrote
-    /// twenty build completions for a commit whose real content CI was red.
+    /// A green workflow that did not compile the repository's content is not a build signal at all
+    /// (#3978): no record, no import.
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task GreenUnrelatedWorkflow_DoesNotRecordOrTriggerAnImport()
     {
-        var noFetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick);
+        var noFetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var triggered = await Webhooks.Process(
                 "workflow_run",
-                GreenBuildPayload(BuiltSha, ".github/workflows/auto-update-green-prs.yml"))
+                BuildPayload(PushedSha, ".github/workflows/auto-update-green-prs.yml"))
             .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
         triggered.Should().Be(0,
@@ -196,148 +246,164 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// 🚨 <b>The POSITIVE control for #3978, and it needs all THREE trigger kinds to be one.</b>
+    /// 🚨 <b>An incompatible module is declined ALONE while its siblings sync</b> — the per-module
+    /// judgement every push-triggered import runs (policy <c>module-sync-per-manifest-hash</c>), read
+    /// off a pushed tree exactly as the import reads it.
     ///
-    /// <para>Keying the publish signal on the repository's content CI is only safe while every way
-    /// that CI can START still publishes. Narrowing the admitted triggers is the mistake this fleet
-    /// has ALREADY made, in the opposite direction: on 2026-09-02 the test was <c>event == "push"</c>
-    /// alone, <c>MeshWeaver.Reinsurance</c>'s three green <c>repository_dispatch</c> runs at
-    /// <c>636ebd5</c> were all discarded, and <c>Underwriting/_GitSync</c> sat <b>38 hours</b> behind
-    /// a merged main with every delivery answering 200 OK and nothing reporting a fault
-    /// (MeshWeaver.Plugins#1194). A content-CI run reaches this webhook as <c>push</c> when the
-    /// branch moves, as <c>repository_dispatch</c> when a platform release re-verifies the satellite
-    /// with no commit to push, and as <c>schedule</c> on its own cron — so all three are asserted,
-    /// separately, at their own shas.</para>
-    ///
-    /// <para><b>And it carries its own negative control, in the same mesh.</b> The fourth delivery
-    /// is a green <c>schedule</c> run of the PR-updater — the live #3978 shape — which must record
-    /// nothing and fetch nothing. An absence assertion goes vacuous the moment the setup around it
-    /// stops working, so the three deliveries that DID import are what stop
-    /// <c>NotEmit</c> from passing on a mesh where no import could have happened at all.</para>
+    /// <para>The decision is pure, so it is pinned with an explicit running platform: the test
+    /// process itself runs a local <c>-ci.0</c> build, which the one floor comparator treats as
+    /// advisory by design (policy <c>package-min-mesh-version</c>), so an end-to-end decline cannot be
+    /// produced here without overriding a process-wide environment variable every parallel test
+    /// would see. The negative control is the same tree on a platform that meets the floor: nothing
+    /// is declined.</para>
     /// </summary>
-    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a
-    // constant, and the inner waits below already carry the adaptive bound.
-    [Fact(Timeout = 120_000)]
-    public async Task AGreenContentCiRun_Publishes_UnderEveryAdmittedTriggerKind()
+    [Fact]
+    public void AnIncompatibleModuleIsDeclinedAlone_WhileItsSiblingSyncs()
     {
-        var space = "GbTrig" + Guid.NewGuid().ToString("N")[..8];
+        IEnumerable<(string Path, string Content)> PushedTree() =>
+        [
+            ("Hosting/manifest.lock", """{ "module": "Hosting", "moduleVersion": "1f75ade77bdf2fa5" }"""),
+            ("Hosting/index.json", """{ "nodeType": "Space", "content": { "minMeshVersion": "3.0.0-ci.9500" } }"""),
+            ("Hosting/Babysitter.md", "---\nNodeType: Markdown\n---\n"),
+            ("AI/manifest.lock", """{ "module": "AI", "moduleVersion": "b5c88490aa11bb22" }"""),
+            ("AI/index.json", """{ "nodeType": "Space", "content": { "minMeshVersion": "3.0.0-ci.9000" } }"""),
+        ];
+        var held = new Dictionary<string, string> { ["AI"] = "178ff85c00112233", ["Hosting"] = "39aa00bb11cc22dd" };
+
+        var onAnOldPlatform = ModuleSyncDecision.Decide(
+            ModuleSyncDecision.Read(PushedTree()), held, "3.0.0-ci.9218", reconcile: false);
+        Output.WriteLine(string.Join(Environment.NewLine, onAnOldPlatform.Select(m => $"{m.Module}: {m.Outcome} — {m.Reason}")));
+
+        var hosting = onAnOldPlatform.Single(m => m.Module == "Hosting");
+        hosting.Outcome.Should().Be(ModuleSyncOutcomeKind.Declined,
+            "Hosting declares platform ≥ 3.0.0-ci.9500 and this instance runs 3.0.0-ci.9218");
+        hosting.Reason.Should().Contain("3.0.0-ci.9500").And.Contain("3.0.0-ci.9218",
+            "the decline names BOTH versions, so an operator knows what roll releases it");
+        onAnOldPlatform.Single(m => m.Module == "AI").Outcome.Should().Be(ModuleSyncOutcomeKind.Synced,
+            "a sibling module's floor holds nothing else — the AI module changed and syncs");
+
+        // ── negative control: the platform meets every floor ⇒ nothing is declined ──
+        ModuleSyncDecision.Decide(ModuleSyncDecision.Read(PushedTree()), held, "3.0.0-ci.9600", reconcile: false)
+            .Select(m => m.Outcome)
+            .Should().AllBe(ModuleSyncOutcomeKind.Synced);
+    }
+
+    // ── arrangement ──────────────────────────────────────────────────────────
+
+    private async Task<string> Arrange(string prefix, CancellationToken cancellationToken)
+    {
+        var space = prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
         {
             NodeType = "Space",
-            Name = "Every admitted trigger",
+            Name = prefix,
             State = MeshNodeState.Active,
             Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        }).Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
         var configNode = await Sync
             .SaveConfig(space, RepoUrl, "main", null,
                 createBranchIfMissing: false, createRepoIfMissing: false)
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
+
+        // The import authenticates as the sync config's CREATOR — seed the credential for exactly
+        // the identity the production path will resolve.
         var syncOwner = configNode.CreatedBy is { Length: > 0 } creator ? creator : UserId;
         await Credentials
             .Save(syncOwner, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+            .Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
-        // One distinct sha per trigger kind, so no delivery can be satisfied by another's import and
-        // #3945's "already attempted these exact bytes" skip cannot mask a dropped signal.
-        var shas = new (string Trigger, string Sha, string Why)[]
-        {
-            ("push", "1111111111111111111111111111111111111111",
-                "the branch moved and its content CI ran — the original case"),
-            ("repository_dispatch", "2222222222222222222222222222222222222222",
-                "a platform release re-verifies the satellite with no commit to push — the exact "
-                + "signal MeshWeaver.Plugins#1194 discarded for 38 hours"),
-            ("schedule", "3333333333333333333333333333333333333333",
-                "the content CI's own cron run, which only ever exists on the default branch"),
-        };
-
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        foreach (var (trigger, sha, why) in shas)
-        {
-            // Arm the observation BEFORE the delivery: the fetch happens on a background activity.
-            var fetched = repoClient.FetchedRefs.Where(r => r == sha)
-                .Should().Within(TestTimeouts.Convergence * 2)
-                .Emit($"a green content-CI run started by '{trigger}' is a publish signal — {why}");
-
-            // The webhook request is ANONYMOUS; drop every ambient identity so the processor's own
-            // System impersonation is what carries the lookups and the write.
-            accessService.ClearHostIdentity();
-            accessService.SetHostIdentity(null);
-            accessService.SetContext(null);
-            int triggered;
-            try
-            {
-                triggered = await Webhooks
-                    .Process("workflow_run", GreenBuildPayload(sha, trigger: trigger))
-                    .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
-            }
-            finally
-            {
-                accessService.SetHostIdentity(
-                    new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
-            }
-
-            triggered.Should().Be(1,
-                $"the one sync source of this repository must be selected by a green content-CI run "
-                + $"started by '{trigger}' — {why}");
-            (await fetched).Should().Be(sha,
-                $"the '{trigger}' delivery must import the tree ITS run proved");
-            Output.WriteLine($"{trigger} @ {sha[..8]} → triggered={triggered}, fetched={sha[..8]}");
-        }
-
-        // ── the negative half, on a mesh the three deliveries above have proven can import ──
-        const string UpdaterSha = "4444444444444444444444444444444444444444";
-        var neverFetched = repoClient.FetchedRefs.Where(r => r == UpdaterSha)
-            .Should().NotEmit(within: TestTimeouts.Quick);
-
-        var refused = await Webhooks
-            .Process("workflow_run", GreenBuildPayload(
-                UpdaterSha, ".github/workflows/auto-update-green-prs.yml", trigger: "schedule"))
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
-
-        refused.Should().Be(0,
-            "a green scheduled PR updater checks out nothing and builds nothing; the SAME trigger "
-            + "that just published a real content-CI run must not publish this one — the trigger "
-            + "says how a workflow started, never what it proved (#3978)");
-        await neverFetched;
+        // The processor selects from an eventually-consistent QUERY of the configs.
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => MeshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{GitHubSyncService.ConfigPath(space)}"))
+                .Take(1))
+            .Where(c => c.Items.Count > 0)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(cancellationToken);
+        return space;
     }
 
-    private static JsonElement GreenBuildPayload(
+    /// <summary>
+    /// 🚨 The webhook request is ANONYMOUS — its authorization is the verified HMAC signature — and the
+    /// reconcile runs on a timer with no user. Every ambient identity is dropped so the processor's
+    /// own System impersonation is what carries the lookups and the writes.
+    /// </summary>
+    private async Task<int> Anonymously(Func<IObservable<int>> work)
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.ClearHostIdentity();
+        accessService.SetHostIdentity(null);
+        accessService.SetContext(null);
+        try
+        {
+            return await work().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            accessService.SetHostIdentity(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
+        }
+    }
+
+    private static JsonElement PushPayload(string afterSha) => JsonDocument.Parse($$"""
+        {
+          "ref": "refs/heads/main",
+          "before": "0123456789abcdef0123456789abcdef01234567",
+          "after": "{{afterSha}}",
+          "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
+          "commits": [ { "added": ["Page.md"], "modified": [], "removed": [] } ],
+          "size": 1
+        }
+        """).RootElement;
+
+    private static JsonElement BuildPayload(
         string headSha,
         string workflowPath = ".github/workflows/ci.yml",
-        string trigger = "push") => JsonDocument.Parse($$"""
+        string trigger = "push",
+        string conclusion = "success") => JsonDocument.Parse($$"""
         {
           "action": "completed",
           "repository": { "full_name": "{{RepoFullName}}", "default_branch": "main" },
           "workflow_run": {
-            "conclusion": "success", "head_branch": "main", "head_sha": "{{headSha}}",
+            "conclusion": "{{conclusion}}", "head_branch": "main", "head_sha": "{{headSha}}",
             "id": 34061098155, "run_number": 2026, "name": "Content CI", "event": "{{trigger}}",
             "path": "{{workflowPath}}",
-            "updated_at": "2026-09-06T22:38:18Z"
+            "updated_at": "2026-10-04T14:39:00Z"
           }
         }
         """).RootElement;
 
     /// <summary>
-    /// The GitHub transport, reduced to the one question this test asks: which ref did the import
-    /// request? Everything else throws, so a future caller that starts depending on another
-    /// operation is told rather than silently served a fake answer.
+    /// The GitHub transport, reduced to the two questions these tests ask: which ref did an import
+    /// fetch, and what does the branch point at. Everything else throws.
+    ///
+    /// <para>🚨 <see cref="FetchedRefs"/> is HOT, not replaying: the negative controls assert that NO
+    /// fetch follows a step, and a replaying subject would hand them an earlier step's fetch.</para>
     /// </summary>
     private sealed class RecordingRepoClient : IGitHubRepoClient
     {
-        private readonly ReplaySubject<string> fetched = new();
+        private readonly Subject<string> fetched = new();
 
-        /// <summary>Every commitish a fetch has asked for, replayed to a late subscriber.</summary>
+        /// <summary>Every commitish a fetch asks for, as it happens.</summary>
         public IObservable<string> FetchedRefs => fetched;
+
+        /// <summary>What the branch points at, for the reconcile's ref lookup.</summary>
+        public string Head { get; set; } = PushedSha;
 
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
-        {
-            fetched.OnNext(commitish);
-            // An empty snapshot at the requested sha: the import then has nothing to write, which is
-            // exactly what this test wants — the ref is the measurement, the content is not.
-            return Observable.Return(new RepoSnapshot(commitish, Array.Empty<RepoFile>()));
-        }
+            // Defer: the fetch is what SUBSCRIBING costs, so it is recorded there.
+            => Observable.Defer(() =>
+            {
+                fetched.OnNext(commitish);
+                // One real page at the requested sha, so the import LANDS and records the commit.
+                return Observable.Return(new RepoSnapshot(commitish, ImmutableList.Create(
+                    new RepoFile("Page.md", "---\nNodeType: Markdown\nName: Page\n---\n\nA page.\n"))));
+            });
+
+        public IObservable<string> GetHeadSha(string repositoryUrl, string commitish, string accessToken)
+            => Observable.Return(Head);
 
         public IObservable<GitHubPushResult> Push(GitHubPushRequest request) => NotUsed<GitHubPushResult>();
 
@@ -383,6 +449,6 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
 
         private static IObservable<T> NotUsed<T>() => Observable.Throw<T>(
             new NotSupportedException(
-                "BuildTriggeredSyncPinsTheBuiltCommitTest's repo client answers only Fetch."));
+                "BuildTriggeredSyncPinsTheBuiltCommitTest's repo client answers only Fetch and GetHeadSha."));
     }
 }

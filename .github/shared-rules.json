@@ -339,7 +339,14 @@
         "STALE' on purpose: merging first is a precondition of a push, never a reason for one.",
         "",
         "Landing in the three change sets this register's header describes: step 1 (this entry) names the",
-        "hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
+        "hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven.",
+        "",
+        "SUPERSEDED before step 2 (policy suites-test-fresh-merge): the stale green this rule guarded",
+        "against is now closed in CI — every suite job of every repo that runs core's lanes tests the head",
+        "merged onto the CURRENT base tip (Doc/Architecture/FreshMergeUnderTest), so no spoke copy is owed",
+        "and the six step-2 drafts (Plugins#2757, Memex#644, Education#384, Reinsurance#246, SocialMedia#234,",
+        "Manufacturing#125) were closed with a pointer. The hub copy stays for the one case CI cannot see: a",
+        "DIRTY pull request gets no run at all, and merging main before a push is how its author resolves it."
       ]
     }
   ]

@@ -249,6 +249,16 @@ on:
           on a re-run says so in its own log and summary; this is `plan`'s baseline.
         value: ${{ jobs.plan.outputs.platform-set }}
     inputs:
+      merge-main-sha:
+        description: >-
+          Pull requests only (policy suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest): the
+          base tip every job of this lane merges the head onto before testing it, so the lane tests the
+          head + the CURRENT main and not GitHub's merge ref from push time. Empty = the lane resolves
+          the tip itself, once, in its first job. Ignored when `content-ref` names a ref, and off pull
+          requests.
+        required: false
+        type: string
+        default: ''
       artifact-store-id:
         description: >-
           Physical store identity resolved by the caller's first producer. Pass the same value
@@ -636,6 +646,8 @@ jobs:
       platform-image-digest: ${{ steps.digests.outputs.platform-image-digest }}
       platform-set: ${{ steps.digests.outputs.platform-set }}
       baseline: ${{ steps.digests.outputs.baseline }}
+      # The base tip every shard merges the head onto (empty off pull requests).
+      merge-main-sha: ${{ steps.fresh.outputs.main-sha }}
     steps:
       - name: Resolve and bind the artifact store
         id: store
@@ -679,6 +691,13 @@ jobs:
           fi
           [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
           echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Name the base tip every shard merges onto
+        id: fresh
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          resolve-only: 'true'
+          main-sha: ${{ inputs.merge-main-sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -923,6 +942,11 @@ jobs:
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
       - uses: actions/checkout@v7
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the run's current base tip
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          main-sha: ${{ needs.plan.outputs.merge-main-sha }}
       # The tester installs this tree and stamps each install with its lock's moduleVersion; a
       # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's —
       # written by the generator at this lane's scripts ref (a disposable checkout the action removes).
