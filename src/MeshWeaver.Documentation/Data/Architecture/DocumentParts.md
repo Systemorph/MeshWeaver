@@ -109,12 +109,18 @@ So N point reads hold N hubs.
 
 ```csharp
 meshService.Query<MeshNode>(MeshQueryRequest
-        .FromQuery($"namespace:{DocumentPartPaths.PartNamespace(documentPath)}").Complete())
+        .FromQuery($"namespace:\"{DocumentPartPaths.PartNamespace(documentPath)}\"").Complete())
+    // ONE Initial change carries the WHOLE result set: take that one frame, then use its rows.
     .Where(change => change.ChangeType == QueryChangeType.Initial)
     .Take(1)
+    .Select(change => change.Items)   // every part of the document, not just one
 ```
 
-The query reads the rows from the parts' satellite table and builds no hub.
+`Take(1)` takes one *change*, not one part. Every `Query<T>` stream emits exactly one `Initial`
+change, and that change carries every matching row; `Complete()` lifts any limit. If a frame is
+flagged `SnapshotIncomplete`, a provider could not answer, so do not treat its rows as the full
+set. The quotes keep the namespace a single query token. The query reads the rows from the parts'
+satellite table and builds no hub.
 `DurableStreamSource` consumes a document's parts the same way.
 
 **What it cost.** On 2026-10-04/05 the `memex` portal pods ran out of memory: core #6161, #6163,
