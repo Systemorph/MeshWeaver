@@ -174,8 +174,8 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
     {
         using var contexts = new ModuleContexts();
         var (libG2, depPath) = InstallLibAndDependent(contexts);
-        var lib1 = contexts.Current(Lib)!;
-        var dep1 = contexts.Current(Dependent)!;
+        var lib1 = Held(contexts, Lib);
+        var dep1 = Held(contexts, Dependent);
 
         var stage = new ModuleSwapStage();
         var lib2 = contexts.LoadStaged(libG2, stage);
@@ -199,8 +199,8 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
     {
         using var contexts = new ModuleContexts();
         var (libG2, depPath) = InstallLibAndDependent(contexts);
-        var lib1 = contexts.Current(Lib)!;
-        var dep1 = contexts.Current(Dependent)!;
+        var lib1 = Held(contexts, Lib);
+        var dep1 = Held(contexts, Dependent);
 
         var stage = new ModuleSwapStage();
         stage.Add(contexts.LoadStaged(libG2, stage));
@@ -230,6 +230,9 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
         LibVersionSeenBy(dep).Should().Be(1);
         return (Write(Lib, "g2", LibSource(version: 2)), depPath);
     }
+
+    private static ModuleGeneration Held(ModuleContexts contexts, string module) =>
+        contexts.Current(module) ?? throw new Xunit.Sdk.XunitException($"{module} is not held by the module registry");
 
     private static object? LibVersionSeenBy(ModuleGeneration dependent) =>
         dependent.Assembly.GetType("MeshWeaver.Test.LiveDependent.Uses") is { } uses
