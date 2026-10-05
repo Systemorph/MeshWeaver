@@ -73,6 +73,9 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             .InstallAssemblies(V1);
 
     private ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
+
+    private ModuleGeneration HeldGeneration(string module) =>
+        Contexts.Current(module) ?? throw new Xunit.Sdk.XunitException($"{module} is not held by the module registry");
     private ModuleLiveUpdater Updater => Mesh.ServiceProvider.GetRequiredService<ModuleLiveUpdater>();
 
     [Fact(Timeout = 180_000)]
@@ -81,9 +84,9 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
         var journal = Mesh.ServiceProvider.GetRequiredService<HostedServiceJournal>();
-        Contexts.Current(Module)!.Services.Should().NotBeNull(
+        HeldGeneration(Module).Services.Should().NotBeNull(
             "the module's root services must be served from a scope of its own — the conversion under test");
-        Contexts.Current(Module)!.RootServiceBlockers.Should().BeEmpty();
+        HeldGeneration(Module).RootServiceBlockers.Should().BeEmpty();
         consumer.Ask().Should().Be("hello v1 (options v1)");
         var keyed = Mesh.ServiceProvider.GetRequiredKeyedService<ILiveGreeter>("keyed-greeter");
         keyed.Greet().Should().Be("hello v1 (options v1)");
@@ -138,7 +141,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private WeakReference WeakContextOf(string module) => new(Contexts.Current(module)!.Context);
+    private WeakReference WeakContextOf(string module) => new(HeldGeneration(module).Context);
 
     /// <summary>
     /// A new generation that ADDS a background service still swaps live: the root holds no

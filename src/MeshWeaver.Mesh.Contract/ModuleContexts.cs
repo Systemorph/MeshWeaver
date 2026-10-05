@@ -266,13 +266,31 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// context. Not yet current — the caller materialises its contributions and then calls
     /// <see cref="Commit"/>, or <see cref="Discard"/> when they fail. Throws what the load throws.
     /// </summary>
-    public ModuleGeneration Load(string entryLocation)
+    public ModuleGeneration Load(string entryLocation) => LoadInto(entryLocation, null);
+
+    /// <summary>
+    /// Loads like <see cref="Load(string)"/>, but INSIDE <paramref name="stage"/>. A distinct name,
+    /// never an overload of <c>Load</c>: an added overload turns every existing
+    /// <c>&lt;see cref="Load"/&gt;</c> into CS0419 under <c>-warnaserror</c>, here and in dependents.
+    /// The new context
+    /// binds every module the stage holds to the STAGED generation rather than the current one, so a
+    /// swap can load and materialise a module's dependents against the module's new generation
+    /// before ANY of them is made current (#6128 review: committing first published N+1, its
+    /// endpoints included, while the swap could still fail).
+    /// </summary>
+    public ModuleGeneration LoadStaged(string entryLocation, ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        return LoadInto(entryLocation, stage);
+    }
+
+    private ModuleGeneration LoadInto(string entryLocation, ModuleSwapStage? stage)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         var fullPath = Path.GetFullPath(entryLocation);
         var name = Path.GetFileNameWithoutExtension(fullPath);
         var directory = Path.GetDirectoryName(fullPath) ?? AppContext.BaseDirectory;
-        var context = new ModuleLoadContext(this, name, directory, Interlocked.Increment(ref sequence));
+        var context = new ModuleLoadContext(this, name, directory, Interlocked.Increment(ref sequence), stage);
         try
         {
             var assembly = context.LoadFromAssemblyPath(fullPath);
@@ -325,6 +343,32 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         });
         Bump();
         return ReferenceEquals(replaced, generation) ? null : replaced;
+    }
+
+    /// <summary>
+    /// Makes every generation <paramref name="stage"/> holds current, in the order they were staged,
+    /// only AFTER all of them loaded, materialised and prepared, with ONE <see cref="VersionChanged"/>
+    /// emission, so no reader of the generations (the module endpoint table, the view registrations,
+    /// the static-node catalog) ever observes part of a swap, or a swap that can still fail. Seals
+    /// the stage: from here on its contexts resolve modules through the current generations.
+    /// </summary>
+    public void CommitAll(ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        foreach (var generation in stage.Seal())
+            current[generation.Name] = generation;
+        Bump();
+    }
+
+    /// <summary>
+    /// Unloads every generation <paramref name="stage"/> holds. None of them was ever current, so
+    /// nothing was routed to them and <see cref="Discard"/>'s "loaded but never committed" holds.
+    /// </summary>
+    public void DiscardStaged(ModuleSwapStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(stage);
+        foreach (var generation in stage.Seal())
+            Discard(generation);
     }
 
     /// <summary>
@@ -413,8 +457,13 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// </summary>
     internal Assembly? ResolveForDependent(string name, ModuleLoadContext requester)
     {
+        // A staged context binds the stage's generation first: the swap it belongs to makes them
+        // current together, so this is the binding it will have once the swap commits.
+        ModuleGeneration? Held(string module) =>
+            requester.Stage?.Get(module) ?? (current.TryGetValue(module, out var generation) ? generation : null);
+
         if (!string.Equals(name, requester.ModuleName, StringComparison.Ordinal)
-            && current.TryGetValue(name, out var module))
+            && Held(name) is { } module)
         {
             requester.RecordDependency(name);
             return module.Assembly;
@@ -422,7 +471,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
         foreach (var dependency in requester.DependsOn)
         {
-            if (!current.TryGetValue(dependency, out var held))
+            if (Held(dependency) is not { } held)
                 continue;
             foreach (var assembly in held.Context.Assemblies)
                 if (string.Equals(assembly.GetName().Name, name, StringComparison.Ordinal))
@@ -478,5 +527,41 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             }
             generation.Context.Unload();
         }
+    }
+}
+
+/// <summary>
+/// The generations of ONE live swap, loaded and materialised but not yet current. A context loaded
+/// into the stage (<see cref="ModuleContexts.LoadStaged"/>) binds these in place
+/// of the current generations, so a module's dependents re-bind to its new generation before anything
+/// is published. Made current all at once by <see cref="ModuleContexts.CommitAll"/>, or unloaded by
+/// <see cref="ModuleContexts.DiscardStaged"/>; either seals it. Used by one swap at a time (the swap
+/// pipeline is serial).
+/// </summary>
+public sealed class ModuleSwapStage
+{
+    private ImmutableList<ModuleGeneration> staged = ImmutableList<ModuleGeneration>.Empty;
+    private int sealedFlag;
+
+    /// <summary>Adds <paramref name="generation"/> to the stage; later contexts in the stage bind it.</summary>
+    public void Add(ModuleGeneration generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        if (Volatile.Read(ref sealedFlag) != 0)
+            throw new InvalidOperationException("The swap stage is sealed: it was committed or discarded.");
+        ImmutableInterlocked.Update(ref staged, list => list.Add(generation));
+    }
+
+    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once sealed.</summary>
+    public ModuleGeneration? Get(string moduleName) =>
+        Volatile.Read(ref sealedFlag) != 0
+            ? null
+            : Volatile.Read(ref staged).LastOrDefault(g => string.Equals(g.Name, moduleName, StringComparison.Ordinal));
+
+    internal ImmutableList<ModuleGeneration> Seal()
+    {
+        if (Interlocked.Exchange(ref sealedFlag, 1) != 0)
+            throw new InvalidOperationException("The swap stage was already committed or discarded.");
+        return Volatile.Read(ref staged);
     }
 }

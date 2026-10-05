@@ -236,10 +236,17 @@ public sealed class ModuleLiveUpdater : IDisposable
         if (!link.MayLoad)
             return refused with { Outcome = Fail(name, old.Location, target, $"N+1 does not link against this process: {link.Report()}") };
 
+        // Every generation of this swap is loaded into ONE stage and made current only once all of
+        // them have loaded, materialised and prepared their services (#6128 review): committing the
+        // module first published N+1 (its endpoints, its views) to every reader while a dependent
+        // could still fail, and the rollback then unloaded a generation requests had been routed to,
+        // bypassing the quiescence wait. Nothing staged is ever routed to, so a refusal at any step
+        // unloads with nothing to wait for.
+        var stage = new ModuleSwapStage();
         ModuleGeneration fresh;
         try
         {
-            fresh = contexts.Load(target);
+            fresh = contexts.LoadStaged(target, stage);
         }
         catch (Exception ex)
         {
@@ -271,43 +278,39 @@ public sealed class ModuleLiveUpdater : IDisposable
 
         var dependents = contexts.DependentsOf(name);
         // Contributions are recorded BEFORE the generation is made current, so no reader ever sees
-        // Current(name) with null contributions — which every reader treats as "contributes
-        // nothing", not "in flight" (#6123 review). Recording them on a not-yet-current generation
-        // is invisible: CurrentNodes and the per-node-hub indirection read through Current.
+        // Current(name) with null contributions, which every reader treats as "contributes nothing",
+        // not "in flight" (#6123 review).
         contexts.SetContributions(fresh, contributions);
-        contexts.Commit(fresh);
-        var committed = ImmutableList.Create(fresh);
+        stage.Add(fresh);
+        var serving = ImmutableList.Create(fresh);
         var retiring = ImmutableList.Create(old);
         try
         {
-            // Each dependent is re-loaded from the SAME bytes into a fresh context, which binds the
-            // module's NEW current generation — the only way a bound type identity can move.
+            // Each dependent is re-loaded from the SAME bytes into a fresh context IN THE STAGE, which
+            // binds the module's STAGED new generation: the only way a bound type identity can move.
             foreach (var dependent in dependents)
             {
-                var reloaded = contexts.Load(dependent.Location);
+                var reloaded = contexts.LoadStaged(dependent.Location, stage);
+                stage.Add(reloaded);
                 var reloadedContributions = ModuleContributions.Of(reloaded.Assembly, configuration);
                 if (contexts.PrepareServices(dependent, reloaded, reloadedContributions) is { } dependentRefused)
-                {
-                    contexts.Discard(reloaded);
                     throw new InvalidOperationException($"{dependent.Name}: {dependentRefused}");
-                }
                 contexts.SetContributions(reloaded, reloadedContributions);
-                contexts.Commit(reloaded);
-                committed = committed.Add(reloaded);
+                serving = serving.Add(reloaded);
                 retiring = retiring.Add(dependent);
             }
         }
         catch (Exception ex)
         {
-            // Never a half-swapped state: every generation that was serving goes back in service.
-            foreach (var previous in retiring)
-                contexts.Commit(previous);
-            foreach (var abandoned in committed)
-                contexts.Discard(abandoned);
+            // Nothing was made current, so the serving generations never stopped serving: unload the
+            // staged ones, which no request ever reached.
+            contexts.DiscardStaged(stage);
             return refused with { Outcome = Fail(name, old.Location, target, $"a dependent did not re-bind to N+1: {ex.GetType().Name}: {ex.Message}") };
         }
 
-        return new SwapPlan(null, retiring, committed, old.Location, target);
+        // The swap commits as ONE step: every reader of the generations sees all of N+1 or none of it.
+        contexts.CommitAll(stage);
+        return new SwapPlan(null, retiring, serving, old.Location, target);
     }
 
     /// <summary>The link-probe surface for a swap: the application closure, the target's own
