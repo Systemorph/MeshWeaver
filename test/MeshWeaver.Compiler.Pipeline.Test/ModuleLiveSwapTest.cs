@@ -188,6 +188,33 @@ public sealed class ModuleLiveSwapTest : MonolithMeshTestBase
     /// in the same process, because the compile reference set follows the module's current
     /// generation.
     /// </summary>
+    /// <summary>
+    /// 🚨 Disposal keeps the one-outcome contract (#6123 review): a swap queued behind another — or
+    /// asked for after the updater is gone — is ANSWERED with a refusal that names the shutdown,
+    /// never left without an emission. Before the fix, Dispose tore the Concat down first and the
+    /// abandoned job's AsyncSubject never completed, so this test timed out on the queued swap.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ADisposedUpdater_AnswersEveryQueuedAndLateSwap_WithAShutdownRefusal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var updater = ActivatorUtilities.CreateInstance<ModuleLiveUpdater>(Mesh.ServiceProvider);
+        var first = updater.Swap(Write("g2", ModuleSource(version: 2)), "test: in flight at disposal").Replay(1);
+        var queued = updater.Swap(Write("g3", ModuleSource(version: 3)), "test: queued at disposal").Replay(1);
+        using var connectFirst = first.Connect();
+        using var connectQueued = queued.Connect();
+
+        updater.Dispose();
+
+        (await first.Timeout(Budget).Await(ct)).Should().NotBeNull("the in-flight swap is answered, whatever it reached");
+        var abandoned = await queued.Timeout(Budget).Await(ct);
+        abandoned.Kind.Should().Be(ModuleSwapKind.Failed, abandoned.Reason);
+        abandoned.Reason.Should().Contain("shutting down");
+        var late = await updater.Swap(Write("g4", ModuleSource(version: 4)), "test: after disposal").Timeout(Budget).Await(ct);
+        late.Kind.Should().Be(ModuleSwapKind.Failed, late.Reason);
+        late.NeedsRestart.Should().BeTrue("a swap that was not applied leaves the restart to activate the generation");
+    }
+
     [Fact(Timeout = 300_000)]
     public async Task ANodeTypeWrittenAgainstN1sNewMember_CompilesOnceN1IsSwappedIn()
     {
