@@ -116,12 +116,20 @@ the live test fail (`Restarts` 1, expected 0).
   harmless, because each check now decides from what is pending in its own process.
 - **A brand-new module** (not installed at boot) is `NotHeld` and still activates by restart: there is
   no boot position for its nodes yet.
-- **Slice 3 — the modules (MeshWeaver.Plugins).** Run `ModuleLiveUpdateGuard` over every shipped
-  module (with its negative control), declare `[ModuleRestartRequired]` with the reason on the ones that
-  measure blocked, move what can move to re-appliable surfaces, refuse at landing a bundle that carries
-  a platform assembly, by name; and the platform-fixed tests (P fixed while M goes N → N+1 → N+2 live,
-  N+1 built against an older compatible platform build, N+3 above its floor declined by name while
-  siblings keep updating).
+- **Slice 3 — the declarations (MeshWeaver.Plugins, branch `feat/module-live-plugins`).** All 37
+  blocked modules carry `[assembly: ModuleRestartRequired("<what was measured>")]`; re-measured after
+  the change, all 41 pass `ModuleLiveUpdateGuard` (4 live, 37 declared). It compiles only against a
+  platform pin that contains the attribute, so it lands after this change reaches that pin — core
+  first.
+- **Slice 4 — enforcement.** Run the guard where every satellite already passes every module: the
+  module pack step (`meshweaver-plugin-build`), so a module that blocks a live swap without declaring
+  it fails to pack, fleet-wide. It has to land AFTER slice 3, or it reds every satellite's pack lane
+  on modules that have not declared yet.
+- **Converting surfaces** so the 37 can drop their declarations: a re-appliable seam for mesh-hub
+  view and type registrations, hub-scoped instead of root service registration, and the builder hook
+  decomposed into re-appliable hooks. Also: the bundled-platform-assembly refusal at landing, and the
+  platform-fixed tests (P fixed while M goes N → N+1 → N+2 live, N+1 built against an older compatible
+  platform build, N+3 above its floor declined by name while siblings keep updating).
 
 ## How the modules classify today (measured)
 
