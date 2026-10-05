@@ -554,10 +554,126 @@
     </ItemGroup>
     <Delete Files="@(_ClosureFrameworkDuplicate)" />
 
+    <!-- 🚨 MeshWeaver#6044 — STAMP WHAT EACH COPY WAS BUILT AS, after every prune so nothing can
+         take the stamp away. Boot decides between this image's copy of a module and a store copy
+         of the same name; the framework identity cannot (one compatibility key spans a whole
+         platform epoch), and the module DLL carries no package version of its own (its
+         informational version is the platform's — MeshWeaver#3732). So the version is written
+         down HERE, from the package's manifest.lock at the commit this image is built from, as
+         modules/<Name>/module.seed.json (ImageModuleSeed in MeshWeaver.PluginCatalog reads it).
+         A store copy then overrides the image's copy only as a strictly newer release. A module
+         no package claims gets no stamp — and a stale one is removed — so boot falls back to the
+         identity rule alone, exactly as before the stamp existed. -->
+    <WriteMeshModuleSeedStamps Modules="@(MeshModuleClosure)" AppDir="$(_AppDir)" />
+
     <ItemGroup>
       <_ClosureKept Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/**/*.*" />
     </ItemGroup>
     <Message Importance="high"
              Text="LayoutMeshModuleClosures: @(MeshModuleClosure->Count()) closure module(s) → $(_AppDir)modules/; pruned @(_ClosureAppDuplicate->Count()) app-closure + @(_ClosureFrameworkDuplicate->Count()) shared-framework duplicate(s); kept: @(_ClosureKept->'%(Filename)%(Extension)')" />
   </Target>
+  <!--
+    WriteMeshModuleSeedStamps (MeshWeaver#6044) — for each closure module, find the PACKAGE that
+    declares it (a sibling folder of one of the module project's ancestors holding an index.json
+    whose content.module names the module, beside a manifest.lock) and write
+    modules/<Name>/module.seed.json = { schema, module, package, version, moduleVersion } from that
+    lock. In a node repository (MeshWeaver.Plugins: src/MeshWeaver.AI/ ↔ AI/index.json) the package
+    sits beside src/; a module with no declaring package (core's own storage backends) gets none.
+
+    Inline and netstandard-only on purpose: this file runs as its own project with no SDK import,
+    and RoslynCodeTaskFactory compiles against netstandard, so the JSON is read through
+    JsonReaderWriterFactory (System.Runtime.Serialization.Json) rather than System.Text.Json.
+    The reader of the stamp is ImageModuleSeed.Read — the FIELD NAMES are the contract.
+  -->
+  <UsingTask TaskName="WriteMeshModuleSeedStamps" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Modules ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <AppDir ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Xml" />
+      <Using Namespace="System.Xml.Linq" />
+      <Using Namespace="System.Runtime.Serialization.Json" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var declared = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // index.json → content.module ("" = none)
+        Func<string, XElement> load = path =>
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                using (var reader = JsonReaderWriterFactory.CreateJsonReader(bytes, XmlDictionaryReaderQuotas.Max))
+                    return XElement.Load(reader);
+            }
+            catch (Exception ex)
+            {
+                Log.LogMessage(MessageImportance.High, "WriteMeshModuleSeedStamps: could not read " + path + " (" + ex.GetType().Name + ": " + ex.Message + ") — ignored");
+                return null;
+            }
+        };
+        Func<string, string> moduleOf = indexPath =>
+        {
+            string cached;
+            if (declared.TryGetValue(indexPath, out cached))
+                return cached;
+            var root = load(indexPath);
+            var content = root == null ? null : root.Element("content");
+            var module = content == null ? null : (string)content.Element("module");
+            declared[indexPath] = module ?? "";
+            return module ?? "";
+        };
+        Func<string, string> esc = text => (text ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        foreach (var item in Modules)
+        {
+            var name = item.GetMetadata("Filename");
+            var projectDir = Path.GetDirectoryName(item.GetMetadata("FullPath"));
+            string packageDir = null;
+            var ancestor = projectDir;
+            for (var level = 0; level < 4 && packageDir == null && !string.IsNullOrEmpty(ancestor); level++)
+            {
+                if (Directory.Exists(ancestor))
+                    foreach (var candidate in Directory.EnumerateDirectories(ancestor))
+                    {
+                        var index = Path.Combine(candidate, "index.json");
+                        if (File.Exists(index) && File.Exists(Path.Combine(candidate, "manifest.lock"))
+                            && string.Equals(moduleOf(index), name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            packageDir = candidate;
+                            break;
+                        }
+                    }
+                ancestor = Path.GetDirectoryName(ancestor);
+            }
+            var stamp = Path.Combine(AppDir, "modules", name, "module.seed.json");
+            if (packageDir == null)
+            {
+                if (File.Exists(stamp))
+                    File.Delete(stamp);
+                Log.LogMessage(MessageImportance.High, "WriteMeshModuleSeedStamps: no package declares " + name + " — no seed stamp; boot decides its copies on the framework identity alone");
+                continue;
+            }
+            var lockRoot = load(Path.Combine(packageDir, "manifest.lock"));
+            var version = lockRoot == null ? null : (string)lockRoot.Element("version");
+            var hash = lockRoot == null ? null : (string)lockRoot.Element("moduleVersion");
+            var package = Path.GetFileName(packageDir);
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                if (File.Exists(stamp))
+                    File.Delete(stamp);
+                Log.LogMessage(MessageImportance.High, "WriteMeshModuleSeedStamps: " + package + "/manifest.lock states no version — no seed stamp for " + name);
+                continue;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(stamp));
+            File.WriteAllText(stamp,
+                "{\n  \"schema\": \"mw-module-seed/1\",\n  \"module\": \"" + esc(name)
+                + "\",\n  \"package\": \"" + esc(package) + "\",\n  \"version\": \"" + esc(version)
+                + "\",\n  \"moduleVersion\": \"" + esc(hash) + "\"\n}\n");
+            Log.LogMessage(MessageImportance.High, "WriteMeshModuleSeedStamps: " + name + " stamped as " + package + "@" + version + " (moduleVersion " + (hash ?? "(none)") + ")");
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
 </Project>

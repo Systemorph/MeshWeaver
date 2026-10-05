@@ -823,6 +823,18 @@ public static class MeshNodeLayoutAreas
     /// <summary>The named sub-area of the node header that holds the ⋯ More dropdown.</summary>
     public const string NodeActionsArea = "NodeActions";
 
+    /// <summary>The header's Edit + More row as a page-level slot, for a landing page that replaces the standard header (MeshWeaver.Plugins#2787).</summary>
+    /// <param name="host">The node hub's layout host.</param>
+    internal static IObservable<UiControl?> HeaderActionsSlot(LayoutAreaHost host)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        return PermissionGate(host, hubPath)
+            .Select(gate => (UiControl?)(gate.Read
+                ? Controls.Stack.WithWidth("100%").WithStyle("align-items: flex-end; padding: 8px 0 0 0;")
+                    .WithView(BuildHeaderActionRow(host, false, hubPath, gate.Update))
+                : Controls.Stack));
+    }
+
     /// <summary>
     /// The stable CSS class on the ⋯ More trigger — the hook for tests and client scripts, since
     /// its visible word follows the viewer's language.

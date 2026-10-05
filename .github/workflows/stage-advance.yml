@@ -1,5 +1,9 @@
 # Start core's stage 2 the moment stage 1 turns green for a held pull request head.
 #
+# 🔀 REQUIRED (policy review-then-suites): the stage gate holds every pull request head for its
+# review by default, and this listener is what releases it — a gate without its listener holds
+# forever. Never delete one without the other.
+#
 # The thin caller of node-repo-stage-advance.yml (the lane carries the rationale). Core's held runs
 # are `dotnet-test.yml`'s pull_request runs, whose `stage-gate` job (node-repo-stage-gate.yml) failed
 # because the head's automatic review had not landed or a finding was unanswered.
@@ -27,7 +31,9 @@ permissions:
   actions: write
 
 concurrency:
-  group: stage-advance-${{ github.event.check_run.head_sha || github.event.pull_request.number || 'sweep' }}
+  # ONE group per HEAD for both listeners: a check_run and a review event of the same head must not
+  # race to re-run one run (Plugins #2836 review); the sweep has its own.
+  group: stage-advance-${{ github.event.check_run.head_sha || github.event.pull_request.head.sha || 'sweep' }}
   cancel-in-progress: false
 
 jobs:

@@ -49,6 +49,16 @@ name: Node repo compile-check (reusable)
 on:
   workflow_call:
     inputs:
+      merge-main-sha:
+        description: >-
+          Pull requests only (policy suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest): the
+          base tip every job of this lane merges the head onto before testing it, so the lane tests the
+          head + the CURRENT main and not GitHub's merge ref from push time. Empty = the lane resolves
+          the tip itself, once, in its first job. Ignored when `content-ref` names a ref, and off pull
+          requests.
+        required: false
+        type: string
+        default: ''
       artifact-store-id:
         description: >-
           Physical store identity resolved by the caller's first producer. Pass the same value
@@ -307,6 +317,13 @@ jobs:
           ref: ${{ inputs.content-ref || github.sha }}
           token: ${{ steps.content-token.outputs.token || github.token }}
           path: repo
+      # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
+      - name: Merge the head onto the current base tip
+        uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
+        with:
+          path: repo
+          main-sha: ${{ inputs.merge-main-sha }}
+          content-ref: ${{ inputs.content-ref || (inputs.content-repository != github.repository && inputs.content-repository || '') }}
       # 🚨 The CONTENT commit, resolved once and recorded in the verdict. `content-ref` may be a
       # branch (the platform passes each satellite's `main`); the verdict is a fact about ONE tree,
       # so it names the sha — never "main", which has moved by the time anyone reads it.

@@ -93,6 +93,72 @@ public interface IDeploymentUpdater
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Whether a restart of the running image was issued.</returns>
     Task<bool> RestartAsync(CancellationToken ct) => Task.FromResult(false);
+
+    /// <summary>
+    /// Reads the PORTAL Deployment's rollout strategy (<c>spec.strategy</c> and <c>spec.replicas</c>) —
+    /// what an instance reboot (<c>Doc/Architecture/InstanceReboot</c>) checks before it rolls, so a
+    /// roll can never take the portal below its serving replicas (<see cref="RolloutStrategyReading.NonDisruptiveRefusal"/>).
+    /// Null when this updater cannot read it — the default, so the seam lands in core first; a reboot
+    /// then REFUSES to roll rather than rolling blind. The Kubernetes updater in
+    /// <c>MeshWeaver.SelfUpdate.Aks</c> (MeshWeaver.Plugins) implements it.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
+        Task.FromResult<RolloutStrategyReading?>(null);
+}
+
+/// <summary>
+/// The portal Deployment's rollout strategy as read from the cluster. <see cref="MaxSurge"/> and
+/// <see cref="MaxUnavailable"/> are the raw IntOrString values (<c>1</c>, <c>0</c>, <c>25%</c>) or null
+/// when unset (Kubernetes then applies 25% / 25%).
+/// </summary>
+/// <param name="Type">The strategy type: <c>RollingUpdate</c> or <c>Recreate</c> (null = Kubernetes' default, RollingUpdate).</param>
+/// <param name="MaxSurge">The raw <c>rollingUpdate.maxSurge</c>.</param>
+/// <param name="MaxUnavailable">The raw <c>rollingUpdate.maxUnavailable</c>.</param>
+/// <param name="Replicas">The declared replica count (null = Kubernetes' default, 1).</param>
+public sealed record RolloutStrategyReading(string? Type, string? MaxSurge, string? MaxUnavailable, int? Replicas)
+{
+    /// <summary>
+    /// 🚨 Why a roll under <paramref name="reading"/> could take the portal below its serving replicas,
+    /// or null when it cannot: the strategy must be a RollingUpdate whose <c>maxUnavailable</c> resolves to
+    /// 0 and whose <c>maxSurge</c> resolves to at least 1 for the declared replica count (Kubernetes rounds
+    /// a percentage DOWN for maxUnavailable and UP for maxSurge; an unset value is 25%). An unreadable
+    /// strategy, or a value that cannot be resolved, is a refusal — never a pass. Pure.
+    /// </summary>
+    public static string? NonDisruptiveRefusal(RolloutStrategyReading? reading)
+    {
+        if (reading is null)
+            return "the portal Deployment's rollout strategy could not be read (the updater cannot read it, or the read failed) — "
+                   + "a roll that might take the portal below its serving replicas is not issued";
+        if (string.Equals(reading.Type, "Recreate", StringComparison.OrdinalIgnoreCase))
+            return "the portal Deployment's strategy is Recreate — every pod is deleted before a new one is Ready; "
+                   + "set a RollingUpdate with maxSurge ≥ 1 and maxUnavailable 0";
+        var replicas = reading.Replicas ?? 1;
+        var unavailable = Resolve(reading.MaxUnavailable ?? "25%", replicas, roundUp: false);
+        var surge = Resolve(reading.MaxSurge ?? "25%", replicas, roundUp: true);
+        if (unavailable is null || surge is null)
+            return $"the portal Deployment's rollout values could not be resolved (maxSurge '{reading.MaxSurge ?? "unset"}', "
+                   + $"maxUnavailable '{reading.MaxUnavailable ?? "unset"}', replicas {replicas})";
+        if (unavailable != 0)
+            return $"the portal Deployment's maxUnavailable resolves to {unavailable} of {replicas} replica(s) "
+                   + $"('{reading.MaxUnavailable ?? "unset = 25%"}') — a roll would remove serving pods before new ones are Ready; set maxUnavailable: 0";
+        if (surge < 1)
+            return $"the portal Deployment's maxSurge resolves to {surge} ('{reading.MaxSurge ?? "unset = 25%"}') — with maxUnavailable 0 "
+                   + "the roll could never start a new pod; set maxSurge ≥ 1";
+        return null;
+    }
+
+    private static int? Resolve(string raw, int replicas, bool roundUp)
+    {
+        var value = raw.Trim();
+        if (value.EndsWith('%'))
+            return int.TryParse(value[..^1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var percent) && percent >= 0
+                ? (int)(roundUp ? Math.Ceiling(replicas * percent / 100.0) : Math.Floor(replicas * percent / 100.0))
+                : null;
+        return int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var absolute) && absolute >= 0
+            ? absolute
+            : null;
+    }
 }
 
 /// <summary>

@@ -128,6 +128,39 @@ Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *Wh
 
 ---
 
+## Instance singletons leave a pod when its drain BEGINS
+
+Maintainer, 2026-10-04: "babysitter should be 1 process per cloud". The control instance's always-on
+singleton hub, `Hosting/PlatformBuilds`, runs the PR babysitter and the PR steward's intake. After
+each roll it sat on a DRAINING pod for up to 30 minutes, and reviews and passes stalled from 09:00 to
+09:37. preStop polls `/drain` BEFORE SIGTERM, so nothing in the process knew the pod was leaving
+until the grace period ran out.
+
+- **`HostDrainSignal`** is a process-wide DI singleton. The first `/drain` probe from the pod's OWN
+  `preStop` calls `Begin()`, and `WhenBegun` replays that once. Only an in-pod probe counts — a loopback
+  peer with no `X-Forwarded-For`/`X-Original-For` — because the route is anonymous and reachable
+  through the ingress, and beginning is permanent: any other caller only gets the report.
+- **`config.RelocateOnDrain()`** opts a hub in as an instance singleton.
+- **When drain begins**, that hub's grain hands its address off to another live silo through the
+  same `MigrateOnIdle` hand-off as #5256. A 2 s watch on the grain's own scheduler does this, so it
+  needs no message. Any delivery that reaches it in the meantime is refused retryably, as from a
+  leaving host — but only while it can actually leave (a hand-off is under way, or another silo is
+  Active). With nowhere to go (a single-pod instance, a survivor still joining) it keeps serving until
+  SIGTERM, exactly as before the signal existed.
+- **Every other hub stays.** The drain is waiting for exactly the sessions that hold the pod open.
+  That is why this is not folded into `IsLeaving()`.
+
+Pinned by:
+
+- `AnInstanceSingletonLeavesADrainingSiloTest`, a two-silo test. The singleton leaves the draining
+  silo within seconds with no message, and the next message is answered from the live silo. An
+  ordinary hub on the same silo stays. The test fails when the grain's check is removed.
+- `AnInstanceSingletonWithNowhereToGoKeepsServingTest` — one silo, drain begun: the singleton stays
+  and answers.
+- `RelocateOnDrainRegistersItsHubTest` — the opt-in registers its hub with the process's one signal.
+- `DrainEndpointTest.TheFirstInPodDrainProbe_BeginsTermination_ForTheSingletonsToLeave` and
+  `ADrainProbeFromOutsideThePod_Reports_ButNeverBeginsTermination`.
+
 ## Layer 2 — the hub goes down behind its work: the stall verdicts
 
 `MessageHub.OnDisposalStall` runs every `DisposalWatchdogTimeout` (8 s) during which nothing in the

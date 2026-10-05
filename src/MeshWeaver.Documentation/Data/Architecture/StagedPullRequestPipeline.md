@@ -3,14 +3,23 @@ Name: Staged Pull Request Pipeline
 Category: Architecture
 Description: >-
   Every pull request head moves through four stages in order — cheap static controls, the automatic
-  review landed and answered, the expensive suites, arming — so no runner is spent testing a head a
-  review is about to change, and nothing arms before the tests. What each stage runs, what moves a head
-  on (events, not polling), the three loud releases that keep a reviewer outage from freezing the
-  fleet, why a hold is red and never skipped, and the measured saving.
+  review landed and answered, the expensive suites on a FRESH merge with the current main, and arming
+  only once the review is answered AND every required check is green (policy review-then-suites). What
+  each stage runs, what moves a head on (events, not polling), the three loud releases that keep a
+  reviewer outage from freezing the fleet, why a hold is red and never skipped, a day of running the
+  suites in parallel and why it was reverted, and the measured saving.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="4" height="16" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/></svg>
 ---
 
 # Staged Pull Request Pipeline
+
+> **🔀 Review first, then the suites, then the arm** — policy
+> [`review-then-suites`](../PolicyNotProse), the fleet-wide order. The stage gate holds a head until
+> its review landed and every finding is answered; the suites then test the head merged onto the
+> CURRENT main ([Fresh Merge Under Test](../FreshMergeUnderTest)); and auto-merge is armed only once
+> the review is answered AND every required check is green. A short-lived parallel default
+> (`suites-parallel-with-review`) was reverted the same day — see
+> [A day in parallel](#a-day-in-parallel-and-why-it-was-reverted).
 
 **Decision (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
 also other controls such as no client etc. must pass before we start test. and we arm only at end of
@@ -24,13 +33,35 @@ one before it is green **for that head**:
 | **0 — static controls** | shape/validate, confidential terms ("no client names"), AGENTS.md shared-rule blocks, generated files and locks, repo policy gates, CI inputs (core: shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell, cross-repo pair) | minutes, one light runner each | they finish; a red one **fails fast** — nothing heavy starts |
 | **1 — automatic review** | the head's `internal-review` (App `systemorph-com`, the steward on the control instance) has COMPLETED and every thread a reviewer opened has a reply from a person | the reviewer's time, no runner | `check_run: completed` of the review, a person's reply — see [the event half](#what-moves-a-head-on--events-not-polling) |
 | **2 — expensive suites** | core: build + test shards, doc gate, platform-compat, the dependent-suites request · Plugins: module bundles, compile-check, gate shards, portal hosts (every leg behind `admission`) | the run's runner-minutes, almost all of them | the suites finish |
-| **3 — arming** | the control plane's babysitter arms auto-merge (Plugins #2828) | none | every required check green AND the arm gate (`check-review-answered.py` → `arm_readiness`) |
+| **3 — arming** | the control plane's babysitter arms auto-merge (Plugins `PrArming`, #2828) | none | the arm gate (`check-review-answered.py` → `arm_readiness`): the review answered (conditions 1–3) AND every required status check of the base `success` on the head (condition 4, `required_checks_green`) |
 
 The order is the point. Stage 1 is the stage most likely to send the author back to the keyboard, so
 it runs before the stage that costs the most. A finding answered with a fix push makes a NEW head,
 and a new head restarts at stage 0 — the suites never ran on the head the review changed.
 
-## Measured — why this ordering saves runners
+## A day in parallel, and why it was reverted
+
+On 2026-10-05 the suites briefly ran IN PARALLEL with the review (`suites-parallel-with-review`: the
+stage gate held on stage 0 only), because with ~50 reviews in flight the runners sat idle (09:00Z:
+core 31 jobs running / 0 waiting, Plugins 30 / 0). The maintainer corrected it the same day: the
+fleet-wide order is **review first → suites against a fresh merge with the current main → arm only
+when the review is answered and the suites are green** (policy `review-then-suites`, which replaces
+`suites-parallel-with-review` in the register). What survived the reversal:
+
+- the **fresh merge** on every suite job ([Fresh Merge Under Test](../FreshMergeUnderTest)) — a held
+  run released hours later tests today's main, not the merge GitHub built at the push;
+- the gate job's name, `Stage gate: may the suites start` (formerly `Stage 1: review landed and
+  answered`; the event half recognises both);
+- the opt-out, `review-before-suites: false`, for a caller that wants a test reading early — it never
+  changes the merge or the arm, which still need the answered review.
+
+**Arming after green.** Condition 4 of the arm gate (`required_checks_green`) refuses while any
+required status check of the base branch is missing, pending or red on the current head — read from
+BOTH rulesets and classic protection, the review's own contexts excluded (they are conditions 2–3),
+and an empty required set refused rather than read as "all green". MeshWeaver.Plugins' `PrArming`
+ports the same condition.
+
+## Measured — why the review-first ordering saves runners (and when it does not)
 
 Sample (REST only, 2026-10-04; bot and lock-settle pull requests excluded): the newest **40 merged
 pull requests per repository** — core 2026-10-02 09:44Z → 10-04 07:05Z (130 CI heads), Plugins
@@ -155,6 +186,25 @@ quarter of all Plugins heads into stage 2 before their review — exactly the sp
 for the review anyway: the fallback buys an early test READING, never an earlier merge. A caller may
 pass `fallback-minutes` to both lanes (they must agree), and `tests-before-review` is the per-PR override.
 
+**Generated-only pull requests owe no review.** main's own jobs propose generated files as pull
+requests — `settle-locks` (every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock` plus each
+root's `minMeshVersion`). There is nothing to review, and the settle job rewrites the head on every
+main merge, so a per-head fallback clock restarted forever: during the 2026-10-04 review outage the
+held settle PR (Plugins #2860) stopped module publishing. Such a pull request skips stage 1 on
+PROVENANCE (`generated_only`): authored by the App that writes them (`meshweaver-cloud[bot]`, by id),
+every commit that App's (the commit listing must cover the pull request's own commit count), every
+changed file a lock or a root `index.json` whose changed lines are each NOTHING BUT a
+`"minMeshVersion": "…"` key/value. A person's pull request that touches a lock is staged like any
+other, a generated-only DRAFT is held as a draft, and for any pull request the App authored the
+fallback clock keys on the PULL REQUEST's creation, not the head.
+
+What this skip is NOT: a merge gate. The required `Automatic review answered` lane never consults
+`generated_only`, so the skip only starts stage 2's suites earlier. Its provenance reads GitHub's
+resolved commit author, which follows the author email — so it is as strong as the App's branch is
+closed to other pushers (the App's commits are unsigned today, so a signature cannot be required
+until the producing jobs commit through the API), and a lock's CONTENT is held exact by
+`Validate node repos`, not by this check.
+
 **Stage-0 blockers keep their own rules.** A control whose INPUT is absent (the confidential-terms
 denylist secret on a fork or a Dependabot run) already *skips with a notice* by its own design and so
 does not hold stage 2. A control that goes RED on infrastructure (an unreadable API, a lost runner) is
@@ -184,6 +234,13 @@ A skipped required context counts as satisfied, so the hold is a **failure** at 
   stage-0 controls SKIP by design (push, merge queue, forks), and a job whose need is skipped is itself
   skipped — on the implicit guard the gate, and through it the build, would have skipped on every main
   push (#6070 review). So `failure`/`cancelled` holds (mode `stage0-red`), `skipped` passes;
+  the test shards, doc gate and platform-compat also use `!cancelled()` with an explicit successful
+  `build` result. Without that status function, their implicit `success()` still sees the skipped
+  PR-only stage-0 ancestors on a main push and silently skips them even after a green build (main
+  run 37197032428). The result gate then correctly refuses to claim test evidence. A failed
+  `precheck` does not suppress a successful build's suites (an indeterminate probe still needs
+  evidence), but `Consolidate test results` explicitly rejects a non-successful precheck verdict;
+  test evidence alone cannot turn that run green.
   `Consolidate test results` (required) fails at its first step, *"Stage 2 held — stage 1 (…)"* or
   *"— stage 0 red"*, before the generic no-evidence reds. The green-tree reuse path is not held — it
   spends nothing.
@@ -224,12 +281,27 @@ that release.
 
 | Repository | Stage gate | Event half | State |
 |---|---|---|---|
-| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | this change |
-| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | paired change (its roster rows land here first, `pending: ARRIVING`) |
+| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | review first (default) |
+| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | review first (default) |
 | the satellites | not yet — they run as before | — | adopt with the same two edits: a `stage-gate` job (`node-repo-stage-gate.yml@main`) that their heavy jobs need with `result == 'success'`, and the thin `stage-advance.yml`; plus their rows in `.github/lane-caller-grants.yml` |
 
 A repository that has the gate but not the listener would hold forever, which is why the two are
 adopted together and why the Plugins pin (`check-build-queue-admission.py`) names the lane.
+
+## Trunk outranks pull requests — through the CI queue, not a lane
+
+Staging stops a pull request from STARTING expensive work too early. It does not decide who gets a
+runner when the pools are full. That is the CI queue's job, under policy
+[`ci-two-pools-priority-queues`](../PolicyNotProse) ([Runner Pools and Dispatch Queues](../RunnerPoolsAndDispatchQueues)).
+There are two shared pools, and runs are dispatched in tier order: express, trunk, gate, pr.
+
+> 🗄️ **Superseded: the trunk lanes.** On 2026-10-04, with both ARC sets at their cap and a label's
+> queue first-come-first-served, a main run's worst queued job waited like a pull request's (median
+> 1.9 vs 1.4 min, p90 4.7 vs 4.4 min over 19 main and 133 PR runs). The first answer was two reserved
+> lanes, `aks-silos-trunk` (8) and `aks-silos-dind-trunk` (12), with a higher PriorityClass. Measured
+> overnight after they went live, trunk jobs on them waited p90 6.6 / 3.8 min against 0.6 / 1.0 min for
+> pull requests on the shared sets: the reservation was too small for its own work. The lanes are
+> retired, and every runner gate of the fleet refuses their names.
 
 ## What it does not do (residue, stated)
 
@@ -248,7 +320,7 @@ adopted together and why the Plugins pin (`check-build-queue-admission.py`) name
 ## Reading a held pull request
 
 1. The red front door (`Consolidate test results` / `Admitted by the build queue`) names the stage.
-2. Open **`Stage 1: review landed and answered`** — it says *waiting* (with minutes of the fallback
+2. Open **`Stage gate: may the suites start`** (formerly `Stage 1: review landed and answered`) — it says *waiting* (with minutes of the fallback
    used), *unanswered* (with the first thread), *draft*, or *unreadable*.
 3. Do nothing for *waiting*; reply to each thread for *unanswered*. The suites start by themselves.
 4. If the review is down and you cannot wait for the fallback: `tests-before-review`. It buys the

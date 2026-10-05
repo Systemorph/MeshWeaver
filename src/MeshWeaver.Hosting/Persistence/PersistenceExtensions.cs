@@ -718,7 +718,8 @@ public static class PersistenceExtensions
                 providers,
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
-                sp.GetService<ILoggerFactory>());
+                sp.GetService<ILoggerFactory>(),
+                sp.GetService<ModuleContexts>());
         });
 
         // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
@@ -782,7 +783,8 @@ public static class PersistenceExtensions
                 providers,
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
-                sp.GetService<ILoggerFactory>());
+                sp.GetService<ILoggerFactory>(),
+                sp.GetService<ModuleContexts>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 
@@ -853,6 +855,9 @@ public static class PersistenceExtensions
         // What the cache could not TYPE, kept so /health can name it (2026-09-08): a mesh-scoped
         // instance, registered beside the seam that records into it.
         services.TryAddSingleton<ContentDegradationRegistry>();
+        // "This pod has begun TERMINATING" (first /drain probe) — read by the grains of the hubs that
+        // RelocateOnDrain, so an always-on singleton leaves a draining pod at once (HostDrainSignal).
+        services.TryAddSingleton<HostDrainSignal>();
         // 🚨 The two bake verdicts that existed ONLY in a boot log, published so /health can carry
         // them (#3703, #3704). Registered HERE, beside ContentDegradationRegistry, for one reason
         // that is not tidiness: this is the registration whose container topology is PROVEN to

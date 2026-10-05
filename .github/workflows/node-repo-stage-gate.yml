@@ -1,4 +1,13 @@
-# The staged pull-request pipeline's STAGE-1 GATE (reusable) — may the expensive suites start for this head?
+# The staged pull-request pipeline's STAGE GATE (reusable) — may the expensive suites start for this head?
+#
+# 🔀 REVIEW FIRST, THEN THE SUITES, THEN THE ARM (policy `review-then-suites`, which replaced the
+# short-lived `suites-parallel-with-review`). By default this gate holds a pull request head until
+# its review landed and every finding is answered; the suites then run on a FRESH merge with the
+# current main (policy `suites-test-fresh-merge`), and auto-merge is armed only once the review is
+# answered AND every required check is green (`check-review-answered.py` arm gate, condition 4;
+# MeshWeaver.Plugins `PrArming`). `review-before-suites: false` runs the suites beside the review —
+# a per-caller opt-out, never the default. A caller on the default MUST carry its stage-advance.yml
+# listener: a gate without its listener holds forever.
 #
 # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc. must
 # pass before we start test. and we arm only at end of test". Design of record, with the measured
@@ -65,18 +74,29 @@ on:
         required: false
         type: boolean
         default: false
+      review-before-suites:
+        description: >-
+          true (default, policy review-then-suites) = hold the suites until the head's review landed
+          and every thread is answered; the caller needs its stage-advance.yml listener. false = the
+          suites start as soon as stage 0 is green and run beside the review (an opt-out); merging and
+          arming still require the answered review.
+        required: false
+        type: boolean
+        default: true
     outputs:
       ready:
         description: "'true' when stage 2 may start for this head"
         value: ${{ jobs.gate.outputs.ready }}
       mode:
-        description: "reviewed | degraded | fallback | label | not-staged | stage0-red | draft | waiting | unanswered | unreadable"
+        description: "parallel | reviewed | degraded | fallback | label | not-staged | stage0-red | draft | waiting | unanswered | unreadable"
         value: ${{ jobs.gate.outputs.mode }}
 
 jobs:
   gate:
-    # 🚨 This NAME is the contract the event half matches (check-review-answered.py STAGE_GATE_JOB). Rename both or neither.
-    name: "Stage 1: review landed and answered"
+    # 🚨 This NAME is the contract the event half matches (check-review-answered.py STAGE_GATE_JOBS, Plugins
+    # PrBabysitter.StageGateJob). Renamed from "Stage 1: review landed and answered" (it also answers for
+    # the opt-out, where the review is not awaited); the event half recognises both names.
+    name: "Stage gate: may the suites start"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -89,6 +109,8 @@ jobs:
       mode: ${{ steps.judge.outputs.mode }}
     steps:
       - name: Fetch the platform's review predicate at the lane's scripts ref
+        # Only the review hold (the default) reads the predicate; the opt-out judges stage 0 alone.
+        if: ${{ inputs.review-before-suites }}
         env:
           GH_TOKEN: ${{ github.token }}
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
@@ -101,6 +123,7 @@ jobs:
             || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
 
       - name: "Prove the predicate can say no (self-test)"
+        if: ${{ inputs.review-before-suites }}
         run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
 
       - name: Stage 1 — is this head reviewed and every finding answered?
@@ -115,6 +138,7 @@ jobs:
           STAGE0: ${{ inputs.stage0-results }}
           ALREADY_GREEN: ${{ inputs.already-green }}
           FORK: ${{ github.event.pull_request.head.repo.fork }}
+          REVIEW_BEFORE_SUITES: ${{ inputs.review-before-suites }}
         run: |
           set -euo pipefail
           # Stage 0 first: a red static control holds every event's heavy legs only on a pull request,
@@ -148,6 +172,14 @@ jobs:
             not_staged "a fork's head is not reviewed by the internal reviewer — not staged; the merge gate still applies"
           fi
           [ -n "${PR:-}" ] || { echo "::error::a pull_request event without a pull request number"; exit 1; }
+          # 🔀 The opt-out (review-before-suites: false): the suites run beside the review. The default
+          # (policy review-then-suites) falls through to the review predicate below.
+          if [ "$REVIEW_BEFORE_SUITES" != "true" ]; then
+            echo "stage 0 green — the suites start now and run in PARALLEL with the automatic review; merging and arming still require the review landed and every thread answered"
+            { echo "ready=true"; echo "mode=parallel"; } >> "$GITHUB_OUTPUT"
+            echo "### Staged pipeline — stage 0 green; the suites run in parallel with the review (the merge still requires it answered)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # Stage 1 began when the head's run was created; a re-run keeps created_at, so the fallback
           # clock does not restart on every re-evaluation.
           since=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID" --jq .created_at)
