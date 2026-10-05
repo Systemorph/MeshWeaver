@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -97,6 +98,10 @@ public sealed class ModuleLiveUpdater : IDisposable
     private readonly Microsoft.Extensions.Configuration.IConfiguration? configuration;
     private readonly ISubject<Job> jobs = Subject.Synchronize(new Subject<Job>());
     private readonly IDisposable pipeline;
+    // Every job asked for and not yet answered. Whoever REMOVES a job answers it — the pipeline with
+    // its outcome, or Dispose with a refusal — so a caller always gets exactly one outcome.
+    private readonly ConcurrentDictionary<Job, byte> unanswered = new();
+    private int disposed;
 
     private sealed record Job(string EntryLocation, string Reason, AsyncSubject<ModuleSwapOutcome> Result);
 
@@ -115,11 +120,7 @@ public sealed class ModuleLiveUpdater : IDisposable
                     ModuleName(job.EntryLocation), ModuleSwapKind.Failed,
                     $"the live swap of {ModuleName(job.EntryLocation)} faulted: {ex.GetType().Name}: {ex.Message}")))
                 .Take(1)
-                .Do(outcome =>
-                {
-                    job.Result.OnNext(outcome);
-                    job.Result.OnCompleted();
-                }))
+                .Do(outcome => Answer(job, outcome)))
             .Concat()
             .Subscribe(_ => { }, ex => logger?.LogError(ex, "[ModuleLiveUpdate] the swap pipeline faulted"));
     }
@@ -137,9 +138,27 @@ public sealed class ModuleLiveUpdater : IDisposable
         Observable.Defer(() =>
         {
             var job = new Job(entryLocation, reason, new AsyncSubject<ModuleSwapOutcome>());
-            jobs.OnNext(job);
+            unanswered[job] = 0;
+            if (Volatile.Read(ref disposed) != 0)
+                Answer(job, Disposing(job));
+            else
+                jobs.OnNext(job);
             return job.Result.AsObservable();
         });
+
+    private void Answer(Job job, ModuleSwapOutcome outcome)
+    {
+        if (!unanswered.TryRemove(job, out _))
+            return;
+        job.Result.OnNext(outcome);
+        job.Result.OnCompleted();
+    }
+
+    private static ModuleSwapOutcome Disposing(Job job) =>
+        new(ModuleName(job.EntryLocation), ModuleSwapKind.Failed,
+            $"the live swap of {ModuleName(job.EntryLocation)} was not applied — the mesh is shutting down; "
+            + "a restart activates the landed generation")
+        { ToLocation = job.EntryLocation };
 
     private static string ModuleName(string entryLocation) => Path.GetFileNameWithoutExtension(entryLocation);
 
@@ -191,6 +210,16 @@ public sealed class ModuleLiveUpdater : IDisposable
     private SwapPlan LoadAndCommit(string name, ModuleGeneration old, string target)
     {
         var refused = new SwapPlan(null, [], [], old.Location, target);
+
+        // The SAME link probe boot runs before a load (MeshBuilder.TryLoad), fail-CLOSED: MayLoad is
+        // true for Linkable alone, so a probe that could not be made is never read as one that
+        // passed. It matters most mid-roll — a generation landed on a replica of another image can
+        // reference a platform surface THIS process does not carry — and it is measured BEFORE any
+        // byte of the generation runs (materialising contributions executes attribute code).
+        var link = ModulePlatformLink.Check(target, SurfaceFor(target));
+        if (!link.MayLoad)
+            return refused with { Outcome = Fail(name, old.Location, target, $"N+1 does not link against this process: {link.Report()}") };
+
         ModuleGeneration fresh;
         try
         {
@@ -260,6 +289,18 @@ public sealed class ModuleLiveUpdater : IDisposable
 
         return new SwapPlan(null, retiring, committed, old.Location, target);
     }
+
+    /// <summary>The link-probe surface for a swap: the application closure, the target's own
+    /// directory (a sibling it ships with) and the directory of every generation this process
+    /// holds (a module it may reference) — the runtime's resolution surface, as at boot.</summary>
+    private ModulePlatformSurface SurfaceFor(string target) =>
+        ModulePlatformSurface.OfRunningProcess([
+            AppContext.BaseDirectory,
+            .. new[] { target }.Concat(contexts.Generations.Select(g => g.Location))
+                .Select(location => Path.GetDirectoryName(location))
+                .OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase),
+        ]);
 
     private static ModuleSwapOutcome Fail(string name, string from, string to, string why) =>
         new(name, ModuleSwapKind.Failed, $"the live swap of {name} failed and the running generation keeps serving — {why}")
@@ -335,16 +376,17 @@ public sealed class ModuleLiveUpdater : IDisposable
                      ?? ImmutableList<IMessageHub>.Empty;
         var perNode = hosted
             .Where(h => h.RunLevel is MessageHubRunLevel.Starting or MessageHubRunLevel.Started)
-            .Where(h => ActivationRecycle.BoundNodeType(h) is not null)
+            .Select(h => (Hub: h, NodeType: ActivationRecycle.BoundNodeType(h)))
+            .Where(x => x.NodeType is not null)
             .ToImmutableList();
 
         var generations = plan.Retiring.Concat(plan.Serving).ToImmutableList();
-        var everyHub = generations.Any(g => g.Contributions?.DefaultNodeHubConfigurations.Count > 0)
+        var everyHub = generations.Any(g => g.Contributions?.AllDefaultNodeHubConfigurations.Count > 0)
                        // Module-owned service types are forwarded into every per-node hub's scope.
                        || generations.Any(g => g.Services?.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned) == true)
                        || InMeshBuildsReference(plan.Serving.Select(g => g.Name).ToImmutableHashSet(StringComparer.Ordinal));
         if (everyHub)
-            return perNode;
+            return perNode.Select(x => x.Hub).ToImmutableList();
 
         var paths = generations
             .SelectMany(g => g.Contributions?.AllNodes ?? [])
@@ -352,7 +394,8 @@ public sealed class ModuleLiveUpdater : IDisposable
             .Where(p => !string.IsNullOrEmpty(p))
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         return perNode
-            .Where(h => paths.Contains(ActivationRecycle.BoundNodeType(h)!) || paths.Contains(ActivationRecycle.PathOf(h)))
+            .Where(x => (x.NodeType is { } nodeType && paths.Contains(nodeType)) || paths.Contains(ActivationRecycle.PathOf(x.Hub)))
+            .Select(x => x.Hub)
             .ToImmutableList();
     }
 
@@ -375,7 +418,14 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        pipeline.Dispose();
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+        // Close intake FIRST, then tear the pipeline down, then answer whatever it abandoned — a job
+        // queued behind the Concat or in flight when it was disposed would otherwise never complete
+        // its AsyncSubject, and a caller waiting on Swap would hang instead of being told.
         jobs.OnCompleted();
+        pipeline.Dispose();
+        foreach (var job in unanswered.Keys)
+            Answer(job, Disposing(job));
     }
 }

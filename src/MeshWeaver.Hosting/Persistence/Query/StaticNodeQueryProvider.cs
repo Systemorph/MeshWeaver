@@ -127,6 +127,17 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         _providerList = providers as IList<IStaticNodeProvider> ?? providers.ToList();
         _modules = modules;
         catalog = Build(_modules?.Version ?? 0);
+        // 🚨 LOUD, once per mesh: two providers claiming one path with DIFFERENT content means one
+        // of them is being dropped. Registration order is not something a host controls, so
+        // "append a node at the platform's path to override it" is not a supported pattern — and
+        // before this warning existed it looked like one, because the append was accepted and only
+        // half-honoured (MeshWeaver#2908).
+        // Emitted HERE, at construction, and never from Build: Build re-runs after every live module
+        // swap, so a gate inside it cannot tell the first build from a rebuild.
+        if (_logger is not null)
+            foreach (var collision in StaticNodeProviderExtensions.DescribeStaticProviderCollisions(_providerList))
+                _logger.LogWarning("[StaticNodeQueryProvider] {Collision}", collision);
+
         // Dropped the moment a module generation changes — never held until the next query, which
         // would keep the swapped-out generation's nodes, and so the generation, alive.
         // The subscription lives as long as the registry that holds it — the same mesh as this provider.
@@ -168,15 +179,6 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         // See _providerNodes: a definition-only catalog type-def is never a query result.
         var configNodes = seedNodes.Where(n => !n.IsDefinitionOnly).ToArray();
-
-        // 🚨 LOUD, once per mesh: two providers claiming one path with DIFFERENT content means one
-        // of them is being dropped. Registration order is not something a host controls, so
-        // "append a node at the platform's path to override it" is not a supported pattern — and
-        // before this warning existed it looked like one, because the append was accepted and only
-        // half-honoured (MeshWeaver#2908).
-        if (_logger is not null && catalog is null)
-            foreach (var collision in StaticNodeProviderExtensions.DescribeStaticProviderCollisions(providerList))
-                _logger.LogWarning("[StaticNodeQueryProvider] {Collision}", collision);
 
         var allNodes = providerNodes.Concat(configNodes).ToArray();
 

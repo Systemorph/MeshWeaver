@@ -1018,7 +1018,7 @@ public partial record MeshBuilder
                     moduleHostedServicesHostRegistered = true;
                     services.AddSingleton<IHostedService>(sp => new ModuleHostedServicesHost(
                         sp.GetRequiredService<ModuleContexts>(),
-                        sp.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Mesh.IncompatibleModule")));
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleHostedServicesHost>()));
                 }
                 return ModuleServiceForwarding.AddForwarders(services, probed);
             }
