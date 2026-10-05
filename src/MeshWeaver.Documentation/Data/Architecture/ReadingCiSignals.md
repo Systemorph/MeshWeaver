@@ -585,6 +585,16 @@ also two greens of one workflow name on one sha, but the short one is an idle *s
 green-tree short-circuit — a different mechanism that happens to look the same from the run list.
 Attributing it to reuse would be right about the symptom and wrong about the cause.
 
+### 🚨 A marker vouches only for what ran BEFORE it was written — place the writer after every verdict it speaks for
+
+The section above is about READING a reuse green honestly. This one is the same defect from the writer's side: how a marker that lies comes to exist. Measured on core, filed as #5988 — PR #5852, run `36480427008`, job `109131799247` (2026-10-02): in `collect-results`, the `Record green tree` step sat at step 13, after build and tests but BEFORE the gate verdict steps, conditioned only on the precheck not having short-circuited and on build and tests having succeeded. Step 13 wrote a `refs/ci-green` marker for the tree; step 19 then failed the client-names gate. From that moment the tree carried a green marker over a red gate.
+
+The comment above the step claimed it was reached only when every gate above had passed — true only of the trx and exit-marker gates above it. **A comment is a hypothesis; the ordering is the invariant.**
+
+**The second half is the reuse path doing exactly its job with a marker that lies.** The next run on the same tree takes the reuse branch (`Reused: tree already green`), every gate verdict step is skipped, and the one required check (`Consolidate test results`) reports success for a tree whose client-names gate was never evaluated. Nothing is red anywhere: the marker was written, the verdicts were skipped, the required check concluded `success`.
+
+**The rule:** a step that vouches for other jobs' verdicts must run AFTER the last of them, under the implicit `success()` — or its `if` must name every gate job's result itself. On `main` the marker step and the executed-main ref beside it now follow the last `Fail if … gate failed` step, so any red verdict skips the marker exactly as any red step skips a later one. When a gate is added to a collector, check two things: that its verdict step guards the gate job's result, and that the marker still sits after it — a verdict appended after the writer re-opens the hole silently, with the comment still claiming the opposite.
+
 ### 🚨 `mergeable_state: clean` + `auto_merge: false` is a TWO-POLE ambiguity, not a state
 
 Same class as the reuse green above — a field pair that reads like an answer — and here the two
