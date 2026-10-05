@@ -661,10 +661,16 @@ def is_generated_bot(user: dict | None) -> bool:
         and user.get("login") in GENERATED_BOT_LOGINS
 
 
+# A changed line of a floor stamp is NOTHING BUT the key/value — never a line that merely CONTAINS the
+# key (`"minMeshVersion": "3.0.0", "requires": [...]`, or a minified single-line index.json), whose
+# other content no validator backs (#6097 review).
+FLOOR_LINE = re.compile(r'\s*"minMeshVersion"\s*:\s*"[^"]*"\s*,?\s*')
+
+
 def _floor_only_patch(patch: str | None) -> bool:
     changed = [l for l in (patch or "").splitlines()
                if l[:1] in "+-" and not l.startswith(("+++", "---")) and l[1:].strip()]
-    return bool(changed) and all('"minMeshVersion"' in l for l in changed)
+    return bool(changed) and all(FLOOR_LINE.fullmatch(l[1:]) for l in changed)
 
 
 def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[bool, str]:
@@ -675,7 +681,11 @@ def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[
         return False, "its file listing is empty or unread"
     if len(files) < int(pr.get("changed_files") or 0):
         return False, f"the file listing returned {len(files)} of {pr.get('changed_files')} files"
-    if not commits or not all(is_generated_bot(c.get("author")) for c in commits):
+    if not commits:
+        return False, "its commit listing is empty or unread"
+    if len(commits) < int(pr.get("commits") or 0):
+        return False, f"the commit listing returned {len(commits)} of {pr.get('commits')} commits"
+    if not all(is_generated_bot(c.get("author")) for c in commits):
         return False, "a commit on it is not the App's"
     for f in files:
         name = str(f.get("filename") or "")
@@ -701,7 +711,9 @@ def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
     if is_generated_bot(pr.get("user")):
         since = min(since, str(pr.get("created_at") or since)) if since else str(pr.get("created_at") or "")
         ok, why = generated_only(pr, files, commits)
-        if ok:
+        # A DRAFT is held like any other (#6097 review): the skip removes the review, never the
+        # author's own "not ready yet".
+        if ok and not pr.get("draft"):
             return StageVerdict(True, "generated", "", notes=(f"stage 1 skipped: {why} — nothing to review",))
     labels = {l.get("name") for l in pr.get("labels") or []}
     if TESTS_FIRST_LABEL in labels:
@@ -1667,6 +1679,14 @@ def self_test() -> int:
     gen_case("App PR with a person's commit on it -> waits", "waiting", gpr(), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
     gen_case("App PR whose file listing is short -> waits", "waiting", gpr(n_files=3), LOCKS, BOT_COMMITS)
     gen_case("a look-alike bot (another id) -> waits", "waiting", gpr(user=dict(BOT, id=1)), LOCKS, BOT_COMMITS)
+    gen_case("a generated-only App DRAFT -> held as a draft", "draft", dict(gpr(), draft=True), LOCKS, BOT_COMMITS)
+    gen_case("App PR whose commit listing is short -> waits", "waiting", dict(gpr(), commits=2), LOCKS, BOT_COMMITS)
+    gen_case("a floor line carrying more than the floor -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-    "minMeshVersion": "a",\n+    "minMeshVersion": "b", "requires": ["x"],'}],
+             BOT_COMMITS)
+    gen_case("a minified index.json change -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-{"minMeshVersion": "a", "id": "AI"}\n+{"minMeshVersion": "b", "id": "AI"}'}],
+             BOT_COMMITS)
     # The fallback clock keys on the PULL REQUEST for the App's PRs: a head rewritten 1 min ago on a
     # PR opened 4 h ago is past the fallback (the per-head clock would restart forever).
     v = stage_readiness(gpr(created="2026-10-04T04:00:00Z"), [], [], T_EARLY, "2026-10-04T08:19:00Z", 60,
