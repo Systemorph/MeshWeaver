@@ -274,6 +274,7 @@ public sealed class InstanceComboReader(IMessageHub hub, ILogger<InstanceComboRe
                         RecordPath = node.Path,
                         PackageId = string.IsNullOrWhiteSpace(manifest.Id) ? node.Id : manifest.Id,
                         Name = manifest.Name,
+                        CompiledModule = string.IsNullOrWhiteSpace(manifest.Module) ? null : manifest.Module.Trim(),
                         ModuleVersion = manifest.ModuleVersion,
                         Version = manifest.Version,
                         InstalledFromRef = manifest.InstalledFromRef,
