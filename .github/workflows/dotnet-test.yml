@@ -2364,6 +2364,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
 
+    # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
+    # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
+    # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.
+    - name: "A publication never stamps a platform floor above the portal it names (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/assert-bake-floor.py --self-test
+
     # The recorder that writes a DEAD test host into its own trx (#2495) — here and, from the
     # platform checkout, in every satellite's suite loop. Its reason to exist is the host that wrote
     # nothing, which is also the host whose results DIRECTORY was never created (MeshWeaver.Plugins,
