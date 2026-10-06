@@ -366,9 +366,11 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
         if (activation is null)
             return report;
         var compiledModules = combo.Modules
-            .Where(m => !string.IsNullOrWhiteSpace(m.Package?.CompiledModule))
+            .SelectMany(m => m.Package?.CompiledModule is { } compiled && !string.IsNullOrWhiteSpace(compiled)
+                ? new[] { (m.ModuleId, Compiled: compiled) }
+                : [])
             .GroupBy(m => m.ModuleId, StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(g => g.Key, g => g.First().Package!.CompiledModule!, StringComparer.OrdinalIgnoreCase);
+            .ToImmutableDictionary(g => g.Key, g => g.First().Compiled, StringComparer.OrdinalIgnoreCase);
         return report with
         {
             Modules = report.Modules

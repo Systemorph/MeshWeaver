@@ -88,7 +88,8 @@ Each package row therefore also carries **`runningVersion`**: the version of the
 process has loaded for the package's compiled module (`PackageManifest.Module`), read off the
 activation record (`ModuleLandingService.GetActivation`) against the loaded generation — the head's
 version when the head is loaded, the previous generation's when that is. It is the same reading a
-reload's per-replica row reports (`ModuleReloadAgent.LoadedVersions`), so the two cannot disagree.
+reload's per-replica row reports — `ModuleReloadAgent.LoadedVersions`, which matches the activation
+record against the agent's `LoadedGenerations()` exactly as the report does — so the two cannot disagree.
 It is **null** when it is not known — a content-only package, the image's own copy, a generation the
 record no longer names, or an unreadable record — never guessed from the head or the install record.
 A restart-path reload is the case that rules the head out: it lands N+1 as head while the process
@@ -101,7 +102,8 @@ Reading a row against the target version (`servedVersion`):
 | = target | = target | code and content applied |
 | = target | < target | **code live, content behind** — a live reload moved the module; the content install did not move |
 | < target | < target | nothing applied |
-| null | < target | not known whether the code moved — the row cannot claim either |
+| < target | = target | **content applied, code behind** — the install moved the record; the module reload has not landed, or its restart is still pending |
+| null | anything | not known whether the code moved — the row claims neither state |
 
 ## Retention reads the adopted builds too
 
