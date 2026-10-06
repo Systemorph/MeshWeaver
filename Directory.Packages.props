@@ -303,10 +303,16 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.14.4" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.14.4" />
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.3.1" />
+    <!-- 🚨 ONE Orleans family, one version. These four are referenced only by MeshWeaver.Plugins'
+         hosts (this file is its version source), so no core project shows them to Dependabot and a
+         grouped Orleans bump leaves them behind. A split family ships Microsoft.Orleans.Reminders at
+         the OLD version in the portal image; the image-derived central list then pins it there, and
+         every Plugins test project on Microsoft.Orleans.TestingHost fails restore with NU1109
+         (TestingHost needs Reminders at the family version). Move them with the rest of the family. -->
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.4.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
