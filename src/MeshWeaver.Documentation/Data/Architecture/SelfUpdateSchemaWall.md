@@ -244,6 +244,19 @@ Plugins/control-plane half, and it has a precise shape:
   run again. The `Roll` plan calling it is the Plugins half; until an operator image carrying the
   command is on `hosting-operator:main`, that plan step would stop with *command not found* — before
   the image moves, which is the safe side.
+
+  🚨 **The migration image is paired with the portal's by registry path, never by name substitution.**
+  `hosting-deploy` used to write `migration.image` as `${image/memex-portal-ai/memex-migration}`,
+  which is a silent no-op for any other portal repository. Measured on `control` (portal
+  `memex-control`) on 2026-10-06: a `helm upgrade` at 06:05Z wrote the PORTAL image as
+  `migration.image` (revision 4; its own Job `memex-migration-4` Failed), and every `Roll` after it
+  — unattended CD and hand-approved alike — refused in `hosting-migrate` with *"runs no
+  memex-migration image — nothing to retarget"*. Now `hosting-deploy` pairs `memex-migration` at the
+  portal's tag beside the portal's repository (or on the values' own migration repository when the
+  record rendered one), refuses a portal reference with no tag to pair, and never emits the portal
+  image as the migration; and `hosting-migrate` also recognises the chart's migration containers by
+  NAME (`memex-migration`, `memex-migration-rehearsal`), so a `Roll` heals a release that already
+  carries a wrong `migration.image` instead of refusing on it forever.
 - **(b2) The `Deployments/<name>` record must carry the verdict.** The in-pod path reports on
   `Admin/UpdatePolicy`; an operator `Roll` reports on the instance record, and a plan step that
   patched an image the new pods then refuse must land there as a failure rather than as a completed
