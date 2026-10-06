@@ -77,10 +77,10 @@ public sealed record ImageModuleSeed(string Module, string? Package, string? Ver
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
                 return null;
-            var module = Text(root, "module");
-            if (!string.Equals(module, moduleName, StringComparison.OrdinalIgnoreCase))
+            if (Text(root, "module") is not { } module
+                || !string.Equals(module, moduleName, StringComparison.OrdinalIgnoreCase))
                 return null;
-            return new ImageModuleSeed(module!, Text(root, "package"), Text(root, "version"),
+            return new ImageModuleSeed(module, Text(root, "package"), Text(root, "version"),
                 Text(root, "moduleVersion"));
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)

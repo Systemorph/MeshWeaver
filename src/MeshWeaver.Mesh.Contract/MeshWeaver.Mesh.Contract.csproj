@@ -12,6 +12,10 @@
     <!-- IHostedService only: module-contributed hosted services are isolated at ACTIVATION
          (#2449, IsolatedModuleHostedService). Abstractions only — no host, no runtime. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <!-- HealthCheckServiceOptions: a module's AddCheck<T> registration is rebound to activate in the
+         module's OWN scope (ModuleHealthCheckOptionsForwarder) — the root cannot resolve a module-owned
+         dependency of the check (MeshWeaver.SelfUpdate.Aks's FleetWatchHealthCheck, /health 500). -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
   </ItemGroup>
 
   <ItemGroup>
