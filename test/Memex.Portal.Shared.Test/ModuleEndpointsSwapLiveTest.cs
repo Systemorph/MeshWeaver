@@ -181,6 +181,42 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
             "a stopped host's source must have ended its subscription to the registry's swaps");
     }
 
+    /// <summary>#6128 review: a live-swap commit landing between the source's boot snapshot and its
+    /// subscription to the registry's (non-replaying) swap signal must still be published — never the
+    /// pre-commit endpoints served silently until some later swap.</summary>
+    [Fact]
+    public async Task ACommitBetweenTheSnapshotAndTheSubscription_IsStillPublished()
+    {
+        using var contexts = new ModuleContexts();
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1))));
+        // A host that does NOT map the module endpoints itself, so the source under test is the only one
+        // serving the module's routes (two sources on one host would collide with each other).
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(contexts);
+        builder.Services.AddRouting();
+        await using var app = builder.Build();
+
+        using var source = new ModuleEndpointDataSource(
+            app.Services, contexts, ((IEndpointRouteBuilder)app).CreateApplicationBuilder, logger: null,
+            afterSnapshot: () => contexts.Commit(contexts.Load(Write("g2", ModuleSource(2)))));
+
+        var endpoint = source.Endpoints.OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == "/live-endpoint");
+        (await Answer(endpoint, app.Services)).Should().Be("v2",
+            "the generation committed between the snapshot and the subscription must be the one served");
+    }
+
+    private static async Task<string> Answer(RouteEndpoint endpoint, IServiceProvider services)
+    {
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext { RequestServices = services };
+        context.Request.Method = "GET";
+        using var body = new MemoryStream();
+        context.Response.Body = body;
+        await (endpoint.RequestDelegate ?? throw new InvalidOperationException("the route has no request delegate"))(context);
+        return System.Text.Encoding.UTF8.GetString(body.ToArray());
+    }
+
     /// <summary>#6128 review: the dynamic source publishes its BOOT map without its own collision
     /// check, so the boot routes of a held module must be caught by the host's startup refusal, which
     /// reads the composite endpoint table the dynamic source is part of. The control: the same host

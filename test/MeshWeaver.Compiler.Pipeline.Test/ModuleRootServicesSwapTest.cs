@@ -90,7 +90,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hello v1 (options v1)");
         var keyed = Mesh.ServiceProvider.GetRequiredKeyedService<ILiveGreeter>("keyed-greeter");
         keyed.Greet().Should().Be("hello v1 (options v1)");
-        journal.Entries.Should().Equal(["start v1"], "the host started the module's hosted service once, through its forwarder");
+        journal.Entries.Should().Equal(["start v1"], "the host started the module's hosted service once, through the single ModuleHostedServicesHost");
         var weakN = WeakContextOf(Module);
 
         var outcome = await Updater.Swap(Write("g2", ModuleSource(2)), "test: root services").Timeout(Budget).Await(ct);

@@ -55,22 +55,41 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource, IDisposable
     /// <summary>Creates the source over the mesh's module registry, and maps the current generations.</summary>
     public ModuleEndpointDataSource(
         IServiceProvider services, ModuleContexts contexts, Func<IApplicationBuilder> createApplicationBuilder, ILogger? logger)
+        : this(services, contexts, createApplicationBuilder, logger, afterSnapshot: null)
+    {
+    }
+
+    /// <summary>The constructor with a test seam: <paramref name="afterSnapshot"/> runs between the boot
+    /// snapshot and the subscription, exactly where a concurrent live-swap commit could land unseen.</summary>
+    internal ModuleEndpointDataSource(
+        IServiceProvider services, ModuleContexts contexts, Func<IApplicationBuilder> createApplicationBuilder, ILogger? logger,
+        Action? afterSnapshot)
     {
         this.services = services;
         this.contexts = contexts;
         this.createApplicationBuilder = createApplicationBuilder;
         this.logger = logger;
+        // The version is read BEFORE the snapshot (#6128 review): VersionChanged is a plain subject that
+        // replays nothing, so a commit landing between the snapshot and the subscription below would
+        // bump it with no subscriber — and this source would serve the pre-commit endpoints, silently,
+        // until some later swap. The check after subscribing closes that window.
+        var seen = contexts.Version;
         // Boot maps every held module; a boot collision is refused by the host's startup check, which
         // reads the composite endpoint table this source is part of.
         published = contexts.Generations.ToImmutableDictionary(
             g => g.Name, g => new Published(g, MapModule(g)), StringComparer.Ordinal);
         endpoints = Flatten(published);
+        afterSnapshot?.Invoke();
         // Bound to the HOST, not the registry (#6128 review): the registry may outlive this host — a
         // host rebuilt over a live registry, or several route builders on one mesh — and a source
         // left subscribed would keep re-mapping and firing tokens no matcher reads, rooted by the
         // registry's subject. So the subscription ends when the host stops, or when this source is
         // disposed, whichever comes first.
         versionChanged = contexts.VersionChanged.Subscribe(_ => Remap());
+        // A commit that landed after `seen` was read but before the subscription is caught here. Remap
+        // is idempotent: when the snapshot already holds the current generations it changes nothing.
+        if (contexts.Version != seen)
+            Remap();
         services.GetService<IHostApplicationLifetime>()?.ApplicationStopping.Register(Dispose);
     }
 
