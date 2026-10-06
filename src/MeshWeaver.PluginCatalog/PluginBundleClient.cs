@@ -519,14 +519,25 @@ public sealed class PluginBundleClient
                     "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
                     + "Cause: {Cause}",
                     moduleName, pluginId, ex.Message);
-                return Observable.Return(new ModuleAdoptOutcome
-                {
-                    Registry = _registryUrl,
-                    Failure = $"landing failed — the module is unchanged: {ex.Message}",
-                    Transient = true,
-                });
+                return Observable.Return(LandingFaultOutcome(_registryUrl, ex));
             });
     }
+
+    /// <summary>
+    /// The outcome of an HTTP-route adoption that FAULTED (anything thrown on the way — the feed
+    /// read, the download, the landing). Whether it is retried is the shared classifier's call
+    /// (<see cref="TransientRegistryFailure"/>): a registry refusal (a
+    /// <see cref="RegistryRefusedException"/>, a 404/403 answer, a digest mismatch) is decided —
+    /// <c>Failed</c>, never re-armed — and everything else (a 503/429, a timeout, a reset, an
+    /// unexpected crash) is <c>Faulted</c> and retried. This route used to mark every fault
+    /// transient by itself, so a deliberate refusal on it was retried forever (MeshWeaver#6172).
+    /// </summary>
+    internal static ModuleAdoptOutcome LandingFaultOutcome(string? registryUrl, Exception fault) => new()
+    {
+        Registry = registryUrl,
+        Failure = $"landing failed — the module is unchanged: {fault.Message}",
+        Transient = TransientRegistryFailure.IsTransient(fault),
+    };
 
     /// <summary>
     /// Reads the downloaded bundle's module section and lands it. The declared platform FLOOR in

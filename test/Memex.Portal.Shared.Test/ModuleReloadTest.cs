@@ -1102,4 +1102,19 @@ public class TransientRegistryFailureTest
         RegistryUpdateReconciler.ShouldRetryFeedRead(new RegistryResponseException(HttpStatusCode.TooManyRequests, "429")).Should().BeTrue();
         RegistryUpdateReconciler.ShouldRetryFeedRead(new RegistryResponseException(HttpStatusCode.Forbidden, "403")).Should().BeFalse();
     }
+
+    /// <summary>
+    /// The HTTP bundle route's fault outcome asks the same classifier — the seam a reload reads
+    /// <c>Transient</c> from. A refusal must come out decided (never retried); a 503/timeout/crash
+    /// transient. Fails if the route marks every fault transient by itself again.
+    /// </summary>
+    [Fact]
+    public void TheHttpBundleRoute_AsksTheSameClassifier()
+    {
+        PluginBundleClient.LandingFaultOutcome("https://r", new RegistryRefusedException("no bundle layer")).Transient.Should().BeFalse();
+        PluginBundleClient.LandingFaultOutcome("https://r", new RegistryResponseException(HttpStatusCode.NotFound, "404")).Transient.Should().BeFalse();
+        PluginBundleClient.LandingFaultOutcome("https://r", new RegistryResponseException(HttpStatusCode.ServiceUnavailable, "503")).Transient.Should().BeTrue();
+        PluginBundleClient.LandingFaultOutcome("https://r", new TimeoutException()).Transient.Should().BeTrue();
+        PluginBundleClient.LandingFaultOutcome("https://r", new InvalidOperationException("incidental")).Transient.Should().BeTrue();
+    }
 }
