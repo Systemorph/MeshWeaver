@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using MeshWeaver.Plugin.Packaging;
 
@@ -242,13 +243,16 @@ public static class ModuleSyncDecision
             .ToImmutableList();
 
         static bool TryLoaded(
-            IReadOnlyDictionary<string, LoadedPackageModule> map, string id, out LoadedPackageModule module)
+            IReadOnlyDictionary<string, LoadedPackageModule> map, string id,
+            [NotNullWhen(true)] out LoadedPackageModule? module)
         {
-            if (map.TryGetValue(id, out module!))
-                return !string.IsNullOrWhiteSpace(module.Version);
-            var hit = map.FirstOrDefault(kv => string.Equals(kv.Key, id, StringComparison.OrdinalIgnoreCase));
-            module = hit.Value!;
-            return hit.Value is { Version.Length: > 0 };
+            if (map.TryGetValue(id, out var exact))
+            {
+                module = exact;
+                return !string.IsNullOrWhiteSpace(exact.Version);
+            }
+            module = map.FirstOrDefault(kv => string.Equals(kv.Key, id, StringComparison.OrdinalIgnoreCase)).Value;
+            return module is { Version.Length: > 0 };
         }
     }
 
@@ -280,11 +284,11 @@ public static class ModuleSyncDecision
                     ? module
                     : root.Length > 0 ? root[(root.LastIndexOf('/') + 1)..] : "(root)";
                 var indexPath = root.Length == 0 ? "index.json" : root + "/index.json";
-                var hasIndex = byPath.TryGetValue(indexPath, out var index);
-                var floor = hasIndex ? ParseFloor(index!) : null;
+                var index = byPath.GetValueOrDefault(indexPath);
+                var floor = index is { } floorJson ? ParseFloor(floorJson) : null;
                 return new ModuleReading(name, root, version, floor)
                 {
-                    Requires = hasIndex ? ParseRequires(index!) : [],
+                    Requires = index is { } requiresJson ? ParseRequires(requiresJson) : [],
                 };
             })
             .OrderBy(m => m.Root, StringComparer.Ordinal)
@@ -350,8 +354,10 @@ public static class ModuleSyncDecision
                 || requires.ValueKind != JsonValueKind.Array)
                 return [];
             return [.. requires.EnumerateArray()
-                .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
-                .Select(e => e.GetString()!.Trim())];
+                .Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() : null)
+                .OfType<string>()
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text.Trim())];
         }
         catch (JsonException)
         {

@@ -1,6 +1,8 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh;
@@ -61,6 +63,45 @@ internal sealed class ModuleHostedServiceForwarder(
             : Task.CompletedTask;
 }
 
+/// <summary>
+/// The root's stand-in for a module's <c>AddHealthChecks().AddCheck&lt;T&gt;()</c> — a platform-typed
+/// <see cref="IConfigureOptions{TOptions}"/> of <see cref="HealthCheckServiceOptions"/>, so it is forwarded,
+/// and the ROOT's health-check service then activates each check it adds.
+///
+/// <para>🚨 <b>Why a plain forwarding proxy is not enough.</b> <c>AddCheck&lt;T&gt;</c> stores a
+/// <see cref="HealthCheckRegistration"/> whose factory is
+/// <c>s =&gt; ActivatorUtilities.GetServiceOrCreateInstance&lt;T&gt;(s)</c>, and the root's
+/// <c>HealthCheckService</c> calls it with a ROOT scope. A check whose constructor takes a type the
+/// module itself declares — <c>FleetWatchHealthCheck(FleetWatchHeartbeat)</c> in
+/// MeshWeaver.SelfUpdate.Aks — then cannot be activated: module-owned types live only in the module's
+/// scope (<see cref="ModuleServiceRoute.ModuleOwned"/>), never in the root. Measured on the control
+/// image from core #6127 on: every <c>/health</c> answered 500 (<c>Unable to resolve service for type
+/// 'MeshWeaver.SelfUpdate.Aks.FleetWatchHeartbeat' while attempting to activate
+/// 'MeshWeaver.SelfUpdate.Aks.FleetWatchHealthCheck'</c>) and the control image never passed acceptance.</para>
+///
+/// <para>So this forwarder runs the module's CURRENT generation's configuration and rebinds every
+/// registration it added to activate in that module's CURRENT scope — the same scope the check's
+/// dependencies (and the hosted service that feeds them) are served from, read at every activation so a
+/// live swap is followed.</para>
+/// </summary>
+internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts, string module, int index)
+    : IConfigureOptions<HealthCheckServiceOptions>
+{
+    public void Configure(HealthCheckServiceOptions options)
+    {
+        var target = (IConfigureOptions<HealthCheckServiceOptions>)contexts.ResolveModuleService(module, index);
+        var before = options.Registrations.ToHashSet(ReferenceEqualityComparer.Instance);
+        target.Configure(options);
+        foreach (var registration in options.Registrations.Where(r => !before.Contains(r)).ToArray())
+        {
+            var activate = registration.Factory;
+            registration.Factory = _ => activate(contexts.ModuleScope(module)
+                ?? throw new InvalidOperationException(
+                    $"Module {module} holds no service scope — its health check '{registration.Name}' cannot be activated."));
+        }
+    }
+}
+
 /// <summary>Registers the forwarders for one module's root services.</summary>
 internal static class ModuleServiceForwarding
 {
@@ -77,6 +118,11 @@ internal static class ModuleServiceForwarding
             var type = registration.Descriptor.ServiceType;
             switch (registration.Route)
             {
+                case ModuleServiceRoute.Proxy when type == typeof(IConfigureOptions<HealthCheckServiceOptions>):
+                    // A module's health check must activate in the MODULE's scope, not the root's.
+                    root.Add(ServiceDescriptor.Singleton(type, sp => new ModuleHealthCheckOptionsForwarder(
+                        sp.GetRequiredService<ModuleContexts>(), module, index)));
+                    break;
                 case ModuleServiceRoute.Proxy:
                     // Singleton: ONE stable proxy, so every consumer holds the same forwarder.
                     // Resolving the registry through the container is what attaches it to the root.

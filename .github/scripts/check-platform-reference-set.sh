@@ -36,9 +36,12 @@
 #                   list down at the container app path), or an extracted /app from a pulled
 #                   image. The two shapes are the same directory.
 #     <cd-workflow> this repository's main-cd.yml. The composed-module set is READ OUT OF IT
-#                   (jobs.plugins-modules.with.modules) rather than restated here: the compose set
-#                   and the set this gate forbids in /app must be one list or they drift, and a
-#                   drifted second list is how a gate passes while naming the wrong names.
+#                   (jobs.published-modules.env.PUBLISHED_MODULES, `<package>=<module>` pairs) rather
+#                   than restated here: the module set the platform is judged against and the set
+#                   this gate forbids in /app must be one list or they drift, and a drifted second
+#                   list is how a gate passes while naming the wrong names. (It was
+#                   jobs.plugins-modules.with.modules until policy platform-module-deploy-separate
+#                   removed that job; reading a job that no longer exists is what took CD down.)
 set -euo pipefail
 
 app="${1:?usage: check-platform-reference-set.sh <app-dir> <cd-workflow>}"
@@ -66,8 +69,8 @@ echo "platform reference set: $n assemblies at '$app'; surface manifest names $s
 fail=0
 
 # ─────────────── 1. ONE PRODUCER — a composed module's name must not be in /app ───────────────
-# The set is READ FROM main-cd.yml, not restated: `modules:` on the plugins-modules job is what
-# this run actually composes with --module, and it is exactly the set the bake's
+# The set is READ FROM main-cd.yml, not restated: `PUBLISHED_MODULES` on the published-modules job is
+# the module set every instance on this platform lands — the same names the bake's
 # BakeHost.ShippedByHostProblem tests — a whole publication later. Running the same predicate here
 # turns a fleet-wide red into a refusal to promote.
 composed="$(python3 - "$workflow" <<'PY'
@@ -75,14 +78,17 @@ import json, sys
 import yaml
 
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-job = (doc.get("jobs") or {}).get("plugins-modules") or {}
-raw = (job.get("with") or {}).get("modules")
-if not raw:
-    sys.exit("jobs.plugins-modules.with.modules is absent or empty")
-entries = json.loads(raw)
-names = sorted({e["module"] for e in entries if e.get("module")})
-if not names:
-    sys.exit("jobs.plugins-modules.with.modules names no modules")
+job = (doc.get("jobs") or {}).get("published-modules") or {}
+raw = (job.get("env") or {}).get("PUBLISHED_MODULES")
+if not raw or not str(raw).strip():
+    sys.exit("jobs.published-modules.env.PUBLISHED_MODULES is absent or empty")
+names = set()
+for pair in str(raw).split():
+    package, sep, module = pair.partition("=")
+    if not sep or not package or not module:
+        sys.exit(f"jobs.published-modules.env.PUBLISHED_MODULES entry {pair!r} is not <package>=<module>")
+    names.add(module)
+names = sorted(names)
 print("\n".join(names))
 PY
 )" || { echo "::error::could not read the composed-module set out of '$workflow' — see the message above. This gate refuses to fall back to a hard-coded list: a second list is how a gate ends up asserting the wrong names while staying green."; exit 1; }

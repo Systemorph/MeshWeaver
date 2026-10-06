@@ -2349,6 +2349,22 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-bundle-static-assets.py --self-test
 
+    # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
+    # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
+    # this guard from here, so it is proven here; and core's own trees are held to it. The samples
+    # tree is served by FileSystemStorageAdapter, which MERGES `X.json` + `X/index.md` by design
+    # (ACME is laid out that way) — `--filesystem-layout` admits that one pair and nothing else.
+    # The doc tree is served by DocumentationNodeProvider, which merges nothing.
+    - name: "Two files importing to one node path are caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-node-path-collisions.py --self-test
+    - name: "No two files in core's node trees import to the same node path"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
+        python3 .github/scripts/check-node-path-collisions.py --filesystem-layout --tree samples/Graph/Data
+
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
     # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their
     # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and
@@ -2384,6 +2400,13 @@ jobs:
     - name: "The lane platform resolver chooses by the rule and refuses every dead end (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
+
+    # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
+    # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
+    # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.
+    - name: "A publication never stamps a platform floor above the portal it names (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/assert-bake-floor.py --self-test
 
     # The recorder that writes a DEAD test host into its own trx (#2495) — here and, from the
     # platform checkout, in every satellite's suite loop. Its reason to exist is the host that wrote
