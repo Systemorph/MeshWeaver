@@ -73,8 +73,8 @@ this change teaches the place both notations. "Owed" means a later step of the m
 
 | place | role | status |
 |---|---|---|
-| `Directory.Build.props:122` `PlatformVersion` = `3.0.0`; `:319` `Version = $(PlatformVersion)-ci.$(_CiBuildNumber)` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here (`main-cd.yml` reads it with `-getProperty:Version`) | owed: minter step (§4 step 4) |
-| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the "two shapes" guard (`X.Y.Z-ci.<n>` / `X.Y.Z`) | owed, together with the minter |
+| `Directory.Build.props:122` `PlatformVersion` = `3.0.0`; `:319` `Version = $(PlatformVersion)-ci.$(_CiBuildNumber)` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here (`main-cd.yml` reads it with `-getProperty:Version`) | **handled in the minter change** (§4 step 4): `PlatformVersion` = `3.1.0`; CI `Version` = `<major>.<minor>.<run>`, local `<major>.<minor>.0-ci.0`; `AssemblyVersion` pinned to `<major>.0.0.0` so a minor bump never moves the binding identity |
+| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the "two shapes" guard (`X.Y.Z-ci.<n>` / `X.Y.Z`) | **handled in the minter change**: guards the SemVer shapes through real MSBuild, with a control arm |
 | `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs:68,92,122` | **R**: `BuildOrdinal`, `Compare`, `Newest`, the ONE order every C# caller uses (`VersionSelect`, `PlatformFloor`, `PlatformCompatibility.ProducerIsNewer`, `TargetSet`, `SealedPublicationIndex`, `ShippedPrebuiltBundles`, `PrebuiltBundleRetention`) | **handled**: `SemVerEraStart`, `IsSemVerBuild` |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs:211` | **R**: Stable must not admit a run-numbered clean tag | **handled** |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` `ResolveChannel` advisory | **R/P**: tells the operator which pattern to set | **handled**: names `3.*` |
