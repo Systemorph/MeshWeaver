@@ -151,6 +151,49 @@ public class PluginBundleArtifactFetchTest(ITestOutputHelper output) : MonolithM
         oci.Requests.Should().BeEmpty("an index without an artifact never reaches the OCI registry");
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6172 — what the adopt OUTCOME says about a failed artifact fetch decides whether a
+    /// module reload is <c>Faulted</c> (retried) or <c>Failed</c> (final). A registry that is briefly
+    /// down or rate-limiting answers something that clears on its own; a refusal or a tampered
+    /// layer is an answer the registry will give again.
+    /// </summary>
+    [Theory(Timeout = 120_000)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, true)]
+    [InlineData(HttpStatusCode.TooManyRequests, true)]
+    [InlineData(HttpStatusCode.BadGateway, true)]
+    [InlineData(HttpStatusCode.GatewayTimeout, true)]
+    [InlineData(HttpStatusCode.NotFound, false)]
+    [InlineData(HttpStatusCode.Forbidden, false)]
+    public async Task AFailedArtifactFetch_IsTransient_ExactlyWhenItsStatusMayClear(HttpStatusCode status, bool transient)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Artifact = oci.Reference;
+        oci.BlobStatus = status;
+
+        var outcome = await Client().AdoptModuleOutcome(Plugin, Module, "Plugins/" + Plugin)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        outcome.Failure.Should().NotBeNull($"the premise: a blob answering {(int)status} lands nothing");
+        outcome.Transient.Should().Be(transient,
+            $"{(int)status} {(transient ? "may clear on its own — retried" : "is a decided answer — final")}: {outcome.Failure}");
+    }
+
+    /// <summary>A layer that fails its digest is a REFUSAL — the registry served bytes that are not the
+    /// artifact, and it will serve the same bytes next time: final, never retried.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ATamperedArtifact_IsADecidedFailure_NotTransient()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Artifact = oci.Reference;
+        oci.TamperBlob = true;
+
+        var outcome = await Client().AdoptModuleOutcome(Plugin, Module, "Plugins/" + Plugin)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        outcome.Failure.Should().Contain("ArtifactRefused");
+        outcome.Transient.Should().BeFalse("a hash mismatch is the registry's decided answer");
+    }
+
     /// <summary>A packed module bundle carrying REAL assembly bytes — the landing measures them
     /// (#3538), so a byte stand-in would be refused as unreadable and the test would be about that
     /// gate instead of the fetch.</summary>

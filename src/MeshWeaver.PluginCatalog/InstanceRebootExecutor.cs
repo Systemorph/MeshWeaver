@@ -68,8 +68,15 @@ public static class RebootActivationKinds
     /// <summary>Handed to the control lane (<c>self-update-available</c> or <c>self-update-restart-pending</c>).</summary>
     public const string HandedOver = "HandedOver";
 
-    /// <summary>Nothing could be rolled or restarted — the detail names why.</summary>
+    /// <summary>Nothing could be rolled or restarted — a DECIDED answer (no restart path on this
+    /// install, a release held by policy, a migration that failed). Final; the detail names why.</summary>
     public const string Unavailable = "Unavailable";
+
+    /// <summary>The roll/restart request CRASHED — a hand-over that failed, a check that could not be
+    /// made, a call that threw. Transient, never final: the request goes
+    /// <see cref="InstanceRebootStatus.Faulted"/> and the reconcile pass re-arms it
+    /// (<see cref="InstanceReboot.RetryFaulted"/>).</summary>
+    public const string Faulted = "Faulted";
 
     /// <summary>A roll or restart was REFUSED before anything was issued — a disruptive rollout strategy, or a
     /// control instance that cannot self-patch (it would hand its own restart to itself). The detail names why.</summary>
@@ -89,7 +96,9 @@ public static class RebootActivationKinds
 /// back is the point — it makes the request Failed at the end, by name.</item>
 /// <item><b>Preparing → AwaitingRestart</b>: stamp <see cref="InstanceRebootRequest.RestartRequestedAt"/>
 /// FIRST, then ask <see cref="IInstanceRebootActivation.Activate"/> once — the stamp is what keeps a
-/// resumed executor from asking twice. Not scheduled ⇒ Failed (nothing would verify).</item>
+/// resumed executor from asking twice. A decided "not scheduled" ⇒ Failed (nothing would verify); a
+/// CRASHED request (<see cref="RebootActivationKinds.Faulted"/>, or a throw) ⇒ <see cref="InstanceRebootStatus.Faulted"/>,
+/// re-armed by the reconcile pass (<see cref="InstanceReboot.RetryFaulted"/>) — never final.</item>
 /// <item><b>AwaitingRestart → Done | Failed</b>: <see cref="InstanceReboot.EvaluateVerification"/>
 /// over what every process booted after the stamp REPORTS from its own checks
 /// (<see cref="InstanceRebootAgent"/>).</item>
@@ -129,6 +138,7 @@ public static class InstanceRebootExecutor
         private int preparing;
         private int restarting;
         private int finished;
+        private int attempt;
 
         private AccessService? Access => hub.ServiceProvider.GetService<AccessService>();
 
@@ -144,8 +154,18 @@ public static class InstanceRebootExecutor
             if (InstanceReboot.Validate(request) is { } invalid)
                 return Once(ref finished, () => Finish(invalid));
 
+            // A re-armed request (InstanceReboot.Rearm) is a new attempt: its restart may be asked for again.
+            if (request.Attempt != attempt)
+            {
+                attempt = request.Attempt;
+                Interlocked.Exchange(ref restarting, 0);
+                Interlocked.Exchange(ref finished, 0);
+            }
+
             return request.Status switch
             {
+                // Faulted waits for the reconcile pass to re-arm it (InstanceReboot.RetryFaulted).
+                InstanceRebootStatus.Faulted => Observable.Empty<Unit>(),
                 InstanceRebootStatus.Requested or InstanceRebootStatus.Preparing when request.RestartRequestedAt is null =>
                     Once(ref preparing, () => Prepare(request)),
                 InstanceRebootStatus.AwaitingRestart when request.RestartRequestedAt is null =>
@@ -258,10 +278,27 @@ public static class InstanceRebootExecutor
                     ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok, $"{outcome.Kind}: {outcome.Detail}")
                         .SelectMany(_ => Mark(InstanceRebootSteps.Verify, InstanceRebootStepOutcome.Running,
                             "waiting for a process booted after the restart to report its checks"))
-                    : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{outcome.Kind}: {outcome.Detail}")
-                        .SelectMany(_ => Finish($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
-                .Catch((Exception ex) => Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"faulted: {ex.Message}")
-                    .SelectMany(_ => Finish($"the restart request faulted: {ex.Message}")));
+                    : string.Equals(outcome.Kind, RebootActivationKinds.Faulted, StringComparison.Ordinal)
+                        ? Fault($"the restart request faulted ({outcome.Kind}): {outcome.Detail}")
+                        : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{outcome.Kind}: {outcome.Detail}")
+                            .SelectMany(_ => Finish($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
+                // A restart request that THREW is a crash, never a decided "cannot restart" (#6172).
+                .Catch((Exception ex) => Fault($"the restart request faulted: {ex.Message}"));
+        }
+
+        /// <summary>The restart request crashed: the step is red for THIS attempt and the request goes
+        /// Faulted (not terminal) — the reconcile pass re-arms it once its backoff is due.</summary>
+        private IObservable<Unit> Fault(string why)
+        {
+            logger?.LogWarning("[Reboot] {Path}: attempt {Attempt} Faulted — {Why}; retried once its backoff is due",
+                ModuleReloadExecutor.PathOf(hub), attempt, why);
+            return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{why} — retried once its backoff is due")
+                .SelectMany(_ => Write(r => r with
+                {
+                    Status = InstanceRebootStatus.Faulted,
+                    FaultedAt = DateTimeOffset.UtcNow,
+                    Failure = why,
+                }, Line($"attempt {attempt} faulted: {why} — the reconcile pass re-arms it")));
         }
 
         // ── Step 5 ────────────────────────────────────────────────────────────────────────────

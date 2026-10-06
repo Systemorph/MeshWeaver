@@ -493,6 +493,9 @@ public sealed class PluginBundleClient
                                     {
                                         Failure = $"the bundle {advertised.Version} could not be fetched ({result.Kind})"
                                                   + (string.IsNullOrWhiteSpace(result.Reason) ? "" : $": {result.Reason}"),
+                                        // A 503/429/timeout is a fault that clears on its own (Faulted,
+                                        // retried); a 404/403 or a refused artifact is decided (Failed).
+                                        Transient = result.Transient,
                                     })
                                 : LandFromBundleOutcome(
                                         pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
@@ -516,13 +519,25 @@ public sealed class PluginBundleClient
                     "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
                     + "Cause: {Cause}",
                     moduleName, pluginId, ex.Message);
-                return Observable.Return(new ModuleAdoptOutcome
-                {
-                    Registry = _registryUrl,
-                    Failure = $"landing failed — the module is unchanged: {ex.Message}",
-                });
+                return Observable.Return(LandingFaultOutcome(_registryUrl, ex));
             });
     }
+
+    /// <summary>
+    /// The outcome of an HTTP-route adoption that FAULTED (anything thrown on the way — the feed
+    /// read, the download, the landing). Whether it is retried is the shared classifier's call
+    /// (<see cref="TransientRegistryFailure"/>): a registry refusal (a
+    /// <see cref="RegistryRefusedException"/>, a 404/403 answer, a digest mismatch) is decided —
+    /// <c>Failed</c>, never re-armed — and everything else (a 503/429, a timeout, a reset, an
+    /// unexpected crash) is <c>Faulted</c> and retried. This route used to mark every fault
+    /// transient by itself, so a deliberate refusal on it was retried forever (MeshWeaver#6172).
+    /// </summary>
+    internal static ModuleAdoptOutcome LandingFaultOutcome(string? registryUrl, Exception fault) => new()
+    {
+        Registry = registryUrl,
+        Failure = $"landing failed — the module is unchanged: {fault.Message}",
+        Transient = TransientRegistryFailure.IsTransient(fault),
+    };
 
     /// <summary>
     /// Reads the downloaded bundle's module section and lands it. The declared platform FLOOR in
@@ -709,7 +724,13 @@ public sealed class PluginBundleClient
     /// collapsed "404 for this lane" and "the registry is down" into the same null, and the caller
     /// then collapsed that into the same 0 as a successful adoption.
     /// </summary>
-    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
+    /// <param name="Bytes">The bundle, or null when there is none.</param>
+    /// <param name="Kind">Why there are none (or <see cref="BundleAdoptionKind.Adopted"/>).</param>
+    /// <param name="Reason">The registry's or the transport's own words.</param>
+    /// <param name="Transient">The miss may clear on its own — a 503, 429, timeout or reset
+    /// (<see cref="TransientRegistryFailure"/>) — so a reload that met it is <c>Faulted</c> and
+    /// retried, never a final <c>Failed</c> (MeshWeaver#6172).</param>
+    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null, bool Transient = false);
 
     /// <summary>
     /// The bytes of <paramref name="bundle"/>: from the fleet's OCI registry by digest when the
@@ -761,7 +782,7 @@ public sealed class PluginBundleClient
                     var layer = manifest.Layers.FirstOrDefault(l => string.Equals(
                         l.MediaType, OciRegistryClient.BundleLayerMediaType, StringComparison.OrdinalIgnoreCase));
                     if (layer is null)
-                        return Observable.Throw<FetchResult>(new InvalidOperationException(
+                        return Observable.Throw<FetchResult>(new RegistryRefusedException(
                             $"the manifest {reference.Digest} at {reference.Registry}/{reference.Repository} "
                             + $"carries no {OciRegistryClient.BundleLayerMediaType} layer"));
                     return client.GetBlob(reference.Repository, layer.Digest, () => buffer)
@@ -790,7 +811,8 @@ public sealed class PluginBundleClient
                 "Bundle fetch for {Plugin}@{Version} from {Artifact} failed — {Consequence}. Cause: {Cause}",
                 pluginId, version, artifact, MissConsequence("will compile"), ex.Message);
             return Observable.Return(new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                $"artifact fetch from {artifact} failed: {ex.Message}"));
+                $"artifact fetch from {artifact} failed: {ex.Message}",
+                Transient: TransientRegistryFailure.IsTransient(ex)));
         });
     }
 
@@ -836,7 +858,8 @@ public sealed class PluginBundleClient
                     "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
                     pluginId, version, (int)receipt.Status, MissConsequence("will compile"));
                 return new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                    $"HTTP {(int)receipt.Status} from {_registryUrl}");
+                    $"HTTP {(int)receipt.Status} from {_registryUrl}",
+                    Transient: TransientRegistryFailure.IsTransient(receipt.Status));
             }
 
             // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence made #4528

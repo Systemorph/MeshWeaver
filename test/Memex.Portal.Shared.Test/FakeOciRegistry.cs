@@ -84,6 +84,10 @@ internal sealed class FakeOciRegistry : HttpMessageHandler
     /// <summary>Refuse the key at the realm.</summary>
     public bool RefuseKey { get; set; }
 
+    /// <summary>When set, a blob request answers this status instead of the bytes — a registry that
+    /// is briefly down (503), rate-limiting (429), or refusing (403/404).</summary>
+    public HttpStatusCode? BlobStatus { get; set; }
+
     private ImmutableList<string> requests = ImmutableList<string>.Empty;
     private int tokenRequests;
     private int blobRequests;
@@ -154,6 +158,8 @@ internal sealed class FakeOciRegistry : HttpMessageHandler
         if (uri.AbsolutePath.StartsWith(blobsPrefix, StringComparison.Ordinal))
         {
             Interlocked.Increment(ref blobRequests);
+            if (BlobStatus is { } status)
+                return Task.FromResult(new HttpResponseMessage(status));
             var digest = uri.AbsolutePath[blobsPrefix.Length..];
             if (digest != BundleDigest)
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
