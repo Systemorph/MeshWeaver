@@ -222,6 +222,15 @@ Neither of those touches a row already stored: the defect moved out of the code 
 and only a pass over the data closes it. `SelfTypedDeclarationDurableRepair` exists for the same
 reason and draws the same distinction — a write guard can only ever refuse the *next* bad row.
 
+🚨 **A repair pass that tolerates a failed step must still SAY it failed.** Both repairs skip a lane
+(a partition that cannot be read) or a row (a write that is refused) so the rest still heal — and
+`SelfTypedDeclarationDurableRepair` used to end such a pass with the Information line
+`sweep completed: … N row(s) retyped`, the failure visible only as a Warning beside it. Every
+tolerated fault is now recorded on the pass, and a pass with any ends at **Error** with
+`sweep completed with K FAILED step(s) [...]`, naming each lane or row
+(`SelfTypedDeclarationRepairReportsFailedStepsTest`). If you are reading a pass's outcome, read that
+summary line. A Warning on its own is not the outcome.
+
 🚨 **Restoring `MainNode == Path` is necessary but not sufficient** for a decentral node to be
 searchable again. A second, independent defect produces the identical symptom: a query union whose
 legacy single `Query` field carries only `list[0]`, so a static node matched by the *second* query is

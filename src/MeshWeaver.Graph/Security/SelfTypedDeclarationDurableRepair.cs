@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Disposables;
 using System.Text.Json;
@@ -164,16 +165,33 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
         // spot — so a finished sweep leaves this instance referencing NOTHING.
         // The one line every boot ends with, whichever way the sweep terminates — the
         // "nothing found" outcome is a count of zero here, never an absent line.
-        void Summarize(string outcome) => logger?.LogInformation(
-            "[SelfTypedDeclarationRepair] sweep {Outcome}: {Count} declaration path(s) [{Paths}] "
-            + "by path routing and inside pinned partition(s) [{Partitions}]: {Read} durable "
-            + "row(s) read, {Retyped} self-typed row(s) retyped",
-            outcome,
-            declarationPaths.Length,
-            string.Join(", ", declarationPaths),
-            string.Join(", ", pinned.Select(p =>
-                $"{p.Definition.Namespace}←{string.Join("|", p.Paths)}")),
-            stats.Read, stats.Retyped);
+        // 🚨 A step that FAILED is part of the verdict, never only of a Warning beside it. Each lane
+        // and each row is fault-tolerant on purpose (one bad seam must not leave every other row
+        // unhealed), but the summary used to say "completed" over a lane whose read had faulted —
+        // the one line an operator reads claimed a clean pass while the rows that lane covered
+        // stayed self-typed. A pass with failed steps now ends at Error and names them.
+        void Summarize(string outcome)
+        {
+            var partitions = string.Join(", ", pinned.Select(p =>
+                $"{p.Definition.Namespace}←{string.Join("|", p.Paths)}"));
+            var failures = stats.Failures;
+            if (failures.IsEmpty)
+                logger?.LogInformation(
+                    "[SelfTypedDeclarationRepair] sweep {Outcome}: {Count} declaration path(s) [{Paths}] "
+                    + "by path routing and inside pinned partition(s) [{Partitions}]: {Read} durable "
+                    + "row(s) read, {Retyped} self-typed row(s) retyped",
+                    outcome, declarationPaths.Length, string.Join(", ", declarationPaths),
+                    partitions, stats.Read, stats.Retyped);
+            else
+                logger?.LogError(
+                    "[SelfTypedDeclarationRepair] sweep {Outcome} with {FailureCount} FAILED step(s) "
+                    + "[{Failures}] — any self-typed row those steps covered stays unhealed until a "
+                    + "later start succeeds. {Count} declaration path(s) [{Paths}] by path routing and "
+                    + "inside pinned partition(s) [{Partitions}]: {Read} durable row(s) read, "
+                    + "{Retyped} self-typed row(s) retyped",
+                    outcome, failures.Count, string.Join("; ", failures), declarationPaths.Length,
+                    string.Join(", ", declarationPaths), partitions, stats.Read, stats.Retyped);
+        }
 
         var gate = new SingleAssignmentDisposable();
         subscription = gate;
@@ -209,7 +227,7 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
     /// ends empty, so the lanes after it still run — the sweep is per-lane tolerant for the same
     /// reason it is per-row tolerant: one failing seam must not leave every other row unhealed.
     /// </summary>
-    private static IObservable<MeshNode?> Sweep(
+    internal static IObservable<MeshNode?> Sweep(
         IObservable<MeshNode> source,
         IStorageAdapter target,
         string lane,
@@ -240,6 +258,7 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
                 // retried on the next boot — the fossil still matches the predicate.
                 .Catch<MeshNode?, Exception>(ex =>
                 {
+                    stats.RecordFailure($"retype '{fossil.Path}' ({lane}): {ex.GetType().Name}: {ex.Message}");
                     logger?.LogWarning(ex,
                         "[SelfTypedDeclarationRepair] retyping '{Path}' ({Lane}) failed; it stays "
                         + "self-typed and will be retried on the next start", fossil.Path, lane);
@@ -249,6 +268,7 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
             // retried on the next boot — whatever it would have found still matches the predicate.
             .Catch<MeshNode?, Exception>(ex =>
             {
+                stats.RecordFailure($"read by {lane}: {ex.GetType().Name}: {ex.Message}");
                 logger?.LogWarning(ex,
                     "[SelfTypedDeclarationRepair] reading declaration rows by {Lane} failed; any "
                     + "self-typed row there stays unhealed until the next start", lane);
@@ -314,16 +334,22 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
 
     /// <summary>Counters for the end-of-sweep summary line; incremented from the sequential
     /// chain, guarded anyway because a backend may emit from its own pool thread.</summary>
-    private sealed class SweepStats
+    internal sealed class SweepStats
     {
         private int read;
         private int retyped;
+        private ImmutableList<string> failures = ImmutableList<string>.Empty;
 
         public int Read => Volatile.Read(ref read);
         public int Retyped => Volatile.Read(ref retyped);
 
+        /// <summary>Every step that faulted and was tolerated — a read lane or one row's retype.
+        /// Non-empty means the pass did NOT heal everything it was asked to look at.</summary>
+        public ImmutableList<string> Failures => Volatile.Read(ref failures);
+
         public void CountRead() => Interlocked.Increment(ref read);
         public void CountRetyped() => Interlocked.Increment(ref retyped);
+        public void RecordFailure(string step) => ImmutableInterlocked.Update(ref failures, list => list.Add(step));
     }
 
     /// <inheritdoc />
