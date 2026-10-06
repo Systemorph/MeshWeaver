@@ -1781,8 +1781,6 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
         core, plugins = record["core_sha"], record["plugins_sha"]
         version = record["v_portal"]
         staging = str(record.get("staging") or "")
-        if staging and not re.fullmatch(rf"staging-{core[:7]}-[0-9]+", staging):
-            raise ValueError(f"staging tag {staging!r} does not name core {core[:7]}")
         if (record["run_number"] != run_number or not SHA.fullmatch(core)
                 or not SHA.fullmatch(plugins) or not SET_NAME.fullmatch(version)
                 or int(SET_NAME.fullmatch(version).group(2)) != run_number
@@ -1790,6 +1788,10 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
                 or record["short"] != core[:7] or record["plugins_short"] != plugins[:7]
                 or record["key"] != f"pair-{core[:7]}-p{plugins[:7]}"):
             raise ValueError("source pair or release version is inconsistent")
+        # Only after `core` is proven 40-hex, and escaped anyway: a corrupt record must stay a
+        # clean ResolutionError (skip this run), never an `re.error` that fails the whole resolve.
+        if staging and not re.fullmatch(rf"staging-{re.escape(core[:7])}-[0-9]+", staging):
+            raise ValueError(f"staging tag {staging!r} does not name core {core[:7]}")
         return PromotionIdentity(core, plugins, version, staging)
     except (ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
         raise ResolutionError(f"run #{run_number} promotion-record is invalid: {error}") from error
@@ -2593,6 +2595,18 @@ def self_test() -> int:
     case("recorded staging AND pair absent refuses the moving bare core tag (negative control)", True,
          lambda: choose(pair_fetch, _registry(missing_pair), tester, portal, log=logs.append),
          lambda c: c.sha == B and any("#8207" in line and "purged" in line for line in logs))
+    # A CORRUPT record (a core that is not 40-hex, with regex metacharacters in it, and a staging
+    # tag set) is a clean ResolutionError for that run — never an `re.error` that kills the resolve.
+    corrupt_buffer = io.BytesIO()
+    with zipfile.ZipFile(corrupt_buffer, "w") as zipped:
+        zipped.writestr("promotion-record.json", json.dumps({**record, "core_sha": "((([" + "e" * 36}))
+    def corrupt_fetch(path: str) -> dict | bytes:
+        if path.endswith("/artifacts/42/zip"):
+            return corrupt_buffer.getvalue()
+        return pair_fetch(path)
+    case("a corrupt record with regex metacharacters in its core is a clean ResolutionError", False,
+         lambda: promotion_identity(corrupt_fetch, 9207, 8207),
+         lambda message: "promotion-record is invalid" in message)
     case("SHA freeze never substitutes the run head for its promoted source", False,
          lambda: choose(pair_fetch, _registry(paired), tester, portal, freeze=A, log=logs.append),
          lambda message: "freeze" in message and "matched no" in message)
