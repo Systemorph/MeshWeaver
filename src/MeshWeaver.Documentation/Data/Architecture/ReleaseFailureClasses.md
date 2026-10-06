@@ -588,6 +588,74 @@ stopped through `StopApplication()`.
 - **The first attempts' nested root-create failures** (above). They are still unexplained, apart
   from happening in this same shutdown window.
 
+## Where the 10 s bound is spent (#5057, fourth half)
+
+### What was measured
+
+#6056's shape is a create cut short because its own process was shutting down. That shape is
+classified separately; see the section above. Measured on the control instance, the incident
+`Admin/_LogIncident/17578d9fadcb0174` holds #5057's own shape: *"the create did not land within
+00:00:10"*. It stood at 743 occurrences, last seen 2026-10-05 17:47Z. A Release node carries three
+timestamps, and the create handler logs `Node created at …` only after the storage write emits. Those
+four facts together place the delay:
+
+| Release (memex) | id stamp | `createdDate` (pre-write stamp) | `Node created at` lines |
+|---|---|---|---|
+| `Hosting/ModuleInventory/…174622-9wQzFEsa` | 17:46:22 | 17:46:22.62 | 17:46:34.69, 17:46:48.29 |
+| `Hosting/PlatformBuildInbox/…174705-36aDAzi_` | 17:47:05 | 17:47:05.78 | 17:47:34.57, 17:47:45.66 |
+
+- **Before the write is fast.** Each first attempt reached its pre-write stamp within a second of
+  being minted.
+- **The re-cut's handler is fast too.** It was composed 1 ms after the first expiry was logged and
+  reached its own pre-write stamp 7–20 ms later.
+- **The write leg is slow.** The first attempt's write emitted at least 12 s (`ModuleInventory`) and
+  at least 29 s (`PlatformBuildInbox`) after its pre-write stamp. Both expiries fired before any
+  `Node created` line.
+
+For these two, the bound was spent in the storage write leg. It was not spent in queueing at the
+node-operation hub or in the handler's reads.
+
+The 10-04 releases on memex (`Hosting/LogEntry`, `Essentials/OperationRequest`, `Store/Publishing`,
+`Store/InstallRequest`) show a different shape:
+- Their pre-write stamps came 10–15 s after composition, so the delay there was BEFORE the write.
+- Three of them, in two partitions, were stamped within 4 ms of each other (20:14:34.80Z). That
+  looks like a shared gate releasing all at once. Which gate it was has not been established.
+
+### The one gate in the write leg
+
+The write leg runs from `CreateNode` step 5 through `MonotonicWriteGuard`, `SubtreeDeletionGuard`,
+`VersionWriting`, `PersistenceService` and the Postgres routing adapter to the per-schema adapter's
+`Write`. That call runs inside `pg:{provider}`. The pool is capped at ONE, and every per-schema
+adapter shares it (`PostgreSqlPathRoutingAdapter.GetOrCreateAdapter` passes `_provider.WritePool`),
+so it is a process-wide FIFO for every node write in every partition. `IoPoolNames.PostgresAdapterPrefix`
+says so and carries a 2026-09-16 reading of a quiet window: 2,786 admissions, max wait 205 ms. A
+compile wave is not a quiet window. Whether the release create was QUEUED behind other writes there,
+or the write that held the slot was itself slow (a long batch, schema provisioning, a lock wait),
+cannot be read from the expiry line. Those two causes need opposite fixes.
+
+### The instrument
+
+`NodeTypeBuildState.Bounded` now takes `IoPoolRegistry.Snapshot()` when the wait opens. On expiry it
+appends `IoPoolQueueReport.Describe(pools, baseline)`, the same reading the recursive-delete drain
+attaches to its timeout (#1198). It names every pool with work queued at the expiry, with its cap and
+depth, and counts the admissions that waited a second or more during the window. A window with
+nothing queued reads `NothingQueued`. A host with no registry reads `NotMeasured`.
+
+The control is `AReleaseCreateExpiryNamesTheQueuedPoolTest`. It drives the production seam on a
+`HistoricalScheduler` with a real registry:
+- With a cap-1 `pg:` pool holding one leaf and queueing a second, the expiry must name that pool.
+- The idle negative control must read `NothingQueued`.
+
+All three cases are red with the reading removed.
+
+### Not established
+
+- **Which of the two write-leg causes it was.** The next expiry's own line now answers that. The
+  `[LIVENESS]` ticks for the 17:46Z window, which would show ThreadPool backlog and GC pauses, were
+  not read: the control instance's MCP connection failed for the rest of the session.
+- **The 10-04 shape's gate.** Its delay was before the write, so this instrument does not cover it.
+- **The mix across the 743 occurrences.** Only six releases were measured.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was
