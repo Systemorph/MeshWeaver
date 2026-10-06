@@ -215,6 +215,100 @@ public class PlatformReleaseOrderTest
                 .OrderByDescending(v => v, PlatformReleaseOrder.Newest));
     }
 
+    // ───────── the SemVer notation (policy `platform-semver-versioning`) ─────────
+
+    /// <summary>
+    /// From <see cref="PlatformReleaseOrder.SemVerEraStart"/> on, a continuous build is the plain
+    /// SemVer <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c> and its run number is the PATCH. Below
+    /// the boundary nothing changes meaning: a clean <c>3.0.x</c> is still a promotion, and the
+    /// withdrawn slip <c>3.1.0-ci.7841</c> is still read by its <c>ci</c> label.
+    /// </summary>
+    [Theory]
+    [InlineData("3.1.10050", 10050L, true)]
+    [InlineData("3.1.10050+sha.abc1234", 10050L, true)]
+    [InlineData("3.1.10050-edge", 10050L, true)]
+    [InlineData("3.1.10050-edge.311", 311L, false)]    // edge-images' fallback: its OWN run number decides, as before
+    [InlineData("3.2.10400", 10400L, true)]
+    [InlineData("4.0.20000", 20000L, true)]
+    [InlineData("3.1.0", null, false)]                  // a zero patch is a floor or a release, never a run
+    [InlineData("4.0.0", null, false)]
+    [InlineData("3.1.0-ci.0", 0L, false)]               // the new notation's LOCAL source-build stamp
+    [InlineData("3.1.0-ci.7841", 7841L, false)]         // the slip keeps its ci number
+    [InlineData("3.0.0", null, false)]                  // a promotion below the boundary
+    [InlineData("3.0.5", null, false)]
+    [InlineData("2.9.12345", null, false)]
+    [InlineData("3.1.10050-rc1", null, false)]          // an unknown label is not a build of the notation
+    [InlineData("3.1.10050.1", null, false)]            // four parts is not the notation
+    public void BuildOrdinal_ReadsTheSemVerNotationsPatch_AboveTheBoundaryOnly(
+        string version, long? expected, bool isSemVerBuild)
+    {
+        Assert.Equal(expected, PlatformReleaseOrder.BuildOrdinal(version));
+        Assert.Equal(isSemVerBuild, PlatformReleaseOrder.IsSemVerBuild(version));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The cut-over is monotonic — the claim the whole migration rests on.</b> The old and the
+    /// new notation share ONE lineage (the CD run number), so the last <c>3.0.0-ci.&lt;n&gt;</c> and
+    /// the first <c>3.1.&lt;n+1&gt;</c> are ordered by publication, whichever notation each wears.
+    ///
+    /// <para>Negative control, built into the data: before the SemVer reading existed,
+    /// <c>3.1.10000</c> had NO run number, so the band rule ranked EVERY <c>3.0.0-ci.*</c> above it
+    /// and a Continuous install would never have left the old notation. Reverting
+    /// <c>SemVerBuildPatch</c> to <c>return null</c> fails this test.</para>
+    /// </summary>
+    [Fact]
+    public void TheOldAndTheNewNotation_InterleaveByPublicationOrder()
+    {
+        Assert.True(PlatformReleaseOrder.IsNewer("3.1.10000", "3.0.0-ci.9999"));
+        Assert.False(PlatformReleaseOrder.IsNewer("3.0.0-ci.9999", "3.1.10000"));
+        // A LATER old-notation set (a reconcile run that minted under 3.0.0 after the flip) is still
+        // newer than an earlier new-notation one: the run number decides, never the notation.
+        Assert.True(PlatformReleaseOrder.IsNewer("3.0.0-ci.10002", "3.1.10001"));
+        // The withdrawn slip never outranks the new notation.
+        Assert.True(PlatformReleaseOrder.IsNewer("3.1.10000", "3.1.0-ci.7841"));
+        // A minor bump is deliberate and later, so SemVer and the lineage agree across it.
+        Assert.True(PlatformReleaseOrder.IsNewer("3.2.10400", "3.1.10399"));
+
+        string[] mixed =
+        [
+            "3.0.0-ci.9998", "3.1.10001", "3.0.0", "3.1.0-ci.7841", "3.0.0-ci.9999",
+            "3.2.10400", "3.1.10000", "3.0.0-rc9.ci.7824",
+        ];
+        Assert.Equal(
+            ["3.2.10400", "3.1.10001", "3.1.10000", "3.0.0-ci.9999", "3.0.0-ci.9998",
+             "3.1.0-ci.7841", "3.0.0-rc9.ci.7824", "3.0.0"],
+            mixed.OrderByDescending(v => v, PlatformReleaseOrder.Newest));
+    }
+
+    /// <summary>The total order stays total across the two notations: every permutation of a mixed
+    /// set sorts to the same answer.</summary>
+    [Fact]
+    public void TheTotalOrder_IsTransitive_AcrossBothNotations()
+    {
+        string[] expected = ["3.1.10001", "3.0.0-ci.10000", "3.1.0-ci.7841", "3.0.0"];
+        foreach (var permutation in Permutations(["3.0.0", "3.1.10001", "3.1.0-ci.7841", "3.0.0-ci.10000"]))
+            Assert.Equal(expected, permutation.OrderByDescending(v => v, PlatformReleaseOrder.Newest));
+    }
+
+    /// <summary>
+    /// A declared floor keeps meaning what it says across the cut-over: a <c>3.0.0</c> floor is met
+    /// by every new-notation build, an old-notation set floor is ordered by run number against a
+    /// new-notation build, a minor floor (<c>3.2.0</c>, zero patch) holds until that minor ships, and
+    /// the local stamp <c>3.1.0-ci.0</c> is never ordered against a publication.
+    /// </summary>
+    [Fact]
+    public void AFloor_IsOrderedAcrossTheCutOver()
+    {
+        Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate("3.0.0", "3.1.10050").Kind);
+        Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate("3.0.0-ci.9000", "3.1.10050").Kind);
+        Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate("3.1.10060", "3.0.0-ci.9999").Kind);
+        Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate("3.2.10400", "3.1.10050").Kind);
+        Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate("3.2.0", "3.1.10050").Kind);
+        Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate("3.1.0", "3.1.10050").Kind);
+        Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate("3.1.0", "3.0.0-ci.9999").Kind);
+        Assert.Equal(PlatformFloorKind.Advisory, PlatformFloor.Evaluate("3.1.10050", "3.1.0-ci.0").Kind);
+    }
+
     private static IEnumerable<string[]> Permutations(string[] items) =>
         items.Length <= 1
             ? [items]

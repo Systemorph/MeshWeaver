@@ -125,6 +125,19 @@ PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
 STAGING_TAG = re.compile(r"^staging-([0-9a-f]{7})-[0-9]+$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
+# 🚨 THE SEMVER NOTATION (policy `platform-semver-versioning`, core Doc/Architecture/PlatformVersioning):
+# from line 3.1 on a set is the plain `<major>.<minor>.<run>` and the PATCH is the CD run number —
+# the same monotonic counter `-ci.<run>` carried. Read ONLY at or above the boundary, so no tag the
+# old notation published (`3.0.0`, the withdrawn `3.1.0-ci.7841`) changes meaning. The C# twin is
+# `PlatformReleaseOrder.SemVerEraStart`; the two must name the same boundary.
+SEMVER_ERA_START = (3, 1)
+SEMVER_SET_NAME = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_set(version: str):
+    m = SEMVER_SET_NAME.match(version or "")
+    # A zero patch is a floor or a release (`3.1.0`), never a CD run.
+    return m if m and (int(m.group(1)), int(m.group(2))) >= SEMVER_ERA_START and int(m.group(3)) > 0 else None
 
 Get = Callable[[str, str], tuple[int, object]]
 
@@ -137,7 +150,10 @@ def verdict_key(short: str, plugins_short: str) -> str:
 
 def run_number_of(version: str) -> int | None:
     m = SET_NAME.match(version or "")
-    return int(m.group(1)) if m else None
+    if m:
+        return int(m.group(1))
+    m = _semver_set(version)
+    return int(m.group(3)) if m else None
 
 
 def check_record(rec: object) -> str | None:
@@ -264,11 +280,15 @@ CONTROL_FIRST_REPORTER = "main-cd control-first"
 
 def line_pattern(version: str) -> str:
     """The version LINE a set belongs to, as the self-update pattern syntax spells it:
-    `3.0.0-ci.10052` → `3.0.0-ci*`. Pure; a non-set name is a ValueError."""
+    `3.0.0-ci.10052` → `3.0.0-ci*`, and in the SemVer notation `3.1.10052` → `3.1.*` (the minor
+    line — a record's `3.*` admits it). Pure; a non-set name is a ValueError."""
     m = SET_NAME.match(version or "")
-    if m is None:
-        raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N — it names no line")
-    return version[: m.start(1) - 1] + "*"
+    if m is not None:
+        return version[: m.start(1) - 1] + "*"
+    e = _semver_set(version)
+    if e is not None:
+        return f"{e.group(1)}.{e.group(2)}.*"
+    raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N or <major>.<minor>.<run> — it names no line")
 
 
 def control_announcement(deployment: str, version: str, image_repository: str, instance: str,
@@ -867,6 +887,19 @@ def self_test() -> int:
     check("control-first: an OLDER build than the newest control version is never announced", cf["announce"] is False, str(cf))
     check("line_pattern: a set names its own line", line_pattern("3.0.0-ci.10052") == "3.0.0-ci*", line_pattern("3.0.0-ci.10052"))
     check("line_pattern: a pre-release line keeps its prefix", line_pattern("3.0.0-rc9.ci.7231") == "3.0.0-rc9.ci*")
+    check("line_pattern: a SemVer-notation set names its minor line", line_pattern("3.1.10052") == "3.1.*", line_pattern("3.1.10052"))
+    check("run_number_of: the SemVer notation's run number is the PATCH", run_number_of("3.1.10052") == 10052)
+    check("run_number_of: both notations share ONE lineage (old 9999 < new 10000)",
+          run_number_of("3.0.0-ci.9999") < run_number_of("3.1.10000"))
+    check("run_number_of: the withdrawn slip keeps its ci number", run_number_of("3.1.0-ci.7841") == 7841)
+    for not_a_set in ("3.0.0", "3.1.0", "3.0.5", "2.9.12345", "3.1.10052-rc1", "3-latest", "3.1-latest"):
+        check(f"run_number_of: {not_a_set!r} below the boundary or not a build is no set", run_number_of(not_a_set) is None)
+    cf = control_first([{"tags": ["3.0.0-ci.9999"]}], "3.1.10000")
+    check("control-first: the first SemVer-notation build is newer than the last ci set (announced, pointers move)",
+          cf["announce"] is True and cf["move_pointers"] is True, str(cf))
+    cf = control_first([{"tags": ["3.1.10003"]}], "3.0.0-ci.10001")
+    check("control-first: an old-notation build OLDER than a SemVer-notation one is never announced",
+          cf["announce"] is False and cf["move_pointers"] is False, str(cf))
     try:
         line_pattern("main")
         check("line_pattern: a non-set name is RED", False)

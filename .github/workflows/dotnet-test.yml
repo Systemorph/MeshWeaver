@@ -2380,6 +2380,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
 
+    # The ONE shell-facing reader of a platform version tag (policy `platform-semver-versioning`):
+    # main-cd's never-backwards checks and line pointers read the run number through it, in both the
+    # `3.0.0-ci.<run>` and the `3.<minor>.<run>` notation.
+    - name: "The platform version reader reads both notations as one lineage (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/platform-version.py --self-test
+
     # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
     # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
     # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.

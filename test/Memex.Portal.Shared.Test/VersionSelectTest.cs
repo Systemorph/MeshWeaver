@@ -120,7 +120,7 @@ public class VersionSelectTest
         Assert.NotNull(channel.Advisory);
         Assert.Contains(UpdatePolicyNodeType.NodePath, channel.Advisory, StringComparison.Ordinal);
         Assert.Contains("pattern", channel.Advisory, StringComparison.Ordinal);
-        Assert.Contains("3.0.0-ci*", channel.Advisory, StringComparison.Ordinal);
+        Assert.Contains("\"3.*\"", channel.Advisory, StringComparison.Ordinal);
 
         // A blank pattern is no pattern — " " must not be a third policy.
         Assert.Equal(UpdatePolicyKind.Stable, VersionSelect.ResolveChannel(UpdatePolicyKind.Continuous, "  ").Policy);
@@ -643,5 +643,87 @@ public class VersionSelectTest
 
         Assert.Equal(["3.0.0-ci.7977"], selection.Candidates);
         Assert.False(selection.IsRecovery);
+    }
+
+    // ───────── the SemVer notation (policy `platform-semver-versioning`) ─────────
+    //
+    // Doc/Architecture/PlatformVersioning: continuous builds move from `3.0.0-ci.<run>` to the plain
+    // SemVer `3.<minor>.<run>`, the patch being the same monotonic CD run number. The registry on
+    // cut-over day holds BOTH notations, the withdrawn 3.1.0-ci slip, the moving pointers, per-RID
+    // images and an unverified edge build of the new notation.
+
+    private static readonly string[] CutOverRegistry =
+    [
+        "3.0.0-ci.9998", "3.0.0-ci.9999", "3.1.0-ci.7841", "3.1.10000", "3.1.10001",
+        "3.1.10001-linux-x64", "3.1.10002-edge.10002", "3-latest", "3.1-latest", "3.0.0-latest", "main",
+    ];
+
+    /// <summary>🚨 A Continuous install on the old notation crosses to the new one under a
+    /// MAJOR pattern, newest run first — and never onto the slip, the edge build, a pointer or a
+    /// per-RID image.</summary>
+    [Fact]
+    public void AMajorPattern_CrossesFromTheOldNotationToTheNew()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            CutOverRegistry, "3.0.0-ci.9999", UpdatePolicyKind.Continuous, pattern: "3.*");
+
+        Assert.Equal(["3.1.10001", "3.1.10000"], selection.Candidates);
+        Assert.False(selection.IsRecovery);
+
+        var onTheNewNotation = VersionSelect.SelectCandidates(
+            CutOverRegistry, "3.1.10000", UpdatePolicyKind.Continuous, pattern: "3.*");
+        Assert.Equal(["3.1.10001"], onTheNewNotation.Candidates);
+        Assert.Equal(VersionSelect.InstalledTagResolution.Resolved, onTheNewNotation.Installed.Resolution);
+    }
+
+    /// <summary>
+    /// 🚨 NEGATIVE CONTROL: the pattern every fleet record carries today, <c>3.0.0-ci*</c>, does NOT
+    /// admit the new notation — which is why the records must be widened to <c>3.*</c> BEFORE core
+    /// mints its first <c>3.1.&lt;run&gt;</c>, or every Continuous install freezes on its last
+    /// <c>3.0.0-ci</c> set with nothing to say so but "no newer release".
+    /// </summary>
+    [Fact]
+    public void TheOldFleetPattern_NeverSelectsTheNewNotation()
+    {
+        var selection = VersionSelect.SelectCandidates(
+            CutOverRegistry, "3.0.0-ci.9999", UpdatePolicyKind.Continuous, pattern: "3.0.0-ci*");
+
+        Assert.Empty(selection.Candidates);
+        Assert.False(selection.IsRecovery);
+    }
+
+    /// <summary>Widening to <c>3.*</c> is safe BEFORE the first new-notation build exists: the
+    /// withdrawn slip <c>3.1.0-ci.7841</c> matches the glob but is ranked by its run number, so it is
+    /// never newer than the running set.</summary>
+    [Fact]
+    public void WideningThePattern_BeforeTheCutOver_ChangesNothing()
+    {
+        string[] beforeTheFlip = ["3.0.0-ci.9998", "3.0.0-ci.9999", "3.1.0-ci.7841", "3-latest", "3.0.0-latest"];
+
+        Assert.Empty(VersionSelect.SelectCandidates(
+            beforeTheFlip, "3.0.0-ci.9999", UpdatePolicyKind.Continuous, pattern: "3.*").Candidates);
+        Assert.Equal(["3.0.0-ci.9999"], VersionSelect.SelectCandidates(
+            beforeTheFlip, "3.0.0-ci.9998", UpdatePolicyKind.Continuous, pattern: "3.*").Candidates);
+    }
+
+    /// <summary>🚨 A new-notation build carries no pre-release label, yet it is a CONTINUOUS
+    /// publication — Stable must not start following main the day the notation flips.</summary>
+    [Fact]
+    public void Stable_NeverSelectsANewNotationBuild()
+    {
+        Assert.Null(VersionSelect.PickTarget(CutOverRegistry, UpdatePolicyKind.Stable));
+        Assert.Equal("3.0.0",
+            VersionSelect.PickTarget([.. CutOverRegistry, "3.0.0"], UpdatePolicyKind.Stable));
+    }
+
+    /// <summary>The unverified edge build of the new notation is excluded by the green-only gate
+    /// and eligible only when an install opts out of it.</summary>
+    [Fact]
+    public void TheNewNotationsEdgeBuild_IsGatedLikeTheOld()
+    {
+        Assert.Equal("3.1.10001",
+            VersionSelect.PickTarget(CutOverRegistry, UpdatePolicyKind.Continuous, pattern: "3.*"));
+        Assert.Equal("3.1.10002-edge.10002",
+            VersionSelect.PickTarget(CutOverRegistry, UpdatePolicyKind.Continuous, requireCiGreen: false, pattern: "3.*"));
     }
 }

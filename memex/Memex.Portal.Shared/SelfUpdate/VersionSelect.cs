@@ -157,8 +157,8 @@ public static class VersionSelect
                 $"{UpdatePolicyNodeType.NodePath} declares policy Continuous with no version pattern, "
                 + "so it follows CLEAN releases only (the same as Stable): a continuous build is "
                 + "eligible only when a pattern admits it. To follow the current line's continuous "
-                + "builds set `pattern` on the record, e.g. \"3.0.0-ci*\" — it stops matching the "
-                + "day the next clean release is tagged, which is when following the line should end."),
+                + "builds set `pattern` on the record, e.g. \"3.*\" — every continuous build of major 3, "
+                + "in both the 3.0.0-ci.<run> and the 3.<minor>.<run> notation (Doc/Architecture/PlatformVersioning)."),
             _ => new(policy, normalized, null),
         };
     }
@@ -202,8 +202,13 @@ public static class VersionSelect
 
         var parsed = Parse(tags);
 
+        // 🚨 Stable = DELIBERATELY CUT releases. Under the SemVer notation (policy
+        // `platform-semver-versioning`) a continuous build carries no pre-release label either —
+        // `3.1.10050` is as "clean" to NuGet as a release — so `!IsPrerelease` alone would hand
+        // every Stable install every main build the day the notation flips. A tag that carries a
+        // run number is a continuous publication whatever its shape, and stays out of Stable.
         if (policy == UpdatePolicyKind.Stable)
-            parsed = parsed.Where(x => !x.ver.IsPrerelease);
+            parsed = parsed.Where(x => !x.ver.IsPrerelease && PlatformReleaseOrder.BuildOrdinal(x.tag) is null);
 
         // Compiled once per listing, not once per tag (Copilot review on #3723).
         if (UpdateChannelPattern.Compile(pattern) is { } glob)
