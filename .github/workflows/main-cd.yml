@@ -349,6 +349,8 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+          CONTROL_WEBHOOK_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
@@ -360,6 +362,11 @@ jobs:
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          # `control-first` hands every accepted build to control's roll lane with these two: the
+          # control PLANE's inbox (the instance holding the Deployments records and Ops/Actions) and
+          # the HMAC it verifies. Without them control is tagged a build nothing ever rolls it to.
+          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (org variable, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
+          [ -n "$CONTROL_WEBHOOK_SECRET" ] || missing+=("secrets.CONTROL_WEBHOOK_SECRET    the HMAC that inbox verifies (org secret, byte-identical to that instance's Hosting:PlatformWebhookSecret)")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and `published-modules` READS the sealed module publications from there (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
@@ -2042,8 +2049,16 @@ jobs:
   # DB) is the control instance's next image — written HERE, in the run that built it, as
   # `memex-control:<version>` plus the line pointers (never backwards). It waits for nothing else:
   # not `arm`, not a MeshWeaver.Plugins verdict, not a seal, not a module publication (policy
-  # `platform-module-deploy-separate`). The control record (Systemorph/Memex `control`) is
-  # Continuous on `3.0.0-ci*` with no `rollGate`, so its self-update rolls to this tag unattended.
+  # `platform-module-deploy-separate`). And it DELIVERS it: the last step POSTs a signed
+  # `self-update-available` announcement for the control record into the control plane's inbox, which
+  # opens a routed `Roll` (MeshWeaver.Plugins `SelfUpdateRouting`). The control record (Systemorph/Memex
+  # `control`) is Continuous on `3.0.0-ci*` with no `rollGate`, so that Roll runs unattended
+  # (`ActionsExecutor.AdmittedUnattended`). 🚨 It used to rely on control's own in-pod self-updater to
+  # find the tag, which could not: it lists `memex-portal-ai` (written only by `arm`, which waits for
+  # control — a circular wait), it had no registry credential, and it handed over to its own inbox,
+  # whose mesh holds no Deployments record — so no build after ci.9939 was ever rolled to control
+  # unattended, and with control-first nothing reached the fleet either
+  # (Doc/Architecture/PlatformAndModuleDeploy → "Who rolls control").
   #
   # The FLEET is offered the build only after control RUNS it: `arm` reads control's
   # `/api/version` + `/health` (`.github/control-instance.json`) as the control half of the platform
@@ -2074,7 +2089,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          # The control declaration sits BESIDE the scripts: `control-announcement` names the record
+          # it reads from there, so the sparse checkout must name it (as `arm`'s does).
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
       - name: Ensure Azure CLI
@@ -2127,6 +2147,52 @@ jobs:
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           echo "- memex-control DEPLOYED FIRST: \`$V_CONTROL\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }}) — control rolls to it now; the fleet is offered it once control runs it" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE DELIVERY. Tagging alone gives control nothing: this POST is what makes the build
+      # control's next image. The inbox stores it, the control plane verifies the HMAC, resolves
+      # `deployment` to its record (the lookup IS the authorization) and opens
+      # `Ops/Actions/selfupdate-roll-control-<version>-…`, unattended for a Continuous, ungated record
+      # whose pattern admits the tag. Re-sent on a re-run (`done`) — the receiver dedupes, and that
+      # re-delivery is how a lost POST is closed. Never for a build OLDER than control's newest tag.
+      # Every non-success ends the job: a build control was never handed is the outage this fixes.
+      - name: "Hand the build to control's roll lane (signed self-update-available)"
+        if: steps.control_tags.outputs.announce == 'true'
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
+          esac
+          BODY=$(python3 .github/scripts/arm-promoted-set.py control-announcement \
+            --version "$V_CONTROL" --image-repository "${{ env.ACR }}/memex-control" --instance "$RUN_URL")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/announce-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/announce-resp" || true
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/announce-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              # Three answers, as `Did the inbox VERIFY the build fact?` reads them (#3338): `verified`
+              # passes; any other WORD is the receiver saying the HMAC we sent was not checked — RED;
+              # NO verdict is a receiver older than #3312 that cannot answer (its watcher still
+              # verifies before routing) — said, never read as a pass or a refusal.
+              case "$verdict" in
+                verified) ;;
+                "") echo "::warning::the control plane's inbox stored the announcement but answered no signature verdict (a pre-#3312 endpoint) — its watcher verifies before routing; read Ops/Actions/selfupdate-roll-control-* to confirm the Roll opened" ;;
+                *) echo "::error::the control plane's inbox stored the announcement but did not VERIFY its signature (signature: $verdict) — the router drops what it cannot verify, so control would not be rolled. Declare WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on that instance."
+                   exit 1 ;;
+              esac
+              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` stored and verified at the control plane (HTTP $code) — it opens \`Ops/Actions/selfupdate-roll-control-*\`, unattended under the record's Continuous \`3.0.0-ci*\` line" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control plane's inbox at all (DNS/TLS/connection refused) — control was NOT handed $V_CONTROL"; exit 1 ;;
+            401) echo "::error::the control plane's inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical — control was NOT handed $V_CONTROL"; exit 1 ;;
+            404) echo "::error::the control plane's inbox answered 404 (an unlisted target or a wrong URL) — check vars.CONTROL_WEBHOOK_URL; control was NOT handed $V_CONTROL"; exit 1 ;;
+            *)   echo "::error::the control plane's inbox refused the announcement (HTTP $code) — control was NOT handed $V_CONTROL"; exit 1 ;;
+          esac
       # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
       # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
       # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on

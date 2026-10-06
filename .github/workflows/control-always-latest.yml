@@ -8,12 +8,14 @@
 # workflow reads, on a schedule, whether control actually RUNS the newest build it was given:
 #
 #   * control's running core commit — its PUBLIC `/api/version` (no credential is sent to it);
-#   * the newest promoted set whose `Deploy control first` job SUCCEEDED, and when — the promotion
+#   * every promoted set whose `Deploy control first` job SUCCEEDED, newest first, and when — back to
+#     the first one control contains, because the lag clock starts at the FIRST build control missed
+#     (a clock on the newest build is reset by every build and never fires) — the promotion
 #     records and job timestamps of `main-cd` (this repository's own token);
 #   * containment by ANCESTRY (GitHub compare), never by timestamps or version strings.
 #
 # Behind past `platformLagBoundMinutes` → RED, and the ONE open `control-lag` issue gets a comment
-# naming control's commit, the newest build, and how long ago it was given. Converging inside the
+# naming control's commit, the newest build, and the first build it missed and how long ago. Converging inside the
 # bound is said, not red. A control whose running build cannot be read is RED too — an instance that
 # cannot say what it runs cannot be shown to be latest. Control ON the newest build but with `/health`
 # not 200 is RED as well: the arming offers the fleet nothing from an unhealthy control, so that state
@@ -90,7 +92,7 @@ jobs:
                 --color B60205 --force || echo "::warning::could not ensure the control-lag label (continuing — the issue is the alarm, not the label)"
               body="🚨 [run ${GITHUB_RUN_ID}](${RUN_URL}) — policy \`control-always-latest\`: ${SENTENCE}.
 
-          Control is declared in \`.github/control-instance.json\`. Read, in order: did \`main-cd\`'s **Deploy control first** job tag \`memex-control:<version>\`; did control's self-update hand the roll over (its \`Admin/UpdatePolicy\`); did the \`Roll\` run on the control instance (\`Hosting/InstanceAction\`, and whether it parked at an approval — the control record carries no \`rollGate\`); did the migration Job complete. This issue closes itself on the first reading that finds control on the newest build."
+          Control is declared in \`.github/control-instance.json\`. Read, in order: did \`main-cd\`'s **Deploy control first** job tag \`memex-control:<version>\`; did that job's **Hand the build to control's roll lane** step store a VERIFIED \`self-update-available\` at the control plane; did the \`Roll\` run on the control instance (\`Hosting/InstanceAction\`, and whether it parked at an approval — the control record carries no \`rollGate\`); did the migration Job complete. This issue closes itself on the first reading that finds control on the newest build."
               if [ -n "$existing" ]; then
                 gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
               else

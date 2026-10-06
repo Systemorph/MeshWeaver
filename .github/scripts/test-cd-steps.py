@@ -1296,6 +1296,18 @@ def separation_problems(workflow_text: str) -> list[str]:
             problems.append("`control-first` does not follow `control-promote` — it would tag an image that was never accepted")
         if "control-promote.result == 'success'" not in " ".join(str(cf.get("if", "")).split()):
             problems.append("`control-first`'s `if:` does not assert `needs.control-promote.result == 'success'`")
+        # 7. ...and DELIVERS it: tagging memex-control rolls nothing. A step must sign the
+        #    `control-announcement` body to the control plane's inbox, or control is handed a build
+        #    nothing ever rolls it to (control sat on ci.9939 for 22 h, 2026-10-06).
+        steps = cf.get("steps") or []
+        hand = [st for st in steps if "arm-promoted-set.py control-announcement" in str(st.get("run", ""))]
+        if not hand:
+            problems.append("`control-first` tags memex-control but never hands the build to control's roll lane "
+                            "(no step POSTs the `control-announcement` body) — control would never roll to it")
+        elif not any("vars.CONTROL_WEBHOOK_URL" in json.dumps(st.get("env") or {})
+                     and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {}) for st in hand):
+            problems.append("`control-first`'s handover is not signed to the control plane's inbox "
+                            "(vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
     for name in ("published-modules", "platform-ladder-compat"):
         job = jobs.get(name)
         if job is None:
@@ -1436,6 +1448,13 @@ def main() -> int:
     case("...and the guard catches control waiting for the fleet's arming (control LAST again)",
          control_last != workflow_text and any("FIRST" in p for p in separation_problems(control_last)),
          "the mutation passed (or could not apply) with control-first needing arm")
+    undelivered = workflow_text.replace("arm-promoted-set.py control-announcement", "arm-promoted-set.py control-REMOVED", 1)
+    case("...and the guard catches control-first TAGGING control without handing it the build (the 2026-10-06 outage)",
+         undelivered != workflow_text and any("never hands the build" in p for p in separation_problems(undelivered)),
+         "the mutation passed (or could not apply) with no handover step in control-first")
+    case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
+         not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
+         str(separation_problems(workflow_text)))
     unpaid = workflow_text.replace(
         "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&\n"
         "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
