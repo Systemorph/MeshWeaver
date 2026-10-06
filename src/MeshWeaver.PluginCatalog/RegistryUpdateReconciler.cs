@@ -243,16 +243,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// survives as data (<see cref="RegistryResponseException.StatusCode"/>), so the policy can ask
     /// what the server actually said instead of inferring it from a CLR type.</para>
     /// </summary>
-    internal static bool ShouldRetryFeedRead(Exception fault) => fault switch
-    {
-        // A definite answer naming a transient server-side condition (503/429/5xx) — re-ask.
-        RegistryResponseException http => http.IsTransientFailure,
-        // Any other definite answer (401/403/404, a malformed payload) — re-asking cannot help.
-        InvalidOperationException => false,
-        // A transport fault (TCP hiccup, DNS blip, request timeout): the original #1500 case,
-        // where the read never reached an HTTP answer at all.
-        _ => true,
-    };
+    internal static bool ShouldRetryFeedRead(Exception fault) =>
+        // The ONE classifier (MeshWeaver#6172 review): a transient status or transport fault is
+        // re-asked; a decided answer (a non-transient status, a RegistryRefusedException) is not.
+        TransientRegistryFailure.IsTransient(fault);
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)

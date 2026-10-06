@@ -115,10 +115,17 @@ kinds of red apart:
 (`MeshWeaver.PluginCatalog`): a status is transient when it is 5xx, 408 or 429 (the conventional
 transient-HTTP set); a fault is transient when it carries such a status or never reached an answer
 (a timeout, a reset or refused connection, a DNS or socket failure) and decided when it is a digest
-mismatch or a definite refusal. Every download path — the HTTP bundle route and the OCI artifact path
+mismatch or a definite refusal — and a definite refusal is the registry clients' own
+`RegistryRefusedException` (no such manifest, blob or repository; a refused challenge or token; a
+manifest with no bundle layer; a corrupt bundle), never a bare `InvalidOperationException`, which any
+code the fetch pipeline runs can throw and which therefore reads as a crash, retried. The registry
+feed read's retry (`RegistryUpdateReconciler.ShouldRetryFeedRead`) asks the same classifier. Every
+download path — the HTTP bundle route and the OCI artifact path
 — asks it; a second copy of the set is how a bundle download answering 503 once read as a final
 `Failed`. Pinned by `ModuleReloadTransientDownloadTest` (503 → `Faulted` → the next pass retries and
-lands; 429, 502, 504 and a timeout → `Faulted`; 404 and 403 → `Failed`, never retried) and
+lands; 429, 502, 504 and a timeout → `Faulted`; 404 and 403 → `Failed`, never retried),
+`TransientRegistryFailureTest` (a `RegistryRefusedException` is decided, a bare
+`InvalidOperationException` is a crash; the feed read asks the same classifier) and
 `PluginBundleArtifactFetchTest` (the same split on the artifact path; a tampered layer → decided).
 
 **The restart lane draws the same line.** `ModuleRestartKinds.Unavailable` means this install
@@ -236,11 +243,12 @@ modules; the sync-owned hold on the module lane was.
   `ExistingReload`, which returns only a log level and a sentence:
   - `Failed` → Error.
   - `Faulted` → Warning, naming the attempt and the fault ("core retries it on its reconcile pass").
-    This is named in MeshWeaver.Plugins#2893.
+    This branch is added by MeshWeaver.Plugins#2893 (open when this was written); until #2893
+    lands, `Faulted` falls into the Information branch below — a log line, no behaviour.
   - An undated or overdue `Requested`, or no status at all → Warning.
   - Anything else → Information.
 
   Neither method marks a request finished or red or files a replacement, so core's re-arm of the same
-  node is undisturbed. The state table is pinned by the intake's
-  `AFiledReload_NamesItsState_FailedAndUnclaimedAreLoud` test. Before #2893 named it, `Faulted`
-  fell into the Information branch ("the executor has it at Faulted"): a log line, no behaviour.
+  node is undisturbed. With #2893, the state table is pinned by the intake's
+  `AFiledReload_NamesItsState_FailedAndUnclaimedAreLoud` test (its `Faulted` case). Either way the
+  intake never changes the request, so core's retry does not depend on #2893.

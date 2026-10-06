@@ -771,7 +771,7 @@ public sealed class PluginBundleClient
                     var layer = manifest.Layers.FirstOrDefault(l => string.Equals(
                         l.MediaType, OciRegistryClient.BundleLayerMediaType, StringComparison.OrdinalIgnoreCase));
                     if (layer is null)
-                        return Observable.Throw<FetchResult>(new InvalidOperationException(
+                        return Observable.Throw<FetchResult>(new RegistryRefusedException(
                             $"the manifest {reference.Digest} at {reference.Registry}/{reference.Repository} "
                             + $"carries no {OciRegistryClient.BundleLayerMediaType} layer"));
                     return client.GetBlob(reference.Repository, layer.Digest, () => buffer)

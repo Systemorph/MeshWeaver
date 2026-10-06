@@ -1075,3 +1075,31 @@ public class ModuleReloadRestartAttemptTest(ITestOutputHelper output) : ModuleRe
         });
     }
 }
+
+/// <summary>
+/// The ONE classifier (<see cref="TransientRegistryFailure"/>): only the registry clients'
+/// <see cref="RegistryRefusedException"/> is a decided refusal; a bare
+/// <see cref="InvalidOperationException"/> from incidental code is a crash, retried (#6172 review).
+/// </summary>
+public class TransientRegistryFailureTest
+{
+    [Fact]
+    public void ARegistryRefusal_IsDecided_AForeignInvalidOperation_IsACrash()
+    {
+        TransientRegistryFailure.IsTransient(new RegistryRefusedException("no manifest")).Should().BeFalse();
+        TransientRegistryFailure.IsTransient(new InvalidOperationException("Sequence contains no elements")).Should().BeTrue();
+        TransientRegistryFailure.IsTransient(new RegistryResponseException(HttpStatusCode.NotFound, "404")).Should().BeFalse();
+        TransientRegistryFailure.IsTransient(new RegistryResponseException(HttpStatusCode.ServiceUnavailable, "503")).Should().BeTrue();
+        TransientRegistryFailure.IsTransient(new AggregateException(new RegistryRefusedException("x"), new TimeoutException())).Should().BeFalse();
+        TransientRegistryFailure.IsTransient(new AggregateException(new TimeoutException(), new InvalidOperationException("y"))).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TheFeedRead_AsksTheSameClassifier()
+    {
+        RegistryUpdateReconciler.ShouldRetryFeedRead(new RegistryRefusedException("no repository")).Should().BeFalse();
+        RegistryUpdateReconciler.ShouldRetryFeedRead(new InvalidOperationException("incidental")).Should().BeTrue();
+        RegistryUpdateReconciler.ShouldRetryFeedRead(new RegistryResponseException(HttpStatusCode.TooManyRequests, "429")).Should().BeTrue();
+        RegistryUpdateReconciler.ShouldRetryFeedRead(new RegistryResponseException(HttpStatusCode.Forbidden, "403")).Should().BeFalse();
+    }
+}

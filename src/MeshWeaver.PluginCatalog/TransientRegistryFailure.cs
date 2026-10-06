@@ -26,8 +26,10 @@ namespace MeshWeaver.PluginCatalog;
 /// the transient statuses above (an <see cref="HttpRequestException"/> carrying it, a
 /// <see cref="RegistryResponseException"/>). Decided faults: a digest mismatch
 /// (<see cref="OciDigestMismatchException"/> — the registry served bytes that are not the
-/// artifact), and an <see cref="InvalidOperationException"/>, which the registry clients throw for
-/// a definite refusal (401/403/404, a manifest with no bundle layer).</para>
+/// artifact), and a <see cref="RegistryRefusedException"/>, which the registry clients throw for a
+/// definite refusal (no such manifest/blob/repository, a refused challenge or token, a manifest
+/// with no bundle layer, a corrupt bundle). A bare <see cref="InvalidOperationException"/> is NOT
+/// a refusal — any code in the fetch pipeline can throw it — so it is a crash, retried.</para>
 ///
 /// <para>Callers ask HERE, never re-derive the set: a second copy of it is how a 503 once became
 /// "a definite answer" (Systemorph/MeshWeaver#2836) and a bundle download answering 503 became a
@@ -50,8 +52,11 @@ public static class TransientRegistryFailure
         HttpRequestException => true,
         TimeoutException or OperationCanceledException => true,
         SocketException or IOException => true,
-        // The registry clients' definite refusal (401/403/404, a malformed artifact).
-        InvalidOperationException => false,
+        // The registry clients' definite refusal (no such manifest/blob/repository, a refused
+        // challenge or token, a manifest with no bundle layer, a corrupt bundle). Only this type:
+        // a bare InvalidOperationException can come from any code in the pipeline (a LINQ First()
+        // over unexpected input), so it falls to the crash arm below — retried, never final.
+        RegistryRefusedException => false,
         AggregateException aggregate => aggregate.InnerExceptions.Count > 0
                                         && aggregate.InnerExceptions.All(IsTransient),
         // Anything else is a crash, and a crash is never final.
