@@ -1131,7 +1131,7 @@ public sealed class ModuleLandingService : IDisposable
             var closure = assemblies
                 .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return ModulePlatformLink.Check(entryBytes, name, closure, surface);
+            return ModulePlatformLink.Check(entryBytes, name, closure, surface, ModuleLinkOptions.WithMembers);
         }
 
         // 🚨 THE GENERATION IS CONTENT-ADDRESSED (#3656) — `name@<16 hex of SHA-256 over the bytes
@@ -1466,7 +1466,8 @@ public sealed class ModuleLandingService : IDisposable
                 && !string.IsNullOrWhiteSpace(measured.FrameworkMvid))
                 return true;
             var headDll = ModuleActivationBoot.LandedDllPath(baseDirectory, head);
-            return !File.Exists(headDll) || !ModulePlatformLink.Check(headDll, surface).MayLoad;
+            return !File.Exists(headDll)
+                   || !ModulePlatformLink.Check(headDll, surface, ModuleLinkOptions.WithMembers).MayLoad;
         }
 
         if (restartRequired)

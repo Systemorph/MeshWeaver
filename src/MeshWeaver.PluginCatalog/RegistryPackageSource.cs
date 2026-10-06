@@ -244,8 +244,7 @@ public sealed class RegistryResponseException(HttpStatusCode statusCode, string 
     /// names it.</para>
     /// </summary>
     public static bool IsTransient(HttpStatusCode statusCode) =>
-        (int)statusCode >= 500
-        || statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests;
+        TransientRegistryFailure.IsTransient(statusCode);
 
     /// <summary>Whether this particular answer is worth re-asking — see <see cref="IsTransient"/>.</summary>
     public bool IsTransientFailure => IsTransient(StatusCode);

@@ -332,6 +332,12 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
         cannot.Attempts.Should().Be(1, "asked exactly once");
         // Control: the steps before it are not painted red by the failure.
         InstanceRebootTest.Step(red, InstanceRebootSteps.Modules).Outcome.Should().Be(InstanceRebootStepOutcome.Ok);
+
+        // A DECIDED "cannot restart" is final: the retry pass (#6172) re-arms nothing, even at once.
+        var rearmed = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow.AddDays(1))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rearmed.Should().BeEmpty("Unavailable is a decided answer, never retried");
+        cannot.Attempts.Should().Be(1, "still asked exactly once");
     }
 
     private sealed class CannotRestart : IDeploymentUpdater
@@ -347,6 +353,73 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
             Interlocked.Increment(ref attempts);
             return Task.FromResult(false);
         }
+
+        public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
+            Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));
+    }
+}
+
+/// <summary>
+/// 🚨 A transient failure is never final (#6172): a restart request that CRASHED (the updater threw)
+/// leaves the reboot <see cref="InstanceRebootStatus.Faulted"/>, not Failed; the retry pass
+/// (<see cref="InstanceReboot.RetryFaulted"/>) re-arms it, the executor asks for the ONE restart again,
+/// and the reboot completes on that attempt.
+/// </summary>
+public class InstanceRebootFaultedRestartTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    private readonly ThrowsOnce flaky = new();
+
+    protected override IDeploymentUpdater RebootUpdater => flaky;
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARestartThatCrashed_IsFaulted_RetriedByThePass_AndCompletesOnTheNextAttempt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var faulted = await AwaitReboot(path, r => r.Status == InstanceRebootStatus.Faulted || InstanceRebootStatus.IsTerminal(r.Status), ct);
+        faulted.Status.Should().Be(InstanceRebootStatus.Faulted, faulted.Failure ?? string.Join(" | ", faulted.Log));
+        InstanceRebootTest.Step(faulted, InstanceRebootSteps.Restart).Detail.Should().Contain("faulted");
+        faulted.FaultedAt.Should().NotBeNull();
+        flaky.Attempts.Should().Be(1);
+
+        // Before its backoff is due the pass re-arms nothing.
+        var early = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.FromHours(1), DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        early.Should().BeEmpty("the backoff is not due yet");
+
+        var rearmed = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rearmed.Should().ContainSingle().Which.Should().Be(path);
+
+        var waiting = await AwaitReboot(path, r => r.Attempt == 1 && r.Status == InstanceRebootStatus.AwaitingRestart
+            && r.RestartRequestedAt is not null
+            && r.Steps.Any(s => s.Name == InstanceRebootSteps.Restart && s.Outcome == InstanceRebootStepOutcome.Ok), ct);
+        InstanceRebootTest.Step(waiting, InstanceRebootSteps.Restart).Detail.Should().StartWith(RebootActivationKinds.Restarted);
+        flaky.Attempts.Should().Be(2, "the re-armed attempt asked for the restart again, once");
+
+        var restart = waiting.RestartRequestedAt ?? throw new InvalidOperationException("the second attempt carries no restart stamp");
+        await BootedProcessReports(path, restart, Head().Directory ?? throw new InvalidOperationException("no activation head"), ct);
+
+        var done = await AwaitReboot(path, r => InstanceRebootStatus.IsTerminal(r.Status), ct);
+        done.Status.Should().Be(InstanceRebootStatus.Done, done.Failure ?? string.Join(" | ", done.Log));
+        done.Log.Should().Contain(l => l.Contains("retry 1: re-armed after the fault"));
+    }
+
+    private sealed class ThrowsOnce : IDeploymentUpdater
+    {
+        private int attempts;
+        public int Attempts => Volatile.Read(ref attempts);
+        public bool CanPatch => true;
+        public Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct) => Task.FromResult<DateTimeOffset?>(null);
+        public Task PatchToVersionAsync(string versionTag, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<bool> RestartAsync(CancellationToken ct) =>
+            Interlocked.Increment(ref attempts) == 1
+                ? Task.FromException<bool>(new HttpRequestException("the Kubernetes API reset the connection"))
+                : Task.FromResult(true);
 
         public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
             Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));

@@ -232,7 +232,7 @@ public sealed class ModuleLiveUpdater : IDisposable
         // passed. It matters most mid-roll — a generation landed on a replica of another image can
         // reference a platform surface THIS process does not carry — and it is measured BEFORE any
         // byte of the generation runs (materialising contributions executes attribute code).
-        var link = ModulePlatformLink.Check(target, SurfaceFor(target));
+        var link = ModulePlatformLink.Check(target, SurfaceFor(target), ModuleLinkOptions.WithMembers);
         if (!link.MayLoad)
             return refused with { Outcome = Fail(name, old.Location, target, $"N+1 does not link against this process: {link.Report()}") };
 

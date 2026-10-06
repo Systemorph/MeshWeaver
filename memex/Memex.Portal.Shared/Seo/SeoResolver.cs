@@ -426,8 +426,8 @@ public static class SeoResolver
     {
         ArgumentNullException.ThrowIfNull(ancestor);
         var tail = TailBelow(requestedPath, ancestor.Node.Path);
-        var ancestorTitle = ancestor.Node.Name ?? ancestor.Node.Id;
-        var description = FirstNonEmpty(ancestor.Description) is { } text
+        var ancestorTitle = ShareTitle(ancestor.Node);
+        var description = FirstNonEmpty(ContentString(ancestor.Node, "ogDescription"), ancestor.Description) is { } text
             ? callToAction is null ? text : $"{text} {callToAction}"
             : callToAction;
         return new SeoAncestorCard(
@@ -581,9 +581,9 @@ public static class SeoResolver
     public static SeoPreviewCard ComposePreviewCard(MeshNode node, string? callToAction)
     {
         ArgumentNullException.ThrowIfNull(node);
-        var summary = FirstNonEmpty(ExtractDescription(node));
+        var summary = ShareDescription(node);
         return new SeoPreviewCard(
-            node.Name ?? node.Id,
+            ShareTitle(node),
             summary is null
                 ? callToAction
                 : callToAction is null ? summary : $"{summary} {callToAction}",
@@ -695,6 +695,24 @@ public static class SeoResolver
             ContentString(node, "tagline"),
             ContentString(node, "summary"),
             ContentString(node, "headline"));
+
+    /// <summary>
+    /// The title a SHARE card carries: the content's <c>ogTitle</c> when the node authored one,
+    /// else the node's own name (its id when it has none). The default is the node itself, so a
+    /// card needs no configuration; <c>ogTitle</c> exists only to give a share a different headline
+    /// from the page's own, and leaves the page title, the tab and every in-app listing untouched.
+    /// </summary>
+    public static string ShareTitle(MeshNode node) =>
+        FirstNonEmpty(ContentString(node, "ogTitle"), node.Name) ?? node.Id;
+
+    /// <summary>
+    /// The description a SHARE card carries: the content's <c>ogDescription</c> when the node
+    /// authored one, else <see cref="ExtractDescription"/>. The page's own <c>meta description</c>
+    /// stays <see cref="ExtractDescription"/> — the override is for the unfurl, not the search
+    /// snippet.
+    /// </summary>
+    public static string? ShareDescription(MeshNode node) =>
+        FirstNonEmpty(ContentString(node, "ogDescription"), ExtractDescription(node));
 
     /// <summary>
     /// The AUTHORED share image, or null when the node carries none (the caller then falls back to

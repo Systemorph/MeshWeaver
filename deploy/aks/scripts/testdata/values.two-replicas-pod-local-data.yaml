@@ -1,0 +1,22 @@
+# FIXTURE for check-chart-invariants.sh — a REFUSAL (MeshWeaver#6052).
+#
+# Two plain replicas with NO persistence.data claim, so each pod's /data would be its own emptyDir.
+# /data holds the NodeType assembly cache, and every compiled NodeType's shared record names a file
+# in it, so a pod that did not compile a type cannot load it. The client estate in #6052 ran this
+# shape: two replicas, `bake-report bytesmissing=93` on both. Everything else is the valid
+# two-replica shape (values.two-replicas-no-keda.yaml), so the ONLY thing the render can refuse is
+# the pod-local /data. Placeholders, no credential.
+replicas:
+  portal: 2
+keda:
+  enabled: false
+config:
+  memex_portal:
+    Deployment__Orleans__Clustering: "AdoNet"
+secrets:
+  memex_portal:
+    ConnectionStrings__memex: "Host=pg.example.test;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=pg.example.test;Database=orleans;Username=memex;Password=placeholder"
+  memex_migration:
+    ConnectionStrings__memex: "Host=pg.example.test;Database=memex;Username=memex;Password=placeholder"
+    ConnectionStrings__orleans: "Host=pg.example.test;Database=orleans;Username=memex;Password=placeholder"

@@ -555,23 +555,37 @@ def run_decide_cases(root, case) -> None:
     # read GH_CALLS.
     ledger = {**reconcile, "REASON": "reconcile", "GH_VIEW_RESULT": "0", "GH_ISSUE_RESULT": ""}
 
+    # 🚨 THE PAIR TAG IS RETIRED (policy `platform-module-deploy-separate`), and with it the
+    # `HOSTS_STALE` branch that rebuilt the portal whenever MeshWeaver.Plugins `main` had moved
+    # (#2622, #4688). A complete set is bake-only whatever a stale caller still passes; a host
+    # change reaches the image only through an explicit `rebuild` (Plugins' relevance-classified
+    # dispatch). Fed the retired input on purpose: a decide step that still read it would build.
     calls: list[str] = []
     rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None,
                                 calls_out=calls)
     filed = [c for c in calls if "issue create" in c or "issue comment" in c]
-    case("a COMPLETE set whose only gap is the host pairing still publishes (#2622 unchanged)",
-         rc == 0 and "publish=true" in outputs and "bake_only=true" not in outputs,
+    case("a COMPLETE set is bake-only even if the retired HOSTS_STALE input is set — no plugins-move rebuild",
+         rc == 0 and "bake_only=true" in outputs and "publish=true" not in outputs,
          f"rc={rc} out={outputs!r} log={log}")
-    case("...and files NOTHING on the ci-failure ledger — nothing was undelivered",
+    case("...and files NOTHING on the ci-failure ledger",
          not filed, f"calls={filed!r} log={log}")
-    case("...and says so, so a reader is not left guessing why it built",
-         "cadence" in log.lower() and "deliverable" in log.lower(), f"log={log}")
-
-    # The control on that pair: without HOSTS_STALE a complete set is still the cheap bake-only
-    # tick. If these collapsed, every quiet hour would start building an image again.
-    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "false"}, None)
-    case("MUTATION CONTROL: a complete set with a CURRENT pairing is still bake-only, not a build",
-         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # MUTATION CONTROL: put the retired branch back and the same inputs must build — otherwise the
+    # case above would pass on a step that never looked at the variable at all.
+    retired_branch = (
+        'if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \\\n'
+        '   && [ "$GREEN" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then\n'
+        '  decision true "host pairing behind"\n'
+        '  exit 0\n'
+        'fi\n')
+    # `body` is the YAML-dedented `run:` block, so the anchor carries no workflow indentation.
+    anchor = 'if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then\n'
+    mutated = body.replace(anchor, retired_branch + anchor, 1)
+    rc, log, outputs = run_step(mutated, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None)
+    case("MUTATION CONTROL: the retired HOSTS_STALE branch, put back, DOES build on the same inputs",
+         mutated != body and rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "FORCE_REBUILD": "true"}, None)
+    case("...and an explicit `rebuild` (Plugins' host-change dispatch) still builds a complete set",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
     calls = []
     rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false"}, None,
@@ -614,21 +628,6 @@ def run_decide_cases(root, case) -> None:
     case("a settled-RED required check is still reported, attempt probe or not",
          rc == 0 and "publish=false" in outputs and any("issue comment" in c for c in calls),
          f"rc={rc} out={outputs!r} calls={calls!r} log={log}")
-
-    # 🚨 <b>A HOST REFRESH IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK.</b>
-    # (Copilot on MeshWeaver#4687.) The stale-pair branch sits above the required-check guard,
-    # which is right for its neighbours — `bake_only` ships no image, `rebuild` is an operator's
-    # explicit dispatch — and was a hole here: a HEAD whose required check settled RED still has
-    # its old complete set, so COMPLETE is true, and the branch would have built and SHIPPED an
-    # untested tree for a cosmetic refresh.
-    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true",
-                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300"}, None)
-    case("a stale host pairing on a RED required check publishes NOTHING",
-         rc == 0 and "publish=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and falls through to the bake, which builds no image",
-         "bake_only=true" in outputs, f"out={outputs!r} log={log}")
-    case("...and names the check rather than the pairing as the reason",
-         "untested" in log.lower(), f"log={log}")
 
     # 🚨 <b>A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS ALIVE.</b>
     # (Copilot on MeshWeaver#4687.) The in-flight tie-break filters to LOWER run ids so that two
@@ -1296,6 +1295,18 @@ def separation_problems(workflow_text: str) -> list[str]:
             problems.append("`control-first` does not follow `control-promote` — it would tag an image that was never accepted")
         if "control-promote.result == 'success'" not in " ".join(str(cf.get("if", "")).split()):
             problems.append("`control-first`'s `if:` does not assert `needs.control-promote.result == 'success'`")
+        # 7. ...and DELIVERS it: tagging memex-control rolls nothing. A step must sign the
+        #    `control-announcement` body to the control plane's inbox, or control is handed a build
+        #    nothing ever rolls it to (control sat on ci.9939 for 22 h, 2026-10-06).
+        steps = cf.get("steps") or []
+        hand = [st for st in steps if "arm-promoted-set.py control-announcement" in str(st.get("run", ""))]
+        if not hand:
+            problems.append("`control-first` tags memex-control but never hands the build to control's roll lane "
+                            "(no step POSTs the `control-announcement` body) — control would never roll to it")
+        elif not any("vars.CONTROL_WEBHOOK_URL" in json.dumps(st.get("env") or {})
+                     and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {}) for st in hand):
+            problems.append("`control-first`'s handover is not signed to the control plane's inbox "
+                            "(vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
     for name in ("published-modules", "platform-ladder-compat"):
         job = jobs.get(name)
         if job is None:
@@ -1315,6 +1326,33 @@ def separation_problems(workflow_text: str) -> list[str]:
         needs = [needs] if isinstance(needs, str) else needs
         if "preflight" in needs and "needs.preflight.result == 'success'" not in cond:
             problems.append(f"{name} carries `always()` and needs `preflight`, but never asserts `needs.preflight.result == 'success'`")
+    return problems
+
+
+PAIR_TAG_WRITE = re.compile(r"-p\$\{?(?:PLUGINS|PLUGINS_SHORT|PLUGINS_SEL|PS)\b")
+
+
+def pair_tag_problems(workflow_text: str) -> list[str]:
+    """🚨 Policy `platform-module-deploy-separate`: the `<core7>-p<plugins7>` pair tag is RETIRED.
+
+    `main-cd.yml` must not mint it (no `<sha>-p$PLUGINS…` in any executable line), must not ask the
+    completeness probe about it (`check-image-set.sh` gets the core sha only), and `arm` must write
+    the version tag FROM the build's staging tag — the immutable per-run identity that replaced the
+    pair tag as the arming source. Readers stay tolerant of legacy pair tags; only WRITING is barred."""
+    problems: list[str] = []
+    for n, line in enumerate(workflow_text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        # A trailing comment (whitespace, then `#`) is not code: a line that only NAMES the retired
+        # tag in its comment must not trip the guard. A bare `#` stays code — `${VAR#prefix}` is a
+        # shell expansion, and cutting there would hide a real write behind it (#6177 review).
+        code = re.split(r"\s#", line, maxsplit=1)[0]
+        if PAIR_TAG_WRITE.search(code):
+            problems.append(f"main-cd.yml:{n} composes a `<core7>-p<plugins7>` pair tag — it is retired: {line.strip()[:120]}")
+        if "check-image-set.sh" in code and re.search(r'check-image-set\.sh\s+"\$SHORT"\s+"\$', code):
+            problems.append(f"main-cd.yml:{n} passes a second (plugins) argument to check-image-set.sh — the pair probe is retired")
+    if "SRC_PORTAL_TAG=$STAGING_SEL" not in workflow_text:
+        problems.append("`arm` does not arm FROM the selected record's staging tag (`SRC_PORTAL_TAG=$STAGING_SEL`)")
     return problems
 
 
@@ -1436,6 +1474,13 @@ def main() -> int:
     case("...and the guard catches control waiting for the fleet's arming (control LAST again)",
          control_last != workflow_text and any("FIRST" in p for p in separation_problems(control_last)),
          "the mutation passed (or could not apply) with control-first needing arm")
+    undelivered = workflow_text.replace("arm-promoted-set.py control-announcement", "arm-promoted-set.py control-REMOVED", 1)
+    case("...and the guard catches control-first TAGGING control without handing it the build (the 2026-10-06 outage)",
+         undelivered != workflow_text and any("never hands the build" in p for p in separation_problems(undelivered)),
+         "the mutation passed (or could not apply) with no handover step in control-first")
+    case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
+         not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
+         str(separation_problems(workflow_text)))
     unpaid = workflow_text.replace(
         "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&\n"
         "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
@@ -1456,6 +1501,34 @@ def main() -> int:
          plugins_checkout != workflow_text
          and any("checks MeshWeaver.Plugins out" in p for p in separation_problems(plugins_checkout)),
          "the mutation passed (or could not apply) with a module job checking out Plugins")
+
+    # 🚨 The retired pair tag stays retired — with a mutation control per detector.
+    pt = pair_tag_problems(workflow_text)
+    case("main-cd mints no `<core7>-p<plugins7>` pair tag and arms from the staging tag", not pt, "; ".join(pt))
+    minted = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                   '          promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"\n', 1)
+    case("...and the guard catches promote minting the pair tag again",
+         minted != workflow_text and any("pair tag" in p for p in pair_tag_problems(minted)),
+         "the mutation passed (or could not apply) with phase A writing <sha>-p<plugins>")
+    pair_armed = workflow_text.replace('SRC_PORTAL_TAG=$STAGING_SEL', 'SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL', 1)
+    case("...and the guard catches `arm` arming from a pair tag again",
+         pair_armed != workflow_text and len(pair_tag_problems(pair_armed)) >= 2,
+         "the mutation passed (or could not apply) with arm reading <sha>-p<plugins>")
+    probe = workflow_text.replace('check-image-set.sh "$SHORT" || rc=$?', 'check-image-set.sh "$SHORT" "$PLUGINS_SHORT" || rc=$?', 1)
+    case("...and the guard catches the completeness probe asking about the pair again",
+         probe != workflow_text and any("second (plugins) argument" in p for p in pair_tag_problems(probe)),
+         "the mutation passed (or could not apply) with gate passing the plugins sha to check-image-set.sh")
+
+    commented = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA"  # no "$SHA-p$PLUGINS_SHORT" any more\n', 1)
+    case("...and a pair tag named only in a trailing comment is not a write",
+         commented != workflow_text and not any("pair tag" in p for p in pair_tag_problems(commented)),
+         "the mutation could not apply, or an inline comment naming the retired tag tripped the guard")
+    expansion = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA" "${SHA#x}-p$PLUGINS_SHORT"\n', 1)
+    case("...and a write behind a `${VAR#…}` expansion is still caught",
+         expansion != workflow_text and any("pair tag" in p for p in pair_tag_problems(expansion)),
+         "the mutation passed (or could not apply) with a pair-tag write after a ${VAR#…} expansion")
 
     module_pack_text = (root / MODULE_PACK_WORKFLOW).read_text()
     permission_problems = module_pack_permission_problems(module_pack_text)

@@ -288,7 +288,7 @@ break-glass form:
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv
 az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
-.github/scripts/check-image-set.sh <short-sha> [<plugins-short-sha>]   # the exact assertion CD itself makes
+.github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes (the pair-tag argument is retired)
 ```
 
 ## Official release (promote a sealed continuous build)

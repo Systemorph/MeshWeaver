@@ -1342,6 +1342,20 @@ Two readings that look right and are not:
   (`NodeTypeReleaseGateTest`, `CodeEditRecompileTest`). **Discriminate on the verdict, never on the
   suite name plus the exit code**; folding a live wedge into a known-upstream defect hides it.
 
+**Test stand-in compiles carry the canary too.** The defect is not confined to `EmitPipeline`:
+`Memex.Portal.Shared.Test` compiles small stand-in assemblies in memory against the shared
+platform reference set, and on Linux x64 those compiles have failed with the same NRE, with
+`CS0246`/`CS0234` for a stand-in passed right there as a reference, and with a "successful" emit
+missing its own type ([#5212](https://github.com/Systemorph/MeshWeaver/issues/5212#issuecomment-6011465804)) —
+each reading as a defect of whichever test compiled next. Every such compile now goes through ONE
+helper, `StandInCompile.Emit`, which on failure (diagnostics or a throw) runs
+`EmitPipeline.ProbeSharedEmitState` against that compilation and appends
+`EmitPipeline.ProbeSharedEmitState (#5212 / #890): canary=…` to the failure message and the test
+output. It is a diagnostic only — the test still fails, with no retry and no fallback compiler. Read
+it like any other `canary=` line: `canary=OK` means the test's own source is wrong; any other
+verdict means the process cannot emit, and the red belongs to #5212, not to the test.
+`StandInCompileFailureNamesTheEmitCanaryTest` pins that the verdict is there.
+
 > 🚨 **The core dump the canary used to ask for cannot be captured this way.**
 > `DOTNET_DbgEnableMiniDump` fires on a *signal*, and this process never crashes — it throws a
 > managed exception and keeps running until CI's per-suite wall-clock cap kills it (`exit=124`, no

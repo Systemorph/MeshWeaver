@@ -54,7 +54,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
-| 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
+| 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged; the image's OWN copy is judged at the version its `module.seed.json` stamp states — see below) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
@@ -68,6 +68,18 @@ after the fetch, over each `manifest.lock` in the incoming tree:
   `Declined` when a module was declined, and the fetched commit counts as seen.
 - A tree with **no** `manifest.lock` (a course or content repository) states no module and imports
   exactly as before.
+- **Rule 1b judges the image's own copy too** (Systemorph/MeshWeaver.Plugins#2715). The loaded
+  reading (`LoadedPackageModuleReader.ResolveWithImageCopies`) states a landed generation at the
+  version its activation entry recorded, and a module that loaded from the IMAGE's copy at the
+  version that copy's `module.seed.json` states (`ImageModuleSeed`), keyed by the package the stamp
+  names. It used to leave the image copy out as "not judged", and that was the commonest copy there
+  is. Measured on the control instance on 2026-10-05: its image (Plugins `29bfaefb`) ships AI
+  stamped `1.21.1`; Hosting's tree declared `AI@^1.22.0` and called `LanePolicy`, which only AI 1.22
+  carries. With no reading for AI the import wrote Hosting's sources, and twenty Hosting NodeTypes,
+  `InstanceAction` among them, parked at `CS0246 LanePolicy`. A seed stamp can only UNDERSTATE the
+  image's bytes (an unsettled `manifest.lock` keeps its number while the sources move on), so this
+  can hold an import the image would have satisfied, but it never admits one the image cannot
+  satisfy. An image copy with no stamp, a substituted load and an ambiguous load stay unjudged.
 
 **Recorded hashes** live on the sync config as `ModuleVersions` (module → `moduleVersion`). They
 advance only when the import's nodes **all** landed (`MayAdvanceBaseline`), the

@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Reflection;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -162,61 +164,4 @@ internal static class ModuleServiceForwarding
         }
         return root;
     }
-
-    /// <summary>
-    /// Adds to a PER-NODE hub's scope a forwarder for every service type the modules held in their own
-    /// contexts DECLARE themselves (<see cref="ModuleServiceRoute.ModuleOwned"/>) — so module code
-    /// resolving its own service from <c>hub.ServiceProvider</c> finds it — and for the options of
-    /// every options type a module owns. Read from the CURRENT generation when the hub is built; a
-    /// swap recycles the hubs, which re-bind the new generation's types. Never in the root: a root
-    /// registration of a collectible type would pin its generation for the life of the process.
-    /// </summary>
-    public static IServiceCollection AddModuleOwned(IServiceCollection services, ModuleContexts contexts)
-    {
-        foreach (var generation in contexts.Generations)
-        {
-            if (generation.Services is not { } module)
-                continue;
-            var name = generation.Name;
-            foreach (var keyed in module.Registrations
-                         .Where(r => r.Route == ModuleServiceRoute.ModuleOwned && r.Descriptor.IsKeyedService))
-            {
-                var keyedType = keyed.Descriptor.ServiceType;
-                var key = keyed.Descriptor.ServiceKey;
-                services.Add(ServiceDescriptor.KeyedTransient(keyedType, key, (_, _) =>
-                    (contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."))
-                    .GetRequiredKeyedService(keyedType, key)));
-            }
-            var owned = module.Registrations
-                .Where(r => r.Route == ModuleServiceRoute.ModuleOwned && !r.Descriptor.IsKeyedService)
-                .Select(r => r.Descriptor.ServiceType)
-                .Distinct()
-                .ToArray();
-            foreach (var type in owned)
-            {
-                services.Add(ServiceDescriptor.Transient(type, _ =>
-                    (contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."))
-                    .GetRequiredService(type)));
-                // An options type the module owns: IOptions<T>, IOptionsMonitor<T>, IOptionsSnapshot<T>
-                // close over it in the MODULE's scope, where its configure registrations live.
-                if (type.IsGenericType && type.GetGenericArguments() is [var optionsType]
-                    && type.GetGenericTypeDefinition().FullName == "Microsoft.Extensions.Options.IConfigureOptions`1")
-                    foreach (var open in OptionsInterfaces)
-                    {
-                        var closed = open.MakeGenericType(optionsType);
-                        services.Add(ServiceDescriptor.Transient(closed, _ =>
-                            (contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."))
-                            .GetRequiredService(closed)));
-                    }
-            }
-        }
-        return services;
-    }
-
-    private static readonly System.Collections.Immutable.ImmutableArray<Type> OptionsInterfaces =
-    [
-        typeof(Microsoft.Extensions.Options.IOptions<>),
-        typeof(Microsoft.Extensions.Options.IOptionsMonitor<>),
-        typeof(Microsoft.Extensions.Options.IOptionsSnapshot<>),
-    ];
 }

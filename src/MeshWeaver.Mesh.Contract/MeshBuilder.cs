@@ -56,14 +56,20 @@ public partial record MeshBuilder
     }
 
     /// <summary>
-    /// Every per-node hub gets the module-owned service types of the modules held in their own
-    /// contexts (<see cref="ModuleServiceForwarding.AddModuleOwned"/>), from their CURRENT generation.
-    /// Captures the registry only.
+    /// The root answers every type a module held in its own context declares from that module's CURRENT
+    /// generation (<see cref="ModuleOwnedRootSource"/>) — so the mesh hub, every per-node hub and every
+    /// other module's container see the module's services, and the contributions other modules made to
+    /// them. Captures the registry only.
     /// </summary>
     private void RegisterModuleOwnedServiceForwarders()
     {
         var modules = ModuleContexts;
-        ConfigureDefaultNodeHub(config => config.WithServices(s => ModuleServiceForwarding.AddModuleOwned(s, modules)));
+        ConfigureServices(services =>
+        {
+            if (!services.Any(d => d.ImplementationInstance is ModuleOwnedRootSource))
+                services.AddSingleton<Autofac.Core.IRegistrationSource>(new ModuleOwnedRootSource(modules));
+            return services;
+        });
     }
 
     /// <summary>
@@ -686,7 +692,14 @@ public partial record MeshBuilder
     {
         // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
         // check that could not be made can never be read as a check that passed.
-        if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
+        // 🚨 WITH the member half (MeshWeaver#6007): a type that stayed while a member it carries
+        // moved loads cleanly and throws MissingMethodException at the first call. OpenAI 1.4.0
+        // called ReasoningEffortLevels.IsBuiltIn(IEnumerable<string>) on images whose AI had no
+        // such method, and every chat round on those instances died on it. The surface here is
+        // file-backed, so the member walk is determinate; a refusal falls back to the previous
+        // generation exactly as a type-level refusal does.
+        if (surface is not null
+            && ModulePlatformLink.Check(location, surface, ModuleLinkOptions.WithMembers) is { MayLoad: false } verdict)
             return new LoadAttempt(null, IncompatibleModule.FromLinkRefusal(location, verdict), NeverLoaded: true);
 
         // 🚨 Live-update-by-default (policy module-live-update-default): every module the image does

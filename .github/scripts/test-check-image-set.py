@@ -15,7 +15,6 @@ INDEX = {"manifests": [
 ]}
 EXPECTED_TAGS = {
     "memex-portal-ai:abcdef1", "memex-migration:abcdef1", "mw-plugin-test:abcdef1",
-    "memex-portal-ai:abcdef1-p1234567",
     "memex-portal-ai:main", "memex-migration:main", "mw-plugin-test:main",
     "mw-plugin-test:latest",
     "memex-migration:3.0.0-ci.42", "mw-plugin-test:3.0.0-ci.42",
@@ -26,11 +25,9 @@ EXPECTED_TAGS = {
 ARMING_TAG = "memex-portal-ai:3.0.0-ci.42"
 
 
-PAIR_TAG = "memex-portal-ai:abcdef1-p1234567"
-
-
 class ImageSetTests(unittest.TestCase):
-    def check(self, failed_tag="", diagnostic="", exit_code=0, index=INDEX, failed_tags=()):
+    def check(self, failed_tag="", diagnostic="", exit_code=0, index=INDEX, failed_tags=(),
+              args=("abcdef1", "--pointers", "3.0.0-ci.42")):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             az = root / "az"
@@ -51,20 +48,21 @@ print(os.environ['INDEX'])
                    "FAILED_TAGS": failed, "DIAGNOSTIC": diagnostic,
                    "EXIT_CODE": str(exit_code), "INDEX": json.dumps(index),
                    "CALLS": str(root / "calls"), "GITHUB_STEP_SUMMARY": str(root / "summary")}
-            result = subprocess.run(["bash", str(SCRIPT), "abcdef1", "1234567", "--pointers", "3.0.0-ci.42"],
+            result = subprocess.run(["bash", str(SCRIPT), *args],
                                     capture_output=True, text=True, env=env, timeout=15)
-            calls = (root / "calls").read_text().splitlines()
+            log = root / "calls"
+            calls = log.read_text().splitlines() if log.exists() else []
             return result, calls
 
     def test_full_set_checks_every_identity_and_pointer(self):
         result, calls = self.check()
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertEqual(len(calls), 10)
+        self.assertEqual(len(calls), 9)
         self.assertEqual(set(calls), EXPECTED_TAGS)
         self.assertIn("All images exist", result.stdout)
 
     def test_registry_errors_remain_red_and_keep_the_actual_diagnostic(self):
-        for tag in ("memex-migration:main", PAIR_TAG):
+        for tag in ("memex-migration:main", "memex-portal-ai:abcdef1"):
             for code, diagnostic in ((3, "ERROR: MANIFEST_UNKNOWN: tag does not exist"),
                                      (1, "ERROR: response status 503 Service Unavailable"),
                                      (2, "ERROR: registry operation was refused")):
@@ -76,7 +74,7 @@ print(os.environ['INDEX'])
                     self.assertNotIn("is MISSING", result.stdout)
                     self.assertNotIn("was NOT built", result.stdout)
                     self.assertEqual(calls.count(tag), 1, "a failed read must not be retried")
-                    self.assertEqual(len(calls), 10, "a failed read must not hide later checks")
+                    self.assertEqual(len(calls), 9, "a failed read must not hide later checks")
                     self.assertEqual(set(calls), EXPECTED_TAGS)
 
     def test_the_portal_version_tag_is_never_asserted_it_is_the_arming_write(self):
@@ -89,60 +87,29 @@ print(os.environ['INDEX'])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not a linux amd64+arm64 image index", result.stdout)
 
-    # ── deliverability vs provenance (MeshWeaver#4687) ──────────────────────────────────────
+    # ── the retired pair tag (policy `platform-module-deploy-separate`) ─────────────────────
     #
-    # 🚨 THE CASE THAT WOULD HAVE FAILED BEFORE THE FIX. A missing pair tag used to exit 1 —
-    # the same answer a torn image set gives — so `gate` read "main's HEAD has no deployable
-    # image" over a set every install could already roll to, and filed
-    # `CD: main <sha> has an incomplete image set` saying so. 28 of the 109 such issues ever
-    # opened were exactly this, including three for `0dadacc` in three consecutive hours on
-    # 2026-09-17, each closed by a "successful heal" half an hour later.
+    # main-cd no longer mints `memex-portal-ai:<sha>-p<plugins>`, so "the set" must never ask for it:
+    # a checker that still did would read every new set as stale and rebuild on every Plugins merge.
 
-    def test_a_missing_pair_tag_alone_is_exit_2_not_a_torn_set(self):
-        result, calls = self.check(PAIR_TAG, "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("DELIVERABLE", result.stdout)
-        self.assertEqual(set(calls), EXPECTED_TAGS, "every other identity is still asserted")
+    def test_no_pair_tag_is_ever_asked_for(self):
+        result, calls = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse([c for c in calls if "-p" in c.split(":", 1)[1]], calls)
+        self.assertNotIn("::notice::", result.stdout)
 
-    def test_an_UNREADABLE_pair_read_is_exit_1_not_a_stale_pairing(self):
-        # 🚨 Exit 2 PROMISES that everything else was verified and only the pairing is behind, and
-        # `gate` acts on that promise — complete, no ledger entry, refresh. A 503 or a refused pull
-        # establishes nothing about the tag, so reading it as "merely behind" would be the same
-        # answer-that-reads-like-a-pass this change exists to remove, one layer down. Azure CLI
-        # exits 3 for ResourceNotFoundError; anything else stays RED. (Copilot on MeshWeaver#4687.)
-        for code, diagnostic in ((1, "ERROR: response status 503 Service Unavailable"),
-                                 (2, "ERROR: registry operation was refused")):
-            with self.subTest(code=code):
-                result, _ = self.check(PAIR_TAG, diagnostic, code)
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn("::error::", result.stdout)
-                self.assertNotIn("::notice::", result.stdout)
-                self.assertIn("could not be READ", result.stdout)
+    def test_a_second_positional_argument_is_refused_red_not_silently_ignored(self):
+        # The negative control on the retirement: a stale caller still passing the plugins sha must
+        # be told, RED, before any registry read — never answered about a different question.
+        result, calls = self.check(args=("abcdef1", "1234567", "--pointers", "3.0.0-ci.42"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("retired", result.stdout)
+        self.assertEqual(calls, [], "a refused invocation must read nothing")
 
-    def test_a_stale_pair_is_a_notice_never_an_error_annotation(self):
-        # An `::error::` on a job that then succeeds is how a run's annotation list stops being
-        # read. The condition is still printed, and still summarised — just not as a failure.
-        result, _ = self.check(PAIR_TAG, "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)
-        self.assertNotIn("::error::", result.stdout)
-        self.assertIn("::notice::", result.stdout)
-        self.assertIn("az exit 3", result.stdout)
-
-    def test_a_missing_image_outranks_a_stale_pair(self):
-        # 🚨 The ordering IS the contract: exit 2 asserts the set is intact, so a run that lost a
-        # leg AND whose plugins HEAD moved must still exit 1. Without this, the fix would hand
-        # `gate` "deliverable" over a torn set — the one failure the file exists to prevent.
-        result, _ = self.check(
-            failed_tags=("memex-migration:abcdef1", PAIR_TAG),
-            diagnostic="ERROR: MANIFEST_UNKNOWN: tag does not exist", exit_code=3)
+    def test_a_missing_image_is_still_red(self):
+        result, _ = self.check("memex-migration:abcdef1", "ERROR: MANIFEST_UNKNOWN: tag does not exist", 3)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("::error::", result.stdout)
-
-    def test_a_complete_and_correctly_paired_set_is_still_exit_0(self):
-        # The inert control: without it, "a stale pair is exit 2" would also pass if the script
-        # had started answering 2 unconditionally.
-        result, _ = self.check()
-        self.assertEqual(result.returncode, 0)
-        self.assertNotIn("::notice::", result.stdout)
 
 
 if __name__ == "__main__":
