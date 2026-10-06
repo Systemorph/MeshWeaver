@@ -184,6 +184,38 @@ public class SourcesWatcherStallBackoffTest
         Assert.Equal(0, backoff.ConsecutiveStalls);
     }
 
+    [Fact]
+    public void The_real_re_establish_primitive_re_subscribes_the_factory_and_pays_the_growing_delay()
+    {
+        // Review of #6182: the backoff only works if the consuming operator RE-SUBSCRIBES the factory
+        // on fault (Observable.Defer recomputes the delay per subscription). This drives the real
+        // primitive — the same core SubscribeHubWatcher runs InstallSourcesWatcher on — with its
+        // 1 s re-establish moved onto the virtual clock through the public scheduling seam, and a
+        // REAL QueryProviderStalledException through the production classifier.
+        var scheduler = new HistoricalScheduler(new DateTimeOffset(2026, 10, 5, 0, 0, 0, TimeSpan.Zero));
+        var backoff = new SourcesWatcherStallBackoff(Seconds(5), Seconds(120), () => 1.0, scheduler: scheduler);
+        var subscribedAt = new List<DateTimeOffset>();
+        var source = Observable.Defer(() =>
+        {
+            subscribedAt.Add(scheduler.Now);
+            return Observable.Throw<int>(Stall());
+        });
+
+        using var watcher = ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+            () => source.WithStallBackoff(backoff),
+            _ => { },
+            new MeshWeaver.Messaging.Address("stall-backoff", "probe"),
+            logger: null,
+            faultLogContext: "SourcesWatcherStallBackoffTest",
+            scheduleReEstablish: reEstablish =>
+                Observable.Timer(TimeSpan.FromSeconds(1), scheduler).Subscribe(_ => reEstablish()));
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(10));
+
+        var gaps = subscribedAt.Zip(subscribedAt.Skip(1), (a, b) => (b - a).TotalSeconds).ToList();
+        // The primitive's 1 s plus the backoff's 5, 10, 20, ... capped at 120.
+        Assert.Equal(new[] { 6.0, 11, 21, 41, 81, 121, 121, 121 }, gaps);
+    }
+
     // Models SubscribeWithReEstablish's schedule on the virtual clock: on every fault, a FIXED 1 s timer
     // and then a fresh subscription. Returns the gaps between consecutive subscriptions of the source.
     private static List<double> SubscribeGapsSeconds(
