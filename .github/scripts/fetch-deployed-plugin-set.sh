@@ -24,15 +24,21 @@ mkdir -p "$out"
 # finished promoting — and below, only one whose `promote` job SUCCEEDED: those bundles shipped with a
 # promoted set, which is what the fleet rolls to. (A run can be red for other reasons — a satellite
 # leg, an arm64 bake — and still have promoted; the promote job, not the run's colour, is the fact.)
-# GitHub's filtered workflow-run listing can serve an older page than the unfiltered listing:
-# on 2026-09-28 it omitted a promoted run whose four bundles were still downloadable. Read the
-# current page and apply the branch/status filters to its returned rows instead.
-runs=$(gh api "repos/$repo/actions/workflows/main-cd.yml/runs?per_page=40" \
-  --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed") | .id') \
-  || { echo "::error::could not list main-cd.yml runs on $repo — the deployed plugin set cannot be located"; exit 1; }
+# 🚨 The candidates come from the ARTIFACTS, not from a window of runs. This used to scan the last 40
+# main-cd runs; a CD outage of ~30 failing/cancelled runs (2026-10-05/06, #10008→#10036) pushed the last
+# promoted run out of that window while its four bundles were still downloadable for days — and every
+# core pull request's ladder went red over a set that existed. The question is "the newest unexpired
+# bundle set from a promoted main-cd run on main", so it is asked of the artifact listing itself, newest
+# first; retention (not a run count) is the only horizon.
+runs=$(gh api "repos/$repo/actions/artifacts?name=module-bundle-${modules[0]}&per_page=100" \
+  --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | .workflow_run.id] | unique_by(.) | reverse | .[]' ) \
+  || { echo "::error::could not list the module-bundle-${modules[0]} artifacts on $repo — the deployed plugin set cannot be located"; exit 1; }
 
 chosen=""
 for run in $runs; do
+  # The artifact must come from main-cd (any other workflow uploading the same name is not a set).
+  wf=$(gh api "repos/$repo/actions/runs/$run" --jq '[.path, .status] | join(" ")') || continue
+  case "$wf" in ".github/workflows/main-cd.yml completed") ;; *) continue ;; esac
   names=$(gh api "repos/$repo/actions/runs/$run/artifacts?per_page=100" \
     --jq '[.artifacts[] | select(.expired == false) | .name] | join(" ")') || continue
   complete=1
@@ -45,7 +51,7 @@ for run in $runs; do
   if [ "$promoted" = "success" ]; then chosen="$run"; break; fi
 done
 
-[ -n "$chosen" ] || { echo "::error::none of the last 40 COMPLETED main-cd runs on main both PROMOTED its set and still holds all four module-bundle-* artifacts (${modules[*]}) — the deployed plugin set is not available, so no compatibility verdict can be given. Re-run main-cd on main (it re-packs them); do NOT waive this check."; exit 1; }
+[ -n "$chosen" ] || { echo "::error::no COMPLETED main-cd run on main that still holds an unexpired module-bundle artifact both PROMOTED its set and holds all four module-bundle-* artifacts (${modules[*]}) — the deployed plugin set is not available, so no compatibility verdict can be given. A green main-cd run re-publishes them (published-modules reads the sealed plugins publication); do NOT waive this check."; exit 1; }
 
 for m in "${modules[@]}"; do
   gh run download "$chosen" -R "$repo" -n "module-bundle-$m" -D "$out/$m" \
