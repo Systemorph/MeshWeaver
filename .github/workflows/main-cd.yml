@@ -2421,6 +2421,30 @@ jobs:
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
+          # 🚨 NEVER BACKWARDS (MeshWeaver.Manufacturing#84) — the same rule phase D re-checks at its
+          # write. Two runs can promote the SAME core + Plugins pair: the reconcile lane and a
+          # `rebuild` dispatch overlap by design (see `concurrency:`). On 2026-10-05 run 9984 promoted
+          # three minutes AFTER run 9985 and moved `main`/`latest` from 9985's images back to its own.
+          # Phase A already wrote every NEWER promoted set's tester version tag, so the highest
+          # `mw-plugin-test:<line>-ci.<n>` is the newest promoted set; when it is newer than this
+          # run, the moving pointers stay where that set put them (ACR, cr and GHCR alike).
+          # FAIL-CLOSED on both reads: a tag list that cannot be read, or a version without a run
+          # ordinal, is RED — never "no newer set", which would move the pointers on no evidence.
+          [[ "$V_PLUGIN" =~ [.-]ci\.([0-9]+)$ ]] || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no ci.<n> run ordinal — cannot decide whether a newer set already holds main/latest"; exit 1; }
+          n_self="${BASH_REMATCH[1]}"
+          tags=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv) \
+            || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds main/latest; refusing to move them blind"; exit 1; }
+          # Phase A just wrote this run's own version tag, so an EMPTY reading is itself a broken read.
+          n_max=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
+          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no <line>-ci.<n> tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
+          if [ "$n_max" -gt "$n_self" ]; then
+            echo "::notice title=Moving pointers left in place::a newer set (ci.$n_max) was promoted while this run (ci.$n_self) built — main/latest stay on it; this set keeps its own version and identity tags"
+            echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self (never backwards)" >> "$GITHUB_STEP_SUMMARY"
+            # This set's OWN GHCR version tag is not a pointer: the satellite-compat legs pull it.
+            NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+            docker buildx imagetools create --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" "${{ env.ACR }}/mw-plugin-test:$STAGING"
+            exit 0
+          fi
           for repo in memex-migration memex-portal-ai; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
@@ -2658,6 +2682,19 @@ jobs:
             echo "V_PORTAL=$V_PORTAL_SEL"; echo "V_MIGRATION=$V_MIGRATION_SEL"; echo "V_PLUGIN=$V_PLUGIN_SEL"; echo "SHA=$SHA_SEL"
             echo "SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL"
           } >> "$GITHUB_ENV"
+      # 🚨 A VERSION TAG IS ONLY EVER WRITTEN ONTO AN IMAGE THAT REPORTS THAT VERSION
+      # (MeshWeaver.Manufacturing#84). On 2026-10-05 run 9989's `arm` armed 3.0.0-ci.9985 through
+      # the pair tag `d205295-p29bfaef` — which run 9984 (same core + Plugins commits, the reconcile
+      # lane overlapping a `rebuild` dispatch) had re-pointed at ITS portal after 9985 promoted. So
+      # `memex-portal-ai:3.0.0-ci.9985` names an image whose MESHWEAVER_PLATFORM_VERSION is
+      # 3.0.0-ci.9984: the fleet rolled to "9985" and runs 9984, while the 9985 tester and the
+      # Plugins bundles (floor 9985) say 9985 — every satellite consuming the set declined 134 types.
+      # Whatever tag the source is read from, the bytes are asserted here, on every architecture,
+      # BEFORE the arming PUT: an image that misreports the set is never armed. Fail-closed — an
+      # unreadable config is RED (check-image-build-identity.sh).
+      - name: "Gate: the image about to be armed reports the version it is armed as"
+        if: steps.select.outputs.armed == 'true'
+        run: .github/scripts/check-image-build-identity.sh "$SRC_PORTAL_TAG" "$V_PORTAL"
       - name: "Phase C — arm the release: memex-portal-ai:<version>"
         if: steps.select.outputs.armed == 'true'
         run: |
@@ -3594,6 +3631,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # 🚨 THE ONE DECLARATION of the module set this platform is judged against — `<package>=<module>`
+      # pairs. Read by the steps below AND, out of this file, by `portal-image`'s one-producer gate
+      # (check-platform-reference-set.sh: no published module's name may also ship in the host's
+      # /app). One list, so the two can never drift; it replaced `plugins-modules.with.modules`.
+      PUBLISHED_MODULES: >-
+        AI=MeshWeaver.AI
+        Essentials=MeshWeaver.Markdown.Collaboration
+        Maps=MeshWeaver.Maps
+        Stripe=MeshWeaver.Payments.Stripe
     steps:
       - uses: actions/checkout@v7
         with:
@@ -3628,16 +3675,18 @@ jobs:
           [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from $TESTER (got: '$line')"; exit 1; }
           target="${BAKE_PUBLISH_TARGETS%% *}"
           [ -n "$target" ] || { echo "::error::vars.BAKE_PUBLISH_TARGETS is empty — the sealed publications cannot be read (preflight asserts it)"; exit 1; }
+          # The job's PUBLISHED_MODULES declaration (`<package>=<module>` pairs) is the one list.
+          read -r -a mappings <<< "$(printf '%s' "$PUBLISHED_MODULES" | tr '\n' ' ')"
+          [ "${#mappings[@]}" -ge 1 ] || { echo "::error::PUBLISHED_MODULES declares no module — nothing would be judged"; exit 1; }
+          packages=""; for mapping in "${mappings[@]}"; do packages="$packages ${mapping%%=*}"; done
           out="$RUNNER_TEMP/published"; rm -rf "$out"; mkdir -p "$out"
           bash .github/scripts/compose-sealed-modules.sh --identity "$identity" \
-            --packages "AI Essentials Maps Stripe" --upstreams plugins --out "$out" --storage-target "$target"
+            --packages "${packages# }" --upstreams plugins --out "$out" --storage-target "$target"
           # One artifact per MODULE, under the names every consumer already reads
           # (module-bundle-<Module>). The package → module map is the satellites' own declaration
-          # (`registry-modules: AI Essentials Stripe Maps`): AI ships MeshWeaver.AI, Essentials ships
-          # MeshWeaver.Markdown.Collaboration, Maps ships MeshWeaver.Maps, Stripe ships
-          # MeshWeaver.Payments.Stripe. Exactly one bundle per package, or RED.
+          # (`registry-modules: AI Essentials Stripe Maps`). Exactly one bundle per package, or RED.
           stage="$RUNNER_TEMP/module-bundles"; rm -rf "$stage"
-          for mapping in AI=MeshWeaver.AI Essentials=MeshWeaver.Markdown.Collaboration Maps=MeshWeaver.Maps Stripe=MeshWeaver.Payments.Stripe; do
+          for mapping in "${mappings[@]}"; do
             pkg="${mapping%%=*}"; module="${mapping#*=}"
             found=$(find "$out" -maxdepth 1 -iname "$pkg.module.nupkg")
             [ "$(printf '%s' "$found" | grep -c . || true)" = "1" ] || { echo "::error::the sealed plugins publication for $identity yielded $(printf '%s' "$found" | grep -c . || true) bundle(s) for $pkg, expected exactly 1"; exit 1; }
