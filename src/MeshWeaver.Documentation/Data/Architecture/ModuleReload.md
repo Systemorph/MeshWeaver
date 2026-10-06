@@ -108,8 +108,25 @@ kinds of red apart:
 
 | status | what produced it | final? |
 |---|---|---|
-| `Failed` | a DECIDED answer: a floor above the running platform, no installed module of that name, a refused bundle, a replica that loads the wrong version after activation, a request not written by System, a host with no restart path | yes — asking again would get the same answer |
-| `Faulted` | a CRASH: an exception in the landing or restart step, a registry that could not be asked (e.g. a 503), a module-set proposal that faulted, a reconcile lane that was shutting down — any item whose `transient` flag is set (`ModuleAdoptOutcome.Transient`) | **never** — retried |
+| `Failed` | a DECIDED answer: a floor above the running platform, no installed module of that name, a refused bundle, a bundle the registry answers 404 / 401 / 403 for, a bundle whose bytes fail their digest, a replica that loads the wrong version after activation, a request not written by System, an install with no restart path (`ModuleRestartKinds.Unavailable`) | yes — asking again would get the same answer |
+| `Faulted` | a CRASH or an answer that may clear on its own: an exception in the landing or restart step, a registry index or a bundle download that answers 5xx (500, 502, 503, 504), 408 or 429, a transfer that timed out or whose connection was reset or refused, a module-set proposal that faulted, a reconcile lane that was shutting down, a restart attempt whose hand-over failed or whose call threw (`ModuleRestartKinds.Faulted`) — any item whose `transient` flag is set (`ModuleAdoptOutcome.Transient`) | **never** — retried |
+
+**Which answers are transient is decided in ONE place**, `TransientRegistryFailure`
+(`MeshWeaver.PluginCatalog`): a status is transient when it is 5xx, 408 or 429 (the conventional
+transient-HTTP set); a fault is transient when it carries such a status or never reached an answer
+(a timeout, a reset or refused connection, a DNS or socket failure) and decided when it is a digest
+mismatch or a definite refusal. Every download path — the HTTP bundle route and the OCI artifact path
+— asks it; a second copy of the set is how a bundle download answering 503 once read as a final
+`Failed`. Pinned by `ModuleReloadTransientDownloadTest` (503 → `Faulted` → the next pass retries and
+lands; 429, 502, 504 and a timeout → `Faulted`; 404 and 403 → `Failed`, never retried) and
+`PluginBundleArtifactFetchTest` (the same split on the artifact path; a tampered layer → decided).
+
+**The restart lane draws the same line.** `ModuleRestartKinds.Unavailable` means this install
+CANNOT restart at all (no updater that can roll, no control inbox configured) — a configuration
+answer, `Failed`. `ModuleRestartKinds.Faulted` means the path exists and this attempt failed (the
+hand-over to the control lane was refused or unreachable, `SelfUpdateOutcome.RestartHandoverFailed`;
+or the restart call threw) — `Faulted`, and the retry asks for the restart again
+(`ModuleReloadRestartAttemptTest`).
 
 A request with several modules is `Faulted` when ANY failing module crashed: that module's answer is
 still unknown (`ModuleReload.OutcomeOf`).
@@ -212,10 +229,6 @@ modules; the sync-owned hold on the module lane was.
 - **A restart that never comes.** A restart handed to the control lane that the control plane never
   executes leaves the request `AwaitingRestart` with the hand-over sentence on it — visible, not
   retried (it did not crash; it is waiting).
-- **Every crash is classified.** `Faulted` covers the exceptions caught in the executor and in the
-  registry/landing calls it makes. A bundle download that answers a transient error as a `Kind`
-  (`the bundle X could not be fetched (…)`) is still reported as a decided `Failed`; a restart lane
-  that answers "not scheduled" is `Failed` too.
 - **The Plugins self-update intake only files and logs.** `FleetTargetIntake` (MeshWeaver.Plugins,
   `Hosting/PlatformBuildInbox/Source/FleetTargetIntake.cs`) never decides a request's fate from its
   status. `RequestRefresh` only files a request; the node id `selfupdate-{module}-{version}` is the

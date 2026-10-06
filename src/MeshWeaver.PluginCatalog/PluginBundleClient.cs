@@ -493,6 +493,9 @@ public sealed class PluginBundleClient
                                     {
                                         Failure = $"the bundle {advertised.Version} could not be fetched ({result.Kind})"
                                                   + (string.IsNullOrWhiteSpace(result.Reason) ? "" : $": {result.Reason}"),
+                                        // A 503/429/timeout is a fault that clears on its own (Faulted,
+                                        // retried); a 404/403 or a refused artifact is decided (Failed).
+                                        Transient = result.Transient,
                                     })
                                 : LandFromBundleOutcome(
                                         pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
@@ -710,7 +713,13 @@ public sealed class PluginBundleClient
     /// collapsed "404 for this lane" and "the registry is down" into the same null, and the caller
     /// then collapsed that into the same 0 as a successful adoption.
     /// </summary>
-    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
+    /// <param name="Bytes">The bundle, or null when there is none.</param>
+    /// <param name="Kind">Why there are none (or <see cref="BundleAdoptionKind.Adopted"/>).</param>
+    /// <param name="Reason">The registry's or the transport's own words.</param>
+    /// <param name="Transient">The miss may clear on its own — a 503, 429, timeout or reset
+    /// (<see cref="TransientRegistryFailure"/>) — so a reload that met it is <c>Faulted</c> and
+    /// retried, never a final <c>Failed</c> (MeshWeaver#6172).</param>
+    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null, bool Transient = false);
 
     /// <summary>
     /// The bytes of <paramref name="bundle"/>: from the fleet's OCI registry by digest when the
@@ -791,7 +800,8 @@ public sealed class PluginBundleClient
                 "Bundle fetch for {Plugin}@{Version} from {Artifact} failed — {Consequence}. Cause: {Cause}",
                 pluginId, version, artifact, MissConsequence("will compile"), ex.Message);
             return Observable.Return(new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                $"artifact fetch from {artifact} failed: {ex.Message}"));
+                $"artifact fetch from {artifact} failed: {ex.Message}",
+                Transient: TransientRegistryFailure.IsTransient(ex)));
         });
     }
 
@@ -837,7 +847,8 @@ public sealed class PluginBundleClient
                     "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
                     pluginId, version, (int)receipt.Status, MissConsequence("will compile"));
                 return new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                    $"HTTP {(int)receipt.Status} from {_registryUrl}");
+                    $"HTTP {(int)receipt.Status} from {_registryUrl}",
+                    Transient: TransientRegistryFailure.IsTransient(receipt.Status));
             }
 
             // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence made #4528

@@ -233,7 +233,11 @@ public static class ModuleReloadExecutor
                         .SelectMany(_ => restart.RequestRestart(reason).Take(1))
                         .SelectMany(outcome => outcome.Scheduled
                             ? Write(r => r with { ActivationDetail = $"{outcome.Kind}: {outcome.Detail}" }, Line($"restart {outcome.Kind}: {outcome.Detail}"))
-                            : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
+                            // A failed attempt on a restart path that exists is transient — Faulted,
+                            // retried; only "this install cannot restart" is decided (#6172).
+                            : string.Equals(outcome.Kind, ModuleRestartKinds.Faulted, StringComparison.Ordinal)
+                                ? Fault($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")
+                                : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
                 .Catch((Exception ex) => Fault($"the restart request faulted: {ex.Message}"));
         }
 

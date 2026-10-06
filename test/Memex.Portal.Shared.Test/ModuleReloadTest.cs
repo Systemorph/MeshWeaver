@@ -303,6 +303,10 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
 
     protected virtual IModuleLiveActivation? LiveActivation => null;
 
+    /// <summary>The restart lane, when a test needs one that answers on its own terms; null takes the
+    /// real self-updater over <see cref="RecordingUpdater"/>.</summary>
+    protected virtual IModuleActivationRestart? RestartLane => null;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         Directory.CreateDirectory(landingRoot);
@@ -325,7 +329,7 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
                         LoadedGenerations = () => loaded,
                         LoadedNames = () => loaded.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
                     })
-                    .AddSingleton<IModuleActivationRestart>(sp => new SelfUpdateHostedService(
+                    .AddSingleton<IModuleActivationRestart>(sp => RestartLane ?? new SelfUpdateHostedService(
                         sp.GetRequiredService<IMessageHub>(), new NoTags(), Updater, new SelfUpdateOptions()));
                 if (LiveActivation is { } live)
                     services.AddSingleton(live);
@@ -473,6 +477,13 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
         /// <summary>The package whose bundle download crashes (throws), or null for none.</summary>
         public string? CrashDownloadOf { get; set; }
 
+        /// <summary>When set, the bundle DOWNLOAD answers this status instead of the bytes — the index
+        /// still advertises the version, so the reload reaches the download and meets the answer.</summary>
+        public HttpStatusCode? DownloadStatus { get; set; }
+
+        /// <summary>When true, the bundle download times out (the transfer never reaches an answer).</summary>
+        public bool DownloadTimesOut { get; set; }
+
         public bool Serves(string host) => string.Equals(host, RegistryHost, StringComparison.OrdinalIgnoreCase);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -512,6 +523,13 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
                 // the adopt reports it as transient — what a reload must treat as Faulted.
                 if (string.Equals(plugin, CrashDownloadOf, StringComparison.Ordinal))
                     throw new HttpRequestException($"the connection to the registry was reset while downloading {plugin}");
+                if (DownloadTimesOut)
+                    throw new TimeoutException($"the download of {plugin} timed out");
+                if (DownloadStatus is { } status)
+                    return Task.FromResult(new HttpResponseMessage(status)
+                    {
+                        Content = new StringContent($"answered {(int)status}", Encoding.UTF8, "text/plain"),
+                    });
                 var module = plugin == SecondPackage ? SecondModule : Module;
                 ImmutableInterlocked.Update(ref downloads, d => d.Add(version));
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Bundle(plugin, module, version, floor)) });
@@ -888,6 +906,172 @@ public class ModuleReloadFaultedBesideActivationTest(ITestOutputHelper output) :
             ImmutableInterlocked.Update(ref swapped, s => s.Add(module));
             OnSwap?.Invoke(module);
             return Observable.Return(new ModuleReloadSwapOutcome(true));
+        });
+    }
+}
+
+/// <summary>
+/// 🚨 <b>A transient DOWNLOAD answer is Faulted, never Failed</b> (MeshWeaver#6172). The index
+/// advertises N+1 and the bundle download itself answers: a 503, 429, 502, 504 or a timeout may
+/// clear on its own, so the reload records <see cref="ModuleReloadStatus.Faulted"/> and the next
+/// reconcile pass retries it; a 404 or 403 is the registry's decided answer, so the reload is
+/// <see cref="ModuleReloadStatus.Failed"/> and never retried. The classification lives in ONE place
+/// (<see cref="TransientRegistryFailure"/>).
+/// </summary>
+public class ModuleReloadTransientDownloadTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private static readonly TimeSpan PassInterval = TimeSpan.FromMinutes(30);
+
+    /// <summary>The instance runs 1.1.0, the index advertises 1.2.0, and the DOWNLOAD meets
+    /// <paramref name="download"/>'s answer. Returns the request's path and its first settled state.</summary>
+    private async Task<(string Path, ModuleReloadRequest Settled)> ReloadMeeting(Action<ReloadRegistry> download, CancellationToken ct)
+    {
+        await RunningVersionOne(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        download(Registry);
+        var path = await Reload(ct);
+        var settled = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted
+                                                    || r.Status == ModuleReloadStatus.AwaitingRestart
+                                                    || ModuleReloadStatus.IsTerminal(r.Status), ct);
+        return (path, settled);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ADownloadAnswering503_IsFaulted_TheNextPassRetriesIt_AndItLands()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, faulted) = await ReloadMeeting(r => r.DownloadStatus = HttpStatusCode.ServiceUnavailable, ct);
+
+        faulted.Status.Should().Be(ModuleReloadStatus.Faulted, "a 503 may clear on its own: " + (faulted.Failure ?? ""));
+        faulted.Failure.Should().Contain("503");
+        faulted.Items.Single().Transient.Should().BeTrue();
+        faulted.CompletedAt.Should().BeNull("a fault is not an end");
+        var faultedAt = faulted.FaultedAt ?? throw new InvalidOperationException("a Faulted request carries FaultedAt");
+
+        // The registry recovers; the next due pass re-arms the request and it lands N+1.
+        Registry.DownloadStatus = null;
+        (await ModuleReload.RetryFaulted(Mesh, PassInterval, faultedAt + PassInterval)
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([path]);
+
+        var landed = await AwaitRequest(path,
+            r => r.Attempt == 1 && (r.Status == ModuleReloadStatus.AwaitingRestart || ModuleReloadStatus.IsTerminal(r.Status)), ct);
+        landed.Status.Should().Be(ModuleReloadStatus.AwaitingRestart, landed.Failure ?? "");
+        landed.Items.Single().TargetVersion.Should().Be("1.2.0");
+        landed.Items.Single().Failure.Should().BeNull();
+        Registry.Downloads.Should().Contain("1.2.0", "the retry fetched the bundle the 503 withheld");
+    }
+
+    [Theory(Timeout = 240_000)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.BadGateway)]
+    [InlineData(HttpStatusCode.GatewayTimeout)]
+    public async Task ADownloadAnsweringAStatusThatMayClear_IsFaulted(HttpStatusCode status)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, end) = await ReloadMeeting(r => r.DownloadStatus = status, ct);
+
+        end.Status.Should().Be(ModuleReloadStatus.Faulted, $"{(int)status} may clear on its own: {end.Failure}");
+        end.Items.Single().Transient.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ADownloadThatTimesOut_IsFaulted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, end) = await ReloadMeeting(r => r.DownloadTimesOut = true, ct);
+
+        end.Status.Should().Be(ModuleReloadStatus.Faulted, "a timeout never reached an answer: " + (end.Failure ?? ""));
+        end.Items.Single().Transient.Should().BeTrue();
+    }
+
+    [Theory(Timeout = 240_000)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ADownloadAnsweringADecidedStatus_IsFailed_AndNeverRetried(HttpStatusCode status)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, end) = await ReloadMeeting(r => r.DownloadStatus = status, ct);
+
+        end.Status.Should().Be(ModuleReloadStatus.Failed, $"{(int)status} is the registry's decided answer: {end.Failure}");
+        end.Items.Single().Transient.Should().BeFalse();
+        (await ModuleReload.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow.AddDays(1))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("a decided failure is final — retrying it would get the same answer");
+        var after = await AwaitRequest(path, _ => true, ct);
+        after.Status.Should().Be(ModuleReloadStatus.Failed);
+        after.Attempt.Should().Be(0);
+    }
+}
+
+/// <summary>
+/// 🚨 <b>A failed restart ATTEMPT is Faulted; "this install cannot restart" is Failed</b>
+/// (MeshWeaver#6172). The restart lane answers <see cref="ModuleRestartKinds.Faulted"/> when the
+/// path exists but this attempt failed (a refused or unreachable hand-over, a call that threw) —
+/// retried — and <see cref="ModuleRestartKinds.Unavailable"/> when the install has no way to
+/// restart at all, which a retry would answer identically.
+/// </summary>
+public class ModuleReloadRestartAttemptTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private readonly ScriptedRestart lane = new();
+
+    protected override IModuleActivationRestart? RestartLane => lane;
+
+    [Fact(Timeout = 240_000)]
+    public async Task AFailedRestartAttempt_IsFaulted_AndTheRetryAsksAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        lane.Answers = [ModuleRestartKinds.Faulted, ModuleRestartKinds.Restarted];
+
+        var path = await Reload(ct);
+        var faulted = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted || ModuleReloadStatus.IsTerminal(r.Status), ct);
+        faulted.Status.Should().Be(ModuleReloadStatus.Faulted, "a failed hand-over may get through next time: " + (faulted.Failure ?? ""));
+        faulted.Failure.Should().Contain(ModuleRestartKinds.Faulted);
+        var faultedAt = faulted.FaultedAt ?? throw new InvalidOperationException("a Faulted request carries FaultedAt");
+
+        (await ModuleReload.RetryFaulted(Mesh, TimeSpan.FromMinutes(30), faultedAt + TimeSpan.FromMinutes(30))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([path]);
+        // AwaitingRestart is written BEFORE the lane is asked; the lane's answer lands on ActivationDetail.
+        var waiting = await AwaitRequest(path, r => r.Attempt == 1 && r.Status == ModuleReloadStatus.AwaitingRestart
+                                                    && r.ActivationDetail?.StartsWith(ModuleRestartKinds.Restarted) == true, ct);
+        waiting.Failure.Should().BeNull();
+        lane.Asked.Should().Be(2, "the retry asks for the restart again — the failed attempt delivered nothing");
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task AnInstallThatCannotRestart_IsFailed_AndNeverRetried()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        lane.Answers = [ModuleRestartKinds.Unavailable];
+
+        var path = await Reload(ct);
+        var end = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted || ModuleReloadStatus.IsTerminal(r.Status), ct);
+        end.Status.Should().Be(ModuleReloadStatus.Failed, "no restart path is a decided answer: " + (end.Failure ?? ""));
+        (await ModuleReload.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow.AddDays(1))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty();
+        lane.Asked.Should().Be(1);
+    }
+
+    /// <summary>A restart lane that answers a scripted kind per call (the last one repeats).</summary>
+    private sealed class ScriptedRestart : IModuleActivationRestart
+    {
+        private int asked;
+
+        public ImmutableList<string> Answers { get; set; } = [ModuleRestartKinds.Restarted];
+
+        public int Asked => Volatile.Read(ref asked);
+
+        public IObservable<ModuleRestartOutcome> RequestRestart(string reason) => Observable.Defer(() =>
+        {
+            var n = Interlocked.Increment(ref asked) - 1;
+            var kind = Answers[Math.Min(n, Answers.Count - 1)];
+            return Observable.Return(new ModuleRestartOutcome(kind, $"scripted answer {n + 1}: {kind}"));
         });
     }
 }

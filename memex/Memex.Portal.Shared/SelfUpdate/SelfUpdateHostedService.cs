@@ -475,11 +475,15 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 {
                     SelfUpdateOutcome.Restarted => ModuleRestartKinds.Restarted,
                     SelfUpdateOutcome.RestartHandedOver => ModuleRestartKinds.HandedOver,
+                    // The mechanism exists and the attempt failed — transient, retried (#6172).
+                    SelfUpdateOutcome.RestartHandoverFailed => ModuleRestartKinds.Faulted,
                     _ => ModuleRestartKinds.Unavailable,
                 },
                 verdict.Message))
+            // A restart call that THREW (a Kubernetes API blip, a timeout) is a crash, never a
+            // decided "cannot restart" — the reload records it Faulted and retries (#6172).
             .Catch((Exception ex) => Observable.Return(new ModuleRestartOutcome(
-                ModuleRestartKinds.Unavailable, $"the restart request faulted: {ex.Message}")));
+                ModuleRestartKinds.Faulted, $"the restart request faulted: {ex.Message}")));
 
     /// <summary>
     /// 🚨 <see cref="IInstanceRebootActivation.SelectImage"/> — the reboot's Image step
@@ -729,6 +733,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                      // A release this install could neither apply nor hand over is a delivery that
                      // stopped (#4098) — the pairing or the inbox is what an operator has to look at.
                      or SelfUpdateOutcome.HandoverFailed
+                     or SelfUpdateOutcome.RestartHandoverFailed
                      || verdict.UnresolvedInstalledTag is not null)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else

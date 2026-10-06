@@ -50,6 +50,8 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.RestartHandedOver, false)]
     // A module that went LIVE was already landed here — nothing newer was waiting in the registry.
     [InlineData(SelfUpdateOutcome.ActivatedLive, false)]
+    // A restart hand-over that failed activates an already-landed module — nothing newer was waiting.
+    [InlineData(SelfUpdateOutcome.RestartHandoverFailed, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -87,6 +89,8 @@ public class SelfUpdateVerdictTest
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)"),
             SelfUpdateVerdict.ActivatedLive(
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "went live without a restart: MeshWeaver.Test.Widget"),
+            SelfUpdateVerdict.RestartHandoverFailed(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "the control inbox was unreachable"),
         ];
 
         Assert.Equal(
@@ -367,6 +371,21 @@ public class SelfUpdateVerdictTest
         Assert.Equal(SelfUpdateOutcome.RestartUnavailable, verdict.Outcome);
         Assert.Contains("does not self-patch", verdict.Message, StringComparison.Ordinal);
         Assert.Contains("kubectl rollout restart", verdict.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 A FAILED restart hand-over is its own outcome, not <see cref="SelfUpdateOutcome.RestartUnavailable"/>
+    /// (MeshWeaver#6172): the restart path exists and this attempt failed, so a module reload retries
+    /// it (Faulted) instead of ending (Failed). The message still names the cause.
+    /// </summary>
+    [Fact]
+    public void ARestartHandoverFailure_IsItsOwnOutcome_NamingTheCause()
+    {
+        var verdict = SelfUpdateVerdict.RestartHandoverFailed(UpToDate, "3.0.0", "the control inbox was unreachable");
+
+        Assert.Equal(SelfUpdateOutcome.RestartHandoverFailed, verdict.Outcome);
+        Assert.Contains("the hand-over to the control lane failed: the control inbox was unreachable",
+            verdict.Message, StringComparison.Ordinal);
     }
 
     /// <summary>A restart taken on the recovery path keeps the strand visible: the withdrawn
