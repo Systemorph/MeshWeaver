@@ -232,11 +232,6 @@ public class ModulePlatformSurfaceJsonTest
             [CSharpSyntaxTree.ParseText(source)],
             platform,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var buffer = new MemoryStream();
-        var result = compilation.Emit(buffer);
-        Assert.True(result.Success, string.Join(
-            Environment.NewLine,
-            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        return buffer.ToArray();
+        return StandInCompile.Emit(compilation);
     }
 }
