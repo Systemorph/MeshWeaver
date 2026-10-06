@@ -442,7 +442,11 @@ public sealed class GitHubSyncService
                 return FetchAndImport(repoUrl, commitish, config.Subdirectory, token, spacePath,
                         SyncIgnore.For(config), progress, policy,
                         baseSha: force ? null : config.LastSyncCommitSha,
-                        heldModuleVersions: config.ModuleVersions)
+                        heldModuleVersions: config.ModuleVersions,
+                        // A source that already retired its deleted folder under THIS configuration
+                        // stays retired on later commits, whose diff from the retirement commit is
+                        // empty — the one fact the git proof cannot re-derive (SourceRetirement).
+                        previouslyRetired: IsRetiredUnderCurrentConfig(config))
                     // 🚨 A REFUSAL IS A CONCLUSION, AND EVERY CONCLUSION RECORDS ITSELF (#3581).
                     // The empty-subdirectory refusal below was the one branch that escaped that
                     // rule: it logged, it threw, and it wrote NOTHING to the config node — so from
@@ -575,7 +579,7 @@ public sealed class GitHubSyncService
                                 // wait for their bundle — both are drift the sync cannot close by
                                 // itself, stated where the settings tab and the status surface read
                                 // it rather than only in the activity log.
-                                note: Notes(HeldNote(x.Result), BundleHeldNote(x.Hold), ModuleDeclinedNote(x.Modules)),
+                                note: Notes(RetiredNote(x.Result), HeldNote(x.Result), BundleHeldNote(x.Hold), ModuleDeclinedNote(x.Modules)),
                                 // 🚨 #3945 — the SECOND, weaker pointer, and the whole reason it is
                                 // a second one. "We have already looked at exactly these bytes" is
                                 // not "the mesh holds this commit", and one field answering both is
@@ -845,7 +849,8 @@ public sealed class GitHubSyncService
     private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
         SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
-        string? baseSha = null, IReadOnlyDictionary<string, string>? heldModuleVersions = null)
+        string? baseSha = null, IReadOnlyDictionary<string, string>? heldModuleVersions = null,
+        bool previouslyRetired = false)
     {
         // 🚨 #6067 follow-up — what this process RUNS for each package, read once per import, so a
         // package whose declared dependency floor the loaded build does not meet is declined below
@@ -865,25 +870,116 @@ public sealed class GitHubSyncService
             // genuinely empty repo (no subdirectory) is a legitimate first-sync state.
             if (snapshot.Files.Count == 0 && !string.IsNullOrWhiteSpace(subdirectory))
             {
-                var message =
-                    $"No files found under subdirectory '{subdirectory.Trim().Trim('/')}' at "
-                    + $"{Short(snapshot.CommitSha)} in {repoUrl}. Refusing to import an empty snapshot — "
-                    + "it would prune the whole Space. Check the subdirectory (including its exact "
-                    + "capitalisation — git paths are case-sensitive) on the sync source.";
-                logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
-                progress?.Invoke(message, LogLevel.Error);
-                // 🚨 TYPED so the caller can RECORD this conclusion without matching on the message
-                // text (#4499). It derives from InvalidOperationException, so anything that already
-                // catches that keeps behaving exactly as before.
-                return Observable.Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(
-                    new SyncSubdirectoryEmptyException(message)
-                    {
-                        // The commit the listing was READ at, and whether that listing was whole —
-                        // together what makes the recorded refusal a final verdict (#4499).
-                        CommitSha = snapshot.CommitSha,
-                        ListingIsComplete = snapshot.ListingIsComplete,
-                    });
+                // 🚨 …UNLESS GIT SAYS THE FOLDER WAS DELETED (Doc/Architecture/SourceRetirement). An
+                // empty listing is ALSO what a renamed or removed package produces, and refusing it
+                // forever left every node the package had imported live — DeepSign's menu entries sat
+                // beside their Signature replacements on both production meshes for weeks. The two are
+                // told apart by the last commit this source IMPORTED: if the folder had files there
+                // and has none now, git deleted it — a retirement, not a typo. A typo has no files at
+                // either commit, so it is still refused.
+                return SourceRetiredSince(repoUrl, baseSha, snapshot, subdirectory, token, previouslyRetired)
+                    .SelectMany(retired => retired
+                        ? RetireDeletedSource(spaceId, snapshot.CommitSha, subdirectory, progress)
+                        : RefuseEmptySnapshot(repoUrl, snapshot, subdirectory, spaceId, progress));
             }
+            return ImportSnapshot(repoUrl, snapshot, read.Loaded, subdirectory, token, spaceId, ignore,
+                progress, policy, baseSha, heldModuleVersions);
+        });
+    }
+
+    /// <summary>
+    /// Whether the configured subdirectory, empty at <paramref name="snapshot"/>, was DELETED in the
+    /// repository rather than never there. True when the source already recorded the retirement
+    /// under this configuration, or when the folder HAD files at the last commit this source
+    /// imported (<paramref name="baseSha"/>) — a typo has none at either commit. False — refuse —
+    /// whenever that cannot be shown: no base (a first import), an incomplete listing at either
+    /// commit, or a read that faults. Every unknown answers "refuse", the direction that deletes
+    /// nothing.
+    /// </summary>
+    private IObservable<bool> SourceRetiredSince(
+        string repoUrl, string? baseSha, RepoSnapshot snapshot, string subdirectory, string token,
+        bool previouslyRetired)
+    {
+        if (!snapshot.ListingIsComplete)
+            return Observable.Return(false);
+        if (previouslyRetired)
+            return Observable.Return(true);
+        if (string.IsNullOrEmpty(baseSha)
+            || string.Equals(baseSha, snapshot.CommitSha, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(false);
+        // A READ of the folder at the base commit, not a diff: the production client answers every
+        // GetChangedPaths with null (it is not forwarded to the compare API), which would make this
+        // proof unreachable exactly where it is needed. A fetch at a sha is what every sync already
+        // does; this one runs only on the rare empty-subdirectory path.
+        return repoClient.Fetch(repoUrl, baseSha, subdirectory, token)
+            .Take(1)
+            .Select(atBase => atBase.ListingIsComplete && atBase.Files.Count > 0)
+            .DefaultIfEmpty(false)
+            .Catch((Exception exception) =>
+            {
+                logger?.LogWarning(exception,
+                    "[GitSync] could not read '{Subdirectory}' at the last imported commit {Base} in {Repo} — "
+                    + "the empty subdirectory at {Head} is refused rather than read as a deletion.",
+                    subdirectory, Short(baseSha), repoUrl, Short(snapshot.CommitSha));
+                return Observable.Return(false);
+            });
+    }
+
+    /// <summary>
+    /// Retires what a deleted source folder imported (<see cref="StaticRepoImporter.RetireSource"/>)
+    /// and answers it in the import's own shape, so the caller records it like any other conclusion.
+    /// </summary>
+    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> RetireDeletedSource(
+        string spaceId, string commitSha, string subdirectory, Action<string, LogLevel>? progress)
+    {
+        var folder = subdirectory.Trim().Trim('/');
+        logger?.LogWarning(
+            "[GitSync] {Space}: the repository no longer carries '{Subdirectory}' at {Sha} — retiring the "
+            + "nodes this source imported.", spaceId, folder, Short(commitSha));
+        return StaticRepoImporter.RetireSource(hub, spaceId, $"{spaceId} source retired at {Short(commitSha)}", logger)
+            .Do(result => progress?.Invoke(
+                $"The repository no longer carries '{folder}' at {Short(commitSha)}: retired "
+                + $"{result.PrunedPaths.Count} node(s) this source had imported"
+                + (result.HeldNodeTypePaths.Count > 0
+                    ? $", holding {result.HeldNodeTypePaths.Count} NodeType(s) that still have instances."
+                    : "."),
+                LogLevel.Information))
+            .Select(result => (result, commitSha, BundleHoldDecision.Nothing, ImmutableList<ModuleSyncOutcome>.Empty));
+    }
+
+    /// <summary>The refusal of an empty snapshot under a configured subdirectory (#1326, #4499).</summary>
+    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> RefuseEmptySnapshot(
+        string repoUrl, RepoSnapshot snapshot, string subdirectory, string spaceId,
+        Action<string, LogLevel>? progress)
+    {
+        var message =
+            $"No files found under subdirectory '{subdirectory.Trim().Trim('/')}' at "
+            + $"{Short(snapshot.CommitSha)} in {repoUrl}. Refusing to import an empty snapshot — "
+            + "it would prune the whole Space. Check the subdirectory (including its exact "
+            + "capitalisation — git paths are case-sensitive) on the sync source.";
+        logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
+        progress?.Invoke(message, LogLevel.Error);
+        // 🚨 TYPED so the caller can RECORD this conclusion without matching on the message
+        // text (#4499). It derives from InvalidOperationException, so anything that already
+        // catches that keeps behaving exactly as before.
+        return Observable.Throw<(StaticRepoImportResult, string, BundleHoldDecision, ImmutableList<ModuleSyncOutcome>)>(
+            new SyncSubdirectoryEmptyException(message)
+            {
+                // The commit the listing was READ at, and whether that listing was whole —
+                // together what makes the recorded refusal a final verdict (#4499).
+                CommitSha = snapshot.CommitSha,
+                ListingIsComplete = snapshot.ListingIsComplete,
+            });
+    }
+
+    /// <summary>Imports a fetched, non-empty (or subdirectory-less) snapshot — the ordinary path.</summary>
+    private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> ImportSnapshot(
+        string repoUrl, RepoSnapshot snapshot, ImmutableDictionary<string, LoadedPackageModule> loaded,
+        string? subdirectory, string token, string spaceId, SyncIgnore ignore,
+        Action<string, LogLevel>? progress, ImportConflictPolicy? policy, string? baseSha,
+        IReadOnlyDictionary<string, string>? heldModuleVersions)
+    {
+        {
             // 🚨 EVERY MODULE SYNCS, JUDGED ALONE BY ITS MANIFEST HASH (policy
             // module-sync-per-manifest-hash; Doc/Architecture/ModuleSyncPerManifestHash). This
             // replaces the whole-Space hold the sealed-publication gate used to take BEFORE the
@@ -899,7 +995,7 @@ public sealed class GitHubSyncService
                     PrebuiltAdoptionPolicy.RunningPlatformVersion,
                     reconcile: policy is { Force: true } or { Reconcile: true }),
                 readings,
-                read.Loaded);
+                loaded);
             var notWritten = modules
                 .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
                 .ToList();
@@ -1015,7 +1111,7 @@ public sealed class GitHubSyncService
                                     Hold: hold,
                                     Modules: modules));
                         })));
-        });
+        }
     }
 
     /// <summary>
@@ -1536,6 +1632,38 @@ public sealed class GitHubSyncService
     /// for an unbounded duration, with nothing but a log line to show for it).</para>
     /// </summary>
     public const string RefusedOutcome = "Refused";
+
+    /// <summary>
+    /// A source whose subdirectory the repository DELETED — proven from git, not inferred from an
+    /// empty listing — and whose imported nodes were therefore retired
+    /// (<see cref="StaticRepoImporter.RetireSource"/>; <c>Doc/Architecture/SourceRetirement</c>).
+    /// The same word as <see cref="StaticRepoImporter.RetiredOutcome"/>, which the import result
+    /// carries and this records.
+    /// </summary>
+    public const string RetiredOutcome = StaticRepoImporter.RetiredOutcome;
+
+    /// <summary>
+    /// Whether <paramref name="config"/> recorded a retirement under the configuration it carries
+    /// NOW — so a corrected or re-pointed subdirectory is judged afresh instead of inheriting it.
+    /// Pure.
+    /// </summary>
+    /// <param name="config">The source configuration.</param>
+    internal static bool IsRetiredUnderCurrentConfig(GitHubSyncConfig config)
+        => string.Equals(config.LastSyncOutcome, RetiredOutcome, StringComparison.Ordinal)
+           && string.Equals(config.LastAttemptedConfigFingerprint, SourceFingerprint(config), StringComparison.Ordinal);
+
+    /// <summary>
+    /// The <see cref="GitHubSyncConfig.LastSyncNote"/> a retirement earns: what went and what is
+    /// left for a person to decide. <c>null</c> for every other outcome. Pure.
+    /// </summary>
+    /// <param name="result">The import's outcome.</param>
+    internal static string? RetiredNote(StaticRepoImportResult result)
+        => !string.Equals(result.Outcome, RetiredOutcome, StringComparison.Ordinal)
+            ? null
+            : $"The repository no longer carries this source's folder: {result.PrunedPaths.Count} node(s) "
+              + "it had imported were retired on this pass. The partition root and this sync source remain — "
+              + "if the package is gone for good, remove it through the Store's governed removal "
+              + "(Provision → Remove); if the folder returns, the next sync imports it again.";
 
     /// <summary>
     /// Records that this source was HELD from advancing, and why — onto the config, so the reason

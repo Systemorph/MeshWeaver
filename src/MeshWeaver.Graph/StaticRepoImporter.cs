@@ -853,6 +853,143 @@ public static class StaticRepoImporter
         return Import(importHub, source, logger, policy: policy, changedNodePaths: changedNodePaths);
     }
 
+    /// <summary>The <see cref="StaticRepoImportResult.Outcome"/> of <see cref="RetireSource"/>.</summary>
+    public const string RetiredOutcome = "Retired";
+
+    /// <summary>
+    /// 🚨 <b>The source DELETED the whole folder this partition mirrors</b> — retire what the source
+    /// put here, exactly as a per-file deletion prunes one node (<c>Doc/Architecture/SourceRetirement</c>).
+    ///
+    /// <para><b>Why it exists.</b> Deleting 24 of a package folder's 25 files pruned 24 nodes; deleting
+    /// all 25 pruned NOTHING, because the caller refuses an empty snapshot (#1326 — an empty listing
+    /// is also what a mistyped subdirectory produces) and <see cref="Import"/> derives the partitions
+    /// it reads from the source's own nodes, of which an empty source has none. So a RENAMED or
+    /// REMOVED package left every node it had imported live for good: DeepSign's two menu
+    /// contributions stayed in every node's ⋯ More beside their Signature replacements on both
+    /// production meshes. The caller proves the deletion from git before calling this (the folder had
+    /// files at the last commit this source imported), which is what separates a retirement from a
+    /// typo.</para>
+    ///
+    /// <para><b>What is removed is exactly what the prune would remove</b> —
+    /// <see cref="ComputePrunableNodes"/> with an empty source: PROVENANCE-gated (only paths the
+    /// source's import manifest records, so runtime data, release records and governance stay), a
+    /// partition decoupled with "sync: none" is left alone, and a NodeType that still has instances
+    /// anywhere on the mesh is HELD (<see cref="NodeTypeInstanceProbe"/>). Two differences, both
+    /// deliberate: the partition ROOT stays — deleting it is recursive and would take the sync source,
+    /// the access grants and every runtime node with it, which is the governed package removal's job,
+    /// not a sync's — and the instances the source itself shipped go FIRST, so a type whose only
+    /// instances were the package's own (a desk, a workspace) is not held by them.</para>
+    /// </summary>
+    /// <param name="meshHub">The mesh hub; the work runs on the dedicated import hub.</param>
+    /// <param name="partition">The partition whose source folder was deleted.</param>
+    /// <param name="retiredBy">Who retired it — the text a held type's pending-retirement stamp carries.</param>
+    /// <param name="logger">Optional logger; resolved from the hub when null.</param>
+    /// <returns>One result: <see cref="RetiredOutcome"/>, the pruned paths, and the NodeTypes held
+    /// for their instances (counted as <see cref="StaticRepoImportResult.Preserved"/>).</returns>
+    public static IObservable<StaticRepoImportResult> RetireSource(
+        IMessageHub meshHub, string partition, string retiredBy, ILogger? logger = null)
+    {
+        logger ??= meshHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.StaticRepoImporter");
+        var hub = CreateImportHub(meshHub, logger);
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return ProvisionPartitions(hub, [partition])
+            .SelectMany(_ => Observable.Zip(
+                // An ENUMERATION gating a delete — .Complete(), for the reason Run gives.
+                meshService.Query<MeshNode>(
+                        MeshQueryRequest.FromQuery($"path:{partition} scope:descendants").Complete())
+                    .Take(1)
+                    .Select(change => (IReadOnlyList<MeshNode>)change.Items.ToArray()),
+                ReadClaimedRoots(hub, [partition]),
+                ReadNodeManifest(hub, partition),
+                (existing, claimed, manifest) => (existing, claimed, manifest)))
+            .Take(1)
+            .SelectMany(read =>
+            {
+                var candidates = RetirementCandidates(partition, read.existing, read.manifest.Keys, read.claimed);
+                var typePaths = NodeTypeInstanceProbe.NodeTypePathsAmong(candidates);
+                bool UnderAType(MeshNode n) => typePaths.Any(t => IsAtOrUnder(n.Path, t));
+                var shipped = candidates.Where(n => !UnderAType(n)).ToArray();
+                var types = candidates.Where(UnderAType).ToArray();
+                logger?.LogInformation(
+                    "[StaticRepoImport] {Partition}: the source folder was deleted — retiring {Count} "
+                    + "node(s) the source imported ({Types} NodeType(s) among them).",
+                    partition, candidates.Count, typePaths.Count);
+                return DeleteTopmost(hub, partition, shipped, logger).SelectMany(prunedShipped =>
+                    NodeTypeInstanceProbe.Probe(hub, types, logger).SelectMany(held =>
+                    {
+                        var heldPaths = held.Select(h => h.NodeTypePath).ToImmutableList();
+                        NodeTypeInstanceProbe.Report(held, logger);
+                        return NodeTypeInstanceProbe.Hold(hub, held, retiredBy, logger)
+                            .SelectMany(_ => DeleteTopmost(hub, partition,
+                                NodeTypeInstanceProbe.WithoutHeld(types, heldPaths), logger))
+                            .Select(prunedTypes => new StaticRepoImportResult(
+                                partition, "retired", RetiredOutcome, 0, Preserved: held.Count)
+                            {
+                                PrunedPaths = prunedShipped.AddRange(prunedTypes),
+                                HeldNodeTypePaths = heldPaths,
+                            });
+                    }));
+            });
+    }
+
+    /// <summary>
+    /// The nodes a retired source leaves to be deleted: <see cref="ComputePrunableNodes"/> against an
+    /// EMPTY source (so every guard of the ordinary prune holds — provenance, governance, release
+    /// records, claimed roots), minus the partition root. Pure.
+    /// </summary>
+    /// <param name="partition">The partition being retired.</param>
+    /// <param name="existing">Its current nodes.</param>
+    /// <param name="previouslyOwnedPaths">The import manifest's keys — what the source put there.</param>
+    /// <param name="claimedRoots">Roots decoupled with "sync: none".</param>
+    public static IReadOnlyList<MeshNode> RetirementCandidates(
+        string partition, IEnumerable<MeshNode> existing, IEnumerable<string> previouslyOwnedPaths,
+        IEnumerable<string> claimedRoots)
+        => ComputePrunableNodes(
+            existing, [], previouslyOwnedPaths, claimedRoots, PartitionSyncMode.FullReplace,
+            isExcludedFromMirror: path => string.Equals(path, partition, StringComparison.OrdinalIgnoreCase),
+            listingIsComplete: true);
+
+    /// <summary>
+    /// Deletes the TOPMOST of <paramref name="nodes"/> as System — a delete is recursive, so a
+    /// candidate under another candidate goes with it — and answers the paths actually deleted. A
+    /// delete that fails is logged and left out, like the ordinary prune's.
+    /// </summary>
+    private static IObservable<ImmutableList<string>> DeleteTopmost(
+        IMessageHub hub, string partition, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
+    {
+        var topmost = nodes
+            .Where(n => !nodes.Any(other => !ReferenceEquals(other, n)
+                && !string.Equals(other.Path, n.Path, StringComparison.OrdinalIgnoreCase)
+                && IsAtOrUnder(n.Path, other.Path)))
+            .ToArray();
+        if (topmost.Length == 0)
+            return Observable.Return(ImmutableList<string>.Empty);
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return topmost
+            .Select(node => AsSystem(hub, () => meshService.DeleteNode(node.Path))
+                .Select(_ =>
+                {
+                    logger?.LogInformation(
+                        "[StaticRepoImport] {Partition}: retired {Path} (its source folder was deleted).",
+                        partition, node.Path);
+                    return (string?)node.Path;
+                })
+                .Catch<string?, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "[StaticRepoImport] {Partition}: retiring {Path} failed (continuing).",
+                        partition, node.Path);
+                    return Observable.Return<string?>(null);
+                }))
+            .ToObservable()
+            .MergeBounded(BatchSize)
+            .Where(p => p is not null)
+            .Select(p => p!)
+            .ToList()
+            .Select(list => list.ToImmutableList());
+    }
+
     /// <summary>
     /// Creates (or returns the existing) DEDICATED import hub — the reachable hosted hub the whole
     /// static-repo import runs on, so its bulk <see cref="CreateOrUpdateNodeRequest"/> /
