@@ -167,6 +167,11 @@ public class ImageCopyVersionDiscriminatorTest : IDisposable
             "a stamp describing another module must never decide for this one");
         Assert.Single(Boot()).Landed.Should().NotBeNull();
 
+        File.WriteAllText(Path.Combine(imageModuleDir, ImageModuleSeed.FileName),
+            $$"""{ "schema": "{{ImageModuleSeed.Schema}}", "version": "9.9.9" }""");
+        ImageModuleSeed.Read(imageModuleDir, Plugin).Should().BeNull(
+            "a stamp that names no module describes no module");
+
         File.WriteAllText(Path.Combine(imageModuleDir, ImageModuleSeed.FileName), "{ not json");
         ImageModuleSeed.Read(imageModuleDir, Plugin).Should().BeNull("unreadable states nothing");
     }

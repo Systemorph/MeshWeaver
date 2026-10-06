@@ -10,7 +10,7 @@ satellite that re-implements a piece drifts, and the next incident is measured t
 
 | Piece | Mechanism (this repo) | The caller carries |
 |---|---|---|
-| Validate node JSON + sources, workflow guards | `node-repo-validate.yml` | the call, `enforce-cancel-rule: true` |
+| Validate node JSON + sources, workflow guards, [no two files on one node path](../NodePathCollisions) | `node-repo-validate.yml` | the call, `enforce-cancel-rule: true` |
 | Compile-check against the platform surface | `node-repo-compile-check.yml` | the call |
 | The Tests-area gate (import + compile + render + run) | `node-repo-gate.yml` | the call, `permissions: actions: read` |
 | Module pack / publish / tag / bake / canary / ref-bump | `node-repo-*.yml` | the calls |

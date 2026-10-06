@@ -906,10 +906,15 @@ public sealed class GitHubSyncService
             var declined = modules.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
             foreach (var decline in declined)
                 logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
+            // Two declines, two remedies (#6111 review): a platform floor above the running
+            // platform waits for a roll; an unmet `requires` waits for its dependency to load.
             var declinedNames = declined
-                .Select(m => m.UnmetRequirement is { } requirement
-                    ? $"{m.Module} (requires {requirement})"
-                    : $"{m.Module} (≥ {m.Floor})")
+                .Where(m => m.UnmetRequirement is null)
+                .Select(m => $"{m.Module} (≥ {m.Floor})")
+                .ToImmutableList();
+            var unmetRequirementNames = declined
+                .Where(m => m.UnmetRequirement is not null)
+                .Select(m => $"{m.Module} (requires {m.UnmetRequirement})")
                 .ToImmutableList();
             // Nothing of this tree is written when every file sits under a module that is unchanged
             // or declined — the whole import is a no-op, and says which.
@@ -921,9 +926,10 @@ public sealed class GitHubSyncService
                     Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
                 var noop = new StaticRepoImportResult(spaceId,
                     "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
-                    declined.Count > 0 ? DeclinedOutcome : "Skipped")
+                    NoOpOutcome(declinedNames.Count, unmetRequirementNames.Count))
                 {
                     DeclinedModules = declinedNames,
+                    UnmetRequirementModules = unmetRequirementNames,
                 };
                 return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
             }
@@ -1003,6 +1009,7 @@ public sealed class GitHubSyncService
                                     {
                                         BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
                                         DeclinedModules = declinedNames,
+                                        UnmetRequirementModules = unmetRequirementNames,
                                     },
                                     snapshot.CommitSha,
                                     Hold: hold,
@@ -1465,6 +1472,27 @@ public sealed class GitHubSyncService
     /// <see cref="GitHubSyncConfig.ModuleOutcomes"/>.
     /// </summary>
     public const string DeclinedOutcome = "Declined";
+
+    /// <summary>
+    /// The outcome literal recorded when an import wrote NOTHING and every module it declined was
+    /// held on an unmet <c>requires</c> — a LOADED dependency below the stated range (an absent
+    /// dependency is not judged; that module syncs) — rather than
+    /// on a platform floor. Its remedy is loading a satisfying dependency, never rolling the
+    /// platform, so it is never recorded as <see cref="DeclinedOutcome"/>.
+    /// </summary>
+    public const string RequirementUnmetOutcome = "RequirementUnmet";
+
+    /// <summary>
+    /// The outcome of an import that wrote nothing: <see cref="DeclinedOutcome"/> when any module
+    /// was declined on its platform floor, <see cref="RequirementUnmetOutcome"/> when every decline
+    /// was an unmet requirement, otherwise <c>Skipped</c> (everything unchanged). Pure.
+    /// </summary>
+    /// <param name="floorDeclines">Modules declined on a platform floor.</param>
+    /// <param name="requirementDeclines">Modules held on an unmet requirement.</param>
+    internal static string NoOpOutcome(int floorDeclines, int requirementDeclines)
+        => floorDeclines > 0 ? DeclinedOutcome
+            : requirementDeclines > 0 ? RequirementUnmetOutcome
+            : "Skipped";
 
     /// <summary>
     /// The <see cref="GitHubSyncConfig.LastSyncNote"/> sentence for the modules an import declined —
