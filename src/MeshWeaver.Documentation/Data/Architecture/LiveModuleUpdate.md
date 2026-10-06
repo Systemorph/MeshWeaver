@@ -117,9 +117,18 @@ the live test fail (`Restarts` 1, expected 0).
 |---|---|
 | `ModuleServices` (`MeshWeaver.Mesh.Contract`) | The module's registration delegates run against a COPY of the root collection as it stands when the module installs, so every `TryAdd` decision is the boot one; what they ADDED is the module's set, routed (`ModuleServiceRoute`, open vocabulary): a platform **interface** → `Proxy`, a platform **class** → `Current`, `IHostedService` → `Hosted`, a type the module declares itself → `ModuleOwned`, an open generic or infrastructure → `Private`. |
 | Root forwarders (`ModuleServiceForwarding`) | The root gets exactly the platform-typed registrations it would have had — as forwarders that never name a module type. `Proxy` is ONE stable `DispatchProxy` per registration that forwards every call to the CURRENT generation, so a platform singleton that cached it follows a swap. `Hosted` is started at boot and, on a swap, the old generation's instance is STOPPED and the same registration STARTED from the new one. |
-| `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
-| Per-node hubs | Every per-node hub's scope gets forwarders for the module-owned types (and their options) of each module's CURRENT generation, so module code resolving its own service from `hub.ServiceProvider` finds it; a swap recycles the hubs. |
+| `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module — through ONE stand-in **per root registration**, so `IEnumerable<T>` in the module is the root's whole list in the root's order and a single resolve still answers the root's LAST; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
+| Per-node hubs | Every per-node hub's scope gets ONE forwarder **per registration** of each module-owned type (and their options) of each module's CURRENT generation, each answering its own registration (`ModuleServiceProvider.ResolveAt`), so module code resolving its own services from `hub.ServiceProvider` — `GetServices<T>()` included — finds all of them; a swap recycles the hubs. |
 | The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
+
+🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
+service to its LAST element in two places — the module container's fallback answered a platform type with
+one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on
+the three portals running core `7585f2a6`: MCP listed ONE tool of 37 (`restore_from_point_in_time`, the
+last declared — the MCP server takes `IEnumerable<McpServerTool>` inside the AI module) while a portal on an
+older image listed all 37; by the same mechanism every per-node hub resolves only the LAST `IHarness` the
+AI module registers, which is how the home-page chat lost the harness it was bound to.
+`ModuleServicesKeepEveryRegistrationTest` pins both, with the collapsed answers as its negative control.
 
 What still blocks root services (measured, named): a delegate that removes or replaces a registration it
 did not add, a keyed registration, a class-typed platform service the module implements, an interface

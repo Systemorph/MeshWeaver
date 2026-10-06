@@ -45,6 +45,36 @@ public static class ModuleServiceProvider
         builder.RegisterSource(new ModuleFallbackSource(root, isModuleType, rootOpenGenerics));
         return new AutofacServiceProvider(builder.Build());
     }
+
+    /// <summary>
+    /// Resolves the <paramref name="position"/>-th registration of <paramref name="serviceType"/> in
+    /// <paramref name="provider"/>, counted in registration order — exactly the element
+    /// <c>GetServices(serviceType)</c> yields at that position, and nothing else.
+    ///
+    /// <para>🚨 This is how a forwarder stands in for ONE of several registrations of the same service
+    /// type. A forwarder that called <c>GetRequiredService(serviceType)</c> instead answers the LAST
+    /// registration for every position, so <c>GetServices</c> through N such forwarders returns N copies
+    /// of the last one, or — when the forwarders were de-duplicated by type — that one alone. On the core
+    /// #6127 images every per-node hub resolved only the LAST <c>IHarness</c> the AI module registers, so the
+    /// home-page chat lost the harness it was bound to.</para>
+    /// </summary>
+    /// <param name="provider">The provider holding the registrations — a module container.</param>
+    /// <param name="serviceType">The (closed) service type.</param>
+    /// <param name="position">Zero-based position among that type's registrations.</param>
+    public static object ResolveAt(IServiceProvider provider, Type serviceType, int position)
+    {
+        if (provider.GetService<ILifetimeScope>() is not { } scope)
+            return provider.GetServices(serviceType).ElementAt(position)
+                   ?? throw new InvalidOperationException($"Registration {position} of {serviceType} resolved to null.");
+        var service = new TypedService(serviceType);
+        var registration = scope.ComponentRegistry.ServiceRegistrationsFor(service)
+            .OrderBy(r => r.GetRegistrationOrder())
+            .ElementAtOrDefault(position);
+        if (registration.Registration is null)
+            throw new InvalidOperationException(
+                $"{serviceType} has no registration at position {position} in this module container.");
+        return scope.ResolveComponent(new ResolveRequest(service, registration, []));
+    }
 }
 
 /// <summary>
@@ -91,10 +121,46 @@ internal sealed class ModuleFallbackSource(
         }
         if (root.GetService<IServiceProviderIsService>() is { } isService && !isService.IsService(type))
             yield break;
-        yield return RegistrationBuilder
-            .ForDelegate(type, (_, _) => root.GetRequiredService(type))
-            .ExternallyOwned()
-            .InstancePerDependency()
-            .CreateRegistration();
+        // 🚨 One stand-in PER ROOT REGISTRATION, never one for the type. A single
+        // `root.GetRequiredService(type)` stand-in made every IEnumerable<T> a module service took
+        // contain exactly ONE element — the root's last — while the root itself held all of them.
+        // Measured on the core 7585f2a6 portals: the MCP server (an AI-module service taking
+        // IEnumerable<McpServerTool>) listed one tool of 37, `restore_from_point_in_time`, the last
+        // one declared; every other tool answered "Unknown tool".
+        if (root.GetService<ILifetimeScope>() is { } rootScope)
+        {
+            var rootRegistrations = rootScope.ComponentRegistry.ServiceRegistrationsFor(service)
+                .OrderBy(r => r.GetRegistrationOrder())
+                .ToArray();
+            // CREATED in the root's order, YIELDED last-first. Autofac stamps a registration's order
+            // when it is created, and its collection resolution sorts by that order, so
+            // IEnumerable<T> enumerates in the root's order; and it makes the FIRST registration a
+            // source yields the default (what a single-service resolve answers), so that is the
+            // root's LAST, as in the root. Both halves are pinned by
+            // ModuleServicesKeepEveryRegistrationTest (yielded first-first, the single resolve
+            // answered the root's FIRST registration).
+            var standIns = rootRegistrations
+                .Select(rootRegistration => RegistrationBuilder
+                    .ForDelegate(type, (_, _) => rootScope.ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
+                    .ExternallyOwned()
+                    .InstancePerDependency()
+                    .CreateRegistration())
+                .ToArray();
+            for (var i = standIns.Length - 1; i >= 0; i--)
+                yield return standIns[i];
+            yield break;
+        }
+        // A root that is not an Autofac container (the mesh's never is — SetupModules requires one)
+        // can only be asked by type: each stand-in takes its element of the root's enumeration, in the
+        // same created-in-order, yielded-last-first shape.
+        var positions = Enumerable.Range(0, root.GetServices(type).Count())
+            .Select(position => RegistrationBuilder
+                .ForDelegate(type, (_, _) => root.GetServices(type).ElementAt(position)!)
+                .ExternallyOwned()
+                .InstancePerDependency()
+                .CreateRegistration())
+            .ToArray();
+        for (var i = positions.Length - 1; i >= 0; i--)
+            yield return positions[i];
     }
 }

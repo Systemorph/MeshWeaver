@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Reflection;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -160,13 +162,23 @@ internal static class ModuleServiceForwarding
             var owned = module.Registrations
                 .Where(r => r.Route == ModuleServiceRoute.ModuleOwned)
                 .Select(r => r.Descriptor.ServiceType)
-                .Distinct()
                 .ToArray();
+            // 🚨 One forwarder PER REGISTRATION, each answering ITS registration — never one per type.
+            // A module registers many service types more than once (TryAddEnumerable: the AI module's
+            // IHarness registrations, its tool and provider lists); a per-type forwarder calling
+            // GetRequiredService answered only the LAST, so every per-node hub's GetServices saw ONE of
+            // them — the chat could not resolve the harness it was bound to (core #6127 images).
+            var positions = ImmutableDictionary<Type, int>.Empty;
             foreach (var type in owned)
             {
-                services.Add(ServiceDescriptor.Transient(type, _ =>
-                    (contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."))
-                    .GetRequiredService(type)));
+                var position = positions.GetValueOrDefault(type);
+                positions = positions.SetItem(type, position + 1);
+                services.Add(ServiceDescriptor.Transient(type, _ => ModuleServiceProvider.ResolveAt(
+                    contexts.ModuleScope(name) ?? throw new InvalidOperationException($"Module {name} holds no service scope."),
+                    type, position)));
+            }
+            foreach (var type in owned.Distinct())
+            {
                 // An options type the module owns: IOptions<T>, IOptionsMonitor<T>, IOptionsSnapshot<T>
                 // close over it in the MODULE's scope, where its configure registrations live.
                 if (type.IsGenericType && type.GetGenericArguments() is [var optionsType]
