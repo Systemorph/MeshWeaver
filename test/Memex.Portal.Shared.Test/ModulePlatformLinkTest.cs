@@ -743,6 +743,86 @@ public class ModulePlatformLinkTest : IDisposable
         Assert.Equal(good, File.ReadAllBytes(goodPath));
     }
 
+    // ──────────────────────────────── the member half at the runtime sites (MeshWeaver#6007)
+
+    /// <summary>A member no build of <see cref="ContractAssembly"/> has ever carried, on a type every
+    /// build carries (<see cref="ModulePlatformLink"/> itself) — the shape of #6007: OpenAI 1.4.0
+    /// called <c>ReasoningEffortLevels.IsBuiltIn(IEnumerable&lt;string&gt;)</c>, the type was there and
+    /// the method was not.</summary>
+    private const string FutureMember = "MemberFromTheFuture";
+
+    /// <summary>
+    /// 🚨 <b>THE repro of #6007, at the landing.</b> A module whose bytes call a MEMBER this
+    /// process's copy of the platform lacks — on a type it does have — is REFUSED, naming the member,
+    /// and nothing lands. Before, the landing measured types only: these bytes landed, loaded, and
+    /// threw <c>MissingMethodException</c> at the first call, which on the OpenAI wire was every chat
+    /// round. <b>In-test negative control:</b> the type-only verdict over the same bytes and the same
+    /// surface admits them.
+    /// </summary>
+    [Fact]
+    public async Task AModuleCallingAMemberThisPlatformLacks_IsRefusedAtLanding_NamingTheMember()
+    {
+        const string name = "MeshWeaver.Test.FutureMemberWire";
+        var module = ModuleCallingAFutureMember(name);
+
+        var typeOnly = ModulePlatformLink.Check(module, name, new HashSet<string> { name },
+            ModulePlatformSurface.OfRunningProcess(AppContext.BaseDirectory));
+        Assert.True(typeOnly.MayLoad, "negative control: the type half alone admits these bytes — " + typeOnly.Report());
+
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await landing.LandModule(name, [(name + ".dll", module)], minMeshVersion: null)
+                .Timeout(TestTimeouts.Convergence).Await());
+
+        Assert.Contains("ModulePlatformLink::" + FutureMember, refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(ContractAssembly, refusal.Message, StringComparison.Ordinal);
+        Assert.Empty(ModuleActivationSidecar.Read(root).Entries);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The same at BOOT</b> — the copy an instance already had when the floor that admitted it
+    /// turned out wrong (the customer instance on 3.0.0-ci.9606 kept OpenAI 1.4.0). The module is
+    /// parked as <see cref="IncompatibleModule"/> naming the member, the module beside it installs,
+    /// and <c>InstallAssemblies</c> does not throw.
+    /// </summary>
+    [Fact]
+    public void AModuleCallingAMemberThisPlatformLacks_IsParkedAtBoot()
+    {
+        var bad = Write("MeshWeaver.Test.FutureMemberPack", ModuleCallingAFutureMember("MeshWeaver.Test.FutureMemberPack"));
+        var goodName = typeof(MeshWeaver.Plugin.Packaging.BundleReader).Assembly.GetName().Name!;
+        var good = Write(goodName,
+            File.ReadAllBytes(typeof(MeshWeaver.Plugin.Packaging.BundleReader).Assembly.Location));
+
+        var services = new ServiceCollection();
+        var builder = new MeshBuilder(configure => configure(services), new Address("mesh", "test"));
+        builder.InstallAssemblies(bad, good);
+
+        var provider = services.BuildServiceProvider();
+        var parked = Assert.Single(provider.GetServices<IncompatibleModule>());
+        Assert.Equal("MeshWeaver.Test.FutureMemberPack", parked.Name);
+        Assert.Contains("ModulePlatformLink::" + FutureMember, parked.Report(), StringComparison.Ordinal);
+        Assert.Contains(provider.GetServices<InstalledModuleAssembly>(),
+            m => string.Equals(m.Assembly.GetName().Name, goodName, StringComparison.Ordinal));
+    }
+
+    /// <summary>A module compiled against a stand-in <see cref="ContractAssembly"/> whose
+    /// <c>ModulePlatformLink</c> carries <see cref="FutureMember"/>: the type exists on this
+    /// platform, the member does not.</summary>
+    private static byte[] ModuleCallingAFutureMember(string moduleName)
+    {
+        var future = Emit(ContractAssembly, $$"""
+            namespace MeshWeaver.Mesh;
+            public static class ModulePlatformLink { public static int {{FutureMember}}(System.Collections.Generic.IEnumerable<string> levels) => 1; }
+            """, excludeReference: ContractAssembly);
+        return Emit(moduleName, $$"""
+            public static class Wire
+            {
+                public static int Rewrite() => MeshWeaver.Mesh.ModulePlatformLink.{{FutureMember}}(new[] { "high" });
+            }
+            """,
+            excludeReference: ContractAssembly,
+            extra: MetadataReference.CreateFromImage(future));
+    }
+
     /// <summary>
     /// A module compiled against a STAND-IN <c>MeshWeaver.Mesh.Contract</c> that carries
     /// <see cref="FutureType"/> — the assembly a platform three days ahead would have shipped. The
