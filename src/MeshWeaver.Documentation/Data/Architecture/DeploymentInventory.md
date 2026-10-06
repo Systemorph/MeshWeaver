@@ -69,12 +69,41 @@ healthy and reports almost nothing (memex, 2026-08-10: 42 sync configs, zero ins
 | `adoptedFrameworkInventoryComplete` | `true` only after the adoption query completes and every returned definition is readable; `false` on failure, absent in legacy reports |
 | `updatePolicy` | the `Admin/UpdatePolicy` node's policy, read as a children listing of the partition (a point read of an absent node trips the routing NotFound and its storm-breaker; a test mesh has no such node) |
 | `sampledAt` | UTC, second precision |
-| `modules[]` | per module: `id`, `origin` (`GitSync` or `Package`), `repository`, `ref`, `subdirectory`, `commitSha`, `lastSyncedAt`, `moduleVersion`. A module recorded under both shapes reports as `GitSync` carrying the install record's version — the receiver's fold keeps exactly that |
+| `modules[]` | per module: `id`, `origin` (`GitSync` or `Package`), `repository`, `ref`, `subdirectory`, `commitSha`, `lastSyncedAt`, `moduleVersion`, `version` (install record), `runningVersion` (activation record — see below). A module recorded under both shapes reports as `GitSync` carrying the install record's version — the receiver's fold keeps exactly that |
 | `warnings[]` | an incomplete read (a source that could not be queried), an empty module list, a missing platform version or home url |
 | `reporter` | `hosted` — distinguishes the service from the manual script in the record |
 
 Fields the control instance's inbox does not read yet (`commitSha`, `frameworkIdentity`,
 `updatePolicy`, `reporter`) ride along: an older control instance ignores them, a newer one shows them.
+
+## Installed version vs running version
+
+A package row's `version` (and `moduleVersion`) come from the `Plugins/{id}` **install record**. A
+[module reload](../ModuleReload) does NOT re-stamp that record — it describes the CONTENT install too —
+it moves only the **activation record** and the generation the process has loaded. So after a live
+reload of M from 1.1.0 to 1.2.0 the install record still reads `version=1.1.0 moduleVersion=h-1.1.0`
+while the process runs 1.2.0 (measured in `ModuleReloadLiveTest` on core `1d1e2023de`).
+
+Each package row therefore also carries **`runningVersion`**: the version of the generation THIS
+process has loaded for the package's compiled module (`PackageManifest.Module`), read off the
+activation record (`ModuleLandingService.GetActivation`) against the loaded generation — the head's
+version when the head is loaded, the previous generation's when that is. It is the same reading a
+reload's per-replica row reports — `ModuleReloadAgent.LoadedVersions`, which matches the activation
+record against the agent's `LoadedGenerations()` exactly as the report does — so the two cannot disagree.
+It is **null** when it is not known — a content-only package, the image's own copy, a generation the
+record no longer names, or an unreadable record — never guessed from the head or the install record.
+A restart-path reload is the case that rules the head out: it lands N+1 as head while the process
+still runs N until it restarts.
+
+Reading a row against the target version (`servedVersion`):
+
+| `runningVersion` | `version` | Meaning |
+|---|---|---|
+| = target | = target | code and content applied |
+| = target | < target | **code live, content behind** — a live reload moved the module; the content install did not move |
+| < target | < target | nothing applied |
+| < target | = target | **content applied, code behind** — the install moved the record; the module reload has not landed, or its restart is still pending |
+| null | anything | not known whether the code moved — the row claims neither state |
 
 ## Retention reads the adopted builds too
 
