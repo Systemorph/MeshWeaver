@@ -267,6 +267,12 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
     protected ModuleActivationEntry Head() =>
         ModuleActivationSidecar.Read(landingRoot).Entries.Single(e => e.Name == Module);
 
+    /// <summary>The head's generation leaf — a readable failure, never a null, when the head names none.</summary>
+    protected string HeadDirectory() =>
+        Head().Directory is { Length: > 0 } directory
+            ? directory
+            : throw new InvalidOperationException($"the activation record's head for {Module} names no generation directory");
+
     /// <summary>The instance runs M@1.1.0: installed, landed, and loaded by this process.</summary>
     protected async Task RunningVersionOne(CancellationToken ct, Func<PackageManifest, PackageManifest>? shape = null)
     {
@@ -648,20 +654,20 @@ public class ModuleReloadInstanceReportTest(ITestOutputHelper output) : ModuleRe
         var reporter = Mesh.ServiceProvider.GetRequiredService<DeploymentReportService>();
 
         var before = await reporter.Report().Timeout(TestTimeouts.Convergence).Await(ct);
-        before.Report.Should().NotBeNull(before.Detail);
-        var rowBefore = before.Report!.Modules.Single(m => m.Id == Package);
+        var reportBefore = before.Report ?? throw new InvalidOperationException($"no report before the reload: {before.Detail}");
+        var rowBefore = reportBefore.Modules.Single(m => m.Id == Package);
         rowBefore.RunningVersion.Should().Be("1.1.0", "the premise: this process runs the generation 1.1.0 landed");
 
         Registry.Serve("1.2.0", floor: FloorFixture.Below);
-        loader.OnSwap = () => SetLoaded(Module, Head().Directory!);
+        loader.OnSwap = () => SetLoaded(Module, HeadDirectory());
         var path = await Reload(ct);
         var done = await AwaitRequest(path, r => ModuleReloadStatus.IsTerminal(r.Status), ct);
         done.Status.Should().Be(ModuleReloadStatus.Done, done.Failure ?? "");
         Head().Version.Should().Be("1.2.0", "the premise: the activation record moved");
 
         var after = await reporter.Report().Timeout(TestTimeouts.Convergence).Await(ct);
-        after.Report.Should().NotBeNull(after.Detail);
-        var row = after.Report!.Modules.Single(m => m.Id == Package);
+        var reportAfter = after.Report ?? throw new InvalidOperationException($"no report after the reload: {after.Detail}");
+        var row = reportAfter.Modules.Single(m => m.Id == Package);
         Output.WriteLine($"report row after Done reload: version={row.Version} moduleVersion={row.ModuleVersion} runningVersion={row.RunningVersion}");
         row.Version.Should().Be("1.1.0", "the install record is not re-stamped by a reload — it also describes the content install");
         row.ModuleVersion.Should().Be("h-1.1.0");
