@@ -284,6 +284,11 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
     protected const string Package = "ReloadPkg";
     protected const string Module = "MeshWeaver.ReloadModule";
 
+    /// <summary>A second installed package, served only when <see cref="ReloadRegistry.ServesSecond"/>
+    /// is set — for a reload that covers more than one module.</summary>
+    protected const string SecondPackage = "ReloadPkgTwo";
+    protected const string SecondModule = "MeshWeaver.ReloadModuleTwo";
+
     private readonly string landingRoot = Path.Combine(Path.GetTempPath(), "mw-reload-" + Guid.NewGuid().ToString("N"));
 
     protected ReloadRegistry Registry { get; } = new();
@@ -344,38 +349,48 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
 
     protected AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
-    protected ModuleActivationEntry Head() =>
-        ModuleActivationSidecar.Read(landingRoot).Entries.Single(e => e.Name == Module);
+    protected ModuleActivationEntry Head() => HeadOf(Module);
+
+    protected ModuleActivationEntry HeadOf(string module) =>
+        ModuleActivationSidecar.Read(landingRoot).Entries.Single(e => e.Name == module);
 
     /// <summary>The instance runs M@1.1.0: installed, landed, and loaded by this process.</summary>
     protected async Task RunningVersionOne(CancellationToken ct, Func<PackageManifest, PackageManifest>? shape = null)
     {
         FloorFixture.AssertTheFloorHolds(Mesh);
+        Registry.Serve("1.1.0", floor: null);
+        await InstallRunning(Package, Module, ct, shape);
+    }
+
+    /// <summary>Installs <paramref name="package"/> declaring <paramref name="module"/>, lands the
+    /// version the registry serves for it (1.1.0), and records this process as loading it.</summary>
+    protected async Task InstallRunning(string package, string module, CancellationToken ct,
+        Func<PackageManifest, PackageManifest>? shape = null)
+    {
         var manifest = new PackageManifest
         {
-            Id = Package,
-            Name = Package,
+            Id = package,
+            Name = package,
             Version = "1.1.0",
-            TargetPartition = Package,
-            Module = Module,
+            TargetPartition = package,
+            Module = module,
             // Notify: the UNATTENDED lane would decline an update — the reload is attended and must not.
             AutoUpdate = false,
         };
-        var record = MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{Package}") with
+        var record = MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{package}") with
         {
             NodeType = PackageInstaller.PackageNodeType,
-            Name = Package,
+            Name = package,
             State = MeshNodeState.Active,
             Content = shape is null ? manifest : shape(manifest),
         };
         await Access.RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record)).Timeout(TestTimeouts.Convergence).Await(ct);
 
-        Registry.Serve("1.1.0", floor: null);
-        (await new PluginBundleClient(Mesh, RegistryUrl, Token).AdoptModule(Package, Module, record.Path)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be(1, "the premise: 1.1.0 is landed");
-        var head = Head();
+        (await new PluginBundleClient(Mesh, RegistryUrl, Token).AdoptModule(package, module, record.Path)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be(1, $"the premise: {package} 1.1.0 is landed");
+        var head = HeadOf(module);
         head.Version.Should().Be("1.1.0");
-        SetLoaded(Module, head.Directory!);
+        SetLoaded(module, head.Directory ?? throw new InvalidOperationException($"{module} landed without a directory"));
     }
 
     protected async Task<string> Reload(CancellationToken ct)
@@ -452,6 +467,12 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
         /// TRANSIENT fault a reload must survive.</summary>
         public bool IndexDown { get; set; }
 
+        /// <summary>When set, the index also lists <see cref="SecondPackage"/> at the served version.</summary>
+        public bool ServesSecond { get; set; }
+
+        /// <summary>The package whose bundle download crashes (throws), or null for none.</summary>
+        public string? CrashDownloadOf { get; set; }
+
         public bool Serves(string host) => string.Equals(host, RegistryHost, StringComparison.OrdinalIgnoreCase);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -466,26 +487,34 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
                     Content = new StringContent("registry briefly down", Encoding.UTF8, "text/plain"),
                 });
             if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json")
+            {
+                var listed = ServesSecond
+                    ? new[] { (Package, Module), (SecondPackage, SecondModule) }
+                    : new[] { (Package, Module) };
                 return Ok(JsonSerializer.Serialize(new
                 {
                     frameworkMvid = "s1234567890abcdef1234567890abcdef",
-                    bundles = new[]
+                    bundles = listed.Select(b => new
                     {
-                        new
-                        {
-                            plugin = Package,
-                            version,
-                            url = $"{RegistryUrl}{PluginBundleClient.RoutePrefix}/{Package}/{version}",
-                            module = Module,
-                            minMeshVersion = floor,
-                            frameworkMvid = "s1234567890abcdef1234567890abcdef",
-                        },
-                    },
+                        plugin = b.Item1,
+                        version,
+                        url = $"{RegistryUrl}{PluginBundleClient.RoutePrefix}/{b.Item1}/{version}",
+                        module = b.Item2,
+                        minMeshVersion = floor,
+                        frameworkMvid = "s1234567890abcdef1234567890abcdef",
+                    }).ToArray(),
                 }, PluginRegistryPayloads.Json));
+            }
             if (request.Method == HttpMethod.Get && path.StartsWith($"{PluginBundleClient.RoutePrefix}/", StringComparison.Ordinal))
             {
+                var plugin = Uri.UnescapeDataString(path[(PluginBundleClient.RoutePrefix.Length + 1)..].Split('/')[0]);
+                // A transfer that CRASHES (the connection dropped), not a refusal: an exception, so
+                // the adopt reports it as transient — what a reload must treat as Faulted.
+                if (string.Equals(plugin, CrashDownloadOf, StringComparison.Ordinal))
+                    throw new HttpRequestException($"the connection to the registry was reset while downloading {plugin}");
+                var module = plugin == SecondPackage ? SecondModule : Module;
                 ImmutableInterlocked.Update(ref downloads, d => d.Add(version));
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Bundle(version, floor)) });
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Bundle(plugin, module, version, floor)) });
             }
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
@@ -496,7 +525,7 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
 
-        private static byte[] Bundle(string version, string? floor)
+        private static byte[] Bundle(string package, string module, string version, string? floor)
         {
             // Different real assemblies per version: landing is content-addressed, so identical
             // bytes would land as the SAME generation and "which generation is loaded" could not
@@ -506,19 +535,19 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
                 : typeof(ModuleAdoptOutcome).Assembly.Location;
             var manifestJson = JsonSerializer.Serialize(new
             {
-                plugin = Package,
+                plugin = package,
                 version,
                 frameworkMvid = "s1234567890abcdef1234567890abcdef",
-                module = new { assemblyName = Module, assemblies = new[] { Module + ".dll" }, minMeshVersion = floor },
+                module = new { assemblyName = module, assemblies = new[] { module + ".dll" }, minMeshVersion = floor },
             });
             var buffer = new MemoryStream();
             NuGetPackageWriter.Write(
                 buffer,
-                new PackagingManifest(Package, "MeshWeaver.Plugin." + Package, version, Package, null, []),
+                new PackagingManifest(package, "MeshWeaver.Plugin." + package, version, package, null, []),
                 "3.0.0",
                 [
                     new NuGetPackageWriter.Entry(
-                        NuGetPackageWriter.ModuleEntryPathFor(Module + ".dll"),
+                        NuGetPackageWriter.ModuleEntryPathFor(module + ".dll"),
                         () => new MemoryStream(File.ReadAllBytes(bytesFrom))),
                 ],
                 manifestJson);
@@ -790,5 +819,75 @@ public class ModuleReloadFaultedTest(ITestOutputHelper output) : ModuleReloadSce
         var after = await AwaitRequest(path, _ => true, ct);
         after.Status.Should().Be(ModuleReloadStatus.Failed);
         after.Attempt.Should().Be(0);
+    }
+}
+
+/// <summary>
+/// 🚨 <b>A crash beside an activation is still Faulted</b> (MeshWeaver#6172 review). One module's
+/// adopt CRASHES while another lands a new version and goes live. The request's end state is
+/// decided in <c>Evaluate</c> from the items the activation write persisted, so the crashed item's
+/// <see cref="ModuleReloadItem.Transient"/> flag must survive that write. If it did not, the end
+/// state would read <see cref="ModuleReloadStatus.Failed"/>, and a crash would be final.
+/// </summary>
+public class ModuleReloadFaultedBesideActivationTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private readonly SwapLoader loader = new();
+
+    protected override IModuleLiveActivation? LiveActivation => loader;
+
+    [Fact(Timeout = 240_000)]
+    public async Task OneModulesCrashedAdopt_BesideAnotherModulesLiveActivation_IsFaulted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        FloorFixture.AssertTheFloorHolds(Mesh);
+        Registry.ServesSecond = true;
+        Registry.Serve("1.1.0", floor: null);
+        await InstallRunning(Package, Module, ct);
+        await InstallRunning(SecondPackage, SecondModule, ct);
+
+        // N+1 for both: the first lands and swaps live, the second's download crashes.
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        Registry.CrashDownloadOf = SecondPackage;
+        loader.OnSwap = module => SetLoaded(module, HeadOf(module).Directory
+            ?? throw new InvalidOperationException($"{module} has no landed directory"));
+
+        var ticket = await ModuleReload.Request(Mesh, new ModuleReloadRequest
+            {
+                Reason = "one module crashes beside another's activation (#6172 review)",
+                RequestedBy = "test",
+            })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        ticket.Refusal.Should().BeNull();
+        var path = ticket.Path ?? throw new InvalidOperationException("an accepted request carries its path");
+
+        var end = await AwaitRequest(path, r => r.Status is ModuleReloadStatus.Faulted || ModuleReloadStatus.IsTerminal(r.Status), ct);
+
+        end.Activation.Should().Be(ModuleReloadActivation.Live, "the premise: the other module activated live");
+        loader.Swapped.Should().Equal([Module], "only the module that landed is swapped");
+        var crashed = end.Items.Single(i => i.Module == SecondModule);
+        crashed.Failure.Should().Contain("reset");
+        crashed.Transient.Should().BeTrue("the activation write must persist the crashed item's flag");
+        end.Items.Single(i => i.Module == Module).Failure.Should().BeNull();
+        end.Status.Should().Be(ModuleReloadStatus.Faulted,
+            "a crash beside a successful activation is still a crash — never final: " + (end.Failure ?? ""));
+        end.FaultedAt.Should().NotBeNull();
+        end.CompletedAt.Should().BeNull("a fault is not an end");
+    }
+
+    private sealed class SwapLoader : IModuleLiveActivation
+    {
+        private ImmutableList<string> swapped = ImmutableList<string>.Empty;
+
+        public ImmutableList<string> Swapped => swapped;
+        public Action<string>? OnSwap { get; set; }
+
+        public bool CanSwap(string module) => true;
+
+        public IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
+        {
+            ImmutableInterlocked.Update(ref swapped, s => s.Add(module));
+            OnSwap?.Invoke(module);
+            return Observable.Return(new ModuleReloadSwapOutcome(true));
+        });
     }
 }

@@ -215,12 +215,19 @@ modules; the sync-owned hold on the module lane was.
 - **Every crash is classified.** `Faulted` covers the exceptions caught in the executor and in the
   registry/landing calls it makes. A bundle download that answers a transient error as a `Kind`
   (`the bundle X could not be fetched (…)`) is still reported as a decided `Failed`; a restart lane
-  that answers "not scheduled" is `Failed` too. The Plugins-side self-update intake
-  (`FleetTargetIntake`) does not yet name `Faulted`, and that is harmless by its construction: it
-  never decides a request's fate from the status. It only files a request (the node id
-  `selfupdate-{module}-{version}` is the key, so a second filing collides) and, on a collision, LOGS
-  the existing request's state. `Failed` is logged at Error, an undated or overdue `Requested` and a
-  missing status at Warning, and any other status, `Faulted` included, as executor progress at
-  Information ("the executor has it at Faulted"). It never marks a request finished or red, and never
-  files a replacement, so core's re-arm of the same node is undisturbed. Teaching it the name is
-  logging only.
+  that answers "not scheduled" is `Failed` too.
+- **The Plugins self-update intake only files and logs.** `FleetTargetIntake` (MeshWeaver.Plugins,
+  `Hosting/PlatformBuildInbox/Source/FleetTargetIntake.cs`) never decides a request's fate from its
+  status. `RequestRefresh` only files a request; the node id `selfupdate-{module}-{version}` is the
+  key, so a second filing collides. On a collision it reads the existing request and passes it to
+  `ExistingReload`, which returns only a log level and a sentence:
+  - `Failed` → Error.
+  - `Faulted` → Warning, naming the attempt and the fault ("core retries it on its reconcile pass").
+    This is named in MeshWeaver.Plugins#2893.
+  - An undated or overdue `Requested`, or no status at all → Warning.
+  - Anything else → Information.
+
+  Neither method marks a request finished or red or files a replacement, so core's re-arm of the same
+  node is undisturbed. The state table is pinned by the intake's
+  `AFiledReload_NamesItsState_FailedAndUnclaimedAreLoud` test. Before #2893 named it, `Faulted`
+  fell into the Information branch ("the executor has it at Faulted"): a log line, no behaviour.

@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -450,6 +451,11 @@ public static partial class ModuleReload
         var access = hub.ServiceProvider.GetService<AccessService>();
         if (mesh is null || access is null)
             return Observable.Return(ImmutableList<string>.Empty);
+        // The pass never faults, so a read that fails is skipped — but never SILENTLY: a request
+        // whose read fails every pass would otherwise sit Faulted with nothing saying why (#6172
+        // review). Warning, not Debug: a faulted request that cannot be re-armed is self-repair
+        // blocked, and it recurs at most once per reconcile pass.
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ModuleReload));
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{ModuleReloadRequest.Namespace} scope:children nodeType:{ModuleReloadRequest.NodeType}"))
                 .Take(1)
@@ -469,11 +475,23 @@ public static partial class ModuleReload
                             .Take(1)
                             .Select(_ => path)
                         : Observable.Empty<string>())
-                    .Catch((Exception _) => Observable.Empty<string>()))
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[ModuleReload] {Path}: the faulted-request retry could not read or re-arm it this pass ({Reason}) — the next pass asks again",
+                            path, ex.Message);
+                        return Observable.Empty<string>();
+                    }))
                 .Concat()
                 .ToList())
             .Select(paths => paths.ToImmutableList())
-            .Catch((Exception _) => Observable.Return(ImmutableList<string>.Empty))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "[ModuleReload] the faulted-request retry could not list {Namespace} this pass ({Reason}) — nothing re-armed; the next pass asks again",
+                    ModuleReloadRequest.Namespace, ex.Message);
+                return Observable.Return(ImmutableList<string>.Empty);
+            })
             .Take(1);
     }
 }
