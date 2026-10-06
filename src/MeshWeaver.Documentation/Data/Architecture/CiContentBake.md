@@ -1618,3 +1618,9 @@ rows it was written for: a compatible bundle is **adopted** — the gate tests t
 which is its whole purpose — and only a genuinely incompatible bundle, or none at all, becomes
 `Unservable`, said at Critical. A named verdict replaces an unreadable compile failure, and nothing
 that passes today starts failing.
+
+## A set that contradicts itself
+
+Before it publishes, the lane refuses any bundle whose platform floor is above the portal the
+publication names. This stops a set from being sealed with a tester and a portal from two different
+builds. See [A Set That Contradicts Itself](../SelfContradictingSet).
