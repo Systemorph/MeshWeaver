@@ -518,6 +518,76 @@ SIGTERM on that replica against those two creates. The first attempts' failures 
 partition-root creates. #6088 stops a root-read fault from being misread as absence. Why those
 reads faulted is still not recorded.
 
+## A re-cut cut short by the process's own shutdown is a Warning (#6056, second half)
+
+### What the logs and the version history show
+
+The draining host is no longer only inferred from the roll's timeline. Two governed `Logs` actions
+on the control instance read the two replicas' own lines (`Ops/Actions/logs-6056-tslft-shutdown-20261006`
+and `Ops/Actions/logs-6056-jqqxx-shutdown-20261006`). Both bursts of the failure fall in the same
+millisecond as that replica's `DeliveryFailureException: Host is shutting down, cannot route` lines:
+
+| Burst | Replica | Shutdown lines | NodeTypes |
+|---|---|---|---|
+| 2026-10-03 23:15:58Z | `57d6d7f9cc-tslft` | from 23:15:58.008Z | `Store/Core`, `Signature/DeepSignCredential` |
+| 2026-10-05 11:25:57Z | `5dcbbd8f4b-jqqxx` | from 11:25:57.722Z, 200 read (cut) | `Signature/SignatureRequest`, `Store/Core`, `Signature/Desk` |
+
+The second burst ran on core `d205295b`, which already carried #6088 and #6101. It is the same
+shape: the roll to `3.0.0-ci.9978` was replacing that replica.
+
+The version history corrects one sentence above. The settle's stamp did **not** land. The dying
+process's terminal write never reached the store:
+
+- `Signature/SignatureRequest` goes v3926 (11:25:44Z, `Compiling`) → v3927 (11:26:34Z, the new
+  replica's compile). Its release `…/Release/20261005112638-sEwNSJCA` landed 41 s after the failure.
+- `Signature/DeepSignCredential` goes v3872 (23:15:49Z) → v3873 (23:16:01Z). Its release landed at
+  23:16:14Z, 16 s after the failure.
+
+No NodeType carries `unreleasedBuildPath`. The sweep
+`nodeType:NodeType content.unreleasedBuildPath:* partitions:all` answers `count: 0` over 125
+readable partitions. The positive control `content.latestReleasePath:*` returns rows. So in both
+bursts no NodeType advertised a build that no release names. The Error line said one did and named
+a stamp, and the sev:H incident was filed from that line. What it actually recorded was a replica
+being replaced.
+
+### The change
+
+`ReleasePostCondition.Restore` asks the survivor `IsLeaving()`, the shared predicate in
+`HubLeavingExtensions`: the mesh is shutting down, or the host lifetime has begun stopping. On a pod the host lifetime fires at SIGTERM and stays live for the whole termination
+window. When it is true, the violation line and the could-not-re-cut line are logged at `Warning`.
+The compile `_Activity` entry is the keyed `activity.compile.releasePostCondition.abandonedAtShutdown`
+at `Warning`. The stamp and its reason still travel, because the build still has no release. If the
+terminal write does land inside the grace window, the stamp is the truth, and #6101's
+inherited-obligation completion cuts the release on the next activation.
+
+The decision reads the PROCESS's state and never parses the reason. The same `Unavailable` answer
+also means "the store was unreachable". That is an availability fault, and on a process that is not
+leaving it stays an `Error`. Nothing that is attempted changes: the re-cut still runs, because
+inside the grace window it can land.
+
+### The control
+
+`AReleaseRecutCutShortByShutdownTest` runs on a real monolith mesh. A real `INodeValidator` fails
+this type's Release create with the cancellation a drained pool raises. That drives CreateNode's
+own cooperative-cancellation arm to the production answer, *"Node creation at '…' was cancelled
+before it completed."*. The process's leaving comes from the host's real `ApplicationLifetime`,
+stopped through `StopApplication()`.
+
+- **Leaving:** a keyed Warning naming the shutdown, and no Error line. Against the code before this
+  change it is red, because the key is `…violated`.
+- **Negative control:** the identical failure on a process that is NOT leaving stays the Error and
+  the `…violated` entry.
+
+### Not established
+
+- **What re-drives a record a dying process leaves at `Compiling`.** In both bursts the new replica
+  compiled the type within a minute, and both records name the same framework identity (`c003e001`)
+  before and after. What triggered that compile was not established: the record left at
+  `Compiling`, a pending source change (v3926 reads `buildProvenance: StaleAdopted`), or the boot
+  bake. So it is not shown that every such record is re-driven.
+- **The first attempts' nested root-create failures** (above). They are still unexplained, apart
+  from happening in this same shutdown window.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was
