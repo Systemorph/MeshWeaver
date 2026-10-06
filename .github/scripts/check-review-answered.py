@@ -657,6 +657,7 @@ class Carry:
 #: exit into a carried "review" in silence; with an allow-list a reworded REVIEW title only means a
 #: fresh round. The shapes are Plugins `PullRequestActions` (`No blocking findings`,
 #: `{n} blocking finding(s)`) and `ReviewCarryOver.CarriedTitlePrefix` (a carried review carries on).
+REVIEW_CONCLUSIONS = frozenset({"success", "failure"})
 REVIEW_TITLES = re.compile(r"^(?:No blocking findings|[1-9]\d* blocking finding\(s\)|Review carried from )")
 
 
@@ -665,7 +666,8 @@ def real_review_run(check_runs, sha: str) -> dict | None:
     (REVIEW_TITLES); None when there is none, or when the newest is anything else."""
     run = newest_internal_review_run(internal_review_runs(check_runs, sha), None)
     title = ((run or {}).get("output") or {}).get("title") or ""
-    return run if run is not None and REVIEW_TITLES.match(title.strip()) else None
+    # The conclusion must be READ as one a review posts: an unread or empty one is never carried.
+    return run if run is not None and run.get("conclusion") in REVIEW_CONCLUSIONS and REVIEW_TITLES.match(title.strip()) else None
 
 
 def pr_diff_id(files) -> tuple[str | None, str]:
@@ -2092,6 +2094,8 @@ def self_test() -> int:
                "is not a merge commit")
     carry_case("a REWORDED no-review exit is not carried (allow-list fails safe)", False,
                carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="failure", title="Review could not finish — …")]}), "is not a merge commit")
+    carry_case("a review title with an UNREAD conclusion is not carried", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion=None)]}), "is not a merge commit")
     carry_case("a carried review carries on", True,
                carry_of(NEW_CMP, runs={O: [_ir(sha=O, title=f"Review carried from {P1[:10]} — No blocking findings")]}), "CARRIED")
     carry_case("a merge that only changed TRAILING WHITESPACE on a changed line -> fresh", False,
