@@ -311,11 +311,23 @@ public sealed class ModuleServices : IDisposable
             ModuleName);
 
     /// <summary>Starts EVERY hosted registration of this generation — the host at boot, and the swap
-    /// for the generation it puts in service.</summary>
+    /// for the generation it puts in service. ONE AFTER ANOTHER in registration order, each once the
+    /// previous start has completed — the order the generic host itself uses for root
+    /// <see cref="IHostedService"/>s, which the per-registration forwarders this replaced inherited
+    /// (#6128 review).</summary>
     public Task StartAllHosted(IServiceProvider root, CancellationToken ct, ILogger? logger) =>
-        Task.WhenAll(Registrations
+        InSequence(Registrations
             .Where(r => r.Route == ModuleServiceRoute.Hosted)
-            .Select(r => StartHosted(root, r.Index, ct, logger)));
+            .OrderBy(r => r.Index)
+            .Select(r => (Func<Task>)(() => StartHosted(root, r.Index, ct, logger))));
+
+    /// <summary>Runs <paramref name="steps"/> one after another, each once the previous task completed.
+    /// Every step this type hands it reports its own fault and completes, so one failing step never
+    /// keeps the next from running. Task-shaped because <see cref="IHostedService"/> is — no <c>await</c>.</summary>
+    internal static Task InSequence(IEnumerable<Func<Task>> steps) =>
+        steps.Aggregate(Task.CompletedTask, (prior, next) => prior.ContinueWith(
+                _ => next(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
+            .Unwrap());
 
     /// <summary>The hosted registrations this generation has started.</summary>
     public ImmutableList<int> StartedHosted
@@ -323,8 +335,9 @@ public sealed class ModuleServices : IDisposable
         get { lock (gate) return started.Select(s => s.Index).ToImmutableList(); }
     }
 
-    /// <summary>Stops every hosted service this generation started — before it is retired. A stop
-    /// that faults is logged; it never keeps the others running.</summary>
+    /// <summary>Stops every hosted service this generation started — before it is retired — one after
+    /// another in REVERSE registration order, as the generic host stops its own. A stop that faults is
+    /// logged; it never keeps the others running.</summary>
     public Task StopHosted(CancellationToken ct, ILogger? logger)
     {
         ImmutableList<(int Index, IHostedService Instance)> running;
@@ -333,7 +346,7 @@ public sealed class ModuleServices : IDisposable
             running = started;
             started = [];
         }
-        return Task.WhenAll(running.Select(r =>
+        return InSequence(running.OrderByDescending(r => r.Index).Select(r => (Func<Task>)(() =>
         {
             Task stopping;
             try
@@ -352,7 +365,7 @@ public sealed class ModuleServices : IDisposable
                         logger?.LogWarning(t.Exception, "[ModuleLiveUpdate] stopping a hosted service of {Module} faulted", ModuleName);
                 },
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        }));
+        })));
     }
 
     /// <summary>Disposes the scope — this generation's singletons with it.</summary>

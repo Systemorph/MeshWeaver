@@ -50,17 +50,24 @@ public class ModuleServiceProxy : DispatchProxy
 /// generation's and starts the new one's (<see cref="ModuleContexts.HandOverHosted"/>). Because the root
 /// holds no per-registration forwarder, a generation may add or drop a background service and still swap
 /// live. A failure costs the module's feature, never the host (#2449).
+///
+/// <para>Start and stop are SEQUENTIAL, as the generic host runs root hosted services and as the
+/// per-registration forwarders this replaced inherited (#6128 review): modules in name order, each
+/// module's services in registration order, each started once the previous start completed; stop is
+/// the exact reverse.</para>
 /// </summary>
 internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger? logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken) =>
-        Task.WhenAll(contexts.Generations
+        ModuleServices.InSequence(contexts.Generations
             .Where(g => g.Services is not null)
-            .Select(g => contexts.StartAllModuleHosted(g, cancellationToken, logger)));
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .Select(g => (Func<Task>)(() => contexts.StartAllModuleHosted(g, cancellationToken, logger))));
 
     public Task StopAsync(CancellationToken cancellationToken) =>
-        Task.WhenAll(contexts.Generations
-            .Select(g => g.Services?.StopHosted(cancellationToken, logger) ?? Task.CompletedTask));
+        ModuleServices.InSequence(contexts.Generations
+            .OrderByDescending(g => g.Name, StringComparer.Ordinal)
+            .Select(g => (Func<Task>)(() => g.Services?.StopHosted(cancellationToken, logger) ?? Task.CompletedTask)));
 }
 
 /// <summary>Registers the forwarders for one module's root services.</summary>

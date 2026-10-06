@@ -20,9 +20,16 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// are mapped onto a PRIVATE route builder per generation, exposed here, and on
 /// <see cref="ModuleContexts.VersionChanged"/> re-mapped from the new generation and announced — the
 /// same authenticated-by-default group and module marker metadata
-/// <see cref="MeshModuleEndpointExtensions.MapMeshModuleEndpoints"/> applies. A re-map whose routes
-/// collide with another endpoint is not published: the previous map stays, and the collision is
-/// logged at Critical, naming both.</para>
+/// <see cref="MeshModuleEndpointExtensions.MapMeshModuleEndpoints"/> applies.</para>
+///
+/// <para>The refusal is scoped PER MODULE (#6128 review). Each module's endpoints are published
+/// together with the generation that mapped them, and only a module whose CURRENT generation differs
+/// from its published one is re-mapped. A module whose new generation throws while mapping, or whose
+/// routes collide with another endpoint the host serves (another module's included), keeps serving its
+/// previously published endpoints. It is logged at Critical, naming the module and the collision. Every
+/// other module's change is still published, so one module's bad generation never freezes endpoint
+/// updates for the rest. A refused module is retried on every later swap, because its current
+/// generation still differs from its published one.</para>
 /// </summary>
 public sealed class ModuleEndpointDataSource : EndpointDataSource
 {
@@ -31,8 +38,13 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
     private readonly Func<IApplicationBuilder> createApplicationBuilder;
     private readonly ILogger? logger;
     private readonly object gate = new();
+    private readonly object remapGate = new();
     private IReadOnlyList<Endpoint> endpoints = [];
+    private ImmutableDictionary<string, Published> published = ImmutableDictionary.Create<string, Published>(StringComparer.Ordinal);
     private CancellationTokenSource changed = new();
+
+    /// <summary>A module's endpoints as they are being served, with the generation that mapped them.</summary>
+    private sealed record Published(ModuleGeneration Generation, IReadOnlyList<Endpoint> Endpoints);
 
     /// <summary>Creates the source over the mesh's module registry, and maps the current generations.</summary>
     public ModuleEndpointDataSource(
@@ -42,7 +54,11 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
         this.contexts = contexts;
         this.createApplicationBuilder = createApplicationBuilder;
         this.logger = logger;
-        endpoints = Map();
+        // Boot maps every held module; a boot collision is refused by the host's startup check, which
+        // reads the composite endpoint table this source is part of.
+        published = contexts.Generations.ToImmutableDictionary(
+            g => g.Name, g => new Published(g, MapModule(g)), StringComparer.Ordinal);
+        endpoints = Flatten(published);
         // Lives as long as the registry — the same mesh as the host.
         contexts.VersionChanged.Subscribe(_ => Remap());
     }
@@ -62,29 +78,56 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
 
     private void Remap()
     {
-        IReadOnlyList<Endpoint> mapped;
-        try
+        lock (remapGate)
         {
-            mapped = Map();
+            var previous = published;
+            var current = contexts.Generations.OrderBy(g => g.Name, StringComparer.Ordinal).ToArray();
+            // Start from what is served: an unchanged module keeps its endpoints, a changed one keeps its
+            // previous endpoints until its new map is accepted, and a module no longer held drops out.
+            var choice = current
+                .Where(g => previous.ContainsKey(g.Name))
+                .ToImmutableDictionary(g => g.Name, g => previous[g.Name], StringComparer.Ordinal);
+            var pending = current
+                .Where(g => !(previous.TryGetValue(g.Name, out var served) && ReferenceEquals(served.Generation, g)))
+                .ToArray();
+            var ours = previous.Values.SelectMany(p => p.Endpoints).ToImmutableHashSet(ReferenceEqualityComparer.Instance);
+            var foreign = services.GetService<EndpointDataSource>()?.Endpoints
+                .Where(e => !ours.Contains(e)).ToArray() ?? [];
+
+            foreach (var generation in pending)
+            {
+                IReadOnlyList<Endpoint> candidate;
+                try
+                {
+                    candidate = MapModule(generation);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogCritical(exception,
+                        "[ModuleLiveUpdate] re-mapping module {Module}'s endpoints after a swap FAILED — its previous endpoints keep serving; other modules' changes are still published",
+                        generation.Name);
+                    continue;
+                }
+                // The same refusal boot applies — never two registrations on one (verb, pattern) —
+                // measured against every endpoint the host would serve with this module's new map.
+                var others = choice.Where(kv => kv.Key != generation.Name).SelectMany(kv => kv.Value.Endpoints);
+                if (MeshModuleEndpointExtensions.FindRouteCollisions(foreign.Concat(others).Concat(candidate)) is { } collision)
+                {
+                    logger?.LogCritical(
+                        "[ModuleLiveUpdate] module {Module}'s swapped endpoints collide with existing routes — NOT published, its previous endpoints keep serving; other modules' changes are still published: {Collision}",
+                        generation.Name, collision);
+                    continue;
+                }
+                choice = choice.SetItem(generation.Name, new Published(generation, candidate));
+            }
+
+            var unchanged = choice.Count == previous.Count
+                && choice.All(kv => previous.TryGetValue(kv.Key, out var served) && ReferenceEquals(served, kv.Value));
+            if (unchanged)
+                return;
+            published = choice;
+            Volatile.Write(ref endpoints, Flatten(choice));
         }
-        catch (Exception exception)
-        {
-            logger?.LogCritical(exception,
-                "[ModuleLiveUpdate] re-mapping module endpoints after a swap FAILED — the previous endpoints keep serving");
-            return;
-        }
-        // The same refusal boot applies — never two registrations on one (verb, pattern) — measured
-        // against every OTHER endpoint the host serves; a colliding re-map is not published.
-        var others = services.GetService<EndpointDataSource>()?.Endpoints
-            .Where(e => !Volatile.Read(ref endpoints).Contains(e)) ?? [];
-        if (MeshModuleEndpointExtensions.FindRouteCollisions(others.Concat(mapped)) is { } collision)
-        {
-            logger?.LogCritical(
-                "[ModuleLiveUpdate] the swapped module's endpoints collide with existing routes — NOT published, the previous endpoints keep serving: {Collision}",
-                collision);
-            return;
-        }
-        Volatile.Write(ref endpoints, mapped);
         CancellationTokenSource fire;
         lock (gate)
         {
@@ -98,17 +141,19 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
         fire.Cancel();
     }
 
-    private IReadOnlyList<Endpoint> Map()
+    private static IReadOnlyList<Endpoint> Flatten(ImmutableDictionary<string, Published> modules) =>
+        modules.OrderBy(kv => kv.Key, StringComparer.Ordinal).SelectMany(kv => kv.Value.Endpoints).ToImmutableArray();
+
+    private IReadOnlyList<Endpoint> MapModule(ModuleGeneration generation)
     {
         var builder = new PrivateRouteBuilder(services, createApplicationBuilder);
-        foreach (var generation in contexts.Generations.OrderBy(g => g.Name, StringComparer.Ordinal))
-            foreach (var attribute in generation.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>())
-            {
-                var group = builder.MapGroup(string.Empty).RequireAuthorization()
-                    .WithMetadata(new MeshModuleEndpointMetadata(generation.Name));
-                foreach (var configure in attribute.EndpointConfigurations)
-                    configure(group);
-            }
+        foreach (var attribute in generation.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>())
+        {
+            var group = builder.MapGroup(string.Empty).RequireAuthorization()
+                .WithMetadata(new MeshModuleEndpointMetadata(generation.Name));
+            foreach (var configure in attribute.EndpointConfigurations)
+                configure(group);
+        }
         return builder.DataSources.SelectMany(source => source.Endpoints).ToImmutableArray();
     }
 

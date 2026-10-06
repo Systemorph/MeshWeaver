@@ -200,14 +200,15 @@ query routing rule is a blocker the guard names.
 
 | Piece | What it does |
 |---|---|
-| `ModuleEndpointDataSource` (`MeshWeaver.Hosting.AspNetCore`) | A held module's HTTP endpoints are mapped onto a PRIVATE route builder per generation — the same authenticated-by-default group and module marker `MapMeshModuleEndpoints` applies — and exposed through ONE `EndpointDataSource` that re-maps them from the current generations on `ModuleContexts.VersionChanged` and fires its change token, so ASP.NET Core routing rebuilds its matcher. A re-map whose routes collide with another endpoint is NOT published (the previous endpoints keep serving; logged Critical, naming both). Image-bound modules map as before. Endpoints are no longer a blocker. |
+| `ModuleEndpointDataSource` (`MeshWeaver.Hosting.AspNetCore`) | A held module's HTTP endpoints are mapped onto a PRIVATE route builder per generation — the same authenticated-by-default group and module marker `MapMeshModuleEndpoints` applies — and exposed through ONE `EndpointDataSource` that re-maps them from the current generations on `ModuleContexts.VersionChanged` and fires its change token, so ASP.NET Core routing rebuilds its matcher. The refusal is scoped PER MODULE: each module's endpoints are published with the generation that mapped them, and only a module whose current generation differs is re-mapped. A module whose new map throws, or whose routes collide with another endpoint the host serves (another module's included), keeps serving its previous endpoints; it is logged at Critical with the module and the collision named, and it is retried on every later swap. Every other module's change is still published, so one module's bad generation never freezes endpoint updates for the rest. Image-bound modules map as before. Endpoints are no longer a blocker. |
 | `MeshNodeProviderAttribute.Views` + `IViewContributionSource` (`MeshWeaver.Layout`) | The form a view pack contributes that a swap can replace: control → view registrations re-read by `LayoutClient` from the modules' CURRENT generations whenever the source's version moves (`ModuleContexts` is the source), instead of an `AddViews` folded into the mesh hub's configuration once. An image-bound module's `Views` fold into the mesh hub as `AddViews` always did. `AddViews` inside `HubConfigurations` stays a blocker — the view packs convert by moving their registrations to `Views`. |
 | Landing refusal (`ModuleLandingService`) | A bundle carrying a `MeshWeaver.*` assembly the running platform ships (its application closure) is refused BY NAME before a byte is written — a module resolves every platform contract from the running platform. Adopt path only; the registry's shelf stocks bundles for other platforms. |
 
 **Tests:** `ModuleEndpointsSwapLiveTest` (real ASP.NET Core routing on a TestServer): the route answers
 from N+1 after the swap with no restart and N is collected; a generation that ADDS endpoints is mapped
 live even when boot mapped none; a held module whose boot route collides with the host is refused at
-startup; the negative control: a colliding re-map is not published and the previous route keeps serving.
+startup; the negative control: a colliding re-map is not published and the previous route keeps serving;
+and one module's refused swap does not freeze another module's swap, which still goes live.
 `ModuleViewsSwapTest`: the SAME layout client resolves the control to N+1's view after the swap; the
 negative control: views folded through `HubConfigurations`' `AddViews` are a named blocker.
 `ModulesUpdateIndependentlyOfThePlatformTest`: the platform stays fixed while M goes N → N+1 → N+2 live
@@ -234,7 +235,9 @@ made that true, each found by running it:
    N+1's root services "changed shape" — by exactly one added hosted service. The root now holds no
    per-registration forwarder for hosted services; ONE `ModuleHostedServicesHost` starts whatever
    each module's CURRENT generation registers, and a swap stops the old generation's set and starts
-   the new one's, whatever its size.
+   the new one's, whatever its size. Start and stop stay SEQUENTIAL, as the generic host runs root
+   hosted services: modules in name order, each module's services in registration order, each once
+   the previous start completed; stop is the exact reverse (`ModuleHostedServicesStartInSequenceTest`).
 2. **The content-type registry let go of nothing.** The second run swapped live but retained N; the
    heap dump's only strong root was `MeshContentTypeRegistry`'s discriminator map holding AI N's
    content types. It now evicts, on a collectible context's `Unloading`, exactly the entries whose

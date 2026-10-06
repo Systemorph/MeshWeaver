@@ -105,6 +105,34 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
         (await client.GetStringAsync("/host-route")).Should().Be("host");
     }
 
+    /// <summary>#6128 review: the refusal is scoped PER MODULE. Module B's new generation collides with
+    /// the host and is refused; module A's later swap must STILL go live. With the old all-or-nothing
+    /// re-map, B's colliding current generation refused every later map, so A's swap stayed unpublished.</summary>
+    [Fact]
+    public async Task OneModulesRefusedSwap_DoesNotFreezeAnotherModulesEndpoints()
+    {
+        using var contexts = new ModuleContexts();
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1))));
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1, route: "/other-endpoint", module: OtherModule), OtherModule)));
+        await using var app = await Start(contexts);
+        var client = app.GetTestClient();
+        (await client.GetStringAsync("/live-endpoint")).Should().Be("v1");
+        (await client.GetStringAsync("/other-endpoint")).Should().Be("v1");
+
+        contexts.Commit(contexts.Load(Write("g2", ModuleSource(2, collide: true, module: OtherModule), OtherModule)));
+        (await client.GetStringAsync("/other-endpoint")).Should().Be("v1",
+            "the colliding module's swap is refused and its previous route keeps serving");
+
+        contexts.Commit(contexts.Load(Write("g2", ModuleSource(2))));
+        (await client.GetStringAsync("/live-endpoint")).Should().Be("v2",
+            "another module's refused generation must not freeze this module's live swap");
+        (await client.GetStringAsync("/other-endpoint")).Should().Be("v1",
+            "the refused module still serves its previous route");
+        (await client.GetStringAsync("/host-route")).Should().Be("host");
+    }
+
+    private const string OtherModule = "MeshWeaver.Test.LiveEndpointsOther";
+
     /// <summary>#6128 review: the dynamic source publishes its BOOT map without its own collision
     /// check, so the boot routes of a held module must be caught by the host's startup refusal, which
     /// reads the composite endpoint table the dynamic source is part of. The control: the same host
@@ -142,33 +170,33 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
         return app;
     }
 
-    private static string ModuleSource(int version, bool collide = false) => $$"""
+    private static string ModuleSource(int version, bool collide = false, string route = "/live-endpoint", string module = Module) => $$"""
         using Microsoft.AspNetCore.Builder;
         using Microsoft.AspNetCore.Routing;
-        [assembly: MeshWeaver.Test.LiveEndpoints.Endpoints]
-        namespace MeshWeaver.Test.LiveEndpoints;
+        [assembly: {{module}}.Endpoints]
+        namespace {{module}};
         public sealed class EndpointsAttribute : MeshWeaver.Hosting.AspNetCore.MeshEndpointProviderAttribute
         {
             public override System.Collections.Generic.IEnumerable<System.Action<IEndpointRouteBuilder>> EndpointConfigurations =>
             [
-                routes => routes.MapGet("{{(collide ? "/host-route" : "/live-endpoint")}}", () => "v{{version}}").AllowAnonymous(),
+                routes => routes.MapGet("{{(collide ? "/host-route" : route)}}", () => "v{{version}}").AllowAnonymous(),
             ];
         }
         """;
 
-    private string Write(string generation, string source)
+    private string Write(string generation, string source, string module = Module)
     {
         var references = PlatformReferences.Platform()
             .Add(MetadataReference.CreateFromFile(typeof(MeshEndpointProviderAttribute).Assembly.Location));
-        var compilation = CSharpCompilation.Create(Module, [CSharpSyntaxTree.ParseText(source)], references,
+        var compilation = CSharpCompilation.Create(module, [CSharpSyntaxTree.ParseText(source)], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var buffer = new MemoryStream();
         var result = compilation.Emit(buffer);
         result.Success.Should().BeTrue(string.Join(Environment.NewLine,
             result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        var directory = Path.Combine(root, "modules", $"{Module}@{generation}");
+        var directory = Path.Combine(root, "modules", $"{module}@{generation}");
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, Module + ".dll");
+        var path = Path.Combine(directory, module + ".dll");
         File.WriteAllBytes(path, buffer.ToArray());
         return path;
     }
