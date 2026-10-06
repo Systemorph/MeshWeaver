@@ -204,10 +204,15 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
 5. **Done — the pair tag `<core7>-p<plugins7>` is retired.** main-cd no longer mints it on
    `memex-portal-ai` (`promote` phase A) or `memex-control` (`control-promote`). See
    "The pair tag, retired" below.
-6. **Owed — Plugins' `promotion-candidate.yml` / `core-candidate.yml`.** They still run the
-   dependent suites against each promoted pair, and `arm-promoted-set.py pending` still answers
-   them, but no verdict they write decides anything. They report only, and they can be retired by
-   Plugins.
+6. **Done — the promotion poller is retired.** MeshWeaver.Plugins deleted `promotion-candidate.yml`
+   (the 10-minute poll that measured every promoted pair), the green-pair nudge of core's CD and
+   the held-pair ledger (`core-release-attribution.py`, the `core-release-held` issue). Core then
+   deleted the `pending` command of `arm-promoted-set.py` that answered the poller, and the two
+   `core-candidate.yml` rows in `.github/lane-caller-grants.yml`. Plugins went first, because a
+   satellite asserts its roster row against core's `main`, and a `pending:` row excuses an absent
+   caller but not an unrecorded one. `core-candidate.yml` stays for the advisory measurements a core
+   pull request asks for (`dependent-suites` label or `Pairs-with:`) and for `paired-core.yml`.
+   None of them gates a merge or an arming.
 
 ## The pair tag, retired
 

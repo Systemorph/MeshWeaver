@@ -53,7 +53,7 @@ Plugins push to main ──(image-relevant?)──► main-cd rebuild ───�
                                                                    │   Plugins seal, satellites …
                                                                    │   (CI reads the set NOW)
                                                                    ▼
-   Plugins promotion-candidate.yml (poll) ──► core-candidate.yml: dependent suites against the pair
+   Plugins promotion-candidate.yml (poll, RETIRED) ──► core-candidate.yml: suites against the pair
                                                                    │ verdict at
                                                                    │ refs/core-candidate/pair-<core7>-p<plugins7>
                                                                    ▼
@@ -119,7 +119,9 @@ and arms the newest promoted set that is
    (the core commit of the newest ARMED set — below) and Plugins commit all checked
    (`.github/scripts/arm-promoted-set.py`, `--self-test`).
 
-A missing verdict WAITS, a red one is REFUSED, a newer green one supersedes both. The verdict is
+A missing verdict WAITS, a red one is REFUSED, a newer green one supersedes both. *(Historical:
+`arm` no longer reads this verdict, and the poller that produced it was retired. See
+[Platform and Module Deploy](../PlatformAndModuleDeploy), migration step 6.)* The verdict was
 produced asynchronously by MeshWeaver.Plugins' `promotion-candidate.yml`, which polls for the newest
 promoted-but-unarmed pair without a verdict and runs `core-candidate.yml` against it; when that run
 finishes it dispatches main-cd so the arming does not wait for the hourly reconcile. Core sends
@@ -196,15 +198,17 @@ a `Roll` `Hosting/InstanceAction`, not here.
   `MeshWeaver.Fleet.Control` and `MeshWeaver.SelfUpdate.Aks` and closes the type set — see
   [Closed Type Set](../ClosedTypeSet)). Its own lane (`control-image` → `control-acceptance` →
   `control-promote`) stays outside the fleet's delivery verdict, and `control-promote` writes only
-  identity tags: `<core7>` and `main`. The version tag and the line
-  pointers are written by `control-arm`, which runs after `arm` in every main-cd run
-  (`arm-promoted-set.py control-follow`): it reads the newest ARMED version and its pair tag off
-  memex-portal-ai and tags the accepted control image of that pair. An armed set without an accepted
-  control image is a warning naming the version the control image stays on — never a red on the
-  fleet's delivery, and healed by the next run once the pair is accepted. The version tag is written
-  to the fleet registry first and to ACR last, so its presence on ACR means both registries carry it.
-  Before this, `control-promote` wrote the version and the pointers at promotion, so an instance on
-  `memex-control` with a Continuous policy would have rolled to sets the gate had not armed.
+  identity tags: `<core7>` and `main`. The version tag and the line pointers are written by
+  `control-first`, in the same main-cd run that built and accepted the control image: control
+  deploys FIRST (policy `platform-deploy-control-first`) and waits for nothing else — not `arm`, not
+  a pair tag, not a MeshWeaver.Plugins verdict. It reads no pair tag at all; the version it writes
+  is this run's own `V_CONTROL`. The fleet is offered the build only after control runs it (`arm`
+  reads control's `/api/version` + `/health` as the control half of the verdict), and
+  `control-always-latest.yml` turns a control that never got its tag into a red within the declared
+  bound. The former `control-arm` job (`arm-promoted-set.py control-follow`, which followed the
+  fleet's arming and the pair tag) is retired — see
+  [Platform and Module Deploy](../PlatformAndModuleDeploy). The version tag is written to the fleet
+  registry first and to ACR last, so its presence on ACR means both registries carry it.
 
 ### Containment is answerable
 
@@ -234,8 +238,7 @@ exist — it was not armed yet. A set the fleet cannot run is not a target.
 
 **The candidate and the target are one pipeline, not two definitions.** Without `--armed` the
 resolver returns the newest sealed set — the CANDIDATE every CI run (and `stamp-floors`, which writes
-it onto each package as `minMeshVersion`) tests, so that `promotion-candidate.yml`'s verdict can ARM
-it. Arming is what turns the candidate into the target. A host that cannot read an armed tag (no
+it onto each package as `minMeshVersion`) tests, so that the platform verdict can ARM it. Arming is what turns the candidate into the target. A host that cannot read an armed tag (no
 self-update) falls back to the newest served floor, which is still the resolver's own answer.
 
 **An instance has CONVERGED** when its running platform is at or above `P*` and every installed

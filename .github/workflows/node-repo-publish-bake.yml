@@ -1785,6 +1785,21 @@ jobs:
           echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           echo "baked bundles:"; ls -l "$BAKE"/*.zip
+      # 🚨 A SET THAT CONTRADICTS ITSELF IS NEVER SEALED (MeshWeaver.Manufacturing#84). Every bundle
+      # this bake wrote stamps a platform FLOOR (`producerPlatformVersion`); a consumer running an
+      # older build DECLINES it. The publication record names ONE portal as the platform this set was
+      # baked for (`steps.platform-version` — that image's own MESHWEAVER_PLATFORM_VERSION). Set
+      # 3.0.0-ci.9985 shipped Plugins bundles with floor 9985 next to a portal that reported 9984, and
+      # every satellite consuming it went red on 134 declined types. So, BEFORE anything is published:
+      # every floor this bake stamped must be <= that version. Checked HERE, on the bundles this bake
+      # just wrote — the carried-forward ones were sealed (and checked) by the run that baked them.
+      # A GATE, so no `continue-on-error` and no input-shaped `if:` — it runs exactly when the bake
+      # ran, and zero bundles, an unreadable bundle or an absent floor is RED, never a vacuous pass.
+      - name: "Gate: no bundle stamps a platform floor above the portal this publication names"
+        if: steps.scope.outputs.scope != 'none'
+        env:
+          PLATFORM_VERSION: ${{ steps.platform-version.outputs.version }}
+        run: python3 mw-platform-gate/.github/scripts/assert-bake-floor.py --bake "$BAKE_DIR" --platform-version "$PLATFORM_VERSION"
       - name: Azure login (OIDC)
         if: steps.scope.outputs.scope != 'none'
         uses: azure/login@v3

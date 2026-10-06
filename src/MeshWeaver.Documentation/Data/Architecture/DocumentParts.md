@@ -93,6 +93,55 @@ activity or a thread keeps its parts in `document_parts`. It does not outrank `_
 ties `_Notification` / `_UserActivity`; `DocumentPartPaths.PartPlacementProblem` refuses a document
 filed there, because its parts would be written into another table and never be found again.
 
+## Reading parts: a namespace query, never a point read per part
+
+🚨 **Read many parts with ONE query over the part namespace, never with `GetMeshNode(partPath)` once
+per part.** A part is a node at its own address, and a point read routes to that address. That builds
+the part's own per-node hub (an Orleans grain on a cluster) with a full DI scope, type registry and
+data source. Nothing redirects a satellite to its owner's hub. Once built, the hub stays alive for
+minutes:
+
+- the stream-cache entry for its own path is released only after `ReadStreamIdleExpiration` (10 min);
+- each heartbeat re-arms `DelayDeactivation` for 10 min;
+- Orleans then waits out its idle `CollectionAge` (15 min by default).
+
+So N point reads hold N hubs.
+
+```csharp
+meshService.Query<MeshNode>(MeshQueryRequest
+        .FromQuery($"namespace:\"{DocumentPartPaths.PartNamespace(documentPath)}\"").Complete())
+    // ONE Initial change carries the WHOLE result set: take that one frame, then use its rows.
+    .Where(change => change.ChangeType == QueryChangeType.Initial)
+    .Take(1)
+    .Select(change => change.Items)   // every part of the document, not just one
+```
+
+`Take(1)` takes one *change*, not one part. Every `Query<T>` stream emits exactly one `Initial`
+change, and that change carries every matching row; `Complete()` lifts any limit. If a frame is
+flagged `SnapshotIncomplete`, a provider could not answer, so do not treat its rows as the full
+set. The quotes keep the namespace a single query token. The query reads the rows from the parts'
+satellite table and builds no hub.
+`DurableStreamSource` consumes a document's parts the same way.
+
+**What it cost.** On 2026-10-04/05 the `memex` portal pods ran out of memory: core #6161, #6163,
+#6152 and #6159. The seal (`DocumentPartWriter.StoreOriginal`) read every part back by point read so
+it could assemble the original. The PR babysitter had begun recording every downloaded CI job log as a
+document, and one uncapped log was cut into more than 5,150 parts. Sealing it activated thousands of
+part hubs:
+
+- **The victims were part hubs.** The OutOfMemoryExceptions were thrown in the delivery pipelines of
+  those hubs, for example `…/logs-ci-Systemorph-MeshWeaver-111819915277.log/_DocumentPart/005158`.
+- **The memory was held, not just allocated.** `[HEAPSTEP]` showed a live heap of 10–11.7 GiB for
+  more than an hour.
+- **The allocations look like hub construction.** They were led by Autofac resolve-pipeline handlers
+  and `MiddlewareDeclaration`.
+
+MeshWeaver.Plugins#2979 replaced the per-part reads with one query. Its test seals a 7-part document
+and asserts that no part address has a hosted hub. On the old writer the test failed with 7.
+
+A point read is still right for ONE part, for example a viewer opening it. A sweep over parts (assemble,
+prune, re-index, export) uses the query.
+
 ## Search
 
 The vector index is the existing content chunk index (`content_chunks`, the store behind

@@ -1329,9 +1329,12 @@ def pair_tag_problems(workflow_text: str) -> list[str]:
     pair tag as the arming source. Readers stay tolerant of legacy pair tags; only WRITING is barred."""
     problems: list[str] = []
     for n, line in enumerate(workflow_text.splitlines(), 1):
-        code = line.split("#", 1)[0] if line.lstrip().startswith("#") else line
         if line.lstrip().startswith("#"):
             continue
+        # A trailing comment (whitespace, then `#`) is not code: a line that only NAMES the retired
+        # tag in its comment must not trip the guard. A bare `#` stays code — `${VAR#prefix}` is a
+        # shell expansion, and cutting there would hide a real write behind it (#6177 review).
+        code = re.split(r"\s#", line, maxsplit=1)[0]
         if PAIR_TAG_WRITE.search(code):
             problems.append(f"main-cd.yml:{n} composes a `<core7>-p<plugins7>` pair tag — it is retired: {line.strip()[:120]}")
         if "check-image-set.sh" in code and re.search(r'check-image-set\.sh\s+"\$SHORT"\s+"\$', code):
@@ -1496,6 +1499,17 @@ def main() -> int:
     case("...and the guard catches the completeness probe asking about the pair again",
          probe != workflow_text and any("second (plugins) argument" in p for p in pair_tag_problems(probe)),
          "the mutation passed (or could not apply) with gate passing the plugins sha to check-image-set.sh")
+
+    commented = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA"  # no "$SHA-p$PLUGINS_SHORT" any more\n', 1)
+    case("...and a pair tag named only in a trailing comment is not a write",
+         commented != workflow_text and not any("pair tag" in p for p in pair_tag_problems(commented)),
+         "the mutation could not apply, or an inline comment naming the retired tag tripped the guard")
+    expansion = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA" "${SHA#x}-p$PLUGINS_SHORT"\n', 1)
+    case("...and a write behind a `${VAR#…}` expansion is still caught",
+         expansion != workflow_text and any("pair tag" in p for p in pair_tag_problems(expansion)),
+         "the mutation passed (or could not apply) with a pair-tag write after a ${VAR#…} expansion")
 
     module_pack_text = (root / MODULE_PACK_WORKFLOW).read_text()
     permission_problems = module_pack_permission_problems(module_pack_text)
