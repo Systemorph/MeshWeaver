@@ -1,7 +1,7 @@
 ---
 Name: Live Query Re-query Cost
 Category: Architecture
-Description: "Why one node write cost more the larger the mesh was: every write re-walked the security fold's permanent live queries. A live raw query now ignores a change whose old and new node types it can never return."
+Description: "Why one node write cost more the larger the mesh was: every write re-walked the security fold's permanent live queries. A live raw query, and a secured one answered as System, now ignores a change whose old and new node types it can never return."
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 4 4 5-5"/></svg>
 ---
 
@@ -80,7 +80,8 @@ types and neither the type the path now holds nor the type it held before is in 
 - **Only the raw surface uses it.** The security fold reads through `IMeshQueryCore`. A
   row-level-security filtered result also moves with grants, and a grant is exactly a node of *another*
   type (an `AccessAssignment` under the scope makes other rows visible). So the secured `Query`
-  surface keeps re-querying on every change under its scope.
+  surface keeps re-querying on every change under its scope, with one exception: a secured read
+  answered as System, which is filtered by nothing (see *The secured surface* below).
 
 After the fix the same repro holds **~1 ms per write, flat**, from 150 nodes to 1,200.
 
@@ -96,6 +97,80 @@ query's base path:
 - a row retyped away from the watched type, and a deleted watched row, still leave the result. The
   negative control, with the previous type ignored, turned both red;
 - the rule refuses every shape it cannot prove.
+
+## The secured surface: System catalogs re-walked the mesh on every write
+
+The fix above covered the raw surface only. The **secured** surface kept re-querying on every change
+under its scope, and the platform keeps several secured live queries open for the life of the mesh
+whose scope is the whole mesh: the `UiContribution` menu catalog (`UiContributionCatalog`), the
+`NodeType` catalogs and the `Store/Plugin` package index. Each is a `partitions:all` query confined to
+one node type, and each is read as **System**. So every write, of anything, still re-walked the mesh
+three times.
+
+### What it looked like
+
+`MeshWeaver.Reinsurance`'s required check `test-repos / Compile + render node repos (MeshWeaver from
+ACR)` runs its gate in one shard: 56 package installs into one in-memory mesh (40 upstream packages
+from the sealed Plugins publication, then the repository's own 17). It was cut by the 45-minute job cap
+while installing `ReinsurancePractice` (main schedule run 37411388338, ci.10047), and the one green
+main run (37414123629) took 41 minutes. The per-node write time of the installer in the cut run
+(`── X: installing N file(s)` to `Installed node-repo plugin X: N written`):
+
+| package (install position) | nodes already installed | s/node |
+|---|---|---|
+| Store (1st) | 0 | 0.006 |
+| Edu (15th) | 499 | 0.025 |
+| HomeAssistant (26th) | 850 | 0.115 |
+| Ifrs17 (30th) | 1,558 | 0.37 |
+| Reinsurance (42nd) | 2,319 | 0.63 |
+| ReinsuranceDemo (56th) | 3,346 | 1.02 (300 nodes, 305 s) |
+
+Nothing was compiling, baking or waiting: the time went into writes, and the cost of one write grew
+with the mesh.
+
+### The measurement
+
+The gate was run locally (`mw-plugin-test` from this repository, the AI module built from
+`MeshWeaver.Plugins`, the packages Store, Edu, Essentials, Training and Hosting plus all of
+`MeshWeaver.Reinsurance`) with every live re-query tallied by query, viewer and duration:
+
+```
+ 4156 re-runs   113 s   secured  viewer=system-security  nodeType:Store/Plugin is:main partitions:all
+ 3804 re-runs   112 s   secured  viewer=system-security  nodeType:UiContribution partitions:all
+ 2596 re-runs    93 s   secured  viewer=system-security  nodeType:NodeType partitions:all
+```
+
+About 2,950 node writes paid for about 10,500 re-walks of the whole mesh.
+
+### The fix
+
+**A secured read answered as System, in a mesh whose every Read validator admits System
+unconditionally, IS the raw read, so the node-type test applies to it unchanged.**
+`StorageAdapterMeshQueryProvider.SecuredReadIsTheRawRead` decides this when the live query subscribes:
+
+- **The viewer is stamped on the request as `WellKnownUsers.System`.** An explicit request identity wins
+  over any ambient one (`QueryIdentityResolver`), so every re-run is filtered for the same viewer.
+- **Every validator that judges a Read declares `ISystemReadTransparentNodeValidator`.** Row-level
+  security (`RlsNodeValidator`) does; its first line returns `Valid` for System. A Read validator
+  without the declaration switches the pruning off for every System query in that mesh, and the
+  re-read runs as it always has. That is the safe direction.
+- **Any other viewer keeps today's behaviour.** A grant can make other rows visible to it.
+
+The same local run after the fix: about 280 re-queries in all (the `NodeType` catalog still re-reads
+when a `NodeType` is written, which is a relevant change). Per-node write cost stayed between 1 and
+5 ms from the first package to the last, where it had grown from 3 ms to 136 ms. The whole run took
+2 min 36 s instead of 6 min 23 s, and every package and type verdict was identical.
+
+### Regression test
+
+`LiveQueryIgnoresOtherNodeTypesTest` (MeshWeaver.Hosting.Test) gained two cases:
+
+- `ASystemSecuredQuery_SkipsWritesOfAnotherNodeType`: forty `Markdown` writes cost a secured System
+  query **0** walks, and then one watched write costs exactly one walk and reaches the subscriber. With
+  the System test disabled, the same test counted **41** walks.
+- `ASecuredQueryTheRuleCannotProve_StillReReadsOnAForeignWrite`: a secured query for a real viewer,
+  and a System query in a mesh with an undeclared Read validator, both still re-read on a foreign
+  write.
 
 ## What this does not claim
 

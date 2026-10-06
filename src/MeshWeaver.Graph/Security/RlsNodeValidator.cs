@@ -12,7 +12,7 @@ namespace MeshWeaver.Graph.Security;
 /// Node validator that enforces Row-Level Security based on permissions.
 /// Checks if the current user has the required permission for the operation.
 /// </summary>
-public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
+public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISystemReadTransparentNodeValidator
 {
     private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;

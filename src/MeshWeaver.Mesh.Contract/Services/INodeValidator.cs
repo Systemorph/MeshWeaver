@@ -40,6 +40,27 @@ public interface IOwnerEnforcedNodeValidator
 }
 
 /// <summary>
+/// Marker for a Read-capable <see cref="INodeValidator"/> that admits a read by
+/// <see cref="MeshWeaver.Mesh.Security.WellKnownUsers.System"/> UNCONDITIONALLY — whatever the node
+/// and whatever any other node in the mesh holds. Row-level security is the one in the platform
+/// (its system bypass is its first line).
+///
+/// <para><b>What the marker licenses.</b> A secured read answered as System is then exactly the raw
+/// read: no grant, membership or policy can move its result. So a LIVE secured query running as
+/// System may skip the re-read for a change that cannot touch its rows, exactly as a raw query does
+/// (<c>NodeTypeChangeRelevance</c>, Doc/Architecture/LiveQueryRequeryCost). A Read validator WITHOUT
+/// this marker switches that pruning off for every System query in the mesh — the safe direction:
+/// the re-read simply runs, as it always used to.</para>
+///
+/// <para>🚨 Only implement it when the claim holds by construction. A validator whose verdict for
+/// System could depend on another node (a grant, a flag, a parent) must NOT carry it, or a System
+/// live query would miss a change that moved its result.</para>
+/// </summary>
+public interface ISystemReadTransparentNodeValidator
+{
+}
+
+/// <summary>
 /// Context for node validation containing all relevant information.
 /// </summary>
 public record NodeValidationContext
