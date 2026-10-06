@@ -47,7 +47,8 @@ public sealed record ModuleServiceRegistration(int Index, ServiceDescriptor Desc
     /// which is a different <see cref="Type"/> in every generation.</summary>
     public string Shape => Route == ModuleServiceRoute.ModuleOwned || Route == ModuleServiceRoute.Private
         ? $"{Route}:{Descriptor.ServiceType.FullName}"
-        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}";
+        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}"
+          + (Descriptor.IsKeyedService ? $":key={Descriptor.ServiceKey}" : "");
 }
 
 /// <summary>
@@ -107,7 +108,11 @@ public sealed class ModuleServices : IDisposable
 
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>).</summary>
     public ImmutableList<string> Shape => Registrations
-        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+        // Hosted services are NOT part of the shape: the root holds no per-registration forwarder for
+        // them — one ModuleHostedServicesHost starts whatever the CURRENT generation registers — so a
+        // generation may add or drop a background service and still swap live (measured: the AI
+        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else).
+        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
         .Select(r => r.Shape)
         .ToImmutableList();
 
@@ -161,9 +166,16 @@ public sealed class ModuleServices : IDisposable
     {
         blocker = null;
         var type = descriptor.ServiceType;
-        if (descriptor.IsKeyedService)
+        // A keyed registration is forwarded under its OWN key — unless the key pins the module: a key
+        // that is a module object, or a key that IS a module type (the keyed-by-marker-type shape,
+        // `AddKeyedSingleton<IService>(typeof(SomeModuleType), …)`, whose runtime type is CoreLib's
+        // RuntimeType and so passes an instance check). A root registration would hold either for the
+        // life of the process, and with it the module's collectible load context.
+        if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key
+            && (IsOwned(key.GetType(), module) || (key is Type keyType && IsOwned(keyType, module))))
         {
-            blocker = "keyed root services are not forwarded";
+            var named = key is Type t ? t.Name : key.GetType().Name;
+            blocker = $"its service key is a module type ({named}) — the root would hold it";
             return ModuleServiceRoute.Private;
         }
         var implementation = ImplementationTypeOf(descriptor);
@@ -198,9 +210,13 @@ public sealed class ModuleServices : IDisposable
     }
 
     private static Type? ImplementationTypeOf(ServiceDescriptor descriptor) =>
-        descriptor.ImplementationType
-        ?? descriptor.ImplementationInstance?.GetType()
-        ?? descriptor.ImplementationFactory?.Method.ReturnType;
+        descriptor.IsKeyedService
+            ? descriptor.KeyedImplementationType
+              ?? descriptor.KeyedImplementationInstance?.GetType()
+              ?? descriptor.KeyedImplementationFactory?.Method.ReturnType
+            : descriptor.ImplementationType
+              ?? descriptor.ImplementationInstance?.GetType()
+              ?? descriptor.ImplementationFactory?.Method.ReturnType;
 
     /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from
     /// <paramref name="module"/>.</summary>
@@ -226,7 +242,10 @@ public sealed class ModuleServices : IDisposable
             foreach (var registration in Registrations)
             {
                 var d = registration.Descriptor;
-                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+                // A keyed registration keeps its own key — the root forwards by that key; an unkeyed
+                // forwarded one is held under its index key so the root can ask for exactly it.
+                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted
+                    && !d.IsKeyedService)
                     services.Add(Keyed(d, registration.Key));
                 else
                     services.Add(d);
@@ -252,7 +271,9 @@ public sealed class ModuleServices : IDisposable
     public object Resolve(IServiceProvider root, int index)
     {
         var registration = Registrations[index];
-        return Scope(root).GetRequiredKeyedService(registration.Descriptor.ServiceType, registration.Key);
+        var descriptor = registration.Descriptor;
+        return Scope(root).GetRequiredKeyedService(
+            descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
     }
 
     /// <summary>Starts hosted registration <paramref name="index"/> from this generation and records
@@ -289,14 +310,34 @@ public sealed class ModuleServices : IDisposable
             "[MeshWeaver.Mesh.IncompatibleModule] a hosted service of module {Module} could not start — its feature is absent",
             ModuleName);
 
+    /// <summary>Starts EVERY hosted registration of this generation — the host at boot, and the swap
+    /// for the generation it puts in service. ONE AFTER ANOTHER in registration order, each once the
+    /// previous start has completed — the order the generic host itself uses for root
+    /// <see cref="IHostedService"/>s, which the per-registration forwarders this replaced inherited
+    /// (#6128 review).</summary>
+    public Task StartAllHosted(IServiceProvider root, CancellationToken ct, ILogger? logger) =>
+        InSequence(Registrations
+            .Where(r => r.Route == ModuleServiceRoute.Hosted)
+            .OrderBy(r => r.Index)
+            .Select(r => (Func<Task>)(() => StartHosted(root, r.Index, ct, logger))));
+
+    /// <summary>Runs <paramref name="steps"/> one after another, each once the previous task completed.
+    /// Every step this type hands it reports its own fault and completes, so one failing step never
+    /// keeps the next from running. Task-shaped because <see cref="IHostedService"/> is — no <c>await</c>.</summary>
+    internal static Task InSequence(IEnumerable<Func<Task>> steps) =>
+        steps.Aggregate(Task.CompletedTask, (prior, next) => prior.ContinueWith(
+                _ => next(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
+            .Unwrap());
+
     /// <summary>The hosted registrations this generation has started.</summary>
     public ImmutableList<int> StartedHosted
     {
         get { lock (gate) return started.Select(s => s.Index).ToImmutableList(); }
     }
 
-    /// <summary>Stops every hosted service this generation started — before it is retired. A stop
-    /// that faults is logged; it never keeps the others running.</summary>
+    /// <summary>Stops every hosted service this generation started — before it is retired — one after
+    /// another in REVERSE registration order, as the generic host stops its own. A stop that faults is
+    /// logged; it never keeps the others running.</summary>
     public Task StopHosted(CancellationToken ct, ILogger? logger)
     {
         ImmutableList<(int Index, IHostedService Instance)> running;
@@ -305,7 +346,7 @@ public sealed class ModuleServices : IDisposable
             running = started;
             started = [];
         }
-        return Task.WhenAll(running.Select(r =>
+        return InSequence(running.OrderByDescending(r => r.Index).Select(r => (Func<Task>)(() =>
         {
             Task stopping;
             try
@@ -324,7 +365,7 @@ public sealed class ModuleServices : IDisposable
                         logger?.LogWarning(t.Exception, "[ModuleLiveUpdate] stopping a hosted service of {Module} faulted", ModuleName);
                 },
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        }));
+        })));
     }
 
     /// <summary>Disposes the scope — this generation's singletons with it.</summary>

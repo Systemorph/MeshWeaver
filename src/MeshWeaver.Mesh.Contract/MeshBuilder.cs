@@ -48,6 +48,8 @@ public partial record MeshBuilder
                 sp.GetService<CollectibleContextUnloads>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
                 sp));
+            // The layout client re-reads held modules' views from their current generations.
+            services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             return services;
         });
         RegisterModuleOwnedServiceForwarders();
@@ -474,6 +476,10 @@ public partial record MeshBuilder
             ConfigureHub(hubConfiguration);
         foreach (var module in installed.Where(p => IsHeld(p.Assembly)))
             RegisterMeshHubConfigurations(module.Assembly.GetName().Name ?? "");
+        // An image-bound module's views fold into the mesh hub's configuration, as AddViews always did;
+        // a held module's are re-read from its current generation (IViewContributionSource).
+        foreach (var view in installed.Where(p => !IsHeld(p.Assembly)).SelectMany(p => p.Views))
+            ConfigureHub(config => MeshWeaver.Layout.LayoutExtensions.AddViews(config, view));
         foreach (var module in installed)
             RegisterDefaultNodeHubConfigurations(module.Assembly, module.DefaultNodeHubConfigurations);
 
@@ -538,7 +544,11 @@ public partial record MeshBuilder
         IReadOnlyCollection<KeyValuePair<string, Type>> AddressTypes,
         IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations,
         IReadOnlyCollection<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations,
-        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations);
+        IReadOnlyCollection<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations)
+    {
+        /// <summary>The module's view registrations.</summary>
+        public IReadOnlyCollection<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> Views { get; init; } = [];
+    }
 
     /// <summary>
     /// The outcome of probing and loading ONE generation: what was materialised, or why not.
@@ -730,7 +740,10 @@ public partial record MeshBuilder
                     moduleAttributes.SelectMany(a => a.AddressTypes).ToArray(),
                     moduleAttributes.SelectMany(a => a.HubConfigurations).ToArray(),
                     moduleAttributes.SelectMany(a => a.DefaultNodeHubConfigurations).ToArray(),
-                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray()),
+                    moduleAttributes.SelectMany(a => a.BuilderConfigurations).ToArray())
+                {
+                    Views = moduleAttributes.SelectMany(a => a.Views).ToArray(),
+                },
                 null,
                 NeverLoaded: false,
                 LoadedFrom: substituted);
@@ -805,8 +818,11 @@ public partial record MeshBuilder
         var name = assembly.GetName().Name ?? "";
         if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
         {
-            if (held.Contributions?.AllDefaultNodeHubConfigurations is not { Count: > 0 })
-                return;
+            // Registered for EVERY held module, whatever its boot generation contributes (#6128
+            // review): a later generation may ADD every-per-node-hub configuration, and the swap
+            // recycles every per-node hub for it — without the indirection those hubs would rebuild
+            // without it while the swap reports Live. It aggregates to nothing while the current
+            // generation contributes none, exactly as the mesh-hub indirection does.
             var contexts = ModuleContexts;
             ConfigureDefaultNodeHub(config =>
                 (contexts.Current(name)?.Contributions?.AllDefaultNodeHubConfigurations ?? [])
@@ -972,6 +988,10 @@ public partial record MeshBuilder
     private static IncompatibleModule ReportIncompatible(string entry, Exception exception) =>
         Report(IncompatibleModule.From(entry, exception));
 
+    /// <summary>Whether the one host that starts and stops every held module's hosted services has
+    /// been registered in the root yet.</summary>
+    private bool moduleHostedServicesHostRegistered;
+
     /// <summary>
     /// The root services of a module held in its own load context (policy
     /// <c>module-live-update-default</c>): run against a COPY of the root collection, served from a
@@ -996,6 +1016,15 @@ public partial record MeshBuilder
             if (probed.Blockers.IsEmpty)
             {
                 generation.Services = probed;
+                // ONE host for every held module's background services, registered where the first
+                // module's would have been — the position its hosted services always started at.
+                if (!moduleHostedServicesHostRegistered)
+                {
+                    moduleHostedServicesHostRegistered = true;
+                    services.AddSingleton<IHostedService>(sp => new ModuleHostedServicesHost(
+                        sp.GetRequiredService<ModuleContexts>(),
+                        sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleHostedServicesHost>()));
+                }
                 return ModuleServiceForwarding.AddForwarders(services, probed);
             }
             generation.RootServiceBlockers = probed.Blockers;

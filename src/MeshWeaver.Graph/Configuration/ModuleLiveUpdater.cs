@@ -189,17 +189,14 @@ public sealed class ModuleLiveUpdater : IDisposable
                 return Observable.Return(new ModuleSwapOutcome(name, ModuleSwapKind.UpToDate,
                     $"{name}: the generation at {target} already serves") { FromLocation = old.Location, ToLocation = target });
 
-            var running = (old.Contributions?.LiveUpdateBlockers()
-                           ?? ImmutableList.Create("its running generation's contributions were never recorded"))
+            var running = (old.Contributions?.LiveUpdateBlockers() ?? UnrecordedContributions)
                 .AddRange(old.RootServiceBlockers.Select(b => $"root services: {b}"));
             if (!running.IsEmpty)
                 return Observable.Return(Restart(name, old.Location, target, "the running generation", running));
-            // A dependent is judged exactly like the module itself: contributions that were never
-            // recorded are UNKNOWN, never "nothing to re-apply" (#6123 review).
+            // A dependent is held to the SAME fail-safe as the module itself (#6128 review): unrecorded
+            // contributions are a reason to restart, never "no blockers".
             foreach (var dependent in contexts.DependentsOf(name))
-                if ((dependent.Contributions?.LiveUpdateBlockers()
-                     ?? ImmutableList.Create("its running generation's contributions were never recorded"))
-                    is { IsEmpty: false } blocked)
+                if ((dependent.Contributions?.LiveUpdateBlockers() ?? UnrecordedContributions) is { IsEmpty: false } blocked)
                     return Observable.Return(Restart(name, old.Location, target, $"its dependent {dependent.Name}", blocked));
 
             return pool.InvokeBlocking(_ => LoadAndCommit(name, old, target))
@@ -207,6 +204,9 @@ public sealed class ModuleLiveUpdater : IDisposable
                     ? Observable.Return(refused)
                     : RecycleAndRetire(name, plan, reason));
         });
+
+    private static readonly ImmutableList<string> UnrecordedContributions =
+        ImmutableList.Create("its running generation's contributions were never recorded");
 
     private static ModuleSwapOutcome Restart(
         string name, string from, string to, string who, ImmutableList<string> blockers) =>

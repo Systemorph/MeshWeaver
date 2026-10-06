@@ -364,26 +364,37 @@ public class AHoldersCompletionLandsOnTheOwnerTest
 
     /// <summary>
     /// Two reports over a node whose holder's own report enumerates FIRST. The order cannot be
-    /// asserted into existence — <c>ImmutableDictionary</c> specifies none and
-    /// <c>string.GetHashCode</c> is seeded per process — so it is searched for over candidate
-    /// reporter ids and the winner's order is re-asserted in the test body. A run that found none
-    /// fails loudly rather than quietly testing the other order.
+    /// asserted into existence under the default comparer — <c>ImmutableDictionary</c> enumerates
+    /// by hash and <c>string.GetHashCode</c> is seeded per process — so the map is built with a
+    /// comparer whose hash ranks the holder below every other reporter. Ordinal equality is
+    /// unchanged; only the enumeration order is pinned, and the test body re-asserts it.
+    ///
+    /// <para>This used to SEARCH 256 candidate reporter ids for one whose default hash happened to
+    /// sort after the holder's. That search fails whenever the holder's per-process hash is above
+    /// all 256 candidates' — about 1 run in 257 (the chance the holder is the largest of 257
+    /// uniform draws) — and it did, on core#6128 shard 1, a PR that touches nothing here.</para>
     /// </summary>
     private static (ImmutableDictionary<string, BuildOutcome> Reports, string Superseded)
         ReportsWhereTheHolderEnumeratesFirst()
     {
-        foreach (var candidate in Enumerable.Range(0, 256).Select(i => $"superseded-{i}"))
-        {
-            var reports = ImmutableDictionary<string, BuildOutcome>.Empty
-                .Add(HolderB, BuildOutcome.Completed(T0.AddMinutes(1), GoB))
-                .Add(candidate, BuildOutcome.Completed(T0, new BuildGo("fp-stale", T0)));
-            if (string.Equals(reports.First().Key, HolderB, StringComparison.Ordinal))
-                return (reports, candidate);
-        }
+        const string superseded = "superseded-0";
+        var reports = ImmutableDictionary.Create<string, BuildOutcome>(new HolderFirstComparer())
+            .Add(superseded, BuildOutcome.Completed(T0, new BuildGo("fp-stale", T0)))
+            .Add(HolderB, BuildOutcome.Completed(T0.AddMinutes(1), GoB));
+        if (!string.Equals(reports.First().Key, HolderB, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The holder-first comparer did not put the holder first — ImmutableDictionary no "
+                + "longer enumerates in hash order, so this case needs a new way to pin it.");
+        return (reports, superseded);
+    }
 
-        throw new InvalidOperationException(
-            "No reporter id out of 256 made the holder enumerate first — the search, not the "
-            + "subject, is what broke.");
+    /// <summary>Ordinal equality; a hash that ranks <see cref="HolderB"/> below every other key.</summary>
+    private sealed class HolderFirstComparer : IEqualityComparer<string>
+    {
+        public bool Equals(string? x, string? y) => string.Equals(x, y, StringComparison.Ordinal);
+
+        public int GetHashCode(string obj) =>
+            string.Equals(obj, HolderB, StringComparison.Ordinal) ? 0 : 1;
     }
 
     // ── the guard that keeps this fix from becoming a worse bug ─────────────────────────────────
