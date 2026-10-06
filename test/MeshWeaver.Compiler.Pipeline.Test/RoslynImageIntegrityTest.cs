@@ -78,6 +78,7 @@ public class RoslynImageIntegrityTest(ITestOutputHelper output)
         // The shape-b control: the only acceptable reading on a healthy process is LOADS — a
         // control that cannot load a known-good image would mark every real load failure as a
         // process fault.
+        EmitPipeline.RunLoadCanary().Should().StartWith("loadcanary=LOADS(3 types)");
         var verdict = EmitPipeline.ProbeEmittedImageLoads();
         output.WriteLine(verdict);
         verdict.Should().StartWith("loadcanary=LOADS(3 types)")

@@ -1565,7 +1565,9 @@ appends a fresh reading compared with it:
 | `image=REWRITTEN-IN-PLACE(…)` | file AND mapped bytes changed: something wrote into a loaded compiler image. Find the writer; no runtime report |
 | `image=MAPPED-CHANGED(…)` | mapped bytes changed, file did not: the image's pages were altered in memory |
 | `image=FILE-REPLACED(…)` | the path names new bytes but the mapping reads the original (a rename) — not the cause |
-| `image=NO-BASELINE(…)` | no first-compile reading in this process (a caller that emits through Roslyn directly); only mapped-vs-disk was compared, and the token says so |
+| `image=NO-BASELINE(…)` | no first-compile reading in this process (a caller that emits through Roslyn directly); only mapped-vs-disk was compared, and they agree |
+| `image=NO-BASELINE-MAPPED-DIFFERS(…)` | no baseline, AND the metadata the runtime executes from is not the metadata of the file at that path now — the image was rewritten or corrupted at some point before |
+| `image=UNAVAILABLE(…)` | the leg could not read the images (single-file host, no raw metadata, or the probe itself faulted) — it says nothing either way |
 
 It also appends `host=(runtime, RID, CPU model, ISA flags, any DOTNET_ tiering knobs)` — the
 variables a native-code fault depends on, which no earlier occurrence recorded, so occurrences can
@@ -1582,7 +1584,11 @@ identical to an occurrence one run earlier that DID throw `canary=BELOW-ROSLYN`.
 through the shared compiler, loads it from bytes and realises its types.
 `loadcanary=INVALID-IMAGE(…)` ⇒ the process writes invalid metadata for a known-good source — the
 loader-side exit of the same fault; `loadcanary=LOADS(…)` ⇒ the invalid image is specific to that
-compilation. The image and host legs ride along.
+compilation; `loadcanary=DIAGNOSTICS(<ids>)`, `loadcanary=THREW <Type> at <frame>` (the canary's
+own emit refused or threw) and `loadcanary=UNAVAILABLE(…)` (no CoreLib to reference) mean the
+control could not answer. The load verdict is taken once per process (INVALID-IMAGE already
+attributes every later load failure to itself); the image and host legs ride along fresh on every
+line.
 
 **What this does NOT do:** it does not fix #890/#5212 and does not change any verdict or status
 (`IsProcessEmitFailure` still keys on the unchanged `canary=` prefix). It decides which of the three

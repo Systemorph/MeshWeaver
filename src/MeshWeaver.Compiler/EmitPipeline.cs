@@ -583,12 +583,27 @@ public static class EmitPipeline
     /// <returns>A one-line verdict, safe to append to a log message.</returns>
     internal static string ProbeEmittedImageLoads()
     {
+        // The load verdict is taken ONCE per process: INVALID-IMAGE already attributes every later
+        // load failure to itself, and one poisoned process produced 96 such failures. The image
+        // and host legs stay fresh on every call — the image is the reading that can change.
+        if (Volatile.Read(ref loadCanaryVerdict) is null)
+            Interlocked.CompareExchange(ref loadCanaryVerdict, RunLoadCanary(), null);
+        return $"{Volatile.Read(ref loadCanaryVerdict)} {RoslynImageIntegrity.Reading()} {RoslynImageIntegrity.Host()}";
+    }
+
+    /// <summary>The process's one load-canary verdict; written once, never replaced or cleared.</summary>
+    private static string? loadCanaryVerdict;
+
+    /// <summary>Runs the load canary itself, bypassing the once-per-process verdict (test seam).</summary>
+    /// <returns>The <c>loadcanary=</c> token alone.</returns>
+    internal static string RunLoadCanary()
+    {
         string load;
         try
         {
             var references = TryBuildPristineControl(out var unavailable);
             if (unavailable is not null)
-                return $"loadcanary=UNAVAILABLE({unavailable}) {RoslynImageIntegrity.Reading()} {RoslynImageIntegrity.Host()}";
+                return $"loadcanary=UNAVAILABLE({unavailable})";
 
             var canary = CSharpCompilation.Create(
                 "MeshWeaverLoadCanary",
@@ -607,7 +622,7 @@ public static class EmitPipeline
         {
             load = $"loadcanary=THREW {probeError.GetType().Name} at {ThrowSite(probeError)}: {probeError.Message}";
         }
-        return $"{load} {RoslynImageIntegrity.Reading()} {RoslynImageIntegrity.Host()}";
+        return load;
 
         static string LoadAndRealise(MemoryStream image)
         {

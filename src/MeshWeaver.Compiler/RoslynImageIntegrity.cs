@@ -198,9 +198,10 @@ internal static class RoslynImageIntegrity
 
     private static ImageFingerprint ReadOne(Assembly assembly, Func<Type, bool> ilScope)
     {
-        var name = assembly.GetName().Name ?? "(unnamed)";
+        var name = "(unnamed)";
         try
         {
+            name = assembly.GetName().Name ?? name;
             var location = assembly.Location;
             if (string.IsNullOrEmpty(location) || !File.Exists(location))
                 return ImageFingerprint.Missing(name, "no on-disk image (single-file host or loaded from bytes)");
