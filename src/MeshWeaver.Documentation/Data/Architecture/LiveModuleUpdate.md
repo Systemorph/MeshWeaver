@@ -216,9 +216,17 @@ through the real landing path — N+2 recorded against an older platform build a
 platform, so no identity-equality gate, no seal, no roll. An N+3 whose floor is above the platform is
 declined by name by the reconciler's own decision function (`ModuleUpdateDecision`, called directly —
 the decline happens BEFORE anything lands, so no above-floor bundle reaches the landing path), and the
-next activation pass then takes only the sibling's landed update while M keeps serving N+2; the
-reconciler's own wiring of that decision is not exercised here. A bundle carrying a platform assembly is
-refused naming it, and the same bundle without it lands.
+next activation pass then takes only the sibling's landed update while M keeps serving N+2. The
+reconciler's own wiring of that decision is exercised end to end elsewhere, from a real registry
+serving an above-floor bundle:
+- `PackagesAutoUpdateTest.AnIncompatibleFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the unattended reconcile pass, `ReconcileNow`);
+- `ModuleReloadByRestartTest.ANewerVersionAboveTheFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the attended reload);
+- `ModuleBundleFloorHoldTest` step 2 (the adopt).
+
+Each asserts the held bundle is not downloaded and the running version keeps serving. A bundle carrying
+a platform assembly is refused naming it, and the same bundle without it lands.
 
 ## What is shipped (slice 7 — the REAL MeshWeaver.AI update goes live; keyed services; added background services)
 

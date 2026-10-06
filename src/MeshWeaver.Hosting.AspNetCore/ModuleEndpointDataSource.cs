@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 
@@ -31,7 +32,7 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// updates for the rest. A refused module is retried on every later swap, because its current
 /// generation still differs from its published one.</para>
 /// </summary>
-public sealed class ModuleEndpointDataSource : EndpointDataSource
+public sealed class ModuleEndpointDataSource : EndpointDataSource, IDisposable
 {
     private readonly IServiceProvider services;
     private readonly ModuleContexts contexts;
@@ -42,6 +43,7 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
     private IReadOnlyList<Endpoint> endpoints = [];
     private ImmutableDictionary<string, Published> published = ImmutableDictionary.Create<string, Published>(StringComparer.Ordinal);
     private CancellationTokenSource changed = new();
+    private IDisposable? versionChanged;
 
     /// <summary>A module's endpoints as they are being served, with the generation that mapped them.</summary>
     private sealed record Published(ModuleGeneration Generation, IReadOnlyList<Endpoint> Endpoints);
@@ -59,9 +61,18 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource
         published = contexts.Generations.ToImmutableDictionary(
             g => g.Name, g => new Published(g, MapModule(g)), StringComparer.Ordinal);
         endpoints = Flatten(published);
-        // Lives as long as the registry — the same mesh as the host.
-        contexts.VersionChanged.Subscribe(_ => Remap());
+        // Bound to the HOST, not the registry (#6128 review): the registry may outlive this host — a
+        // host rebuilt over a live registry, or several route builders on one mesh — and a source
+        // left subscribed would keep re-mapping and firing tokens no matcher reads, rooted by the
+        // registry's subject. So the subscription ends when the host stops, or when this source is
+        // disposed, whichever comes first.
+        versionChanged = contexts.VersionChanged.Subscribe(_ => Remap());
+        services.GetService<IHostApplicationLifetime>()?.ApplicationStopping.Register(Dispose);
     }
+
+    /// <summary>Ends the subscription to module swaps; the endpoints already published keep being
+    /// served as they are. Called when the host stops.</summary>
+    public void Dispose() => Interlocked.Exchange(ref versionChanged, null)?.Dispose();
 
     /// <summary>How many endpoints the held modules currently contribute.</summary>
     public int Count => Volatile.Read(ref endpoints).Count;

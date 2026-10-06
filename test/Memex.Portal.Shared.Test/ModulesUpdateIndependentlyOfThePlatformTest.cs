@@ -29,9 +29,11 @@ namespace Memex.Portal.Shared.Test;
 /// below P) — compatible, so it lands and goes live: no identity-equality gate, no seal, no roll;</item>
 /// <item>N+3 declares a floor ABOVE P — declined BY NAME by the same decision the reconciler takes
 /// (<see cref="ModuleUpdateDecision"/> with <see cref="PlatformFloor"/>, called directly: the decline
-/// comes BEFORE anything lands, so no above-floor bundle reaches the landing path, and the reconciler's
-/// wiring of the decision is not exercised here). The next activation pass then takes only the
-/// SIBLING module S's landed update, while M keeps serving N+2.</item>
+/// comes BEFORE anything lands, so no above-floor bundle reaches the landing path). The reconciler's
+/// wiring of the decision is exercised end to end from a real registry by
+/// <see cref="PackagesAutoUpdateTest"/> (unattended pass), <see cref="ModuleReloadByRestartTest"/>
+/// (attended reload) and <see cref="ModuleBundleFloorHoldTest"/> (the adopt). The next
+/// activation pass then takes only the SIBLING module S's landed update, while M keeps serving N+2.</item>
 /// </list>
 /// Plus the landing refusal: a bundle that carries a platform assembly is refused, naming it (negative
 /// control: the same bundle without it lands).

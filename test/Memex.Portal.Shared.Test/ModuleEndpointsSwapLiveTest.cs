@@ -10,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -132,6 +133,29 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
     }
 
     private const string OtherModule = "MeshWeaver.Test.LiveEndpointsOther";
+
+    /// <summary>#6128 review: the swap subscription is bound to the HOST, not the module registry. The
+    /// registry can outlive a host, so once the host stops, a later swap must not re-map this source
+    /// (which would fire change tokens no matcher reads, and root the source through the registry's
+    /// subject). The control: while the host runs, the same swap does re-map.</summary>
+    [Fact]
+    public async Task AStoppedHostsSource_NoLongerFollowsSwaps_WhileARunningOneDoes()
+    {
+        using var contexts = new ModuleContexts();
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1))));
+        await using var app = await Start(contexts);
+        var source = ((IEndpointRouteBuilder)app).DataSources.OfType<ModuleEndpointDataSource>().Single();
+
+        var boot = source.Endpoints;
+        contexts.Commit(contexts.Load(Write("g2", ModuleSource(2))));
+        var running = source.Endpoints;
+        running.Should().NotBeSameAs(boot, "the control: a running host's source re-maps on a swap");
+
+        await app.StopAsync();
+        contexts.Commit(contexts.Load(Write("g3", ModuleSource(3))));
+        source.Endpoints.Should().BeSameAs(running,
+            "a stopped host's source must have ended its subscription to the registry's swaps");
+    }
 
     /// <summary>#6128 review: the dynamic source publishes its BOOT map without its own collision
     /// check, so the boot routes of a held module must be caught by the host's startup refusal, which
