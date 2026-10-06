@@ -23,6 +23,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using PackagingManifest = MeshWeaver.Plugin.Packaging.PluginManifest;
@@ -265,6 +266,12 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
 
     protected ModuleActivationEntry Head() =>
         ModuleActivationSidecar.Read(landingRoot).Entries.Single(e => e.Name == Module);
+
+    /// <summary>The head's generation leaf — a readable failure, never a null, when the head names none.</summary>
+    protected string HeadDirectory() =>
+        Head().Directory is { Length: > 0 } directory
+            ? directory
+            : throw new InvalidOperationException($"the activation record's head for {Module} names no generation directory");
 
     /// <summary>The instance runs M@1.1.0: installed, landed, and loaded by this process.</summary>
     protected async Task RunningVersionOne(CancellationToken ct, Func<PackageManifest, PackageManifest>? shape = null)
@@ -577,7 +584,7 @@ public class ModuleReloadByRestartTest(ITestOutputHelper output) : ModuleReloadS
 /// swap that fails falls back to exactly one restart.</summary>
 public class ModuleReloadLiveTest(ITestOutputHelper output) : ModuleReloadScenario(output)
 {
-    private readonly FakeLoader loader = new();
+    private readonly SwappableModuleLoader loader = new();
 
     protected override IModuleLiveActivation? LiveActivation => loader;
 
@@ -614,24 +621,113 @@ public class ModuleReloadLiveTest(ITestOutputHelper output) : ModuleReloadScenar
         waiting.Log.Should().Contain(line => line.Contains("the new context would not load"));
         Updater.Restarts.Should().Be(1);
     }
+}
 
-    private sealed class FakeLoader : IModuleLiveActivation
+/// <summary>
+/// 🚨 <b>The instance report names the module code that RUNS, not only what was installed.</b> A live
+/// reload moves the activation record and the loaded generation and leaves the install record
+/// <c>Plugins/{id}</c> alone (it also describes the content install) — so a report reading only the
+/// install record says 1.1.0 for a module running 1.2.0. <see cref="ModuleReport.RunningVersion"/> is
+/// read off the activation record against the generation this process loaded.
+/// </summary>
+public class ModuleReloadInstanceReportTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private readonly SwappableModuleLoader loader = new();
+
+    protected override IModuleLiveActivation? LiveActivation => loader;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder).ConfigureServices(services => services.AddSingleton<IConfiguration>(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DeploymentReportService.DeploymentKey] = "reload-dep",
+                // A control url and NO signing secret: the report is composed in full and handed back
+                // as Skipped — nothing leaves the test process.
+                [DeploymentReportService.ReportToKey] = "https://control.module-reload.test",
+            }).Build()));
+
+    [Fact(Timeout = 240_000)]
+    public async Task AfterALiveReload_TheReportSaysRunning120_WhileTheInstallRecordStillSays110()
     {
-        private int swaps;
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct, m => m with { ReleasedVersion = "1.1.0", ModuleVersion = "h-1.1.0" });
+        var reporter = Mesh.ServiceProvider.GetRequiredService<DeploymentReportService>();
 
-        public int Swaps => Volatile.Read(ref swaps);
-        public Action? OnSwap { get; set; }
-        public string? Failure { get; set; }
+        var before = await reporter.Report().Timeout(TestTimeouts.Convergence).Await(ct);
+        var reportBefore = before.Report ?? throw new InvalidOperationException($"no report before the reload: {before.Detail}");
+        var rowBefore = reportBefore.Modules.Single(m => m.Id == Package);
+        rowBefore.RunningVersion.Should().Be("1.1.0", "the premise: this process runs the generation 1.1.0 landed");
 
-        public bool CanSwap(string module) => true;
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        loader.OnSwap = () => SetLoaded(Module, HeadDirectory());
+        var path = await Reload(ct);
+        var done = await AwaitRequest(path, r => ModuleReloadStatus.IsTerminal(r.Status), ct);
+        done.Status.Should().Be(ModuleReloadStatus.Done, done.Failure ?? "");
+        Head().Version.Should().Be("1.2.0", "the premise: the activation record moved");
 
-        public IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
-        {
-            Interlocked.Increment(ref swaps);
-            if (Failure is { } failure)
-                return Observable.Return(new ModuleReloadSwapOutcome(false, failure));
-            OnSwap?.Invoke();
-            return Observable.Return(new ModuleReloadSwapOutcome(true));
-        });
+        var after = await reporter.Report().Timeout(TestTimeouts.Convergence).Await(ct);
+        var reportAfter = after.Report ?? throw new InvalidOperationException($"no report after the reload: {after.Detail}");
+        var row = reportAfter.Modules.Single(m => m.Id == Package);
+        Output.WriteLine($"report row after Done reload: version={row.Version} moduleVersion={row.ModuleVersion} runningVersion={row.RunningVersion}");
+        row.Version.Should().Be("1.1.0", "the install record is not re-stamped by a reload — it also describes the content install");
+        row.ModuleVersion.Should().Be("h-1.1.0");
+        row.RunningVersion.Should().Be("1.2.0",
+            "the module code this process runs is the generation the reload swapped in, read off the activation record");
     }
+
+    [Fact]
+    public void RunningVersion_IsTheLoadedGeneration_NeverTheHeadAloneNorTheInstallRecord()
+    {
+        var combo = new InstanceCombo
+        {
+            Modules =
+            [
+                new ModuleCoordinate { ModuleId = "P", Package = new PackageCoordinate { PackageId = "P", CompiledModule = "M", ReleasedVersion = "1.0.0" } },
+                new ModuleCoordinate { ModuleId = "Content", Package = new PackageCoordinate { PackageId = "Content", ReleasedVersion = "4.0.0" } },
+            ],
+        };
+        var report = new DeploymentReport
+        {
+            Modules = [new ModuleReport { Id = "P", Version = "1.0.0" }, new ModuleReport { Id = "Content", Version = "4.0.0" }],
+        };
+        var activation = new ModuleActivationList
+        {
+            Entries = [new ModuleActivationEntry { Name = "M", Directory = "M@new", Version = "2.0.0", PreviousDirectory = "M@old", PreviousVersion = "1.0.0" }],
+        };
+
+        string? Running(IReadOnlyDictionary<string, string> loaded) =>
+            DeploymentReportService.WithRunning(report, combo, activation, loaded).Modules.Single(m => m.Id == "P").RunningVersion;
+
+        Running(new Dictionary<string, string> { ["M"] = "M@new" }).Should().Be("2.0.0");
+        Running(new Dictionary<string, string> { ["M"] = "M@old" })
+            .Should().Be("1.0.0", "a restart-path reload lands N+1 as head while this process still runs N");
+        Running(new Dictionary<string, string>()).Should().BeNull("the image's own copy or not loaded — not known, never guessed");
+        Running(new Dictionary<string, string> { ["M"] = "M@gone" }).Should().BeNull("a generation the record no longer names");
+        DeploymentReportService.WithRunning(report, combo, null, new Dictionary<string, string> { ["M"] = "M@new" })
+            .Modules.Single(m => m.Id == "P").RunningVersion.Should().BeNull("an unreadable record states nothing");
+        DeploymentReportService.WithRunning(report, combo, activation, new Dictionary<string, string> { ["M"] = "M@new" })
+            .Modules.Single(m => m.Id == "Content").RunningVersion.Should().BeNull("a content-only package has no module code");
+    }
+}
+
+/// <summary>A live loader whose swap the test drives: it records swaps, can be told to fail, and
+/// runs <see cref="OnSwap"/> to simulate the process now holding the new generation.</summary>
+internal sealed class SwappableModuleLoader : IModuleLiveActivation
+{
+    private int swaps;
+
+    public int Swaps => Volatile.Read(ref swaps);
+    public Action? OnSwap { get; set; }
+    public string? Failure { get; set; }
+
+    public bool CanSwap(string module) => true;
+
+    public IObservable<ModuleReloadSwapOutcome> Swap(string module, string reason) => Observable.Defer(() =>
+    {
+        Interlocked.Increment(ref swaps);
+        if (Failure is { } failure)
+            return Observable.Return(new ModuleReloadSwapOutcome(false, failure));
+        OnSwap?.Invoke();
+        return Observable.Return(new ModuleReloadSwapOutcome(true));
+    });
 }
