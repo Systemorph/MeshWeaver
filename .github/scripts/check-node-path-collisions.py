@@ -208,7 +208,10 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
 
+        cases: list[str] = []   # the banner's count is READ from here, never written by hand
+
         def case(name: str, files: dict[str, str], expect: int, fs: bool = False) -> list[str]:
+            cases.append(name)
             root = base / name
             for rel, text in files.items():
                 write(root, rel, text)
@@ -249,6 +252,7 @@ def self_test() -> int:
 
         # --root mode: module sources and tooling scratch are not nodes; a package collision is.
         repo = base / "repo-mode"
+        cases.append("repo-mode")
         for rel, text in {"src/M/Foo.cs": "//", "src/M/Foo.json": node_json,
                           ".agents/x/Y.md": "#", ".agents/x/Y.json": node_json,
                           "Pkg/Z.md": "#", "Pkg/Z.json": node_json, "index.md": "#"}.items():
@@ -270,7 +274,7 @@ def self_test() -> int:
     for f in failures:
         print(f"✗ {f}")
     print(f"check-node-path-collisions --self-test: {'FAIL' if failures else 'ok'} "
-          f"(19 cases + vacuity guard; {len(failures)} failure(s))")
+          f"({len(cases)} cases + vacuity guard; {len(failures)} failure(s))")
     return 1 if failures else 0
 
 

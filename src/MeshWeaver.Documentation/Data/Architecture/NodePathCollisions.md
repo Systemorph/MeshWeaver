@@ -40,7 +40,8 @@ so one author's node silently replaces another's: no error, no log line, nothing
   repo's top-level `src/` (module sources).
 
 Every colliding group is reported with ALL its files, and an empty scan is red — a gate over nothing
-passes vacuously. The self-test proves each half of the rule can fail: 19 cases, and each of eight
+passes vacuously. The self-test proves each half of the rule can fail: every case
+asserts its own expected outcome (its banner counts the cases it actually ran), and each of eight
 mutants of the rule (no extension strip, no case fold, no `index` fold, no content filter, every
 `.json` a node, `src/` scanned, the file-system pair admitted everywhere, the vacuity line removed)
 reds it.
