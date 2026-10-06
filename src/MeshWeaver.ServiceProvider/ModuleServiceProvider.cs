@@ -39,11 +39,54 @@ public static class ModuleServiceProvider
         IServiceProvider root,
         Func<Type, bool> isModuleType,
         IEnumerable<ServiceDescriptor> rootOpenGenerics)
+        => Create(services, root, isModuleType, rootOpenGenerics, _ => []);
+
+    /// <summary>
+    /// As <see cref="Create(IServiceCollection, IServiceProvider, Func{Type, bool}, IEnumerable{ServiceDescriptor})"/>,
+    /// plus <paramref name="registrationsElsewhere"/>: for a type a MODULE declares (this one or another),
+    /// the registrations made of it in OTHER module containers, each a resolver of one instance — served
+    /// after the module's own, so <c>IEnumerable&lt;T&gt;</c> is the whole list and a single resolve still
+    /// answers the module's own last registration. Empty for a platform type.
+    /// </summary>
+    /// <param name="services">The module's own registrations.</param>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="isModuleType">Whether a type names the module (its own type or a generic over one).</param>
+    /// <param name="rootOpenGenerics">The root's open-generic registrations.</param>
+    /// <param name="registrationsElsewhere">A module type's registrations in other module containers, in order.</param>
+    public static IServiceProvider Create(
+        IServiceCollection services,
+        IServiceProvider root,
+        Func<Type, bool> isModuleType,
+        IEnumerable<ServiceDescriptor> rootOpenGenerics,
+        Func<Type, IReadOnlyList<Func<object>>> registrationsElsewhere)
     {
         var builder = new ContainerBuilder();
         builder.Populate(services);
-        builder.RegisterSource(new ModuleFallbackSource(root, isModuleType, rootOpenGenerics));
+        builder.RegisterSource(new ModuleFallbackSource(root, isModuleType, rootOpenGenerics, registrationsElsewhere));
         return new AutofacServiceProvider(builder.Build());
+    }
+
+    /// <summary>
+    /// One stand-in registration per resolver in <paramref name="resolvers"/>, each answering its own
+    /// instance, created in order. When <paramref name="explicitRegistrationsExist"/> they are yielded in
+    /// order — Autofac keeps an explicit registration the default, so the list reads explicit-then-these;
+    /// otherwise last-first, because the FIRST registration a source yields becomes the default and that
+    /// must be the LAST of the list, as in a single collection.
+    /// </summary>
+    /// <param name="type">The service type the stand-ins expose.</param>
+    /// <param name="resolvers">One resolver per registration, in order.</param>
+    /// <param name="explicitRegistrationsExist">Whether the container registers the type itself.</param>
+    public static IEnumerable<IComponentRegistration> StandIns(
+        Type type, IReadOnlyList<Func<object>> resolvers, bool explicitRegistrationsExist)
+    {
+        var standIns = resolvers
+            .Select(resolve => RegistrationBuilder
+                .ForDelegate(type, (_, _) => resolve())
+                .ExternallyOwned()
+                .InstancePerDependency()
+                .CreateRegistration())
+            .ToArray();
+        return explicitRegistrationsExist ? standIns : standIns.Reverse();
     }
 
     /// <summary>
@@ -84,7 +127,8 @@ public static class ModuleServiceProvider
 internal sealed class ModuleFallbackSource(
     IServiceProvider root,
     Func<Type, bool> isModuleType,
-    IEnumerable<ServiceDescriptor> rootOpenGenerics) : IRegistrationSource
+    IEnumerable<ServiceDescriptor> rootOpenGenerics,
+    Func<Type, IReadOnlyList<Func<object>>> registrationsElsewhere) : IRegistrationSource
 {
     private readonly IReadOnlyDictionary<Type, ServiceDescriptor> openGenerics = rootOpenGenerics
         .Where(d => d.ServiceType.IsGenericTypeDefinition && d.ImplementationType is not null && !d.IsKeyedService)
@@ -99,12 +143,28 @@ internal sealed class ModuleFallbackSource(
         if (service is not TypedService typed)
             yield break;
         var type = typed.ServiceType;
-        if (registrationAccessor(service).Any())
-            yield break; // the module registers it itself
+        var ownRegistrations = registrationAccessor(service).Any();
+        // 🚨 A type a MODULE declares — this one or another — is answered from the MODULES, never the
+        // root: the registrations made of it in other module containers (another module's own, or a
+        // contribution a dependent module made to this module's list). Measured on the control instance
+        // from core #6127 on: every AI provider module registers MeshWeaver.AI's catalog sources and
+        // chat-client factories, and those never reached the AI module's container — the model catalog
+        // listed no provider, "No IChatClientFactory is registered", every PR review stopped — while the
+        // provider's own code could not resolve the AI module's ChatClientCredentialResolver at all.
+        // After the module's own registrations, so IEnumerable<T> is the whole list and a single resolve
+        // still answers the module's own last registration.
+        var elsewhere = registrationsElsewhere(type);
+        if (elsewhere.Count > 0)
+        {
+            foreach (var standIn in ModuleServiceProvider.StandIns(type, elsewhere, ownRegistrations))
+                yield return standIn;
+            yield break;
+        }
         if (isModuleType(type))
         {
-            // A closed generic over a module type: closed HERE, from the root's open generic.
-            if (type.IsConstructedGenericType
+            // A closed generic over a module type nobody registered closed: closed HERE, from the
+            // root's open generic.
+            if (!ownRegistrations && type.IsConstructedGenericType
                 && openGenerics.TryGetValue(type.GetGenericTypeDefinition(), out var open))
             {
                 var registration = RegistrationBuilder
@@ -119,6 +179,8 @@ internal sealed class ModuleFallbackSource(
             }
             yield break; // never ask the root about a module type — that is what pins it
         }
+        if (ownRegistrations)
+            yield break; // the module registers it itself
         if (root.GetService<IServiceProviderIsService>() is { } isService && !isService.IsService(type))
             yield break;
         // 🚨 One stand-in PER ROOT REGISTRATION, never one for the type. A single
