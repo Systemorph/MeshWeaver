@@ -1171,6 +1171,29 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// validators in the Concat queue never subscribe — same semantics as the
     /// old loop's early <c>return false</c>).
     /// </summary>
+    /// <summary>
+    /// Whether the SECURED read of <paramref name="request"/> returns exactly what the raw read
+    /// returns, on every run of it: the request is stamped as <see cref="WellKnownUsers.System"/>
+    /// (so every re-run resolves the same viewer — <see cref="QueryIdentityResolver"/> honours an
+    /// explicit request identity before any ambient one), and every validator that judges a Read
+    /// declares that it admits System unconditionally (<see cref="ISystemReadTransparentNodeValidator"/>).
+    /// A Read validator without that declaration answers false, which keeps today's re-read.
+    /// </summary>
+    private bool SecuredReadIsTheRawRead(MeshQueryRequest request)
+    {
+        if (!string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal))
+            return false;
+        if (nodeValidators == null)
+            return true;
+        // Resolved here, at subscribe time, for the same reason ValidateRead resolves per row: a
+        // constructor-time resolution would re-enter SecurityService (see the field's comment).
+        return nodeValidators
+            .Select(lv => lv.Value)
+            .Where(v => v.SupportedOperations.Count == 0
+                     || v.SupportedOperations.Contains(NodeOperation.Read))
+            .All(v => v is ISystemReadTransparentNodeValidator);
+    }
+
     private IObservable<bool> ValidateRead(MeshNode node, string userId)
     {
         if (nodeValidators == null)
@@ -1566,7 +1589,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // types both lie outside a query's required types cannot move its result, so it does
             // not trigger one. RAW surface only: a secured result also moves with grants, and a
             // grant is exactly a node of another type (see NodeTypeChangeRelevance).
-            var relevantNodeTypes = useSecurityFilter
+            //
+            // 🚨 …UNLESS the secured read is the raw read. One that runs as SYSTEM, in a mesh whose
+            // every Read validator admits System unconditionally, is filtered by nothing: no grant
+            // can move its result, so the type test is exact for it too. That is the shape of every
+            // mesh-wide catalog the platform keeps open for the life of the mesh — the UiContribution
+            // menu catalog, the NodeType catalogs, the package index, all read as System — and with
+            // three of them re-walking the WHOLE mesh on every write, one write cost ~1 s at the end
+            // of a node-repo gate's install and the gate ran past its 45-minute cap
+            // (Doc/Architecture/LiveQueryRequeryCost, "The secured surface").
+            var relevantNodeTypes = (useSecurityFilter && !SecuredReadIsTheRawRead(request))
                 || scopeFilters.Any(sf => sf.Scope == QueryScope.NextLevel)
                     ? null
                     : NodeTypeChangeRelevance.RequiredNodeTypes(effectiveQueries.Select(q => _parser.Parse(q)));
