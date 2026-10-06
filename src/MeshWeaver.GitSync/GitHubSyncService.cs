@@ -979,139 +979,137 @@ public sealed class GitHubSyncService
         Action<string, LogLevel>? progress, ImportConflictPolicy? policy, string? baseSha,
         IReadOnlyDictionary<string, string>? heldModuleVersions)
     {
-        {
-            // 🚨 EVERY MODULE SYNCS, JUDGED ALONE BY ITS MANIFEST HASH (policy
-            // module-sync-per-manifest-hash; Doc/Architecture/ModuleSyncPerManifestHash). This
-            // replaces the whole-Space hold the sealed-publication gate used to take BEFORE the
-            // fetch: an unchanged module writes nothing, a changed one syncs, and a module declaring
-            // a platform floor above the running one is the ONE decline — its paths are neither
-            // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
-            // module and imports exactly as before.
-            var readings = ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content)));
-            var modules = ModuleSyncDecision.DeclineUnmetRequirements(
-                ModuleSyncDecision.Decide(
-                    readings,
-                    heldModuleVersions,
-                    PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                    reconcile: policy is { Force: true } or { Reconcile: true }),
+        // 🚨 EVERY MODULE SYNCS, JUDGED ALONE BY ITS MANIFEST HASH (policy
+        // module-sync-per-manifest-hash; Doc/Architecture/ModuleSyncPerManifestHash). This
+        // replaces the whole-Space hold the sealed-publication gate used to take BEFORE the
+        // fetch: an unchanged module writes nothing, a changed one syncs, and a module declaring
+        // a platform floor above the running one is the ONE decline — its paths are neither
+        // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
+        // module and imports exactly as before.
+        var readings = ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content)));
+        var modules = ModuleSyncDecision.DeclineUnmetRequirements(
+            ModuleSyncDecision.Decide(
                 readings,
-                loaded);
-            var notWritten = modules
-                .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
-                .ToList();
-            var declined = modules.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
-            foreach (var decline in declined)
-                logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
-            // Two declines, two remedies (#6111 review): a platform floor above the running
-            // platform waits for a roll; an unmet `requires` waits for its dependency to load.
-            var declinedNames = declined
-                .Where(m => m.UnmetRequirement is null)
-                .Select(m => $"{m.Module} (≥ {m.Floor})")
-                .ToImmutableList();
-            var unmetRequirementNames = declined
-                .Where(m => m.UnmetRequirement is not null)
-                .Select(m => $"{m.Module} (requires {m.UnmetRequirement})")
-                .ToImmutableList();
-            // Nothing of this tree is written when every file sits under a module that is unchanged
-            // or declined — the whole import is a no-op, and says which.
-            if (notWritten.Count > 0
-                && snapshot.Files.All(f => notWritten.Any(m => IsAtOrUnder(f.Path, m.Root))))
+                heldModuleVersions,
+                PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                reconcile: policy is { Force: true } or { Reconcile: true }),
+            readings,
+            loaded);
+        var notWritten = modules
+            .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
+            .ToList();
+        var declined = modules.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList();
+        foreach (var decline in declined)
+            logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
+        // Two declines, two remedies (#6111 review): a platform floor above the running
+        // platform waits for a roll; an unmet `requires` waits for its dependency to load.
+        var declinedNames = declined
+            .Where(m => m.UnmetRequirement is null)
+            .Select(m => $"{m.Module} (≥ {m.Floor})")
+            .ToImmutableList();
+        var unmetRequirementNames = declined
+            .Where(m => m.UnmetRequirement is not null)
+            .Select(m => $"{m.Module} (requires {m.UnmetRequirement})")
+            .ToImmutableList();
+        // Nothing of this tree is written when every file sits under a module that is unchanged
+        // or declined — the whole import is a no-op, and says which.
+        if (notWritten.Count > 0
+            && snapshot.Files.All(f => notWritten.Any(m => IsAtOrUnder(f.Path, m.Root))))
+        {
+            logger?.LogInformation(
+                "[ModuleSync] {Space}: nothing written at {Sha} — {Modules}", spaceId,
+                Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
+            var noop = new StaticRepoImportResult(spaceId,
+                "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
+                NoOpOutcome(declinedNames.Count, unmetRequirementNames.Count))
             {
-                logger?.LogInformation(
-                    "[ModuleSync] {Space}: nothing written at {Sha} — {Modules}", spaceId,
-                    Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
-                var noop = new StaticRepoImportResult(spaceId,
-                    "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
-                    NoOpOutcome(declinedNames.Count, unmetRequirementNames.Count))
-                {
-                    DeclinedModules = declinedNames,
-                    UnmetRequirementModules = unmetRequirementNames,
-                };
-                return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
-            }
-            // Only the modules that are not written are held; a module rooted at the Space root
-            // always takes the no-op arm above (it covers every file), so every root here is a
-            // real folder.
-            var moduleHeld = new SyncIgnore(Array.Empty<string>())
-                .WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
-            var importIgnore = ignore.WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
-            // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
-            // webhook/update — not a force, not a first import), ask GitHub what changed between it
-            // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
-            // truncated, or a compare error) falls back to a full import — never a silent
-            // under-import. This is what stops a routine push from re-materialising the whole
-            // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
-            var readmePolicy = ReadmeFilePolicy.From(snapshot);
-            // Reconciliation measures drift in the live mesh, not changes between Git commits.
-            // B..B is empty even when another import replaced the live nodes with A.
-            var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true || policy?.Reconcile == true
-                ? Observable.Return<IReadOnlyList<string>?>(null)
-                : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
-            return diff.SelectMany(changedFiles =>
-                ParseSnapshot(snapshot, spaceId, importIgnore, readmePolicy, progress).SelectMany(parsed =>
-                    // 🚨 ADOPT, THEN SYNC, PER NODETYPE (MeshWeaver#3845 hole 4). The seal got this
-                    // tree onto the commit this instance's bundles were baked from — a REPOSITORY
-                    // fact. Whether one NodeType's sources may move is a per-TYPE fact, and a
-                    // publication can be sealed, at the right commit, under the right identity, and
-                    // still not carry the bundle a given type needs. So an adopted type whose compile
-                    // input would move onto a fingerprint no bundle for this identity records is HELD:
-                    // its sources are neither written nor pruned, and the rest of the Space imports.
-                    // See Doc/Architecture/AdoptThenSyncPerNodeType.
-                    BundleKeyedHoldReading.Decide(hub, spaceId, parsed.Children, logger)
-                        .SelectMany(hold =>
-                        {
-                            // A module's own node can live BESIDE its folder (`Hosting.json` for
-                            // `Hosting/`), which the file-level ignore does not reach — so parsed
-                            // nodes are filtered by node path through the same matcher.
-                            var children = parsed.Children
-                                .Where(n => !hold.HoldsNode(spaceId, n.Path)
-                                            && !moduleHeld.IsIgnored(RelativeTo(spaceId, n.Path)))
-                                .ToList();
-                            // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
-                            // needs them to tell "the repo dropped this node" from "this node never syncs".
-                            // The HELD paths ride the same way — a held node is absent from `children`
-                            // above, and without telling the prune it would read that absence as a
-                            // deletion and remove the very sources this hold exists to keep.
-                            // 🚨 So does the fetch's COMPLETENESS verdict (issue #3589): a truncated GitHub
-                            // tree arrives as HTTP 200 with a partial file list, and the prune's inference
-                            // ("absent from the source ⇒ deleted from the source") is unsound on one. The
-                            // import still upserts everything it did read — only the deletion half is
-                            // withheld, because a stale extra is recoverable and a silent delete is not.
-                            var source = new InMemoryStaticRepoSource(
-                                spaceId, children, parsed.Root, parsed.ContentSyncs,
-                                importIgnore.WithHeldPaths(hold.HeldPaths),
-                                listingIsComplete: snapshot.ListingIsComplete,
-                                ownsReadme: readmePolicy.IsPackage);
-                            var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
-                            if (changedNodePaths is not null)
-                                logger?.LogInformation(
-                                    "[GitSync] {Space}: git-diff {Base}..{Head} → {Count} changed node(s) — "
-                                    + "importing only those (full partition left untouched).",
-                                    spaceId, Short(baseSha), Short(snapshot.CommitSha), changedNodePaths.Count);
-                            foreach (var abstained in hold.Abstained)
-                                logger?.LogInformation(
-                                    "[BundleHold] {Space}: not judged — {Reason}", spaceId, abstained);
-                            // 🚨 NOT through `progress` (review on #4595): that sink persists the
-                            // sentence as English with no catalog key, and the held types are already
-                            // named on the activity by the KEYED line every import path logs at the
-                            // end (`LogImportOutcome` → `BundleHeldLine`, en + de). Two writers of
-                            // one fact, one of them untranslatable, is the #3236 shape.
-                            return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
-                                // The held types travel ON the result, so the one activity line every
-                                // import path logs can name them and the baseline decision below can
-                                // see them without a second channel.
-                                .Select(result => (
-                                    result with
-                                    {
-                                        BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
-                                        DeclinedModules = declinedNames,
-                                        UnmetRequirementModules = unmetRequirementNames,
-                                    },
-                                    snapshot.CommitSha,
-                                    Hold: hold,
-                                    Modules: modules));
-                        })));
+                DeclinedModules = declinedNames,
+                UnmetRequirementModules = unmetRequirementNames,
+            };
+            return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
         }
+        // Only the modules that are not written are held; a module rooted at the Space root
+        // always takes the no-op arm above (it covers every file), so every root here is a
+        // real folder.
+        var moduleHeld = new SyncIgnore(Array.Empty<string>())
+            .WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
+        var importIgnore = ignore.WithHeldPaths(notWritten.Select(m => m.Root).Where(r => r.Length > 0));
+        // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
+        // webhook/update — not a force, not a first import), ask GitHub what changed between it
+        // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
+        // truncated, or a compare error) falls back to a full import — never a silent
+        // under-import. This is what stops a routine push from re-materialising the whole
+        // partition and storming the live compiler (the memex-cloud outage loop, 2026-07-23).
+        var readmePolicy = ReadmeFilePolicy.From(snapshot);
+        // Reconciliation measures drift in the live mesh, not changes between Git commits.
+        // B..B is empty even when another import replaced the live nodes with A.
+        var diff = string.IsNullOrEmpty(baseSha) || policy?.Force == true || policy?.Reconcile == true
+            ? Observable.Return<IReadOnlyList<string>?>(null)
+            : repoClient.GetChangedPaths(repoUrl, baseSha!, snapshot.CommitSha, subdirectory, token);
+        return diff.SelectMany(changedFiles =>
+            ParseSnapshot(snapshot, spaceId, importIgnore, readmePolicy, progress).SelectMany(parsed =>
+                // 🚨 ADOPT, THEN SYNC, PER NODETYPE (MeshWeaver#3845 hole 4). The seal got this
+                // tree onto the commit this instance's bundles were baked from — a REPOSITORY
+                // fact. Whether one NodeType's sources may move is a per-TYPE fact, and a
+                // publication can be sealed, at the right commit, under the right identity, and
+                // still not carry the bundle a given type needs. So an adopted type whose compile
+                // input would move onto a fingerprint no bundle for this identity records is HELD:
+                // its sources are neither written nor pruned, and the rest of the Space imports.
+                // See Doc/Architecture/AdoptThenSyncPerNodeType.
+                BundleKeyedHoldReading.Decide(hub, spaceId, parsed.Children, logger)
+                    .SelectMany(hold =>
+                    {
+                        // A module's own node can live BESIDE its folder (`Hosting.json` for
+                        // `Hosting/`), which the file-level ignore does not reach — so parsed
+                        // nodes are filtered by node path through the same matcher.
+                        var children = parsed.Children
+                            .Where(n => !hold.HoldsNode(spaceId, n.Path)
+                                        && !moduleHeld.IsIgnored(RelativeTo(spaceId, n.Path)))
+                            .ToList();
+                        // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
+                        // needs them to tell "the repo dropped this node" from "this node never syncs".
+                        // The HELD paths ride the same way — a held node is absent from `children`
+                        // above, and without telling the prune it would read that absence as a
+                        // deletion and remove the very sources this hold exists to keep.
+                        // 🚨 So does the fetch's COMPLETENESS verdict (issue #3589): a truncated GitHub
+                        // tree arrives as HTTP 200 with a partial file list, and the prune's inference
+                        // ("absent from the source ⇒ deleted from the source") is unsound on one. The
+                        // import still upserts everything it did read — only the deletion half is
+                        // withheld, because a stale extra is recoverable and a silent delete is not.
+                        var source = new InMemoryStaticRepoSource(
+                            spaceId, children, parsed.Root, parsed.ContentSyncs,
+                            importIgnore.WithHeldPaths(hold.HeldPaths),
+                            listingIsComplete: snapshot.ListingIsComplete,
+                            ownsReadme: readmePolicy.IsPackage);
+                        var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
+                        if (changedNodePaths is not null)
+                            logger?.LogInformation(
+                                "[GitSync] {Space}: git-diff {Base}..{Head} → {Count} changed node(s) — "
+                                + "importing only those (full partition left untouched).",
+                                spaceId, Short(baseSha), Short(snapshot.CommitSha), changedNodePaths.Count);
+                        foreach (var abstained in hold.Abstained)
+                            logger?.LogInformation(
+                                "[BundleHold] {Space}: not judged — {Reason}", spaceId, abstained);
+                        // 🚨 NOT through `progress` (review on #4595): that sink persists the
+                        // sentence as English with no catalog key, and the held types are already
+                        // named on the activity by the KEYED line every import path logs at the
+                        // end (`LogImportOutcome` → `BundleHeldLine`, en + de). Two writers of
+                        // one fact, one of them untranslatable, is the #3236 shape.
+                        return StaticRepoImporter.ImportSource(hub, source, logger, policy, changedNodePaths)
+                            // The held types travel ON the result, so the one activity line every
+                            // import path logs can name them and the baseline decision below can
+                            // see them without a second channel.
+                            .Select(result => (
+                                result with
+                                {
+                                    BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
+                                    DeclinedModules = declinedNames,
+                                    UnmetRequirementModules = unmetRequirementNames,
+                                },
+                                snapshot.CommitSha,
+                                Hold: hold,
+                                Modules: modules));
+                    })));
     }
 
     /// <summary>

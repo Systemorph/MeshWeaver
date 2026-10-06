@@ -47,8 +47,12 @@ folder there.
 | unreadable / truncated listing | none | **Refused** |
 
 Every unknown answers *refuse*, the direction that deletes nothing. An operator who re-points a source
-at a different (wrong) folder is still refused: the base proves only that the folder it was read
-under existed.
+at a folder that exists at **neither** commit (the usual typo) is still refused. 🚨 The proof reads the
+folder the source is configured with **now**: re-pointing it at a *different* folder that did exist at
+the last imported commit and is gone at the new one reads as a retirement, and retires what this
+source imported even though the folder those nodes came from may still exist. That corner stays
+provenance-gated and recoverable — point the source back and the next sync imports the nodes again —
+but it is accepted, not excluded.
 
 🚨 It is a **read** of the folder at the base commit, not a git diff. The production repository
 client (`GitProtocolRepoClient`) does not forward `GetChangedPaths` to the compare API, so it answers
@@ -77,9 +81,13 @@ Two differences, both deliberate:
    grants and every runtime node with it. That is the governed package removal's job — the Store's
    `SystemRemoval` (Provision → Remove), which also cleans each viewer's installed copy and checks for
    dependent packages. The retirement's `lastSyncNote` says so.
-2. **The source's own instances go first.** A package often ships an instance of its own type (a
-   desk, a workspace). Deleting those before probing the types means a type whose only instances were
-   the package's own is not held by them.
+2. **The source's own instances do not hold their type.** A package often ships an instance of its
+   own type (a desk, a workspace). The probe runs once, before anything is deleted, and
+   `PlanRetirement` holds a type only for an instance that will SURVIVE — one outside the retired set,
+   or one the probe counted but could not name. A held type also keeps every folder node above it: a
+   delete is recursive, and deleting the folder would delete the type. The decision is a pure
+   function of the probe's answer, so it never depends on how far an index has caught up with a
+   delete made a moment earlier.
 
 ## What is still a person's decision
 

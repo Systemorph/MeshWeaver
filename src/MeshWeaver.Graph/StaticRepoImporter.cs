@@ -877,8 +877,9 @@ public static class StaticRepoImporter
     /// anywhere on the mesh is HELD (<see cref="NodeTypeInstanceProbe"/>). Two differences, both
     /// deliberate: the partition ROOT stays — deleting it is recursive and would take the sync source,
     /// the access grants and every runtime node with it, which is the governed package removal's job,
-    /// not a sync's — and the instances the source itself shipped go FIRST, so a type whose only
-    /// instances were the package's own (a desk, a workspace) is not held by them.</para>
+    /// not a sync's — and an instance the source itself shipped, which this pass deletes, does not
+    /// hold its type, so a type whose only instances were the package's own (a desk, a workspace)
+    /// goes with them (<see cref="PlanRetirement"/>).</para>
     /// </summary>
     /// <param name="meshHub">The mesh hub; the work runs on the dedicated import hub.</param>
     /// <param name="partition">The partition whose source folder was deleted.</param>
@@ -907,30 +908,68 @@ public static class StaticRepoImporter
             .SelectMany(read =>
             {
                 var candidates = RetirementCandidates(partition, read.existing, read.manifest.Keys, read.claimed);
-                var typePaths = NodeTypeInstanceProbe.NodeTypePathsAmong(candidates);
-                bool UnderAType(MeshNode n) => typePaths.Any(t => IsAtOrUnder(n.Path, t));
-                var shipped = candidates.Where(n => !UnderAType(n)).ToArray();
-                var types = candidates.Where(UnderAType).ToArray();
                 logger?.LogInformation(
                     "[StaticRepoImport] {Partition}: the source folder was deleted — retiring {Count} "
                     + "node(s) the source imported ({Types} NodeType(s) among them).",
-                    partition, candidates.Count, typePaths.Count);
-                return DeleteTopmost(hub, partition, shipped, logger).SelectMany(prunedShipped =>
-                    NodeTypeInstanceProbe.Probe(hub, types, logger).SelectMany(held =>
-                    {
-                        var heldPaths = held.Select(h => h.NodeTypePath).ToImmutableList();
-                        NodeTypeInstanceProbe.Report(held, logger);
-                        return NodeTypeInstanceProbe.Hold(hub, held, retiredBy, logger)
-                            .SelectMany(_ => DeleteTopmost(hub, partition,
-                                NodeTypeInstanceProbe.WithoutHeld(types, heldPaths), logger))
-                            .Select(prunedTypes => new StaticRepoImportResult(
-                                partition, "retired", RetiredOutcome, 0, Preserved: held.Count)
-                            {
-                                PrunedPaths = prunedShipped.AddRange(prunedTypes),
-                                HeldNodeTypePaths = heldPaths,
-                            });
-                    }));
+                    partition, candidates.Count, NodeTypeInstanceProbe.NodeTypePathsAmong(candidates).Count);
+                // Probe FIRST, decide on the whole set, then delete once: the decision is a pure
+                // function of what the probe saw (PlanRetirement), so it cannot depend on how far an
+                // index has caught up with deletes made a moment earlier.
+                return NodeTypeInstanceProbe.Probe(hub, candidates, logger).SelectMany(probed =>
+                {
+                    var plan = PlanRetirement(candidates, probed);
+                    NodeTypeInstanceProbe.Report(plan.Held, logger);
+                    return NodeTypeInstanceProbe.Hold(hub, plan.Held, retiredBy, logger)
+                        .SelectMany(_ => DeleteTopmost(hub, partition, plan.Delete, logger))
+                        .Select(pruned => new StaticRepoImportResult(
+                            partition, "retired", RetiredOutcome, 0, Preserved: plan.Held.Count)
+                        {
+                            PrunedPaths = pruned,
+                            HeldNodeTypePaths = plan.Held.Select(h => h.NodeTypePath).ToImmutableList(),
+                        });
+                });
             });
+    }
+
+    /// <summary>
+    /// What a retirement deletes and which NodeTypes it holds — a pure function of the candidates
+    /// and of what the instance probe saw, so it is testable without a mesh.
+    ///
+    /// <para>A NodeType is held when it has an instance that will SURVIVE the retirement: one
+    /// outside the retired set (a user's copy, another package's node), or one the probe could not
+    /// name (a count above the named paths, or a truncated probe — unknown holds, as everywhere
+    /// else). An instance the source itself shipped, and that the retirement deletes, does not hold
+    /// its type: it goes in the same pass.</para>
+    ///
+    /// <para>A held type keeps its own subtree (<see cref="NodeTypeInstanceProbe.WithoutHeld"/>)
+    /// and every ANCESTOR candidate too — a delete is recursive, so deleting a folder node above a
+    /// held type would take the type with it. What is kept can in turn keep an instance alive, so
+    /// the hold is iterated to its fixed point (it only ever grows, so it terminates).</para>
+    /// </summary>
+    /// <param name="candidates">The retirement candidates (<see cref="RetirementCandidates"/>).</param>
+    /// <param name="probed">The probe's answer for the NodeTypes among them.</param>
+    public static (IReadOnlyList<MeshNode> Delete, ImmutableList<NodeTypeInstanceProbe.StrandedInstances> Held)
+        PlanRetirement(
+            IReadOnlyList<MeshNode> candidates,
+            IReadOnlyCollection<NodeTypeInstanceProbe.StrandedInstances> probed)
+    {
+        var held = ImmutableList<NodeTypeInstanceProbe.StrandedInstances>.Empty;
+        while (true)
+        {
+            var heldPaths = held.Select(h => h.NodeTypePath).ToArray();
+            var deleted = candidates
+                .Where(n => !heldPaths.Any(t => IsAtOrUnder(n.Path, t) || IsAtOrUnder(t, n.Path)))
+                .ToArray();
+            bool Gone(string path) => deleted.Any(d => IsAtOrUnder(path, d.Path));
+            var next = probed
+                .Where(p => p.Truncated
+                            || p.Count > p.InstancePaths.Count
+                            || p.InstancePaths.Any(instance => !Gone(instance)))
+                .ToImmutableList();
+            if (next.Count == held.Count)
+                return (deleted, held);
+            held = next;
+        }
     }
 
     /// <summary>
