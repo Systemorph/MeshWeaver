@@ -1,4 +1,3 @@
-#pragma warning disable CS1591
 using System;
 using System.Collections.Generic;
 using System.Reactive.Linq;
@@ -25,10 +24,12 @@ namespace Memex.Portal.Shared.Test;
 /// <c>NodeType adoption record ControlLaneRecord could not be read</c>, so the control instance's
 /// retention refused every report. Content that is present but unreadable stays the loud case.
 /// </summary>
+/// <param name="output">The xUnit output sink.</param>
 public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(60);
 
+    /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddPluginCatalog()
@@ -50,19 +51,29 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
                     HomeUrl = "https://unit.example",
                 }));
 
+    /// <summary>
+    /// The production registration of the content-less <c>ControlLaneRecord</c> NodeType leaves the
+    /// deployment report's adopted-framework inventory complete, with no "incomplete" warning.
+    /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task ADeclarationLessStaticNodeType_LeavesTheAdoptedInventoryComplete()
     {
         var outcome = await Mesh.ServiceProvider.GetRequiredService<DeploymentReportService>()
             .Report().Timeout(Budget).Await(TestContext.Current.CancellationToken);
 
-        var report = outcome.Report!;
+        var report = outcome.Report ?? throw new InvalidOperationException(
+            $"the report carried no DeploymentReport: {outcome.Delivery} - {outcome.Detail}");
         report.AdoptedFrameworkInventoryComplete.Should().Be(true,
             $"'{ControlLaneExtensions.RecordNodeType}' is a static NodeType with no definition — it adopts "
             + "nothing, and reading it as 'unreadable' made every instance's inventory incomplete");
         report.Warnings.Should().NotContain(w => w.Contains("adopted artifact inventory is incomplete"));
     }
 
+    /// <summary>
+    /// <see cref="NodeTypeAdoptionStamp.CompiledFrameworkVersionOf"/> keeps its three states apart:
+    /// no content is null, a readable definition is its stamp, and unreadable content throws with
+    /// the established <c>could not be read</c> fingerprint.
+    /// </summary>
     [Fact]
     public void TheStamp_TellsNoContentFromAStampFromUnreadableContent()
     {
@@ -88,6 +99,6 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
         read.Should().Throw<InvalidOperationException>(
                 "present-but-unreadable content means the stamp is UNKNOWN — a reference set that drops it "
                 + "lets retention delete a bundle someone adopted")
-            .WithMessage("*Unreadable*String*");
+            .WithMessage("NodeType adoption record Unreadable could not be read*String*");
     }
 }

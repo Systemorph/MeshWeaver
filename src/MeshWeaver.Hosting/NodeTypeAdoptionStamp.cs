@@ -51,7 +51,9 @@ public static class NodeTypeAdoptionStamp
             return null;
         var definition = node.ContentAs<NodeTypeDefinition>(options, logger)
             ?? throw new InvalidOperationException(
-                $"NodeType adoption record {node.Path} carries content of type "
+                // The prefix is the established fingerprint (the swallow audit found this incident
+                // by it) — a genuinely unreadable record must still match it.
+                $"NodeType adoption record {node.Path} could not be read: it carries content of type "
                 + $"{DescribeContent(node.Content)} that cannot be read as a NodeTypeDefinition — its adoption stamp is unknown");
         return string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion)
             ? null
