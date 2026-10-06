@@ -1405,6 +1405,25 @@ def main() -> int:
     case("the control-always-latest alarm checks out the control declaration it reads",
          ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
          "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
+    # 🚨 The one-producer gate in `portal-image` READS the published module set out of this workflow
+    # (check-platform-reference-set.sh). #6143 removed the job it read and CD published nothing for
+    # ~30 runs — so the reader is executed here against the real workflow, and against a mutation.
+    def reference_set_reader(text: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "main-cd.yml"
+            wf.write_text(text)
+            script = (root / ".github/scripts/check-platform-reference-set.sh").read_text()
+            reader = script[script.index("composed=\"$(python3 - \"$workflow\" <<'PY'"):script.index("\nPY\n)\"") + 4]
+            reader = reader.replace("composed=\"$(python3 - \"$workflow\" <<'PY'", "python3 - \"$1\" <<'PY'")
+            proc = subprocess.run(["bash", "-c", reader, "reader", str(wf)], capture_output=True, text=True)
+            return proc.returncode, proc.stdout + proc.stderr
+    rc, out = reference_set_reader(workflow_text)
+    case("the portal-image one-producer gate can read the published module set out of main-cd.yml",
+         rc == 0 and "MeshWeaver.AI" in out and len(out.split()) >= 4, f"rc={rc} out={out}")
+    no_set = workflow_text.replace("      PUBLISHED_MODULES: >-\n", "      PUBLISHED_MODULES_GONE: >-\n", 1)
+    rc, out = reference_set_reader(no_set)
+    case("...and a workflow without that declaration makes the reader RED (never an empty pass)",
+         no_set != workflow_text and rc != 0 and "PUBLISHED_MODULES" in out, f"rc={rc} out={out}")
     module_gates_arm = workflow_text.replace(
         "    needs: [preflight, gate, promote, platform-ladder-compat]",
         "    needs: [preflight, gate, promote, platform-ladder-compat, published-modules]", 1)
@@ -1420,10 +1439,12 @@ def main() -> int:
     unpaid = workflow_text.replace(
         "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&\n"
         "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
-        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: ${{ needs.gate.outputs.sha }}\n          sparse-checkout: .github/scripts\n      - name: \"The input must exist",
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    env:\n"
+        "      # 🚨 THE ONE DECLARATION",
         "      always() && needs.gate.result == 'success' &&\n"
         "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
-        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          ref: ${{ needs.gate.outputs.sha }}\n          sparse-checkout: .github/scripts\n      - name: \"The input must exist", 1)
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    env:\n"
+        "      # 🚨 THE ONE DECLARATION", 1)
     case("...and the guard catches `always()` that no longer stops on a FAILED preflight",
          unpaid != workflow_text and any("needs.preflight.result" in p for p in separation_problems(unpaid)),
          "the mutation passed (or could not apply) with a module-input leg that runs after preflight failed")

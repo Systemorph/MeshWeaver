@@ -3594,6 +3594,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # 🚨 THE ONE DECLARATION of the module set this platform is judged against — `<package>=<module>`
+      # pairs. Read by the steps below AND, out of this file, by `portal-image`'s one-producer gate
+      # (check-platform-reference-set.sh: no published module's name may also ship in the host's
+      # /app). One list, so the two can never drift; it replaced `plugins-modules.with.modules`.
+      PUBLISHED_MODULES: >-
+        AI=MeshWeaver.AI
+        Essentials=MeshWeaver.Markdown.Collaboration
+        Maps=MeshWeaver.Maps
+        Stripe=MeshWeaver.Payments.Stripe
     steps:
       - uses: actions/checkout@v7
         with:
@@ -3628,16 +3638,18 @@ jobs:
           [ -n "$identity" ] || { echo "::error::could not resolve a framework identity from $TESTER (got: '$line')"; exit 1; }
           target="${BAKE_PUBLISH_TARGETS%% *}"
           [ -n "$target" ] || { echo "::error::vars.BAKE_PUBLISH_TARGETS is empty — the sealed publications cannot be read (preflight asserts it)"; exit 1; }
+          # The job's PUBLISHED_MODULES declaration (`<package>=<module>` pairs) is the one list.
+          read -r -a mappings <<< "$(printf '%s' "$PUBLISHED_MODULES" | tr '\n' ' ')"
+          [ "${#mappings[@]}" -ge 1 ] || { echo "::error::PUBLISHED_MODULES declares no module — nothing would be judged"; exit 1; }
+          packages=""; for mapping in "${mappings[@]}"; do packages="$packages ${mapping%%=*}"; done
           out="$RUNNER_TEMP/published"; rm -rf "$out"; mkdir -p "$out"
           bash .github/scripts/compose-sealed-modules.sh --identity "$identity" \
-            --packages "AI Essentials Maps Stripe" --upstreams plugins --out "$out" --storage-target "$target"
+            --packages "${packages# }" --upstreams plugins --out "$out" --storage-target "$target"
           # One artifact per MODULE, under the names every consumer already reads
           # (module-bundle-<Module>). The package → module map is the satellites' own declaration
-          # (`registry-modules: AI Essentials Stripe Maps`): AI ships MeshWeaver.AI, Essentials ships
-          # MeshWeaver.Markdown.Collaboration, Maps ships MeshWeaver.Maps, Stripe ships
-          # MeshWeaver.Payments.Stripe. Exactly one bundle per package, or RED.
+          # (`registry-modules: AI Essentials Stripe Maps`). Exactly one bundle per package, or RED.
           stage="$RUNNER_TEMP/module-bundles"; rm -rf "$stage"
-          for mapping in AI=MeshWeaver.AI Essentials=MeshWeaver.Markdown.Collaboration Maps=MeshWeaver.Maps Stripe=MeshWeaver.Payments.Stripe; do
+          for mapping in "${mappings[@]}"; do
             pkg="${mapping%%=*}"; module="${mapping#*=}"
             found=$(find "$out" -maxdepth 1 -iname "$pkg.module.nupkg")
             [ "$(printf '%s' "$found" | grep -c . || true)" = "1" ] || { echo "::error::the sealed plugins publication for $identity yielded $(printf '%s' "$found" | grep -c . || true) bundle(s) for $pkg, expected exactly 1"; exit 1; }
