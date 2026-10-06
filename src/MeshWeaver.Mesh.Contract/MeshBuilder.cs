@@ -676,7 +676,14 @@ public partial record MeshBuilder
     {
         // Fail CLOSED on Indeterminate: MayLoad is true for Linkable and nothing else, so a
         // check that could not be made can never be read as a check that passed.
-        if (surface is not null && ModulePlatformLink.Check(location, surface) is { MayLoad: false } verdict)
+        // 🚨 WITH the member half (MeshWeaver#6007): a type that stayed while a member it carries
+        // moved loads cleanly and throws MissingMethodException at the first call. OpenAI 1.4.0
+        // called ReasoningEffortLevels.IsBuiltIn(IEnumerable<string>) on images whose AI had no
+        // such method, and every chat round on those instances died on it. The surface here is
+        // file-backed, so the member walk is determinate; a refusal falls back to the previous
+        // generation exactly as a type-level refusal does.
+        if (surface is not null
+            && ModulePlatformLink.Check(location, surface, ModuleLinkOptions.WithMembers) is { MayLoad: false } verdict)
             return new LoadAttempt(null, IncompatibleModule.FromLinkRefusal(location, verdict), NeverLoaded: true);
 
         // 🚨 Live-update-by-default (policy module-live-update-default): every module the image does
