@@ -189,7 +189,7 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
                     + "later start succeeds. {Count} declaration path(s) [{Paths}] by path routing and "
                     + "inside pinned partition(s) [{Partitions}]: {Read} durable row(s) read, "
                     + "{Retyped} self-typed row(s) retyped",
-                    outcome, failures.Count, string.Join("; ", failures), declarationPaths.Length,
+                    outcome, failures.Count, RenderFailures(failures), declarationPaths.Length,
                     string.Join(", ", declarationPaths), partitions, stats.Read, stats.Retyped);
         }
 
@@ -218,6 +218,23 @@ public sealed class SelfTypedDeclarationDurableRepair : IHostedService
 
         return Task.CompletedTask;
     }
+
+    /// <summary>How many failed steps the summary line names before it folds the rest into a count.</summary>
+    internal const int RenderedFailureCap = 10;
+
+    /// <summary>
+    /// The failed steps as the summary line renders them: the first <see cref="RenderedFailureCap"/>
+    /// by name, then <c>+ N more</c>. A sweep failing systematically over a large corpus would
+    /// otherwise put every row into ONE line long enough for a sink to truncate or drop; every
+    /// step beyond the cap is still named on its own Warning line.
+    /// </summary>
+    /// <param name="failures">Every step the pass recorded as failed.</param>
+    /// <returns>The rendered list.</returns>
+    internal static string RenderFailures(ImmutableList<string> failures)
+        => failures.Count <= RenderedFailureCap
+            ? string.Join("; ", failures)
+            : string.Join("; ", failures.Take(RenderedFailureCap))
+              + $"; + {failures.Count - RenderedFailureCap} more (each on its own Warning line)";
 
     /// <summary>
     /// One lane of the sweep: every durable row <paramref name="source"/> yields is counted,

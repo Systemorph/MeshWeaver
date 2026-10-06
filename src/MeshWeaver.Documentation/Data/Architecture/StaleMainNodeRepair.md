@@ -226,9 +226,10 @@ reason and draws the same distinction — a write guard can only ever refuse the
 (a partition that cannot be read) or a row (a write that is refused) so the rest still heal — and
 `SelfTypedDeclarationDurableRepair` used to end such a pass with the Information line
 `sweep completed: … N row(s) retyped`, the failure visible only as a Warning beside it. Every
-tolerated fault is now recorded on the pass, and a pass with any ends at **Error** with
-`sweep completed with K FAILED step(s) [...]`, naming each lane or row
-(`SelfTypedDeclarationRepairReportsFailedStepsTest`). If you are reading a pass's outcome, read that
+tolerated fault is now recorded on the pass, and a pass with any failed step ends at **Error** with
+`sweep completed with K FAILED step(s) [...]`, naming each lane or row (the first ten by name, the
+rest as a count; every one also has its own Warning line) — `SelfTypedDeclarationRepairReportsFailedStepsTest`
+pins both fault kinds, a faulted read lane and a refused retype. If you are reading a pass's outcome, read that
 summary line. A Warning on its own is not the outcome.
 
 🚨 **Restoring `MainNode == Path` is necessary but not sufficient** for a decentral node to be
