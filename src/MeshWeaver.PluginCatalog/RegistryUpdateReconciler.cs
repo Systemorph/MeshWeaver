@@ -624,22 +624,33 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// that already runs asks. With the safety net off, the boot pass is the retry. Never faults —
     /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
     /// </summary>
-    private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options) =>
-        ModuleReload.RetryFaulted(hub,
-                options.ReconcileSafetyNetInterval > TimeSpan.Zero ? options.ReconcileSafetyNetInterval : TimeSpan.Zero,
-                DateTimeOffset.UtcNow)
+    private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options)
+    {
+        var unit = options.ReconcileSafetyNetInterval > TimeSpan.Zero ? options.ReconcileSafetyNetInterval : TimeSpan.Zero;
+        var now = DateTimeOffset.UtcNow;
+        // A reboot whose restart request CRASHED is re-armed on the same pass, with the same backoff
+        // (InstanceReboot.RetryFaulted) — a transient failure is never final (#6172).
+        return ModuleReload.RetryFaulted(hub, unit, now)
             .Do(paths =>
             {
                 if (!paths.IsEmpty)
                     logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted module reload(s): {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
+            .SelectMany(_ => InstanceReboot.RetryFaulted(hub, unit, now))
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {
-                logger.LogWarning(ex, "[RegistryUpdate] faulted module reloads could not be re-armed this pass — the next pass asks again");
+                logger.LogWarning(ex, "[RegistryUpdate] faulted module reloads or reboots could not be re-armed this pass — the next pass asks again");
                 return Observable.Return(Unit.Default);
             });
+    }
 
     /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
     private IObservable<Unit> SafetyNetReconcile(PluginRegistryReference registry)

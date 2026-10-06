@@ -589,30 +589,57 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
         if (choice.Target is not { } target)
             return Restart(new SelfUpdateVerdict(SelfUpdateOutcome.NoNewerRelease, $"Reboot ({reason}):"),
                     honourFloor: false, reason: reason)
-                .Select(verdict => new RebootActivationOutcome(
-                    verdict.Outcome switch
-                    {
-                        SelfUpdateOutcome.Restarted => RebootActivationKinds.Restarted,
-                        SelfUpdateOutcome.RestartHandedOver => RebootActivationKinds.HandedOver,
-                        _ => RebootActivationKinds.Unavailable,
-                    },
-                    verdict.Message))
+                .Select(verdict => new RebootActivationOutcome(RebootKindOf(verdict.Outcome, reason), verdict.Message))
+                // A restart call that THREW is a crash, never a decided "cannot restart" (#6172).
                 .Catch((Exception ex) => Observable.Return(new RebootActivationOutcome(
-                    RebootActivationKinds.Unavailable, $"the restart faulted: {ex.Message}")));
+                    RebootActivationKinds.Faulted, $"the restart faulted: {ex.Message}")));
         return Observable.Defer(() => ReadPolicyStream().Take(1).Timeout(TimeSpan.FromSeconds(30)))
             .SelectMany(policy => Apply(SelfUpdateTrigger.PolicyChange, policy, target, honourFloor: false))
             .Where(verdict => verdict.Outcome != SelfUpdateOutcome.NoOutcome)
             .Take(1)
-            .Select(verdict => new RebootActivationOutcome(
-                verdict.Outcome switch
-                {
-                    SelfUpdateOutcome.Applied => RebootActivationKinds.Rolled,
-                    SelfUpdateOutcome.HandedOver => RebootActivationKinds.HandedOver,
-                    _ => RebootActivationKinds.Unavailable,
-                },
-                verdict.Message))
+            .Select(verdict => new RebootActivationOutcome(RebootKindOf(verdict.Outcome, reason), verdict.Message))
             .Catch((Exception ex) => Observable.Return(new RebootActivationOutcome(
-                RebootActivationKinds.Unavailable, $"the roll to {target} faulted: {ex.Message}")));
+                RebootActivationKinds.Faulted, $"the roll to {target} faulted: {ex.Message}")));
+    }
+
+    /// <summary>
+    /// How a self-update verdict reads as a reboot's activation. A roll or restart on its way is
+    /// scheduled; an attempt that CRASHED (a hand-over that failed, a registry check that could not
+    /// be made) is <see cref="RebootActivationKinds.Faulted"/> and retried, never final (#6172); a
+    /// decided refusal (held, deferred, no restart path, a failed migration) is
+    /// <see cref="RebootActivationKinds.Unavailable"/>. An outcome this switch does not name is still
+    /// reported Unavailable, but it is logged BY NAME so it is never folded away silently.
+    /// </summary>
+    /// <param name="outcome">The verdict's outcome.</param>
+    /// <param name="reason">The reboot's reason, for the log line.</param>
+    internal string RebootKindOf(SelfUpdateOutcome outcome, string reason)
+    {
+        switch (outcome)
+        {
+            case SelfUpdateOutcome.Applied: return RebootActivationKinds.Rolled;
+            case SelfUpdateOutcome.Restarted: return RebootActivationKinds.Restarted;
+            case SelfUpdateOutcome.HandedOver:
+            case SelfUpdateOutcome.RestartHandedOver: return RebootActivationKinds.HandedOver;
+            case SelfUpdateOutcome.RestartHandoverFailed:
+            case SelfUpdateOutcome.HandoverFailed:
+            case SelfUpdateOutcome.CheckFailed: return RebootActivationKinds.Faulted;
+            case SelfUpdateOutcome.UpdatesDisabled:
+            case SelfUpdateOutcome.NoNewerRelease:
+            case SelfUpdateOutcome.Held:
+            case SelfUpdateOutcome.Deferred:
+            case SelfUpdateOutcome.DetectOnly:
+            case SelfUpdateOutcome.ComboBlocked:
+            case SelfUpdateOutcome.MigrationFailed:
+            case SelfUpdateOutcome.MigrationUnavailable:
+            case SelfUpdateOutcome.InstalledTagWithdrawn:
+            case SelfUpdateOutcome.RestartDeferred:
+            case SelfUpdateOutcome.RestartUnavailable: return RebootActivationKinds.Unavailable;
+            default:
+                _logger?.LogWarning(
+                    "[Reboot] activation for '{Reason}' answered {Outcome}, which the reboot lane does not name — reported as {Kind}",
+                    reason, outcome, RebootActivationKinds.Unavailable);
+                return RebootActivationKinds.Unavailable;
+        }
     }
 
     private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform, bool honourFloor, string? reason)
