@@ -695,8 +695,8 @@ public class ModuleReloadInstanceReportTest(ITestOutputHelper output) : ModuleRe
             Entries = [new ModuleActivationEntry { Name = "M", Directory = "M@new", Version = "2.0.0", PreviousDirectory = "M@old", PreviousVersion = "1.0.0" }],
         };
 
-        string? Running(IReadOnlyDictionary<string, string> loaded, ModuleActivationList? record = null) =>
-            DeploymentReportService.WithRunning(report, combo, record ?? activation, loaded).Modules.Single(m => m.Id == "P").RunningVersion;
+        string? Running(IReadOnlyDictionary<string, string> loaded) =>
+            DeploymentReportService.WithRunning(report, combo, activation, loaded).Modules.Single(m => m.Id == "P").RunningVersion;
 
         Running(new Dictionary<string, string> { ["M"] = "M@new" }).Should().Be("2.0.0");
         Running(new Dictionary<string, string> { ["M"] = "M@old" })
