@@ -223,7 +223,9 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
         var comboReader = hub.ServiceProvider.GetRequiredService<InstanceComboReader>();
         return comboReader.Read()
             .Take(1)
-            .Zip(ReadUpdatePolicy(), (combo, policy) => Compose(settings, combo, policy))
+            .Zip(ReadUpdatePolicy(), (combo, policy) => (combo, policy))
+            .Zip(ReadActivation(), (pair, activation) => WithRunning(
+                Compose(settings, pair.combo, pair.policy), pair.combo, activation, LoadedGenerations()))
             .Zip(ReadAdoptedFrameworks(), (report, adopted) => report with
             {
                 AdoptedFrameworkIdentities = adopted.Identities,
@@ -307,6 +309,91 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                && !string.IsNullOrWhiteSpace(value.GetString())
             ? value.GetString()?.Trim()
             : null;
+    }
+
+    /// <summary>
+    /// The activation record — which generation, at which version, each landed module's head and
+    /// previous slot name — read off the volume through <see cref="ModuleLandingService.GetActivation"/>
+    /// (its own IO pool). Null when this host has no landing service or the read failed; then every
+    /// row's <see cref="ModuleReport.RunningVersion"/> stays null ("not known").
+    /// </summary>
+    private IObservable<ModuleActivationList?> ReadActivation()
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return<ModuleActivationList?>(null);
+        return landing.GetActivation()
+            .Take(1)
+            .Timeout(ReadBudget)
+            .Select(list => (ModuleActivationList?)list)
+            .DefaultIfEmpty(null)
+            .Catch<ModuleActivationList?, Exception>(ex =>
+            {
+                logger.LogWarning(ex, "[DeploymentReport] the module activation record could not be read — "
+                    + "this report carries no running module versions");
+                return Observable.Return<ModuleActivationList?>(null);
+            });
+    }
+
+    /// <summary>Module → the generation leaf THIS process loaded it from — the same reader the
+    /// module-reload agent reports with, so the report and a reload's per-replica row agree.</summary>
+    private IReadOnlyDictionary<string, string> LoadedGenerations() =>
+        hub.ServiceProvider.GetService<ModuleReloadAgent>()?.LoadedGenerations()
+        ?? ModuleActivationStatus.LoadedModuleGenerations();
+
+    /// <summary>
+    /// Each package row's <see cref="ModuleReport.RunningVersion"/>: the version of the generation
+    /// this process has LOADED for the package's compiled module, read against the activation
+    /// record — the head's version when the head is loaded, the previous generation's when that is,
+    /// else null (pure).
+    /// </summary>
+    /// <remarks>
+    /// 🚨 Never the install record's version. A live module reload moves the activation record and
+    /// the loaded generation and deliberately leaves <c>Plugins/{id}</c> alone (that record also
+    /// describes the CONTENT install), so <see cref="ModuleReport.Version"/> keeps naming what was
+    /// installed while this names what runs. Never the head's version either when the head is NOT
+    /// what is loaded: a restart-path reload lands N+1 as head while this process still runs N until
+    /// it restarts, and reporting the head would claim the code is live a restart early.
+    /// </remarks>
+    /// <param name="report">The composed report.</param>
+    /// <param name="combo">The combo the report was composed from (carries each row's compiled module).</param>
+    /// <param name="activation">The activation record, or null when it could not be read.</param>
+    /// <param name="loadedGenerations">Module → the generation leaf this process loaded it from.</param>
+    internal static DeploymentReport WithRunning(
+        DeploymentReport report, InstanceCombo combo, ModuleActivationList? activation,
+        IReadOnlyDictionary<string, string> loadedGenerations)
+    {
+        if (activation is null)
+            return report;
+        var compiledModules = combo.Modules
+            .SelectMany(m => m.Package?.CompiledModule is { } compiled && !string.IsNullOrWhiteSpace(compiled)
+                ? new[] { (m.ModuleId, Compiled: compiled) }
+                : [])
+            .GroupBy(m => m.ModuleId, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.First().Compiled, StringComparer.OrdinalIgnoreCase);
+        return report with
+        {
+            Modules = report.Modules
+                .Select(row => compiledModules.TryGetValue(row.Id, out var module)
+                    ? row with { RunningVersion = RunningVersionOf(module, activation, loadedGenerations) }
+                    : row)
+                .ToImmutableList(),
+        };
+    }
+
+    private static string? RunningVersionOf(
+        string module, ModuleActivationList activation, IReadOnlyDictionary<string, string> loadedGenerations)
+    {
+        if (!loadedGenerations.TryGetValue(module, out var leaf))
+            return null;
+        var entry = activation.Entries.FirstOrDefault(e => string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            return null;
+        if (string.Equals(entry.Directory, leaf, StringComparison.Ordinal))
+            return Blank(entry.Version);
+        if (string.Equals(entry.PreviousDirectory, leaf, StringComparison.Ordinal))
+            return Blank(entry.PreviousVersion);
+        return null;
     }
 
     /// <summary>The report with the target set and each module's served version applied (pure).</summary>
@@ -616,6 +703,14 @@ public sealed record ModuleReport
     public string Origin { get; init; } = "GitSync";
     /// <summary>The installed published SemVer, when the install record has one.</summary>
     public string? Version { get; init; }
+    /// <summary>
+    /// The version of the module CODE this instance is running — the generation this process loaded
+    /// for the package's compiled module, read off the activation record, never off the install
+    /// record. Differs from <see cref="Version"/> after a live module reload (the code moved, the
+    /// content install did not). Null when not known: no compiled module, the image's own copy, a
+    /// generation the record no longer names, or an unreadable record.
+    /// </summary>
+    public string? RunningVersion { get; init; }
     /// <summary>The installed version's platform floor.</summary>
     public string? MinMeshVersion { get; init; }
     /// <summary>Why a newer version is not installed — the install record's hold sentence.</summary>
