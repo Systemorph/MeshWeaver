@@ -16,9 +16,9 @@ acceptable while the referenced API is compatible; identical versions are insuff
 API is not. `ModulePlatformLinkTest` compiles separate contract assemblies to exercise both
 directions of version skew, additive API changes, and removal of a referenced type without a
 version change. It also verifies that a refused upgrade leaves the installed generation and its
-bytes intact. This probe checks **types**, not member signatures; actual load/install/execution
-checks must cover missing methods or changed constructors. A successful type probe is not a
-claim that those member checks ran.
+bytes intact. At boot, at the landing and in the live swap the probe also checks **members**
+(MeshWeaver#6007, below); the roll gate, which links against a published surface document, checks
+types only.
 
 Until MeshWeaver#3538 the module lane had exactly one platform gate: the module's declared
 `minMeshVersion` FLOOR, compared as SemVer against the running platform's version. That gate is a
@@ -212,16 +212,36 @@ direction.
 
 ### What it does NOT see
 
-**Member-level skew — at boot, landing and the roll.** A method or constructor signature that moved
-on a type that still exists — MeshWeaver#2234's original `MissingMethodException` — is invisible to
-these runtime call sites, because they check TYPE references (`ModuleLinkOptions.TypesOnly`). The
-SAME probe carries an opt-in member half (`ModuleLinkOptions.WithMembers`: every `MemberRef` resolved
-by name and exact signature, plus accessibility and what a plugin type owes the interfaces and base
-classes it implements), and it runs where a platform change is DECIDED rather than where a module is
-loaded: on every platform pull request and every promoted image, against the deployed plugin set —
-see [The Platform Compatibility Ladder](../PlatformCompatibilityLadder). A published surface document
-carries type names only, so the member half against one is `Indeterminate`, never a silent pass. Stating this explicitly matters: a gate whose blind spot is undocumented gets read as
-covering more than it does.
+**Member-level skew at the ROLL.** A method or constructor signature that moved on a type that
+still exists is a `MissingMethodException` at the first call. Boot (`MeshBuilder`), the landing
+(`ModuleLandingService`) and the live swap (`ModuleLiveUpdater`) measure it: they link against this
+process's own files, so they pass `ModuleLinkOptions.WithMembers` (every `MemberRef` resolved by name
+and exact signature, plus accessibility and what a plugin type owes the interfaces and base classes it
+implements). The roll gate cannot: it links a landed module against the TARGET image's published
+surface document, which carries type names only, so it keeps `ModuleLinkOptions.TypesOnly`; the
+member half against a document is `Indeterminate`, never a silent pass. Member skew against a target
+image is measured where a platform change is DECIDED instead — on every platform pull request and
+every promoted image, against the deployed plugin set (see
+[The Platform Compatibility Ladder](../PlatformCompatibilityLadder)). Stating this explicitly matters:
+a gate whose blind spot is undocumented gets read as covering more than it does.
+
+**Why boot and the landing measure members (MeshWeaver#6007).** The OpenAI package 1.4.0 called
+`ReasoningEffortLevels.IsBuiltIn(IEnumerable<string>)`, added to `MeshWeaver.AI` on 2026-10-01. Its
+hand-typed floor (`minMeshVersion`) admitted it onto images whose AI predated that method. The type
+probe passed (`ReasoningEffortLevels` was there), the module landed, and every chat round through the
+OpenAI wire threw `MissingMethodException` — 200 occurrences on memex between 2026-10-02 19:42Z and 2026-10-03 06:19Z, and every round on a
+customer instance. With the member half at the landing those bytes are refused and the previous
+generation keeps serving; at boot an already-landed copy is parked and the previous generation (or the
+image's baseline) loads instead.
+
+**Blast radius, measured before it shipped.** Against image `3.0.0-ci.9984` (`/app` plus its
+`modules/`), with the member half on: 11 image modules and the 4 deployed module bundles of that
+build's main-cd run, about 3,900 member references in all, 0 refused. The first measurement refused
+one: the image's own `MeshWeaver.Blazor.EntityViews`, for 8 protected `BlazorView`2` members. The
+derivation walk stopped at a generic base defined in the platform assembly itself
+(`InputBase`3 : FormComponentBase`3`), so the protected members read as "no longer accessible". That
+was a false refusal, and it is fixed in the same change
+(`ModulePlatformMemberLinkTest.AProtectedMemberThroughGenericPlatformBases_IsAccessible_AndRuns`).
 
 ## Where it runs, and what it protects
 

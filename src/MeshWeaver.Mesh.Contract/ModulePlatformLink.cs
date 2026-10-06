@@ -908,14 +908,18 @@ public sealed class ModulePlatformSurface
 /// by the loader and is a hard verdict here. <c>MeshWeaver.*</c> assemblies keep the type-identity
 /// rule and are compared by version like every other carried assembly.</para>
 ///
-/// <para><b>Member-level skew is measured only when asked for.</b> The runtime call sites (boot,
-/// landing, prebuilt adoption, the roll gate) check TYPE references
-/// (<see cref="ModuleLinkOptions.TypesOnly"/>); a method or constructor signature that moved on a
-/// type that still exists (#2234's original <c>MissingMethodException</c>) is invisible to them.
+/// <para><b>Member-level skew is measured wherever the surface is THIS process's files.</b>
 /// <see cref="ModuleLinkOptions.WithMembers"/> adds the member half — every <c>MemberRef</c> by name
-/// and exact signature, accessibility, and what a module type owes the platform types it implements —
-/// and is what the platform compatibility gate runs on every platform pull request against the
-/// deployed plugin set (policy <c>platform-backwards-compatibility</c>).</para>
+/// and exact signature, accessibility, and what a module type owes the platform types it implements.
+/// Boot (<c>MeshBuilder</c>), the landing (<c>ModuleLandingService</c>) and the live swap
+/// (<c>ModuleLiveUpdater</c>) pass it (MeshWeaver#6007: OpenAI 1.4.0 called a
+/// <c>ReasoningEffortLevels</c> method the loaded AI did not have, landed cleanly, and threw
+/// <c>MissingMethodException</c> on every chat round). The roll gate keeps
+/// <see cref="ModuleLinkOptions.TypesOnly"/>: it links against a PUBLISHED surface document, which
+/// carries type names only, so the member half there would be <c>Indeterminate</c> for every module.
+/// Prebuilt NodeType adoption keeps it too — that decision is the compatibility key's. The platform
+/// compatibility gate runs the member half on every platform pull request against the deployed
+/// plugin set (policy <c>platform-backwards-compatibility</c>).</para>
 /// </summary>
 public static partial class ModulePlatformLink
 {
@@ -993,6 +997,29 @@ public static partial class ModulePlatformLink
         ArgumentNullException.ThrowIfNull(surface);
         using var stream = new MemoryStream(entryBytes, writable: false);
         return Check(stream, moduleName, closure, surface, ModuleLinkOptions.TypesOnly);
+    }
+
+    /// <summary>
+    /// <see cref="Check(byte[], string, IReadOnlySet{string}, ModulePlatformSurface)"/> with explicit
+    /// <paramref name="options"/> — the landing passes <see cref="ModuleLinkOptions.WithMembers"/>,
+    /// because a module whose bytes call a member this platform does not have lands cleanly and
+    /// throws <c>MissingMethodException</c> at the first call (MeshWeaver#6007).
+    /// </summary>
+    /// <param name="entryBytes">The entry assembly's bytes.</param>
+    /// <param name="moduleName">The module's assembly simple name (for the report).</param>
+    /// <param name="closure">The simple names of the assemblies travelling WITH the module.</param>
+    /// <param name="surface">The platform this module would be loaded into.</param>
+    /// <param name="options">What to measure beyond the type and version halves.</param>
+    public static ModuleLinkVerdict Check(
+        byte[] entryBytes, string moduleName, IReadOnlySet<string> closure,
+        ModulePlatformSurface surface, ModuleLinkOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(entryBytes);
+        ArgumentNullException.ThrowIfNull(closure);
+        ArgumentNullException.ThrowIfNull(surface);
+        ArgumentNullException.ThrowIfNull(options);
+        using var stream = new MemoryStream(entryBytes, writable: false);
+        return Check(stream, moduleName, closure, surface, options);
     }
 
     private static ModuleLinkVerdict Check(
