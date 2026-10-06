@@ -31,6 +31,14 @@ public static class ModuleServiceRoute
 
     /// <summary>Only the module's scope sees it (an open generic, or infrastructure the module added).</summary>
     public const string Private = "Private";
+
+    /// <summary>A service type ANOTHER module declares — this module contributes to that module's list
+    /// (every AI provider module registers MeshWeaver.AI's catalog sources and chat-client factories).
+    /// Never registered in the root: a root registration would pin the declaring module's generation, and a
+    /// root forwarding proxy cannot be built over a collectible interface at all ("A non-collectible
+    /// assembly may not reference a collectible assembly"). Served instead to the DECLARING module's own
+    /// container, after its own registrations, and to every per-node hub.</summary>
+    public const string Contributed = "Contributed";
 }
 
 /// <summary>One registration a module added, and how it is served.</summary>
@@ -175,6 +183,8 @@ public sealed class ModuleServices : IDisposable
         }
         if (IsOwned(type, module))
             return ModuleServiceRoute.ModuleOwned;
+        if (IsOwnedByAnotherModule(type, module))
+            return ModuleServiceRoute.Contributed;
         if (type == typeof(IHostedService))
             return ModuleServiceRoute.Hosted;
         if (type.IsInterface)
@@ -210,6 +220,14 @@ public sealed class ModuleServices : IDisposable
             || (type.IsGenericType && type.GetGenericArguments().Any(a => IsOwned(a, module)))
             || (type.HasElementType && IsOwned(type.GetElementType(), module)));
 
+    /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from a module context
+    /// OTHER than <paramref name="module"/> — a type a module this one depends on declares.</summary>
+    public static bool IsOwnedByAnotherModule(Type? type, AssemblyLoadContext module) =>
+        type is not null
+        && ((AssemblyLoadContext.GetLoadContext(type.Assembly) is ModuleLoadContext other && !ReferenceEquals(other, module))
+            || (type.IsGenericType && type.GetGenericArguments().Any(a => IsOwnedByAnotherModule(a, module)))
+            || (type.HasElementType && IsOwnedByAnotherModule(type.GetElementType(), module)));
+
     /// <summary>
     /// The module's scope — a child of <paramref name="root"/> holding every registration the module
     /// added, the forwarded ones under their <see cref="ModuleServiceRegistration.Key"/> so the root can
@@ -226,7 +244,8 @@ public sealed class ModuleServices : IDisposable
             foreach (var registration in Registrations)
             {
                 var d = registration.Descriptor;
-                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+                if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted
+                    or ModuleServiceRoute.Contributed)
                     services.Add(Keyed(d, registration.Key));
                 else
                     services.Add(d);
@@ -234,11 +253,70 @@ public sealed class ModuleServices : IDisposable
             // A container of its OWN, reaching the root only for types that do not name the module —
             // a child scope of the root would pin the generation (MeshWeaver.ServiceProvider.ModuleServiceProvider).
             var context = LoadContext;
+            var name = ModuleName;
+            var contexts = root.GetService<ModuleContexts>();
             return scope = ModuleServiceProvider.Create(
                 services, root,
                 type => context is not null && IsOwned(type, context),
-                Prefix.Where(d => d.ServiceType.IsGenericTypeDefinition));
+                Prefix.Where(d => d.ServiceType.IsGenericTypeDefinition),
+                type => contexts is null ? [] : RegistrationsElsewhere(contexts, name, type));
         }
+    }
+
+    /// <summary>
+    /// The registrations of <paramref name="type"/> held OUTSIDE <paramref name="requester"/>'s container,
+    /// when <paramref name="type"/> is a type a module declares — each a resolver of its own registration,
+    /// from the CURRENT generations, in a stable order: the declaring module's own registrations (unless it
+    /// is the requester), then the contributions other modules made of it
+    /// (<see cref="ModuleServiceRoute.Contributed"/>, module name then registration order; never the
+    /// requester's own, which its container registers itself). Empty for a type no module declares.
+    ///
+    /// <para>This is how a module type is served wherever it is asked: to the root (and through it the
+    /// mesh hub and every per-node hub — <see cref="ModuleOwnedRootSource"/>), and to another module's
+    /// container (<c>ModuleFallbackSource</c>). Before it, MeshWeaver.AI's catalog never saw a provider
+    /// module's sources or chat-client factories, and a provider module's code — which reads the AI
+    /// module's <c>ChatClientCredentialResolver</c> off the mesh hub — could not resolve it at all.</para>
+    /// </summary>
+    /// <param name="contexts">The mesh's module registry.</param>
+    /// <param name="requester">The module whose container asks, or null for the root.</param>
+    /// <param name="type">The service type asked for.</param>
+    public static IReadOnlyList<Func<object>> RegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type)
+    {
+        ArgumentNullException.ThrowIfNull(contexts);
+        ArgumentNullException.ThrowIfNull(type);
+        if (type.IsGenericTypeDefinition)
+            return [];
+        var generations = contexts.Generations
+            .Where(g => g.Services is not null)
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .ToArray();
+        var owner = generations.FirstOrDefault(g => IsOwned(type, g.Context));
+        if (owner is null)
+            return [];
+        var resolvers = ImmutableList.CreateBuilder<Func<object>>();
+        if (owner.Name != requester)
+        {
+            var ownerName = owner.Name;
+            var count = owner.Services!.Registrations.Count(r => r.Route == ModuleServiceRoute.ModuleOwned && r.Descriptor.ServiceType == type);
+            for (var position = 0; position < count; position++)
+            {
+                var at = position;
+                resolvers.Add(() => ModuleServiceProvider.ResolveAt(
+                    contexts.ModuleScope(ownerName) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
+                    type, at));
+            }
+        }
+        foreach (var contributor in generations.Where(g => g.Name != requester && g.Name != owner.Name))
+        {
+            var name = contributor.Name;
+            foreach (var registration in contributor.Services!.Registrations
+                         .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type))
+            {
+                var index = registration.Index;
+                resolvers.Add(() => contexts.ResolveModuleService(name, index));
+            }
+        }
+        return resolvers.ToImmutable();
     }
 
     private static ServiceDescriptor Keyed(ServiceDescriptor d, string key) =>

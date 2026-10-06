@@ -118,7 +118,8 @@ the live test fail (`Restarts` 1, expected 0).
 | `ModuleServices` (`MeshWeaver.Mesh.Contract`) | The module's registration delegates run against a COPY of the root collection as it stands when the module installs, so every `TryAdd` decision is the boot one; what they ADDED is the module's set, routed (`ModuleServiceRoute`, open vocabulary): a platform **interface** → `Proxy`, a platform **class** → `Current`, `IHostedService` → `Hosted`, a type the module declares itself → `ModuleOwned`, an open generic or infrastructure → `Private`. |
 | Root forwarders (`ModuleServiceForwarding`) | The root gets exactly the platform-typed registrations it would have had — as forwarders that never name a module type. `Proxy` is ONE stable `DispatchProxy` per registration that forwards every call to the CURRENT generation, so a platform singleton that cached it follows a swap. `Hosted` is started at boot and, on a swap, the old generation's instance is STOPPED and the same registration STARTED from the new one. |
 | `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module — through ONE stand-in **per root registration**, so `IEnumerable<T>` in the module is the root's whole list in the root's order and a single resolve still answers the root's LAST; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
-| Per-node hubs | Every per-node hub's scope gets ONE forwarder **per registration** of each module-owned type (and their options) of each module's CURRENT generation, each answering its own registration (`ModuleServiceProvider.ResolveAt`), so module code resolving its own services from `hub.ServiceProvider` — `GetServices<T>()` included — finds all of them; a swap recycles the hubs. |
+| Module types, wherever asked | A type a module DECLARES is answered from the modules wherever it is asked — `ModuleServices.RegistrationsElsewhere`: the declaring module's registrations (`ModuleServiceProvider.ResolveAt`, one per registration) plus every **contribution** another module made of it (`ModuleServiceRoute.Contributed`). The ROOT serves it through `ModuleOwnedRootSource` (so the mesh hub and every per-node hub, which are scopes under the root, see it), and another module's container through `ModuleFallbackSource`. |
+| Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
 | The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
 
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
@@ -129,6 +130,19 @@ last declared — the MCP server takes `IEnumerable<McpServerTool>` inside the A
 older image listed all 37; by the same mechanism every per-node hub resolves only the LAST `IHarness` the
 AI module registers, which is how the home-page chat lost the harness it was bound to.
 `ModuleServicesKeepEveryRegistrationTest` pins both, with the collapsed answers as its negative control.
+
+🚨 **A module's lists include what its DEPENDENTS contribute, and a dependent resolves its dependency's
+services.** The first images of this slice served a module type only inside its own container: on the
+control instance every AI provider's catalog sources and chat-client factories stayed in the provider's
+container (the Provider import listed only the platform nodes, `Provider/OpenRouterEU` had 0 models,
+"No IChatClientFactory is registered", every pull-request review stopped), and the provider factories —
+which read MeshWeaver.AI's `ChatClientCredentialResolver` off the mesh hub — found nothing.
+`ModuleContributionsCrossContainersTest` pins all four directions (the declaring module's list, the mesh
+hub, a per-node hub, a dependent resolving its dependency), every one red on the code before it. A
+"find the shared singleton in the collection and mutate it" registration cannot cross containers by
+construction — contribute a list element instead (MeshWeaver.AI's catalog is built from every
+`LanguageModelCatalogSource` registration). A dependent module's service that cached a contribution keeps
+that generation's instance until the hubs holding it are recycled — the same rule as any swap.
 
 What still blocks root services (measured, named): a delegate that removes or replaces a registration it
 did not add, a keyed registration, a class-typed platform service the module implements, an interface
