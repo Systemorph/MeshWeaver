@@ -308,7 +308,7 @@
          grouped Orleans bump leaves them behind. A split family ships Microsoft.Orleans.Reminders at
          the OLD version in the portal image; the image-derived central list then pins it there, and
          every Plugins test project on Microsoft.Orleans.TestingHost fails restore with NU1109
-         (TestingHost 10.4.0 needs Reminders >= 10.4.0). Move them with the rest of the family. -->
+         (TestingHost needs Reminders at the family version). Move them with the rest of the family. -->
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.4.0" />
