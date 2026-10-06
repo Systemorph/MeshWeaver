@@ -2225,6 +2225,12 @@ internal static class NodeTypeCompilationHelpers
                 .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
                     .Select(mv => (p.Snapshot, p.Fingerprint, p.Includes, ModuleVersion: mv))))
             .Switch()
+            // #5344 — the backoff wraps the WHOLE factory above, not only the per-path tail: the
+            // path-set discovery (NodeSources.GetSources, the read the #5344 stall faults) and the
+            // include-arrival watch both sit upstream of the Switch()es and pass their errors here.
+            // The include reader and the module-version read never fault the stream (EmitNull
+            // timeouts; SourceIncludeUnavailableException is caught), so there is nothing else to
+            // classify — every QueryProviderStalledException this watcher can raise lands here.
             .WithStallBackoff(stallBackoff),
                 published =>
                 {
