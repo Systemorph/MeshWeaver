@@ -269,11 +269,7 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
             [CSharpSyntaxTree.ParseText(source)],
             PlatformReferences.Platform(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var buffer = new MemoryStream();
-        var result = compilation.Emit(buffer);
-        result.Success.Should().BeTrue(string.Join(Environment.NewLine,
-            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        return buffer.ToArray();
+        return StandInCompile.Emit(compilation);
     }
 
     private sealed class FakeAcrTagLister(IReadOnlyList<string> tags) : IAcrTagLister

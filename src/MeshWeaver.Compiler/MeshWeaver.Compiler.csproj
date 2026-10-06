@@ -37,6 +37,10 @@
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- #5212 / #890: the stand-in compiles of Memex.Portal.Shared.Test run the shared-emit canary
+         (EmitPipeline.ProbeSharedEmitState) when they fail, so a red names the process defect
+         instead of reading as a test defect. Diagnostic only. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
   <ItemGroup>
