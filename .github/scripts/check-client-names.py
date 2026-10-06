@@ -195,7 +195,13 @@ class Mesh:
                     raw = resp.read()
                     if notification or resp.status == 202 or not raw:
                         return None
-                    return self._parse(raw, (resp.headers.get("Content-Type") or "").lower(), body.get("id"))
+                    try:
+                        return self._parse(raw, (resp.headers.get("Content-Type") or "").lower(), body.get("id"))
+                    except NotChecked as exc:
+                        # Name the CALL that was refused: "JSON-RPC error -32602" alone does not say whether
+                        # the handshake, the create or the read-back failed (#5852's runs could not tell).
+                        call = f"{method} {params.get('name')}" if method == "tools/call" else method
+                        raise NotChecked(f"{call}: {exc}") from exc
             except urllib.error.HTTPError as exc:
                 last = f"HTTP {exc.code}"
                 if exc.code in (429, 502, 503, 504) and attempt < HTTP_ATTEMPTS:
@@ -439,7 +445,7 @@ def self_test() -> int:
     import tempfile
 
     store: dict[str, dict] = {}
-    flags = {"answer": True, "not_checked": False}
+    flags = {"answer": True, "not_checked": False, "rpc_error": False}
     term = re.compile(r"(?<![A-Za-z0-9])zorblax(?![a-z0-9])", re.I)
 
     class H(BaseHTTPRequestHandler):
@@ -463,6 +469,9 @@ def self_test() -> int:
             if method == "initialize":
                 return self._send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": PROTOCOL_VERSION}})
             name, args = req["params"]["name"], req["params"]["arguments"]
+            if name == "create" and flags["rpc_error"]:
+                return self._send({"jsonrpc": "2.0", "id": rid,
+                                   "error": {"code": -32602, "message": "secret detail never printed"}})
             if name == "create":
                 node = json.loads(args["node"])
                 store[node["namespace"] + "/" + node["id"]] = node["content"]
@@ -612,6 +621,11 @@ def self_test() -> int:
         flags["not_checked"] = True
         rc, out = run(ok_env, "--base", "HEAD~1")
         check("🚨 a NotChecked answer FAILS closed", rc == 1 and "NotChecked" in out)
+        flags["not_checked"], flags["rpc_error"] = False, True
+        rc, out = run(ok_env, "--base", "HEAD~1")
+        check("🚨 a JSON-RPC error FAILS closed, naming the refused call and not its message",
+              rc == 1 and "tools/call create: JSON-RPC error -32602" in out and "secret detail" not in out)
+        flags["rpc_error"] = False
         flags["not_checked"], flags["answer"] = False, False
         rc, out = run(ok_env, "--base", "HEAD~1")
         check("🚨 no answer in time FAILS closed", rc == 1 and "no answer within" in out)
