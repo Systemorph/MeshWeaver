@@ -29,7 +29,8 @@ core merge ─► gate ─► images ─► promote               module merge �
                                                     ▼             registry: newest version + floor
                               control-first: memex-control:<version>        │
                                                     │                       │  every instance, on its
-                          control self-update rolls to it (no approval)     │  own schedule:
+         control-first POSTs self-update-available                          │  own schedule:
+            → routed Roll for control (no approval)                         │
                                                     │                       │  newer version published
                                    control runs it, /health 200             │  AND floor ≤ running
                                                     │                       │  ⇒ lands + activates
@@ -84,11 +85,50 @@ On the module side, two things still guard what an instance runs:
   does this for every build that passed `control-acceptance` (empty database, a broken NodeType
   row, and N−1 on the migrated database), in the same run, and never moves the pointers backwards.
   It needs `control-promote` and does not need `arm`.
+- **`control-first` also delivers the build.** Its last step signs a `self-update-available`
+  announcement for the control record (`arm-promoted-set.py control-announcement`: the tag, the
+  image on `memex-control`, and the build's own line `3.0.0-ci*` as the admitting pattern) and POSTs
+  it to the control plane's inbox (`vars.CONTROL_WEBHOOK_URL`, signed with
+  `secrets.CONTROL_WEBHOOK_SECRET`). MeshWeaver.Plugins `SelfUpdateRouting` resolves the record and
+  opens `Ops/Actions/selfupdate-roll-control-<version>-…`. A re-run re-announces the same build,
+  which the router dedupes. A build older than control's newest tag is never announced, and the
+  router refuses a backwards roll anyway. Any answer other than a stored **and verified** delivery
+  turns the job red.
 - The control record (Systemorph/Memex `mesh/Deployments/control.json`) is Continuous on
-  `3.0.0-ci*` and carries **no `rollGate`**. Its self-update therefore hands the roll to the
-  control lane, and the routed `Roll` runs unattended: `ActionsExecutor.AdmittedUnattended`
-  requires a Continuous policy, a matching pattern and `rollGate == null`, and the Memex
-  classifier's `is_continuous_ci_roll` applies the same rule.
+  `3.0.0-ci*` and carries **no `rollGate`**, so that routed `Roll` runs unattended.
+  `ActionsExecutor.AdmittedUnattended` requires a routed roll written by the system, a Continuous
+  policy, a pattern that admits the tag on both the announcement and the record, and
+  `rollGate == null`. The Memex classifier's `is_continuous_ci_roll` applies the same rule. A
+  hand-filed `Roll` is a person's request: it carries no `admittedBy` and always waits for an
+  approval. **Unattended means the routed lane, never a hand-filed action.** A hand-filed `Roll`
+  that is parked at `AwaitingApproval` also counts as a rollout in flight, so the router opens
+  nothing for that deployment until the parked roll is approved or rejected.
+
+### Who rolls control (and why it is CD, not control's own self-updater)
+
+The first version of this design said "control's self-update rolls to it". It never did, and no
+build after ci.9939 reached control without a hand-filed, approved `Roll`. Because the fleet is
+armed only once control runs a build, nothing reached the fleet either. Three independent defects
+stood behind that, measured 2026-10-06 on control.systemorph.com and memex.systemorph.com:
+
+1. **The watcher looked at the wrong repository.** The in-pod self-updater lists
+   `SelfUpdate:PortalRepository`, which defaults to `memex-portal-ai`, and nothing renders it for
+   control. `memex-portal-ai:<version>` is written only by `arm`, and `arm` waits for control to
+   run the build. That is a circular wait: control could only ever follow the fleet.
+2. **It could not list tags at all.** Control's `Admin/UpdatePolicy` read
+   `check FAILED: CredentialUnavailableException` on every hourly check. A record-provisioned
+   instance gets the federated credential (`hosting-control` on the portal identity), but the
+   rendered values never carry `selfUpdate.azureClientId`, so the pod has no workload identity.
+3. **Its hand-over went to its own inbox.** Control lists `Hosting/PlatformBuilds` with a secret
+   and declares no `Hosting:ControlInbox:Url`, so its route is local. Its own mesh holds no
+   `Deployments` record (a `namespace:Deployments` search answers 0), so a hand-over there could
+   open nothing. `Ops/Actions` on the control plane held `selfupdate-roll-*` actions for memex,
+   build and memex-cloud, and none for control.
+
+The job that tags the control image is the one place that knows, deterministically, that control
+has a new build. So that job hands the build over. The record still decides everything that matters:
+which record is named, whether the instance takes rolls, the image repository, the line, the gate,
+and never-backwards.
 - **The minimum governance that remains:** a roll **along the record's own Continuous line** is
   unattended. That is the exception that already existed for every working instance. Any other
   roll of control still needs a mesh approval: a different tag, a rollback, or a `RollBack` or
@@ -100,12 +140,21 @@ On the module side, two things still guard what an instance runs:
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
 minutes and calls `arm-promoted-set.py control-lag`. It finds the newest promoted set whose
-`Deploy control first` job succeeded, and when that job ran, then checks whether control's running
-commit contains that set. The results:
+`Deploy control first` job succeeded, and checks whether control's running commit contains that
+set. When it does not, it walks back through the earlier builds given to control until it reaches
+one control contains. The **first build control was given and did not take** starts the clock. The
+results:
 
-- **ok**: control contains the set, however long ago it was given.
-- **converging**: control does not contain it yet, and the build was given inside
+- **ok**: control contains the newest set, however long ago it was given.
+- **converging**: control does not contain it yet, and it has been behind for less than
   `platformLagBoundMinutes`. This is reported, not red.
+
+🚨 The clock used to start at the newest build. With a platform build every 30–60 minutes that
+clock was reset on almost every tick. On 2026-10-06 control had been on ci.9939 for 22 hours
+while the alarm read *"converging — 3.0.0-ci.10052 was given 29 min ago"*. A bound that every new
+build resets cannot catch the one state it exists for: control taking no build while builds keep
+arriving. When the walk reaches the end of the examined runs, or a containment it cannot read,
+the reading is a floor and says *"at least"*.
 - **lag**: control does not contain it past the bound, control's state cannot be read, or control
   runs it but `/health` is not 200 (the arming offers the fleet nothing from an unhealthy control,
   so that state blocks every roll). The
