@@ -824,6 +824,8 @@ public static class GitHubActivityExtensions
             ctx.Log(bundleHeld);
         if (ModulesDeclinedLine(result) is { } modulesDeclined)
             ctx.Log(modulesDeclined);
+        if (ModulesRequirementUnmetLine(result) is { } requirementUnmet)
+            ctx.Log(requirementUnmet);
         ctx.Log(ImportedLine(result, commitish));
     }
 
@@ -841,11 +843,32 @@ public static class GitHubActivityExtensions
         var running = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?";
         return new LogMessage(
                 $"⛔ {result.DeclinedModules.Count} module(s) not written — each declares a platform newer "
-                + $"than the running {running}: {modules}. Every other module synced; these sync once this "
-                + "instance's platform is rolled forward.",
+                + $"than the running {running}: {modules}. Modules not listed here are not held by this; these "
+                + "sync once this instance's platform is rolled forward.",
                 LogLevel.Warning)
             .WithKey("activity.gitsync.modulesDeclined",
                 ("count", result.DeclinedModules.Count), ("running", running), ("modules", modules));
+    }
+
+    /// <summary>
+    /// The modules this import did not write because each requires a newer version of a module this
+    /// instance has loaded (an absent dependency is not judged — that module syncs). Named apart from
+    /// <see cref="ModulesDeclinedLine"/> because the remedy differs: the dependency must load, the
+    /// platform is not behind. It makes no claim about the other modules — on a no-op import nothing
+    /// was written at all. Warning, in the viewer's language.
+    /// </summary>
+    internal static LogMessage? ModulesRequirementUnmetLine(StaticRepoImportResult result)
+    {
+        if (result.UnmetRequirementModules.Count == 0)
+            return null;
+        var modules = string.Join(", ", result.UnmetRequirementModules);
+        return new LogMessage(
+                $"⛔ {result.UnmetRequirementModules.Count} module(s) not written — each requires a newer "
+                + $"version of a module this instance has loaded: {modules}. Modules not listed here are not "
+                + "held by this; these sync on the import after a satisfying version is loaded.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.modulesRequirementUnmet",
+                ("count", result.UnmetRequirementModules.Count), ("modules", modules));
     }
 
     /// <summary>
