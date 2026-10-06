@@ -19,6 +19,9 @@
 #            every reviewer thread has a reply from a person — `check-review-answered.py --stage-gate`,
 #            the SAME `internal_review_runs` / `reviewer_threads` / `listing_incomplete` the arm gate and
 #            the merge gate use, so the three can never disagree about "reviewed" or "answered".
+#            A head that differs from a reviewed head only by a clean merge of the base branch CARRIES
+#            that review (policy review-carries-over-clean-base-merge — computed from the commits and the
+#            pull request's own diff, logged with both patch-ids): no wait, no new review round.
 #   STAGE 2  the caller's test shards / portal hosts / gate shards / bundles — they `need` this job and
 #            require `result == 'success'` EXPLICITLY (a skipped need is success() to the implicit guard).
 #   STAGE 3  arming — the control plane's babysitter, after the required checks are green.
@@ -88,7 +91,7 @@ on:
         description: "'true' when stage 2 may start for this head"
         value: ${{ jobs.gate.outputs.ready }}
       mode:
-        description: "parallel | reviewed | degraded | fallback | label | not-staged | stage0-red | draft | waiting | unanswered | unreadable"
+        description: "parallel | reviewed | carried | degraded | fallback | label | not-staged | stage0-red | draft | waiting | unanswered | unreadable"
         value: ${{ jobs.gate.outputs.mode }}
 
 jobs:
