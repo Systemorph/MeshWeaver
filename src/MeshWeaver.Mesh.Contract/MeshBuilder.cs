@@ -54,14 +54,20 @@ public partial record MeshBuilder
     }
 
     /// <summary>
-    /// Every per-node hub gets the module-owned service types of the modules held in their own
-    /// contexts (<see cref="ModuleServiceForwarding.AddModuleOwned"/>), from their CURRENT generation.
-    /// Captures the registry only.
+    /// The root answers every type a module held in its own context declares from that module's CURRENT
+    /// generation (<see cref="ModuleOwnedRootSource"/>) — so the mesh hub, every per-node hub and every
+    /// other module's container see the module's services, and the contributions other modules made to
+    /// them. Captures the registry only.
     /// </summary>
     private void RegisterModuleOwnedServiceForwarders()
     {
         var modules = ModuleContexts;
-        ConfigureDefaultNodeHub(config => config.WithServices(s => ModuleServiceForwarding.AddModuleOwned(s, modules)));
+        ConfigureServices(services =>
+        {
+            if (!services.Any(d => d.ImplementationInstance is ModuleOwnedRootSource))
+                services.AddSingleton<Autofac.Core.IRegistrationSource>(new ModuleOwnedRootSource(modules));
+            return services;
+        });
     }
 
     /// <summary>
