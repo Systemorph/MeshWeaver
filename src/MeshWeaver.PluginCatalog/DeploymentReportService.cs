@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -434,13 +435,12 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                 .Select(change =>
                 {
                     var identities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+                    // A declaration-less static NodeType (no content) adopts nothing and is NOT an
+                    // unreadable record; content that cannot be read still throws — see
+                    // NodeTypeAdoptionStamp for the three states and the fleet-wide incident.
                     foreach (var node in change.Items)
-                    {
-                        var definition = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
-                            ?? throw new InvalidOperationException($"NodeType adoption record {node.Path} could not be read");
-                        if (!string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion))
-                            identities.Add(definition.CompiledFrameworkVersion);
-                    }
+                        if (NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(node, hub.JsonSerializerOptions, logger) is { } identity)
+                            identities.Add(identity);
                     return (Identities: identities.OrderBy(id => id, StringComparer.Ordinal).ToImmutableList(), Complete: true);
                 }))
             .Catch<(ImmutableList<string> Identities, bool Complete), Exception>(ex =>

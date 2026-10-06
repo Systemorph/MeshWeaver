@@ -169,8 +169,11 @@ public sealed class PrebuiltBundleRetentionHostedService(
             .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
             .Take(1)
             .Timeout(EnumerationBudget)
+            // 🚨 An unreadable record THROWS here (NodeTypeAdoptionStamp) and aborts the pass, as the
+            // summary above promises — it used to read as "no stamp" and silently left the
+            // reference set, so its bundle was eligible for deletion.
             .Select(change => change.Items
-                .Select(n => n.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions, logger)?.CompiledFrameworkVersion)
+                .Select(n => NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(n, mesh.JsonSerializerOptions, logger))
                 .Where(v => !string.IsNullOrWhiteSpace(v))
                 .Select(v => v!)
                 .ToImmutableHashSet(StringComparer.Ordinal)));
