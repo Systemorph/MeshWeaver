@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -127,9 +126,15 @@ public static class ContentTypeRegistration
                     .AsTransientNodeProbe(startDataSources: false),
                 HostedHubCreation.Always);
             probe.Hub?.Dispose();
+            // The ERROR decides, before the hub does: a result that carried both would otherwise
+            // read as success with its fault dropped. HostedHubsCollection never pairs the two
+            // today (every faulted outcome is built with a null hub), but this verdict must not
+            // hang on that.
+            if (probe.Error is { } error)
+                return error;
             return probe.Hub is not null
                 ? null
-                : probe.Error ?? new InvalidOperationException(
+                : new InvalidOperationException(
                     $"the registration probe for NodeType '{nodeTypePath}' produced no hub ({probe.Outcome})");
         }
         catch (Exception ex)
@@ -161,28 +166,34 @@ public sealed class ContentTypeRegistrationSweep(IServiceProvider services) : IH
             return Task.CompletedTask;
         var logger = services.GetService<ILogger<ContentTypeRegistrationSweep>>();
         var swept = 0;
-        var failed = ImmutableList<string>.Empty;
+        var failed = 0;
         foreach (var node in services.EnumerateStaticNodes())
         {
             if (node.HubConfiguration is not { } cfg
                 || registry.TryResolveByNodeType(node.Path, out _))
                 continue;
             if (ContentTypeRegistration.ProbeRegister(hub, node.Path, cfg, logger) is { } fault)
-                failed = failed.Add($"{node.Path} ({fault.GetType().Name}: {fault.Message})");
+            {
+                // One Error line PER faulted definition, the type a structured property and the
+                // cause attached: its content reads as untyped on every hub that has not built it
+                // itself, and nothing else says so. Never one joined line — a mass failure would
+                // make it long enough for a sink to truncate or drop, losing the very names it
+                // exists to carry. A faulted definition is not counted as probed.
+                failed++;
+                logger?.LogError(fault,
+                    "Content-type registration sweep: the probe for static NodeType {NodeType} faulted — "
+                    + "its content stays untyped on hubs that have not registered it themselves",
+                    node.Path);
+                continue;
+            }
             swept++;
         }
-        if (swept > 0)
+        if (swept > 0 || failed > 0)
             logger?.LogInformation(
                 "Content-type registration sweep: {Count} static NodeType definition(s) probed — "
-                + "their content types resolve without any instance existing.",
-                swept);
-        // A static definition whose probe faulted is a type whose content reads as untyped on every
-        // hub that has not built it itself — named, at Error, because nothing else will say so.
-        if (!failed.IsEmpty)
-            logger?.LogError(
-                "Content-type registration sweep: {Count} static NodeType definition(s) could NOT be "
-                + "probed — their content stays untyped on hubs that have not registered it themselves: {Types}",
-                failed.Count, string.Join(", ", failed));
+                + "their content types resolve without any instance existing; {Failed} faulted "
+                + "(each named at Error).",
+                swept, failed);
         return Task.CompletedTask;
     }
 
