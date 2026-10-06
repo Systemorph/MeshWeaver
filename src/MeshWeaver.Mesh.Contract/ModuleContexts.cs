@@ -57,7 +57,7 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 /// installs the modules, registered as that mesh's singleton, and disposed with it — which retires
 /// every generation it still holds.</para>
 /// </summary>
-public sealed class ModuleContexts : IDisposable
+public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IViewContributionSource
 {
     private readonly ConcurrentDictionary<string, ModuleGeneration> current = new(StringComparer.Ordinal);
     // Which module contributed a mesh node — by REFERENCE, weakly: the seed node list asks it so a
@@ -86,6 +86,13 @@ public sealed class ModuleContexts : IDisposable
         var now = Interlocked.Increment(ref version);
         versionChanged.OnNext(now);
     }
+
+    /// <summary>The view registrations of every module's CURRENT generation, ordered by module name —
+    /// what the layout client re-reads when <see cref="Version"/> moves.</summary>
+    public IReadOnlyList<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> ViewConfigurations =>
+        current.Values.OrderBy(g => g.Name, StringComparer.Ordinal)
+            .SelectMany(g => g.Contributions?.Views ?? [])
+            .ToArray();
 
     /// <summary>Moves on every change of which generation is current — what a cached view of the
     /// modules' contributions (the static-node query catalog) compares against.</summary>
@@ -169,9 +176,9 @@ public sealed class ModuleContexts : IDisposable
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);
 
-    internal Task StartModuleHosted(string module, int index, CancellationToken ct, ILogger? log) =>
-        Current(module)?.Services is { } services
-            ? services.StartHosted(Root, index, ct, log)
+    internal Task StartAllModuleHosted(ModuleGeneration generation, CancellationToken ct, ILogger? log) =>
+        generation.Services is { } services
+            ? services.StartAllHosted(Root, ct, log ?? logger)
             : Task.CompletedTask;
 
     /// <summary>
@@ -240,16 +247,15 @@ public sealed class ModuleContexts : IDisposable
     /// <summary>
     /// Moves the hosted services of a swapped module from <paramref name="from"/> to
     /// <paramref name="to"/>: stops what the old generation started, then starts the same registrations
-    /// from the new one. Task-shaped because <c>IHostedService</c> is.
+    /// — every hosted registration the new generation has, which may differ from the old one's. Task-shaped
+    /// because <c>IHostedService</c> is.
     /// </summary>
     public Task HandOverHosted(ModuleGeneration from, ModuleGeneration to, CancellationToken ct)
     {
-        if (from.Services is not { } old)
-            return Task.CompletedTask;
-        var indices = old.StartedHosted;
-        return old.StopHosted(ct, logger).ContinueWith(
+        var stopping = from.Services?.StopHosted(ct, logger) ?? Task.CompletedTask;
+        return stopping.ContinueWith(
                 _ => to.Services is { } fresh
-                    ? Task.WhenAll(indices.Select(i => fresh.StartHosted(Root, i, ct, logger)))
+                    ? fresh.StartAllHosted(Root, ct, logger)
                     : Task.CompletedTask,
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
             .Unwrap();

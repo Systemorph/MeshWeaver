@@ -295,11 +295,48 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
             ClaimDiscriminator(fullName, contentType, declaration);
         if (!string.IsNullOrEmpty(nodeTypePath))
             _byNodeType[nodeTypePath] = contentType;
+        TrackCollectible(contentType);
 
         // 🚨 ANNOUNCE LAST — after BOTH maps carry the entry. A subscriber's first act is to
         // re-ask this registry, so publishing earlier would hand it the very "unknown" answer the
         // notification exists to retract, and the retry would be spent on nothing.
         _registrations.OnNext(new MeshContentTypeRegistration(contentType, nodeTypePath));
+    }
+
+    // Collectible load contexts this registry holds types from, so it subscribes to each one's
+    // Unloading exactly once. A ConditionalWeakTable, never a dictionary keyed by the context — that
+    // would root the very generation it must let go of.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<System.Runtime.Loader.AssemblyLoadContext, object> _tracked = new();
+    private static readonly object Tracked = new();
+
+    /// <summary>
+    /// 🚨 A type from a COLLECTIBLE context (a runtime-compiled NodeType build, a module generation
+    /// held in its own context) must leave these maps when its context unloads. A replaced build is
+    /// normally overwritten by its successor's registration, but a type nothing re-registers — a
+    /// module swapped live whose hubs have not re-activated yet — stayed here for the life of the
+    /// process, and this map was then the ONLY strong root of the swapped-out generation (measured:
+    /// a heap dump of a retained MeshWeaver.AI generation after a live swap). Evicting on
+    /// <c>Unloading</c> removes only entries whose type belongs to the unloading context, so a
+    /// successor that already registered keeps its claim.
+    /// </summary>
+    private void TrackCollectible(Type contentType)
+    {
+        if (!contentType.Assembly.IsCollectible
+            || System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(contentType.Assembly) is not { IsCollectible: true } context
+            || _tracked.TryGetValue(context, out _))
+            return;
+        _tracked.AddOrUpdate(context, Tracked);
+        context.Unloading += Evict;
+    }
+
+    private void Evict(System.Runtime.Loader.AssemblyLoadContext unloading)
+    {
+        foreach (var entry in _byDiscriminator)
+            if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.ContentType.Assembly), unloading))
+                _byDiscriminator.TryRemove(entry);
+        foreach (var entry in _byNodeType)
+            if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.Assembly), unloading))
+                _byNodeType.TryRemove(entry);
     }
 
     private void ClaimDiscriminator(string discriminator, Type contentType, string declaration)

@@ -209,8 +209,8 @@ SelfUpdate.Aks, Testing, Import, Maps, Northwind, OgCard. **16 still blocked:**
 
 | Blocker | Modules | Conversion owed |
 |---|---|---|
-| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | a view-registration seam read per render / per client hub instead of folded into the mesh hub's immutable configuration |
-| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | a dynamic endpoint data source the swap updates |
+| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | the seam shipped in slice 6 (`Views`); each pack moves its `AddViews` registrations to `Views` (MeshWeaver.Plugins) |
+| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | ✅ converted in slice 6 (`ModuleEndpointDataSource`) |
 | Root services could not be measured | Acp (`TryAddEnumerable` with a factory typed as the interface throws), Azure.Blob, Mcp, Radzen (their dependency DLLs were absent from the measured Debug output — an artefact of the measurement, not of the modules) | Acp: register the harness by implementation type; the others re-measure against a published closure |
 
 **Tests:** `ModuleBuilderHookSwapTest` (2): a module contributing ONLY through its builder hook — a node,
@@ -218,6 +218,77 @@ a root service, a mesh-hub type registration, per-node-hub configuration, an aut
 swaps live: the service answers from N+1, the node is served from N+1, the running mesh hub's type
 registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
 query routing rule is a blocker the guard names.
+
+## What is shipped (slice 6 — endpoints, views, platform independence)
+
+| Piece | What it does |
+|---|---|
+| `ModuleEndpointDataSource` (`MeshWeaver.Hosting.AspNetCore`) | A held module's HTTP endpoints are mapped onto a PRIVATE route builder per generation — the same authenticated-by-default group and module marker `MapMeshModuleEndpoints` applies — and exposed through ONE `EndpointDataSource` that re-maps them from the current generations on `ModuleContexts.VersionChanged` and fires its change token, so ASP.NET Core routing rebuilds its matcher. The refusal is scoped PER MODULE: each module's endpoints are published with the generation that mapped them, and only a module whose current generation differs is re-mapped. A module whose new map throws, or whose routes collide with another endpoint the host serves (another module's included), keeps serving its previous endpoints; it is logged at Critical with the module and the collision named, and it is retried on every later swap. Its served endpoints hold the previous generation's types, so that generation stays loaded and is not collected — one retained generation per refused module, until a later map is accepted. Every other module's change is still published, so one module's bad generation never freezes endpoint updates for the rest. The pending maps are first decided together, so two modules that exchange routes across swap waves both go live once the exchange completes, rather than each being refused against the other's stale map. Image-bound modules map as before. Endpoints are no longer a blocker. |
+| `MeshNodeProviderAttribute.Views` + `IViewContributionSource` (`MeshWeaver.Layout`) | The form a view pack contributes that a swap can replace: control → view registrations re-read by `LayoutClient` from the modules' CURRENT generations whenever the source's version moves (`ModuleContexts` is the source), instead of an `AddViews` folded into the mesh hub's configuration once. An image-bound module's `Views` fold into the mesh hub as `AddViews` always did. `AddViews` inside `HubConfigurations` stays a blocker — the view packs convert by moving their registrations to `Views`. |
+| Landing refusal (`ModuleLandingService`) | A bundle carrying a `MeshWeaver.*` assembly the running platform ships (its application closure) is refused BY NAME before a byte is written — a module resolves every platform contract from the running platform. Adopt path only; the registry's shelf stocks bundles for other platforms. |
+
+**Tests:** `ModuleEndpointsSwapLiveTest` (real ASP.NET Core routing on a TestServer): the route answers
+from N+1 after the swap with no restart and N is collected; a generation that ADDS endpoints is mapped
+live even when boot mapped none; a held module whose boot route collides with the host is refused at
+startup; the negative control: a colliding re-map is not published and the previous route keeps serving;
+one module's refused swap does not freeze another module's swap, which still goes live; and two modules that exchange routes are both published once the exchange completes.
+`ModuleViewsSwapTest`: the SAME layout client resolves the control to N+1's view after the swap; the
+negative control: views folded through `HubConfigurations`' `AddViews` are a named blocker.
+`ModulesUpdateIndependentlyOfThePlatformTest`: the platform stays fixed while M goes N → N+1 → N+2 live
+through the real landing path — N+2 recorded against an older platform build and a floor below the
+platform, so no identity-equality gate, no seal, no roll. An N+3 whose floor is above the platform is
+declined by name by the reconciler's own decision function (`ModuleUpdateDecision`, called directly —
+the decline happens BEFORE anything lands, so no above-floor bundle reaches the landing path), and the
+next activation pass then takes only the sibling's landed update while M keeps serving N+2. The
+reconciler's own wiring of that decision is exercised end to end elsewhere, from a real registry
+serving an above-floor bundle:
+- `PackagesAutoUpdateTest.AnIncompatibleFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the unattended reconcile pass, `ReconcileNow`);
+- `ModuleReloadByRestartTest.ANewerVersionAboveTheFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the attended reload);
+- `ModuleBundleFloorHoldTest` step 2 (the adopt).
+
+Each asserts the held bundle is not downloaded and the running version keeps serving. A bundle carrying
+a platform assembly is refused naming it, and the same bundle without it lands.
+
+## What is shipped (slice 7 — the REAL MeshWeaver.AI update goes live; keyed services; added background services)
+
+**Measured on the actual incident pair.** MeshWeaver.AI was published twice against this core — from
+MeshWeaver.Plugins `b7a083d98~1` (no `ThreadPreparation.Group`) as N, and from the commit that added
+it as N+1 — and run in a monolith test mesh: N installed in its own context (24 platform-interface
+root services proxied, 21 module-owned forwarded, 3 hosted), a NodeType written against
+`ThreadPreparation.Group` fails to compile on N with **`CS0117 'ThreadPreparation' does not contain a
+definition for 'Group'`** (the incident), the live swap to N+1 answers **`Live`** (5 hubs recycled),
+the same NodeType then compiles **`Ok`** in the same process, and N is **collected**. Three changes
+made that true, each found by running it:
+
+1. **Added background services are not a shape change.** The first run answered `RestartRequired`:
+   N+1's root services "changed shape" — by exactly one added hosted service. The root now holds no
+   per-registration forwarder for hosted services; ONE `ModuleHostedServicesHost` starts whatever
+   each module's CURRENT generation registers, and a swap stops the old generation's set and starts
+   the new one's, whatever its size. Start and stop stay SEQUENTIAL, as the generic host runs root
+   hosted services: modules in name order, each module's services in registration order, each once
+   the previous start completed; stop is the exact reverse (`ModuleHostedServicesStartInSequenceTest`).
+2. **The content-type registry let go of nothing.** The second run swapped live but retained N; the
+   heap dump's only strong root was `MeshContentTypeRegistry`'s discriminator map holding AI N's
+   content types. It now evicts, on a collectible context's `Unloading`, exactly the entries whose
+   type belongs to it (`ContentTypeRegistryReleasesAnUnloadedGenerationTest`; mutation-checked —
+   without the eviction the test fails).
+3. **Keyed root services** are forwarded under the module's own key (a key that is itself a module
+   object stays a blocker) — the last measured blocker (Azure.Blob's keyed `IStreamProviderFactory`).
+   A keyed registration of a type the module DECLARES is answered by key from the root too
+   (`ModuleOwnedRootSource` → `ModuleServices.KeyedRegistrationsElsewhere`), and never counted among
+   the type's unkeyed registrations.
+
+**Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
+Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
+published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations
+needed.**
+
+**Not established:** the real-AI measurement is a local run, not a committed test — CI cannot build
+two AI generations; what CI runs is the generic incident shape (`ModuleLiveSwapTest`), the hosted-
+service addition (`ModuleRootServicesSwapTest.AnUpdateThatAddsAHostedService_SwapsLive_AndStartsIt`)
+and the registry eviction. That a THREAD then runs end to end on N+1 (a model round) was not run.
 
 ## What is owed
 
