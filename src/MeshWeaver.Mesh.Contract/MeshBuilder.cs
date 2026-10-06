@@ -988,6 +988,10 @@ public partial record MeshBuilder
     private static IncompatibleModule ReportIncompatible(string entry, Exception exception) =>
         Report(IncompatibleModule.From(entry, exception));
 
+    /// <summary>Whether the one host that starts and stops every held module's hosted services has
+    /// been registered in the root yet.</summary>
+    private bool moduleHostedServicesHostRegistered;
+
     /// <summary>
     /// The root services of a module held in its own load context (policy
     /// <c>module-live-update-default</c>): run against a COPY of the root collection, served from a
@@ -996,8 +1000,6 @@ public partial record MeshBuilder
     /// straight into the root — and the reason is recorded on the generation, which keeps it
     /// restart-required.
     /// </summary>
-    private bool moduleHostedServicesHostRegistered;
-
     private List<MeshNode> InstallModuleServices(ModuleGeneration generation)
     {
         var contributions = generation.Contributions

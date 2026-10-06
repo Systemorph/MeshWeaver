@@ -134,6 +134,30 @@ public sealed class ModuleEndpointsSwapLiveTest : IDisposable
 
     private const string OtherModule = "MeshWeaver.Test.LiveEndpointsOther";
 
+    /// <summary>#6128 review: two modules that EXCHANGE routes across swap waves. A's new map takes B's
+    /// route, which B still serves, so A is refused. B's new map then takes A's old route. Measured
+    /// one at a time against each other's stale served map, both would be refused on every later swap,
+    /// for good. Decided together, the combined set has no collision, so both go live.</summary>
+    [Fact]
+    public async Task TwoModulesExchangingRoutes_AreBothPublished_OnceTheExchangeCompletes()
+    {
+        using var contexts = new ModuleContexts();
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1, route: "/route-a"))));
+        contexts.Commit(contexts.Load(Write("g1", ModuleSource(1, route: "/route-b", module: OtherModule), OtherModule)));
+        await using var app = await Start(contexts);
+        var client = app.GetTestClient();
+
+        contexts.Commit(contexts.Load(Write("g2", ModuleSource(2, route: "/route-b"))));
+        (await client.GetStringAsync("/route-b")).Should().Be("v1",
+            "half-way through the exchange A's new route still collides with B's served one, so A is refused");
+
+        contexts.Commit(contexts.Load(Write("g2", ModuleSource(2, route: "/route-a", module: OtherModule), OtherModule)));
+        (await client.GetStringAsync("/route-a")).Should().Be("v2",
+            "once the exchange completes, B now serves A's old route");
+        (await client.GetStringAsync("/route-b")).Should().Be("v2",
+            "and A serves B's old route — the pending maps are decided together, so neither is refused for good");
+    }
+
     /// <summary>#6128 review: the swap subscription is bound to the HOST, not the module registry. The
     /// registry can outlive a host, so once the host stops, a later swap must not re-map this source
     /// (which would fire change tokens no matcher reads, and root the source through the registry's

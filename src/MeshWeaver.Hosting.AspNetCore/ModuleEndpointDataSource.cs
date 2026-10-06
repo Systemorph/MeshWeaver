@@ -30,7 +30,11 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// previously published endpoints. It is logged at Critical, naming the module and the collision. Every
 /// other module's change is still published, so one module's bad generation never freezes endpoint
 /// updates for the rest. A refused module is retried on every later swap, because its current
-/// generation still differs from its published one.</para>
+/// generation still differs from its published one. The pending maps are first decided together, so
+/// two modules that exchange routes across swap waves are published at once rather than each refused
+/// against the other's stale map. A refused module keeps its previous generation loaded, because its
+/// served endpoints hold that generation's types: one retained generation per refused module, until a
+/// later map is accepted.</para>
 /// </summary>
 public sealed class ModuleEndpointDataSource : EndpointDataSource, IDisposable
 {
@@ -105,31 +109,50 @@ public sealed class ModuleEndpointDataSource : EndpointDataSource, IDisposable
             var foreign = services.GetService<EndpointDataSource>()?.Endpoints
                 .Where(e => !ours.Contains(e)).ToArray() ?? [];
 
+            var candidates = ImmutableDictionary.Create<string, Published>(StringComparer.Ordinal);
             foreach (var generation in pending)
             {
-                IReadOnlyList<Endpoint> candidate;
                 try
                 {
-                    candidate = MapModule(generation);
+                    candidates = candidates.SetItem(generation.Name, new Published(generation, MapModule(generation)));
                 }
                 catch (Exception exception)
                 {
                     logger?.LogCritical(exception,
                         "[ModuleLiveUpdate] re-mapping module {Module}'s endpoints after a swap FAILED — its previous endpoints keep serving; other modules' changes are still published",
                         generation.Name);
-                    continue;
                 }
-                // The same refusal boot applies — never two registrations on one (verb, pattern) —
-                // measured against every endpoint the host would serve with this module's new map.
-                var others = choice.Where(kv => kv.Key != generation.Name).SelectMany(kv => kv.Value.Endpoints);
-                if (MeshModuleEndpointExtensions.FindRouteCollisions(foreign.Concat(others).Concat(candidate)) is { } collision)
+            }
+
+            // The pending maps are decided TOGETHER first (#6128 review): two modules that EXCHANGE
+            // routes across swap waves collide only with each other's stale, still-served map, so
+            // measuring each against the others' served endpoints would refuse both on every later swap
+            // — for good. If every mapped candidate fits with the foreign routes and the unchanged
+            // modules, all are published at once. Only when that combined set collides is each candidate
+            // decided ALONE, against the others' served maps, so one bad generation is still refused
+            // without holding back the rest.
+            var settled = choice.RemoveRange(candidates.Keys);
+            if (MeshModuleEndpointExtensions.FindRouteCollisions(
+                    foreign.Concat(settled.Values.SelectMany(p => p.Endpoints)).Concat(candidates.Values.SelectMany(p => p.Endpoints))) is null)
+            {
+                choice = choice.SetItems(candidates);
+            }
+            else
+            {
+                foreach (var (name, candidate) in candidates.OrderBy(kv => kv.Key, StringComparer.Ordinal))
                 {
-                    logger?.LogCritical(
-                        "[ModuleLiveUpdate] module {Module}'s swapped endpoints collide with existing routes — NOT published, its previous endpoints keep serving; other modules' changes are still published: {Collision}",
-                        generation.Name, collision);
-                    continue;
+                    // The same refusal boot applies — never two registrations on one (verb, pattern) —
+                    // measured against every endpoint the host would serve with this module's new map.
+                    var others = choice.Where(kv => kv.Key != name).SelectMany(kv => kv.Value.Endpoints);
+                    if (MeshModuleEndpointExtensions.FindRouteCollisions(foreign.Concat(others).Concat(candidate.Endpoints)) is { } collision)
+                    {
+                        logger?.LogCritical(
+                            "[ModuleLiveUpdate] module {Module}'s swapped endpoints collide with existing routes — NOT published, its previous endpoints keep serving; other modules' changes are still published: {Collision}",
+                            name, collision);
+                        continue;
+                    }
+                    choice = choice.SetItem(name, candidate);
                 }
-                choice = choice.SetItem(generation.Name, new Published(generation, candidate));
             }
 
             var unchanged = choice.Count == previous.Count
