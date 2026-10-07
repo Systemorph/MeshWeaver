@@ -33,6 +33,23 @@ public interface IStorageAdapter
     IObservable<DataChangeNotification> Changes
         => System.Reactive.Linq.Observable.Empty<DataChangeNotification>();
 
+    /// <summary>
+    /// Declared holes in <see cref="Changes"/>: one <see cref="ChangeFeedGap"/> each time the
+    /// backend's CROSS-PROCESS feed lost delivery and resumed, so that notifications committed in
+    /// between will never arrive. A subscriber that derives state from <see cref="Changes"/>
+    /// re-reads its authoritative state on each one (see <see cref="ChangeFeedGap"/>).
+    ///
+    /// <para>The default never emits: a backend with no cross-process feed (in-memory, a
+    /// single-process file system) cannot lose one. A backend whose feed CAN drop — PostgreSQL
+    /// <c>LISTEN/NOTIFY</c> across a reconnect — overrides it.</para>
+    ///
+    /// <para>🚨 Decorators MUST forward it to their inner adapter, exactly as they forward
+    /// <see cref="Changes"/>: one that inherits this default silently hides every gap from
+    /// everything above it (<c>StorageAdapterDecoratorsForwardBatchReadGuard</c>).</para>
+    /// </summary>
+    IObservable<ChangeFeedGap> ChangeFeedGaps
+        => System.Reactive.Linq.Observable.Never<ChangeFeedGap>();
+
     /// <summary>Reads a node from storage. Emits the node (or null) and completes.</summary>
     IObservable<MeshNode?> Read(string path, JsonSerializerOptions options);
 

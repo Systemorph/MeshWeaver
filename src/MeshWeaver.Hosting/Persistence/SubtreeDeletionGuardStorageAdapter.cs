@@ -57,6 +57,9 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     public IObservable<DataChangeNotification> Changes => inner.Changes;
 
     /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => inner.ChangeFeedGaps;
+
+    /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => registry is null
             ? inner.Write(node, options)

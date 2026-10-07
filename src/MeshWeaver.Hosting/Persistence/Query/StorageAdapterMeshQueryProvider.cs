@@ -1675,30 +1675,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             var initialDone = false;
             // Published under `earlyLock` in the same critical section that sets initialDone.
             Subject<DataChangeNotification>? liveBuffer = null;
+            void Route(DataChangeNotification n)
+            {
+                Subject<DataChangeNotification>? live;
+                lock (earlyLock)
+                {
+                    if (!initialDone)
+                    {
+                        earlyBacklog.Add(n);
+                        return;
+                    }
+                    live = liveBuffer;
+                }
+                if (live is null)
+                    return;
+                // Torn down between the read and the push — teardown disposes this
+                // subscription BEFORE the buffer (insertion order, see below), so this is
+                // narrow, and swallowing it here keeps a disposal race from reaching the
+                // adapter's fan-out.
+                try { live.OnNext(n); }
+                catch (ObjectDisposedException) { }
+            }
             disposables.Add(persistence.Changes
                 .Where(n => NodeTypeChangeRelevance.CanAffect(n, relevantNodeTypes)
                     && scopeFilters.Any(sf => PathMatcher.ShouldNotify(n.Path, sf.BasePath, sf.Scope)))
-                .Subscribe(n =>
-                {
-                    Subject<DataChangeNotification>? live;
-                    lock (earlyLock)
-                    {
-                        if (!initialDone)
-                        {
-                            earlyBacklog.Add(n);
-                            return;
-                        }
-                        live = liveBuffer;
-                    }
-                    if (live is null)
-                        return;
-                    // Torn down between the read and the push — teardown disposes this
-                    // subscription BEFORE the buffer (insertion order, see below), so this is
-                    // narrow, and swallowing it here keeps a disposal race from reaching the
-                    // adapter's fan-out.
-                    try { live.OnNext(n); }
-                    catch (ObjectDisposedException) { }
-                }));
+                .Subscribe(Route));
+            // 🚨 A declared hole in the feed is a trigger for EVERY live query, past every
+            // relevance filter: a commit made by another process while the cross-process channel
+            // was down may have entered or left this result set, and no notification will ever
+            // say so (Plugins#3000). The trigger is only a trigger — the re-query is the sole
+            // source of rows (#1250) and ProcessBatch diffs it against currentItems, so a gap
+            // that changed nothing here emits nothing.
+            //
+            // A SEPARATE subscription into the same Route, never `.Merge` into the one above:
+            // Merge serialises its sources behind one gate, so a notification whose re-query runs
+            // inline on the delivering thread would hold that gate and park every concurrent
+            // delivery behind it (LiveRequeryCoalescingTest measures exactly that park). Same
+            // backlog-or-live routing either way; registered AFTER the feed subscription and
+            // BEFORE the buffer, so teardown order is unchanged.
+            disposables.Add(persistence.ChangeFeedGaps
+                .Subscribe(gap => Route(gap.ToRequeryTrigger())));
 
             disposables.Add(
                 RunQuery().Subscribe(

@@ -126,6 +126,9 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     public IObservable<DataChangeNotification> Changes => inner.Changes;
 
     /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => inner.ChangeFeedGaps;
+
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options).Do(Observe);
 

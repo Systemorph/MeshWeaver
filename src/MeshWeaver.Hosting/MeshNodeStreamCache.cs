@@ -334,6 +334,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // the next natural read.
     private readonly IDisposable? changeFeedReset;
 
+    // Plugins#3000: the same reset, for EVERY path at once, when the feed declares a hole. The
+    // per-path reset above relies on a change event naming the path; a commit made by another
+    // process while this replica's cross-process channel was down names nothing, so without this
+    // a negative window opened before the gap stayed open for its full back-off (up to
+    // StormMaxCooldown) after the node had in fact been created.
+    private readonly IDisposable? changeFeedGapReset;
+
     // Diagnostic/test seam: one event per released read entry (idle sweep,
     // Invalidate, storm-breaker stale removal). Subject.Synchronize because
     // releases fire from the sweep timer thread and hub threads concurrently.
@@ -809,6 +816,47 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         changeFeedReset = invalidationFeed is not null
             ? invalidationFeed.Subscribe(OnMeshChange)
             : meshHub.ServiceProvider.GetService<IMeshChangeFeed>()?.Subscribe(OnMeshChange);
+        changeFeedGapReset = invalidationFeed?.Gaps.Subscribe(OnChangeFeedGap);
+    }
+
+    /// <summary>
+    /// Change-feed GAP handler (see <see cref="ChangeFeedGap"/>): any path's cached failure state
+    /// may now be stale and nothing will name which, so every path that HOLDS failure state — a
+    /// storm-breaker negative entry, a transient-fault streak, or a terminally faulted read entry —
+    /// gets the same <see cref="ResetFailureState"/> a change event would have given it.
+    /// <para>Healthy live entries are untouched, exactly as on a per-path event: they are fed by
+    /// the owner's sync stream, not by the change feed, so the gap did not starve them. Like
+    /// <see cref="OnMeshChange"/> this only EVICTS — the next natural read re-probes; nothing is
+    /// re-subscribed here.</para>
+    /// </summary>
+    internal void OnChangeFeedGap(ChangeFeedGap gap)
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return;
+        var suspect = _negative.Keys
+            .Concat(_transientStreaks.Keys)
+            .Concat(_streams
+                .Where(kv => kv.Value.IsValueCreated && kv.Value.Value.IsFaulted)
+                .Select(kv => kv.Key))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        foreach (var path in suspect)
+        {
+            try
+            {
+                ResetFailureState(path);
+            }
+            catch (Exception ex)
+            {
+                // Same rule as OnMeshChange: hygiene on the feed's publisher thread must never
+                // break the publisher, and one path's fault must not keep the rest stale.
+                logger.LogError(ex,
+                    "MeshNodeStreamCache: failure-state reset after a change-feed gap faulted for {Path}", path);
+            }
+        }
+        logger.LogInformation(
+            "MeshNodeStreamCache: reset failure state of {Count} path(s) after change-feed gap on '{Source}' "
+            + "({LostAt:O} → {ResumedAt:O})", suspect.Count, gap.Source, gap.LostAt, gap.ResumedAt);
     }
 
     /// <summary>
@@ -1007,6 +1055,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         catch (Exception ex)
         {
             logger.LogDebug(ex, "MeshNodeStreamCache: error disposing change-feed reset subscription");
+        }
+        try { changeFeedGapReset?.Dispose(); }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error disposing change-feed gap subscription");
         }
         try { readStreamEvictions.OnCompleted(); }
         catch (Exception ex)

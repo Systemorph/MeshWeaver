@@ -100,6 +100,70 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             + string.Join("\n  ", silent));
     }
 
+    /// <summary>Does <paramref name="type"/> declare the PROPERTY <paramref name="property"/> itself (either spelling)?</summary>
+    private static bool DeclaresProperty(Type type, string property) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic
+                           | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Any(p => p.Name == property || p.Name.EndsWith("." + property, StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🚨 The same hazard, on the feed's other half (Plugins#3000). A decorator that forwards
+    /// <see cref="IStorageAdapter.Changes"/> but inherits <see cref="IStorageAdapter.ChangeFeedGaps"/>
+    /// hands its consumers every notification and HIDES every declared hole in them — the default
+    /// never emits — so each cache above it stays stale after a lost LISTEN window exactly as it did
+    /// before the gap signal existed, with nothing in any result to say so. The rule is scoped to
+    /// decorators that forward the feed at all: one that publishes no feed has no gap to hide.
+    /// </summary>
+    [Fact]
+    public void EveryDecoratorThatForwardsTheFeed_ForwardsItsGaps()
+    {
+        var feedForwarders = Decorators()
+            .Where(ForwardsTheFeed)
+            .ToList();
+        feedForwarders.Count.Should().BeGreaterThanOrEqualTo(3,
+            "the production chain's SubtreeDeletionGuard, MonotonicWriteGuard and VersionWriting all "
+            + "forward the feed; fewer means the predicate stopped matching and this rule is vacuous. "
+            + $"Saw: {string.Join(", ", feedForwarders.Select(t => t.Name))}");
+
+        var hiding = feedForwarders
+            .Where(HidesTheGaps)
+            .Select(t => $"{t.FullName} forwards Changes but declares no ChangeFeedGaps")
+            .ToList();
+
+        hiding.Should().BeEmpty(
+            "a decorator that forwards the change feed must forward its declared gaps too, or every "
+            + "cache above it misses the one signal that says notifications were lost. Offenders:\n  "
+            + string.Join("\n  ", hiding));
+
+        // Mutation arms, through the SAME two predicates the rule applies: a decorator that
+        // forwards the feed but inherits the gap default must be flagged, one that forwards both
+        // must be cleared, and one that forwards neither is out of scope.
+        ForwardsTheFeed(typeof(GapHidingDouble)).Should().BeTrue("it declares Changes");
+        HidesTheGaps(typeof(GapHidingDouble)).Should().BeTrue(
+            "it forwards Changes and inherits ChangeFeedGaps — the omission this rule exists to catch");
+        ForwardsTheFeed(typeof(GapForwardingDouble)).Should().BeTrue("it declares Changes");
+        HidesTheGaps(typeof(GapForwardingDouble)).Should().BeFalse("it forwards both halves of the feed");
+        ForwardsTheFeed(typeof(ForgetfulDouble)).Should().BeFalse(
+            "it publishes no feed, so it has no gap to hide and is out of this rule's scope");
+    }
+
+    private static bool ForwardsTheFeed(Type type) => DeclaresProperty(type, nameof(IStorageAdapter.Changes));
+
+    private static bool HidesTheGaps(Type type) => !DeclaresProperty(type, nameof(IStorageAdapter.ChangeFeedGaps));
+
+    /// <summary>Forwards the feed but inherits the gap default — the mutation the gap rule must catch.</summary>
+    private sealed class GapHidingDouble(IStorageAdapter inner) : InertDecorator(inner)
+    {
+        public IObservable<DataChangeNotification> Changes => Inner.Changes;
+    }
+
+    /// <summary>Forwards both halves of the feed — the shape the gap rule wants.</summary>
+    private sealed class GapForwardingDouble(IStorageAdapter inner) : InertDecorator(inner)
+    {
+        public IObservable<DataChangeNotification> Changes => Inner.Changes;
+        public IObservable<ChangeFeedGap> ChangeFeedGaps => Inner.ChangeFeedGaps;
+    }
+
     /// <summary>
     /// 🚨 The scanner must actually FIND the decorators — a predicate that matched nothing would
     /// satisfy the test above on an empty set, which is the same defect one level up. Bound to a
