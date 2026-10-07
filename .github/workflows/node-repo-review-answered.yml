@@ -63,6 +63,7 @@ name: Node repo review answered (reusable)
 #         pull-requests: read
 #         issues: read
 #         checks: read
+#         actions: write     # the `refresh` job only — see "THE SELF-REFRESH" below
 #       with:
 #         scripts-ref: <the SAME 40-char core sha>
 #
@@ -81,6 +82,17 @@ name: Node repo review answered (reusable)
 # `pull_request_review_comment` ones (measured on #4649) — sharing one pending slot let the
 # comment-driven runs evict the read-eligible ones. review-answered.yml in core carries the full
 # measurement.
+#
+# ♻️ THE SELF-REFRESH (the `refresh` job). Branch protection reads this check's `pull_request` run
+# and NOT the `pull_request_review_comment` run a reply starts (measured on #4649), so a reply that
+# turned the verdict GREEN used to leave the pull request BLOCKED on the older `pull_request` red
+# until a person re-ran it by hand. Now, after a GREEN verdict on any event but `pull_request` /
+# `merge_group`, the `refresh` job re-runs the failed jobs of the newest `pull_request` run of the
+# CALLER's workflow for the current head — once per (head, answered state); the decision is
+# `refresh_action` in the predicate, self-tested. It is the ONLY job here that writes, and the ONLY
+# reason a caller grants `actions: write`: a called workflow's job permissions are a HARD requirement
+# on every caller (startup_failure, zero jobs, otherwise — .github/lane-caller-grants.yml), so an
+# adopting caller grants it in the same change and records it in its roster row.
 #
 # 🔒 PIN THE REF — `@<40-char commit sha>`, never `@main` (CiContentBake.md → "The caller PINS the
 # workflow ref"): otherwise a caller's gate changes with no diff in the caller. And pass the SAME sha
@@ -139,6 +151,10 @@ jobs:
       pull-requests: read
       issues: read
       checks: read
+    # When the GREEN verdict was taken — the `refresh` job re-runs only a read run that STARTED
+    # before it (one that started later judged a state no older than this one).
+    outputs:
+      evaluated-at: ${{ steps.verdict-time.outputs.at }}
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
@@ -185,3 +201,54 @@ jobs:
             echo "::error::event '${EVENT_NAME}' carries no pull request and no merge-queue ref — this lane judges pull requests only; wire the caller to pull_request / pull_request_review / pull_request_review_comment"
             exit 1
           fi
+
+      # Reached only on GREEN (the step above exits 1 on RED).
+      - name: Stamp when the verdict was taken
+        id: verdict-time
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  # ♻️ THE SELF-REFRESH — see the header. Runs only after a GREEN verdict (`needs` success); on a
+  # RED one there is nothing to refresh, and a later reply's own GREEN run refreshes then. The script
+  # decides and PRINTS every no-op (this run is the `pull_request` one; the read run is in flight,
+  # already green, or newer than this verdict; a fork) — so the job never skips silently on an event
+  # it was started for. Not a required context: it can turn nothing green by itself, only make the
+  # run branch protection reads judge the live state again.
+  refresh:
+    name: Refresh the verdict branch protection reads
+    needs: answered
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun-failed-jobs
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the platform's review-answered predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review-answered predicate has no ref to be fetched at"; exit 1; }
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+          python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
+
+      - name: Re-run the newest pull_request run iff it still carries an older red
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          EVALUATED_AT: ${{ needs.answered.outputs.evaluated-at }}
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --refresh-read-run \
+            --event "$EVENT_NAME" --pr "${PR:-}" --run-id "$RUN_ID" --evaluated-at "$EVALUATED_AT"

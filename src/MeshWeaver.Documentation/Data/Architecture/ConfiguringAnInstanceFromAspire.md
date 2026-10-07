@@ -229,6 +229,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithIdlePolicy(suspendAfterDays, teardownAfterDays)` | `IdleSuspendDays`, `IdleTeardownDays` | — (the idle reaper) | — |
 | `WithGracePeriod(days)` | `GracePeriodDays` | — | — |
 | `WithWebhookInbox(target, secretConfigKey)` | `WebhookInbox[].Target`, `WebhookInbox[].SecretConfigKey` | `config.memex_portal.WebhookInbox__Targets__N` | `WebhookInbox__Targets__0`, `WebhookInbox__Targets__0__SecretConfigKey` |
+| `WithFeature(name, enabled, packages)` | `Features` | `features.<name>` (the chart renders `Features__Flags__<name>__Enabled` / `__Packages__N`; Memex#376) | — |
 | `WithPortalConfig(key, value)` | `ExtraPortalConfig` | `config.memex_portal.<key>` — the advanced rung, any key the typed surface does not carry | `Embedding__*` (for instance) |
 
 The nested builders these rows lean on: `KeyVaultSecretsSpec.Map(key, vaultSecret)`;
@@ -297,6 +298,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `DatabaseUsername` | Database user | Datenbank-Benutzer |
 | `DeploymentContent` | `InClusterPostgres` | Run an in-cluster Postgres (self-host only) | In-Cluster-Postgres betreiben (nur Selbst-Hosting) |
 | `DeploymentContent` | `InClusterDatabase` | The instance's own database release (in-cluster, CloudNativePG) | Eigenes Datenbank-Release der Instanz (im Cluster, CloudNativePG) |
+| `DeploymentContent` | `Features` | Feature flags rendered to the chart's features (name → enabled / description / packages) | Feature-Flags, gerendert in die features des Charts (Name → aktiv / Beschreibung / Pakete) |
 | `DeploymentContent` | `MigrationImageRepository` | Migration image repository — blank derives it from the portal's | Repository des Migrations-Images — leer leitet es vom Portal ab |
 | `DeploymentContent` | `HttpPort` | HTTP port | HTTP-Port |
 | `DeploymentContent` | `Resources` | Resources (RAM / CPU) | Ressourcen (RAM / CPU) |

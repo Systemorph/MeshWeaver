@@ -32,14 +32,20 @@ if [ "${1:-}" = "--budget" ]; then
   body=$(curl -fsS --max-time 10 -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
            "${GITHUB_API_URL:-https://api.github.com}/rate_limit" 2>/dev/null) \
     || { echo "REST budget: /rate_limit did not answer — not read"; exit 0; }
-  python3 - "$body" <<'PY'
+  # Never fatal: a body that is not the expected JSON is "not read", like an unanswered request.
+  python3 - "$body" <<'PY' || echo "REST budget: /rate_limit answered something unreadable — not read"
 import datetime, json, sys
-core = (json.loads(sys.argv[1]).get("resources") or {}).get("core") or {}
-used, limit, reset = core.get("used"), core.get("limit"), core.get("reset")
-at = datetime.datetime.fromtimestamp(reset, datetime.UTC).strftime("%H:%M:%SZ") if isinstance(reset, int) else "?"
+try:
+    core = ((json.loads(sys.argv[1]) or {}).get("resources") or {}).get("core") or {}
+    used, limit, reset = core.get("used"), core.get("limit"), core.get("reset")
+except (ValueError, AttributeError, TypeError):
+    print("REST budget: /rate_limit answered something unreadable — not read")
+    sys.exit(0)
+at = (datetime.datetime.fromtimestamp(reset, datetime.timezone.utc).strftime("%H:%M:%SZ")
+      if isinstance(reset, int) else "?")
 line = f"REST budget of this job's token: {used} of {limit} used, resets {at}"
 if isinstance(used, int) and isinstance(limit, int) and limit and used >= 0.8 * limit:
-    print(f"::warning title=REST budget nearly spent::{line} — Doc/Architecture/CiRestBudget")
+    print(f"::warning title=REST budget nearly spent::{line}")
 else:
     print(line)
 PY

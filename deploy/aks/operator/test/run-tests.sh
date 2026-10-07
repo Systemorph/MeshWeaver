@@ -2952,6 +2952,51 @@ else
   bad "every kubectl verb+resource in bin/ is granted by operator-rbac.yaml" "$rbac_out"
 fi
 
+# ── hosting-deploy never DROPS a value the live release carries and the record cannot express ───
+# 🚨 Memex#376: memex-cloud's `features.fleetops` (enabled: false) lived only in its overlay. Once every
+# Roll re-applies the record (policy record-change-applies-itself), a render without it would have
+# re-enabled fleet ops with nothing in any log. The guard compares leaf paths of `helm get values`
+# with what the upgrade supplies and refuses BEFORE helm, naming each path.
+echo
+echo "── hosting-deploy: never silently drops a live value (Memex#376) ──"
+_dr_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_dr_dir/"; _dr_log="$_dr_dir/calls.log"; : > "$_dr_log"
+_dr_vals="$_dr_dir/values.yaml"
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  image: "cr.example.test/memex-portal-ai:1"\n' > "$_dr_vals"
+[ -f "$_dr_dir/status.json" ] || printf '{"info":{"status":"deployed"},"version":7}' > "$_dr_dir/status.json"
+printf 'cr.example.test/memex-portal-ai:1' > "$_dr_dir/running-image"
+_dr_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_dr_dir" HOSTING_DEPLOY_STUB_LOG="$_dr_log" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_dr_vals" 2>&1; }
+printf '{"features":{"fleetops":{"enabled":false,"packages":["Plugins/Hosting"]}},"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/live-values.json"
+printf '{"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/supplied-values.json"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+if [ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q "would DROP 2 value(s)" \
+   && printf '%s' "$_dr_out" | grep -q "features.fleetops.enabled" && printf '%s' "$_dr_out" | grep -q "features.fleetops.packages" \
+   && ! grep -q '^helm upgrade' "$_dr_log"; then
+  ok "a live features flag the render does not carry is REFUSED by name, before helm"
+else
+  bad "a live value the render would drop is refused before helm" "rc=${_dr_rc} out: ${_dr_out} calls: $(cat "$_dr_log")"
+fi
+# The record now carries it → kept → the upgrade runs.
+printf '{"features":{"fleetops":{"enabled":false,"packages":["Plugins/Hosting"]}},"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" && printf '%s' "$_dr_out" | grep -q "nothing the live release carries is dropped" \
+  && ok "the same flag expressed by the record passes and the upgrade runs" \
+  || bad "an expressed flag passes" "rc=${_dr_rc} out: ${_dr_out}"
+# A flag re-expressed in the bool shorthand (`fleetops: false`) covers the map form — no false refusal.
+printf '{"features":{"fleetops":false},"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" \
+  && ok "a flag re-expressed as a bare bool covers its map form" \
+  || bad "the bool shorthand covers the map form" "rc=${_dr_rc} out: ${_dr_out}"
+# CONTROL: a first install (no release) has nothing live to drop and is not asked.
+rm -f "$_dr_dir/status.json"; : > "$_dr_log"
+printf '{}' > "$_dr_dir/supplied-values.json"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+! grep -q '^helm get values' "$_dr_log" \
+  && ok "a first install reads no live values" \
+  || bad "a first install reads no live values" "calls: $(cat "$_dr_log")"
+rm -rf "$_dr_dir"
+
 echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"

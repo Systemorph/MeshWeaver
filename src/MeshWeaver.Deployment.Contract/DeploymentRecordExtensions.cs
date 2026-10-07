@@ -129,6 +129,22 @@ public static class DeploymentRecordExtensions
         d with { UpdatePattern = string.IsNullOrWhiteSpace(pattern) ? null : pattern.Trim() };
 
     /// <summary>
+    /// Declare (or replace) one environment FEATURE FLAG (<see cref="DeploymentContent.Features"/>),
+    /// rendered to the chart's <c>features.&lt;name&gt;</c>: an enabled flag installs
+    /// <paramref name="packages"/>, a disabled one excludes them (Doc/Architecture/EnvironmentComposition).
+    /// </summary>
+    public static DeploymentContent WithFeature(
+        this DeploymentContent d, string name, bool enabled, params string[] packages) =>
+        d with
+        {
+            Features = d.Features.SetItem(name.Trim(), new FeatureFlagSpec
+            {
+                Enabled = enabled,
+                Packages = packages.Select(p => p.Trim()).Where(p => p.Length > 0).ToImmutableList(),
+            }),
+        };
+
+    /// <summary>
     /// Gate WHEN this deployment takes a build: only after every deployment in
     /// <paramref name="after"/> has converged on it and soaked <paramref name="soakMinutes"/>
     /// without a StuckRoll or Critical issue, and always with an approval

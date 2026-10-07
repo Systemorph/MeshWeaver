@@ -79,7 +79,7 @@ two of the cases.
 A caller may pass `merge-main-sha` to the three lanes; empty means the lane resolves the tip itself
 in its first job. Satellites need no change: they call the lanes at `@main`.
 
-**When is "now"?** When the suites START. Under policy `review-then-suites` a run is held at the
+**When is "now"?** When the suites START. For a caller that opts in to `review-before-suites: true` a run is held at the
 stage gate until its review is answered and then released by `rerun-failed-jobs`; the job that
 resolves the tip is one that re-runs then (core's `build`, Plugins' `admission`), so the released
 suites test the main of the moment they start, not the main of the push. A re-run of failed shards
@@ -103,5 +103,5 @@ alone keeps the tree its build compiled — on purpose, since the shards read th
 
 ## Related
 
-- [Staged Pull Request Pipeline](../StagedPullRequestPipeline) — review first, then these suites, then the arm (policy `review-then-suites`)
+- [Staged Pull Request Pipeline](../StagedPullRequestPipeline) — the suites beside the review, then the arm (policy `suites-parallel-with-review`)
 - [Review Findings Answered](../ReviewFindingsAnswered) — the required check that still gates the merge

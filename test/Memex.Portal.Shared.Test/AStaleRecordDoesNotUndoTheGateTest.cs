@@ -31,9 +31,25 @@ namespace Memex.Portal.Shared.Test;
 public class AStaleRecordDoesNotUndoTheGateTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
+    /// <summary>
+    /// The plugin root's NodeType. <c>Store/Plugin</c> and its <c>PluginContent</c> are defined in
+    /// MeshWeaver.Plugins, so this mesh declares a stand-in NodeType at the same path with NO content
+    /// type: the root's content stays the raw <c>"$type":"PluginContent"</c> JSON that
+    /// <c>PackageInstaller.PreInstalledOnRoot</c> recognises by its discriminator — exactly what a
+    /// core host that never compiled the plugins' types reads.
+    /// </summary>
+    private const string PluginNodeType = "Store/Plugin";
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddPluginCatalog();
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .AddMeshNodes(new MeshNode("Plugin", "Store")
+            {
+                Name = "Plugin",
+                NodeType = MeshNode.NodeTypePath,
+                IsSatelliteType = false,
+            });
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -90,9 +106,13 @@ public class AStaleRecordDoesNotUndoTheGateTest(ITestOutputHelper output)
         var content = new JsonObject { ["$type"] = "PluginContent" };
         if (rootPreInstalled)
             content["preInstalled"] = true;
+        // The production shape of a plugin root: NodeType Store/Plugin carrying PluginContent (both
+        // defined in MeshWeaver.Plugins, so neither is registered on this mesh). A `Space` carrying
+        // `"$type":"PluginContent"` is a shape nothing writes — the content names a type its NodeType
+        // does not bind — and the write boundary refuses it (ContentSchemaValidator, #6231).
         await WriteAsSystem(new MeshNode(partition)
         {
-            NodeType = "Space",
+            NodeType = PluginNodeType,
             State = MeshNodeState.Active,
             Content = content,
         });

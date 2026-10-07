@@ -52,11 +52,14 @@ gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f 
 🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
 before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
 
-🚨 **And answering every thread is NECESSARY, NOT SUFFICIENT.** The verdict branch protection
-reads can still be an older failure taken on the same head, while the check's own newest run says
-GREEN. The remedy — re-run the check's `pull_request` run — the measurement behind it, and what was
-changed so it stops happening are below, under **"The check's log says GREEN and the pull request
-is still BLOCKED"**.
+🚨 **Answering every thread used to be NECESSARY, NOT SUFFICIENT — the check now finishes the job
+itself.** Branch protection reads the check's `pull_request` run, not the
+`pull_request_review_comment` run your reply starts, so the verdict it read stayed an older failure
+on the same head while the newest run said GREEN, until somebody re-ran the `pull_request` run by
+hand. The lane's `refresh` job now does that re-run on its own after every GREEN verdict taken on a
+different event. The measurement, the self-refresh, and the manual fallback for the cases it cannot
+cover (a fork, or a red `refresh` job) are below, under **"The check's log says GREEN and the pull
+request is still BLOCKED"**.
 
 ## Why: a review was advisory
 
@@ -121,12 +124,23 @@ uses:
 
 Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
 
-- **The request.** Every repository's ruleset carries `copilot_code_review` with `review_on_push: true` and `review_draft_pull_requests: false`. So Copilot reviews every pushed head, not only the first commit as in the measurement above, where the rule carried `review_on_push: false`.
+- **The request.** Every repository's ruleset carries `copilot_code_review`. Under this policy alone it carried `review_on_push: true` (`review_draft_pull_requests: false`), so Copilot reviewed every pushed head; [One review per pull request](#one-review-per-pull-request) below turns that back to one review.
 - **What branch protection requires.** `internal-review` is not a required context in any repository. Core still requires `Automatic review answered`.
 - **This merge gate.** It takes a landed Copilot review, as it always did. Every thread Copilot or the internal reviewer opened still needs a person's reply.
-- **The stage gate and the arm gate.** They ask about THIS HEAD's review. They accept a Copilot review submitted against the current head: `commit_id` equal to the head, not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_on` in `check-review-answered.py`). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
-- **What does not count.** A Copilot review of an earlier head does not count; the push invalidated it. The internal bot's *review* alone does not count either, because its verdict on a head is its `internal-review` check run. The self-test pins every one of these cases, and replacing `copilot_review_on` with one that finds nothing turns the acceptance cases red.
+- **The stage gate and the arm gate.** They accept a landed Copilot review of the pull request: not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_of_pull_request` in `check-review-answered.py` — the head's own review first, otherwise one of an earlier head; see below). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
+- **What does not count.** A refusal on any head. The internal bot's *review* alone, because its verdict on a head is its `internal-review` check run. The self-test pins every one of these cases, and replacing `copilot_review_on` with one that finds nothing turns the acceptance cases red.
 - **One timing difference.** Copilot's own `pull_request_review` event starts no workflow run (see *The reviewer's own event cannot start a run here* below). So a Copilot review releases a held stage gate on the next `stage-advance.yml` sweep, at most about 15 minutes later, rather than on the event itself.
+
+### One review per pull request
+
+Policy [`review-once-per-pull-request`](../PolicyNotProse) narrows `copilot-code-review`: a pull request is reviewed ONCE, not once per push. With `review_on_push: true` every push bought a full new review round, and every round's new threads held the merge again until a person answered them — so a pull request that needed three fix pushes paid for four reviews and four rounds of replies.
+
+- **The gates.** All three — `Automatic review answered` (`evaluate`), the stage gate (`stage_readiness`) and the arm gate (`arm_readiness`) — count a landed Copilot review against ANY head of the pull request as "reviewed". `copilot_review_of_pull_request` returns the newest landed review against the current head when there is one, otherwise the newest landed review against an earlier head, and the verdict's note names which head it was. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it returns reviewed this pull request. The merge gate's condition 1 never looked at the head; the stage and arm gates did, and now do not.
+- **What is unchanged.** Every thread a reviewer opened still needs a person's reply, whichever head it was opened on. A refusal is still not a review on any head. No review at all is still red.
+- **The ruleset.** The `copilot_code_review` rule runs with `review_on_push: false`; `review_draft_pull_requests` keeps its value. `.github/scripts/set-copilot-review-once.py` applies that to the nine repositories idempotently (dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed).
+- **The order.** The gate change merges FIRST, the ruleset flip comes second. Flipped first, every new push would carry no review of its head while the old stage and arm gates still demanded one.
+- **Drafts.** With `review_draft_pull_requests: false` a draft is not reviewed while it is a draft; the one review must then come when it is marked ready. Whether `review_on_push: false` still requests that review on ready-for-review was not measured when the policy was set. Check it on the first pull request opened as a draft after the flip. If no review arrives, the stage gate's fallback and the `review-waived` label are the existing exits, and `review_draft_pull_requests: true` is the remedy — the one review then lands while the pull request is still a draft.
+- **The self-test.** The `ONCE` cases pin it: an older-head review with every thread answered is green on all three gates, an older-head review with an unanswered thread is red, an older-head refusal is red, and no review at all is red. With `copilot_review_of_pull_request` cut back to the head alone, every stage- and arm-gate `ONCE` case that reaches the thread condition turns red.
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
 check matches on the account id or either login, and only for `type: Bot`, so a person who names
@@ -972,7 +986,29 @@ Two traps when sweeping a repo for stubs, both of which produce a confident unde
 
 ### 🚨 The check's log says GREEN and the pull request is still BLOCKED
 
-**The remedy first, because this is found under pressure. Re-run the check's `pull_request` run:**
+**The check now refreshes itself.** After a GREEN verdict on any event other than `pull_request`
+(and never for a `merge_group` entry, which is its own commit), the `refresh` job of
+`node-repo-review-answered.yml` (`lane / Refresh the verdict branch protection reads` in core)
+re-runs the failed jobs of the newest `pull_request` run of the same workflow for the current head
+(`check-review-answered.py --refresh-read-run`). The decision is the pure function `refresh_action`,
+covered by the script's `--self-test`. It re-runs that run only if it has **completed**, is **not
+`success`**, and **started before** this GREEN verdict was taken. A run that is in flight, already
+green, or started after the verdict is left alone, and the job prints why. That makes it idempotent
+per (head sha, answered state), with no loop and no polling: the re-run is itself a `pull_request`
+run, which never refreshes, and a re-run made with the workflow token raises no new event. Covered
+the same way: a pull request that went RED because answers were missing goes green when a later
+reply's run is GREEN, because that run refreshes too. `refresh` is the only job in the lane that
+writes, and it holds `actions: write` alone. A caller adopting the lane grants it on its `uses:`
+job and records the grant in `.github/lane-caller-grants.yml` in the same change.
+
+The staged pipeline's hold is re-evaluated on the same reply events by the existing listener,
+`stage-advance.yml` → `node-repo-stage-advance.yml`. Its `on-answer` job fires on
+`pull_request_review_comment: created` and `pull_request_review: submitted` and re-runs the failed
+jobs of the head's held `dotnet-test.yml` run once stage 1 is green.
+
+**Manual fallback.** The self-refresh cannot help in two cases. A **fork** pull request's token
+cannot re-run a workflow, so the job warns and names this remedy. And if the `refresh` job itself
+is **red**, it names what it could not read. In both cases, re-run the check's `pull_request` run:
 
 ```bash
 # the run whose verdict branch protection actually reads

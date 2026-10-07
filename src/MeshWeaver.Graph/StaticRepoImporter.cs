@@ -2338,7 +2338,7 @@ public static class StaticRepoImporter
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
                             .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, evaluatedPaths,
-                            heldPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
+                            prunedPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -3552,7 +3552,8 @@ public static class StaticRepoImporter
     /// <summary>
     /// Writes the partition's per-node import manifest — an <c>_Activity</c> node whose
     /// <see cref="ActivityLog.ReturnValue"/> is the <c>{path → source-token}</c> map for the CURRENT source
-    /// set. Read back on the next import to upsert only the delta. Best-effort: a failed manifest write only
+    /// set, plus every path an earlier run recorded that no run has removed yet (see
+    /// <paramref name="prunedPaths"/>). Read back on the next import to upsert only the delta. Best-effort: a failed manifest write only
     /// makes the next import non-incremental, never incorrect.
     ///
     /// <para>🚨 A SCOPED RUN MAY ONLY CLAIM WHAT IT EVALUATED (issue #1326). The map is built from the
@@ -3572,6 +3573,9 @@ public static class StaticRepoImporter
     /// a drifted node the two-way policy preserved is NOT in it, so it keeps its prior token and the
     /// next pass evaluates it again; <see langword="null"/> means the run
     /// evaluated every source node and may claim the whole map.</param>
+    /// <param name="prunedPaths">The paths this run DELETED — successful deletes only. With the source's
+    /// own paths, the only two ways a previously-owned path leaves the manifest; every other entry of
+    /// <paramref name="previous"/> is carried forward (policy <c>prune-requires-provenance</c>).</param>
     /// <param name="failures">🚨 The nodes this run could NOT write (issue #4459/#4456). A run may
     /// only claim what it WROTE — the same rule as <paramref name="evaluatedPaths"/>, for the other
     /// way a node can fail to land. A DETERMINISTIC refusal is recorded as a refusal
@@ -3582,7 +3586,7 @@ public static class StaticRepoImporter
     private static IObservable<int> WriteManifest(
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
         IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
-        IReadOnlyCollection<string> heldNodeTypePaths, IReadOnlyCollection<FailedImport> failures,
+        IReadOnlyCollection<string> prunedPaths, IReadOnlyCollection<FailedImport> failures,
         IReadOnlyCollection<string> writtenPaths,
         JsonSerializerOptions opts, ILogger? logger)
     {
@@ -3594,23 +3598,29 @@ public static class StaticRepoImporter
                 g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
                 StringComparer.OrdinalIgnoreCase);
 
-        // 🚨 A HELD NodeType (pending retirement — the source no longer carries it, the mesh still
-        // has instances) stays in the manifest under whatever the last run that carried it
-        // recorded, together with everything under it. The manifest is what Additive mode reads
-        // as "previously owned": drop the held paths from it and the very next run would file the
-        // type as user-added, never a prune candidate again, and the retirement would never
-        // complete — a silent leak instead of a pending migration.
-        if (heldNodeTypePaths.Count > 0)
+        // 🚨 OWNERSHIP OUTLIVES A RUN THAT DID NOT PRUNE (policy prune-requires-provenance). The
+        // manifest is the ONLY memory of what the source put in this partition — ComputePrunableNodes
+        // prunes nothing it does not list — so a path leaves it in exactly two ways: the source
+        // carries it again (it is in `map` above, under its new token), or THIS run deleted it
+        // (`prunedPaths`, which holds only deletes that succeeded). Every other previously-owned path
+        // is carried forward under the token the last run that carried it recorded.
+        //
+        // This used to carry only the NodeTypes held by THIS SAME run, so a run that did not re-hold
+        // a held type — a truncated listing (#3589), an UpsertOnly partition, a server edit kept from
+        // the prune, a prune whose delete failed, a candidate the run did not see — dropped it from
+        // the manifest, and from then on no import could ever prune it: the retirement leaked
+        // silently. Measured on memex.systemorph.com: Crm/Client was held on every Crm import from
+        // 09-25 to 10-03, was not even mentioned by the 10-06 07:05Z one, and is gone from the
+        // manifest while /health still lists it as retired by its repository.
+        if (previous.Count > 0)
         {
+            var removed = prunedPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
             var builder = map.ToBuilder();
             foreach (var (path, token) in previous)
             {
-                if (builder.ContainsKey(path))
+                if (builder.ContainsKey(path) || removed.Contains(path))
                     continue;
-                if (heldNodeTypePaths.Any(held =>
-                        string.Equals(path, held, StringComparison.OrdinalIgnoreCase)
-                        || path.StartsWith(held + "/", StringComparison.OrdinalIgnoreCase)))
-                    builder[path] = token;
+                builder[path] = token;
             }
             map = builder.ToImmutable();
         }
