@@ -345,6 +345,11 @@ disarm-only. The arm predicate gains **"every required check is green on the hea
 nothing arms before the tests. A head released by any of the three loud releases is never armed by
 that release.
 
+Under policy [`copilot-code-review`](../PolicyNotProse), `PrArming` takes the same review as
+`arm_readiness`: a landed Copilot review against the current head (`copilot_review_on`) first, then a
+real `internal-review` run (Systemorph/MeshWeaver.Plugins#3088). Before that port the control plane
+required an `internal-review` run, so with the internal reviewer retired it armed nothing.
+
 ## Adoption, per repository
 
 | Repository | Stage gate | Event half | State |
