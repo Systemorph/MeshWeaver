@@ -101,8 +101,12 @@ public static class PluginBundleEndpoints
             var logger = http.RequestServices.GetService<ILoggerFactory>()
                 ?.CreateLogger(typeof(PluginBundleEndpoints));
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
+            // The request's stage ledger starts HERE — its arrival at the route — so the answer
+            // deadline counts the authentication too (RegistryAnswerDeadline, #4963).
+            var stages = RegistryAnswerDeadline.Stages(http);
 
             var outcome = (await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+                .InStage(stages, "instance-key authentication")
                 .FirstAsync()
                 .ObserveCompletion(
                     ex => logger?.LogWarning(ex,
@@ -1103,7 +1107,8 @@ public static class PluginBundleEndpoints
 
         // 🚨 The SERVED activation list (#4963): a maintained snapshot, not a scan of every
         // module's records on the share per poll — see ModuleLandingService.GetServedActivation.
-        return Servable(rootHub, Anchor(http), ServedActivation(rootHub), ct)
+        var stages = RegistryAnswerDeadline.Stages(http);
+        return Servable(rootHub, Anchor(http), ServedActivation(rootHub), ct, stages)
             .Select(state =>
             {
                 var decisions = state.Entries
@@ -1119,7 +1124,8 @@ public static class PluginBundleEndpoints
                 return granted;
             })
             .SelectMany(packages => ServableModules(rootHub, packages, ServedActivation(rootHub))
-                .SelectMany(modules => artifacts.Select(pushed => Results.Json(new
+                .InStage(stages, "servable modules (module activation list)")
+                .SelectMany(modules => artifacts.InStage(stages, "pushed artifacts record").Select(pushed => Results.Json(new
                 {
                     frameworkMvid = servedLane.Identity,
                     // The architecture that identity belongs to (#1751). The identity already FOLDS
@@ -1164,6 +1170,10 @@ public static class PluginBundleEndpoints
                 }))))
             // A stalled catalogue read is 503 + Retry-After, never an unhandled 500 (#5345).
             .UnavailableOnAStalledRead(http, lateFaultLogger)
+            // …and a stage with no bound of its own is too: the index ANSWERS or REFUSES within the
+            // deadline, naming what it was waiting on — never 0 bytes for the consumer's whole
+            // budget with no line logged here (#4963).
+            .AnsweredWithin(http, RegistryAnswerDeadline.Budget(http, RegistryAnswerDeadline.AnswerBudget), TransientRetryAfterSeconds, lateFaultLogger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => lateFaultLogger?.LogWarning(ex,
@@ -1265,12 +1275,19 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static IObservable<(IReadOnlyList<BundleEntry> Entries, PackageOriginSnapshot Anchor)> Servable(
         IMessageHub rootHub, PackageOriginAnchor? anchor,
-        Func<IObservable<ModuleActivationList>>? activation, CancellationToken ct) =>
+        Func<IObservable<ModuleActivationList>>? activation, CancellationToken ct,
+        RegistryRequestStages? stages = null) =>
+        // Each wait is a named stage of the request (RegistryAnswerDeadline, #4963): a route that
+        // has not answered by the deadline says WHICH of these it was still waiting on.
         InstalledPackages(rootHub, ct)
+            .InStage(stages, "installed packages (mesh query)")
             .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
-            .SelectMany(records => WithPublishedModules(records, activation))
+            .SelectMany(records => WithPublishedModules(records, activation)
+                .InStage(stages, "module activation list (module records on the share)"))
             .SelectMany(local => ReadAnchor(anchor)
+                .InStage(stages, "package origin anchor")
                 .SelectMany(snapshot => WithAnchoredPackages(rootHub, local, snapshot)
+                    .InStage(stages, "held partitions (mesh query)")
                     .Select(entries => (Entries: entries, Anchor: snapshot))));
 
     /// <summary>Contributor (2): the modules published onto this instance. Both the activation
@@ -1606,7 +1623,8 @@ public static class PluginBundleEndpoints
                 ?[PublishedBundleCatalogue.PublishedRootConfigKey];
         // The download stays on the AUTHORITATIVE read: it decides which bytes a consumer lands,
         // so it must resolve a version another replica published a moment ago.
-        return Servable(rootHub, anchorService, AuthoritativeActivation(rootHub), ct)
+        var stages = RegistryAnswerDeadline.Stages(http);
+        return Servable(rootHub, anchorService, AuthoritativeActivation(rootHub), ct, stages)
             .SelectMany(state =>
             {
                 // Named apart from the query-string reader Requested(HttpContext, …) above — one
@@ -1638,7 +1656,8 @@ public static class PluginBundleEndpoints
                     // states none.
                     return Assemble(
                         rootHub, asked, identity, architecture, publishedRoot,
-                        decision.Source ?? asked.Source);
+                        decision.Source ?? asked.Source)
+                        .InStage(stages, "bundle assembly (nodes, assemblies, archive)");
 
                 // The refusal is uniform on the wire; the LOG is where it is diagnosable, naming
                 // which instance asked, what the entitlement answer actually was, and whether this
@@ -1661,8 +1680,10 @@ public static class PluginBundleEndpoints
             // Bytes the resolution located and the archive then could not open are a serve RACE,
             // not a defect of the request: 503 + Retry-After (#3876).
             .TransientWhenServedBytesMoved(http, plugin, version, lateFaultLogger)
-            // See Index: a stalled catalogue read is 503 + Retry-After (#5345).
+            // See Index: a stalled catalogue read is 503 + Retry-After (#5345), and so is a route
+            // that has produced no answer by the deadline (#4963).
             .UnavailableOnAStalledRead(http, lateFaultLogger)
+            .AnsweredWithin(http, RegistryAnswerDeadline.Budget(http, RegistryAnswerDeadline.DownloadBudget), TransientRetryAfterSeconds, lateFaultLogger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => lateFaultLogger?.LogWarning(ex,

@@ -216,6 +216,50 @@ mesh queries (~0.5 s) are still per request; and the download route still derive
 activation derivation. Both are the next candidates if the index or the download is still slow
 after this rolls — measure first, with the same script.
 
+## The registry answers or refuses — and says what it was waiting on
+
+Even with the snapshot, the **request** had no bound. Each live read on the route had one (auth legs
+10 s, the query fan-in 15 s), but a stage with no bound of its own could still hold the request with
+nothing written and nothing logged. The examples are the activation list's shared derivation over
+the module records on the share, the catalog's shared source listing, and a host-supplied seam.
+
+**Measured on 2026-10-07, read-only, through governed `Logs` actions on the control instance:**
+
+| consumer | window | what it saw |
+|---|---|---|
+| memex-cloud (self-registry), all three replicas `…6b756548d4-{2wln8,dzn5q,f2fz5}` | 13:52–13:57:30Z | `plugin-registry-standard` attempts cut at 30 s (OnTimeout ×9 across the three pods); pod 2wln8's index read `NoResponse`, 0 bytes, twice in a row (13:53:16→13:55:16, 13:55:16→13:57:16), then succeeded in 19,411 ms at 13:57:35 |
+| memex (control), pod `…c84c67-dzmpr` | 13:54:52Z | a `plugin-registry-standard` attempt cut at 30 s against the same registry |
+| memex (control), pod `…b7dc8b-ddhc7` | 13:57:37Z onward | index in 1,371 ms; then 17 bundle downloads, each ~15–16 s, including a 1,156-byte one in 15,318 ms |
+
+The registry side of that window:
+- No line from `PluginBundleEndpoints`, `PluginRegistryEndpoints` or `InstanceRegistryAuthenticator`. So no 503 branch fired.
+- `ProcessLivenessHeartbeatService` ticked every 10 s on time on all three replicas. So no process was thread-starved.
+- One `Routing back-pressure` episode on f2fz5 at 13:52:28: 64 dispatches in flight, 18 waiting for a pool slot.
+- GitSync imports on all three replicas, 13:53:50–13:57:06.
+- `ReleaseAvailability` scans of `/data/prebuilt-bundles` on all three replicas within two seconds, 13:56:05–07.
+
+The stall was not a roll window: all three replicas had been up since 13:09–13:12Z. It was not one consumer either: two namespaces saw it at once. Action records: `Ops/Actions/logs-4963-cloud-*-20261007`, `Ops/Actions/logs-4963-memex-registry-calls-1345-1405-20261007`.
+
+**The fix: `RegistryAnswerDeadline`** (`memex/Memex.Portal.Shared/Api/RegistryAnswerDeadline.cs`).
+- Each request carries a stage ledger, started at the auth filter, which is the request's arrival at the route.
+- Each wait enters the ledger while it runs: instance-key authentication, installed packages, the module activation list, the origin anchor, held partitions, servable modules, the pushed-artifacts record, bundle assembly, each source listing.
+- A route with no answer within its budget answers **503 + `Retry-After`**. The body names `waitingOn`, and it logs ONE warning with the stage still running and how long each finished stage took.
+- The budget is set by the consumers:
+  - index and catalog: **25 s**. That is under `plugin-registry-standard`'s 30 s attempt and above the slowest healthy index measured (19.4 s).
+  - bundle download: **60 s**. A healthy download takes ~16 s; the bundle client's own budget is 120 s.
+- The shared reads behind an abandoned stage are service-owned and keep running for the next request.
+
+**Why this is also the discriminator the incident lacked.** From now on there are two readings:
+- A consumer `NoResponse` with **no** "produced no answer within" line on the registry means the request never reached the route: ingress, network, or the consumer's own connection.
+- A line on the registry names the stage that held the request.
+
+Before this fix, both cases were silence on both sides. That is why "which side holds the request" could not be answered for the 2026-10-07 windows. **It is still not established for them.** The evidence above points at the registry or its ingress, not at a booting consumer. It does not separate the ingress from an unbounded stage.
+
+Tests: `RegistryAnswersOrRefusesTest` runs the real mesh and the real bundle routes on a TestServer.
+- One stage, the pushed-artifacts record, never answers. The index answers 503 + `Retry-After` within its 2 s test budget, with `waitingOn: ["pushed artifacts record"]`.
+- Negative control: the same request with the deadline out of reach gets no status line in 5 s. That is the defect, reproduced.
+- The operator's own cases: a never-answering stage, an answer inside the budget, a budget already spent before the handler ran, and the stage without a deadline.
+
 ## The second defect: exhaustion leaves no readable mark
 
 When the attempts do exhaust, nothing an operator can see records it:
