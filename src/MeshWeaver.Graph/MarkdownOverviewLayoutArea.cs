@@ -12,6 +12,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -59,14 +60,28 @@ public static class MarkdownOverviewLayoutArea
         // Starts null and never gates: a page that inherits nothing renders exactly as before.
         var partitionRootStream = host.Workspace.ObservePartitionRoot(host.Hub.Address.Path);
 
+        // The server-rendered body for remote clients (CollaborativeMarkdownControl.Html). A full Markdig
+        // parse is CPU work, so it runs on a pooled leaf OFF the hub's scheduler and only when the
+        // (path, text) pair actually changed — a permissions/navigation/root emission re-uses the last
+        // render instead of re-parsing unchanged markdown inside the combine selector below.
+        var pool = host.Hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Layout)
+                   ?? IoPool.Unbounded;
+        var renderedStream = host.Workspace.GetMeshNodeStream()
+            .Select(n => (Path: n?.Path ?? hubPath, Text: ReadMarkdownContent(n).Text))
+            .DistinctUntilChanged()
+            .Select(t => string.IsNullOrWhiteSpace(t.Text)
+                ? Observable.Return<string?>(null)
+                : pool.InvokeBlocking(_ => (string?)MarkdownViewLogic.Render(t.Text, t.Path, t.Path).Html))
+            .Switch();
+
         return host.Workspace.GetMeshNodeStream()
             .CombineLatest(permissionsStream, defaultStream, suppliedStream,
-                partitionRootStream,
-                (node, perms, defaultNavigation, supplied, partitionRoot) =>
+                partitionRootStream, renderedStream,
+                (node, perms, defaultNavigation, supplied, partitionRoot, renderedHtml) =>
             {
                 var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
                 var canEdit = perms.HasFlag(Permission.Update);
-                var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader, partitionRoot);
+                var content = (UiControl)BuildOverview(host, node, canComment, canEdit, hideHeader, partitionRoot, renderedHtml);
 
                 // A markdown page in a tree gets the tree's index beside it. Skipped for @@ embeds
                 // and when there is nothing to index (no sub-nodes, no siblings). A module's own
@@ -223,7 +238,7 @@ public static class MarkdownOverviewLayoutArea
     // its package mark from there (#2075 item 2). Null keeps the NodeType glyph.
     private static UiControl BuildOverview(
         LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader,
-        MeshNode? partitionRoot = null)
+        MeshNode? partitionRoot = null, string? renderedHtml = null)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var read = ReadMarkdownContent(node);
@@ -240,7 +255,7 @@ public static class MarkdownOverviewLayoutArea
         // a DIRECT child of `container` so agents and tests can locate it without
         // walking through an intermediate Stack wrapper. An @@ embed (hideHeader) renders the
         // body WITHOUT collaboration UI — commenting happens on the embedded node's own page.
-        container = container.WithView(BuildMarkdownReadView(host, nodePath, read, canComment, canEdit, hideAnnotations: hideHeader));
+        container = container.WithView(BuildMarkdownReadView(host, nodePath, read, canComment, canEdit, hideAnnotations: hideHeader, renderedHtml));
 
         // No hardcoded children section: a node page is a markdown space — children (or any other
         // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
@@ -381,16 +396,17 @@ public static class MarkdownOverviewLayoutArea
     /// typed. The unreadable state therefore says what is stored and does not invite anything.</para>
     /// </summary>
     internal static UiControl BuildMarkdownReadView(
-        LayoutAreaHost host, string nodePath, MarkdownRead read, bool canComment, bool canEdit, bool hideAnnotations)
+        LayoutAreaHost host, string nodePath, MarkdownRead read, bool canComment, bool canEdit, bool hideAnnotations,
+        string? renderedHtml = null)
     {
         if (read.State == MarkdownContentState.Present && !string.IsNullOrWhiteSpace(read.Text))
         {
             // Html: the page ARRIVES rendered for remote clients — the same MarkdownViewLogic.Render
-            // the render-markdown endpoint runs, so a native app no longer needs a second request
-            // (and a second authentication) to show a doc page.
+            // the render-markdown endpoint runs, produced OFF the hub (see Overview) and passed in;
+            // null means "not pre-rendered" and a client falls back to the endpoint.
             return new CollaborativeMarkdownControl()
                 .WithValue(read.Text)
-                .WithHtml(MarkdownViewLogic.Render(read.Text, nodePath, nodePath).Html)
+                .WithHtml(renderedHtml)
                 .WithNodePath(nodePath)
                 .WithHubAddress(host.Hub.Address.ToString())
                 .WithCanComment(canComment)

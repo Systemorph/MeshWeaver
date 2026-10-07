@@ -95,7 +95,9 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
                 NodeType = MeshWeaver.Graph.Configuration.MarkdownNodeType.NodeType,
                 Content = Json("""{"$type":"MarkdownContent","content":"# Readable\n\nBody."}"""),
             }),
-            canComment: false, canEdit: true, hideAnnotations: false);
+            canComment: false, canEdit: true, hideAnnotations: false,
+            // Overview renders this off the hub (pooled leaf) and hands the result in.
+            renderedHtml: MarkdownViewLogic.Render("# Readable\n\nBody.", "test/present/Page", "test/present/Page").Html);
 
     private async Task<UiControl> RenderAsync(string area)
     {
