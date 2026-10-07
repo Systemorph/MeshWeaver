@@ -100,6 +100,46 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             + string.Join("\n  ", silent));
     }
 
+    /// <summary>Does <paramref name="type"/> declare the PROPERTY <paramref name="property"/> itself (either spelling)?</summary>
+    private static bool DeclaresProperty(Type type, string property) =>
+        type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic
+                           | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Any(p => p.Name == property || p.Name.EndsWith("." + property, StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🚨 The same hazard, on the feed's other half (Plugins#3000). A decorator that forwards
+    /// <see cref="IStorageAdapter.Changes"/> but inherits <see cref="IStorageAdapter.ChangeFeedGaps"/>
+    /// hands its consumers every notification and HIDES every declared hole in them — the default
+    /// never emits — so each cache above it stays stale after a lost LISTEN window exactly as it did
+    /// before the gap signal existed, with nothing in any result to say so. The rule is scoped to
+    /// decorators that forward the feed at all: one that publishes no feed has no gap to hide.
+    /// </summary>
+    [Fact]
+    public void EveryDecoratorThatForwardsTheFeed_ForwardsItsGaps()
+    {
+        var feedForwarders = Decorators()
+            .Where(t => DeclaresProperty(t, nameof(IStorageAdapter.Changes)))
+            .ToList();
+        feedForwarders.Count.Should().BeGreaterThanOrEqualTo(3,
+            "the production chain's SubtreeDeletionGuard, MonotonicWriteGuard and VersionWriting all "
+            + "forward the feed; fewer means the predicate stopped matching and this rule is vacuous. "
+            + $"Saw: {string.Join(", ", feedForwarders.Select(t => t.Name))}");
+
+        var hiding = feedForwarders
+            .Where(t => !DeclaresProperty(t, nameof(IStorageAdapter.ChangeFeedGaps)))
+            .Select(t => $"{t.FullName} forwards Changes but declares no ChangeFeedGaps")
+            .ToList();
+
+        hiding.Should().BeEmpty(
+            "a decorator that forwards the change feed must forward its declared gaps too, or every "
+            + "cache above it misses the one signal that says notifications were lost. Offenders:\n  "
+            + string.Join("\n  ", hiding));
+
+        // Mutation arm: the predicate must be able to fail.
+        DeclaresProperty(typeof(ForgetfulDouble), nameof(IStorageAdapter.ChangeFeedGaps)).Should().BeFalse(
+            "the planted double inherits the default — the shape this rule exists to catch");
+    }
+
     /// <summary>
     /// 🚨 The scanner must actually FIND the decorators — a predicate that matched nothing would
     /// satisfy the test above on an empty set, which is the same defect one level up. Bound to a

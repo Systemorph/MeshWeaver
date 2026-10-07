@@ -48,6 +48,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
+    private readonly ISubject<ChangeFeedGap> _gaps = Subject.Synchronize(new Subject<ChangeFeedGap>());
     private FaultSwitch? _feedHold;
 
     /// <summary>Wraps <paramref name="inner"/>, the store of record.</summary>
@@ -143,10 +144,21 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     /// <param name="notification">The remote commit.</param>
     public void DeliverRemoteChange(DataChangeNotification notification) => _remote.OnNext(notification);
 
+    /// <summary>
+    /// Declares a hole in this process's cross-process feed, as the PostgreSQL listener does when
+    /// it re-opens its LISTEN session after a dropped connection (Plugins#3000). Arrives on
+    /// <see cref="ChangeFeedGaps"/>.
+    /// </summary>
+    /// <param name="gap">The declared gap.</param>
+    public void DeliverChangeFeedGap(ChangeFeedGap gap) => _gaps.OnNext(gap);
+
     // ── IStorageAdapter ──────────────────────────────────────────────────────────────────────────
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes { get; }
+
+    /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => Observable.Merge(_inner.ChangeFeedGaps, _gaps.AsObservable());
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
