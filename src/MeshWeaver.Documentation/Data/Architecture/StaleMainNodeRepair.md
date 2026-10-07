@@ -227,9 +227,10 @@ reason and draws the same distinction — a write guard can only ever refuse the
 `SelfTypedDeclarationDurableRepair` used to end such a pass with the Information line
 `sweep completed: … N row(s) retyped`, the failure visible only as a Warning beside it. Every
 tolerated fault is now recorded on the pass, and a pass with any failed step ends at **Error** with
-`sweep completed with K FAILED step(s) [...]`, naming each lane or row (the first ten by name, the
-rest as a count; every one also has its own Warning line) — `SelfTypedDeclarationRepairReportsFailedStepsTest`
-pins both fault kinds, a faulted read lane and a refused retype. If you are reading a pass's outcome, read that
+`sweep completed with K FAILED step(s) [...]`, naming each lane or row (the first `RenderedFailureCap` by name, the
+rest as a count — and only those names are kept, so a systematic failure grows a counter, not memory;
+every one also has its own Warning line) — `SelfTypedDeclarationRepairReportsFailedStepsTest`
+pins both fault kinds, a faulted read lane and a refused retype, and the Information-vs-Error choice itself. If you are reading a pass's outcome, read that
 summary line. A Warning on its own is not the outcome.
 
 🚨 **Restoring `MainNode == Path` is necessary but not sufficient** for a decentral node to be
