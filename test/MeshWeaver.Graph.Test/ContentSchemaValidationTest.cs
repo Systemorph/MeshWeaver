@@ -397,6 +397,30 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// The same dead letter written as the as-written <see cref="System.Text.Json.Nodes.JsonObject"/>
+    /// DOM instead of a <see cref="JsonElement"/>. Both are raw JSON; the guard used to judge only
+    /// the latter, so a direct Create carrying the JsonObject shape skipped the rule entirely.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Create_AsJsonObject_WhoseTypeDiscriminatorNamesNoType_IsRefused()
+    {
+        var id = NewId();
+        var node = Of(CompiledType, id, "{}") with
+        {
+            Content = System.Text.Json.Nodes.JsonNode.Parse("""{"$type":"Feedback","label":"Bug","description":"what broke"}""")!.AsObject(),
+        };
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(node)
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+
+        failure.Should().NotBeNull(
+            "a JsonObject is the same raw JSON as a JsonElement — its shape must not exempt it from the guard");
+        failure!.Message.Should().Contain("'Feedback'");
+        failure.Message.Should().Contain(nameof(SchemaGuardedContent));
+    }
+
+    /// <summary>
     /// The CONTROL for the rule above: a <c>$type</c> naming a DIFFERENT record that EXISTS (here a
     /// type compiled alongside the declared one — the polymorphic-subtype shape) is still admitted,
     /// exactly as before. Without it the test above would pass for a guard that refused every

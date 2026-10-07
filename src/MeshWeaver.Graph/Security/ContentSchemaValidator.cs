@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 using MeshWeaver.Mesh;
@@ -116,8 +117,10 @@ public sealed class ContentSchemaValidator : INodeValidator
         var node = context.Node;
 
         // Typed (in-process) content has already bound; null content and non-object JSON carry no
-        // members to judge.
-        if (node.Content is not JsonElement content || content.ValueKind != JsonValueKind.Object)
+        // members to judge. The as-written JsonObject DOM is the SAME raw JSON in another shape and
+        // is judged exactly like a JsonElement — otherwise a direct Create/Update carrying
+        // `{"$type":"Feedback"}` as a JsonObject would skip every rule here (review on #6231).
+        if (AsObjectElement(node.Content) is not { } content)
             return NodeValidationResult.Valid();
 
         if (string.IsNullOrEmpty(node.NodeType))
@@ -288,12 +291,23 @@ public sealed class ContentSchemaValidator : INodeValidator
 
     /// <summary>The <c>$type</c> the stored node's raw content carries, or null.</summary>
     private static string? ExistingDiscriminator(MeshNode? existing)
-        => existing?.Content is JsonElement je
-           && je.ValueKind == JsonValueKind.Object
+        => AsObjectElement(existing?.Content) is { } je
            && je.TryGetProperty("$type", out var t)
            && t.ValueKind == JsonValueKind.String
             ? t.GetString()
             : null;
+
+    /// <summary>
+    /// The content as a JSON-object <see cref="JsonElement"/> when it is RAW JSON in either shape —
+    /// a <see cref="JsonElement"/> or the as-written <see cref="JsonObject"/> DOM — else null
+    /// (typed content, null, or non-object JSON).
+    /// </summary>
+    private static JsonElement? AsObjectElement(object? content) => content switch
+    {
+        JsonElement { ValueKind: JsonValueKind.Object } je => je,
+        JsonObject jo => JsonSerializer.SerializeToElement<JsonNode>(jo),
+        _ => null,
+    };
 
     /// <summary>Logs the refusal (with the reason a reader of the portal log needs) and returns it.</summary>
     private NodeValidationResult Refuse(NodeValidationContext context, string message, string summary)

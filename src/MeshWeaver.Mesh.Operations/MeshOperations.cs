@@ -3372,14 +3372,16 @@ public partial class MeshOperations
                 + $"\"$type\": \"{contentType.Name}\" with its declared members (get @<path>/schema/). "
                 + "Nothing was written.";
 
-        return UnknownContentMembersOfType(createdContent, contentType, hub.JsonSerializerOptions) is { Count: > 0 } unknown
+        // The PROBE's options: the bound type and its serialization configuration (NodeType-specific
+        // converters, naming, extension data) belong to the probe hub, not to this facade.
+        return UnknownContentMembersOfType(createdContent, contentType, probeHub.JsonSerializerOptions) is { Count: > 0 } unknown
             ? UnknownContentMembersMessage("create", meshNode.Path, meshNode.NodeType, contentType, unknown)
             : null;
     }
 
     /// <summary>
-    /// Whether <paramref name="discriminator"/> names a type the NodeType's own hub — or the bound
-    /// type's own assembly — knows. The full-name → short-name fallback is the load path's
+    /// Whether <paramref name="discriminator"/> names a type the NodeType's own hub, the mesh-wide
+    /// content-type map, or the bound type's own assembly knows. The full-name → short-name fallback is the load path's
     /// (<c>MeshNodeTypeSource.ResolveJsonElementContent</c>).
     /// </summary>
     private bool DiscriminatorResolves(string discriminator, Type contentType, IMessageHub probeHub)
@@ -3391,6 +3393,14 @@ public partial class MeshOperations
         if (registry is not null
             && ((registry.TryGetType(discriminator, out var def) && def?.Type is not null)
                 || (registry.TryGetType(shortName, out def) && def?.Type is not null)))
+            return true;
+        // The mesh-wide content-type map too — the same instruments, in the same order, as the
+        // write-boundary validator (ContentSchemaValidator): a discriminator belonging to another
+        // activated runtime NodeType may be known ONLY there, and the verb must not refuse what
+        // the write boundary admits.
+        if (probeHub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } contentTypes
+            && (contentTypes.TryResolveByDiscriminator(discriminator, out _)
+                || contentTypes.TryResolveByDiscriminator(shortName, out _)))
             return true;
         try
         {
