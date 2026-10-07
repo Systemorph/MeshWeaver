@@ -75,7 +75,27 @@ public sealed record NodeTypeLiveRecordCensus(
     /// AFTER this replica booted does. A foreign record from before boot is the ordinary state every
     /// deploy passes through and every adopt-only portal lives in.
     /// </summary>
-    public bool IsClean => ForeignSinceBoot == 0;
+    public bool IsClean => ForeignSinceBoot == 0 && StalePastBound == 0;
+
+    /// <summary>
+    /// Records serving a build the source has moved past (<see cref="BuildProvenance.StaleAdopted"/>
+    /// with assembly coordinates) — Systemorph/Memex#668. Printed on every reading, so a
+    /// stale-but-serving type is never silent on <c>/health</c>.
+    /// </summary>
+    public int StaleServing { get; init; }
+
+    /// <summary>
+    /// The subset of <see cref="StaleServing"/> further behind its source than the stale-adoption
+    /// bound (<see cref="StaleBound"/>). The judgement refuses such a build, so a non-zero count is a
+    /// record nothing has re-judged since the bound took effect — it DEGRADES the entry.
+    /// </summary>
+    public int StalePastBound { get; init; }
+
+    /// <summary>The bound the stale counts were taken against (negative = disabled).</summary>
+    public int StaleBound { get; init; } = StaleAdoptionBound.DefaultMaxMinorVersionsBehind;
+
+    /// <summary>The stale-but-serving records as <c>&lt;partition&gt;/… ×N (max M minor(s) behind)</c>.</summary>
+    public string StaleDetail { get; init; } = string.Empty;
 
     /// <summary>
     /// How many distinct (identity, partition) groups the detail names before the rest are counted —
@@ -102,6 +122,25 @@ public sealed record NodeTypeLiveRecordCensus(
         string liveFrameworkVersion,
         DateTimeOffset bootedAt,
         DateTimeOffset at)
+        => Of(records, liveFrameworkVersion, bootedAt, at, StaleAdoptionBound.DefaultMaxMinorVersionsBehind);
+
+    /// <summary>
+    /// <see cref="Of(IEnumerable{ValueTuple{string, NodeTypeDefinition}}, string, DateTimeOffset, DateTimeOffset)"/>
+    /// with the mesh's stale-adoption bound (Systemorph/Memex#668), against which the
+    /// stale-but-serving records are counted.
+    /// </summary>
+    /// <param name="records">The catalog: <c>(path, definition-or-null)</c> per dynamic NodeType.</param>
+    /// <param name="liveFrameworkVersion">This process's framework identity.</param>
+    /// <param name="bootedAt">The boundary <see cref="ForeignSinceBoot"/> splits on.</param>
+    /// <param name="at">When the reading is taken.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound; negative = disabled.</param>
+    /// <returns>The census.</returns>
+    public static NodeTypeLiveRecordCensus Of(
+        IEnumerable<(string Path, NodeTypeDefinition? Definition)> records,
+        string liveFrameworkVersion,
+        DateTimeOffset bootedAt,
+        DateTimeOffset at,
+        int maxMinorVersionsBehind)
     {
         ArgumentNullException.ThrowIfNull(records);
         ArgumentException.ThrowIfNullOrWhiteSpace(liveFrameworkVersion);
@@ -109,6 +148,7 @@ public sealed record NodeTypeLiveRecordCensus(
         var total = 0;
         var untyped = 0;
         var foreign = ImmutableList.CreateBuilder<(string Partition, string Identity, bool SinceBoot)>();
+        var stale = ImmutableList.CreateBuilder<(string Partition, int? Behind, bool PastBound)>();
         foreach (var (path, definition) in records)
         {
             total++;
@@ -117,6 +157,16 @@ public sealed record NodeTypeLiveRecordCensus(
                 untyped++;
                 continue;
             }
+            // Memex#668 — a build the source moved past that still has coordinates is SERVING.
+            if (definition.BuildProvenance is BuildProvenance.StaleAdopted
+                && !string.IsNullOrEmpty(definition.LatestAssemblyPath))
+                stale.Add((
+                    PartitionOf(path),
+                    ModuleVersionCompatibility.MinorVersionsBehind(
+                        definition.AdoptedModuleVersion, definition.CurrentModuleVersion),
+                    StaleAdoptionBound.Exceeds(
+                        definition.AdoptedModuleVersion, definition.CurrentModuleVersion,
+                        maxMinorVersionsBehind)));
             // THE per-process verdict, never the raw field: Ok is scoped to CompiledFrameworkVersion
             // (#3472), and this is the one function every load path folds the pair through.
             if (NodeTypeBuildIdentity.ReportedStatus(definition, liveFrameworkVersion)
@@ -143,9 +193,52 @@ public sealed record NodeTypeLiveRecordCensus(
         if (groups.Count > MaxNamedGroups)
             detail += $"; +{groups.Count - MaxNamedGroups} more group(s)";
 
+        var staleGroups = stale
+            .GroupBy(s => s.Partition)
+            .Select(g => (Partition: g.Key, Count: g.Count(), PastBound: g.Count(s => s.PastBound),
+                MaxBehind: g.Max(s => s.Behind)))
+            .OrderByDescending(g => g.PastBound)
+            .ThenByDescending(g => g.Count)
+            .ThenBy(g => g.Partition, StringComparer.Ordinal)
+            .ToList();
+        var staleDetail = string.Join("; ", staleGroups
+            .Take(MaxNamedGroups)
+            .Select(g => $"{g.Partition}/… ×{g.Count} (max "
+                         + (g.MaxBehind is { } behind ? $"{behind} minor(s)" : "unmeasured")
+                         + $" behind, {g.PastBound} past the bound)"));
+        if (staleGroups.Count > MaxNamedGroups)
+            staleDetail += $"; +{staleGroups.Count - MaxNamedGroups} more partition(s)";
+
         return new NodeTypeLiveRecordCensus(
             liveFrameworkVersion, total, untyped, foreign.Count, foreign.Count(f => f.SinceBoot),
-            detail, bootedAt, at);
+            detail, bootedAt, at)
+        {
+            StaleServing = stale.Count,
+            StalePastBound = stale.Count(s => s.PastBound),
+            StaleBound = maxMinorVersionsBehind,
+            StaleDetail = staleDetail,
+        };
+    }
+
+    /// <summary>
+    /// The stale-but-serving sentence (Systemorph/Memex#668) appended to every reading — "none" is
+    /// printed as such, never omitted, so its absence cannot be read as a clean measurement.
+    /// </summary>
+    /// <param name="census">The reading.</param>
+    /// <returns>The sentence, with a leading space.</returns>
+    private static string DescribeStale(NodeTypeLiveRecordCensus census)
+    {
+        var bound = StaleAdoptionBound.DescribeBound(census.StaleBound);
+        if (census.StaleServing == 0)
+            return $" STALE-BUT-SERVING: none — no typed record serves a build its source has moved past ({bound}).";
+        if (census.StalePastBound == 0)
+            return $" STALE-BUT-SERVING: {census.StaleServing} record(s) serve a build their source has "
+                   + $"moved past, all within the stale-adoption {bound}: {census.StaleDetail}. Each keeps "
+                   + "serving until a build of the current source lands (MeshWeaver#3583, Memex#668).";
+        return $" 🚨 STALE-BUT-SERVING: {census.StalePastBound} of {census.StaleServing} record(s) serve a "
+               + $"build FURTHER behind its source than the stale-adoption {bound}: {census.StaleDetail}. "
+               + "The judgement refuses such a build; these records have not been re-judged since — a "
+               + "release request (the Compile button, the recycle verb) re-runs it (Memex#668).";
     }
 
     /// <summary>
@@ -185,13 +278,13 @@ public sealed record NodeTypeLiveRecordCensus(
         if (census.Foreign == 0)
             return $"LIVE RECORD CENSUS at {at}: every one of the {typed} typed record(s) names a "
                    + "build for this replica's framework, or no build at all — nothing typed is keyed "
-                   + "to a framework this replica does not run." + undecided + denominator;
+                   + "to a framework this replica does not run." + undecided + DescribeStale(census) + denominator;
 
         if (census.ForeignSinceBoot == 0)
             return $"LIVE RECORD CENSUS at {at}: {census.Foreign} of {typed} typed record(s) name a build keyed to a "
                    + $"framework this replica does not run ({census.ForeignDetail}), ALL stamped before "
                    + "this replica booted — the ordinary previous-image state, which the bake or the "
-                   + "first access rebuilds; NONE was re-keyed since boot." + undecided + denominator;
+                   + "first access rebuilds; NONE was re-keyed since boot." + undecided + DescribeStale(census) + denominator;
 
         return $"🚨 LIVE RECORD CENSUS at {at}: {census.ForeignSinceBoot} NodeType record(s) were "
                + "RE-KEYED to a framework this replica does not run AFTER it booted "
@@ -205,7 +298,7 @@ public sealed record NodeTypeLiveRecordCensus(
                + "printed and the node's own name deliberately is not; this body is public (#4258, "
                + "#3890). It clears when the fleet converges on one image, or when this replica "
                + "rebuilds the type against its own framework (the recycle verb, the Compile button)."
-               + denominator;
+               + DescribeStale(census) + denominator;
     }
 
     /// <summary>The partition a type path lives in — its first segment, and nothing else.</summary>

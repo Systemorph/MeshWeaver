@@ -108,6 +108,51 @@ public static class ModuleVersionCompatibility
             : null;
     }
 
+    /// <summary>
+    /// How many MINOR versions the adopted build trails the current source by, within one MAJOR —
+    /// the distance the stale-adoption bound (<see cref="StaleAdoptionBound"/>, Systemorph/Memex#668)
+    /// is measured in. <c>null</c> when it cannot be measured: either side unknown, the MAJORs
+    /// differ (that is <see cref="ModuleVersionVerdict.Incompatible"/>'s question, not this one), or
+    /// a MINOR does not parse. Zero or negative when the build is not behind.
+    /// </summary>
+    /// <param name="adoptedVersion">The adopted build's module version.</param>
+    /// <param name="currentVersion">The current source's module version.</param>
+    public static int? MinorVersionsBehind(string? adoptedVersion, string? currentVersion)
+    {
+        var adopted = MajorMinorOf(adoptedVersion);
+        var current = MajorMinorOf(currentVersion);
+        if (adopted is null || current is null || adopted.Value.Major != current.Value.Major)
+            return null;
+        return current.Value.Minor - adopted.Value.Minor;
+    }
+
+    /// <summary>
+    /// The MAJOR and MINOR of a SemVer-ish string, or null when either cannot be read. A bare
+    /// MAJOR (<c>"2"</c>) reads as MINOR 0. Same leniency and the same hash refusal as
+    /// <see cref="MajorOf"/>.
+    /// </summary>
+    /// <param name="version">The version text.</param>
+    public static (int Major, int Minor)? MajorMinorOf(string? version)
+    {
+        if (MajorOf(version) is not { } major)
+            return null;
+        var span = version!.AsSpan().Trim();
+        if (span.Length > 0 && (span[0] == 'v' || span[0] == 'V'))
+            span = span[1..];
+        var separator = span.IndexOfAny('.', '-', '+');
+        if (separator < 0 || span[separator] != '.')
+            return (major, 0);
+        var rest = span[(separator + 1)..];
+        var end = 0;
+        while (end < rest.Length && char.IsAsciiDigit(rest[end]))
+            end++;
+        if (end == 0)
+            return null;
+        return int.TryParse(rest[..end], NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
+            ? (major, minor)
+            : null;
+    }
+
     /// <summary>A version for a sentence: the value, or "(unknown)".</summary>
     public static string Display(string? version)
         => string.IsNullOrWhiteSpace(version) ? "(unknown)" : version.Trim();

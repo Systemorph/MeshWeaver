@@ -265,4 +265,47 @@ public class LiveRecordCensusTest
             .And.Contain("every one of the 1 typed record(s) names a build for this replica's framework",
                 "the last reading is still printed — it was true when taken — beside the fault that dates it");
     }
+
+    // ── Systemorph/Memex#668 — stale-but-serving builds are counted, and past the bound degrade ──
+
+    private static NodeTypeDefinition StaleServing(string adopted, string current) =>
+        Stamped(Live, BootedAt.AddHours(-1)) with
+        {
+            BuildProvenance = BuildProvenance.StaleAdopted,
+            AdoptedModuleVersion = adopted,
+            CurrentModuleVersion = current,
+        };
+
+    [Fact]
+    public void AStaleBuildPastTheBound_IsNamedOnHealth_AndDegrades()
+    {
+        var census = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/InstanceAction", StaleServing("1.29.7", "1.56"))], Live, BootedAt, At, maxMinorVersionsBehind: 5);
+
+        census.StaleServing.Should().Be(1);
+        census.StalePastBound.Should().Be(1);
+        census.IsClean.Should().BeFalse("a 27-minor-old build serving is the Memex#668 state");
+        census.StaleDetail.Should().Be("Hosting/… ×1 (max 27 minor(s) behind, 1 past the bound)");
+        NodeTypeLiveRecordCensus.Describe(census).Should().Contain("🚨 STALE-BUT-SERVING: 1 of 1");
+
+        // Negative control: the same record against a disabled bound counts but does not degrade.
+        var unbounded = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/InstanceAction", StaleServing("1.29.7", "1.56"))], Live, BootedAt, At, maxMinorVersionsBehind: -1);
+        unbounded.StalePastBound.Should().Be(0);
+        unbounded.IsClean.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AStaleBuildWithinTheBound_IsPrinted_ButClean_AndNoneIsSaidAsNone()
+    {
+        var census = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/Deployment", StaleServing("1.57.0", "1.59"))], Live, BootedAt, At, maxMinorVersionsBehind: 5);
+        census.StaleServing.Should().Be(1);
+        census.IsClean.Should().BeTrue();
+        NodeTypeLiveRecordCensus.Describe(census).Should()
+            .Contain("STALE-BUT-SERVING: 1 record(s)").And.Contain("max 2 minor(s) behind");
+
+        NodeTypeLiveRecordCensus.Describe(Census(("Edu/Course", Stamped(Live, At)))).Should()
+            .Contain("STALE-BUT-SERVING: none", "an absent count would read as an unmeasured one");
+    }
 }

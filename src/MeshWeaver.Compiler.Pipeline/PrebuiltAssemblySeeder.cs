@@ -949,9 +949,25 @@ public static class PrebuiltAssemblySeeder
                 nodeTypePath, producerFingerprint, liveFingerprint,
                 ModuleVersionCompatibility.Display(moduleVersion),
                 ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict);
+            // Memex#668 — a version-compatible bundle further behind the live source than the
+            // stale-adoption bound is NOT adopted as the last build either: same MAJOR is not a
+            // licence to serve an arbitrarily old program. Said at Error, with the bound.
+            var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
+                hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
+            var tooFarBehind = StaleAdoptionBound.Exceeds(
+                moduleVersion, observed.CurrentModuleVersion, staleBound);
+            if (tooFarBehind)
+                logger?.LogError(
+                    "Prebuilt assembly for {NodeTypePath} will NOT be adopted as a stale-but-serving "
+                    + "build (Memex#668): bundle module version {Adopted} over current {Current} is "
+                    + "{Distance}, past the stale-adoption {Bound}. A build of the current source lifts it.",
+                    nodeTypePath, ModuleVersionCompatibility.Display(moduleVersion),
+                    ModuleVersionCompatibility.Display(observed.CurrentModuleVersion),
+                    StaleAdoptionBound.DescribeDistance(moduleVersion, observed.CurrentModuleVersion),
+                    StaleAdoptionBound.DescribeBound(staleBound));
             return AfterStaleDeclineObserved(
                 hub, workspace, store, observed, nodeTypePath, logger,
-                adoptAnyway: verdict is ModuleVersionVerdict.Incompatible
+                adoptAnyway: verdict is ModuleVersionVerdict.Incompatible || tooFarBehind
                     ? null
                     : () =>
                     {
