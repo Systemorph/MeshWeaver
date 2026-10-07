@@ -37,7 +37,8 @@ For the subject job (`dotnet-test.yml` → `collect-results`):
           absent or literally false; an EXPRESSION is decided at run time and never credited),
           whose `if:` is a plain conjunction with `needs.<job>.result != 'success'` as a TOP-LEVEL
           conjunct (so `!( … )`, a top-level `||` and a constant-false `&& false` are refused), and
-          whose `run:` ends in `exit <non-zero>` with no earlier `exit`/`exit 0`. A step that merely
+          whose `run:` ends in `exit <non-zero>` with no earlier `exit` of any kind (an early
+          `exit "$status"` may exit zero, so it is refused, not evaluated). A step that merely
           MENTIONS the result (`echo ${{ needs.x.result }}`), or a commented-out `# exit 1`,
           translates nothing;
        b. or that marker's OWN `if:` carrying `needs.<job>.result == 'success'` as a top-level
@@ -141,13 +142,17 @@ def _enforces(cond, comparison: re.Pattern) -> bool:
 
 
 def _always_exits_red(run) -> bool:
-    """The body's LAST non-comment line is `exit <non-zero>` and no line exits 0 first. A substring
-    test is not enough: `# exit 1` or `exit 0` before it make the body exit zero."""
+    """The body's LAST non-comment line is `exit <non-zero>` and NO earlier line exits at all. A
+    substring test is not enough: `# exit 1`, `exit 0`, or a variable-valued `exit "$status"` before
+    it can make the body exit zero, so any earlier `exit` is refused rather than reasoned about."""
     lines = [l.strip() for l in str(run or "").splitlines()]
     lines = [l for l in lines if l and not l.startswith("#")]
     if not lines or not re.fullmatch(r"exit\s+[1-9][0-9]*", lines[-1]):
         return False
-    return not any(re.search(r"\bexit(\s+0)?\s*(;|$|#)", l) for l in lines[:-1])
+    # `exit` in COMMAND position (line start, or after ; & | ( { then do else) — prose such as
+    # "its exit status" inside an echo is not a command and must not refuse a real verdict.
+    exit_cmd = re.compile(r"(^|[;&|({]|\bthen\b|\bdo\b|\belse\b)\s*exit\b")
+    return not any(exit_cmd.search(l) for l in lines[:-1])
 
 
 def _is_verdict_for(step: dict, need: str) -> bool:
@@ -322,7 +327,8 @@ def self_test(root: Path) -> int:
     for m in (1, 2):  # an OR branch on each marker bypasses the requirement it appears to state
         j["steps"][m]["if"] += " && (needs.doc-gate.result == 'success' || true)"
     expect("a marker requirement under an always-true OR fires", j, True, "'doc-gate' is not enforced")
-    for body in ("echo doc gate red\n# exit 1", "exit 0\nexit 1", "echo red; exit 1 # \nexit"):
+    for body in ("echo doc gate red\n# exit 1", "exit 0\nexit 1", "echo red; exit 1 # \nexit",
+                 'status=0\nif [ "$status" -eq 0 ]; then\n  exit "$status"\nfi\nexit 1'):
         j = copy.deepcopy(good)
         j["steps"][1]["run"] = body
         expect(f"a verdict body that can exit zero fires ({body!r})", j, True, "'doc-gate' is not enforced")
