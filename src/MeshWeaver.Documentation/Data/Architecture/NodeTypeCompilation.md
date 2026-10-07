@@ -2144,6 +2144,61 @@ per-process rate above is a test-host rate and says nothing about a portal eithe
 harness null a statement about `linux-x64`: it ran on arm64, and a codegen hypothesis is
 architecture-specific.
 
+#### The defect, in one listing — the JIT drops the `isinst`, and Tiered PGO off removes it
+
+The capture above was finally read on core, where a workload change made the condition frequent:
+the class split that #6128 shifted moved `InstallNeverInheritsRepoCompileVerdictTest` into
+`Memex.Portal.Shared.Test` part 1/2, behind the stand-in emits of `ModulePlatformMemberLinkTest`,
+`ModuleLinkVersionTest` and friends. From then on that part poisoned in **4 of 12** `main` runs
+(`InstallNeverInherits…` and both `ModulesUpdateIndependentlyOfThePlatformTest` cases, or the whole of
+`ModuleLinkVersionTest` when the onset came earlier) — no diff in those pull requests was involved.
+
+**The reproduction in CI's own shape** (experiment branch `exp/890-tieredpgo-split-arm`, run
+[`37647154163`](https://github.com/Systemorph/MeshWeaver/actions/runs/37647154163)): the very
+`build-output-3` artifact of a poisoned pull-request run, part 1/2 launched exactly as the shard launches
+it (`dotnet Memex.Portal.Shared.Test.dll -class …`), 14 runners per arm, on whatever `ubuntu-latest` hosts
+GitHub assigned (EPYC 7763 without AVX-512, EPYC 9V74/9V45 and Xeon with it):
+
+| arm | poisoned | clean |
+|---|---|---|
+| defaults + `DOTNET_JitDisasm` capture | **4** | 10 |
+| `DOTNET_TieredPGO=0` | **0** | 14 |
+
+**And the mechanism, 14 of 14.** The Tier-1 listing of
+`NamedTypeSymbol:AsNestedTypeDefinitionImpl` inlines `SourceMemberContainerTypeSymbol.ContainingType`
+(`_containingSymbol as NamedTypeSymbol`) behind a guarded devirtualisation. In all **10** clean hosts the
+inlined body keeps the cast — a likely-class compare, then `CORINFO_HELP_ISINSTANCEOFCLASS`. In all **4**
+poisoned hosts it is gone:
+
+```text
+G_M000_IG07:
+       mov      rax, gword ptr [rbx+0x38]     ; _containingSymbol, NO isinst
+       jmp      SHORT G_M000_IG04             ; → test rax, rax / jne: "is nested"
+```
+
+So for a top-level type the namespace container reads as a non-null containing type, the guard admits
+it, and `get_ContainingTypeDefinition` — whose own, separately compiled `ContainingType` still casts —
+returns null and the writer dereferences it. That one listing explains every reading this page
+collected: `dissect=READS-HEALTHY` (a direct call goes through the correct standalone method),
+`flat=SAME-FRAME` (one member-less top-level class is enough), `compiler=PRIVATE-COPY-EMITS` (a cold copy
+runs tier-0 code), the acquired onset (the method reaches tier 1 after enough emits) and the per-process
+lottery (which code tier 1 produces depends on the profile that process collected). It is independent
+of the ISA (both VEX and EVEX hosts poisoned). The standalone `ContainingType` in a poisoned host still
+casts, so this is the inliner's copy only. *Why* the cast is folded is not established — the listing
+shows the result, not the JIT phase; the profile-driven cast expansion is the suspect, because the
+dropped cast and the surviving one differ only in which PGO data fed them.
+
+**The remedy is the supported runtime switch, at the narrowest place that covers every compiling host:**
+`<TieredPGO>false</TieredPGO>` in the root `Directory.Build.props` (every executable under `src/`,
+`tools/` and `memex/`, including the bake host `mw-plugin-test`) and in `test/Directory.Build.props`
+(which does not import the root). It reaches the runtime as `System.Runtime.TieredPGO: false` in each
+host's runtimeconfig — the file a `dotnet <name>.dll` launch reads, which is how CI's shards start
+hosts. `TieredPgoIsOffInEveryCompilingHostTest` pins that it arrives (negative control: a build with
+`-p:TieredPGO=true` fails both of its assertions). This is a workaround for a runtime defect, stated as
+one: the defect is in the .NET 10 JIT, not in this repository, and the switch is removed only with a
+measurement on a runtime that fixes it — the arm above, re-run. The portal hosts live in
+MeshWeaver.Plugins and need the same property there.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present

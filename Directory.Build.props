@@ -28,6 +28,18 @@
          toward leaving a dead package listed. Opting a project back in means intending to publish
          it, and means adding it to .github/workflows/publish-packages.yml. -->
     <IsPackable>false</IsPackable>
+    <!-- 🚨 #890: every executable here runs with Tiered PGO OFF (runtimeconfig System.Runtime.TieredPGO).
+         On .NET 10 linux-x64 the Tier-1 JIT, in roughly one process in three of the in-mesh compile
+         workload, inlines Roslyn's SourceMemberContainerTypeSymbol.ContainingType
+         (`_containingSymbol as NamedTypeSymbol`) into NamedTypeSymbol.AsNestedTypeDefinitionImpl WITHOUT
+         the isinst — the namespace container of a top-level type then reads as its containing type, and
+         every later Emit in the process dies in get_ContainingTypeDefinition. Measured, not inferred: the
+         JIT listing of that method has no isinst in 4 of 4 poisoned processes and has it in 10 of 10
+         clean ones, and with TieredPGO off 0 of 14 processes poisoned (Doc/Architecture/NodeTypeCompilation,
+         "The defect, in one listing"). This is a runtime defect worked around at the narrowest supported
+         switch; remove it only with a measurement on the runtime that fixes it. The test tree sets the
+         same property in test/Directory.Build.props, which does not import this file. -->
+    <TieredPGO>false</TieredPGO>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <!-- `dotnet pack` over the solution warns NU5128-style once per non-packable project; with the
          default now false that is every project, and the warnings are noise, not signal. -->
