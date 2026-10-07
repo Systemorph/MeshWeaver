@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
@@ -1373,6 +1374,54 @@ def module_pack_permission_problems(workflow_text: str) -> list[str]:
     return problems
 
 
+def run_control_webhook_cases(root, case) -> None:
+    """EXECUTE the preflight's control-webhook guard and prove the workflow still wires it."""
+    import yaml
+
+    script = root / ".github/scripts/check-control-webhook-url.py"
+    declared = json.loads((root / ".github/control-instance.json").read_text())["url"].rstrip("/")
+    good = declared + "/api/hooks/Hosting/PlatformBuilds"
+
+    def check(declaration, url):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "control-instance.json"
+            if declaration is not None:
+                path.write_text(declaration)
+            res = subprocess.run([sys.executable, str(script), str(path), url],
+                                 capture_output=True, text=True)
+            return res.returncode, res.stdout + res.stderr
+
+    decl = json.dumps({"url": declared})
+    rc, log = check(decl, good)
+    case("the declared control inbox URL is accepted", rc == 0, f"rc={rc} log={log}")
+    rc, log = check(decl, "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds")
+    case("the old/wrong portal is refused", rc == 1 and "different inbox" in log, f"rc={rc} log={log}")
+    rc, log = check(decl, good + "/")
+    case("a near-miss URL (trailing slash) is refused", rc == 1, f"rc={rc} log={log}")
+    rc, log = check(json.dumps({"url": "http://control.example"}), good)
+    case("a non-HTTPS declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check(json.dumps({"deployment": "control"}), good)
+    case("a declaration without a url is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check("{not json", good)
+    case("a malformed declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check(None, good)
+    case("a missing declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+
+    # Wiring: the preflight must still sparse-checkout both files and invoke the checker.
+    wf = yaml.safe_load((root / WORKFLOW).read_text())
+    pre = wf["jobs"].get("preflight", {})
+    steps = pre.get("steps", [])
+    checkout = next((st for st in steps if str(st.get("uses", "")).startswith("actions/checkout")), {})
+    sparse = checkout.get("with", {}).get("sparse-checkout", "")
+    run_text = "\n".join(str(st.get("run", "")) for st in steps)
+    case("preflight sparse-checks-out the declaration and the checker",
+         ".github/control-instance.json" in sparse and ".github/scripts/check-control-webhook-url.py" in sparse,
+         f"sparse-checkout={sparse!r}")
+    case("preflight invokes the checker against the declaration and CONTROL_WEBHOOK_URL",
+         re.search(r'check-control-webhook-url\.py\s*\\?\s*\.github/control-instance\.json\s+"\$CONTROL_WEBHOOK_URL"', run_text) is not None,
+         "the preflight run script no longer calls the checker")
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -1407,6 +1456,44 @@ def main() -> int:
             failures.append(name)
 
     workflow_text = (root / WORKFLOW).read_text()
+    # The URL behavior is executed by run_control_webhook_cases below. These mutation cases
+    # prove that dropping its production wiring or changing the reporter's host goes red.
+    def webhook_wiring_problems(source: str) -> list[str]:
+        doc = yaml.safe_load(source)
+        steps = (doc.get("jobs") or {}).get("preflight", {}).get("steps") or []
+        checkout = next((s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")), {})
+        sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
+        actions = [s for s in steps if "check-control-webhook-url.py" in str(s.get("run", ""))]
+        problems = []
+        for path in (".github/control-instance.json", ".github/scripts/check-control-webhook-url.py"):
+            if path not in sparse:
+                problems.append(f"preflight sparse checkout omits {path}")
+        if len(actions) != 1 or "CONTROL_WEBHOOK_URL" not in str(actions[0].get("run", "")) \
+                or "vars.CONTROL_WEBHOOK_URL" not in str((actions[0].get("env") or {}).get("CONTROL_WEBHOOK_URL", "")):
+            problems.append("preflight does not invoke the checker with vars.CONTROL_WEBHOOK_URL")
+        return problems
+
+    case("preflight wires the control webhook checker", not webhook_wiring_problems(workflow_text),
+         "; ".join(webhook_wiring_problems(workflow_text)))
+    no_check = workflow_text.replace("python3 .github/scripts/check-control-webhook-url.py", "true", 1)
+    case("the wiring guard detects a removed checker",
+         no_check != workflow_text and bool(webhook_wiring_problems(no_check)))
+    no_checker_file = workflow_text.replace("            .github/scripts/check-control-webhook-url.py\n", "", 1)
+    case("the wiring guard detects a missing checker file",
+         no_checker_file != workflow_text and bool(webhook_wiring_problems(no_checker_file)))
+    reporter = root / ".github/workflows/node-repo-ci-failure.yml"
+    reporter_text = reporter.read_text()
+
+    def reporter_host_matches(source: str) -> bool:
+        doc = yaml.safe_load(source)
+        inputs = (doc.get("on") or doc.get(True))["workflow_call"]["inputs"]
+        declared = json.loads((root / ".github/control-instance.json").read_text())["url"]
+        return inputs["control-webhook-host"]["default"] == urlsplit(declared).hostname
+
+    case("the CI failure reporter accepts the declared control host", reporter_host_matches(reporter_text))
+    old_host = reporter_text.replace("default: control.systemorph.com", "default: memex.systemorph.com", 1)
+    case("the reporter guard detects its former host default",
+         old_host != reporter_text and not reporter_host_matches(old_host))
     # 🚨 Policy `platform-module-deploy-separate`: the platform deploy packs, bakes and seals no
     # module, reads no Plugins verdict, and deploys control first. Each detector has a mutation
     # control that re-introduces one coupling and must be caught — a guard that cannot fail is not one.
@@ -1606,6 +1693,10 @@ def main() -> int:
     print()
     print(f"── step `{HEAL_STEP_ID}` ──")
     run_heal_cases(root, case)
+
+    print()
+    print("── control webhook preflight guard ──")
+    run_control_webhook_cases(root, case)
 
     print()
     if failures:
