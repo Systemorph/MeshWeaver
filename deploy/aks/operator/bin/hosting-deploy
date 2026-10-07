@@ -456,6 +456,46 @@ case "$release_state" in
   *) hosting::log "release   ${release} is '${release_state}'" ;;
 esac
 
+# ── never DROP what the live release carries and the record cannot express ──────────────────────
+# 🚨 Since every Roll re-applies the record (policy record-change-applies-itself), the record's render
+# REPLACES the user-supplied values of an instance that was last deployed from an overlay. A key the
+# overlay set and the record cannot express is then silently dropped by helm — measured on Memex#376:
+# memex-cloud's `features.fleetops` (enabled: false, packages: [Plugins/Hosting]) lived only in the
+# overlay, and a record-driven render would have re-enabled fleet ops on it with nothing in any log.
+# So before anything changes, compare the LEAF PATHS of the live release's user-supplied values
+# (`helm get values`) with the leaf paths of what this upgrade supplies (both values layers plus the
+# --set flags, merged by helm itself through a one-template probe chart — this image has no yq), and
+# REFUSE naming every path that would vanish. A path counts as kept when the new values carry it, a
+# prefix of it, or a path under it (a flag re-expressed as `name: true` ↔ `name.enabled`). Remedy:
+# express the key on the record (features, extraPortalConfig, …) — or drop it from the live release on
+# purpose with a governed HelmRelease action. Never a silent drop.
+leaf_paths_jq='[paths(type != "object") as $p | select(getpath($p) != null) | select(all($p[]; type == "string")) | $p | join(".")] | unique'
+if [ -n "$release_state" ]; then
+  live_err="$(mktemp)"
+  live_values="$(hosting::read helm get values "$release" --namespace "$namespace" -o json 2>"$live_err")" \
+    || { why="$(grep -m1 . "$live_err" | cut -c1-300)"; rm -f "$live_err"
+         hosting::die "could not read the user-supplied values of the live release ${release} (${why}) — whether this upgrade would DROP a key the release carries is then unknown, and it is refused rather than guessed (Memex#376)"; }
+  rm -f "$live_err"
+  probe_chart="$(mktemp -d)"
+  mkdir -p "${probe_chart}/templates"
+  printf 'apiVersion: v2\nname: values-probe\nversion: 0.0.0\n' > "${probe_chart}/Chart.yaml"
+  printf '{{ toJson .Values }}\n' > "${probe_chart}/templates/values.json"
+  probe_err="$(mktemp)"
+  supplied="$(hosting::read helm template values-probe "$probe_chart" "${files[@]}" "${sets[@]}" 2>"$probe_err" | grep -v '^---' | grep -v '^# Source:')" \
+    || { why="$(grep -m1 . "$probe_err" | cut -c1-300)"; rm -rf "$probe_chart" "$probe_err"
+         hosting::die "could not merge this upgrade's values to compare them with the live release (${why}) — refused rather than risking a silent drop (Memex#376)"; }
+  rm -rf "$probe_chart" "$probe_err"
+  dropped="$(jq -rn --argjson live "${live_values:-null}" --argjson next "${supplied:-null}" "
+      (\$live // {} | ${leaf_paths_jq}) as \$l | (\$next // {} | ${leaf_paths_jq}) as \$n
+      | \$l[] | . as \$path
+      | select([\$n[] | . as \$kept | \$kept == \$path or (\$kept | startswith(\$path + \".\")) or (\$path | startswith(\$kept + \".\"))] | any | not)" 2>/dev/null)" \
+    || hosting::die "the live and the supplied values of ${release} could not be compared (jq) — refused rather than risking a silent drop (Memex#376)"
+  if [ -n "$dropped" ]; then
+    hosting::die "this upgrade would DROP $(printf '%s\n' "$dropped" | grep -c .) value(s) the live release ${release} carries and the record does not express: $(printf '%s' "$dropped" | tr '\n' ' ')— helm replaces the user-supplied values, so each would silently fall back to the chart default (Memex#376: memex-cloud's features.fleetops). Nothing was changed. Express them on the Deployment record (features, extraPortalConfig, …), or remove them from the live release deliberately with a governed HelmRelease action, then re-request."
+  fi
+  hosting::log "values    nothing the live release carries is dropped by this upgrade"
+fi
+
 # ── migrate BEFORE the image moves (policy roll-migrates-first) ─────────────────────────────────
 # 🚨 The chart's migration Job is a plain release object, not a hook, so `helm upgrade` applies it
 # and the portal Deployment IN THE SAME APPLY: when this upgrade also moves the image, the new pods

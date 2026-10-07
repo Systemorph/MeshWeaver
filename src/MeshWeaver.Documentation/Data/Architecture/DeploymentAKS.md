@@ -11,6 +11,8 @@ This is **one of two deploy routes** for MeshWeaver. Use it for the shared porta
 
 > 🚨 **This runbook is the bootstrap / break-glass form of a `Roll`.** Since 2026-09-08 the rule is that operations go through the control instance's Hosting API: the instance is a `Deployments/<name>` record, its image pin is the roll, and a `Roll` (or `Restart`, `Suspend`, `Audit`, `Reconcile`) `Hosting/InstanceAction` is what the in-cluster operator executes — running exactly the commands below for you. Read them as what happens, not as what you type. Policy, and what the API does not answer yet: [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal).
 >
+> 🚨 **A Roll no longer `set image`s, and a record change needs no Reconcile filed** (policy `record-change-applies-itself`). The bare `set image` below kept the pods' OLD environment — record `memex` v180 turned the LLM steward switches off, CD rolled memex, and the switches never reached the pods. The operator's `Roll` now runs the tag's migration and then `hosting-deploy` over the CURRENT record's render at that tag; and a record whose rendered values changed is reconciled by the control plane itself, unattended. The `set image` form below is break-glass only — it does not carry the record.
+>
 > **The cluster is private.** `kubectl` is not reachable directly — where a break-glass command is unavoidable it runs through `az aks command invoke --subscription <subscription> -g <aks-resource-group> -n <aks-cluster> --command "…"`, which executes inside the cluster's API-server-side runner.
 
 A **code update** is three steps: build the images, point the Deployments at the new tag, restart. It is **not** `tools/deploy.sh` and **not** `aspire deploy` — those are the Container Apps route.
@@ -703,7 +705,7 @@ questions as nodes, with no cluster credential on the caller:
 | what did it log | `{ "requestedAction": "Logs", "query": "<regex or \| pipeline>", "sinceMinutes": 60, "limit": 300, "pod": "<optional>" }` | `logQl`, `entryCount`, `truncated` on the run; `Hosting/LogEntry` nodes under `Ops/Logs`, the Deployment page's Logs area |
 | what lives only on the cluster | `{ "requestedAction": "Audit" }` | `Ops/Audit/<id>` |
 | roll it | pin `pinnedImageTag` on the record → `{ "requestedAction": "Reconcile", "confirmation": "<id>" }` | the run's phases; then a `Sample` |
-| grow a full share | set `volumes[].size` on the record → the same `Reconcile` | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
+| grow a full share | set `volumes[].size` on the record — the control plane opens the `Reconcile` itself (policy `record-change-applies-itself`); a hand-filed one is break-glass | the run's `Ensure volume capacity: <volume>` phase, `pv_capacity=` read back from the claim — see "Volume capacity is a record property" above |
 | re-read ONE address a person may not recycle (a NodeType and its dependency network, or any node) | `{ "requestedAction": "Recycle", "recycleTarget": "<path>", "reason": "…" }` + one approval | the run's log; manual `Hosting/RecycleAction` (MeshWeaver.Plugins) |
 | remove a space no person may delete (owner gone, or a stranded partition with no root) | `{ "requestedAction": "DeleteSpace", … }`; it parks WITH its plan, and the approval binds that plan | the plan on the node, then an audit record; manual `Hosting/DeleteSpaceAction` (MeshWeaver.Plugins) |
 
