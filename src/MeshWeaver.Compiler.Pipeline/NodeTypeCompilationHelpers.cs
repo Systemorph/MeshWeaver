@@ -389,23 +389,45 @@ internal static class NodeTypeCompilationHelpers
                     bool SettleAsHold(NodeTypeDefinition pendingDefinition, string reason)
                     {
                         var usable = HasUsableBuild(pendingNode!, pendingDefinition, guards);
-                        if (BuildDeliveryHold.Settle(pendingDefinition, usable, reason) is null)
+                        // Memex#668 — the mesh's stale-adoption bound decides whether the last
+                        // build may keep serving at all.
+                        var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
+                            hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
+                        if (BuildDeliveryHold.Settle(pendingDefinition, usable, reason, staleBound) is not { } settled)
                             return false;
-                        logger?.LogWarning(
-                            "Compile watcher: {HubPath} is held by delivery (#3583) — {Outcome}. {Reason}",
-                            hubPath,
-                            pendingDefinition.BuildProvenance is BuildProvenance.AdoptionRefused
-                                ? "its adopted build is INCOMPATIBLE (module MAJOR moved) and is not run; awaiting a bundle"
-                                : "its last build keeps serving over source that moved ahead; awaiting a bundle",
-                            reason);
+                        if (settled.BuildProvenance is BuildProvenance.AdoptionRefused
+                            && StaleAdoptionBound.Exceeds(
+                                settled.AdoptedModuleVersion, settled.CurrentModuleVersion, staleBound))
+                            // Memex#668 — a refusal ON THE BOUND is said at Error at every
+                            // enforcement site (this gate, the adoption stamp, the seeder), with
+                            // both versions, the distance and the configured bound.
+                            logger?.LogError(
+                                "Compile watcher: {HubPath} is held by delivery (#3583) — its adopted build is "
+                                + "TOO FAR BEHIND its source ({AdoptedVersion} over {CurrentVersion}: {Distance}, "
+                                + "past the stale-adoption {Bound}) and is not run (Memex#668); awaiting a build "
+                                + "of the current source. {Reason}",
+                                hubPath,
+                                ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion),
+                                ModuleVersionCompatibility.Display(settled.CurrentModuleVersion),
+                                StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion),
+                                StaleAdoptionBound.DescribeBound(staleBound),
+                                reason);
+                        else
+                            logger?.LogWarning(
+                                "Compile watcher: {HubPath} is held by delivery (#3583) — {Outcome}. {Reason}",
+                                hubPath,
+                                settled.BuildProvenance is BuildProvenance.AdoptionRefused
+                                    ? "its adopted build is INCOMPATIBLE (module MAJOR moved) and is not run; awaiting a bundle"
+                                    : $"its last build keeps serving over source that moved ahead ({ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion)} over {ModuleVersionCompatibility.Display(settled.CurrentModuleVersion)}: {StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion)}, {StaleAdoptionBound.DescribeBound(staleBound)}); awaiting a bundle",
+                                reason);
                         SettlePending(parkedDef =>
                         {
                             var held = BuildDeliveryHold.Settle(
-                                parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason);
+                                parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason, staleBound);
                             if (held is null)
                                 return ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash);
-                            if (BuildDeliveryHold.EventOf(parkedDef, held) is { } evt)
-                                BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger);
+                            if (BuildDeliveryHold.EventOf(parkedDef, held, staleBound) is { } evt)
+                                BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger, staleBound);
                             return held;
                         });
                         return true;
@@ -1544,11 +1566,17 @@ internal static class NodeTypeCompilationHelpers
     /// dispatch anything, and because omitting it degrades in the SAFE direction: the token then
     /// reads <c>mod=(none)</c>, which cannot match a request's token built from a real hash, so the
     /// request PARKS exactly as an unstamped flip made it park.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound (Systemorph/Memex#668,
+    /// <see cref="StaleAdoptionBound"/>): a version-compatible build more than this many MINOR
+    /// versions behind the current source is REFUSED rather than kept serving. Negative disables
+    /// the bound. Defaulted to the platform default so a pure caller (a test) gets the production
+    /// rule; the reporting wrapper passes the mesh's configured value.</param>
     internal static NodeTypeDefinition ApplyAdoptedSourceStamp(
         NodeTypeDefinition def,
         IReadOnlyDictionary<string, long> snapshot,
         bool canCompileLocally,
-        string? modulesHash = null)
+        string? modulesHash = null,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
     {
         var stamped = def with
         {
@@ -1631,7 +1659,15 @@ internal static class NodeTypeCompilationHelpers
         // merging while the only bundle for the portal's identity predated it, took the refusal
         // branch and left every page of the type dead for the afternoon. The refusal was right
         // about the bytes and wrong about the consequence.
-        if (!ModuleVersionCompatibility.Refuses(def.AdoptedModuleVersion, def.CurrentModuleVersion))
+        //
+        // 🚨 Systemorph/Memex#668 — …and only WITHIN THE STALE-ADOPTION BOUND. Same MAJOR said
+        // nothing about how far: a Hosting/InstanceAction build at 1.29.7 served over source at
+        // 1.56, twenty-seven minors and a signing-key change behind, with no alarm. Past the bound
+        // the build takes the refusal below exactly as a MAJOR bump does, with its own notice.
+        var tooFarBehind = StaleAdoptionBound.Exceeds(
+            def.AdoptedModuleVersion, def.CurrentModuleVersion, maxMinorVersionsBehind);
+        if (!tooFarBehind
+            && !ModuleVersionCompatibility.Refuses(def.AdoptedModuleVersion, def.CurrentModuleVersion))
         {
             var serving = def with
             {
@@ -1713,6 +1749,11 @@ internal static class NodeTypeCompilationHelpers
         // memex and memex-cloud, and #2194 item 3 records the same - that is TWO instances, and says
         // nothing about fabrikam, initech, local installs, or any external instance the registry serves.
         // Configuration lives on AKS in places this repo has never heard of (Memex#148).
+        //
+        // 🚨 Memex#668 — a refusal ON THE BOUND names itself on the node in both branches: the
+        // record says WHICH rule refused the bytes and by how much, so a reader of the type does not
+        // have to infer it from two version fields. (A MAJOR-bump refusal on a compiling mesh keeps
+        // its pre-#668 shape: the dispatched compile's own verdict is the next thing it reads.)
         return canCompileLocally
             ? refused with
             {
@@ -1721,6 +1762,9 @@ internal static class NodeTypeCompilationHelpers
                 LatestAssemblyCollection = null,
                 LatestAssemblyPath = null,
                 LatestAssemblyMvid = null,
+                CompilationError = tooFarBehind
+                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
+                    : refused.CompilationError,
             }
             : refused with
             {
@@ -1732,7 +1776,9 @@ internal static class NodeTypeCompilationHelpers
                 CompilationStatus = def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling
                     ? def.CompilationStatus
                     : CompilationStatus.Unavailable,
-                CompilationError = BuildDeliveryHold.IncompatibleNotice(refused),
+                CompilationError = tooFarBehind
+                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
+                    : BuildDeliveryHold.IncompatibleNotice(refused),
             };
     }
 
@@ -1824,26 +1870,34 @@ internal static class NodeTypeCompilationHelpers
         var canCompileLocally = !PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
         // The hub is in hand here, so the refusal branch's Pending dispatch is stamped with the
         // REAL module fingerprint rather than the safe-but-blind default (#3390).
+        // Memex#668 — the stale-adoption bound is the MESH's configuration, read here where the hub
+        // is in hand; the pure judgement takes it as a value.
+        var bound = StaleAdoptionBound.MaxMinorVersionsBehind(
+            hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
         var result = ApplyAdoptedSourceStamp(
-            def, snapshot, canCompileLocally, ModulesHashOf(hub));
+            def, snapshot, canCompileLocally, ModulesHashOf(hub), bound);
 
         // #3583 requirement 3 — a person hears about a hold, and about the adoption that lifts
         // it ("Essentials 1.2.3 adopted for this identity"), on the TRANSITION, never on every
         // stamp: the pure EventOf is what decides, so the three writers that can fulfil a stamp
         // request cannot disagree about when to speak.
-        if (BuildDeliveryHold.EventOf(def, result) is { } evt)
-            BuildDeliveryHold.Notify(hub, hubPath, result, evt, logger);
+        if (BuildDeliveryHold.EventOf(def, result, bound) is { } evt)
+            BuildDeliveryHold.Notify(hub, hubPath, result, evt, logger, bound);
 
         if (result.BuildProvenance is BuildProvenance.StaleAdopted)
         {
+            // Memex#668 — the distance and the bound are IN the line, every time: "keeps serving"
+            // without "how far behind" is the silence that let 1.29.7 serve over 1.56.
             logger?.LogWarning(
                 "[AdoptedSourceStamp] {HubPath}: the source moved past the adopted build (bundle "
                 + "fingerprint {Adopted}, live {Live}) and the two are COMPATIBLE by module version "
-                + "({AdoptedVersion} over {CurrentVersion}) — the build keeps serving as StaleAdopted "
-                + "(#3583); {Next}",
+                + "({AdoptedVersion} over {CurrentVersion}: {Distance}, {Bound}) — the build keeps "
+                + "serving as StaleAdopted (#3583, Memex#668); {Next}",
                 hubPath, def.AdoptedSourceFingerprint, def.CurrentSourceFingerprint,
                 ModuleVersionCompatibility.Display(def.AdoptedModuleVersion),
                 ModuleVersionCompatibility.Display(def.CurrentModuleVersion),
+                StaleAdoptionBound.DescribeDistance(def.AdoptedModuleVersion, def.CurrentModuleVersion),
+                StaleAdoptionBound.DescribeBound(bound),
                 canCompileLocally
                     ? "a compile of the live source is dispatched"
                     : "a bundle for this identity is awaited");
@@ -1852,6 +1906,27 @@ internal static class NodeTypeCompilationHelpers
 
         if (result.BuildProvenance is not BuildProvenance.AdoptionRefused)
             return result;
+
+        if (StaleAdoptionBound.Exceeds(def.AdoptedModuleVersion, def.CurrentModuleVersion, bound))
+        {
+            // Memex#668 — refused on the BOUND, not on a MAJOR bump: said as such, at Error, with
+            // both versions, the distance and the configured bound.
+            logger?.LogError(
+                "ADOPTION REFUSED for {HubPath} (Memex#668): the adopted build is module version "
+                + "{AdoptedVersion} and the current source is {CurrentVersion} — {Distance}, past the "
+                + "stale-adoption {Bound}. The build is not run: {Next}",
+                hubPath,
+                ModuleVersionCompatibility.Display(def.AdoptedModuleVersion),
+                ModuleVersionCompatibility.Display(def.CurrentModuleVersion),
+                StaleAdoptionBound.DescribeDistance(def.AdoptedModuleVersion, def.CurrentModuleVersion),
+                StaleAdoptionBound.DescribeBound(bound),
+                canCompileLocally
+                    ? "its coordinates are cleared and a compile of the live source is dispatched; "
+                      + "if that compile fails the type has NO build, by design"
+                    : "this mesh cannot compile, so the type is Unavailable until a bundle for the "
+                      + "current source is published");
+            return result;
+        }
 
         if (canCompileLocally)
             logger?.LogError(

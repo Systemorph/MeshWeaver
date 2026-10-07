@@ -1,3 +1,4 @@
+using System.Globalization;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -43,10 +44,16 @@ public static class BuildDeliveryHold
     /// record still names a build usable on this framework.
     ///
     /// <list type="table">
-    ///   <item><term>usable build, not refused</term><description><c>Ok</c> +
+    ///   <item><term>usable build, within the stale-adoption bound, not refused</term><description><c>Ok</c> +
     ///     <see cref="BuildProvenance.StaleAdopted"/>: the last build keeps serving; the page names
     ///     both versions and fingerprints and says a bundle is awaited; the error text is
-    ///     cleared — an Ok record carries none.</description></item>
+    ///     cleared — an Ok record carries none. A record previously refused only on the bound
+    ///     (versions measurably same-MAJOR) returns here once the bound no longer refuses it (disabled
+    ///     or raised).</description></item>
+    ///   <item><term>usable same-MAJOR build PAST the stale-adoption bound</term><description>
+    ///     <c>Unavailable</c> + <see cref="BuildProvenance.AdoptionRefused"/>, named by
+    ///     <see cref="TooFarBehindNotice"/> (Systemorph/Memex#668): same MAJOR is only the first
+    ///     gate, the distance in MINOR versions is the second.</description></item>
     ///   <item><term>refused (a MAJOR bump)</term><description><c>Unavailable</c> +
     ///     <see cref="BuildProvenance.AdoptionRefused"/>: the bytes are not run (the execute-time
     ///     gate refuses them), nothing is known to be wrong with the source, a bundle is awaited.
@@ -62,14 +69,64 @@ public static class BuildDeliveryHold
     /// (<c>NodeTypeCompilationHelpers.HasUsableBuild</c> with the watcher's guards).</param>
     /// <param name="reason">The gate's named reason (what is missing and how to fix it).</param>
     public static NodeTypeDefinition? Settle(NodeTypeDefinition pending, bool hasUsableBuild, string reason)
+        => Settle(pending, hasUsableBuild, reason, StaleAdoptionBound.DefaultMaxMinorVersionsBehind);
+
+    /// <summary>
+    /// <see cref="Settle(NodeTypeDefinition, bool, string)"/> against an explicit stale-adoption
+    /// bound — the compile watcher passes the mesh's configured value.
+    /// </summary>
+    /// <param name="pending">The Pending record the gate observed.</param>
+    /// <param name="hasUsableBuild">Whether the record names a build usable on this framework.</param>
+    /// <param name="reason">The gate's named reason (what is missing and how to fix it).</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound (Systemorph/Memex#668): a
+    /// usable build more than this many MINOR versions behind the current source is settled as
+    /// REFUSED (<c>Unavailable</c> + <see cref="BuildProvenance.AdoptionRefused"/>, named by
+    /// <see cref="TooFarBehindNotice"/>) rather than kept serving. Negative disables it.</param>
+    public static NodeTypeDefinition? Settle(
+        NodeTypeDefinition pending,
+        bool hasUsableBuild,
+        string reason,
+        int maxMinorVersionsBehind)
     {
         ArgumentNullException.ThrowIfNull(pending);
-        if (pending.BuildProvenance is BuildProvenance.AdoptionRefused)
+        var pastBound = StaleAdoptionBound.Exceeds(
+            pending.AdoptedModuleVersion, pending.CurrentModuleVersion, maxMinorVersionsBehind);
+        if (hasUsableBuild
+            && pending.BuildProvenance is not BuildProvenance.AdoptionRefused
+            && pastBound)
+            // Memex#668 — the last build is too far behind its source to keep serving: refused,
+            // named, not run (the execute-time gate refuses AdoptionRefused), never an Error.
             return pending with
             {
                 DispatchedBuildInputs = null,
                 CompilationStatus = CompilationStatus.Unavailable,
-                CompilationError = IncompatibleNotice(pending, reason),
+                CompilationError = TooFarBehindNotice(pending, maxMinorVersionsBehind, reason),
+                CompilationDiagnostics = null,
+                CompilationImportRefusals = null,
+                CompiledSources = null,
+                BuildProvenance = BuildProvenance.AdoptionRefused,
+                RequestedReleaseForce = false,
+            };
+        // A refusal stands unless the versions are MEASURABLY same-MAJOR and within the bound: with
+        // a usable build to serve, a refusal made ONLY on the bound recovers to StaleAdopted
+        // (below) once the operator disables or raises the bound, and is never re-written as a
+        // MAJOR incompatibility the versions do not have (Memex#668, Copilot review). A refusal
+        // whose versions cannot be compared keeps its pre-#668 behaviour. A bound-only refusal
+        // whose bound was lifted and which has NO usable build left settles exactly as a
+        // never-refused record with nothing to serve (null → the gate's own park), never as a
+        // MAJOR incompatibility.
+        if (pending.BuildProvenance is BuildProvenance.AdoptionRefused
+            && (pastBound
+                || ModuleVersionCompatibility.Classify(pending.AdoptedModuleVersion, pending.CurrentModuleVersion)
+                    is not ModuleVersionVerdict.Compatible))
+            return pending with
+            {
+                DispatchedBuildInputs = null,
+                CompilationStatus = CompilationStatus.Unavailable,
+                // The refusal keeps naming the rule that made it: the bound (Memex#668) or a MAJOR bump.
+                CompilationError = pastBound
+                    ? TooFarBehindNotice(pending, maxMinorVersionsBehind, reason)
+                    : IncompatibleNotice(pending, reason),
                 CompiledSources = null,
                 RequestedReleaseForce = false,
             };
@@ -116,6 +173,24 @@ public static class BuildDeliveryHold
            + "MAJOR), so the build keeps serving (MeshWeaver#3583)."
            + (string.IsNullOrEmpty(gateReason) ? "" : $" Gate: {gateReason}");
 
+    /// <summary>The too-far-behind sentence for a build refused on the stale-adoption bound
+    /// (Systemorph/Memex#668): both versions, the distance, the bound, and what lifts it.</summary>
+    /// <param name="def">The record whose adopted build was refused.</param>
+    /// <param name="maxMinorVersionsBehind">The bound that refused it.</param>
+    /// <param name="gateReason">The delivery gate's own reason, when a gate settled it.</param>
+    public static string TooFarBehindNotice(
+        NodeTypeDefinition def, int maxMinorVersionsBehind, string? gateReason = null)
+        => $"Build too far behind its source, not run: the adopted build is module version "
+           + $"{ModuleVersionCompatibility.Display(def.AdoptedModuleVersion)} (source fingerprint "
+           + $"{Short(def.AdoptedSourceFingerprint)}) and the current source is module version "
+           + $"{ModuleVersionCompatibility.Display(def.CurrentModuleVersion)} (fingerprint "
+           + $"{Short(def.CurrentSourceFingerprint)}) — "
+           + $"{StaleAdoptionBound.DescribeDistance(def.AdoptedModuleVersion, def.CurrentModuleVersion)}, "
+           + $"past the stale-adoption {StaleAdoptionBound.DescribeBound(maxMinorVersionsBehind)}. "
+           + $"A build of the current source (a successful compile, or a bundle for framework "
+           + $"{NodeTypeCompilationHelpers.FrameworkVersion}) lifts it (Systemorph/Memex#668)."
+           + (string.IsNullOrEmpty(gateReason) ? "" : $" Gate: {gateReason}");
+
     /// <summary>The incompatible-awaiting-bundle sentence for a refused build.</summary>
     public static string IncompatibleNotice(NodeTypeDefinition def, string? gateReason = null)
         => $"Incompatible build, awaiting bundle: the adopted build is module version "
@@ -133,15 +208,30 @@ public static class BuildDeliveryHold
     /// because a build for the current source was adopted or compiled. Pure, so the three
     /// writers that can make the transition emit exactly once each, on the transition itself.
     /// </summary>
-    public static DeliveryEvent? EventOf(NodeTypeDefinition? before, NodeTypeDefinition after)
+    /// <param name="before">The record before the write (null when there was none).</param>
+    /// <param name="after">The record the write produced.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound (Systemorph/Memex#668) the
+    /// refusal was judged against: a refusal ON THE BOUND is <see cref="DeliveryEvent.HeldTooFarBehind"/>,
+    /// never <see cref="DeliveryEvent.HeldIncompatible"/> — the two name different causes.</param>
+    public static DeliveryEvent? EventOf(
+        NodeTypeDefinition? before,
+        NodeTypeDefinition after,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
     {
         ArgumentNullException.ThrowIfNull(after);
         var wasHeld = IsHeld(before);
         var isHeld = IsHeld(after);
-        if (!wasHeld && isHeld)
-            return after.BuildProvenance is BuildProvenance.AdoptionRefused
-                ? DeliveryEvent.HeldIncompatible
-                : DeliveryEvent.HeldStale;
+        // Entering a hold, OR moving between the two hold kinds: a serving StaleAdopted build that
+        // the source outruns past the bound becomes AdoptionRefused and STOPS running — both are
+        // "held", but a person must hear that the type stopped serving (and, the other way, that a
+        // lifted bound let it serve again) (Memex#668, Copilot review).
+        if (isHeld && (!wasHeld || before!.BuildProvenance != after.BuildProvenance))
+            return after.BuildProvenance is not BuildProvenance.AdoptionRefused
+                ? DeliveryEvent.HeldStale
+                : StaleAdoptionBound.Exceeds(
+                    after.AdoptedModuleVersion, after.CurrentModuleVersion, maxMinorVersionsBehind)
+                    ? DeliveryEvent.HeldTooFarBehind
+                    : DeliveryEvent.HeldIncompatible;
         if (wasHeld && !isHeld
             && after.BuildProvenance is BuildProvenance.AdoptedVerified or BuildProvenance.Compiled
             && after.CompilationStatus is CompilationStatus.Ok)
@@ -166,6 +256,10 @@ public static class BuildDeliveryHold
 
         /// <summary>The current source was compiled locally — the hold is lifted.</summary>
         Compiled = 4,
+
+        /// <summary>The serving build is same-MAJOR but further behind its source than the
+        /// stale-adoption bound (Systemorph/Memex#668); the build is refused.</summary>
+        HeldTooFarBehind = 5,
     }
 
     /// <summary>
@@ -177,8 +271,16 @@ public static class BuildDeliveryHold
     /// <see cref="ICompileFailureNotifier"/> (the graph/compiler split) — a generic System
     /// notification; the name is the seam's, the content is this event's.
     /// </summary>
+    /// <param name="hub">The hub whose notifier delivers.</param>
+    /// <param name="nodeTypePath">The NodeType the event is about.</param>
+    /// <param name="after">The record the transition produced.</param>
+    /// <param name="evt">The event (<see cref="EventOf"/>).</param>
+    /// <param name="logger">Where a failed delivery is logged.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound, for a
+    /// <see cref="DeliveryEvent.HeldTooFarBehind"/> body when the record carries no persisted notice.</param>
     public static void Notify(
-        IMessageHub hub, string nodeTypePath, NodeTypeDefinition after, DeliveryEvent evt, ILogger? logger)
+        IMessageHub hub, string nodeTypePath, NodeTypeDefinition after, DeliveryEvent evt, ILogger? logger,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
     {
         var notifier = hub.ServiceProvider.GetService<ICompileFailureNotifier>();
         if (notifier is null)
@@ -196,6 +298,11 @@ public static class BuildDeliveryHold
             : nodeTypePath;
         var package = NodeTypeCompilationHelpers.PartitionOf(nodeTypePath);
         var adopted = ModuleVersionCompatibility.Display(after.AdoptedModuleVersion);
+        var current = ModuleVersionCompatibility.Display(after.CurrentModuleVersion);
+        var behind = ModuleVersionCompatibility.MinorVersionsBehind(
+            after.AdoptedModuleVersion, after.CurrentModuleVersion) is { } measured
+            ? measured.ToString(CultureInfo.InvariantCulture)
+            : "?";
         var fingerprint = Short(after.CurrentSourceFingerprint);
         var framework = NodeTypeCompilationHelpers.FrameworkVersion;
         // 🚨 The two HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice are declared as the
@@ -227,6 +334,26 @@ public static class BuildDeliveryHold
                     + $"{fingerprint}); the build it was serving from is retired.",
                     "notification.delivery.compiled.body",
                     ("nodeTypePath", nodeTypePath), ("fingerprint", fingerprint))),
+            // Memex#668 — the refusal on the BOUND: both versions, the distance and the configured
+            // bound, never the MAJOR-bump sentence. Unlike the two hold bodies below, this one is
+            // COMPOSED here from the record's fields (the record's persisted TooFarBehindNotice
+            // stays the operator/log wording), so it is keyed: a German viewer reads it in German.
+            DeliveryEvent.HeldTooFarBehind => (
+                LocalizableText.Keyed(
+                    $"'{typeName}' is not run: its build is too far behind its source",
+                    "notification.delivery.heldTooFarBehind.title", ("typeName", typeName)),
+                LocalizableText.Keyed(
+                    $"'{nodeTypePath}' is not run: its build (module version {adopted}) is "
+                    + $"{behind} minor version(s) behind the current source (module version "
+                    + $"{current}, fingerprint {fingerprint}), past the stale-adoption bound of "
+                    + $"{maxMinorVersionsBehind} ({StaleAdoptionBound.ConfigKey}). A build of the "
+                    + $"current source (a successful compile, or a bundle for framework {framework}) "
+                    + "lifts it.",
+                    "notification.delivery.heldTooFarBehind.body",
+                    ("nodeTypePath", nodeTypePath), ("adopted", adopted), ("behind", behind),
+                    ("current", current), ("fingerprint", fingerprint),
+                    ("bound", maxMinorVersionsBehind), ("configKey", StaleAdoptionBound.ConfigKey),
+                    ("framework", framework))),
             DeliveryEvent.HeldIncompatible => (
                 LocalizableText.Keyed(
                     $"'{typeName}' is awaiting a bundle (incompatible build)",

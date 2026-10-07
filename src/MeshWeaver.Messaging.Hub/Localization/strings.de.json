@@ -1751,6 +1751,8 @@
   "notification.delivery.compiled.title": "'{typeName}' aus der aktuellen Quelle kompiliert",
   "notification.delivery.compiled.body": "'{nodeTypePath}' wurde aus der aktuellen Quelle kompiliert (Fingerabdruck {fingerprint}); der bisher ausgelieferte Build ist stillgelegt.",
   "notification.delivery.heldIncompatible.title": "'{typeName}' wartet auf ein Bundle (inkompatibler Build)",
+  "notification.delivery.heldTooFarBehind.title": "'{typeName}' wird nicht ausgeführt: der Build liegt zu weit hinter seiner Quelle",
+  "notification.delivery.heldTooFarBehind.body": "'{nodeTypePath}' wird nicht ausgeführt: sein Build (Modulversion {adopted}) liegt {behind} Minor-Version(en) hinter der aktuellen Quelle (Modulversion {current}, Fingerabdruck {fingerprint}) und damit jenseits der Grenze für veraltete Builds von {bound} ({configKey}). Ein Build der aktuellen Quelle (eine erfolgreiche Kompilierung oder ein Bundle für Framework {framework}) hebt dies auf.",
   "notification.delivery.heldStale.title": "'{typeName}' liefert seinen letzten Build aus; die Quelle ist weitergezogen",
   "layout.areaNotFound.title": "Dieser Abschnitt konnte nicht angezeigt werden.",
   "layout.areaNotFound.pageUnaffected": "Der Rest dieser Seite ist davon nicht betroffen.",

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Memex.Portal.Shared.SelfUpdate;
@@ -652,7 +653,7 @@ public class VersionSelectTest
     // cut-over day holds BOTH notations, the withdrawn 3.1.0-ci slip, the moving pointers, per-RID
     // images and an unverified edge build of the new notation.
 
-    private static readonly string[] CutOverRegistry =
+    private static readonly ImmutableArray<string> CutOverRegistry =
     [
         "3.0.0-ci.9998", "3.0.0-ci.9999", "3.1.0-ci.7841", "3.1.10000", "3.1.10001",
         "3.1.10001-linux-x64", "3.1.10002-edge.10002", "3-latest", "3.1-latest", "3.0.0-latest", "main",

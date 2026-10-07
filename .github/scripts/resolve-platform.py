@@ -251,14 +251,33 @@ def match_set_name(text: str | None):
     return None
 
 
+# 🚨 THE LINE ALONE DOES NOT DECIDE THE NOTATION. The withdrawn slip published `3.1.0-ci.7832…7841`
+# under the props line `3.1.0` with the OLD minter, so (line `3.1.0`, run 7841) composed by line
+# alone spells a set that never existed (`3.1.7841`). Every other run on a line at or above the era
+# start comes from the SemVer minter, which moves `PlatformVersion` to 3.1.0 in the same change
+# (cut-over step 4, Doc/Architecture/PlatformVersioning §4) — so the slip's last run is the one
+# boundary that separates the two, and it is EVIDENCE (a published range), not a guess.
+WITHDRAWN_SLIP_LAST_RUN = 7841
+
+
 def compose_set_name(line: str, run_number: int) -> str:
     """The set name a CD run of `run_number` published under the props LINE `line` — the ONE
     composer, so the two notations can never be spelled two ways: `3.0.0` → `3.0.0-ci.<run>`,
-    `3.1.0` → `3.1.<run>`."""
-    if semver_line(line):
+    `3.1.0` → `3.1.<run>`, and the withdrawn slip (`3.1.0`, ≤ 7841) → `3.1.0-ci.<run>`."""
+    if semver_line(line) and run_number > WITHDRAWN_SLIP_LAST_RUN:
         major, minor, _ = line.split(".")
         return f"{major}.{minor}.{run_number}"
     return f"{line}-ci.{run_number}"
+
+
+def canonical_set_name(text: str | None) -> str | None:
+    """A WRITTEN set name in its canonical spelling, keeping the notation it was WRITTEN in — never
+    re-composed from its line: `3.1.0-ci.7841` stays `3.1.0-ci.7841`, the retired `.ci.` separator
+    becomes `-ci.`, `3.1.10000` stays `3.1.10000`. None when the text is no set."""
+    legacy = SET_NAME.fullmatch(text or "")
+    if legacy:
+        return f"{legacy.group(1)}-ci.{legacy.group(2)}"
+    return text if match_set_name(text) else None
 
 
 def notice_set_number(message: str) -> int | None:
@@ -768,7 +787,9 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
             raise ProvenanceUnavailable(
                 f"platform-bake job {job_id} has an incomplete or inconsistent final publication receipt")
         version = release.group(1)
-        receipt = PublicationSource(sha, version, compose_set_name(version, run_number))
+        # The receipt NAMES its release — keep that spelling rather than re-composing it from the
+        # line, which cannot tell the withdrawn slip's `3.1.0-ci.<n>` from `3.1.<n>`.
+        receipt = PublicationSource(sha, version, canonical_set_name(fields["release"]))
         receipts[job_id, run_number] = receipt
         sources.add(receipt)
     # 🚨 ZERO AND TWO ARE DIFFERENT SENTENCES (#4242). This said "successful platform bakes
@@ -1931,7 +1952,7 @@ def parse_freeze(value: str) -> tuple[str, str]:
         return "sha", value
     match = match_set_name(value)
     if match:
-        return "set", compose_set_name(match.group(1), int(match.group(2)))
+        return "set", canonical_set_name(value)
     raise ResolutionError(
         f"the freeze `{value}` is neither a 40-character core commit nor a set name of the shape "
         "`X.Y.Z[-prerelease]-ci.<n>` (also accepting `.ci.<n>`) or, from line 3.1 on, "
@@ -2561,6 +2582,14 @@ def self_test() -> int:
         ("compose: a minor bump keeps the notation", compose_set_name("3.2.0", 10400), "3.2.10400"),
         ("a freeze in the SemVer notation is a set", _freeze("3.1.10000"), ("set", "3.1.10000")),
         ("a freeze in the old notation is unchanged", _freeze("3.0.0.ci.8203"), ("set", "3.0.0-ci.8203")),
+        # The line alone cannot decide the notation: the withdrawn slip is `3.1.0-ci.<n>` on a
+        # SemVer-era line, and re-composing it from (3.1.0, 7841) spells the nonexistent `3.1.7841`.
+        ("a freeze of the withdrawn slip keeps its notation", _freeze("3.1.0-ci.7841"), ("set", "3.1.0-ci.7841")),
+        ("compose: the withdrawn slip's runs keep -ci.<run>", compose_set_name("3.1.0", 7841), "3.1.0-ci.7841"),
+        ("compose: the first run past the slip is SemVer", compose_set_name("3.1.0", 7842), "3.1.7842"),
+        ("canonical: a written SemVer name is kept", canonical_set_name("3.1.10000"), "3.1.10000"),
+        ("canonical: the retired .ci. separator becomes -ci.", canonical_set_name("3.0.0-rc9.ci.7824"), "3.0.0-rc9-ci.7824"),
+        ("canonical: a non-set is None", canonical_set_name("3.1.0"), None),
         ("notice: old notation", notice_set_number("3.0.0-ci.8207 — core aaaaaaaaa (x)"), 8207),
         ("notice: SemVer notation", notice_set_number("3.1.10000 — core aaaaaaaaa (x)"), 10000),
         ("notice: a clean 3.0.0 names no set", notice_set_number("3.0.0 — core aaaaaaaaa"), None),
