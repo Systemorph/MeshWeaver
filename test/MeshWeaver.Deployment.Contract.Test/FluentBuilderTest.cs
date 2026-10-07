@@ -284,6 +284,13 @@ public class FluentBuilderTest
             Assert.Equal("systemorph/memex-migration", ghcr["SelfUpdate__MigrationRepository"]);
             var blankControl = DeploymentPortalConfig.PortalConfig(new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-control" }, options);
             Assert.False(blankControl.ContainsKey("SelfUpdate__MigrationRepository"), "memex-migration beside a host-level repository IS the default");
+            // ...and the image Aspire DEPLOYS as its migration (MemexHostingExtensions.Images calls
+            // MigrationImage) is that same repository — never the portal image a substring replace
+            // left on memex-control.
+            Assert.Equal("meshweaver.azurecr.io/memex-migration:t",
+                DeploymentPortalConfig.MigrationImage(new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-control" }, "t"));
+            Assert.Equal("ghcr.io/systemorph/memex-migration:t",
+                DeploymentPortalConfig.MigrationImage(new DeploymentContent { ImageRepository = "ghcr.io/systemorph/memex-portal-ai" }, "t"));
 
             // Negative control: the default repositories, and no repository at all, render nothing.
             foreach (var quiet in new[] { fleet, new DeploymentContent() })

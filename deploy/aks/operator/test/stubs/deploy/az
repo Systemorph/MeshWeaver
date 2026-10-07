@@ -17,7 +17,8 @@ if [ "${1:-} ${2:-}" = "identity show" ]; then
   shift 2; ident=""
   while [ $# -gt 0 ]; do case "$1" in -n|--name) ident="${2:-}"; shift 2 ;; *) shift ;; esac; done
   if [ -f "$fixture/identity/${ident}.forbidden" ]; then
-    echo "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.ManagedIdentity/userAssignedIdentities/read' (Forbidden)" >&2; exit 1
+    # The REAL CLI's bytes — no "Forbidden" anywhere: hosting::probe must classify this shape itself.
+    echo "ERROR: (AuthorizationFailed) The client 'x' with object id 'y' does not have authorization to perform action 'Microsoft.ManagedIdentity/userAssignedIdentities/read' over scope '/subscriptions/s/resourceGroups/memex-aks-rg' or the scope is invalid. If access was recently granted, please refresh your credentials." >&2; exit 1
   fi
   [ -f "$fixture/identity/$ident" ] || { echo "ERROR: (ResourceNotFound) The Resource 'Microsoft.ManagedIdentity/userAssignedIdentities/${ident}' was not found." >&2; exit 3; }
   cat "$fixture/identity/$ident"; exit 0

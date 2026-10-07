@@ -184,9 +184,9 @@ public static class DeploymentPortalConfig
 
     /// <summary>
     /// The migration image paired with the portal's: the explicit
-    /// <see cref="DeploymentContent.MigrationImageRepository"/>, else the portal repository with
-    /// <c>memex-portal-ai</c>/<c>memex-portal</c> replaced by <c>memex-migration</c>. Same tag,
-    /// always — a migration from a different build lands the schema half-applied.
+    /// <see cref="DeploymentContent.MigrationImageRepository"/>, else <c>memex-migration</c> beside
+    /// the portal repository (<see cref="PairedMigrationRepository"/>, the operator's pairing rule).
+    /// Same tag, always — a migration from a different build lands the schema half-applied.
     /// </summary>
     public static string? MigrationImage(DeploymentContent d, string? resolvedTag)
     {
@@ -194,8 +194,7 @@ public static class DeploymentPortalConfig
         if (tag is null) return null;
         var repository = !string.IsNullOrWhiteSpace(d.MigrationImageRepository)
             ? d.MigrationImageRepository!.Trim()
-            : string.IsNullOrWhiteSpace(d.ImageRepository) ? null
-            : d.ImageRepository!.Trim().Replace("memex-portal-ai", "memex-migration").Replace("memex-portal", "memex-migration");
+            : PairedMigrationRepository(d.ImageRepository);
         return repository is null ? null : $"{repository}:{tag}";
     }
 
@@ -246,21 +245,26 @@ public static class DeploymentPortalConfig
     /// </summary>
     public static string? SelfUpdateMigrationRepository(DeploymentContent d)
     {
-        var path = RepositoryPath(d.MigrationImageRepository) ?? PairedMigrationPath(RepositoryPath(d.ImageRepository));
+        var path = RepositoryPath(d.MigrationImageRepository) ?? RepositoryPath(PairedMigrationRepository(d.ImageRepository));
         return path is null || string.Equals(path, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal) ? null : path;
     }
 
     /// <summary>
-    /// <c>memex-migration</c> beside a portal repository path (<c>systemorph/memex-portal-ai</c> →
-    /// <c>systemorph/memex-migration</c>, <c>memex-control</c> → <c>memex-migration</c>) — the
-    /// operator's pairing rule, never a substring replace (which leaves <c>memex-control</c> naming
-    /// the portal itself). Null for no portal path.
+    /// <c>memex-migration</c> beside a portal repository (<c>ghcr.io/systemorph/memex-portal-ai</c> →
+    /// <c>ghcr.io/systemorph/memex-migration</c>, <c>meshweaver.azurecr.io/memex-control</c> →
+    /// <c>meshweaver.azurecr.io/memex-migration</c>, bare <c>memex-control</c> →
+    /// <c>memex-migration</c>) — the operator's pairing rule (<c>hosting-deploy</c>'s
+    /// <c>migration_image_for</c>), never a substring replace (which leaves <c>memex-control</c>
+    /// naming the portal itself). The ONE derivation behind both <see cref="MigrationImage"/> and
+    /// <see cref="SelfUpdateMigrationRepository"/>, so the image Aspire deploys and the repository
+    /// the self-updater lists cannot disagree. Null for a blank portal repository. Pure.
     /// </summary>
-    private static string? PairedMigrationPath(string? portalPath)
+    public static string? PairedMigrationRepository(string? portalRepository)
     {
-        if (portalPath is null) return null;
-        var slash = portalPath.LastIndexOf('/');
-        return slash < 0 ? DefaultSelfUpdateMigrationRepository : $"{portalPath[..slash]}/{DefaultSelfUpdateMigrationRepository}";
+        var portal = (portalRepository ?? "").Trim();
+        if (portal.Length == 0) return null;
+        var slash = portal.LastIndexOf('/');
+        return slash < 0 ? DefaultSelfUpdateMigrationRepository : $"{portal[..slash]}/{DefaultSelfUpdateMigrationRepository}";
     }
 
     // ───────────────────────────────── modules ─────────────────────────────────────────────────
