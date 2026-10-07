@@ -316,17 +316,17 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// The other side of that control: an ABSOLUTE authored image is another host's business, fetchable
-    /// or not on its own terms, and nothing here can make it worse — so it is kept, exactly as a public
-    /// page keeps it.
+    /// The other side of that control: an ABSOLUTE authored image is declared as the node's PHOTO card
+    /// — the same picture, re-served by the portal at a size unfurlers show (a print master shared as
+    /// is left WhatsApp with an empty frame, 2026-10-07) — exactly as a public page declares it.
     /// </summary>
     [Fact]
-    public async Task AnAbsoluteAuthoredImage_IsKept()
+    public async Task AnAbsoluteAuthoredImage_IsSharedAsThePhotoCard()
     {
         var card = await Preview("Offers/Offsite");
 
         Assert.NotNull(card);
-        Assert.Equal("https://cdn.example.org/offer.png", card.Image);
+        Assert.Equal("/api/og/Offers/Offsite.jpg", card.Image);
     }
 
     /// <summary>

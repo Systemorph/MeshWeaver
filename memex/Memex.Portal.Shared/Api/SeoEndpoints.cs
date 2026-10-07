@@ -296,6 +296,8 @@ public static class SeoEndpoints
             CancellationToken ct) =>
         {
             var nodePath = (path ?? "").Trim('/');
+            if (nodePath.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+                return PhotoCardResult(hub, renderer, http, nodePath[..^4], ct);
             if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 nodePath = nodePath[..^4];
             if (nodePath.Length == 0)
@@ -416,6 +418,27 @@ public static class SeoEndpoints
         return Results.File(png, "image/png");
     }
 
+    /// <summary>
+    /// <c>/api/og/{node}.jpg</c> — the node's own authored picture as a 1200×630 JPEG
+    /// (<see cref="SharePhoto"/>), behind the SAME one predicate as the drawn card. A node with no
+    /// external picture, or one whose picture cannot be fetched or decoded, gets its drawn card
+    /// instead — a share always carries a picture that loads, never a broken one.
+    /// </summary>
+    private static Task<IResult> PhotoCardResult(
+        IMessageHub hub, OgCardRenderer renderer, HttpContext http, string nodePath, CancellationToken ct) =>
+        SeoResolver.ResolveShareableNode(hub, nodePath)
+            .SelectMany(shareable =>
+                shareable is not { } cleared
+                    ? Observable.Return(Results.NotFound())
+                    : SeoResolver.ExtractImage(cleared.Node) is { } source && SeoResolver.IsExternalImage(source)
+                        ? SharePhoto.Fetch(hub, source).Select(photo => photo is null
+                            ? CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable)
+                            : ImageResult(http, photo, "image/jpeg", cleared.AnonymousReadable))
+                        : Observable.Return(CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable)))
+            .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
+            .FirstAsync()
+            .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}.jpg"), ct)!;
+
     private static IResult CardResult(
         HttpContext http, OgCardRenderer renderer, MeshNode node, bool sharedCacheable) =>
         PngResult(http, renderer.Render(CardContent(node)), sharedCacheable);
@@ -455,15 +478,18 @@ public static class SeoEndpoints
     private static string? TypeLeaf(string? nodeType) =>
         string.IsNullOrWhiteSpace(nodeType) ? null : nodeType[(nodeType.LastIndexOf('/') + 1)..];
 
-    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true)
+    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true) =>
+        ImageResult(http, png, "image/png", sharedCacheable);
+
+    private static IResult ImageResult(HttpContext http, byte[] bytes, string contentType, bool sharedCacheable)
     {
-        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
+        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes))}\"";
         if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
         http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
-        return Results.File(png, "image/png");
+        return Results.File(bytes, contentType);
     }
 
     /// <summary>
