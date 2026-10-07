@@ -14,7 +14,9 @@ icon: /static/NodeTypeIcons/box.svg
 # Declared, Not Derived
 
 Policy [`declared-not-derived`](../PolicyNotProse). The imperative form is a shared rule block in
-every repository's `AGENTS.md`; this page carries the reasoning and the review checklist.
+`AGENTS.md` — carried by this repository now, and by every repository of the fleet once the spoke
+copies land (the register row names what is owed); this page carries the reasoning and the review
+checklist.
 
 ## The rule
 
