@@ -346,7 +346,7 @@ public partial class MeshOperations
                     var list = change.Items
                         .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Icon })
                         .ToImmutableList();
-                    return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
+                    return ToolAnswerJson.Serialize(list, hub.JsonSerializerOptions);
                 })
                 .Catch((Exception ex) =>
                 {
@@ -379,7 +379,7 @@ public partial class MeshOperations
             // perfectly good answer with an error.
             return FetchNode(documentPath, timeoutSeconds: 3)
                 .SelectMany(doc => doc.Node is not null
-                    ? Observable.Return(JsonSerializer.Serialize(doc.Node, hub.JsonSerializerOptions))
+                    ? Observable.Return(ToolAnswerJson.Serialize(doc.Node, hub.JsonSerializerOptions))
                     : ReadNodeOrUnified(resolvedPath));
         }
 
@@ -435,10 +435,10 @@ public partial class MeshOperations
                     return UserPiiRedaction.RedactEmailForReader(hub, node, caller)
                         .SelectMany(readable => LookupCompilationError(readable)
                             .Select(compileError => compileError != null
-                                ? JsonSerializer.Serialize(
+                                ? ToolAnswerJson.Serialize(
                                     new { node = readable, compilationError = compileError },
                                     hub.JsonSerializerOptions)
-                                : JsonSerializer.Serialize(readable, hub.JsonSerializerOptions)));
+                                : ToolAnswerJson.Serialize(readable, hub.JsonSerializerOptions)));
                 });
             })
             .Catch((Exception ex) =>
@@ -542,14 +542,14 @@ public partial class MeshOperations
                     .Select(c => c.Items.FirstOrDefault())
                     .Select(qn => qn is null
                         ? $"Not found: {resolvedPath}"
-                        : JsonSerializer.Serialize(
+                        : ToolAnswerJson.Serialize(
                             new { node = qn, compilationError = compileError },
                             hub.JsonSerializerOptions))
                     .Catch((Exception ex) =>
                     {
                         logger.LogWarning(ex,
                             "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
-                        return Observable.Return(JsonSerializer.Serialize(
+                        return Observable.Return(ToolAnswerJson.Serialize(
                             new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
                             hub.JsonSerializerOptions));
                     });
@@ -793,7 +793,7 @@ public partial class MeshOperations
                 ["html"] = result.Html,
                 ["codeSubmissions"] = submissions,
             };
-            return Observable.Return(payload.ToJsonString());
+            return Observable.Return(ToolAnswerJson.Write(payload));
         })
         .Catch((Exception ex) =>
         {
@@ -865,7 +865,7 @@ public partial class MeshOperations
                     ? UnavailableMessage(fullPath, outcome.UnavailableReason!)
                     : outcome.Node is null
                         ? result
-                        : JsonSerializer.Serialize(outcome.Node, hub.JsonSerializerOptions));
+                        : ToolAnswerJson.Serialize(outcome.Node, hub.JsonSerializerOptions));
             });
 
     /// <summary>
@@ -1352,7 +1352,7 @@ public partial class MeshOperations
                                     if (responseMsg.Error != null)
                                         observer.OnNext($"Error: {responseMsg.Error}");
                                     else
-                                        observer.OnNext(JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
+                                        observer.OnNext(ToolAnswerJson.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
                                 }
                                 else
                                 {
@@ -1497,7 +1497,7 @@ public partial class MeshOperations
                 if (truncated)
                     payload["hint"] =
                         "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1569,7 +1569,7 @@ public partial class MeshOperations
                     ["count"] = plugins.Count,
                     ["plugins"] = JsonSerializer.SerializeToNode(plugins, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1613,7 +1613,7 @@ public partial class MeshOperations
                     ["nodeCount"] = all.Count,
                     ["nodes"] = JsonSerializer.SerializeToNode(all, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1676,7 +1676,7 @@ public partial class MeshOperations
                     ["count"] = items.Count,
                     ["results"] = JsonSerializer.SerializeToNode(items, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1724,12 +1724,12 @@ public partial class MeshOperations
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Catch((Exception _) => Observable.Return<string?>(null))
-                    .Select(redirect => new JsonObject
+                    .Select(redirect => ToolAnswerJson.Write(new JsonObject
                     {
                         ["prefix"] = resolution.Prefix,
                         ["remainder"] = resolution.Remainder,
                         ["redirectOnDenied"] = redirect,
-                    }.ToJsonString()))
+                    })))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Resolve failed for {Path}", resolvedPath);
@@ -1970,7 +1970,7 @@ public partial class MeshOperations
     /// one massive minified line.
     /// </summary>
     private string SerialisePretty(MeshNode node) =>
-        JsonSerializer.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
+        ToolAnswerJson.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
 
     /// <summary>
     /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
@@ -2844,7 +2844,7 @@ public partial class MeshOperations
                                     // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
                                     hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
 
-                                    return JsonSerializer.Serialize(new
+                                    return ToolAnswerJson.Serialize(new
                                     {
                                         status = "Uploaded",
                                         path = $"{resolution.Prefix}/{collectionName}/{filePath}",
@@ -2948,7 +2948,7 @@ public partial class MeshOperations
                                     _ => new { kind = "unknown", name = item.Name, path = item.Path },
                                 })
                                 .ToArray()
-                                .Select(items => JsonSerializer.Serialize(new
+                                .Select(items => ToolAnswerJson.Serialize(new
                                 {
                                     collection = qualifiedCollectionName,
                                     path = dir,
@@ -3280,7 +3280,7 @@ public partial class MeshOperations
     /// </para>
     /// </summary>
     private static string GenerateSchema(IMessageHub probeHub, Type contentType)
-        => probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType).ToJsonString();
+        => ToolAnswerJson.Write(probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType));
 
     /// <summary>
     /// Deserializes <paramref name="meshNode"/>'s content into <paramref name="contentType"/> and
@@ -3659,7 +3659,7 @@ public partial class MeshOperations
         return permissions
             .Zip(globalAdmin, (granted, isGlobalAdmin) => granted is not { } g || isGlobalAdmin is not { } admin
                 ? $"Unavailable: access at '{resolvedPath}' reached no verdict (the permission fold completed without an answer) — ask again."
-                : JsonSerializer.Serialize(new
+                : ToolAnswerJson.Serialize(new
             {
                 userId = identified ? userId : null,
                 name = identified ? ctx?.Name : null,
@@ -3771,14 +3771,14 @@ public partial class MeshOperations
                         // Explicit JsonObject so the count keys are ALWAYS present — a 0 count (e.g.
                         // an access-denied import that wrote nothing) would otherwise be dropped by
                         // the hub serializer's WhenWritingDefault, breaking consumers that read them.
-                        .Select(uploadedCount => new JsonObject
+                        .Select(uploadedCount => ToolAnswerJson.Write(new JsonObject
                         {
                             ["status"] = "Imported",
                             ["exportRoot"] = root,
                             ["targetNamespace"] = target,
                             ["nodesImported"] = createdCount,
                             ["filesImported"] = uploadedCount,
-                        }.ToJsonString());
+                        }));
                 });
             })
             .Catch((Exception ex) =>
@@ -4051,13 +4051,13 @@ public partial class MeshOperations
         logger.LogInformation("Recycle called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -4129,12 +4129,12 @@ public partial class MeshOperations
                         "Recycle: the permission fold for {Path} reached NO verdict — reporting it "
                         + "as retryable, not as a denial: {Reason}",
                         resolvedPath, outcome.UndeterminedReason);
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Error", path = resolvedPath, message = RecycleUndeterminedMessage },
                         hub.JsonSerializerOptions));
                 }
 
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                     hub.JsonSerializerOptions));
             });
@@ -4162,7 +4162,7 @@ public partial class MeshOperations
     {
         logger.LogInformation("ReloadModule called with module={Module}", module ?? "(all)");
         if (string.IsNullOrWhiteSpace(reason))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
                 hub.JsonSerializerOptions));
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -4178,7 +4178,7 @@ public partial class MeshOperations
                 })
                 : Observable.Return(new ModuleReloadTicket(null,
                     "reloading a module requires a platform admin (an admin on the Admin partition) — it can restart this instance")))
-            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+            .Select(ticket => ToolAnswerJson.Serialize(ticket.Accepted
                     ? new
                     {
                         status = "Requested",
@@ -4213,7 +4213,7 @@ public partial class MeshOperations
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
-        string Error(string message) => JsonSerializer.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
+        string Error(string message) => ToolAnswerJson.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
         IObservable<string> Gate(Func<IObservable<string>> act) =>
             hub.IsGlobalAdmin().Take(1).Catch((Exception _) => Observable.Return(false))
                 .SelectMany(admin => admin
@@ -4252,7 +4252,7 @@ public partial class MeshOperations
             .Where(until)
             .Take(1)
             .Timeout(UninstallPreviewBudget)
-            .Select(r => JsonSerializer.Serialize(new
+            .Select(r => ToolAnswerJson.Serialize(new
             {
                 status = r.Status,
                 path,
@@ -4272,7 +4272,7 @@ public partial class MeshOperations
                     _ => r.Failure ?? r.Status,
                 },
             }, hub.JsonSerializerOptions))
-            .Catch((Exception ex) => Observable.Return(JsonSerializer.Serialize(
+            .Catch((Exception ex) => Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Pending", path, message = $"the request is still running ({ex.Message}) — read {path}" },
                 hub.JsonSerializerOptions)));
     }
@@ -4296,7 +4296,7 @@ public partial class MeshOperations
     {
         logger.LogInformation("RebootInstance called (wedged={Wedged})", wedged);
         if (string.IsNullOrWhiteSpace(reason))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
                 hub.JsonSerializerOptions));
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -4313,7 +4313,7 @@ public partial class MeshOperations
                 })
                 : Observable.Return(new InstanceRebootTicket(null,
                     "rebooting an instance requires a platform admin (an admin on the Admin partition) — it restarts this instance")))
-            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+            .Select(ticket => ToolAnswerJson.Serialize(ticket.Accepted
                     ? new
                     {
                         status = "Requested",
@@ -4634,7 +4634,7 @@ public partial class MeshOperations
                             + "hub is NOT disposed — a caller who may not write this node may not "
                             + "recycle it either. Nothing was changed.",
                             resolvedPath);
-                        return Observable.Return<string?>(JsonSerializer.Serialize(
+                        return Observable.Return<string?>(ToolAnswerJson.Serialize(
                             new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                             hub.JsonSerializerOptions));
                     }
@@ -4703,7 +4703,7 @@ public partial class MeshOperations
                             Reason = RecycleReason(resolvedPath, reason),
                         },
                         o => o.WithTarget(new Address(resolvedPath)));
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Recycled",
@@ -4716,7 +4716,7 @@ public partial class MeshOperations
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", path = resolvedPath, message = ex.Message },
                 hub.JsonSerializerOptions));
         }
@@ -4730,7 +4730,7 @@ public partial class MeshOperations
         logger.LogInformation("GetDiagnostics called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -4746,7 +4746,7 @@ public partial class MeshOperations
                 // verdict must say so — the "Unknown / Not found" reply below would otherwise
                 // point the caller at the node's existence instead of at the degradation (#974).
                 if (outcome.IsUnavailable)
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Unavailable",
@@ -4763,7 +4763,7 @@ public partial class MeshOperations
                 var nodeTypePath = isNodeTypeDef ? node!.Path : node?.NodeType;
 
                 if (string.IsNullOrEmpty(nodeTypePath))
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Unknown", message = $"Not found: {resolvedPath}" },
                         hub.JsonSerializerOptions));
 
@@ -4837,7 +4837,7 @@ public partial class MeshOperations
                                 // type have come from" is exactly what the reader is asking.
                                 ResolveContentType(nodeTypePath));
                         return WithContentType(
-                            JsonSerializer.Serialize(
+                            ToolAnswerJson.Serialize(
                                 new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
                                 hub.JsonSerializerOptions),
                             ContentTypeBlock(ResolveContentType(nodeTypePath)),
@@ -4960,13 +4960,13 @@ public partial class MeshOperations
         logger.LogInformation("Compile called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -5010,12 +5010,12 @@ public partial class MeshOperations
                         "Compile: the permission fold for {Path} reached NO verdict — reporting it "
                         + "as retryable, not as a denial: {Reason}",
                         resolvedPath, outcome.UndeterminedReason);
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Error", path = resolvedPath, message = CompileUndeterminedMessage },
                         hub.JsonSerializerOptions));
                 }
 
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = CompileDeniedMessage },
                     hub.JsonSerializerOptions));
             });
@@ -5027,7 +5027,7 @@ public partial class MeshOperations
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Compile: workspace unavailable for {Path}", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = ex.Message },
                     hub.JsonSerializerOptions));
             }
@@ -5106,7 +5106,7 @@ public partial class MeshOperations
                     catch (Exception ex)
                     {
                         logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
-                        return Observable.Return(JsonSerializer.Serialize(
+                        return Observable.Return(ToolAnswerJson.Serialize(
                             new { status = "Error", path = resolvedPath, message = ex.Message },
                             hub.JsonSerializerOptions));
                     }
@@ -5135,7 +5135,7 @@ public partial class MeshOperations
                             var status = ReadCompilationStatusFromNode(n);
                             var error = ReadCompilationError(n);
                             var activityPath = ReadActivityPath(n);
-                            return JsonSerializer.Serialize(
+                            return ToolAnswerJson.Serialize(
                                 new
                                 {
                                     status = status?.ToString() ?? "Unknown",
@@ -5172,7 +5172,7 @@ public partial class MeshOperations
                                 .Take(1)
                                 .Timeout(TimeSpan.FromSeconds(5))
                                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-                                .Select(now => JsonSerializer.Serialize(
+                                .Select(now => ToolAnswerJson.Serialize(
                                     new
                                     {
                                         status = (ReadCompilationStatusFromNode(now) ?? CompilationStatus.Pending)
@@ -5444,7 +5444,7 @@ public partial class MeshOperations
         string? activityPath,
         DateTimeOffset? startedAt,
         JsonSerializerOptions options)
-        => JsonSerializer.Serialize(
+        => ToolAnswerJson.Serialize(
             new
             {
                 status = "Compiling",
@@ -5587,7 +5587,7 @@ public partial class MeshOperations
         if (node is null)
             return json;
         node["contentType"] = contentTypeBlock;
-        return node.ToJsonString(options);
+        return ToolAnswerJson.Write(node, options);
     }
 
     private static string FormatDiagnosticsCore(
@@ -5606,7 +5606,7 @@ public partial class MeshOperations
                 var elapsedMs = startedAt is null
                     ? (long?)null
                     : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Compiling",
@@ -5618,7 +5618,7 @@ public partial class MeshOperations
                     options);
             }
             case CompilationStatus.Error:
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Error",
@@ -5641,7 +5641,7 @@ public partial class MeshOperations
                 // So the reply now says exactly what it knows (the compile succeeded), NAMES the
                 // build it is about (mvid), and points at the one check that is actually about the
                 // served bytes. Do not restore the "is loaded" clause.
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Ok",
@@ -5665,7 +5665,7 @@ public partial class MeshOperations
                 // 🚨 Must never read as a compile failure: `error` here describes why the
                 // state could not be DETERMINED, not what is wrong with the source. An
                 // agent that confuses the two starts "fixing" code that compiles fine.
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Unavailable",
@@ -5683,7 +5683,7 @@ public partial class MeshOperations
                 // describes a build this process cannot LOAD AT ALL. Never "Ok" — the compile
                 // did succeed, for somebody else — and never "Error", which would send the
                 // reader to correct source code that is fine (the #641 mistake).
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Foreign",
@@ -5702,7 +5702,7 @@ public partial class MeshOperations
                     options);
             case CompilationStatus.Unknown:
             default:
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Unknown",
@@ -5745,13 +5745,13 @@ public partial class MeshOperations
     {
         logger.LogInformation("ExecuteScript called with path={Path}", path);
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrEmpty(resolvedPath.Split('/', 2)[0]))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new
                 {
                     status = "Error",
@@ -5868,7 +5868,7 @@ public partial class MeshOperations
         logger.LogWarning(
             "ExecuteScript refused for {Path} ({ErrorType}): {Error} No Activity node was created.",
             resolvedPath, errorType, message);
-        return JsonSerializer.Serialize(
+        return ToolAnswerJson.Serialize(
             new { status = "Error", path = resolvedPath, errorType, message },
             hub.JsonSerializerOptions);
     }
@@ -5901,7 +5901,7 @@ public partial class MeshOperations
                     logger.LogWarning(
                         "ExecuteScript dispatch refused for {Path}: {Error}",
                         resolvedPath, response.Error);
-                    return JsonSerializer.Serialize(
+                    return ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Error",
@@ -5923,7 +5923,7 @@ public partial class MeshOperations
                 // Activity, never a locally reconstructed guess.
                 var activityPath = response.ActivityLog;
                 if (string.IsNullOrEmpty(activityPath))
-                    return JsonSerializer.Serialize(
+                    return ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Error",
@@ -5941,7 +5941,7 @@ public partial class MeshOperations
                         },
                         hub.JsonSerializerOptions);
 
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Dispatched",
@@ -5960,7 +5960,7 @@ public partial class MeshOperations
                 // STACK to the logger, TYPE + message + detail to the caller — a caller
                 // that cannot tell "pending" from "dropped" is the defect this fixes.
                 logger.LogError(ex, "ExecuteScript dispatch failed for {Path}", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Error",
