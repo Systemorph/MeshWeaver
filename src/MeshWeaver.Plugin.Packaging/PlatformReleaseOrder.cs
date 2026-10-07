@@ -52,6 +52,22 @@ public static class PlatformReleaseOrder
     private static readonly string[] ChannelLabels = ["ci", "edge"];
 
     /// <summary>
+    /// 🚨 <b>The first line of the SemVer notation</b> — policy <c>platform-semver-versioning</c>
+    /// (<c>Doc/Architecture/PlatformVersioning</c>). From this <c>major.minor</c> on, a continuous
+    /// build is published as a PLAIN SemVer version <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>
+    /// (<c>3.1.10050</c>): no pre-release label, and the PATCH is the same monotonic CD run number
+    /// the <c>-ci.&lt;run&gt;</c> suffix carried before it. Below it a clean version (<c>3.0.0</c>)
+    /// is still a PROMOTION with no run number of its own, exactly as it always was.
+    ///
+    /// <para>The boundary is a declared constant, never inferred from "the patch looks big": a
+    /// version is read as a build of the new notation only when its line is at or above this one,
+    /// so no tag published under the old notation changes meaning — <c>3.0.0</c>, <c>3.0.0-rc8</c>
+    /// and the withdrawn slip <c>3.1.0-ci.7841</c> (whose <c>ci</c> label still decides) read
+    /// exactly as before.</para>
+    /// </summary>
+    public static (int Major, int Minor) SemVerEraStart { get; } = (3, 1);
+
+    /// <summary>
     /// The CD run number <paramref name="version"/> was published by — its SEALED-PUBLICATION
     /// LINEAGE — or <c>null</c> for a version that carries none.
     ///
@@ -67,6 +83,10 @@ public static class PlatformReleaseOrder
     /// <item><c>3.0.0</c> → <c>null</c> — an official release is a PROMOTION, a retag of one already
     /// sealed continuous set, so its lineage lives on the sibling tag it was cut from and cannot be
     /// read off the tag at all.</item>
+    /// <item><c>3.1.10050</c> → <c>10050</c> — the SemVer notation (<see cref="SemVerEraStart"/>,
+    /// policy <c>platform-semver-versioning</c>): the run number is the PATCH, so the old and the new
+    /// notation share ONE lineage and interleave by publication order (<c>3.0.0-ci.9999</c> &lt;
+    /// <c>3.1.10000</c>).</item>
     /// </list>
     /// </summary>
     public static long? BuildOrdinal(string? version)
@@ -80,7 +100,50 @@ public static class PlatformReleaseOrder
                     preRelease[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
                 return ordinal;
 
-        return null;
+        // The SemVer notation (policy `platform-semver-versioning`): the run number IS the patch.
+        // Read only AFTER the channel-label loop, so a `-ci.<n>` / `-edge.<n>` suffix still decides
+        // wherever one is present — the withdrawn `3.1.0-ci.7841` keeps its 7841.
+        return SemVerBuildPatch(version);
+    }
+
+    /// <summary>
+    /// True when <paramref name="version"/> is a build of the SemVer notation — a plain
+    /// <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c> on a line at or above
+    /// <see cref="SemVerEraStart"/>, optionally carrying the bare <c>edge</c> label an unverified
+    /// build is marked with (<c>3.1.10050-edge</c>). Its <see cref="BuildOrdinal"/> is the patch.
+    ///
+    /// <list type="bullet">
+    /// <item><c>3.1.10050</c> → true (ordinal 10050)</item>
+    /// <item><c>3.0.0</c>, <c>3.1.0</c>, <c>4.0.0</c> → false — a zero patch is a floor or a
+    /// release, never a CD run</item>
+    /// <item><c>3.0.0-ci.9999</c>, <c>3.1.0-ci.7841</c>, <c>3.1.0.5</c>, <c>2.5.3</c> → false</item>
+    /// </list>
+    /// </summary>
+    public static bool IsSemVerBuild(string? version) => SemVerBuildPatch(version) is not null;
+
+    private static long? SemVerBuildPatch(string? version)
+    {
+        if (!TrySplit(version, out var core, out var preRelease))
+            return null;
+        if (preRelease.Length > 1
+            || (preRelease.Length == 1 && !string.Equals(preRelease[0], "edge", StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        var parts = core.Split('.');
+        if (parts.Length != 3)
+            return null;
+        var major = long.Parse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture);
+        var minor = long.Parse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture);
+        if (major < SemVerEraStart.Major || (major == SemVerEraStart.Major && minor < SemVerEraStart.Minor))
+            return null;
+
+        // 🚨 A ZERO patch is NOT a build of the notation: `3.1.0`, `4.0.0`, `999.0.0` are what a
+        // declared FLOOR ("needs the 3.1 line") and a deliberately cut release look like, and they
+        // must keep being compared by their numeric core. A CD run number is never 0; the local
+        // source-build stamp of the new notation is `<major>.<minor>.0-ci.0` (Directory.Build.props),
+        // which the channel-label loop above already reads as ordinal 0.
+        var patch = long.Parse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture);
+        return patch > 0 ? patch : null;
     }
 
     /// <summary>
