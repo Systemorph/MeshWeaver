@@ -103,6 +103,12 @@ Full reference: <!--slot:reference-->[StaleStateUntilRecycle.md](src/MeshWeaver.
 
 If active bleeding genuinely needs a stopgap first, say so EXPLICITLY ("this is a temporary stopgap; the root cause is X; I will fix X") — then fix X. Default to a **deterministic repro** that pins the true cause before changing code. Full reference: memory `feedback_no_bandaids`.
 
+<!-- shared-rule:begin declared-not-derived -->
+## 🚨🚨🚨 ABSOLUTE: DECLARED, NOT DERIVED — what the platform cannot run without lives in config
+
+**Anything the platform cannot run without — language models and providers, agents, queues, policies, credential references — is DECLARED (deployment-record config or committed content), and the declaration is the source of truth.** A boot-time importer or reconciler never deletes a declared item because a module, plugin or registration did not contribute it on this replica: **an absent contributor is NOT a removal.** Pruning removes only what the declaration itself dropped. A change that makes a critical catalogue depend on module wiring alone is a defect — and so is a critical catalogue that exists only as nodes derived at boot: declare it. Measured once already: every EU language model existed only as boot-derived nodes, a module-container change hid the contributing registration, the import pruned them although the deployment record declared them, and the fleet had no reviewer model for about twelve hours. Policy `declared-not-derived`.
+<!-- shared-rule:end declared-not-derived -->
+
 ## 🚨🚨🚨 ABSOLUTE: No hand-woven async/concurrency primitives — the actor model does NOT tolerate `SemaphoreSlim`
 
 **A `SemaphoreSlim` — or any hand-rolled async gate, lock-for-async, or signal (`TaskCompletionSource` as a gate, a `Task.Delay` timeout race, `ManualResetEventSlim`, `lock`-around-`await`) — anywhere in `src/` **or `test/`** is FORBIDDEN, outside the one place sealed inside `IoPool`.** It parks the single-threaded action block (or grain turn), so the message you are waiting on can never be processed → deadlock. **Serialization channels through the hub** (a `Subject<T>` + `.Select(Run).Concat().Subscribe(...)`, or `GetMeshNodeStream(path).Update(...)`), and **concurrency bounding / one-shot init channels through `IIoPool`** — `pool.Run(...)` held in an *instance* `PromiseCache`/`PromiseSlot`, never a `SemaphoreSlim(1,1)` and never a bare `ConcurrentDictionary<key, IObservable<T>>` (a ReplaySubject latches `OnError` and replays one transient fault forever, #1369).
