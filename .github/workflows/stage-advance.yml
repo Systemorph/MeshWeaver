@@ -1,7 +1,8 @@
 # Start core's stage 2 the moment stage 1 turns green for a held pull request head.
 #
-# 🔀 REQUIRED (policy review-then-suites): the stage gate holds every pull request head for its
-# review by default, and this listener is what releases it — a gate without its listener holds
+# 🔀 REQUIRED for a caller that opts in to `review-before-suites: true` (the opt-in; the default,
+# `false`, per policy suites-parallel-with-review, holds nothing): the stage gate then holds every head for its
+# review, and this listener is what releases it — a gate without its listener holds
 # forever. Never delete one without the other.
 #
 # The thin caller of node-repo-stage-advance.yml (the lane carries the rationale). Core's held runs

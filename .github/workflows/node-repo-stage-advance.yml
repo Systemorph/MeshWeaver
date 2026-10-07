@@ -1,7 +1,8 @@
 # The staged pull-request pipeline's EVENT HALF (reusable) — start stage 2 the moment stage 1 turns green.
 #
-# 🔀 Needed by EVERY caller on the default ordering (policy review-then-suites: the stage gate holds
-# for the review). Only a caller that opts out (`review-before-suites: false`) can do without it.
+# 🔀 Needed only by a caller that opts in to `review-before-suites: true` (the stage gate then holds
+# for the review). On the default (policy suites-parallel-with-review) nothing is held, so nothing
+# needs releasing.
 #
 # A held run's stage gate (node-repo-stage-gate.yml) is RED and stays red until something asks again.
 # The doctrine already has the shape for "an event outside the pull_request run changed live state":
