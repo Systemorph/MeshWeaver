@@ -192,10 +192,33 @@ public static class DeploymentPortalConfig
     {
         var tag = Tag(d, resolvedTag);
         if (tag is null) return null;
-        var repository = !string.IsNullOrWhiteSpace(d.MigrationImageRepository)
-            ? d.MigrationImageRepository!.Trim()
-            : PairedMigrationRepository(d.ImageRepository);
+        var repository = EffectiveMigrationRepository(d);
         return repository is null ? null : $"{repository}:{tag}";
+    }
+
+    /// <summary>
+    /// The migration repository a record deploys: the explicit
+    /// <see cref="DeploymentContent.MigrationImageRepository"/> when its last path segment is
+    /// <c>memex-migration</c>, else (blank) <see cref="PairedMigrationRepository"/>. An explicit
+    /// repository with ANY other name THROWS: the AKS operator rolls only a <c>memex-migration</c>
+    /// repository (<c>hosting-deploy</c>'s <c>migration_image_for</c> ignores another name and
+    /// <c>hosting-migrate</c> refuses it), so accepting one would tell the self-updater one
+    /// repository while the release runs another, and the next roll is refused. The ONE source for
+    /// both <see cref="MigrationImage"/> and <see cref="SelfUpdateMigrationRepository"/>. Pure.
+    /// </summary>
+    public static string? EffectiveMigrationRepository(DeploymentContent d)
+    {
+        if (string.IsNullOrWhiteSpace(d.MigrationImageRepository))
+            return PairedMigrationRepository(d.ImageRepository);
+        var repository = d.MigrationImageRepository!.Trim();
+        var name = repository[(repository.LastIndexOf('/') + 1)..];
+        return string.Equals(name, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal)
+            ? repository
+            : throw new InvalidOperationException(
+                $"migrationImageRepository '{repository}' does not name a {DefaultSelfUpdateMigrationRepository} repository. "
+                + "The operator rolls only <registry>/<path>/memex-migration (hosting-deploy migration_image_for, hosting-migrate), "
+                + "so the self-updater would list one repository while the release runs another. Leave it blank to pair it "
+                + "with the portal repository, or name a memex-migration repository.");
     }
 
     /// <summary>The self-updater's portal repository when the image names none (<c>SelfUpdateOptions.PortalRepository</c>).</summary>
@@ -213,13 +236,41 @@ public static class DeploymentPortalConfig
     {
         var repository = (imageRepository ?? "").Trim();
         if (repository.Length == 0) return null;
-        var slash = repository.IndexOf('/');
-        // A first segment is a HOST only when it looks like one (a dot, a port, or localhost) —
-        // the same rule the Docker reference grammar uses; `library/x` is a path, not a host.
-        var first = slash < 0 ? "" : repository[..slash];
-        var hasHost = first.Contains('.') || first.Contains(':') || first == "localhost";
-        var path = hasHost ? repository[(slash + 1)..] : repository;
+        var host = RepositoryHost(repository);
+        var path = host is null ? repository : repository[(host.Length + 1)..];
         return path.Length == 0 ? null : path;
+    }
+
+    /// <summary>
+    /// The registry HOST of an image repository reference (<c>ghcr.io/systemorph/memex-portal-ai</c>
+    /// → <c>ghcr.io</c>), or null when it names none. A first segment is a host only when it looks
+    /// like one (a dot, a port, or <c>localhost</c>) — the Docker reference grammar's rule;
+    /// <c>library/x</c> is a path, not a host. Pure.
+    /// </summary>
+    public static string? RepositoryHost(string? imageRepository)
+    {
+        var repository = (imageRepository ?? "").Trim();
+        var slash = repository.IndexOf('/');
+        if (slash <= 0) return null;
+        var first = repository[..slash];
+        return first.Contains('.') || first.Contains(':') || first == "localhost" ? first : null;
+    }
+
+    /// <summary>The self-updater's registry when the image names none (<c>SelfUpdateOptions.Registry</c>).</summary>
+    public const string DefaultSelfUpdateRegistry = "meshweaver.azurecr.io";
+
+    /// <summary>
+    /// <c>SelfUpdate__Registry</c> for a record: the host of the repository its pods pull, or null
+    /// when it names none or names the image's default. Rendered only under
+    /// <see cref="PortalConfigOptions.SelfUpdateRegistryKey"/> (Aspire): under Helm the chart renders
+    /// the same key from <c>selfUpdate.registry</c>, which the operator derives from the image host.
+    /// Without it an Aspire record on <c>ghcr.io/systemorph/memex-portal-ai</c> renders the repository
+    /// PATH alone and the updater lists it on <c>meshweaver.azurecr.io</c>. Pure.
+    /// </summary>
+    public static string? SelfUpdateRegistry(DeploymentContent d)
+    {
+        var host = RepositoryHost(d.ImageRepository);
+        return host is null || string.Equals(host, DefaultSelfUpdateRegistry, StringComparison.OrdinalIgnoreCase) ? null : host;
     }
 
     /// <summary>
@@ -245,7 +296,7 @@ public static class DeploymentPortalConfig
     /// </summary>
     public static string? SelfUpdateMigrationRepository(DeploymentContent d)
     {
-        var path = RepositoryPath(d.MigrationImageRepository) ?? RepositoryPath(PairedMigrationRepository(d.ImageRepository));
+        var path = RepositoryPath(EffectiveMigrationRepository(d));
         return path is null || string.Equals(path, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal) ? null : path;
     }
 
@@ -678,6 +729,10 @@ public static class DeploymentPortalConfig
         // where the value matters.
         Set("SelfUpdate__PortalRepository", SelfUpdatePortalRepository(d));
         Set("SelfUpdate__MigrationRepository", SelfUpdateMigrationRepository(d));
+        // Those are PATHS on a registry. Under Helm the chart names the registry (selfUpdate.registry,
+        // from the image host); under Aspire nothing else does, so the record's host renders here.
+        if (options.SelfUpdateRegistryKey)
+            Set("SelfUpdate__Registry", SelfUpdateRegistry(d));
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
         // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault
@@ -843,6 +898,12 @@ public static class DeploymentPortalConfig
 /// <param name="IncludeBootEntries">Emit the plugin-catalog wiring (<c>PluginCatalog__*</c>) as portal keys (Aspire: yes; Helm: no — the operator's catalog config file carries the same entries).</param>
 public sealed record PortalConfigOptions(bool DatabaseKeys, string? McpBaseUrl, bool InClusterMcpBaseUrl, bool IncludeBootEntries)
 {
+    /// <summary>
+    /// Emit <c>SelfUpdate__Registry</c> from the record's image host (Aspire: yes; Helm: no — the
+    /// chart renders it from <c>selfUpdate.registry</c>).
+    /// </summary>
+    public bool SelfUpdateRegistryKey { get; init; }
+
     /// <summary>The chart's view: database keys from the record, the in-cluster Service as the MCP base URL, catalog wiring via the catalog file.</summary>
     public static PortalConfigOptions Helm { get; } = new(DatabaseKeys: true, McpBaseUrl: null, InClusterMcpBaseUrl: true, IncludeBootEntries: false);
 
@@ -851,5 +912,5 @@ public sealed record PortalConfigOptions(bool DatabaseKeys, string? McpBaseUrl, 
     /// <paramref name="mcpBaseUrl"/> when given as text, else NOT emitted here — the adapter sets
     /// <c>Mcp__BaseUrl</c> to the endpoint reference Aspire allocates; catalog wiring as env.
     /// </summary>
-    public static PortalConfigOptions Aspire(string? mcpBaseUrl) => new(DatabaseKeys: false, McpBaseUrl: mcpBaseUrl, InClusterMcpBaseUrl: false, IncludeBootEntries: true);
+    public static PortalConfigOptions Aspire(string? mcpBaseUrl) => new(DatabaseKeys: false, McpBaseUrl: mcpBaseUrl, InClusterMcpBaseUrl: false, IncludeBootEntries: true) { SelfUpdateRegistryKey = true };
 }

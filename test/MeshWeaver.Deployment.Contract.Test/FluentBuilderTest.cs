@@ -263,8 +263,18 @@ public class FluentBuilderTest
         var mirrored = new DeploymentContent
         {
             ImageRepository = "cr.example.test:5000/estate/memex-control",
+            MigrationImageRepository = "cr.example.test:5000/estate/ctl/memex-migration",
+        };
+        // A migration repository the AKS operator cannot roll (any name but memex-migration) is
+        // REFUSED by both derivations, never rendered: the updater would list it while the release
+        // runs the paired memex-migration, and the next roll is refused.
+        var unrollable = new DeploymentContent
+        {
+            ImageRepository = "cr.example.test:5000/estate/memex-control",
             MigrationImageRepository = "cr.example.test:5000/estate/memex-migration-ctl",
         };
+        Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.SelfUpdateMigrationRepository(unrollable));
+        Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.MigrationImage(unrollable, "t"));
         var fleet = new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-portal-ai" };
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
         {
@@ -274,7 +284,7 @@ public class FluentBuilderTest
 
             var m = DeploymentPortalConfig.PortalConfig(mirrored, options);
             Assert.Equal("estate/memex-control", m["SelfUpdate__PortalRepository"]);
-            Assert.Equal("estate/memex-migration-ctl", m["SelfUpdate__MigrationRepository"]);
+            Assert.Equal("estate/ctl/memex-migration", m["SelfUpdate__MigrationRepository"]);
 
             // A BLANK migration repository is derived the way the operator pairs it — memex-migration
             // in the portal repository's directory — never the bare default, which on a registry
@@ -282,6 +292,19 @@ public class FluentBuilderTest
             var ghcr = DeploymentPortalConfig.PortalConfig(new DeploymentContent { ImageRepository = "ghcr.io/systemorph/memex-portal-ai" }, options);
             Assert.Equal("systemorph/memex-portal-ai", ghcr["SelfUpdate__PortalRepository"]);
             Assert.Equal("systemorph/memex-migration", ghcr["SelfUpdate__MigrationRepository"]);
+            // The repositories are PATHS; the registry they live on is the other half of the tuple.
+            // Aspire renders it from the record (nothing else would); Helm leaves it to the chart's
+            // selfUpdate.registry, so the same ConfigMap never carries the key twice.
+            if (options.SelfUpdateRegistryKey)
+            {
+                Assert.Equal("ghcr.io", ghcr["SelfUpdate__Registry"]);
+                Assert.Equal("cr.example.test:5000", m["SelfUpdate__Registry"]);
+                Assert.False(c.ContainsKey("SelfUpdate__Registry"), "meshweaver.azurecr.io IS the default");
+            }
+            else
+            {
+                Assert.False(ghcr.ContainsKey("SelfUpdate__Registry"), "Helm: the chart renders selfUpdate.registry");
+            }
             var blankControl = DeploymentPortalConfig.PortalConfig(new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-control" }, options);
             Assert.False(blankControl.ContainsKey("SelfUpdate__MigrationRepository"), "memex-migration beside a host-level repository IS the default");
             // ...and the image Aspire DEPLOYS as its migration (MemexHostingExtensions.Images calls
@@ -298,6 +321,7 @@ public class FluentBuilderTest
                 var q = DeploymentPortalConfig.PortalConfig(quiet, options);
                 Assert.False(q.ContainsKey("SelfUpdate__PortalRepository"), "the image default stands");
                 Assert.False(q.ContainsKey("SelfUpdate__MigrationRepository"), "the image default stands");
+                Assert.False(q.ContainsKey("SelfUpdate__Registry"), "the image default stands");
             }
         }
         Assert.Equal("library/memex-control", DeploymentPortalConfig.RepositoryPath("library/memex-control"));
