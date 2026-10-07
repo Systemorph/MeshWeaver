@@ -649,6 +649,41 @@ public record DeploymentContent
     [Description("Extra portal configuration (Section__Key = value)")]
     public ImmutableSortedDictionary<string, string> ExtraPortalConfig { get; init; }
         = ImmutableSortedDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// The environment's FEATURE FLAGS — rendered verbatim to the chart's <c>.Values.features</c>
+    /// (<c>Features__Flags__&lt;name&gt;__*</c>, Doc/Architecture/EnvironmentComposition): an enabled flag
+    /// installs the packages it names, a declared-but-disabled flag excludes them. Empty renders
+    /// nothing, so the chart default (<c>features: {}</c>) stands.
+    /// <para>🚨 Memex#376: a flag that lived only in an overlay's <c>features:</c> block (memex-cloud's
+    /// <c>fleetops</c> off) had no home on the record, so once every roll re-applies the record (policy
+    /// <c>record-change-applies-itself</c>) it would have been dropped and fleet ops re-enabled. The
+    /// record now expresses it; <c>hosting-deploy</c> refuses any upgrade that would still drop a value
+    /// the live release carries.</para>
+    /// </summary>
+    [Description("Feature flags rendered to the chart's features (name → enabled / description / packages)")]
+    public ImmutableSortedDictionary<string, FeatureFlagSpec> Features { get; init; }
+        = ImmutableSortedDictionary<string, FeatureFlagSpec>.Empty;
+}
+
+/// <summary>
+/// One environment feature flag, in the chart's own shape (<c>features.&lt;name&gt;</c>): whether it is
+/// enabled, a description, and the packages it installs (enabled) or excludes (disabled). A flag that
+/// states neither <see cref="Enabled"/> nor packages renders nothing for that key.
+/// </summary>
+public sealed record FeatureFlagSpec
+{
+    /// <summary>On or off; null leaves the chart's declaration (a shared values file) to decide.</summary>
+    [Description("Whether the flag is on")]
+    public bool? Enabled { get; init; }
+
+    /// <summary>What the flag is for — rendered as <c>Features__Flags__&lt;name&gt;__Description</c>.</summary>
+    [Description("What the flag is for")]
+    public string? Description { get; init; }
+
+    /// <summary>The packages the flag installs when enabled and excludes when disabled (e.g. <c>Plugins/Hosting</c>).</summary>
+    [Description("Packages the flag installs (enabled) or excludes (disabled)")]
+    public ImmutableList<string> Packages { get; init; } = ImmutableList<string>.Empty;
 }
 
 /// <summary>
