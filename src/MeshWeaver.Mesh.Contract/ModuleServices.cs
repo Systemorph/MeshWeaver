@@ -178,9 +178,13 @@ public sealed class ModuleServices : IDisposable
         // that is a module object, or a key that IS a module type (the keyed-by-marker-type shape,
         // `AddKeyedSingleton<IService>(typeof(SomeModuleType), …)`, whose runtime type is CoreLib's
         // RuntimeType and so passes an instance check). A root registration would hold either for the
-        // life of the process, and with it the module's collectible load context.
+        // life of the process, and with it the module's collectible load context. Not only THIS
+        // module's: a key typed from ANOTHER collectible context (a module this one depends on, a
+        // compiled NodeType) would pin that context after it swaps, and its owner's own probe cannot
+        // see a registration it did not make.
         if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key
-            && (IsOwned(key.GetType(), module) || (key is Type keyType && IsOwned(keyType, module))))
+            && (PinsACollectibleContext(key.GetType(), module)
+                || (key is Type keyType && PinsACollectibleContext(keyType, module))))
         {
             var named = key is Type t ? t.Name : key.GetType().Name;
             blocker = $"its service key is a module type ({named}) — the root would hold it";
@@ -235,6 +239,16 @@ public sealed class ModuleServices : IDisposable
         && (ReferenceEquals(AssemblyLoadContext.GetLoadContext(type.Assembly), module)
             || (type.IsGenericType && type.GetGenericArguments().Any(a => IsOwned(a, module)))
             || (type.HasElementType && IsOwned(type.GetElementType(), module)));
+
+    /// <summary>Whether a root registration holding <paramref name="type"/> would pin a collectible load
+    /// context: the type (or a generic argument or element type of it) comes from
+    /// <paramref name="module"/> or from ANY collectible assembly.</summary>
+    private static bool PinsACollectibleContext(Type? type, AssemblyLoadContext module) =>
+        type is not null
+        && (IsOwned(type, module)
+            || type.Assembly.IsCollectible
+            || (type.IsGenericType && type.GetGenericArguments().Any(a => PinsACollectibleContext(a, module)))
+            || (type.HasElementType && PinsACollectibleContext(type.GetElementType(), module)));
 
     /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from a module context
     /// OTHER than <paramref name="module"/> — a type a module this one depends on declares.</summary>

@@ -1031,6 +1031,13 @@ public partial record MeshBuilder
                 generation.Services = probed;
                 // ONE host for every held module's background services, registered where the first
                 // module's would have been — the position its hosted services always started at.
+                // Invariant: this runs only while the root collection is still being built —
+                // InstallModuleServices' one caller is the builder's install loop, before the
+                // container exists. A held module never reaches a FIRST clean install later: the
+                // live path (ModuleContexts.PrepareServices) re-binds an already-installed module's
+                // scope and refuses a generation whose running one had no forwarders laid out at
+                // boot, so a module that was blocked (or absent) at boot gets its services by a
+                // restart, never by a registration on a built container.
                 if (!moduleHostedServicesHostRegistered)
                 {
                     moduleHostedServicesHostRegistered = true;

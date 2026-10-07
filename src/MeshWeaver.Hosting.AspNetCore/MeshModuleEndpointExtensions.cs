@@ -50,14 +50,17 @@ public static class MeshModuleEndpointExtensions
             contributed += dynamicEndpoints.Count;
             if (dynamicEndpoints.Count > 0)
                 logger.LogInformation(
-                "Mapped {Count} endpoint(s) from modules held in their own load contexts, re-mapped on every live swap",
-                dynamicEndpoints.Count);
+                    "Mapped {Count} endpoint(s) from modules held in their own load contexts, re-mapped on every live swap",
+                    dynamicEndpoints.Count);
         }
         foreach (var module in app.Services.GetServices<InstalledModuleAssembly>())
         foreach (var attribute in module.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>())
         {
-            if (held?.Current(module.Assembly.GetName().Name ?? "") is { } generation
-                && ReferenceEquals(generation.Assembly, module.Assembly))
+            // Keyed on the module being HELD, never on this assembly being its current generation:
+            // the dynamic source maps every held module's current generation, so a held module is
+            // its alone. An identity check would fail if a live swap committed between the source's
+            // snapshot and this line, and map the old generation onto the app for good.
+            if (held?.Current(module.Assembly.GetName().Name ?? "") is not null)
                 continue;
             // Authenticated-by-default: the group policy applies to every route the module maps
             // unless the route itself declares AllowAnonymous — a module cannot accidentally

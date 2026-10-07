@@ -30,6 +30,22 @@ public sealed class AModuleTypeAsServiceKeyIsABlockerTest
                     "a Type key from the module would be held by the root and pin the generation");
             }
 
+            // A key typed from ANOTHER collectible context (a module this one depends on) pins THAT
+            // context; the registering module's own-type check alone would forward it to the root.
+            var foreign = Load("OtherModule", "OtherMarker", out var otherContext);
+            try
+            {
+                using var other = ModuleServices.Probe("KeyedMarkerModule", context,
+                    [s => s.AddKeyedSingleton<IDisposable>(foreign, (_, _) => new MemoryStream())], []);
+                other.Blockers.Should().ContainSingle(
+                    b => b.Contains("service key is a module type") && b.Contains("OtherMarker"),
+                    "a Type key from another collectible context would pin that context after it swaps");
+            }
+            finally
+            {
+                otherContext.Unload();
+            }
+
             using var control = ModuleServices.Probe("KeyedMarkerModule", context,
                 [s => s.AddKeyedSingleton<IDisposable>("plain-key", (_, _) => new MemoryStream())], []);
             control.Blockers.Should().BeEmpty("a platform key pins nothing — the registration forwards");
