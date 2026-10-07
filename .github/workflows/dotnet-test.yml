@@ -658,6 +658,12 @@ jobs:
     # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
     if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
     timeout-minutes: 25
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # `dotnet build` of the whole solution launches a long-lived Roslyn compiler server that
+    # emits in-process, so it is exposed to the same Tier-1 JIT defect as the test shards (see
+    # the `test` job's env); `<TieredPGO>` in a runtimeconfig does not configure that process.
+    env:
+      DOTNET_TieredPGO: "0"
     runs-on: ubuntu-latest
     outputs:
       # THE MAIN THE SUITES TEST AGAINST, resolved HERE — as the suites START. A run held at the stage
