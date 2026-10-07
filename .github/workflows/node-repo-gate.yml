@@ -944,6 +944,13 @@ jobs:
     # needs more is STUCK, not slow.
     timeout-minutes: 45
     env:
+      # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+      # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+      # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+      # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+      # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+      # this env covers every process the job launches, whatever pin it was built at.
+      DOTNET_TieredPGO: "0"
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       # No step here runs setup-dotnet today; the line is the rule, uniform with module-pack.
@@ -2187,7 +2194,10 @@ jobs:
             if [ "$MODE" = volume ]; then
               "$DOTNET" "$HOST_DIR/mw-plugin-test.dll" "$@"
             else
-              docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+              # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix
+              # ships. Same switch as the job env, carried INTO the container (the runner env does not
+              # cross `docker run`).
+              docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_TieredPGO=0 "${EXT_V[@]}" \
                 -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" "${TESTER_MOUNTS[@]}" "${DUMP_ARGS[@]}" \
                 --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll "$@"
             fi
