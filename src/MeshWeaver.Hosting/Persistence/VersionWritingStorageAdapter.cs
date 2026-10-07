@@ -102,6 +102,9 @@ internal class VersionWritingStorageAdapter(
     // never reached the AccessControlPipeline before its 45 s deadline.
     public IObservable<DataChangeNotification> Changes => inner.Changes;
 
+    /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => inner.ChangeFeedGaps;
+
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options);
 

@@ -138,4 +138,7 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => inner.Changes;
+
+    /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => inner.ChangeFeedGaps;
 }

@@ -48,6 +48,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
+    private readonly ISubject<ChangeFeedGap> _gaps = Subject.Synchronize(new Subject<ChangeFeedGap>());
     private FaultSwitch? _feedHold;
 
     /// <summary>Wraps <paramref name="inner"/>, the store of record.</summary>
@@ -143,10 +144,31 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     /// <param name="notification">The remote commit.</param>
     public void DeliverRemoteChange(DataChangeNotification notification) => _remote.OnNext(notification);
 
+    /// <summary>
+    /// Declares a hole in this process's cross-process feed, as the PostgreSQL listener does when
+    /// it re-opens its LISTEN session after a dropped connection (Plugins#3000). Arrives on
+    /// <see cref="ChangeFeedGaps"/>.
+    /// </summary>
+    /// <param name="gap">The declared gap.</param>
+    public void DeliverChangeFeedGap(ChangeFeedGap gap) => _gaps.OnNext(gap);
+
     // ── IStorageAdapter ──────────────────────────────────────────────────────────────────────────
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes { get; }
+
+    /// <inheritdoc />
+    /// <remarks>Each subscriber isolated — one that throws must not keep the next from seeing the
+    /// gap, or the harness would model a weaker contract than production's.</remarks>
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => Observable.Create<ChangeFeedGap>(observer =>
+        Observable.Merge(_inner.ChangeFeedGaps, _gaps.AsObservable()).Subscribe(
+            gap =>
+            {
+                try { observer.OnNext(gap); }
+                catch (Exception) { /* isolated: the throwing consumer is the test's to see, not its siblings' */ }
+            },
+            observer.OnError,
+            observer.OnCompleted));
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
