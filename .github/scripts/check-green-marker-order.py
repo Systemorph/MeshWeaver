@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""check-green-marker-order.py — a step that RECORDS a tree as green must follow every gate verdict.
+
+WHY THIS EXISTS (MeshWeaver#5988)
+---------------------------------
+`dotnet-test.yml`'s `collect-results` job publishes the required context `Consolidate test results`
+and, when it is green, pushes `refs/ci-green/<tree>/…`. The precheck of a LATER run on the same tree
+honours that marker as proof for the WHOLE tree and takes the reuse path, on which the gate verdict
+steps are skipped. So the marker vouches for every verdict this job translates, not only the test
+shards.
+
+Until #5988 the step `Record green tree` sat BEFORE the gate verdict steps (doc gate, licence,
+binary compatibility, shell gate, shared rules, cross-repo pair, package pins, interface additions,
+mirror sync, closing keywords, clients gate). Its `if:` named only build and test, so a tree whose
+tests were green and whose GATE was red was still marked green — observed on pull request #5852,
+run 36480427008: `Record green tree` succeeded at step 13 and a gate verdict failed at step 19.
+
+The code fix moved the step to the end of the job, where GitHub's implicit `success()` keeps it from
+running after ANY failed step. Nothing held it there: the next verdict step added to the collector,
+or an `always()` added to the marker's `if:`, would reopen the hole with every check green. This
+gate holds the shape.
+
+THE RULE
+--------
+For the subject job (`dotnet-test.yml` → `collect-results`):
+
+  1. every declared MARKER step exists — a marker renamed out from under this gate is STALE and
+     fails, because a guard whose subject moved and that answers green has checked nothing;
+  2. a marker's `if:` carries no status function that drops the implicit `success()` (`always()`,
+     `cancelled()`, `failure()`, `success() ||` …) — any of them lets it run after a red verdict;
+  3. no step AFTER the first marker can turn the job red: each carries `continue-on-error: true`.
+     A step that can still fail after the marker was written is a verdict the marker did not wait
+     for — which is exactly the #5988 shape;
+  4. every job in the collector's `needs:` has its result READ (`needs.<job>.result`) by a step
+     before the first marker, or by the marker's own `if:`. A gate job whose verdict no step
+     translates can be red while the job, and therefore the marker, is green.
+
+USAGE
+-----
+  check-green-marker-order.py [--root DIR]   gate the tree at DIR (default: cwd)
+  check-green-marker-order.py --self-test    prove every rule fires on its defect, stays silent on
+                                             its fix, and fires on the REAL workflow when a marker is
+                                             moved back in front of a verdict (negative control)
+
+Exit 1 on any violation; each is an `::error::` annotation naming the workflow, the job and the step.
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - CI installs PyYAML; locally `pip install pyyaml`
+    print("::error::check-green-marker-order.py needs PyYAML (pip install pyyaml)")
+    sys.exit(2)
+
+WORKFLOW = ".github/workflows/dotnet-test.yml"
+JOB = "collect-results"
+# The steps that write a marker a later run treats as evidence.
+MARKERS = ("Record green tree", "Record executed-and-green main commit")
+
+# Any status function in a marker's `if:` replaces the implicit `success()`.
+STATUS_FUNCTION = re.compile(r"\b(always|cancelled|failure|success)\s*\(\s*\)")
+
+
+def _load(path: Path) -> dict:
+    # PyYAML (YAML 1.1) reads a bare `on:` key as True; irrelevant here, jobs are what we read.
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _truthy(value) -> bool:
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def check_job(job: dict, label: str) -> list[str]:
+    """Return one message per violation for a collector job."""
+    errors: list[str] = []
+    steps = job.get("steps") or []
+    names = [str(s.get("name", "")) for s in steps]
+
+    marker_idx = []
+    for m in MARKERS:
+        if m not in names:
+            errors.append(f"{label}: marker step '{m}' not found — renamed or removed; update MARKERS "
+                          f"in check-green-marker-order.py so this gate keeps checking something.")
+        else:
+            marker_idx.append(names.index(m))
+    if not marker_idx:
+        return errors
+    first = min(marker_idx)
+
+    for i in marker_idx:
+        cond = str(steps[i].get("if", ""))
+        hit = STATUS_FUNCTION.search(cond)
+        if hit:
+            errors.append(f"{label}: marker '{names[i]}' has `{hit.group(0)}` in its if: — that drops the "
+                          f"implicit success(), so the marker can be written after a red gate verdict (#5988).")
+
+    for i in range(first + 1, len(steps)):
+        if i in marker_idx:
+            continue
+        if not _truthy(steps[i].get("continue-on-error")):
+            errors.append(f"{label}: step '{names[i] or f'#{i}'}' comes AFTER marker '{names[first]}' and can "
+                          f"still fail the job — move the marker below it, or the tree is recorded green "
+                          f"before this verdict is known (#5988).")
+
+    needs = job.get("needs") or []
+    if isinstance(needs, str):
+        needs = [needs]
+    read_before = "\n".join(
+        yaml.safe_dump(s, sort_keys=False) for s in steps[:first]
+    ) + "\n" + "\n".join(str(steps[i].get("if", "")) for i in marker_idx)
+    for need in needs:
+        if not re.search(rf"needs\.{re.escape(need)}\.result\b", read_before):
+            errors.append(f"{label}: needed job '{need}' has no verdict step before the marker "
+                          f"(nothing reads needs.{need}.result) — it can be red while the tree is "
+                          f"recorded green (#5988).")
+    return errors
+
+
+def check_tree(root: Path) -> list[str]:
+    path = root / WORKFLOW
+    if not path.is_file():
+        return [f"{WORKFLOW}: not found under {root} — the subject of this gate moved."]
+    jobs = (_load(path) or {}).get("jobs") or {}
+    if JOB not in jobs:
+        return [f"{WORKFLOW}: job '{JOB}' not found — the subject of this gate moved."]
+    return check_job(jobs[JOB], f"{WORKFLOW} → {JOB}")
+
+
+# ─────────────────────────────── self-test ───────────────────────────────
+
+def _fixture() -> dict:
+    return {
+        "needs": ["build", "test", "doc-gate"],
+        "if": "always()",
+        "steps": [
+            {"name": "Fail if any shard job did not succeed",
+             "if": "always() && needs.test.result != 'success'", "run": "exit 1"},
+            {"name": "Fail if the doc gate failed", "if": "needs.doc-gate.result != 'success'", "run": "exit 1"},
+            {"name": "Record green tree",
+             "if": "needs.build.result == 'success' && needs.test.result == 'success'",
+             "continue-on-error": True, "run": "git push"},
+            {"name": "Record executed-and-green main commit",
+             "if": "github.ref == 'refs/heads/main'", "continue-on-error": True, "run": "git push"},
+            {"name": "State the bisect window", "if": "failure()", "continue-on-error": True, "run": "echo"},
+        ],
+    }
+
+
+def _move_marker_before(job: dict, target: str) -> dict:
+    j = copy.deepcopy(job)
+    steps = j["steps"]
+    marker = next(s for s in steps if s.get("name") == MARKERS[0])
+    steps.remove(marker)
+    at = next(i for i, s in enumerate(steps) if s.get("name") == target)
+    steps.insert(at, marker)
+    return j
+
+
+def self_test(root: Path) -> int:
+    failures = 0
+
+    def expect(name: str, job: dict, should_fire: bool, needle: str = "") -> None:
+        nonlocal failures
+        errs = check_job(job, "fixture")
+        fired = bool(errs) and (not needle or any(needle in e for e in errs))
+        if fired != should_fire or (not should_fire and errs):
+            failures += 1
+            print(f"::error::self-test '{name}': expected {'a violation' if should_fire else 'silence'}"
+                  f"{f' containing {needle!r}' if needle else ''}, got {errs or 'silence'}")
+        else:
+            print(f"ok  {name}")
+
+    good = _fixture()
+    expect("the fixed shape is silent", good, False)
+    expect("a marker in front of a verdict fires (the #5988 shape)",
+           _move_marker_before(good, "Fail if the doc gate failed"), True, "comes AFTER marker")
+    j = copy.deepcopy(good)
+    j["steps"][2]["if"] = "always() && " + j["steps"][2]["if"]
+    expect("always() on a marker fires", j, True, "always()")
+    j = copy.deepcopy(good)
+    j["steps"][2]["if"] = "!cancelled() && needs.build.result == 'success'"
+    expect("!cancelled() on a marker fires", j, True, "cancelled()")
+    j = copy.deepcopy(good)
+    j["needs"].append("licence-gate")
+    expect("a needed gate with no verdict step fires", j, True, "licence-gate")
+    j = copy.deepcopy(good)
+    j["steps"][2]["name"] = "Record the green tree"
+    expect("a renamed marker is stale and fires", j, True, "not found")
+    j = copy.deepcopy(good)
+    del j["steps"][4]["continue-on-error"]
+    expect("a failable diagnostic after the marker fires", j, True, "State the bisect window")
+
+    # NEGATIVE CONTROL ON THE REAL WORKFLOW: the tree must pass as it stands, and must FAIL once the
+    # marker is moved back to where #5988 found it (in front of the last gate verdict).
+    path = root / WORKFLOW
+    if path.is_file():
+        real = (_load(path) or {}).get("jobs", {}).get(JOB)
+        if real is None:
+            failures += 1
+            print(f"::error::self-test: job '{JOB}' missing from {WORKFLOW}")
+        else:
+            errs = check_job(real, "real")
+            if errs:
+                failures += 1
+                print(f"::error::self-test: the real workflow does not pass: {errs}")
+            else:
+                print("ok  the real workflow passes")
+            verdicts = [s.get("name") for s in real.get("steps", []) if str(s.get("name", "")).startswith("Fail if")]
+            if not verdicts:
+                failures += 1
+                print("::error::self-test: no 'Fail if …' verdict step found in the real job — control is vacuous")
+            else:
+                moved = _move_marker_before(real, verdicts[-1])
+                if any("comes AFTER marker" in e for e in check_job(moved, "real-moved")):
+                    print(f"ok  moving the marker before '{verdicts[-1]}' in the real workflow fires")
+                else:
+                    failures += 1
+                    print("::error::self-test: moving the marker before the last verdict in the real workflow did NOT fire")
+    else:
+        failures += 1
+        print(f"::error::self-test: {WORKFLOW} not found under {root}; the negative control cannot run")
+
+    print(f"self-test: {'FAILED' if failures else 'passed'} ({failures} failure(s))")
+    return 1 if failures else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--root", default=".")
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    root = Path(args.root)
+    if args.self_test:
+        return self_test(root)
+    errors = check_tree(root)
+    for e in errors:
+        print(f"::error::{e}")
+    if errors:
+        return 1
+    print(f"{WORKFLOW} → {JOB}: every marker step follows every gate verdict ({len(MARKERS)} marker(s) checked).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
