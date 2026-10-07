@@ -87,6 +87,7 @@ READINESS_STEP = "The workspace and the tools are present — the ONE prerequisi
 SUBJECTS: dict[str, dict[str, tuple[str, ...]]] = {
     "node-repo-validate.yml": {
         "validate": (
+            "uses:Systemorph/MeshWeaver/.github/actions/core-file",
             "uses:actions/checkout",
             "Full history and tags, quietly",
             "uses:actions/setup-python",
@@ -233,6 +234,7 @@ _PREFIX = (
     "    runs-on: ubuntu-latest\n"
     "    timeout-minutes: 10\n"
     "    steps:\n"
+    "      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main\n"
     "      - uses: actions/checkout@v7\n"
     "      - name: Full history and tags, quietly\n"
     "        run: echo\n"
