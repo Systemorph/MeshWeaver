@@ -940,22 +940,27 @@ public static class PrebuiltAssemblySeeder
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
-            logger?.LogWarning(
-                "Prebuilt assembly for {NodeTypePath} DECLINED before writing (#2813): the bundle "
-                + "records source fingerprint {Producer} but the live sources are {Live} (bundle "
-                + "module version {Adopted}, current {Current}: {Verdict}) — the owner would not "
-                + "verify the adoption, so the live build's coordinates are left in place. Rebake "
-                + "this package to adopt again.",
-                nodeTypePath, producerFingerprint, liveFingerprint,
-                ModuleVersionCompatibility.Display(moduleVersion),
-                ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict);
-            // Memex#668 — a version-compatible bundle further behind the live source than the
-            // stale-adoption bound is NOT adopted as the last build either: same MAJOR is not a
-            // licence to serve an arbitrarily old program. Said at Error, with the bound.
+            // Memex#668 — the bound is read BEFORE the decline line so EVERY judgement (within the
+            // bound, past it, or with the bound disabled) prints the distance and the effective bound.
             var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
                 hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
             var tooFarBehind = StaleAdoptionBound.Exceeds(
                 moduleVersion, observed.CurrentModuleVersion, staleBound);
+            var distance = StaleAdoptionBound.DescribeDistance(moduleVersion, observed.CurrentModuleVersion);
+            var boundText = StaleAdoptionBound.DescribeBound(staleBound);
+            logger?.LogWarning(
+                "Prebuilt assembly for {NodeTypePath} DECLINED before writing (#2813): the bundle "
+                + "records source fingerprint {Producer} but the live sources are {Live} (bundle "
+                + "module version {Adopted}, current {Current}: {Verdict}; {Distance}, {Bound}) — the "
+                + "owner would not verify the adoption, so the live build's coordinates are left in "
+                + "place. Rebake this package to adopt again.",
+                nodeTypePath, producerFingerprint, liveFingerprint,
+                ModuleVersionCompatibility.Display(moduleVersion),
+                ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict,
+                distance, boundText);
+            // Memex#668 — a version-compatible bundle further behind the live source than the
+            // stale-adoption bound is NOT adopted as the last build either: same MAJOR is not a
+            // licence to serve an arbitrarily old program. Said at Error, with the bound.
             if (tooFarBehind)
                 logger?.LogError(
                     "Prebuilt assembly for {NodeTypePath} will NOT be adopted as a stale-but-serving "
@@ -963,10 +968,16 @@ public static class PrebuiltAssemblySeeder
                     + "{Distance}, past the stale-adoption {Bound}. A build of the current source lifts it.",
                     nodeTypePath, ModuleVersionCompatibility.Display(moduleVersion),
                     ModuleVersionCompatibility.Display(observed.CurrentModuleVersion),
-                    StaleAdoptionBound.DescribeDistance(moduleVersion, observed.CurrentModuleVersion),
-                    StaleAdoptionBound.DescribeBound(staleBound));
+                    distance, boundText);
             return AfterStaleDeclineObserved(
                 hub, workspace, store, observed, nodeTypePath, logger,
+                // Memex#668 — the refusal keeps its REASON: a same-MAJOR bundle past the bound is
+                // not "MAJOR-incompatible", and the unservable diagnosis must not say it is.
+                pastBound: verdict is not ModuleVersionVerdict.Incompatible && tooFarBehind
+                    ? $"bundle module version {ModuleVersionCompatibility.Display(moduleVersion)} over current "
+                      + $"{ModuleVersionCompatibility.Display(observed.CurrentModuleVersion)} is {distance}, "
+                      + $"past the stale-adoption {boundText}"
+                    : null,
                 adoptAnyway: verdict is ModuleVersionVerdict.Incompatible || tooFarBehind
                     ? null
                     : () =>
@@ -1255,9 +1266,13 @@ public static class PrebuiltAssemblySeeder
     /// will NOT compile the type (RequirePrebuilt, or a module partition nothing syncs): null
     /// means the bytes are incompatible and nothing can serve (Critical, unservable); otherwise
     /// the continuation adopts them as the last build the mesh holds.</param>
+    /// <param name="pastBound">Memex#668 — when the bundle is refused because it is same-MAJOR but
+    /// past the stale-adoption bound, the sentence naming both versions, the distance and the
+    /// bound; null when the refusal (if any) is a MAJOR incompatibility.</param>
     private static IObservable<SeedOutcome> AfterStaleDeclineObserved(
         IMessageHub hub, IWorkspace workspace, IAssemblyStore store,
         NodeTypeDefinition observed, string nodeTypePath, ILogger? logger,
+        string? pastBound,
         Func<IObservable<SeedOutcome>>? adoptAnyway)
     {
         var resolves = observed.LastCompiledVersion is { } claimed && claimed >= 0
@@ -1311,6 +1326,19 @@ public static class PrebuiltAssemblySeeder
                     // record names cannot be loaded here. Serving the bundle is a page; a Roslyn
                     // compile is a wait — see DecideAfterStaleDecline for the rule.
                     return adoptAnyway!();
+                case StaleDeclineAction.Unservable when pastBound is not null:
+                    logger?.LogCritical(
+                        "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "
+                        + "build it left in place does not resolve on this process ({Collection}/{Path}) "
+                        + "AND this mesh will not compile it ({Key}=true, or the partition tracks no "
+                        + "source) AND the bundle is too far behind its source to adopt (Memex#668): "
+                        + "{PastBound}. NOTHING THIS PROCESS CAN DO WILL SERVE THE TYPE: publish a bundle "
+                        + "of the current source for framework {Framework}, or bring this instance's "
+                        + "sources onto the publication's commit.",
+                        nodeTypePath, observed.LatestAssemblyCollection ?? "(null)",
+                        observed.LatestAssemblyPath ?? "(null)", RequirePrebuiltConfigKey, pastBound,
+                        NodeTypeCompilationHelpers.FrameworkVersion);
+                    return Observable.Return(SeedOutcome.DeclinedStaleSourcesUnservable);
                 case StaleDeclineAction.Unservable:
                     logger?.LogCritical(
                         "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "

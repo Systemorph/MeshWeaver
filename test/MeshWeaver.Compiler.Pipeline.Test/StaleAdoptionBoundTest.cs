@@ -192,4 +192,24 @@ public class StaleAdoptionBoundTest
         unbounded!.BuildProvenance.Should().Be(BuildProvenance.StaleAdopted,
             "negative control: unbounded, the gate keeps the old build serving");
     }
+
+    [Fact]
+    public void ARefusalOnTheBound_IsItsOwnDeliveryEvent_NeverTheMajorBumpOne()
+    {
+        var before = Adopted("1.29.7", "1.56") with { CompilationStatus = CompilationStatus.Pending };
+        var settled = BuildDeliveryHold.Settle(before, hasUsableBuild: true, "no bundle", 5)!;
+
+        BuildDeliveryHold.EventOf(before, settled, 5).Should().Be(
+            BuildDeliveryHold.DeliveryEvent.HeldTooFarBehind,
+            "a same-MAJOR build past the bound was not refused for a MAJOR bump — the notification "
+            + "must not say it was");
+
+        // Control: a real MAJOR bump on the same path stays HeldIncompatible.
+        var major = Adopted("1.29.7", "2.0") with
+        {
+            CompilationStatus = CompilationStatus.Unavailable,
+            BuildProvenance = BuildProvenance.AdoptionRefused,
+        };
+        BuildDeliveryHold.EventOf(before, major, 5).Should().Be(BuildDeliveryHold.DeliveryEvent.HeldIncompatible);
+    }
 }

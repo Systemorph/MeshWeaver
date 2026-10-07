@@ -157,9 +157,13 @@ public sealed record NodeTypeLiveRecordCensus(
                 untyped++;
                 continue;
             }
-            // Memex#668 — a build the source moved past that still has coordinates is SERVING.
+            // Memex#668 — a build the source moved past that still has coordinates is SERVING —
+            // but only if THIS replica may load it. A record keyed to another framework serves
+            // nothing here (it is counted as Foreign below), so a pre-boot record from the previous
+            // image must never degrade the entry as stale-past-bound.
             if (definition.BuildProvenance is BuildProvenance.StaleAdopted
-                && !string.IsNullOrEmpty(definition.LatestAssemblyPath))
+                && !string.IsNullOrEmpty(definition.LatestAssemblyPath)
+                && NodeTypeBuildIdentity.RefusalReason(definition, liveFrameworkVersion) is null)
                 stale.Add((
                     PartitionOf(path),
                     ModuleVersionCompatibility.MinorVersionsBehind(

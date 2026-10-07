@@ -232,8 +232,9 @@ code, the instance overlay tells the author to fix it, and the readiness gate re
 regression that freezes self-update — none of which is true of a bundle that has not arrived yet.
 
 **Announcing readiness.** A hold is a transition a person should hear about, and so is its lifting.
-`BuildDeliveryHold.EventOf(before, after)` decides — `HeldStale`, `HeldIncompatible`, `Adopted`,
-`Compiled` — and every writer that can make the transition (the three stamp-request fulfillers, the
+`BuildDeliveryHold.EventOf(before, after)` decides — `HeldStale`, `HeldIncompatible`, `HeldTooFarBehind`
+(a same-MAJOR build refused on the stale-adoption bound, Systemorph/Memex#668, whose body is the
+record's own too-far-behind notice with the configured bound), `Adopted`, `Compiled` — and every writer that can make the transition (the three stamp-request fulfillers, the
 two gates, the compile write-back) notifies on it exactly once, to `RequestedReleaseBy` when there
 is one and to the platform operators' bell otherwise: *"Essentials 1.2.3 adopted: 'Email'"* is the
 signal a person can act on, in place of discovering a dead page by reloading it.

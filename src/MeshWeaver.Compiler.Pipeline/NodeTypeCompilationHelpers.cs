@@ -395,24 +395,39 @@ internal static class NodeTypeCompilationHelpers
                             hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
                         if (BuildDeliveryHold.Settle(pendingDefinition, usable, reason, staleBound) is not { } settled)
                             return false;
-                        logger?.LogWarning(
-                            "Compile watcher: {HubPath} is held by delivery (#3583) — {Outcome}. {Reason}",
-                            hubPath,
-                            settled.BuildProvenance is BuildProvenance.AdoptionRefused
-                                ? StaleAdoptionBound.Exceeds(
-                                    settled.AdoptedModuleVersion, settled.CurrentModuleVersion, staleBound)
-                                    ? $"its adopted build is TOO FAR BEHIND its source ({ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion)} over {ModuleVersionCompatibility.Display(settled.CurrentModuleVersion)}: {StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion)}, {StaleAdoptionBound.DescribeBound(staleBound)}) and is not run (Memex#668); awaiting a build of the current source"
-                                    : "its adopted build is INCOMPATIBLE (module MAJOR moved) and is not run; awaiting a bundle"
-                                : $"its last build keeps serving over source that moved ahead ({ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion)} over {ModuleVersionCompatibility.Display(settled.CurrentModuleVersion)}: {StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion)}, {StaleAdoptionBound.DescribeBound(staleBound)}); awaiting a bundle",
-                            reason);
+                        if (settled.BuildProvenance is BuildProvenance.AdoptionRefused
+                            && StaleAdoptionBound.Exceeds(
+                                settled.AdoptedModuleVersion, settled.CurrentModuleVersion, staleBound))
+                            // Memex#668 — a refusal ON THE BOUND is said at Error at every
+                            // enforcement site (this gate, the adoption stamp, the seeder), with
+                            // both versions, the distance and the configured bound.
+                            logger?.LogError(
+                                "Compile watcher: {HubPath} is held by delivery (#3583) — its adopted build is "
+                                + "TOO FAR BEHIND its source ({AdoptedVersion} over {CurrentVersion}: {Distance}, "
+                                + "past the stale-adoption {Bound}) and is not run (Memex#668); awaiting a build "
+                                + "of the current source. {Reason}",
+                                hubPath,
+                                ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion),
+                                ModuleVersionCompatibility.Display(settled.CurrentModuleVersion),
+                                StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion),
+                                StaleAdoptionBound.DescribeBound(staleBound),
+                                reason);
+                        else
+                            logger?.LogWarning(
+                                "Compile watcher: {HubPath} is held by delivery (#3583) — {Outcome}. {Reason}",
+                                hubPath,
+                                settled.BuildProvenance is BuildProvenance.AdoptionRefused
+                                    ? "its adopted build is INCOMPATIBLE (module MAJOR moved) and is not run; awaiting a bundle"
+                                    : $"its last build keeps serving over source that moved ahead ({ModuleVersionCompatibility.Display(settled.AdoptedModuleVersion)} over {ModuleVersionCompatibility.Display(settled.CurrentModuleVersion)}: {StaleAdoptionBound.DescribeDistance(settled.AdoptedModuleVersion, settled.CurrentModuleVersion)}, {StaleAdoptionBound.DescribeBound(staleBound)}); awaiting a bundle",
+                                reason);
                         SettlePending(parkedDef =>
                         {
                             var held = BuildDeliveryHold.Settle(
                                 parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason, staleBound);
                             if (held is null)
                                 return ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash);
-                            if (BuildDeliveryHold.EventOf(parkedDef, held) is { } evt)
-                                BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger);
+                            if (BuildDeliveryHold.EventOf(parkedDef, held, staleBound) is { } evt)
+                                BuildDeliveryHold.Notify(hub, hubPath, held, evt, logger, staleBound);
                             return held;
                         });
                         return true;
@@ -1866,8 +1881,8 @@ internal static class NodeTypeCompilationHelpers
         // it ("Essentials 1.2.3 adopted for this identity"), on the TRANSITION, never on every
         // stamp: the pure EventOf is what decides, so the three writers that can fulfil a stamp
         // request cannot disagree about when to speak.
-        if (BuildDeliveryHold.EventOf(def, result) is { } evt)
-            BuildDeliveryHold.Notify(hub, hubPath, result, evt, logger);
+        if (BuildDeliveryHold.EventOf(def, result, bound) is { } evt)
+            BuildDeliveryHold.Notify(hub, hubPath, result, evt, logger, bound);
 
         if (result.BuildProvenance is BuildProvenance.StaleAdopted)
         {

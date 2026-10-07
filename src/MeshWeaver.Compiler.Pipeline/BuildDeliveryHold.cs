@@ -190,15 +190,26 @@ public static class BuildDeliveryHold
     /// because a build for the current source was adopted or compiled. Pure, so the three
     /// writers that can make the transition emit exactly once each, on the transition itself.
     /// </summary>
-    public static DeliveryEvent? EventOf(NodeTypeDefinition? before, NodeTypeDefinition after)
+    /// <param name="before">The record before the write (null when there was none).</param>
+    /// <param name="after">The record the write produced.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound (Systemorph/Memex#668) the
+    /// refusal was judged against: a refusal ON THE BOUND is <see cref="DeliveryEvent.HeldTooFarBehind"/>,
+    /// never <see cref="DeliveryEvent.HeldIncompatible"/> — the two name different causes.</param>
+    public static DeliveryEvent? EventOf(
+        NodeTypeDefinition? before,
+        NodeTypeDefinition after,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
     {
         ArgumentNullException.ThrowIfNull(after);
         var wasHeld = IsHeld(before);
         var isHeld = IsHeld(after);
         if (!wasHeld && isHeld)
-            return after.BuildProvenance is BuildProvenance.AdoptionRefused
-                ? DeliveryEvent.HeldIncompatible
-                : DeliveryEvent.HeldStale;
+            return after.BuildProvenance is not BuildProvenance.AdoptionRefused
+                ? DeliveryEvent.HeldStale
+                : StaleAdoptionBound.Exceeds(
+                    after.AdoptedModuleVersion, after.CurrentModuleVersion, maxMinorVersionsBehind)
+                    ? DeliveryEvent.HeldTooFarBehind
+                    : DeliveryEvent.HeldIncompatible;
         if (wasHeld && !isHeld
             && after.BuildProvenance is BuildProvenance.AdoptedVerified or BuildProvenance.Compiled
             && after.CompilationStatus is CompilationStatus.Ok)
@@ -223,6 +234,10 @@ public static class BuildDeliveryHold
 
         /// <summary>The current source was compiled locally — the hold is lifted.</summary>
         Compiled = 4,
+
+        /// <summary>The serving build is same-MAJOR but further behind its source than the
+        /// stale-adoption bound (Systemorph/Memex#668); the build is refused.</summary>
+        HeldTooFarBehind = 5,
     }
 
     /// <summary>
@@ -234,8 +249,16 @@ public static class BuildDeliveryHold
     /// <see cref="ICompileFailureNotifier"/> (the graph/compiler split) — a generic System
     /// notification; the name is the seam's, the content is this event's.
     /// </summary>
+    /// <param name="hub">The hub whose notifier delivers.</param>
+    /// <param name="nodeTypePath">The NodeType the event is about.</param>
+    /// <param name="after">The record the transition produced.</param>
+    /// <param name="evt">The event (<see cref="EventOf"/>).</param>
+    /// <param name="logger">Where a failed delivery is logged.</param>
+    /// <param name="maxMinorVersionsBehind">The stale-adoption bound, for a
+    /// <see cref="DeliveryEvent.HeldTooFarBehind"/> body when the record carries no persisted notice.</param>
     public static void Notify(
-        IMessageHub hub, string nodeTypePath, NodeTypeDefinition after, DeliveryEvent evt, ILogger? logger)
+        IMessageHub hub, string nodeTypePath, NodeTypeDefinition after, DeliveryEvent evt, ILogger? logger,
+        int maxMinorVersionsBehind = StaleAdoptionBound.DefaultMaxMinorVersionsBehind)
     {
         var notifier = hub.ServiceProvider.GetService<ICompileFailureNotifier>();
         if (notifier is null)
@@ -255,7 +278,7 @@ public static class BuildDeliveryHold
         var adopted = ModuleVersionCompatibility.Display(after.AdoptedModuleVersion);
         var fingerprint = Short(after.CurrentSourceFingerprint);
         var framework = NodeTypeCompilationHelpers.FrameworkVersion;
-        // 🚨 The two HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice are declared as the
+        // 🚨 The HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice/TooFarBehindNotice are declared as the
         // operator/log wording of the record's own fields — "the page localizes its own copy from
         // the same fields" — so keying them here would put a second, divergent translation of the
         // same facts in the catalog. Every TITLE is keyed, and so is each body the notifier itself
@@ -284,6 +307,15 @@ public static class BuildDeliveryHold
                     + $"{fingerprint}); the build it was serving from is retired.",
                     "notification.delivery.compiled.body",
                     ("nodeTypePath", nodeTypePath), ("fingerprint", fingerprint))),
+            // Memex#668 — the refusal on the BOUND: the record's own persisted notice (both
+            // versions, the distance and the configured bound), never the MAJOR-bump sentence.
+            DeliveryEvent.HeldTooFarBehind => (
+                LocalizableText.Keyed(
+                    $"'{typeName}' is not run: its build is too far behind its source",
+                    "notification.delivery.heldTooFarBehind.title", ("typeName", typeName)),
+                LocalizableText.Verbatim(after.CompilationError is { Length: > 0 } persisted
+                    ? persisted
+                    : TooFarBehindNotice(after, maxMinorVersionsBehind))),
             DeliveryEvent.HeldIncompatible => (
                 LocalizableText.Keyed(
                     $"'{typeName}' is awaiting a bundle (incompatible build)",

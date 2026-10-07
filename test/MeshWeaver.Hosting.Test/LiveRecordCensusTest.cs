@@ -296,6 +296,34 @@ public class LiveRecordCensusTest
     }
 
     [Fact]
+    public void AForeignStaleRecordPastTheBound_StampedBeforeBoot_IsNotServingHere_AndStaysClean()
+    {
+        // A previous image's StaleAdopted record serves nothing on this replica: it is Foreign
+        // (counted as such), never stale-SERVING — otherwise the every-deploy state would degrade
+        // /health, against AForeignRecordStampedBeforeBoot_IsCountedButClean.
+        var foreignStale = Stamped(Other, BootedAt.AddHours(-2)) with
+        {
+            BuildProvenance = BuildProvenance.StaleAdopted,
+            AdoptedModuleVersion = "1.29.7",
+            CurrentModuleVersion = "1.56",
+        };
+        var census = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/InstanceAction", foreignStale)], Live, BootedAt, At, maxMinorVersionsBehind: 5);
+
+        census.Foreign.Should().Be(1);
+        census.StaleServing.Should().Be(0, "a build this replica may not load is not serving here");
+        census.StalePastBound.Should().Be(0);
+        census.IsClean.Should().BeTrue();
+
+        // Control: the same record keyed to THIS replica's framework is serving, and degrades.
+        var live = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/InstanceAction", foreignStale with { CompiledFrameworkVersion = Live })],
+            Live, BootedAt, At, maxMinorVersionsBehind: 5);
+        live.StalePastBound.Should().Be(1);
+        live.IsClean.Should().BeFalse();
+    }
+
+    [Fact]
     public void AStaleBuildWithinTheBound_IsPrinted_ButClean_AndNoneIsSaidAsNone()
     {
         var census = NodeTypeLiveRecordCensus.Of(
