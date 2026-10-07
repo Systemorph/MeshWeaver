@@ -188,12 +188,19 @@ public sealed class ContentTypeRegistrationSweep(IServiceProvider services) : IH
             }
             swept++;
         }
-        if (swept > 0 || failed > 0)
+        // Two lines, never one phrase stretched over both cases: a failures-only pass probed
+        // nothing, and must not say that some content types now resolve.
+        if (swept > 0)
             logger?.LogInformation(
                 "Content-type registration sweep: {Count} static NodeType definition(s) probed — "
                 + "their content types resolve without any instance existing; {Failed} faulted "
                 + "(each named at Error).",
                 swept, failed);
+        else if (failed > 0)
+            logger?.LogInformation(
+                "Content-type registration sweep: no static NodeType definition probed cleanly; "
+                + "{Failed} faulted (each named at Error).",
+                failed);
         return Task.CompletedTask;
     }
 
