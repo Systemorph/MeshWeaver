@@ -56,7 +56,8 @@ public class IoPoolQueueReportSaysCapOrThreadTest(ITestOutputHelper output)
             admission!.Value.AsyncWaiting.Should().Be(1);
             admission.Value.PermitsFree.Should().Be(pool.MaxConcurrency,
                 "nothing holds a permit: the queued leaf has not reached the gate");
-            admission.Value.AsyncQueueWaitsForAThread.Should().BeTrue();
+            admission.Value.BeforeGate.Should().Be(1, "the leaf is held before it reaches the gate");
+            admission.Value.BehindCap.Should().Be(0);
 
             var report = IoPoolQueueReport.Describe(registry, baseline);
             output.WriteLine(report);
@@ -100,13 +101,14 @@ public class IoPoolQueueReportSaysCapOrThreadTest(ITestOutputHelper output)
             var baseline = registry.Snapshot();
             using var queued = pool.Invoke(_ => Task.FromResult(1)).Subscribe(_ => { }, _ => { });
             Assert.True(
-                SpinWait.SpinUntil(() => pool.CurrentlyWaiting >= 1 && pool.CurrentInFlight == 1, TestTimeouts.Quick),
-                "precondition: one leaf running, one queued behind it");
+                SpinWait.SpinUntil(() => pool.AdmissionReading.BehindCap == 1 && pool.CurrentInFlight == 1, TestTimeouts.Quick),
+                "precondition: one leaf running, one inside the gate wait behind it");
 
             var admission = registry.Snapshot().Single(r => r.Name == poolName).Admission!.Value;
             admission.PermitsFree.Should().Be(0, "the occupant holds the only permit");
             admission.GrantedNotRunning.Should().Be(0, "the one held permit belongs to a RUNNING leaf");
-            admission.AsyncQueueWaitsForAThread.Should().BeFalse();
+            admission.BehindCap.Should().Be(1, "the queued leaf is inside the gate wait with no permit");
+            admission.BeforeGate.Should().Be(0);
 
             var report = IoPoolQueueReport.Describe(registry, baseline);
             output.WriteLine(report);
@@ -114,6 +116,70 @@ public class IoPoolQueueReportSaysCapOrThreadTest(ITestOutputHelper output)
                 "a leaf queued behind a gate with no free permit is the one case where the cap IS "
                 + "the constraint, and the report must still say so");
             report.Should().NotContain(IoPoolQueueReport.WaitsForAThread);
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+    }
+
+    /// <summary>
+    /// The review case (Copilot, #6260): a cap-1 gate held by a running leaf, one leaf waiting AT the
+    /// gate, and one newly accepted leaf held BEFORE it. Permit availability alone reads this as
+    /// "the cap is exhausted" — and that is wrong for the leaf that has not reached the gate. The
+    /// report must name both parts of a mixed queue.
+    /// </summary>
+    [Fact]
+    public async Task AMixedQueue_NamesTheThreadWaitAndTheCapWaitSeparately()
+    {
+        using var registry = new IoPoolRegistry(new IoPoolOptions());
+        var poolName = IoPoolNames.PostgresAdapterPrefix + "mixed";
+        var pool = (IoPool)registry.Get(poolName);
+        var occupying = new AsyncSubject<Unit>();
+        var parked = new AsyncSubject<Unit>();
+        var release = 0;
+
+        try
+        {
+            using var occupant = pool.Invoke(_ =>
+            {
+                occupying.OnNext(Unit.Default);
+                occupying.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Quick);
+                return Task.FromResult(0);
+            }).Subscribe(_ => { }, _ => { });
+            await occupying.Should().Within(TestTimeouts.Quick).Emit(
+                "precondition: the occupant holds the pool's only permit",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var baseline = registry.Snapshot();
+            using var atGate = pool.Invoke(_ => Task.FromResult(1)).Subscribe(_ => { }, _ => { });
+            Assert.True(SpinWait.SpinUntil(() => pool.AdmissionReading.BehindCap == 1, TestTimeouts.Quick),
+                "precondition: the second leaf is inside the gate wait");
+
+            // Only now: hold the NEXT accepted leaf before it can reach the gate.
+            pool.OnLeafPrologueStarting = () =>
+            {
+                parked.OnNext(Unit.Default);
+                parked.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref release) == 1, TestTimeouts.Quick);
+            };
+            using var beforeGate = pool.Invoke(_ => Task.FromResult(2)).Subscribe(_ => { }, _ => { });
+            await parked.Should().Within(TestTimeouts.Quick).Emit(
+                "precondition: the third leaf is accepted and held before the gate",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var admission = registry.Snapshot().Single(r => r.Name == poolName).Admission!.Value;
+            admission.PermitsFree.Should().Be(0);
+            admission.BehindCap.Should().Be(1, "one leaf waits at the gate with no permit");
+            admission.BeforeGate.Should().Be(1, "one leaf has not been given a thread to reach the gate");
+
+            var report = IoPoolQueueReport.Describe(registry, baseline);
+            output.WriteLine(report);
+            report.Should().Contain("1 " + IoPoolQueueReport.WaitsForAThread,
+                "a leaf that has not reached the gate waits for a thread even when the cap is full");
+            report.Should().Contain("1 " + IoPoolQueueReport.WaitsForTheCap,
+                "and the leaf at the gate is the cap's");
         }
         finally
         {
@@ -152,7 +218,8 @@ public class IoPoolQueueReportSaysCapOrThreadTest(ITestOutputHelper output)
             admission.AsyncWaiting.Should().Be(0,
                 "a blocking leaf never passes the gate, so reading it against the gate's free permits "
                 + "would report a thread wait the pool does not have");
-            admission.AsyncQueueWaitsForAThread.Should().BeFalse();
+            admission.WaitingForAThread.Should().Be(0);
+            admission.BehindCap.Should().Be(0);
         }
         finally
         {

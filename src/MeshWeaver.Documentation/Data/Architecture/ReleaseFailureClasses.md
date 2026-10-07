@@ -687,35 +687,44 @@ So "94 waiting" is "the cap is exhausted" only when the gate has **no** free per
 free, or granted to waiters that have not resumed, the queue is waiting for a thread. In that case a
 larger cap changes nothing, and so does a longer bound.
 
-**What the census prints now.** The census splits each pool's queue (`IoPool.AdmissionReading`, carried
-on `IoPoolReading.Admission`):
+**What the census prints now.** The census splits each pool's queue by where each leaf IS
+(`IoPool.AdmissionReading`, carried on `IoPoolReading.Admission`). Permit availability alone cannot
+say what an accepted leaf waits for: a cap can be full while a newly accepted leaf has not even been
+given a thread to reach the gate.
 
-- **Async leaves.** How many are waiting, against how many free permits.
-- **Granted but not yet running.** Permits that are neither free nor held by a running async leaf.
+- **Before the gate.** Accepted async leaves whose prologue has not run. They wait for a **thread**,
+  whatever the cap is doing.
+- **Granted, not yet resumed.** Gate waiters holding a permit their continuation has not been given a
+  thread to use. Also a **thread** wait.
+- **Behind the cap.** Gate waiters with no permit. This is the only part of the queue the cap holds
+  back.
 - **Blocking leaves.** These queue on the lane scheduler and never touch the gate. They are counted
-  apart, so they cannot be misread as a thread wait.
+  apart, so they cannot be misread as either.
 
-The verdict is one of two phrases:
-- *"the wait is for a THREAD, not for this cap"*;
-- *"the cap is exhausted"*.
+Each pool prints both parts when both are present, because a queue can be mixed:
+- *"N waiting for a THREAD, not for this cap [B before the gate, G granted and not yet resumed]"*;
+- *"M behind the exhausted cap"*.
 
 The sentence then ends with the ThreadPool's own depth: thread count and queued work items. The
 control is `IoPoolQueueReportSaysCapOrThreadTest`:
 
 - **Thread wait.** A leaf is held in its prologue through `OnLeafPrologueStarting`, so it is accepted
   with every permit free. The census must print the thread-wait phrase.
-- **Cap wait (the negative control).** A cap-1 pool holds one running leaf and queues a second. The
-  census must print the cap phrase.
+- **Cap wait (the negative control).** A cap-1 pool holds one running leaf and queues a second inside
+  the gate wait. The census must print the cap phrase.
+- **Mixed queue.** The same full cap-1 gate, one leaf at the gate and one held before it. Both phrases
+  must appear, one leaf each. This is the case a permit-count verdict gets wrong.
 - **Blocking leaves.** A blocking leaf queued on the lane must not be read against the gate.
 
-Both deliberate breaks were run red:
+Three deliberate breaks were run red:
 - reading every waiter as async fails the blocking case;
-- dropping the verdict fails both the thread-wait and cap-wait cases.
+- dropping the verdict fails the thread-wait and cap-wait cases;
+- counting every async waiter as at-the-gate fails the thread-wait and mixed cases.
 
 **Not established.** What held the ThreadPool on that boot. The census did not read the ThreadPool
-then, and no dump was taken. The next expiry's line says whether the wait was for a thread or for the
-cap, and how deep the ThreadPool's queue was. A cap change, or a widened bound, is unjustified until a
-line says *"the cap is exhausted"*.
+then, and no dump was taken. The next expiry's line says how much of the queue waited for a thread and
+how much for the cap, and how deep the ThreadPool's queue was. A cap change, or a widened bound, is
+unjustified until a line puts the queue *"behind the exhausted cap"*.
 
 ## What this does not claim
 

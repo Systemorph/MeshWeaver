@@ -591,8 +591,12 @@ public sealed class IoPool : IIoPool, IDisposable
                     // admission only when a slot was actually granted. A cancelled wait never became
                     // an admission, and folding it into the distribution would blend "how long work
                     // waited to run" with "how long a teardown took to unwind".
+                    // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                    // is waiting has not yet been given a thread to reach the gate at all.
+                    Interlocked.Increment(ref _atGate);
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    catch { LeaveWaitOnce(); throw; }
+                    catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                    Interlocked.Decrement(ref _atGate);
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
@@ -721,6 +725,12 @@ public sealed class IoPool : IIoPool, IDisposable
     // gate's own free-permit count — see AdmissionReading (#5057).
     private int _blockingWaiting;
 
+    // How many async leaves are INSIDE `_gate.WaitAsync` right now — from the call until it returns,
+    // granted or cancelled (#5057). The rest of the async queue has been accepted and has not yet
+    // been given a ThreadPool thread to reach the gate. A permit granted to one of these waiters
+    // keeps it counted here until its continuation runs, which is what GrantedNotRunning measures.
+    private int _atGate;
+
     /// <summary>
     /// 🚨 WHAT THE QUEUE IS WAITING FOR — the cap, or a thread (#5057).
     ///
@@ -728,10 +738,11 @@ public sealed class IoPool : IIoPool, IDisposable
     /// the three async entry points that interval has TWO halves: the ThreadPool hop before the leaf
     /// reaches the gate (its prologue runs under <c>SubscribeOn(TaskPoolScheduler)</c>), and the gate
     /// wait itself — which, once a permit is released, also needs a ThreadPool thread to RESUME the
-    /// waiter, because <see cref="SemaphoreSlim"/> completes its async waiters asynchronously. So a
-    /// deep queue is "the cap is exhausted" only when the gate has NO free permit; with permits free,
-    /// or permits granted to waiters that have not yet resumed, the queue is waiting for a THREAD, and
-    /// raising the cap would change nothing. The release create that missed its 10 s bound on
+    /// waiter, because <see cref="SemaphoreSlim"/> completes its async waiters asynchronously. So the
+    /// queue is split by WHERE each leaf is, not inferred from the permit count: leaves not yet at the
+    /// gate wait for a thread whatever the cap is doing; gate waiters holding a granted permit wait for
+    /// a thread to resume them; only gate waiters with no permit are held back by the cap. A queue can
+    /// hold all three at once, so each is reported. The release create that missed its 10 s bound on
     /// memex-cloud read <c>pg-read:Postgres(cap 16) 94 waiting, 10 in flight</c> — six permits that
     /// were neither running nor demonstrably free — and the census could not say which.</para>
     ///
@@ -745,17 +756,25 @@ public sealed class IoPool : IIoPool, IDisposable
         {
             var waiting = Volatile.Read(ref _waiting);
             var blockingWaiting = Volatile.Read(ref _blockingWaiting);
+            var atGate = Volatile.Read(ref _atGate);
             var inFlight = Volatile.Read(ref _inFlight);
             var blockingInFlight = Volatile.Read(ref _blockingInFlight);
             // CurrentCount never throws, not even on a disposed SemaphoreSlim — which matters
             // because this is read from failure paths whose own message it would otherwise replace.
             var free = _gate.CurrentCount;
             var asyncInFlight = Math.Max(0, inFlight - blockingInFlight);
+            var asyncWaiting = Math.Max(0, waiting - blockingWaiting);
+            var atGateClamped = Math.Min(atGate, asyncWaiting);
+            var granted = Math.Min(atGateClamped, Math.Max(0, _maxConcurrency - free - asyncInFlight));
             return new IoPoolAdmission(
-                AsyncWaiting: Math.Max(0, waiting - blockingWaiting),
+                AsyncWaiting: asyncWaiting,
                 BlockingWaiting: blockingWaiting,
                 PermitsFree: free,
-                GrantedNotRunning: Math.Max(0, _maxConcurrency - free - asyncInFlight));
+                GrantedNotRunning: granted)
+            {
+                BeforeGate = asyncWaiting - atGateClamped,
+                BehindCap = atGateClamped - granted
+            };
         }
     }
 
@@ -828,8 +847,12 @@ public sealed class IoPool : IIoPool, IDisposable
                     var ct = linked.Token;
                     // Ends the wait that began at SUBSCRIBE; records an admission only when a slot
                     // was granted — see InvokeCore for why a cancelled wait is not one.
+                    // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                    // is waiting has not yet been given a thread to reach the gate at all.
+                    Interlocked.Increment(ref _atGate);
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    catch { LeaveWaitOnce(); throw; }
+                    catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                    Interlocked.Decrement(ref _atGate);
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
@@ -1267,8 +1290,12 @@ public sealed class IoPool : IIoPool, IDisposable
                             var ct = linked.Token;
                             // Ends the wait that began at SUBSCRIBE; an admission is recorded only
                             // when a slot was granted (see InvokeCore).
+                            // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                            // is waiting has not yet been given a thread to reach the gate at all.
+                            Interlocked.Increment(ref _atGate);
                             try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                            catch { LeaveWaitOnce(); throw; }
+                            catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                            Interlocked.Decrement(ref _atGate);
                             LeaveWaitOnce();
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);

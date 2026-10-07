@@ -46,16 +46,19 @@ public readonly record struct IoPoolReading(
 /// <para>A depth alone cannot say it. Async leaves are counted as waiting from the moment they are
 /// accepted, which covers a ThreadPool hop before they reach the gate and a ThreadPool hop after a
 /// permit is handed to them; blocking leaves wait on the limited-concurrency scheduler and never
-/// touch the gate. So the cap is exhausted only when the async queue sits behind a gate with NO free
-/// permit. Waiting with permits free, or permits granted to waiters that have not resumed, is a wait
-/// for a THREAD — and the remedy for that is never a larger cap.</para>
+/// touch the gate. Permit availability alone cannot say what an accepted leaf waits for, so the
+/// split is by position: <see cref="BeforeGate"/> (no thread yet to reach the gate),
+/// <see cref="GrantedNotRunning"/> (a permit, no thread yet to resume) and <see cref="BehindCap"/>
+/// (at the gate with no permit). Only the last is the cap; the first two are a wait for a THREAD,
+/// and the remedy for those is never a larger cap. A queue may hold both kinds at once.</para>
 /// </summary>
 /// <param name="AsyncWaiting">Async leaves accepted and not yet running (before or at the gate).</param>
 /// <param name="BlockingWaiting">Blocking leaves queued on the limited-concurrency scheduler.</param>
 /// <param name="PermitsFree">The gate's free permits at the reading.</param>
 /// <param name="GrantedNotRunning">
-/// Permits that are neither free nor held by a running async leaf: handed to a waiter whose
-/// continuation has not yet been given a thread (or in the instant between grant and count).
+/// Gate waiters holding a permit that is neither free nor held by a running async leaf: handed to a
+/// waiter whose continuation has not yet been given a thread (or in the instant between grant and
+/// count).
 /// </param>
 public readonly record struct IoPoolAdmission(
     int AsyncWaiting,
@@ -64,10 +67,23 @@ public readonly record struct IoPoolAdmission(
     int GrantedNotRunning)
 {
     /// <summary>
-    /// The async queue is behind permits that are FREE or GRANTED-but-not-running: what it waits
-    /// for is a thread to run or resume the leaf, not a slot under the cap.
+    /// Async leaves accepted and not yet at the gate: their prologue has not been given a ThreadPool
+    /// thread. They wait for a THREAD whatever the cap is doing.
     /// </summary>
-    public bool AsyncQueueWaitsForAThread => AsyncWaiting > 0 && (PermitsFree > 0 || GrantedNotRunning > 0);
+    public int BeforeGate { get; init; }
+
+    /// <summary>
+    /// Async leaves inside the gate wait that hold no granted permit — the only part of the queue the
+    /// cap is holding back.
+    /// </summary>
+    public int BehindCap { get; init; }
+
+    /// <summary>
+    /// Leaves waiting for a THREAD: before the gate, or granted a permit and not yet resumed. Counted
+    /// separately from <see cref="BehindCap"/> because a queue can hold both at once, and a single
+    /// binary verdict over a mixed queue is the ambiguity this split exists to remove.
+    /// </summary>
+    public int WaitingForAThread => BeforeGate + GrantedNotRunning;
 }
 
 /// <summary>
@@ -219,18 +235,19 @@ public static class IoPoolQueueReport
     }
 
     /// <summary>
-    /// The phrase that marks an async queue as waiting for a THREAD rather than for the cap. Named
-    /// so a test (and an operator's grep) matches the verdict, not a paraphrase of it.
+    /// The phrase that marks async leaves waiting for a THREAD (before the gate, or granted and not
+    /// resumed). Named so a test (and an operator's grep) matches the verdict, not a paraphrase.
     /// </summary>
-    public const string WaitsForAThread = "the wait is for a THREAD, not for this cap";
+    public const string WaitsForAThread = "waiting for a THREAD, not for this cap";
 
-    /// <summary>The phrase that marks an async queue as genuinely behind an exhausted cap.</summary>
-    public const string WaitsForTheCap = "the cap is exhausted";
+    /// <summary>The phrase that marks async leaves held back by an exhausted cap.</summary>
+    public const string WaitsForTheCap = "behind the exhausted cap";
 
     /// <summary>
-    /// Says, for one pool, whether its async queue is behind the cap or behind a thread (#5057). The
-    /// blocking half is named separately because it never passes through the gate the permits
-    /// describe.
+    /// Says, for one pool, how much of its async queue waits for a thread and how much for the cap
+    /// (#5057). Both are printed when both are present: a queue can be mixed, and a single verdict
+    /// over a mixed queue is what this split removes. The blocking half is named separately because
+    /// it never passes through the gate the permits describe.
     /// </summary>
     private static void AppendAdmission(StringBuilder text, IoPoolAdmission a)
     {
@@ -240,14 +257,31 @@ public static class IoPoolQueueReport
                 .Append(a.AsyncWaiting.ToString(CultureInfo.InvariantCulture))
                 .Append(" async at ")
                 .Append(a.PermitsFree.ToString(CultureInfo.InvariantCulture))
-                .Append(" free permit(s)");
-            if (a.GrantedNotRunning > 0)
-                text.Append(", ")
+                .Append(" free permit(s):");
+            var first = true;
+            if (a.WaitingForAThread > 0)
+            {
+                text.Append(' ')
+                    .Append(a.WaitingForAThread.ToString(CultureInfo.InvariantCulture))
+                    .Append(' ')
+                    .Append(WaitsForAThread)
+                    .Append(" [")
+                    .Append(a.BeforeGate.ToString(CultureInfo.InvariantCulture))
+                    .Append(" before the gate, ")
                     .Append(a.GrantedNotRunning.ToString(CultureInfo.InvariantCulture))
-                    .Append(" granted but not yet running");
-            text.Append(": ")
-                .Append(a.AsyncQueueWaitsForAThread ? WaitsForAThread : WaitsForTheCap)
-                .Append(')');
+                    .Append(" granted and not yet resumed]");
+                first = false;
+            }
+            if (a.BehindCap > 0)
+            {
+                if (!first)
+                    text.Append(';');
+                text.Append(' ')
+                    .Append(a.BehindCap.ToString(CultureInfo.InvariantCulture))
+                    .Append(' ')
+                    .Append(WaitsForTheCap);
+            }
+            text.Append(')');
         }
         if (a.BlockingWaiting > 0)
             text.Append(" (")
