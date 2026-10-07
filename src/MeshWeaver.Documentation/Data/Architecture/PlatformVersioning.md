@@ -43,8 +43,8 @@ core, so a floor that says "needs the 3.1 line" holds a `3.0.0-ci.*` portal and 
 
 **Stable does not start following main.** A new-notation build carries no pre-release label, so to NuGet
 it is as "clean" as a release. `VersionSelect.PickTargets` therefore keeps any tag with a run number out
-of `Stable`, and Stable installs stay where they are until the release mechanism below is decided. See
-open decision 1.
+of `Stable`, so Stable keeps following exactly what it follows today: deliberately cut releases
+(`3.0.0`, `3.1.0`, …), which `release.yml` promotes. See decision 1 in §6.
 
 ## 2. What `3-latest` means for consumers
 
@@ -90,7 +90,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `.github/workflows/node-repo-gate.yml:844-847` | **R**: `platform-set` input shape | **handled**, executed by `test-gate-lane-forwards-the-callers-set.py` |
 | `.github/workflows/node-repo-publish-bake.yml:2106` | **R**: released-version shape | already accepts `X.Y.Z` |
 | `.github/workflows/edge-images.yml:74-76` | **P**: edge tag; for the new notation it falls through to `<v>-edge.<run>` | already correct |
-| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | owed: open decision 2 |
+| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | owed, together with the minter: decision 2 in §6 |
 | `.github/acr-retention/*`, comments across `main-cd.yml` | prose and fixtures | history; no change |
 
 ### MeshWeaver.Plugins
@@ -178,25 +178,41 @@ that verdict is easy to misread.
   Without the reader, `3.1.N` lands in the promotion band and is never chosen.
 - `VersionSelectTest.TheOldFleetPattern_NeverSelectsTheNewNotation`: why step 3 comes before step 4.
 - `VersionSelectTest.WideningThePattern_BeforeTheCutOver_ChangesNothing`: why step 3 is safe early.
-- `VersionSelectTest.Stable_NeverSelectsANewNotationBuild`: open decision 1, as implemented.
+- `VersionSelectTest.Stable_NeverSelectsANewNotationBuild`: decision 1 in §6, as implemented.
 - `AFloor_IsOrderedAcrossTheCutOver`: a floor in either notation is ordered against a build in the
   other.
 - The script self-tests (`platform-version.py`, `arm-promoted-set.py`, `resolve-platform.py`,
   `test-gate-lane-forwards-the-callers-set.py`) check the same table. A negative control on the
   resolver (moving its boundary to 9.9) fails exactly the new-notation cases.
 
-## 6. Open decisions
+## 6. Decisions taken (maintainer can override)
 
-1. **What "Stable" means once main builds carry no label.** As implemented, Stable excludes every
-   run-numbered tag, so Stable installs (the seeded default) do not start following main, and they
-   reach no new-notation build at all. The candidates: Stable follows a `stable` channel pointer
-   ([Release Channels](../ReleaseChannels)), or Stable means "Continuous with a minor-pinned pattern".
-2. **What `release.yml` promotes.** Today a `v3.0.0` tag retags the newest `3.0.0-ci.<n>` of its line as
-   `3.0.0`. In the new notation every main build already has a release-shaped version, so a release
-   is either a git tag on an existing `3.<minor>.<run>` plus a channel pointer, or the promotion step
-   retires.
-3. **Who bumps the minor, and when**: a pull request that edits `PlatformVersion`. The run number
-   keeps increasing across the bump, so the order is unaffected.
-4. **The counter is `GITHUB_RUN_NUMBER` of `main-cd.yml`.** Renaming or recreating the workflow
-   resets it. That risk exists today. With the patch as the run number it becomes visible in every
-   version, so it is now a SemVer regression as well as a lineage one.
+These were open when the scheme was drafted. Each was settled the conservative way: nothing already
+published is renamed, the minor moves only by an explicit, governed action, and Stable keeps
+following what it follows today. Overriding one is a follow-up change to this page and the code it
+names. None of them affects the one-lineage order in §1.
+
+1. **Stable keeps following deliberately cut releases.** Stable excludes every run-numbered tag
+   (`VersionSelect.PickTargets`, pinned by `VersionSelectTest.Stable_NeverSelectsANewNotationBuild`),
+   so a Stable install, the seeded default, never starts following main. It reaches a new-notation
+   line only through a release (decision 2). Not chosen: a `stable` channel pointer
+   ([Release Channels](../ReleaseChannels)), or Stable as "Continuous with a minor-pinned pattern".
+   Either would change what every Stable install follows on the day it lands.
+2. **`release.yml` keeps promoting, and renames nothing.** A `v<major>.<minor>.0` tag on a sealed
+   commit adds the clean tag `<major>.<minor>.0` to that commit's already-published
+   `<major>.<minor>.<run>` set, copies its release marker and opens the next-line pull request,
+   exactly as it does for `v3.0.0` today. The `<major>.<minor>.<run>` tag stays where it is. In the
+   new notation the release moves no `-latest` pointer: the set it promotes was armed by CD, which
+   already moved `3-latest`/`3.<minor>-latest` to it or past it, so a release-side move could only
+   move them backwards. GHCR `latest` still follows releases. This is implemented with the minter
+   (step 4). Not chosen: retiring the promotion step, or a git-tag-only release with a channel
+   pointer.
+3. **The minor is bumped only by a merged pull request that edits `PlatformVersion`.** In practice that
+   is the next-line pull request `release.yml` opens after a release (`3.1.0` → `3.2.0`), which goes
+   through the same review and required checks as any other change. No workflow, script or
+   self-updater edits `PlatformVersion` on its own. The run number keeps increasing across the bump,
+   so the order is unaffected.
+
+**A known risk, not a decision:** the counter is `GITHUB_RUN_NUMBER` of `main-cd.yml`. Renaming or
+recreating the workflow resets it. That risk exists today. With the patch as the run number it
+becomes visible in every version, so it is now a SemVer regression as well as a lineage one.
