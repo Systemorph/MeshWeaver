@@ -109,6 +109,22 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// The keyed stand-in path of <see cref="ModuleOwnedRootSource"/>: a KEYED registration of a type the
+    /// module itself DECLARES is never forwarded into the root (route ModuleOwned), so the root answers it
+    /// only through the registration source, which must find the declaring generation for a type whose
+    /// ONLY registration is keyed. Asked by its key on the root, it resolves from the module's container.
+    /// </summary>
+    [Fact]
+    public void AKeyedServiceOfATypeTheModuleDeclares_ResolvesOnTheRootByItsKey()
+    {
+        var type = HeldGeneration(Module).Assembly.GetType("MeshWeaver.Test.LiveServices.IOwnGreeter")
+                   ?? throw new Xunit.Sdk.XunitException("IOwnGreeter is not in the held module");
+        var greeter = Mesh.ServiceProvider.GetRequiredKeyedService(type, "own-keyed");
+        ((string?)type.GetMethod("Greet")!.Invoke(greeter, null)).Should().Be("own v1",
+            "the root holds no descriptor for a module-declared keyed type; the source must answer it by key");
+    }
+
+    /// <summary>
     /// The NEGATIVE CONTROL for the forwarding: the root's forwarders were laid out at boot, so an N+1
     /// that forwards a DIFFERENT set of platform services cannot be swapped live — refused by name, N
     /// keeps serving.
@@ -177,6 +193,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken ct) { journal.Write("start v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
             public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken ct) { journal.Write("stop v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
         }
+        public interface IOwnGreeter { string Greet(); }
+        public sealed class OwnGreeter : IOwnGreeter { public string Greet() => "own v{{version}}"; }
         public class Journal2 : MeshWeaver.Graph.Test.HostedServiceJournalBase { }
         public sealed class ExtraJournaling(MeshWeaver.Graph.Test.HostedServiceJournal journal) : Microsoft.Extensions.Hosting.IHostedService
         {
@@ -192,6 +210,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
                         services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();
                         services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>("keyed-greeter");
+                        services.AddKeyedSingleton<IOwnGreeter, OwnGreeter>("own-keyed");
                         {{(extraGreeter ? "services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();" : "")}}
                         {{(classService ? "services.AddSingleton<MeshWeaver.Graph.Test.HostedServiceJournalBase, Journal2>();" : "")}}
                         services.AddHostedService<Journaling>();
