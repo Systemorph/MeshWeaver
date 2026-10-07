@@ -112,9 +112,11 @@ permissions:
 # state that has stopped moving. The `feedback` lane keeps the comment-driven runs — they still give
 # the author a fast reading on the PR page — without letting them take the gate lane's slot.
 #
-# 🚨 This does NOT make the comment-driven green mean anything to branch protection. Nothing here
-# can: which contexts the rollup carries is GitHub's choice, not this file's. The only shape that
-# would be correct BY CONSTRUCTION is reporting the verdict as a commit STATUS against the head sha
+# 🚨 This does NOT make the comment-driven green mean anything to branch protection — but the lane's
+# `refresh` job now carries it there: on a GREEN comment- or review-driven verdict it re-runs the
+# newest `pull_request` run for the head, whose verdict IS read (see the `lane` job). Nothing here
+# can change which runs the rollup reads — that is GitHub's choice, not this file's. The only shape
+# that would be correct BY CONSTRUCTION is reporting the verdict as a commit STATUS against the head sha
 # (last write per context wins, whatever produced it), and that is a required-context rename and a
 # ruleset edit — the maintainer's call, recorded in Doc/Architecture/ReviewFindingsAnswered.
 concurrency:
@@ -213,6 +215,13 @@ jobs:
   # checks out (the pull request's merge commit, or the queue entry's head — both are refs in this
   # repository, fork pull requests included), so a pull request that changes the predicate is judged
   # by one copy in both jobs.
+  #
+  # ♻️ THE LANE ALSO REFRESHES THE VERDICT BRANCH PROTECTION READS (its `refresh` job). A GREEN
+  # verdict on a `pull_request_review_comment` / `pull_request_review` run re-runs the failed jobs
+  # of this workflow's newest `pull_request` run for the head — the one the rollup reads (#4649) —
+  # so a reply that answers the last thread unblocks the pull request without anyone re-running it
+  # by hand. `actions: write` below is for that job alone (a called job can hold only what its caller
+  # grants); the gate job above stays read-only.
   lane:
     uses: ./.github/workflows/node-repo-review-answered.yml
     permissions:
@@ -220,5 +229,6 @@ jobs:
       pull-requests: read
       issues: read
       checks: read
+      actions: write
     with:
       scripts-ref: ${{ github.sha }}
