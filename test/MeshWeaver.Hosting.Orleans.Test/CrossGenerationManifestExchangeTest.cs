@@ -114,17 +114,24 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
         var cluster = await GenerationSkewCluster.Deploy(new Skew(PreviousGenerationLacksLegacyPath: true, ForceOrleansDefaultOnCurrent: false), output);
         try
         {
-            // Positive anchor: the previous generation has rejected the direct manifest request. The
-            // rejection is logged BEFORE the error response is sent, so by now the current silo's
-            // fetch has failed and it has published nothing for the previous silo.
+            // Positive anchor: the previous generation has received — and rejected — the direct
+            // manifest request, so the skew applied and the current silo has tried to learn it.
             await cluster.RejectionsOnPrevious
                 .Where(line => line.Contains(LegacySiloManifestAlias, StringComparison.Ordinal))
                 .Should().Within(TestTimeouts.CrossSilo)
                 .Emit("the previous generation receives — and cannot decode — the direct manifest request", ct);
 
-            cluster.CurrentKnowsPrevious().Should().BeFalse(
-                "with no protocol in common the current generation cannot learn the previous one's hosted types — "
-                + "the failure the clean case would report if Orleans ever dropped the legacy path");
+            // The rejection is logged BEFORE the error response is sent, so a single read here would
+            // be false by construction (it is false from startup). Re-read over the SAME bound the
+            // clean case waits for the opposite answer: only silence across that whole window shows
+            // the clean case's wait would really fail, rather than a later refresh or fallback
+            // publishing the manifest after a premature sample.
+            await Observable.Interval(TimeSpan.FromMilliseconds(100))
+                .StartWith(0L)
+                .Where(_ => cluster.CurrentKnowsPrevious())
+                .Should().NotEmit(TestTimeouts.CrossSilo,
+                    "with no protocol in common the current generation cannot learn the previous one's hosted types — "
+                    + "the failure the clean case would report if Orleans ever dropped the legacy path", ct);
         }
         finally
         {
@@ -216,7 +223,7 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
         /// — the receive side of the previous generation. Asserts each one was present: a strip that matched
         /// nothing would leave the "previous" silo current and every case vacuous.
         /// </summary>
-        private static HashSet<Type> StripAliases(CompoundTypeAliasTree root, IReadOnlyCollection<string> aliases)
+        private static ImmutableHashSet<Type> StripAliases(CompoundTypeAliasTree root, IReadOnlyCollection<string> aliases)
         {
             var children = typeof(CompoundTypeAliasTree).GetField("_children", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new InvalidOperationException("CompoundTypeAliasTree._children not found — the Orleans layout changed; re-derive the skew model.");
@@ -230,12 +237,12 @@ public class CrossGenerationManifestExchangeTest(ITestOutputHelper output)
                 .Select(kv => Of(kv.Value))
                 .ToArray();
             targets.Should().HaveCount(2, "both manifest system targets must be in the alias tree for the skew to be modelled");
-            var invokables = new HashSet<Type>();
+            var invokables = ImmutableHashSet<Type>.Empty;
             foreach (var alias in aliases)
             {
                 var holders = targets.Where(t => t.ContainsKey(alias)).ToArray();
                 holders.Should().HaveCount(1, $"alias {alias} must exist exactly once to be stripped");
-                invokables.Add(holders[0][alias].Value
+                invokables = invokables.Add(holders[0][alias].Value
                     ?? throw new InvalidOperationException($"alias {alias} names no invokable type"));
                 holders[0].Remove(alias);
             }
