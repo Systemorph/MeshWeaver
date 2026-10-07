@@ -4,3 +4,12 @@
 set -uo pipefail
 log="${HOSTING_INTERLOCK_LOG:?the kubectl stub needs HOSTING_INTERLOCK_LOG}"
 printf 'kubectl %s\n' "$*" >> "$log"
+# `get deployment … initContainers` (the identity-follows-the-image coupling, MeshWeaver#6052):
+# answer with $HOSTING_INTERLOCK_INIT_CONTAINERS (empty by default — a chart without bundles), or
+# fail when $HOSTING_INTERLOCK_GET_FAILS is set.
+case " $* " in
+  *" get deployment "*)
+    if [ -n "${HOSTING_INTERLOCK_GET_FAILS:-}" ]; then echo "Error from server (Forbidden)" >&2; exit 1; fi
+    printf '%s' "${HOSTING_INTERLOCK_INIT_CONTAINERS:-}"
+    ;;
+esac

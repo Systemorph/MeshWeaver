@@ -129,11 +129,11 @@ done <<< "$plan"
 # cannot place is exactly the move it exists to stop.
 portal_image_move() { # <command> → sets pim_ns pim_tag; returns 0 when the command moves the portal image
   local cmd="$1" ref
-  pim_ns="" pim_tag=""
+  pim_ns="" pim_tag="" pim_ref=""
   [[ "$cmd" == *"set image"* && "$cmd" == *"memex-portal-deployment"* && "$cmd" == *"memex-portal="* ]] || return 1
   if [[ "$cmd" =~ (^|[[:space:]])(-n|--namespace)[[:space:]=]+([A-Za-z0-9][A-Za-z0-9-]*) ]]; then pim_ns="${BASH_REMATCH[3]}"; fi
   if [[ "$cmd" =~ memex-portal=([^[:space:]\"\']+) ]]; then
-    ref="${BASH_REMATCH[1]}"; pim_tag="${ref##*:}"
+    ref="${BASH_REMATCH[1]}"; pim_ref="$ref"; pim_tag="${ref##*:}"
     { [ "$pim_tag" != "$ref" ] && [[ "$pim_tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; } || pim_tag=""
   fi
   return 0
@@ -208,6 +208,27 @@ while IFS=$'\t' read -r name command; do
 
   hosting::step "$name"
   echo "[${index}/${total}] ${name}"
+
+  # ── the identity follows the image (MeshWeaver#6052 ask 3) ──────────────────────────────────────
+  # A chart with bundles on renders a `bundle-identity` init container that runs the PORTAL image and
+  # reads the framework identity the build wrote into it, so `bundle-fetch` pulls the publication of
+  # the image the pod RUNS. A `set image … memex-portal=<ref>` moves only the named container; this
+  # moves `bundle-identity` with it, IN THE SAME `set image` (one patch, one rollout) — otherwise the
+  # new pods would read the PREVIOUS image's identity. Not a policy: a mechanical coupling the chart
+  # creates. A Deployment without that container is untouched.
+  if ! hosting::dry && portal_image_move "$command" && [ -n "$pim_ns" ] && [ -n "$pim_ref" ] \
+       && [[ "$command" != *"bundle-identity="* ]]; then
+    if ! inits="$(kubectl -n "$pim_ns" get deployment memex-portal-deployment \
+                    -o 'jsonpath={.spec.template.spec.initContainers[*].name}' 2>&1)"; then
+      hosting::die "step ${index}/${total} '${name}' moves the portal image, but the portal Deployment's init containers could not be read (${inits}) — whether a bundle-identity container must move with it cannot be established, so the image does not move (MeshWeaver#6052). Nothing was changed."
+    fi
+    case " ${inits} " in
+      *" bundle-identity "*)
+        command="${command} bundle-identity=${pim_ref}"
+        hosting::log "step ${index} moves the bundle-identity init container to ${pim_ref} with the portal image, in the same set image (MeshWeaver#6052)"
+        ;;
+    esac
+  fi
 
   if hosting::dry; then
     echo "  DRY-RUN would run: ${command}"

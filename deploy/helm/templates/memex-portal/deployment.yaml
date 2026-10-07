@@ -135,6 +135,51 @@ spec:
         # publication: the container logs it, writes nothing for that source and exits 0 — the
         # pre-warm compiles as it does today; any other failure exits 1 and holds the pod, because a
         # fetch that could not complete must never read as "no bundles".
+{{- if $bundles.fromImage }}
+        # MeshWeaver#6052 ask 3 — the framework identity the fetch pulls for is READ FROM THE PORTAL
+        # IMAGE, not from a value fixed per helm release: this container runs portal.image and copies
+        # the one-line `meshweaver-framework.identity` the build wrote beside the binaries into a
+        # shared emptyDir, which `bundle-fetch` then reads as BUNDLES_IDENTITY_FILE. An image that
+        # predates the file uses bundles.identity as a NAMED fallback (logged as such); with neither
+        # the container exits 1 naming both, because a fetch with no identity must never read as
+        # "no bundles". 🚨 Whatever moves the portal's image must move THIS container's image too
+        # (a helm render does; a name-targeted `set image memex-portal=` does not) — see
+        # Doc/Architecture/PluginBundlesInTheRegistry → "The identity follows the image".
+        - name: "bundle-identity"
+          image: {{ $bundles.portalImage | quote }}
+          imagePullPolicy: "IfNotPresent"
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              set -eu
+              dst=/run/memex-identity/identity
+              if [ -s "$IMAGE_IDENTITY_PATH" ]; then
+                cp "$IMAGE_IDENTITY_PATH" "$dst"
+                echo "bundle-identity: $(cat "$dst") — read from the running image ($IMAGE_IDENTITY_PATH)"
+              elif [ -n "${FALLBACK_IDENTITY:-}" ]; then
+                printf '%s\n' "$FALLBACK_IDENTITY" > "$dst"
+                echo "bundle-identity: WARNING the image carries no $IMAGE_IDENTITY_PATH (it predates MeshWeaver#6052) — using the declared fallback bundles.identity=$FALLBACK_IDENTITY, which does NOT follow a roll"
+              else
+                echo "bundle-identity: ERROR the image carries no $IMAGE_IDENTITY_PATH and bundles.identity (the fallback) is unset — the publication is addressed by identity and none can be named" >&2
+                exit 1
+              fi
+          env:
+            - name: "IMAGE_IDENTITY_PATH"
+              value: {{ $bundles.imageIdentityPath | quote }}
+{{- if $bundles.identity }}
+            - name: "FALLBACK_IDENTITY"
+              value: {{ $bundles.identity | quote }}
+{{- end }}
+          volumeMounts:
+            - name: "memex-bundle-identity"
+              mountPath: "/run/memex-identity"
+          resources:
+            {{- toYaml $bundles.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+{{- end }}
         - name: "bundle-fetch"
           image: {{ $bundles.image | quote }}
           imagePullPolicy: "IfNotPresent"
@@ -146,11 +191,10 @@ spec:
               value: {{ join " " $bundles.sources | quote }}
             - name: "BUNDLES_ROOT"
               value: {{ $bundles.root | quote }}
-{{- if $bundles.identity }}
-            - name: "BUNDLES_IDENTITY"
-              value: {{ $bundles.identity | quote }}
-{{- end }}
-{{- if $bundles.identityFile }}
+{{- if $bundles.fromImage }}
+            - name: "BUNDLES_IDENTITY_FILE"
+              value: "/run/memex-identity/identity"
+{{- else }}
             - name: "BUNDLES_IDENTITY_FILE"
               value: {{ $bundles.identityFile | quote }}
 {{- end }}
@@ -166,6 +210,11 @@ spec:
             - name: "registry-pull-config"
               mountPath: "/run/secrets/registry"
               readOnly: true
+{{- if $bundles.fromImage }}
+            - name: "memex-bundle-identity"
+              mountPath: "/run/memex-identity"
+              readOnly: true
+{{- end }}
 {{- if $bundles.identityFile }}
             # bundles.identityFile is read from the shared data volume: an identity written there
             # by the deployment (a file, one line) is what the init container pulls for.
@@ -599,6 +648,10 @@ spec:
        ORAS (`kubernetes.io/dockerconfigjson` keeps the config under the `.dockerconfigjson` key). */}}
         - name: "memex-bundles"
           emptyDir: {}
+{{- if $bundles.fromImage }}
+        - name: "memex-bundle-identity"
+          emptyDir: {}
+{{- end }}
         - name: "bundle-fetch-script"
           configMap:
             name: "memex-bundle-fetch"
