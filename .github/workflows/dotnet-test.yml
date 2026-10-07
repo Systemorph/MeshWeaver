@@ -2387,6 +2387,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/platform-version.py --self-test
 
+    # release.yml's version steps, EXECUTED in both notations (Doc/Architecture/PlatformVersioning §6,
+    # decision 2): `v3.0.0` promotes `3.0.0-ci.<run>`, `v3.1.0` promotes `3.1.<run>`, a non-zero
+    # patch on the new line is refused, and the withdrawn slip is never promoted.
+    - name: "A release promotes the newest set of its line in both notations (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-release-promotes-both-notations.py
+
     # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
     # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
     # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.

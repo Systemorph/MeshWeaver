@@ -90,7 +90,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `.github/workflows/node-repo-gate.yml:844-847` | **R**: `platform-set` input shape | **handled**, executed by `test-gate-lane-forwards-the-callers-set.py` |
 | `.github/workflows/node-repo-publish-bake.yml:2106` | **R**: released-version shape | already accepts `X.Y.Z` |
 | `.github/workflows/edge-images.yml:74-76` | **P**: edge tag; for the new notation it falls through to `<v>-edge.<run>` | already correct |
-| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | owed, together with the minter: decision 2 in §6 |
+| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | **handled in the minter change** (decision 2 in §6): `v3.0.0` promotes `3.0.0-ci.<run>`, `v<major>.<minor>.0` promotes `<major>.<minor>.<run>`, a non-zero patch on the new line is refused, and no `-latest` pointer moves in the new notation; executed by `test-release-promotes-both-notations.py` |
 | `.github/acr-retention/*`, comments across `main-cd.yml` | prose and fixtures | history; no change |
 
 ### MeshWeaver.Plugins
