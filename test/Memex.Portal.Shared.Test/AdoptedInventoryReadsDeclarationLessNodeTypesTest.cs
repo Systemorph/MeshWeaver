@@ -121,6 +121,11 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
         PrebuiltBundleRetentionHostedService.StampedIdentitiesOf(records, options, null)
             .Should().ContainSingle("a declaration-less record contributes nothing, a stamped one its stamp")
             .Which.Should().Be("fw-1");
+        Action empty = () => PrebuiltBundleRetentionHostedService.StampedIdentitiesOf([], options, null);
+        empty.Should().Throw<InvalidOperationException>(
+                "a store holding bundles and a mesh answering zero NodeType records contradict each other — "
+                + "an empty read is incomplete, and sweeping against it would make every unpinned bundle deletable")
+            .WithMessage("the mesh-wide NodeType read returned no records*");
 
         var withUnreadable = records.Append(new MeshNode("Unreadable")
         {

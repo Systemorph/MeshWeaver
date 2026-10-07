@@ -210,18 +210,30 @@ public sealed class PrebuiltBundleRetentionHostedService(
     /// The reference set the NodeType records name. Throws on a record whose content is present
     /// but unreadable (its stamp is unknown) — never drops it; a declaration-less static NodeType
     /// (no content) adopts nothing and contributes nothing.
+    ///
+    /// <para>An EMPTY read throws too. A prebuilt bundle exists only because a NodeType was
+    /// compiled, so a store holding bundles and a mesh answering ZERO NodeType records contradict
+    /// each other — the read is incomplete (a catalog not yet hydrated, a partition not yet
+    /// reachable), never "nothing is adopted". Sweeping against it would mark every unpinned
+    /// bundle deletable; refusing costs one pass, and the next tick reads again.</para>
     /// </summary>
     /// <param name="records">NodeType records.</param>
     /// <param name="options">The reading hub's serializer options.</param>
     /// <param name="logger">Diagnostics for the content read.</param>
     /// <returns>Every adopted framework identity.</returns>
     internal static ImmutableHashSet<string> StampedIdentitiesOf(
-        IEnumerable<MeshNode> records, System.Text.Json.JsonSerializerOptions options, ILogger? logger) =>
-        records
+        IReadOnlyCollection<MeshNode> records, System.Text.Json.JsonSerializerOptions options, ILogger? logger)
+    {
+        if (records.Count == 0)
+            throw new InvalidOperationException(
+                "the mesh-wide NodeType read returned no records at all — an incomplete read, never "
+                + "\"nothing is adopted\"; the reference set cannot be built, so this pass deletes nothing");
+        return records
             .Select(n => NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(n, options, logger))
             // CompiledFrameworkVersionOf already answers null for a blank stamp.
             .OfType<string>()
             .ToImmutableHashSet(StringComparer.Ordinal);
+    }
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)
