@@ -95,7 +95,9 @@ half-declared block lacks):
 |---|---|
 | `bundles.registry` | the registry host (`cr.meshweaver.cloud`); empty renders nothing, so an environment that has not opted in renders byte-identically |
 | `bundles.sources` | the source names to materialise, as the publisher named them (`[plugins]`) |
-| `bundles.identity` / `bundles.identityFile` | the framework identity to pull — the value the bake lane prints as `baked identity:`, or a one-line file on the data volume the init container reads at run time. One of the two is required: the identity is computed by the portal from its surface manifests (`FrameworkBuildIdentity`) and is not a file inside the image, so nothing in the ORAS container can derive it |
+| `bundles.imageIdentityPath` | where the portal image carries its own framework identity (`/app/meshweaver-framework.identity`, the default). The identity is READ FROM THE RUNNING IMAGE — see "The identity follows the image" below |
+| `bundles.identity` | the FALLBACK identity, used only when the portal image predates the identity file — logged as such, and it does not follow a roll |
+| `bundles.identityFile` | an operator-owned one-line file on the data volume; set ⇒ the identity is not derived from the image |
 | `bundles.image` | the ORAS image, pinned by digest |
 | `bundles.root` | the directory it fills; defaults to `config.memex_portal.PreWarm__PrebuiltBundleRoot`, so the fetch lands exactly where the pre-warm looks |
 | `portal.imagePullSecret` | required when the registry is set: the `kubernetes.io/dockerconfigjson` Secret that pulls the platform image is mounted as ORAS's registry config, and there is no second credential |
@@ -108,10 +110,33 @@ into place as `<root>/<identity>/<source>/`, so the pre-warm sees the publicatio
 all. An absent tag is an unsealed publication: one log line, nothing written for that source,
 exit 0 — the pre-warm compiles that source as it does today. Any other failure — a denied pull,
 a network error, a listed bundle that did not land — exits 1 and holds the pod, because a fetch
-that could not complete must never read as "no bundles". A stale `bundles.identity` after a roll
-that changed the image is inert: the pre-warm finds no directory for its own identity and
-compiles. The script's ConfigMap is hashed into the pod template, so an edit to it rolls the
+that could not complete must never read as "no bundles". The script's ConfigMap is hashed into the pod template, so an edit to it rolls the
 pods as an image change would.
+
+### The identity follows the image (#6052 ask 3)
+
+The publication is addressed by framework identity — the platform compatibility key
+`c<major:D3>e<epoch:D3>`. It used to come from `bundles.identity`, a value fixed per helm release,
+so an in-portal self-update (or any roll that moved only the portal's image) left the init container
+naming the previous image's identity.
+
+* **The image states its identity.** `MeshWeaverSurfaceManifest.targets` writes
+  `meshweaver-framework.identity` beside the binaries of every portal host and publishes it with them
+  — the major from the referenced `MeshWeaver.Compiler` assembly's version, the epoch from the
+  declaration `Directory.Build.props` reads — the same facts the runtime key is computed from.
+  `FrameworkBuildIdentityFileTest` asserts the written value equals `FrameworkBuildIdentity.FrameworkVersion`.
+* **The chart reads it from the image.** A `bundle-identity` init container runs `portal.image`,
+  copies that file into an emptyDir, and `bundle-fetch` reads it as `BUNDLES_IDENTITY_FILE`. An image
+  that predates the file uses `bundles.identity` as a named fallback; with neither, the init container
+  exits 1 naming both. Invariant 13b (`check-chart-invariants.py`) asserts the container runs the
+  portal's image, ahead of the fetch, over a volume both mount.
+* **Whatever moves the portal's image moves this container too.** A helm render does. The operator
+  (`run.sh`) appends `bundle-identity=<ref>` to a plan's `set image … memex-portal=<ref>` when the
+  Deployment carries that container — one `set image`, one rollout — and refuses the move when it
+  cannot read the Deployment. 🚨 **The in-portal self-patcher (`KubernetesDeploymentUpdater`,
+  MeshWeaver.Plugins) still patches only the `memex-portal` container**; until it moves
+  `bundle-identity` as well, a self-patched pod reads the previous image's identity (which is the
+  behaviour this replaced, never worse).
 
 ## Authorization: memex decides, the edge enforces
 

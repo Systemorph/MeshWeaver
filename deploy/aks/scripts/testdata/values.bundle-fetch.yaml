@@ -8,13 +8,13 @@
 # chart leaves all of it dark by default, and without this combination a regression in any of it is
 # invisible until a real pod boots with no bundles.
 #
-# What a consumer sets, and nothing else: the registry host, the sources, the identity of the
-# image it runs, and the pre-warm root the init container fills (the AKS overlay sets the root;
-# this fixture layers on the neutral values, so it names it here).
+# What a consumer sets, and nothing else: the registry host, the sources, and the pre-warm root the
+# init container fills (the AKS overlay sets the root; this fixture layers on the neutral values, so
+# it names it here). NO identity: it is read from the running portal image by the bundle-identity
+# init container (MeshWeaver#6052 ask 3, invariant 13b) — a static one would not follow a roll.
 bundles:
   registry: "cr.example.test"
   sources: ["plugins", "education"]
-  identity: "s0123456789abcdef0123456789abcdef"
 config:
   memex_portal:
     PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"

@@ -2692,6 +2692,35 @@ else
   bad "an unplaceable image move is refused" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
 fi
 rm -f "$_il_log"
+# 6a. MeshWeaver#6052 ask 3: the bundle-identity init container moves WITH the portal image, in the
+#     same set image — so new pods read the identity of the image they run, not the previous one
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_INTERLOCK_INIT_CONTAINERS="wait-for-postgres bundle-identity bundle-fetch" HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && [ "$(grep -c 'set image' "$_il_log")" = "1" ] \
+   && grep 'set image' "$_il_log" | grep -q 'memex-portal=cr.example.test/memex-portal-ai:3.0.0-ci.9332 bundle-identity=cr.example.test/memex-portal-ai:3.0.0-ci.9332$'; then
+  ok "a portal image move carries the bundle-identity init container with it, in ONE set image (#6052)"
+else
+  bad "the bundle-identity init container moves with the portal image" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 6b. …and a Deployment without that container (bundles off) gets the plan's set image unchanged
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_INTERLOCK_INIT_CONTAINERS="wait-for-postgres" HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -eq 0 ] && grep 'set image' "$_il_log" | grep -q 'memex-portal=cr.example.test/memex-portal-ai:3.0.0-ci.9332$'; then
+  ok "without a bundle-identity init container the plan's set image runs unchanged"
+else
+  bad "no bundle-identity: set image unchanged" "rc=${_il_rc} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
+# 6c. an unreadable Deployment is a refusal: the image does not move on a guess
+_il_log="$(mktemp)"
+_il_out="$(_il_run HOSTING_INTERLOCK_GET_FAILS=true HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
+if [ "$_il_rc" -ne 0 ] && ! grep -q 'set image' "$_il_log" && printf '%s' "$_il_out" | grep -q 'MeshWeaver#6052'; then
+  ok "an unreadable portal Deployment stops the run before the image moves, naming #6052"
+else
+  bad "an unreadable Deployment is a refusal" "rc=${_il_rc} out: ${_il_out} log: $(cat "$_il_log")"
+fi
+rm -f "$_il_log"
 # 6. a dry run narrates the interlock's step and runs nothing
 _il_log="$(mktemp)"
 _il_out="$(_il_run HOSTING_DRY_RUN=true HOSTING_PLAN="$(plan "Set the portal image	${_il_set}")")"; _il_rc=$?
