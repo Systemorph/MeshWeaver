@@ -59,11 +59,12 @@ STATUS_NAMES = {1: "Requested", 2: "Pass", 3: "Fail", 4: "NotChecked"}
 # What a refused CREATE means and who fixes it. The caller's grant is an access-control change, so
 # the build never makes it: it is the governed standard `namecheck.caller.grant` on the CRM-owning
 # instance (input: the token's service identity, `svc-…`; signed by a global admin who is not the
-# proposer), which writes `Governance/NameChecks/_Access/{svc}_Access` with the NameCheckCaller role.
+# proposer, or by the standard's maintainer on their own proposal, so one admin can do it alone),
+# which writes `Governance/NameChecks/_Access/{svc}_Access` with the NameCheckCaller role.
 GRANT_REMEDY = ("the build's service user may not create on " + NAMESPACE + ". Owed by a global admin, never "
                 "by the build: propose a Governance/Activity under Governance/Activities with standard "
                 "'namecheck.caller.grant' and inputs.service = the token's service identity (svc-…), signed by "
-                "another global admin; it writes " + NAMESPACE + "/_Access/{svc}_Access with role NameCheckCaller")
+                "a global admin other than the proposer, or by the standard's maintainer on their own proposal; it writes " + NAMESPACE + "/_Access/{svc}_Access with role NameCheckCaller")
 
 
 class NotChecked(RuntimeError):
