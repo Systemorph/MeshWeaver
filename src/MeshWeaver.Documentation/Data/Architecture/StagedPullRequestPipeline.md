@@ -4,7 +4,7 @@ Category: Architecture
 Description: >-
   Every pull request head moves through four stages in order — cheap static controls, the automatic
   review landed and answered, the expensive suites on a FRESH merge with the current main, and arming
-  only once the review is answered AND every required check is green (policy review-then-suites). What
+  only once the review is answered AND every required check is green (policy suites-parallel-with-review: the suites run beside the review by default). What
   each stage runs, what moves a head on (events, not polling), the three loud releases that keep a
   reviewer outage from freezing the fleet, why a hold is red and never skipped, a day of running the
   suites in parallel and why it was reverted, and the measured saving.
@@ -13,12 +13,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Staged Pull Request Pipeline
 
-> **🔀 Review first, then the suites, then the arm** — policy
-> [`review-then-suites`](../PolicyNotProse), the fleet-wide order. The stage gate holds a head until
-> its review landed and every finding is answered; the suites then test the head merged onto the
-> CURRENT main ([Fresh Merge Under Test](../FreshMergeUnderTest)); and auto-merge is armed only once
-> the review is answered AND every required check is green. A short-lived parallel default
-> (`suites-parallel-with-review`) was reverted the same day — see
+> **🔀 Suites beside the review, the arm after both** — policy
+> [`suites-parallel-with-review`](../PolicyNotProse), the fleet-wide default again. The stage gate
+> lets the suites start once stage 0 is green; they test the head merged onto the CURRENT main
+> ([Fresh Merge Under Test](../FreshMergeUnderTest)); and auto-merge is armed only once the review is
+> answered AND every required check is green. Holding the suites until the review landed
+> (`review-then-suites`, now retired) is the per-caller opt-in `review-before-suites: true`; the
+> stage descriptions below read for that opt-in, and the history is in
 > [A day in parallel](#a-day-in-parallel-and-why-it-was-reverted).
 
 **Decision (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
@@ -45,14 +46,14 @@ On 2026-10-05 the suites briefly ran IN PARALLEL with the review (`suites-parall
 stage gate held on stage 0 only), because with ~50 reviews in flight the runners sat idle (09:00Z:
 core 31 jobs running / 0 waiting, Plugins 30 / 0). The maintainer corrected it the same day: the
 fleet-wide order is **review first → suites against a fresh merge with the current main → arm only
-when the review is answered and the suites are green** (policy `review-then-suites`, which replaces
-`suites-parallel-with-review` in the register). What survived the reversal:
+when the review is answered and the suites are green** (policy `review-then-suites`); the maintainer later released that restriction and
+`suites-parallel-with-review` is the default again. What held across both:
 
 - the **fresh merge** on every suite job ([Fresh Merge Under Test](../FreshMergeUnderTest)) — a held
   run released hours later tests today's main, not the merge GitHub built at the push;
 - the gate job's name, `Stage gate: may the suites start` (formerly `Stage 1: review landed and
   answered`; the event half recognises both);
-- the opt-out, `review-before-suites: false`, for a caller that wants a test reading early — it never
+- the switch, `review-before-suites` (default `false`; `true` is the opt-in that holds the suites for the review) — it never
   changes the merge or the arm, which still need the answered review.
 
 **Arming after green.** Condition 4 of the arm gate (`required_checks_green`) refuses while any

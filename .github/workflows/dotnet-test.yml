@@ -601,7 +601,7 @@ jobs:
   # away from the gate that needs it is how a proof and its subject drift apart.
 
   # ── THE STAGE GATE of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
-  # 🔀 Policy review-then-suites: review first (this gate), then the suites on a fresh merge with the
+  # 🔀 Policy suites-parallel-with-review: the suites run beside the review (this gate lets them start after stage 0), on a fresh merge with the
   # current main (policy suites-test-fresh-merge), then the arm once the review is answered and every
   # required check is green.
   # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
@@ -660,7 +660,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # THE MAIN THE SUITES TEST AGAINST, resolved HERE — as the suites START. A run held at the stage
-      # gate (policy review-then-suites) is released by `rerun-failed-jobs`, which re-runs this job
+      # gate (when a caller opts in to review-before-suites) is released by `rerun-failed-jobs`, which re-runs this job
       # but NOT a green `precheck`, so precheck's main may be hours old by then. Every suite job and
       # the green-tree marker take this one; empty off pull requests.
       main-sha: ${{ steps.fresh.outputs.main-sha }}

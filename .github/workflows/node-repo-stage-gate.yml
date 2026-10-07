@@ -1,13 +1,13 @@
 # The staged pull-request pipeline's STAGE GATE (reusable) — may the expensive suites start for this head?
 #
-# 🔀 REVIEW FIRST, THEN THE SUITES, THEN THE ARM (policy `review-then-suites`, which replaced the
-# short-lived `suites-parallel-with-review`). By default this gate holds a pull request head until
-# its review landed and every finding is answered; the suites then run on a FRESH merge with the
+# 🔀 SUITES BESIDE THE REVIEW, THE ARM ONLY AFTER BOTH (policy `suites-parallel-with-review`, back in
+# force after `review-then-suites` was retired). By default this gate lets the suites start as soon
+# as stage 0 is green and run beside the automatic review; they run on a FRESH merge with the
 # current main (policy `suites-test-fresh-merge`), and auto-merge is armed only once the review is
 # answered AND every required check is green (`check-review-answered.py` arm gate, condition 4;
-# MeshWeaver.Plugins `PrArming`). `review-before-suites: false` runs the suites beside the review —
-# a per-caller opt-out, never the default. A caller on the default MUST carry its stage-advance.yml
-# listener: a gate without its listener holds forever.
+# MeshWeaver.Plugins `PrArming`). `review-before-suites: true` is the per-caller OPT-IN that holds
+# the suites until the head's review landed and every finding is answered; a caller that opts in
+# MUST carry its stage-advance.yml listener: a gate without its listener holds forever.
 #
 # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc. must
 # pass before we start test. and we arm only at end of test". Design of record, with the measured
@@ -79,13 +79,13 @@ on:
         default: false
       review-before-suites:
         description: >-
-          true (default, policy review-then-suites) = hold the suites until the head's review landed
-          and every thread is answered; the caller needs its stage-advance.yml listener. false = the
-          suites start as soon as stage 0 is green and run beside the review (an opt-out); merging and
-          arming still require the answered review.
+          false (default, policy suites-parallel-with-review) = the suites start as soon as stage 0 is
+          green and run beside the review; merging and arming still require the answered review.
+          true (opt-in) = hold the suites until the head's review landed and every thread is
+          answered; the caller then needs its stage-advance.yml listener.
         required: false
         type: boolean
-        default: true
+        default: false
     outputs:
       ready:
         description: "'true' when stage 2 may start for this head"
@@ -175,8 +175,8 @@ jobs:
             not_staged "a fork's head is not reviewed by the internal reviewer — not staged; the merge gate still applies"
           fi
           [ -n "${PR:-}" ] || { echo "::error::a pull_request event without a pull request number"; exit 1; }
-          # 🔀 The opt-out (review-before-suites: false): the suites run beside the review. The default
-          # (policy review-then-suites) falls through to the review predicate below.
+          # 🔀 The default (review-before-suites: false, policy suites-parallel-with-review): the suites
+          # run beside the review. The opt-in (true) falls through to the review predicate below.
           if [ "$REVIEW_BEFORE_SUITES" != "true" ]; then
             echo "stage 0 green — the suites start now and run in PARALLEL with the automatic review; merging and arming still require the review landed and every thread answered"
             { echo "ready=true"; echo "mode=parallel"; } >> "$GITHUB_OUTPUT"
