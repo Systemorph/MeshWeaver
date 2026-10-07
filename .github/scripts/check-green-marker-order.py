@@ -171,13 +171,13 @@ def check_job(job: dict, label: str) -> list[str]:
     steps = job.get("steps") or []
     names = [str(s.get("name", "")) for s in steps]
 
-    marker_idx = []
     for m in MARKERS:
         if m not in names:
             errors.append(f"{label}: marker step '{m}' not found — renamed or removed; update MARKERS "
                           f"in check-green-marker-order.py so this gate keeps checking something.")
-        else:
-            marker_idx.append(names.index(m))
+    # EVERY step carrying a marker name, not the first of each: GitHub permits duplicate step names, so a
+    # second `Record green tree` with `always()` would otherwise be a marker nothing here ever checked.
+    marker_idx = [i for i, n in enumerate(names) if n in MARKERS]
     if not marker_idx:
         return errors
     first = min(marker_idx)
@@ -344,6 +344,11 @@ def self_test(root: Path) -> int:
     j = copy.deepcopy(good)
     j["steps"][1]["if"] = "github.event_name == 'pull_request' && " + j["steps"][1]["if"]
     expect("an event exemption on a verdict's if: stays silent", j, False)
+    j = copy.deepcopy(good)  # a DUPLICATE-named marker is a marker too — every occurrence is checked
+    j["steps"].append({"name": "Record green tree",
+                       "if": "always() && needs.build.result == 'success' && needs.test.result == 'success'",
+                       "continue-on-error": True, "run": "git push"})
+    expect("a second step named like a marker, with always(), fires", j, True, "always()")
 
     # NEGATIVE CONTROL ON THE REAL WORKFLOW: the tree must pass as it stands, and must FAIL once the
     # marker is moved back to where #5988 found it (in front of the last gate verdict).
