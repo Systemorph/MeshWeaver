@@ -798,17 +798,27 @@ def derive_release(root: Path, plugin: Path, content_hash: str,
     a human had to remember to bump would silently ship two different trees under one number.
 
     "The highest release" is the highest of the two witnesses — the published tag and the trunk's
-    committed lock (see trunk_baseline for why one of them alone is a hole). When both sit on the
-    same patch, this tree counts as already released if EITHER recorded its hash; a disagreement
-    between them can only ever bump, never re-issue a number under new content.
+    committed lock (see trunk_baseline for why one of them alone is a hole). When only the trunk
+    sits on the highest patch (its tag job has not published yet), this tree is already released
+    if the trunk recorded its hash.
+
+    🚨 When a PUBLISHED tag sits on the highest patch, the TAG alone decides what that number
+    means. A tag is immutable and dependents already resolve it. A trunk lock that claims the same
+    number for a different hash is the defect itself: two merges, each validated against a main
+    that did not yet hold the other, took the same number. "Either witness recorded this hash"
+    let that trunk lock vouch for itself — on main the trunk witness IS the tree being checked — so
+    `--check-versions` passed while tag-modules refused the cut ("v1.3.6 already released with
+    content 575e…, but the tree is 8dee…", MeshWeaver.Education main, 2026-10-06). A disagreement
+    therefore always bumps past the tag; it never re-issues a published number under new content.
 
     No release in the series from either witness ⇒ `.0`, so a newly declared series starts clean.
     `trunk=None` (a repo with no remote) falls back to tags alone — the pre-#434 behaviour, which is
     correct there because nothing can have been merged elsewhere.
     """
     major, minor = declared_series(plugin)
+    published = tag_baseline(root, plugin.name, major, minor, as_of=trunk)
     witnesses = [w for w in (
-        tag_baseline(root, plugin.name, major, minor, as_of=trunk),
+        published,
         trunk_baseline(root, trunk, plugin.name, major, minor) if trunk else None,
     ) if w is not None]
     if not witnesses:
@@ -817,6 +827,11 @@ def derive_release(root: Path, plugin: Path, content_hash: str,
     patch = max(p for p, _, _ in witnesses)
     highest = [w for w in witnesses if w[0] == patch]
     basis = " and ".join(label for _, _, label in highest)
+    if published is not None and published[0] == patch:
+        # The published tag decides — see the docstring. The trunk can only agree or be wrong.
+        if published[1] == content_hash:
+            return f"{major}.{minor}.{patch}", f"unchanged since {basis}"
+        return f"{major}.{minor}.{patch + 1}", f"content moved since {basis}"
     if any(recorded == content_hash for _, recorded, _ in highest):
         return f"{major}.{minor}.{patch}", f"unchanged since {basis}"
     return f"{major}.{minor}.{patch + 1}", f"content moved since {basis}"
@@ -2277,6 +2292,7 @@ def self_test() -> int:
                 f"printed {listed}")
 
         failures.extend(_self_test_main_owned(tmp / "main-owned"))
+        failures.extend(_self_test_published_tag_wins(tmp / "tag-wins"))
 
     if failures:
         print("✗ gen-manifests self-test:")
@@ -2294,8 +2310,56 @@ def self_test() -> int:
           "arm is asserted not to speak the other's, and the per-repo config is REQUIRED — a missing one, a "
           "typo'd key and an unusable project-closure.py each fail rather than defaulting, and "
           "--list-packages exports the EFFECTIVE enumeration (an undeclared dot-directory is not a "
-          "package, a declared skip still is not, and the two real ones are)")
+          "package, a declared skip still is not, and the two real ones are), and a trunk lock "
+          "that re-claims a PUBLISHED number for other content bumps past the tag instead of "
+          "vouching for itself")
     return 0
+
+
+def _self_test_published_tag_wins(repo: Path) -> list[str]:
+    """A trunk lock that claims a TAGGED number for a different tree must derive the NEXT number.
+
+    The shape MeshWeaver.Education main reached on 2026-10-06: `AgenticBusiness/v1.3.6` was tagged
+    for content A; a second merge, validated against a main without that lock, also committed
+    1.3.6, for content B. Both witnesses then sat on patch 6, the trunk one recorded B, and "either
+    witness recorded this hash" answered 1.3.6 — while tag-modules refused to re-cut v1.3.6.
+    """
+    failures: list[str] = []
+
+    def g(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                              text=True, check=False).stdout
+
+    (repo / "Mod").mkdir(parents=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (repo / "Mod" / "index.json").write_text('{"content": {"version": "1.3"}}\n')
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "A", "version": "1.3.6"}\n')
+    g("add", "-A")
+    g("commit", "-qm", "release 1.3.6 = A")
+    g("tag", "-a", "Mod/v1.3.6", "-m", "Mod 1.3.6 (content A)")
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "B", "version": "1.3.6"}\n')
+    g("commit", "-qam", "a second merge re-claims 1.3.6 for B")
+
+    plugin = repo / "Mod"
+    for name, content, want in [("the re-claimed tree B (the defect)", "B", "1.3.7"),
+                                ("the tagged tree A", "A", "1.3.6"),
+                                ("a third tree C", "C", "1.3.7")]:
+        got, basis = derive_release(repo, plugin, content, trunk="main")
+        if got != want:
+            failures.append(f"published tag wins — {name}: expected {want}, derived {got} ({basis})")
+
+    # The trunk-only path is unchanged: with no tag yet at the trunk's number, the trunk's own
+    # record still means "already released" (the window between a merge and its tag job).
+    (repo / "Mod" / "manifest.lock").write_text('{"moduleVersion": "D", "version": "1.3.7"}\n')
+    g("commit", "-qam", "trunk takes 1.3.7 = D, not tagged yet")
+    for name, content, want in [("the trunk's own tree D", "D", "1.3.7"),
+                                ("another tree E", "E", "1.3.8")]:
+        got, basis = derive_release(repo, plugin, content, trunk="main")
+        if got != want:
+            failures.append(f"trunk-only window — {name}: expected {want}, derived {got} ({basis})")
+    return failures
 
 
 def _self_test_main_owned(repo: Path) -> list[str]:
