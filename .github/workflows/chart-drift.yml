@@ -510,10 +510,20 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Serialised: a dispatch overlapping the schedule must not let two runs each find "no
+    # sentinel" and both open one. Queued, never cancelled — every run's report is wanted.
+    concurrency:
+      group: chart-drift-report
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
     steps:
+      # The sentinel lookup lives in a script so it can carry a self-test; nothing else is read.
+      # FIRST: checkout cleans the workspace, so it must run before the verdicts are downloaded.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v8
         with:
           pattern: chart-drift-verdict-*
@@ -532,6 +542,7 @@ jobs:
           RESULT_DRIFT: ${{ needs.drift.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MARKER: "<!-- chart-drift-sentinel -->"
+          LABEL: chart-drift-sentinel
         run: |
           set -euo pipefail
 
@@ -568,22 +579,38 @@ jobs:
           BODY=$(printf '%s\n\n**State: %s** — last checked %s ([run](%s)).\n\n```\n%s```\n\nCounts only, deliberately: this repository is public, so the per-key detail stays in the run log rather than in an issue body (MeshWeaver#4640).\n\n---\nMaintained automatically by `.github/workflows/chart-drift.yml`. Updated in place on every run and closed automatically when every environment matches; it reopens on the next divergence. Do not edit the body — edit the workflow.\n' \
             "$MARKER" "$STATE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_URL" "$DETAIL")
 
-          # ONE issue, ever — found by the marker in its body, across BOTH states so a returning
-          # divergence reopens the original rather than minting a new one each night. Deliberately
-          # not `--search`: GitHub's issue search index lags a freshly-created issue by seconds to
-          # minutes, so a search-based lookup would miss its own issue on the next run and open a
-          # duplicate every day. A plain listing is exact and immediate.
-          FOUND=$(gh issue list --repo "$REPO" --state all --limit 200 \
-                    --json number,state,body \
-                    --jq "map(select(.body != null and (.body | contains(\"$MARKER\")))) | .[0] // empty")
-          NUM=$(printf '%s' "$FOUND" | jq -r '.number // empty')
-          ISSUE_STATE=$(printf '%s' "$FOUND" | jq -r '.state // empty')
+          # ONE issue, ever — found by its dedicated LABEL, across BOTH states, so a returning
+          # divergence reopens the original rather than minting a new one.
+          #
+          # 🚨 This used to scan the 200 most recently created issues for $MARKER in the body. That
+          # is a WINDOW, not a key: the sentinel is long-lived by design, every newer issue pushed it
+          # further back, and once it aged out the scan found nothing and this step OPENED A NEW ONE
+          # — #5049, then #5491, then #5844, consolidated into #5844. The label is filtered
+          # server-side by the REST issues endpoint and read to the last page, so the answer no
+          # longer depends on how many other issues exist. (Not the search API: its index lags a
+          # fresh issue, so a search lookup misses its own issue on the next run.) The script
+          # verifies the label EXISTS first — an unknown label lists `[]`, indistinguishable from
+          # "no sentinel" — and its --self-test (run on every PR in dotnet-test.yml → workflow-shell)
+          # carries the old window scan as its negative control.
+          LOOKUP=$(python3 .github/scripts/sentinel-issue.py find --repo "$REPO" --label "$LABEL" \
+                     --ensure-label --color "d93f0b" \
+                     --description "The ONE standing issue chart-drift.yml updates in place — do not remove")
+          NUM=$(printf '%s' "$LOOKUP" | jq -r '.number // empty')
+          ISSUE_STATE=$(printf '%s' "$LOOKUP" | jq -r '.state // empty')
+          DUPS=$(printf '%s' "$LOOKUP" | jq -r '.duplicates | map("#\(.)") | join(" ")')
+          if [ -n "$DUPS" ]; then
+            # Keep the oldest, REPORT the rest — never open another, never close one silently.
+            echo "::warning::Several open chart-drift sentinels: keeping #$NUM, duplicates $DUPS — close the duplicates by hand."
+            echo "⚠️ Duplicate chart-drift sentinels open: $DUPS (kept #$NUM)." >> "$GITHUB_STEP_SUMMARY"
+            BODY="${BODY}"$'\n\n'"⚠️ Duplicate sentinels are open: ${DUPS}. This one is kept (the oldest); close the others — this workflow never opens another while one is open."
+          fi
 
           if [ "$STATE" = "green" ]; then
-            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "OPEN" ]; then
-              gh issue edit "$NUM" --repo "$REPO" --title "$TITLE" --body "$BODY"
-              gh issue close "$NUM" --repo "$REPO" \
-                --comment "Every environment matches the rendered chart as of $RUN_URL — closing. It reopens automatically on the next divergence."
+            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "open" ]; then
+              gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" --silent
+              gh api "repos/$REPO/issues/$NUM/comments" --silent \
+                -f body="Every environment matches the rendered chart as of $RUN_URL — closing. It reopens automatically on the next divergence."
+              gh api -X PATCH "repos/$REPO/issues/$NUM" -f state=closed --silent
               echo "closed #$NUM"
             else
               echo "In sync, and no tracking issue open. Nothing to do."
@@ -592,9 +619,8 @@ jobs:
           fi
 
           if [ -n "$NUM" ]; then
-            gh issue edit "$NUM" --repo "$REPO" --title "$TITLE" --body "$BODY"
-            [ "$ISSUE_STATE" = "OPEN" ] || gh issue reopen "$NUM" --repo "$REPO"
+            gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" -f state=open --silent
             echo "updated #$NUM (was $ISSUE_STATE)"
           else
-            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
+            gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '"opened #\(.number)"'
           fi

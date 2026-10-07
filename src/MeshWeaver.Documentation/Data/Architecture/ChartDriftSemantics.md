@@ -346,6 +346,32 @@ Findings are printed worst-first and the summary counts each class. Rank the wor
 inside it, which are dated work: the next deploy removes them**; `DIFFERS` is a decision, not a
 deploy.
 
+### The one tracking issue, and how it is found
+
+The workflow keeps ONE standing issue, updated in place, closed when every environment matches and
+reopened on the next divergence. It is found by the dedicated label **`chart-drift-sentinel`** —
+never remove it from the issue; the triage label `feature:chart-drift` is NOT the key, other issues
+carry it too. The lookup (`.github/scripts/sentinel-issue.py`) filters on that label server-side
+through the REST issues endpoint, both states, read to the last page.
+
+It used to scan the 200 most recently created issues for a marker in the body. That is a window,
+not a key: the sentinel is long-lived by design, every newer issue pushed it further back, and once
+it aged out the scan found nothing and the workflow opened a fresh one — #5049, then #5491, then
+#5844 (consolidated into #5844). Now:
+
+- the label's existence is checked on the single-label endpoint first, because an unknown label
+  lists `[]` — indistinguishable from "no sentinel", which would create one;
+- several OPEN sentinels ⇒ the oldest is kept, the rest are reported (a run warning, the step
+  summary and a line in the kept issue's body) and never closed silently; another is never opened;
+- no open one ⇒ the newest closed one is reopened;
+- the `report` job is serialised (`concurrency: chart-drift-report`). The label filter is not
+  instantaneous — measured 2026-10-07, a label applied to #5844 was missing from the filtered
+  listing seconds later and present on the next read — so two overlapping runs could otherwise
+  each find "none" and both create one.
+
+`sentinel-issue.py --self-test` runs on every pull request (`dotnet-test.yml` → *CI's own shell*),
+with the old window scan and a first-page-only pager as negative controls that must miss.
+
 ## `CLUSTER-ONLY` splits in two, and the check now computes the split
 
 There are **three** sides to chart drift, not two:
