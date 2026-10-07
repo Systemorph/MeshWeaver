@@ -142,27 +142,93 @@ public sealed class OpenGraphPreviewService
             });
     }
 
+    /// <summary>Read cap for <see cref="FetchImage"/>: a share picture larger than this is not one
+    /// an unfurler would take either, and the cap bounds what an authored URL can make us download.</summary>
+    public const int MaxImageBytes = 10 * 1024 * 1024;
+
+    /// <summary>
+    /// An external IMAGE, fetched and handed to <paramref name="decode"/> — an authored share
+    /// picture the portal re-serves from its own origin (<c>/api/og/{node}.jpg</c>). Same pool, same
+    /// client, same two-sided SSRF guard and the same deadline as the Open Graph fetch.
+    ///
+    /// <para>NOT cached here, and <paramref name="decode"/> runs INSIDE the pooled leaf: the
+    /// promise <see cref="IoPoolExtensions.Run{T}"/> returns replays its ONE result, so a caller that
+    /// caches it caches what it derived from the bytes (far smaller than the bytes) and derives it
+    /// once — a <c>Select</c> applied after the promise would re-run per subscriber.</para>
+    /// </summary>
+    /// <typeparam name="T">What the caller derives from the picture.</typeparam>
+    /// <param name="url">The absolute http(s) URL of the picture.</param>
+    /// <param name="decode">Derives the result from the response body; may throw for bytes that are
+    /// no usable picture, which surfaces as the observable's error.</param>
+    /// <returns>A single emission, or an error for a refused, failed, non-image, over-size or
+    /// undecodable response — the caller decides what an unavailable picture falls back to.</returns>
+    public IObservable<T> FetchImage<T>(string url, Func<byte[], T> decode) =>
+        IsFetchable(url)
+            ? pool().Run(async ct => decode(await FetchImageAsync(url, ct).ConfigureAwait(false)))
+            : Observable.Throw<T>(new InvalidOperationException(
+                $"Refusing to fetch '{url}': not an absolute http(s) URL on a public address."));
+
+    private async Task<byte[]> FetchImageAsync(string url, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(FetchTimeout);
+        await RefusePrivateResolution(url, cts.Token).ConfigureAwait(false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("Accept", "image/*");
+        request.Headers.TryAddWithoutValidation("User-Agent", "MeshWeaver-OgCard/1.0");
+
+        using var response = await http()
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (mediaType is null || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"'{url}' answered '{mediaType ?? "no content type"}', not an image.");
+        if (response.Content.Headers.ContentLength is > MaxImageBytes)
+            throw new InvalidOperationException(
+                $"'{url}' is {response.Content.Headers.ContentLength} bytes, over the {MaxImageBytes}-byte cap.");
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+        using var body = new MemoryStream();
+        var buffer = new byte[81_920];
+        int read;
+        while ((read = await stream.ReadAsync(buffer, cts.Token).ConfigureAwait(false)) > 0)
+        {
+            if (body.Length + read > MaxImageBytes)
+                throw new InvalidOperationException($"'{url}' exceeds the {MaxImageBytes}-byte cap.");
+            body.Write(buffer, 0, read);
+        }
+        return body.ToArray();
+    }
+
+    /// <summary>
+    /// 🚨 Second SSRF gate, DNS-side: <see cref="IsFetchable"/> vets LITERAL addresses, but a
+    /// hostname that RESOLVES to a private/link-local address (wildcard DNS like
+    /// 169.254.169.254.nip.io) would pass it. Resolved off-hub on the Http pool; refuses when ANY
+    /// resolved address is private, so the request never leaves the process. (A rebinding race
+    /// between this resolve and the client's own remains theoretically possible; the practical
+    /// wildcard-DNS bypass is closed.)
+    /// </summary>
+    private async Task RefusePrivateResolution(string url, CancellationToken ct)
+    {
+        if (allowLoopback
+            || !Uri.TryCreate(url, UriKind.Absolute, out var target)
+            || IPAddress.TryParse(target.Host.Trim('[', ']'), out _))
+            return;
+        var addresses = await System.Net.Dns.GetHostAddressesAsync(target.Host, ct).ConfigureAwait(false);
+        if (addresses.Length == 0 || addresses.Any(IsPrivateOrLocal))
+            throw new InvalidOperationException(
+                $"Refusing to fetch '{target.Host}': resolves to a private or local address.");
+    }
+
     private async Task<OpenGraphPreview> FetchAsync(string url, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(FetchTimeout);
 
-        // 🚨 Second SSRF gate, DNS-side: IsFetchable vets LITERAL addresses, but a hostname that
-        // RESOLVES to a private/link-local address (wildcard DNS like 169.254.169.254.nip.io)
-        // would pass it. Resolve here — already off-hub on the Http pool — and refuse when ANY
-        // resolved address is private: the request never leaves the process. (A rebinding race
-        // between this resolve and the client's own remains theoretically possible; the practical
-        // wildcard-DNS bypass is closed.)
-        if (!allowLoopback
-            && Uri.TryCreate(url, UriKind.Absolute, out var target)
-            && !IPAddress.TryParse(target.Host.Trim('[', ']'), out _))
-        {
-            var addresses = await System.Net.Dns.GetHostAddressesAsync(target.Host, cts.Token)
-                .ConfigureAwait(false);
-            if (addresses.Length == 0 || addresses.Any(IsPrivateOrLocal))
-                throw new InvalidOperationException(
-                    $"Refusing to fetch '{target.Host}': resolves to a private or local address.");
-        }
+        await RefusePrivateResolution(url, cts.Token).ConfigureAwait(false);
 
         // Per-REQUEST headers — never on the client: it can be the process-wide SharedHttp.
         using var request = new HttpRequestMessage(HttpMethod.Get, url);

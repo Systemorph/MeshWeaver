@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Xml.Linq;
 using Memex.Portal.Shared.Seo;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -296,19 +297,72 @@ public static class SeoEndpoints
             CancellationToken ct) =>
         {
             var nodePath = (path ?? "").Trim('/');
-            if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            var authored = nodePath.EndsWith(SeoResolver.AuthoredCardSuffix, StringComparison.OrdinalIgnoreCase);
+            if (authored)
+                nodePath = nodePath[..^SeoResolver.AuthoredCardSuffix.Length];
+            else if (nodePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 nodePath = nodePath[..^4];
             if (nodePath.Length == 0)
                 return Task.FromResult(PngResult(http, renderer.RenderSite(http.Request.Host.Host)));
 
             return SeoResolver.ResolveShareableNode(hub, nodePath)
-                .Select(shareable => shareable is not { } cleared
-                    ? Results.NotFound()
-                    : CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable))
+                .SelectMany(shareable => shareable is not { } cleared
+                    ? Observable.Return(Results.NotFound())
+                    : authored
+                        ? AuthoredCardResult(
+                            hub.ServiceProvider.GetRequiredService<OpenGraphPreviewService>(),
+                            hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SeoEndpoints)),
+                            http, renderer, cleared.Node, cleared.AnonymousReadable)
+                        : Observable.Return(CardResult(http, renderer, cleared.Node, cleared.AnonymousReadable)))
                 .Catch<IResult, Exception>(_ => Observable.Return(Results.NotFound()))
                 .FirstAsync()
                 .ObserveCompletion(LateFault(hub, $"/api/og/{nodePath}"), ct)!;
         }).AllowAnonymous();
+    }
+
+    /// <summary>
+    /// 🚨 THE RE-SERVED AUTHORED PICTURE — <c>/api/og/{node}.jpg</c> (<see cref="SeoResolver.AuthoredCard"/>).
+    ///
+    /// <para>A node whose authored share image lives on ANOTHER host (a Social post's
+    /// <c>mediaUrl</c>) is declared in its head as this URL, not as the foreign one, with
+    /// <c>og:image:type</c> <c>image/jpeg</c> and 1200×630. This answers it: the authored picture,
+    /// fetched once through the SSRF-guarded Http-pool fetcher and normalised by
+    /// <see cref="OgCardRenderer.NormaliseAuthored"/> — so what an unfurler receives is exactly what
+    /// the head promised, from an origin whose headers we set. Same gate as the drawn card (the
+    /// caller already cleared the node through <see cref="SeoResolver.ResolveShareableNode"/>), same
+    /// cache directive.</para>
+    ///
+    /// <para><b>When the authored picture cannot be had</b> — its host is down, refuses us, answers
+    /// something that is no picture, or the node no longer authors one — the node's DRAWN card is
+    /// served, as JPEG. That is not a cover-up: the head's promise is "a 1200×630 JPEG share picture
+    /// of this page", the drawn card is exactly that, and an image URL that 404s makes several
+    /// unfurlers drop the whole preview. The failure is logged, and the promise-cache evicted it, so
+    /// the next request tries the authored picture again.</para>
+    /// </summary>
+    /// <param name="fetcher">The mesh's SSRF-guarded external fetcher.</param>
+    /// <param name="logger">Where a picture that could not be re-served is reported.</param>
+    /// <param name="http">The request, for conditional-GET and response headers.</param>
+    /// <param name="renderer">The card renderer, which also holds the normalised-picture cache.</param>
+    /// <param name="node">The node, already cleared by the caller.</param>
+    /// <param name="sharedCacheable">True when the anonymous gate admitted the node.</param>
+    internal static IObservable<IResult> AuthoredCardResult(
+        OpenGraphPreviewService fetcher, ILogger logger, HttpContext http, OgCardRenderer renderer,
+        MeshNode node, bool sharedCacheable)
+    {
+        IResult Drawn() => JpegResult(http, renderer.RenderJpeg(CardContent(node)), sharedCacheable);
+
+        if (SeoResolver.ExtractImage(node) is not { } source || !SeoResolver.IsExternal(source))
+            return Observable.Return(Drawn());
+
+        return renderer.AuthoredCard(source, fetcher)
+            .Select(jpeg => JpegResult(http, jpeg, sharedCacheable))
+            .Catch<IResult, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "The authored share picture {Source} of {Path} could not be re-served; its drawn card is served instead",
+                    source, node.Path);
+                return Observable.Return(Drawn());
+            });
     }
 
     /// <summary>
@@ -455,15 +509,21 @@ public static class SeoEndpoints
     private static string? TypeLeaf(string? nodeType) =>
         string.IsNullOrWhiteSpace(nodeType) ? null : nodeType[(nodeType.LastIndexOf('/') + 1)..];
 
-    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true)
+    private static IResult PngResult(HttpContext http, byte[] png, bool sharedCacheable = true) =>
+        ImageResult(http, png, "image/png", sharedCacheable);
+
+    private static IResult JpegResult(HttpContext http, byte[] jpeg, bool sharedCacheable) =>
+        ImageResult(http, jpeg, OgCardRenderer.AuthoredMediaType, sharedCacheable);
+
+    private static IResult ImageResult(HttpContext http, byte[] bytes, string mediaType, bool sharedCacheable)
     {
-        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(png))}\"";
+        var etag = $"\"{Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(bytes))}\"";
         if (string.Equals(http.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
             return Results.StatusCode(StatusCodes.Status304NotModified);
 
         http.Response.Headers.ETag = etag;
         http.Response.Headers.CacheControl = CacheDirective(sharedCacheable);
-        return Results.File(png, "image/png");
+        return Results.File(bytes, mediaType);
     }
 
     /// <summary>

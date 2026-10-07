@@ -1,5 +1,8 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text;
+using MeshWeaver.Graph;
+using MeshWeaver.Mesh.Threading;
 using SkiaSharp;
 
 namespace Memex.Portal.Shared.Seo;
@@ -129,12 +132,180 @@ public sealed class OgCardRenderer : IDisposable
     /// </summary>
     public byte[] Render(OgCardContent card)
     {
+        using var image = DrawCard(card);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    /// <summary>
+    /// The same drawn card as <see cref="Render(OgCardContent)"/>, encoded as a baseline JPEG within
+    /// <see cref="MaxShareImageBytes"/> — what <c>/api/og/{node}.jpg</c> answers when the authored
+    /// picture it stands for cannot be fetched or decoded, so the head's declared type and size stay
+    /// true whichever picture is served.
+    /// </summary>
+    /// <param name="card">What the card says about the page.</param>
+    public byte[] RenderJpeg(OgCardContent card)
+    {
+        using var image = DrawCard(card);
+        return EncodeShareJpeg(image);
+    }
+
+    private SKImage DrawCard(OgCardContent card)
+    {
         var info = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info);
         Draw(surface.Canvas, card, AccentFor(card.AccentSeed));
-        using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        return data.ToArray();
+        return surface.Snapshot();
+    }
+
+    /// <summary>
+    /// 🚨 The byte budget an authored share picture is normalised into. WhatsApp — the strictest
+    /// unfurler measured — drops a preview image above roughly 300 KB, and does so AFTER it has
+    /// reserved the large layout from <c>twitter:card=summary_large_image</c>, which is exactly the
+    /// empty-box card a shared post produced (2026-10-07). Kept under that with headroom.
+    /// </summary>
+    public const int MaxShareImageBytes = 280_000;
+
+    /// <summary>The media type of every normalised authored picture (<see cref="NormaliseAuthored"/>).</summary>
+    public const string AuthoredMediaType = "image/jpeg";
+
+    /// <summary>JPEG qualities tried in order until the encoding fits <see cref="MaxShareImageBytes"/>.
+    /// A fixed ladder rather than a search, so the same source always yields the same bytes and the
+    /// route's strong ETag holds.</summary>
+    private static readonly ImmutableArray<int> JpegQualityLadder = [85, 78, 70, 62, 54, 46];
+
+    /// <summary>
+    /// 🚨 An AUTHORED share picture — a post's <c>mediaUrl</c>, a page's <c>ogImage</c> on another
+    /// host — re-drawn as the one shape every unfurler accepts: exactly <see cref="Width"/>×<see cref="Height"/>,
+    /// a BASELINE (non-progressive) JPEG, no larger than <see cref="MaxShareImageBytes"/>.
+    ///
+    /// <para><b>Why the portal redraws a picture it did not make.</b> An authored URL used to be
+    /// declared in the head as-is, with no type and no size, pointing at whatever host the author
+    /// used. A Social post's Supabase JPEG (1264×848, PROGRESSIVE, served with
+    /// <c>x-robots-tag: none</c>) then unfurled in WhatsApp as an EMPTY large card — title,
+    /// description and domain present, the picture box reserved and blank — while the drawn card,
+    /// which is always a declared 1200×630 image on our own origin, did not. Every property the
+    /// unfurler can object to (format, encoding, byte size, dimensions, the host's headers) is fixed
+    /// here instead of hoping the author's host gets all of them right.</para>
+    ///
+    /// <para><b>Nothing is cropped.</b> The whole picture is fitted inside the card; the margin left
+    /// by a different aspect ratio is filled with the same picture enlarged and blurred, so a
+    /// portrait photo or a slide with text at its edge survives intact. Pure: same bytes in, same
+    /// bytes out — no clock, no randomness.</para>
+    /// </summary>
+    /// <param name="source">The encoded source picture (any format Skia decodes: JPEG, PNG, WebP, GIF, BMP).</param>
+    /// <returns>The normalised JPEG, or null when <paramref name="source"/> is not a decodable picture.</returns>
+    public byte[]? NormaliseAuthored(byte[] source)
+    {
+        using var decoded = DecodeUpright(source);
+        if (decoded is null || decoded.Width <= 0 || decoded.Height <= 0)
+            return null;
+        using var picture = SKImage.FromBitmap(decoded);
+
+        var info = new SKImageInfo(Width, Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var surface = SKSurface.Create(info);
+        var canvas = surface.Canvas;
+        canvas.Clear(new SKColor(0x0F, 0x17, 0x2A));
+        var sampling = new SKSamplingOptions(SKCubicResampler.Mitchell);
+
+        // The backdrop: the picture scaled to COVER the card, blurred and dimmed, so the margin a
+        // different aspect ratio leaves reads as part of the picture rather than as a frame.
+        var cover = Math.Max((float)Width / picture.Width, (float)Height / picture.Height);
+        var coverRect = Centred(picture.Width * cover, picture.Height * cover);
+        using (var blur = new SKPaint { ImageFilter = SKImageFilter.CreateBlur(36f, 36f, SKShaderTileMode.Clamp) })
+            canvas.DrawImage(picture, coverRect, sampling, blur);
+        using (var dim = new SKPaint { Color = new SKColor(0, 0, 0, 0x59) })
+            canvas.DrawRect(0, 0, Width, Height, dim);
+
+        // The picture itself, CONTAINED: every pixel the author published stays on the card.
+        var contain = Math.Min((float)Width / picture.Width, (float)Height / picture.Height);
+        using (var paint = new SKPaint { IsAntialias = true })
+            canvas.DrawImage(picture, Centred(picture.Width * contain, picture.Height * contain), sampling, paint);
+
+        using var card = surface.Snapshot();
+        return EncodeShareJpeg(card);
+    }
+
+    /// <summary>The normalised authored pictures, by source URL — instance state on this singleton,
+    /// so it dies with the host. A changed picture is a changed URL (a post's <c>mediaUrl</c> is
+    /// content-addressed by its upload), so an entry never goes stale; a failed fetch or decode is
+    /// EVICTED by the promise-cache, so the next request is a new attempt and never a replayed fault.</summary>
+    private readonly PromiseCache<string, byte[]> authoredCards = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The normalised share picture for an authored image URL (<see cref="NormaliseAuthored"/>),
+    /// fetched ONCE through <paramref name="fetcher"/> — the SSRF-guarded, Http-pool fetch — and
+    /// served from memory afterwards. Errors when the URL is refused, fails, or is no picture; the
+    /// caller decides the fallback, and the next call tries again.
+    /// </summary>
+    /// <param name="url">The authored absolute image URL.</param>
+    /// <param name="fetcher">The mesh's external fetcher.</param>
+    public IObservable<byte[]> AuthoredCard(string url, OpenGraphPreviewService fetcher) =>
+        authoredCards.GetOrAdd(url, source => fetcher.FetchImage(source, bytes =>
+            NormaliseAuthored(bytes)
+            ?? throw new InvalidDataException($"'{source}' is not a picture this portal can decode.")));
+
+    private static SKRect Centred(float width, float height)
+    {
+        var left = (Width - width) / 2f;
+        var top = (Height - height) / 2f;
+        return new SKRect(left, top, left + width, top + height);
+    }
+
+    /// <summary>Decodes <paramref name="source"/> with its EXIF orientation applied — a phone photo
+    /// stored sideways must not unfurl sideways. Null for bytes that are no picture.</summary>
+    private static SKBitmap? DecodeUpright(byte[] source)
+    {
+        using var data = SKData.CreateCopy(source);
+        using var codec = SKCodec.Create(data);
+        if (codec is null)
+            return null;
+        var raw = SKBitmap.Decode(codec);
+        if (raw is null || codec.EncodedOrigin == SKEncodedOrigin.TopLeft)
+            return raw;
+
+        var swap = codec.EncodedOrigin is SKEncodedOrigin.LeftTop or SKEncodedOrigin.RightTop
+            or SKEncodedOrigin.RightBottom or SKEncodedOrigin.LeftBottom;
+        var upright = new SKBitmap(swap ? raw.Height : raw.Width, swap ? raw.Width : raw.Height,
+            raw.ColorType, raw.AlphaType);
+        using (var canvas = new SKCanvas(upright))
+        {
+            canvas.SetMatrix(OrientationMatrix(codec.EncodedOrigin, raw.Width, raw.Height));
+            using var rawImage = SKImage.FromBitmap(raw);
+            canvas.DrawImage(rawImage, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest));
+        }
+        raw.Dispose();
+        return upright;
+    }
+
+    /// <summary>The EXIF orientation as the matrix that maps the stored pixels (<paramref name="w"/>
+    /// × <paramref name="h"/>) onto the upright canvas — x' = sx·x + kx·y + tx, y' = ky·x + sy·y + ty.</summary>
+    internal static SKMatrix OrientationMatrix(SKEncodedOrigin origin, int w, int h) => origin switch
+    {
+        SKEncodedOrigin.TopRight => new SKMatrix(-1, 0, w, 0, 1, 0, 0, 0, 1),
+        SKEncodedOrigin.BottomRight => new SKMatrix(-1, 0, w, 0, -1, h, 0, 0, 1),
+        SKEncodedOrigin.BottomLeft => new SKMatrix(1, 0, 0, 0, -1, h, 0, 0, 1),
+        SKEncodedOrigin.LeftTop => new SKMatrix(0, 1, 0, 1, 0, 0, 0, 0, 1),
+        SKEncodedOrigin.RightTop => new SKMatrix(0, -1, h, 1, 0, 0, 0, 0, 1),
+        SKEncodedOrigin.RightBottom => new SKMatrix(0, -1, h, -1, 0, w, 0, 0, 1),
+        SKEncodedOrigin.LeftBottom => new SKMatrix(0, 1, 0, -1, 0, w, 0, 0, 1),
+        _ => SKMatrix.Identity,
+    };
+
+    /// <summary>Baseline JPEG down the fixed quality ladder until it fits the byte budget; the last
+    /// rung is returned even if it does not, since a 1200×630 JPEG at that quality exceeding the
+    /// budget would take pathological noise, and a slightly large picture beats none.</summary>
+    private static byte[] EncodeShareJpeg(SKImage image)
+    {
+        byte[] encoded = [];
+        foreach (var quality in JpegQualityLadder)
+        {
+            using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+            encoded = data.ToArray();
+            if (encoded.Length <= MaxShareImageBytes)
+                break;
+        }
+        return encoded;
     }
 
     /// <summary>

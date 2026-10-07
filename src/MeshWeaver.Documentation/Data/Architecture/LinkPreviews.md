@@ -52,8 +52,33 @@ Blazor circuit exists:
    is positive; and the instance name plus the path in the footer. A node with no mark gets a
    **default badge** — a rounded tile in the card's accent carrying the page's initial — so no
    card is ever text on a dark rectangle (2026-09-18: the Store shared into iMessage as a bare
-   title beside the site favicon). The head declares `og:image:type/width/height` for the drawn
-   card (an authored image's size is unknown) and mirrors it as `twitter:image`.
+   title beside the site favicon). The head declares `og:image:type/width/height` for every card
+   the portal serves (an image on its own content route has a size unknown to the head) and
+   mirrors it as `twitter:image`.
+
+   **An authored image on ANOTHER host is re-served, never declared raw.** A social post's
+   `mediaUrl`, or an `ogImage` that is an absolute `https://…` URL, is declared as
+   **`/api/og/{path}.jpg`** (`SeoResolver.AuthoredCard`): the route fetches the picture ONCE through
+   the SSRF-guarded Http-pool fetcher (`OpenGraphPreviewService.FetchImage`), and
+   `OgCardRenderer.NormaliseAuthored` redraws it as exactly what the head declares — a **baseline**
+   JPEG of exactly 1200×630, at most `MaxShareImageBytes` (280 KB), the whole picture fitted inside
+   the card with a blurred copy of itself filling the margin (nothing cropped), EXIF orientation
+   applied. The result is cached per source URL in the renderer (a failure is evicted, so the next
+   request tries again) and served with the card's own cache directive and a strong ETag. When the
+   picture cannot be had — the host is down, answers a challenge page, or the node no longer
+   authors one — the node's **drawn card is served as JPEG**, so the declared type and size stay
+   true and the unfurl still carries a picture; the failure is logged.
+
+   *Why (2026-10-07):* a post whose `mediaUrl` was a progressive 1264×848 JPEG on a third-party
+   Supabase host (served with `x-robots-tag: none`) unfurled in **WhatsApp as an EMPTY large card**
+   — title, description and domain shown, the picture box reserved and blank. The head declared
+   that URL with no type and no size, while `twitter:card=summary_large_image` had already
+   committed the unfurler to the large layout. Which of those properties WhatsApp objected to could
+   not be isolated without WhatsApp itself (undeclared type/size, the foreign host's headers or bot
+   protection, the progressive encoding, all plausible); re-serving removes every one of them at
+   once, and the drawn card — a declared 1200×630 image on our own origin — is the shape that was
+   never affected. An image on the portal's own `/api/content/…` route is still declared by URL
+   alone.
 
    **Every page has a card.** The home page and a route that is no node share as the INSTANCE —
    `og:title` is the site name and `og:image` is **`/api/og.png`**, the site card (name + host,
@@ -138,10 +163,11 @@ gate DOES admit and builds the card from that:
   declaration is the owner saying a route in exists. Without one, no call to action: advice that
   leads nowhere is worse than none.
 - **`og:image`** — the ancestor's share image, exactly as a page of its own would declare it: its
-  AUTHORED image when it has one, else the drawn `/api/og/{ancestor}.png`. Either way the same gate
-  already serves it anonymously, so the unfurler can actually fetch what the head declares — and as
-  on a public page, `og:image:type` and 1200×630 are declared only for the drawn card, because an
-  authored banner's dimensions are unknown here.
+  AUTHORED image when it has one (re-served as `/api/og/{ancestor}.jpg` when it lives on another
+  host), else the drawn `/api/og/{ancestor}.png`. Either way the same gate already serves it
+  anonymously, so the unfurler can actually fetch what the head declares — and as on a public page,
+  `og:image:type` and 1200×630 are declared only for a portal-served card, because a banner on the
+  content route has dimensions unknown here.
 - **`noindex, follow`** — the page's content is gated, so it is not a page to rank; the links stay
   crawlable.
 
@@ -249,8 +275,9 @@ is the control `SeoPublicPreviewOptInTest` leads with.
   `content:` reference. That route serves file **bytes**, not the four strings this flag consents to,
   so the opt-in deliberately does not open it — and declaring it anyway would promise exactly the
   broken picture the previous point exists to prevent. On a **previewed** page, therefore: a
-  root-relative authored image falls back to the drawn card, an absolute one is kept (another host's
-  business), and a content-backed icon yields **no icon link at all** — the portal favicon stays,
+  root-relative authored image falls back to the drawn card, an absolute one is re-served as
+  `/api/og/{path}.jpg` exactly as on a public page (another host's bytes, so redrawing them
+  discloses nothing the head's URL did not already point at), and a content-backed icon yields **no icon link at all** — the portal favicon stays,
   which is the same honest fallback the icon route already gives a node with no usable mark. A public
   page is untouched: its authored art is fetchable precisely because the gate admits it.
 - **It is revocable at the origin, and eventually-consistent at the consumer.** A previewed card and
@@ -299,3 +326,31 @@ A page that unfurls shows the full `og:*` set and an `og:image` you can fetch an
 that serves an empty `<title>` and no `og:*` tags is not anonymous-readable — that is the gate
 working, not the feature missing. (Teams and LinkedIn cache unfurls aggressively; a fixed page
 can take hours to re-scrape, and LinkedIn's Post Inspector forces a refresh.)
+
+Then fetch the declared `og:image` itself and read what an unfurler would receive — for a
+portal-served card the type, size and encoding must match the head:
+
+```bash
+curl -s -o card.jpg -w '%{http_code} %{content_type} %{size_download}\n' \
+  https://portal.example.com/api/og/Posts/SomePost.jpg && file card.jpg
+# expect: 200 image/jpeg <≤ 280000> … JPEG image data, … baseline, … 1200x630
+```
+
+### Forcing a re-scrape after a fix
+
+Every unfurler caches the preview **per URL**, and no response header reaches that copy.
+
+- **WhatsApp** keeps a preview for the URL it saw and offers no public re-scrape tool. A preview is
+  built on the SENDER's device when the link is pasted; to see a fix, share a URL WhatsApp has not
+  seen — the same page with a throwaway query string (`…/Posts/X?v=2`). The portal resolves the
+  path and ignores the query for the head, so the card is the page's own, and the canonical
+  `og:url` still names the clean URL. (Whether WhatsApp keys its cache on the pasted URL or on
+  `og:url` has not been measured; the pasted URL is what the query changes.) Already-sent messages
+  keep the preview they were sent with — it travels inside the message.
+- **Facebook / Messenger / Instagram:** the [Sharing Debugger](https://developers.facebook.com/tools/debug/)
+  → *Scrape Again* refetches the head and the image for Meta's own surfaces. WhatsApp shares the
+  crawler user agent (`facebookexternalhit` and `WhatsApp/…` both fetch these pages), but a
+  Sharing Debugger re-scrape has not been shown to clear a preview already cached in WhatsApp —
+  use the query-string route there.
+- **LinkedIn:** Post Inspector forces a refresh. **Slack / Teams / iMessage:** a query string, or
+  wait out their cache (hours to days).

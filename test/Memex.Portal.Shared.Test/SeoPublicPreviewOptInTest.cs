@@ -316,17 +316,20 @@ public class SeoPublicPreviewOptInTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// The other side of that control: an ABSOLUTE authored image is another host's business, fetchable
-    /// or not on its own terms, and nothing here can make it worse — so it is kept, exactly as a public
-    /// page keeps it.
+    /// The other side of that control: an ABSOLUTE authored image is another host's bytes, so it is
+    /// not replaced by the drawn card — it is RE-SERVED from this origin as <c>/api/og/{node}.jpg</c>,
+    /// exactly as a public page re-serves it (see <see cref="AuthoredShareImageTest"/>), and that route
+    /// answers under the same PublicPreview flag. Declared raw, such a picture unfurled in WhatsApp as
+    /// an empty large card.
     /// </summary>
     [Fact]
-    public async Task AnAbsoluteAuthoredImage_IsKept()
+    public async Task AnAbsoluteAuthoredImage_IsReServedFromThisOrigin()
     {
         var card = await Preview("Offers/Offsite");
 
         Assert.NotNull(card);
-        Assert.Equal("https://cdn.example.org/offer.png", card.Image);
+        Assert.Equal("/api/og/Offers/Offsite.jpg", card.Image);
+        Assert.Equal("image/jpeg", SeoResolver.CardMediaType(card.Image));
     }
 
     /// <summary>
