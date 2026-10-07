@@ -2551,8 +2551,10 @@ safe:
   No file at …/v14766-c003e001-1db01ff9e178.dll"*), the type node was written ~6,900 times in 15 hours
   (v12083 → v18986), the recycle-on-new-build rule read each re-adoption as a new build (2,126
   recycle jobs for that type alone), and the replica held an 11+ GiB heap with GC taking more than
-  half of wall time. `NodeAssemblyLoadContext.CanLoadItsBuild` — loaded, or its file still present —
-  now gates the alias. Pinned by
+  half of wall time. The resolver now makes the candidate's bytes RESIDENT before aliasing to it
+  (`NodeAssemblyLoadContext.TryMakeResident` — load the assembly; a load that loses the deletion race
+  skips the candidate). An existence check would not do: the sweep can delete the file between the
+  check and the caller's load, so loading is the only durable guarantee. Pinned by
   `ScanPinSupersessionTest.AReadIsNeverAliasedToASameBuildContextThatCanNoLongerLoadIt` (red on the
   old resolver) and its control `ASameBuildContextThatHasLoadedItsAssemblyIsStillReusedAfterItsFileIsGone`.
 
