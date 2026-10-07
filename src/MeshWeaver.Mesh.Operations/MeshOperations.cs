@@ -1758,7 +1758,15 @@ public partial class MeshOperations
             {
                 var sanitized = RepairJson(node);
                 meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
-                rawContent = (JsonNode.Parse(sanitized) as JsonObject)?["content"] as JsonObject;
+                // The same JSON syntax the typed read above accepted (comments, trailing commas): adding
+                // validation must not narrow what the verb takes.
+                rawContent = (JsonNode.Parse(
+                    sanitized,
+                    documentOptions: new JsonDocumentOptions
+                    {
+                        CommentHandling = hub.JsonSerializerOptions.ReadCommentHandling,
+                        AllowTrailingCommas = hub.JsonSerializerOptions.AllowTrailingCommas,
+                    }) as JsonObject)?["content"] as JsonObject;
             }
             catch (JsonException ex)
             {
