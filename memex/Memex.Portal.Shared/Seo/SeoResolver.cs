@@ -604,16 +604,14 @@ public static class SeoResolver
     /// fetch. So a root-relative authored image falls back to the DRAWN card, which
     /// <see cref="ResolveShareableNode"/> does serve under the same flag.</para>
     ///
-    /// <para>An ABSOLUTE authored image is kept: it is some other host's business, fetchable or not on
-    /// its own terms, and nothing here can make it worse. A PUBLIC page is untouched by this and keeps
-    /// declaring exactly what it declares today — its authored image is fetchable precisely because
-    /// the gate admits the node.</para>
+    /// <para>An ABSOLUTE authored image is shared through the portal's PHOTO card
+    /// (<see cref="PhotoCard"/>) — the same picture, fetched once and cut to a card an unfurler will
+    /// actually show. See <see cref="ShareImage"/>.</para>
     /// </summary>
     /// <param name="node">The withheld node, on a scope that opted in.</param>
     private static string PreviewImage(MeshNode node) =>
-        ExtractImage(node) is { } authored
-        && authored.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? authored
+        ExtractImage(node) is { } authored && IsExternalImage(authored)
+            ? PhotoCard(node.Path)
             : GeneratedCard(node.Path);
 
     /// <summary>
@@ -745,9 +743,42 @@ public static class SeoResolver
     /// <summary>
     /// The image a public page shares with: whatever it authored, else the card the portal draws
     /// for it. Never null — "this page has an Open Graph card" is the default, not an opt-in.
+    ///
+    /// <para>🚨 An ABSOLUTE authored image (another host's URL — a social post's <c>mediaUrl</c>) is
+    /// NOT declared as is: it is declared as <see cref="PhotoCard"/>, which serves that same picture
+    /// cut to 1200×630 JPEG. Authored masters are print-sized (measured 2026-10-07 on memex's posts:
+    /// 3720×2500, 0.2–2.9 MB) and WhatsApp renders an EMPTY frame for an <c>og:image</c> much over
+    /// ~300 KB — the moment posts started sharing their own visual, every share showed a blank
+    /// picture. A root-relative authored image is the portal's own file and is kept.</para>
     /// </summary>
     public static string ShareImage(MeshNode node) =>
-        ExtractImage(node) ?? GeneratedCard(node.Path);
+        ExtractImage(node) switch
+        {
+            { } authored when IsExternalImage(authored) => PhotoCard(node.Path),
+            { } authored => authored,
+            null => GeneratedCard(node.Path),
+        };
+
+    /// <summary>Whether an authored image lives on another host (an absolute http(s) URL).</summary>
+    public static bool IsExternalImage(string? image) =>
+        image is not null
+        && (image.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || image.StartsWith("http://", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The PHOTO card's URL for one node path: the node's own authored picture, fetched by the portal
+    /// and served as a <see cref="OgCardRenderer.Width"/>×<see cref="OgCardRenderer.Height"/> JPEG
+    /// (<c>SharePhoto</c>). Same gate as <see cref="GeneratedCard"/>; the <c>.jpg</c> suffix both
+    /// selects the route's photo branch and tells an unfurler what it is.
+    /// </summary>
+    public static string PhotoCard(string nodePath) => $"/api/og/{nodePath.Trim('/')}.jpg";
+
+    /// <summary>Whether a share image is the portal's PHOTO card — a 1200×630 JPEG, so the head can
+    /// declare its size and type (<c>image/jpeg</c>, unlike the drawn PNG).</summary>
+    public static bool IsPhotoCard(string? image) =>
+        image is not null
+        && image.StartsWith("/api/og/", StringComparison.OrdinalIgnoreCase)
+        && image.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The generated card's URL for one node path. The <c>.png</c> suffix is deliberate: some
@@ -771,6 +802,7 @@ public static class SeoResolver
     /// </summary>
     public static bool IsGeneratedCard(string? image) =>
         image is not null
+        && !IsPhotoCard(image)
         && (image.StartsWith("/api/og/", StringComparison.OrdinalIgnoreCase)
             || string.Equals(image, SiteCard, StringComparison.OrdinalIgnoreCase));
 
