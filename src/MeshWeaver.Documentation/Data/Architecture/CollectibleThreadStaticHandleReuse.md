@@ -242,16 +242,16 @@ The trigger is a **thread exit**. This process has two steady sources of them:
 
 - **ThreadPool workers retire** after about 20 s idle. Those are the threads hub turns and
   deserialisation run on, so they touch NodeType-typed `ArrayPool<T>` constantly.
-- **Every blocking lane of the pools `IoPoolRegistry` registers starts a fresh thread per burst, and
-  that thread exits when its queue drains.** This covers the bounded production pools: the
-  `mw-cpu-lane` compile lane and the `mw-io-lane` IO lanes. It does not cover `IoPool.Unbounded`,
-  whose `InvokeBlocking` runs on the ThreadPool through `Task.Run` and is covered by the ThreadPool
-  bullet above. `LimitedConcurrencyLevelTaskScheduler.NotifyThreadPoolOfPendingWork` runs
-  `new Thread(_ => DrainQueue())`, and `DrainQueue` returns when `_tasks` is empty. The CPU lane has
-  worked this way since the dedicated-thread compile lane, and every IO lane since #5678 (blocking
-  leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
-  the control and public instances on 2026-09-26, core `4c8530d7dd`, contain it). Each
-  blocking-leaf burst is therefore one thread exit, and one more chance to free a handle belonging to
+- **Until #4654, every blocking lane of the pools `IoPoolRegistry` registers started a fresh thread per
+  burst, and that thread exited when its queue drained** (it now keeps them parked — see Remedies). This
+  covered the bounded production pools: the `mw-cpu-lane` compile lane and the `mw-io-lane` IO lanes. It
+  never covered `IoPool.Unbounded`, whose `InvokeBlocking` runs on the ThreadPool through `Task.Run` and
+  is covered by the ThreadPool bullet above. `LimitedConcurrencyLevelTaskScheduler` then ran
+  `new Thread(_ => DrainQueue())` from `NotifyThreadPoolOfPendingWork`, and `DrainQueue` returned when
+  `_tasks` was empty. The CPU lane worked this way since the dedicated-thread compile lane, and every IO
+  lane since #5678 (blocking leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
+  the control and public instances on 2026-09-26, core `4c8530d7dd`, contained it). Each
+  blocking-leaf burst was therefore one thread exit, and one more chance to free a handle belonging to
   a context unloaded since that thread first ran.
 
 Combined with the recompile cadence measured on the control instance (one new compiled assembly every ~8 s for
@@ -275,21 +275,65 @@ carry the identity of the allocator that minted it, with `FreeLoaderAllocatorHan
 skipping on a mismatch. The repro above is the report. Filing it on `dotnet/runtime` is a public act
 on the maintainer's behalf, and it has not been done.
 
-**In this repository**, the defect fires only on a thread **exit**, so two changes remove it until a
-runtime fix ships. Both are **stopgaps against a runtime defect**, and they are named as such:
+**In this repository**, the defect fires only on a thread **exit**, so two changes remove the trigger
+for the threads this process controls until a runtime fix ships. Both are **stopgaps against a
+runtime defect**, named as such, and both are applied (#4654):
 
-1. `System.Threading.ThreadPool.ThreadsToKeepAlive = -1` (runtimeconfig, or
-   `DOTNET_ThreadPool_ThreadsToKeepAlive=-1`). Pool workers stop retiring. The cost is that the
-   pool's peak thread count stays allocated.
-2. `IIoPool` lanes keep their dedicated threads alive when idle instead of exiting on every drain.
-   That is a change to the sealed scheduler and needs its own review.
+1. **ThreadPool workers no longer retire.** The portal chart sets
+   `DOTNET_ThreadPool_ThreadsToKeepAlive=-1` (`deploy/helm/templates/memex-portal/deployment.yaml`).
+   Measured on .NET 10 with `DOTNET_ThreadPool_ThreadTimeoutMs=500`: a 40-item burst leaves 18
+   workers, and all of them retire within 3 s; with the keep-alive set, all 18 remain. The cost is that
+   the pool's peak thread count stays allocated, parked. It takes effect on the next roll of a
+   deployment that renders this chart.
+2. **`IIoPool` blocking lanes keep their threads.** `LimitedConcurrencyLevelTaskScheduler` starts a
+   lane thread on demand (never more than the cap), PARKS it when the queue is empty, wakes it for the
+   next leaf, and lets it exit only when the owning `IoPool`'s disposal completes (`Complete()`).
+   Before, every burst at an idle lane started a thread and every drain ended one. Pinned by
+   `BlockingLaneThreadsAreKeptTest`: 20 sequential bursts run on ONE thread (the exit-per-drain shape,
+   restored as a negative control, uses 20), a warm lane still runs its full cap at once, and disposal
+   releases every kept thread.
 
-Neither has been applied. Each changes thread lifetime for the whole process, so each is an owner's
-decision.
+Neither is the fix. Threads still exit at mesh teardown (every test host does that), and anything
+outside these two pools that starts and ends threads is untouched.
+
+## Production sighting: memex-cloud, 2026-10-07 09:53:29Z
+
+Read from the `createdump` output in Loki through governed `Logs` actions
+(`Ops/Actions/logs-memexcloud-20261007-q5kxg-*` on the control instance). The dump itself was not
+read.
+
+- Pod `memex-portal-deployment-748f7f4577-q5kxg`: `Application started` at 08:59:29Z, so **54 minutes
+  of uptime**, not the ~21 h of the original #4654 crashes. Heap 2.69 GiB, `serverGC=True`, 22
+  ThreadPool threads and `poolPending=0` at the last heartbeat (09:52:51Z). Nothing at `info`/`warn`
+  in the last 90 s beyond heartbeats and two GitHub-webhook warnings.
+- `Crashing thread 45de signal 11`; `NT_SIGINFO … signo 11 code 0001 … addr 0x8`: `SEGV_MAPERR` at
+  offset 8 from a null base. **No `Unwind: exception type` line**, so this is not a managed exception
+  routed through `createdump`.
+- **Thread `45de` had no managed frames.** Its `Unwind: thread 45de` line is followed directly by the
+  next thread's, where every application thread prints `Unwind: managed frames`. Its id is among the
+  newest of the 127 threads in the dump (ids run up to `47cb`; the long-lived runtime threads are
+  `0001`–`0036`), so it was created shortly before the crash. A recently created thread with no
+  managed frame is a thread starting or ending, which is the window this defect's free runs in. The
+  logs cannot say which, and pids are shared with child processes (`git`), so the id gap is not a
+  thread count.
+- The `RIP` printed for `45de` (`00007f8e66665913`, beside the other threads' libc wait addresses) is
+  the signal handler's, not the fault's, and its stack was "found in other mapping" of 3 pages, the
+  alternate signal stack. The fault registers exist only in the dump.
+- 🚨 **The dump is gone.** `DOTNET_DbgMiniDumpName` writes to the `memex-dumps` **emptyDir**, which dies
+  with the pod, and the 13:09Z roll replaced the pod. With rolls this frequent, a production dump
+  survives for hours at most; reading one needs a copy taken before the next roll.
+
+**Not established:** that this crash is this mechanism. It is compatible with it (a young thread with
+no managed frame, a null-based read) and with others.
+
+The same day's restarts on the `pearl` instance are a **different** defect: all three of its dumps in
+the 48 h to 16:08Z (2026-10-06 01:07Z and 12:42Z, 2026-10-07 12:49Z) are `signo 6` with
+`Unwind: exception type System.OutOfMemoryException` — a managed out-of-memory abort, not a native
+fault (`Ops/Actions/logs-pearl-20261007-crash-4654`).
 
 ## Related
 
 - [Debugging Native Crashes](../DebuggingNativeCrashes): sighting #18, and the fact-6 recipe that
   found the dangling base
-- [Controlled IO Pooling](../ControlledIoPooling): the `IIoPool` lanes whose threads exit per drain
+- [Controlled IO Pooling](../ControlledIoPooling): the `IIoPool` lanes, whose threads are now kept between bursts
 - [Node Type Compilation](../NodeTypeCompilation): where collectible contexts are minted and retired
