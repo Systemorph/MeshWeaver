@@ -259,6 +259,14 @@ jobs:
     name: Compile every NodeType (vs core)
     runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     timeout-minutes: 20
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     # 🚨 A job-level `permissions:` in a workflow_call lane is a DEMAND on every caller, not a
     # grant (MeshWeaver#3933 took MeshWeaver.Plugins down for five hours with one `id-token:
     # write` here). Both scopes below sit inside GitHub's RESTRICTED default (contents / packages /
