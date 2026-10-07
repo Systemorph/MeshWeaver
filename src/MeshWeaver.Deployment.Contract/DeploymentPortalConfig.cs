@@ -199,6 +199,54 @@ public static class DeploymentPortalConfig
         return repository is null ? null : $"{repository}:{tag}";
     }
 
+    /// <summary>The self-updater's portal repository when the image names none (<c>SelfUpdateOptions.PortalRepository</c>).</summary>
+    public const string DefaultSelfUpdatePortalRepository = "memex-portal-ai";
+
+    /// <summary>The self-updater's migration repository when the image names none (<c>SelfUpdateOptions.MigrationRepository</c>).</summary>
+    public const string DefaultSelfUpdateMigrationRepository = "memex-migration";
+
+    /// <summary>
+    /// The repository PATH of an image repository reference — everything after the registry host
+    /// (<c>meshweaver.azurecr.io/memex-control</c> → <c>memex-control</c>), or the whole value
+    /// when it names no host. Null for a blank reference. Pure.
+    /// </summary>
+    public static string? RepositoryPath(string? imageRepository)
+    {
+        var repository = (imageRepository ?? "").Trim();
+        if (repository.Length == 0) return null;
+        var slash = repository.IndexOf('/');
+        // A first segment is a HOST only when it looks like one (a dot, a port, or localhost) —
+        // the same rule the Docker reference grammar uses; `library/x` is a path, not a host.
+        var first = slash < 0 ? "" : repository[..slash];
+        var hasHost = first.Contains('.') || first.Contains(':') || first == "localhost";
+        var path = hasHost ? repository[(slash + 1)..] : repository;
+        return path.Length == 0 ? null : path;
+    }
+
+    /// <summary>
+    /// <c>SelfUpdate__PortalRepository</c> for a record: the repository its pods pull
+    /// (<see cref="DeploymentContent.ImageRepository"/>), or null when that IS the image's default —
+    /// so a record on <c>memex-portal-ai</c> renders exactly as before. Pure.
+    /// </summary>
+    public static string? SelfUpdatePortalRepository(DeploymentContent d)
+    {
+        var path = RepositoryPath(d.ImageRepository);
+        return path is null || string.Equals(path, DefaultSelfUpdatePortalRepository, StringComparison.Ordinal) ? null : path;
+    }
+
+    /// <summary>
+    /// <c>SelfUpdate__MigrationRepository</c> for a record: the explicit
+    /// <see cref="DeploymentContent.MigrationImageRepository"/>'s path, or null when the record
+    /// names none or names the image's default. Never derived from the PORTAL repository: the
+    /// operator pairs <c>memex-migration</c> beside the portal (hosting-deploy), which is exactly
+    /// the default. Pure.
+    /// </summary>
+    public static string? SelfUpdateMigrationRepository(DeploymentContent d)
+    {
+        var path = RepositoryPath(d.MigrationImageRepository);
+        return path is null || string.Equals(path, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal) ? null : path;
+    }
+
     // ───────────────────────────────── modules ─────────────────────────────────────────────────
 
     /// <summary>
@@ -601,6 +649,15 @@ public static class DeploymentPortalConfig
         // anything but the three names, and emits them in their canonical casing.
         Set("SelfUpdate__DefaultPolicy", UpdatePolicyName(d.UpdatePolicy));
         Set("SelfUpdate__DefaultPattern", string.IsNullOrWhiteSpace(d.UpdatePattern) ? null : d.UpdatePattern!.Trim());
+        // The repositories the self-updater LISTS and rolls to are the ones the record's pods pull
+        // (Systemorph/MeshWeaver.Plugins#2994): the image's default (memex-portal-ai /
+        // memex-migration) is right for most of the fleet and wrong for every instance on another
+        // repository — control, on memex-control, listed memex-portal-ai and would have rolled
+        // itself onto the working instances' image. Rendered only where the record DIFFERS from the
+        // default, the same rule as SelfUpdate__Registry: restating a default hides the one record
+        // where the value matters.
+        Set("SelfUpdate__PortalRepository", SelfUpdatePortalRepository(d));
+        Set("SelfUpdate__MigrationRepository", SelfUpdateMigrationRepository(d));
         // The per-PACKAGE default update policy (Auto | Notify | None) the instance seeds onto every
         // install record — separate from the platform's own image policy (Admin/UpdatePolicy) since
         // 2026-09-14. Absent renders nothing: the chart's default keeps the legacy AutoUpdateByDefault

@@ -9,6 +9,19 @@ set -uo pipefail
 log="${HOSTING_DEPLOY_STUB_LOG:?the az stub needs HOSTING_DEPLOY_STUB_LOG}"
 fixture="${HOSTING_DEPLOY_FIXTURE:?the az stub needs HOSTING_DEPLOY_FIXTURE}"
 printf 'az %s\n' "$*" >> "$log"
+# The second call (Plugins#2994): `identity show -g G -n N --query clientId -o tsv` answers the bytes
+# of $HOSTING_DEPLOY_FIXTURE/identity/<N> when that file exists, else the real CLI's
+# ResourceNotFound shape — or, with $HOSTING_DEPLOY_FIXTURE/identity/<N>.forbidden present, its
+# AuthorizationFailed shape (a refusal, which hosting-deploy must not read as an absence).
+if [ "${1:-} ${2:-}" = "identity show" ]; then
+  shift 2; ident=""
+  while [ $# -gt 0 ]; do case "$1" in -n|--name) ident="${2:-}"; shift 2 ;; *) shift ;; esac; done
+  if [ -f "$fixture/identity/${ident}.forbidden" ]; then
+    echo "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.ManagedIdentity/userAssignedIdentities/read' (Forbidden)" >&2; exit 1
+  fi
+  [ -f "$fixture/identity/$ident" ] || { echo "ERROR: (ResourceNotFound) The Resource 'Microsoft.ManagedIdentity/userAssignedIdentities/${ident}' was not found." >&2; exit 3; }
+  cat "$fixture/identity/$ident"; exit 0
+fi
 if [ "${1:-} ${2:-} ${3:-}" != "keyvault secret download" ]; then
   echo "az stub: unexpected invocation: $*" >&2; exit 1
 fi

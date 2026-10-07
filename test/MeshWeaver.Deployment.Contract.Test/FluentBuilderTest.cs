@@ -243,6 +243,52 @@ public class FluentBuilderTest
             "shared keys whose value differs between the renderers: " + string.Join(", ", differing));
     }
 
+    /// <summary>
+    /// Systemorph/MeshWeaver.Plugins#2994: control runs <c>meshweaver.azurecr.io/memex-control</c>,
+    /// and nothing rendered that into the self-updater, whose default lists <c>memex-portal-ai</c> —
+    /// the working instances' image. The record's repository now renders as
+    /// <c>SelfUpdate__PortalRepository</c> (and an explicit migration repository as
+    /// <c>SelfUpdate__MigrationRepository</c>) on both renderers; a record on the default
+    /// repositories renders neither key (the negative control), so the fleet's other records render
+    /// byte-identically.
+    /// </summary>
+    [Fact]
+    public void ARecordOnANonDefaultRepository_TellsTheSelfUpdaterWhichRepositoryToList()
+    {
+        var control = new DeploymentContent
+        {
+            ImageRepository = "meshweaver.azurecr.io/memex-control",
+            MigrationImageRepository = "meshweaver.azurecr.io/memex-migration",
+        };
+        var mirrored = new DeploymentContent
+        {
+            ImageRepository = "cr.example.test:5000/estate/memex-control",
+            MigrationImageRepository = "cr.example.test:5000/estate/memex-migration-ctl",
+        };
+        var fleet = new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-portal-ai" };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var c = DeploymentPortalConfig.PortalConfig(control, options);
+            Assert.Equal("memex-control", c["SelfUpdate__PortalRepository"]);
+            Assert.False(c.ContainsKey("SelfUpdate__MigrationRepository"), "memex-migration IS the default — restating it renders nothing");
+
+            var m = DeploymentPortalConfig.PortalConfig(mirrored, options);
+            Assert.Equal("estate/memex-control", m["SelfUpdate__PortalRepository"]);
+            Assert.Equal("estate/memex-migration-ctl", m["SelfUpdate__MigrationRepository"]);
+
+            // Negative control: the default repositories, and no repository at all, render nothing.
+            foreach (var quiet in new[] { fleet, new DeploymentContent() })
+            {
+                var q = DeploymentPortalConfig.PortalConfig(quiet, options);
+                Assert.False(q.ContainsKey("SelfUpdate__PortalRepository"), "the image default stands");
+                Assert.False(q.ContainsKey("SelfUpdate__MigrationRepository"), "the image default stands");
+            }
+        }
+        Assert.Equal("library/memex-control", DeploymentPortalConfig.RepositoryPath("library/memex-control"));
+        Assert.Equal("memex-control", DeploymentPortalConfig.RepositoryPath("localhost/memex-control"));
+        Assert.Null(DeploymentPortalConfig.RepositoryPath("  "));
+    }
+
     [Fact]
     public void ABareRecordStatesItsStorageAndPort()
     {
