@@ -3354,7 +3354,9 @@ public partial class MeshOperations
     ///     own assembly (where a polymorphic subtype would live) is refused. A <c>$type</c> that
     ///     resolves to a real type is left alone — judging it would be reshaping it.</item>
     ///   <item>A top-level member the bound type does not declare is refused, naming it — the
-    ///     same rule and message as <see cref="Patch"/> and <see cref="Update"/>.</item>
+    ///     same rule and message as <see cref="Patch"/> and <see cref="Update"/>. Not asked of
+    ///     content whose <c>$type</c> resolves to a DIFFERENT record: its members are that
+    ///     record's, and the write boundary admits it.</item>
     /// </list>
     /// </summary>
     private string? ValidateCreatedContent(
@@ -3363,9 +3365,14 @@ public partial class MeshOperations
         if (createdContent["$type"] is JsonValue typeValue
             && typeValue.TryGetValue<string>(out var discriminator)
             && !string.IsNullOrEmpty(discriminator)
-            && !ContentDiscriminator.Admits(createdContent, contentType)
-            && !DiscriminatorResolves(discriminator, contentType, probeHub))
-            return $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}', "
+            && !ContentDiscriminator.Admits(createdContent, contentType))
+            // A foreign discriminator that RESOLVES is a different record: its members are that
+            // record's, so judging them against the declared type would refuse here what the write
+            // boundary (ContentSchemaValidator) admits — the verb and the boundary must agree
+            // (review on #6231).
+            return DiscriminatorResolves(discriminator, contentType, probeHub)
+                ? null
+                : $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}', "
                 + $"but no type of that name exists for NodeType '{meshNode.NodeType}' — its content type is "
                 + $"{contentType.Name}. Stored, the node would read as empty to every consumer and anything "
                 + "that reacts to this NodeType would skip it without a word. Send the content as "

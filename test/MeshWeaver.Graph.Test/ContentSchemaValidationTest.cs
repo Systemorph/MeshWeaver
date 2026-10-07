@@ -495,6 +495,100 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
         answer.Should().StartWith("Created:");
     }
 
+    /// <summary>
+    /// The MCP <c>create</c> twin of <see cref="Create_WhoseTypeDiscriminatorNamesAnExistingOtherType_StillLands"/>:
+    /// a <c>$type</c> naming a DIFFERENT record that EXISTS carries that record's members
+    /// (<c>body</c> is not a <see cref="SchemaGuardedContent"/> member). The verb used to judge
+    /// those members against the declared type and refuse what the write boundary admits
+    /// (review on #6231) — the verb and the boundary must agree.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task McpCreate_WhoseTypeDiscriminatorNamesAnExistingOtherType_IsCreated()
+    {
+        var id = NewId();
+
+        var answer = await new MeshOperations(Mesh)
+            .Create(NodeJson(id, $$"""{"$type":"{{nameof(RequiredMemberContent)}}","body":"b"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"create answered: {answer}");
+        answer.Should().StartWith("Created:",
+            "a discriminator that resolves to a real type is admitted by the write boundary; its "
+            + "members are that type's, not the declared one's");
+    }
+
+    /// <summary>
+    /// The discriminator rule on the UPDATE path: an existing, well-formed node re-written with a
+    /// <c>$type</c> that names no type is refused exactly as a create is — the keep-the-stored-
+    /// <c>$type</c> exemption must not widen into "any update passes" (review on #6231).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Update_ToATypeDiscriminatorThatNamesNoType_IsRefused()
+    {
+        var id = NewId();
+
+        await MeshService.CreateNode(Of(CompiledType, id, $$"""{"$type":"{{nameof(SchemaGuardedContent)}}","label":"before"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "the node to re-type must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.UpdateNode(Of(CompiledType, id, """{"$type":"Feedback","label":"after"}"""))
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+
+        failure.Should().NotBeNull(
+            "changing a stored node's `$type` to one that resolves nowhere writes the same dead letter "
+            + "a create would (Plugins#3042)");
+        failure!.Message.Should().Contain("'Feedback'");
+        failure.Message.Should().Contain(nameof(SchemaGuardedContent));
+    }
+
+    /// <summary>
+    /// The exemption itself: an Update that KEEPS the unresolvable <c>$type</c> the stored node
+    /// already carries is preserving what is on disk, and stays admitted so such a node can be
+    /// repaired. A stored dead letter can no longer be produced through the guarded write path, so
+    /// the guard is asked directly with the stored node as <c>ExistingNode</c>. The NEGATIVE
+    /// control is the same write against a stored node carrying a different <c>$type</c>, which
+    /// must be refused — otherwise this would pass for a guard that admitted every update.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Update_KeepingTheStoredUnresolvableTypeDiscriminator_IsAdmitted_ChangingToItIsNot()
+    {
+        var id = NewId();
+
+        // Activates the NodeType so the mesh-wide content-type map knows its declared type.
+        await MeshService.CreateNode(Of(CompiledType, id, $$"""{"$type":"{{nameof(SchemaGuardedContent)}}","label":"before"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "the NodeType must be activated first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var guard = new Security.ContentSchemaValidator(
+            Mesh, Microsoft.Extensions.Logging.Abstractions.NullLogger<Security.ContentSchemaValidator>.Instance);
+        var write = Of(CompiledType, id, """{"$type":"Feedback","label":"repaired"}""");
+
+        var keeping = await guard.Validate(new NodeValidationContext
+            {
+                Operation = MeshWeaver.Mesh.Security.NodeOperation.Update,
+                Node = write,
+                ExistingNode = Of(CompiledType, id, """{"$type":"Feedback","label":"dead letter"}"""),
+            })
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        keeping.IsValid.Should().BeTrue(
+            "keeping the discriminator already on disk is preserving it, not writing new garbage — "
+            + "refusing it would make a stored dead letter unrepairable");
+
+        var changing = await guard.Validate(new NodeValidationContext
+            {
+                Operation = MeshWeaver.Mesh.Security.NodeOperation.Update,
+                Node = write,
+                ExistingNode = Of(CompiledType, id, $$"""{"$type":"{{nameof(SchemaGuardedContent)}}","label":"before"}"""),
+            })
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        changing.IsValid.Should().BeFalse(
+            "the exemption covers only the stored discriminator — changing TO an unresolvable one is refused");
+        changing.ErrorMessage.Should().Contain("'Feedback'");
+    }
+
     private static string NodeJson(string id, string contentJson)
         => $$"""{"id":"{{id}}","namespace":"{{TestPartition}}","name":"Guarded","nodeType":"{{CompiledType}}","content":{{contentJson}}}""";
 }
