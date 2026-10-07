@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -198,7 +199,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n?.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content?.Contains(expected) == true)
-            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 
