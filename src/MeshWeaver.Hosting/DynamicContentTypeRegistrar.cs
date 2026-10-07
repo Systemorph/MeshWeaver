@@ -182,6 +182,15 @@ public static class DynamicContentTypeRegistrar
         // 🚨 The store lookup is file I/O too — FileSystemAssemblyStore probes the directory and
         // reads timestamps when SUBSCRIBED — so it runs inside the pool, never on the emitting thread.
         return pool.InvokeObservable(_ => store.TryGetBuildPath(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
+            // 🚨 #6052 ask 2 — before reporting BytesMissing, re-land the SHIPPED build when it is
+            // the one the record names (ShippedBuildRefetch). Taken AFTER the pooled lookup has
+            // released its slot: the refetch downloads and then writes through this same pool, and
+            // holding a slot while waiting for another is how a bounded pool deadlocks itself.
+            .SelectMany(localPath => !string.IsNullOrEmpty(localPath)
+                    || string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
+                ? Observable.Return(localPath)
+                : ShippedBuildRefetch.ResolveOrRefetch(mesh.ServiceProvider, store,
+                    new MissingBuild(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid), logger))
             .SelectMany(localPath =>
             {
                 if (string.IsNullOrEmpty(localPath))

@@ -497,10 +497,13 @@ public static class DynamicTypePreWarmer
                     var classified = overlay.Definitions;
 
                     var store = ResolveAssemblyStore(mesh);
-                    return NodeTypeBakeStatus
+                    IObservable<NodeTypeBakeReport> ProbeStore() => NodeTypeBakeStatus
                         .Probe(classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+                    return ProbeStore()
+                        // #6052 ask 2: BytesMissing re-lands the SHIPPED build before it is rebuilt.
+                        .SelectMany(report => RefetchBytesMissing(mesh, classified, store, report, ProbeStore, logger))
                         .Select(report => report with
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
@@ -809,6 +812,56 @@ public static class DynamicTypePreWarmer
         {
             Ownership = report.Ownership,
         };
+    }
+
+    /// <summary>
+    /// 🚨 <b>BytesMissing is re-FETCHED before it is re-BUILT</b> (MeshWeaver#6052 ask 2). A type in
+    /// <see cref="BakeState.BytesMissing"/> has a record naming a usable build for this framework
+    /// and a store without its bytes — on a pod-local store, the normal state of every type another
+    /// pod compiled or adopted. When the bytes the record names are a SHIPPED build, the registry
+    /// still has them: one <see cref="IShippedBuildSource"/> call (one download per package) lands
+    /// each that IS the record's build (<see cref="ShippedBuildRefetch.Land"/>), and the store is
+    /// probed again so those types read <see cref="BakeState.Baked"/> and are not compiled. Anything
+    /// not landed stays BytesMissing and is rebuilt exactly as before. No source registered, or
+    /// nothing missing: the report is returned unchanged and nothing is asked.
+    /// </summary>
+    /// <param name="mesh">The mesh hub (resolves the optional source).</param>
+    /// <param name="definitions">The classified definitions the report was probed from.</param>
+    /// <param name="store">The store the probe read.</param>
+    /// <param name="report">The probe's report.</param>
+    /// <param name="reprobe">Probes the store again over the same definitions.</param>
+    /// <param name="logger">Logger.</param>
+    internal static IObservable<NodeTypeBakeReport> RefetchBytesMissing(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        NodeTypeBakeReport report,
+        Func<IObservable<NodeTypeBakeReport>> reprobe,
+        ILogger? logger)
+    {
+        if (report.BytesMissing.IsEmpty)
+            return Observable.Return(report);
+        var source = mesh.ServiceProvider.GetService<IShippedBuildSource>();
+        if (source is null)
+            return Observable.Return(report);
+        var missing = report.BytesMissing
+            .Select(e => definitions.TryGetValue(e.TypePath, out var d) && d?.LastCompiledVersion is { } v
+                ? new MissingBuild(e.TypePath, v, d.LatestAssemblyPath, d.LatestAssemblyMvid)
+                : null)
+            .Where(m => m is not null)
+            .Select(m => m!)
+            .ToList();
+        return ShippedBuildRefetch.Land(mesh.ServiceProvider, store, source, missing, logger)
+            .SelectMany(landed =>
+            {
+                if (landed.IsEmpty)
+                    return Observable.Return(report);
+                logger?.LogInformation(
+                    "DynamicTypePreWarmer: re-fetched the SHIPPED build of {Landed} of {Missing} BytesMissing "
+                    + "NodeType(s) instead of rebuilding them: {Types}",
+                    landed.Count, report.BytesMissing.Count, string.Join(", ", landed));
+                return reprobe();
+            });
     }
 
     /// <summary>

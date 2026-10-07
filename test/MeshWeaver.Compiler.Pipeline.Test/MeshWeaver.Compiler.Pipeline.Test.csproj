@@ -1,5 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <!-- Writes meshweaver-framework.identity beside the test binaries, exactly as every portal
+         image gets it (MeshWeaverSurfaceManifest.targets), so FrameworkBuildIdentityFileTest can
+         assert the build-time value equals the runtime one (MeshWeaver#6052 ask 3). -->
+    <MeshWeaverFrameworkIdentityFile>true</MeshWeaverFrameworkIdentityFile>
+  </PropertyGroup>
+  <!-- The test tree does not import the root Directory.Build.props, so the targets are imported
+       here — the same way a host in another repository imports them (via $(MeshWeaverRoot)), and
+       therefore the same epoch fallback (the checked-in declaration) is what this test exercises. -->
+  <Import Project="..\..\MeshWeaverSurfaceManifest.targets" />
+
   <ItemGroup>
     <PackageReference Include="Autofac" />
     <PackageReference Include="Microsoft.Reactive.Testing" />

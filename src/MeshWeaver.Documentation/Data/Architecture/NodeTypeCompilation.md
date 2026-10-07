@@ -748,6 +748,42 @@ Anything else triggers a recompile. This makes a cold hub start **self-healing**
 | **MeshWeaver redeployed with a breaking change** | The cached DLL bound against the *old* framework surface (ABI-stale) | Rule 3 |
 | Module updated | The cached DLL may bind the replaced module's old ABI | Rule 4 |
 
+### 🚨 Bytes missing on THIS pod are re-FETCHED from what was shipped before anything recompiles (#6052)
+
+The NodeType record is SHARED (database); the assembly store behind it may not be. A per-pod
+`FileSystemAssemblyStore` (collection `local`) holds bytes for the pod that wrote them only, so a
+type compiled or adopted on pod A leaves a record naming bytes pod B never held. Before #6052 pod
+B's only recoveries were `TriggerRecompileAndRetry` — which flips the type `Pending` *through its
+owner*, so the compile, and the bytes, landed on pod A again — and after one attempt the
+assembly-unavailable card. On a client estate that read `bake-report bytesmissing=93` on both pods.
+
+When the record's bytes were a SHIPPED build, the registry still has them, exactly. So every place
+that resolves a record's build — activation (`NodeTypeEnrichmentHelpers.ResolveAssembly`), the
+content-type registration pass and the boot sweep's `BytesMissing` set — asks
+`ShippedBuildRefetch` (`src/MeshWeaver.Mesh.Contract/Services/IShippedBuildSource.cs`) first:
+
+1. The store's own answer, by identity (`TryGetBuildPath`), as before.
+2. On a miss, the registered `IShippedBuildSource` — the plugin catalog's `RegistryShippedBuildSource`
+   reads the configured registries through `PluginBundleClient.FetchShippedBuilds` (same index, same
+   OCI-by-digest or HTTP route, same compatibility rule as every adoption — policy
+   `platform-backwards-compatibility`, never an exact build identity) and writes NOTHING itself. The
+   package is the type path's first segment and must be installed here; one download per package is
+   shared by every concurrent asker and dropped once it settles.
+3. A shipped build is landed under the record's own `(path, version)` **only when its MVID is the
+   record's `LatestAssemblyMvid`** — content addressing then puts the same bytes on the same name the
+   record already carries, so the record needs no write and no other pod is disturbed. A different
+   build (the record names a compile made elsewhere) is not landed: the bind-time identity check
+   would refuse it anyway. A record without an MVID lands and the bind-time check stays the gate.
+4. Anything not landed falls through to the recovery that was there before, unchanged.
+
+The boot sweep lands its whole `BytesMissing` set in one source call and probes again, so those
+types read `Baked` and are not compiled (`DynamicTypePreWarmer.RefetchBytesMissing`). Pinned by
+`BytesMissingRefetchesTheShippedBuildTest` (two stores standing in for two pods; the negative
+control is the same resolve with no source, which still misses).
+
+**Not done here:** refusing a local compile outright on a client instance (#6052 ask 1) is a policy
+choice (`Modules:RequirePrebuilt`); this change makes the miss recoverable without one.
+
 ### A compile that FAILED is re-driven too — one attempt per set of inputs
 
 `HasUsableBuild` and its framework-stale twin both key on **assembly coordinates**, and a failed
