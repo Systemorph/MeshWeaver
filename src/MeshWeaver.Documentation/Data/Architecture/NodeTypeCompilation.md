@@ -773,7 +773,14 @@ content-type registration pass and the boot sweep's `BytesMissing` set — asks
    record's `LatestAssemblyMvid`** — content addressing then puts the same bytes on the same name the
    record already carries, so the record needs no write and no other pod is disturbed. A different
    build (the record names a compile made elsewhere) is not landed: the bind-time identity check
-   would refuse it anyway. A record without an MVID lands and the bind-time check stays the gate.
+   would refuse it anyway. 🚨 A record that states NO MVID — a legacy record, or a pinned release,
+   which carries only a content path — is not refetched at all: nothing could verify the shipped
+   bytes are its build, and the bind-time check accepts a missing MVID, so an unverified landing
+   would bind the registry's current build under a pinned version.
+   A path is not proof either: the store falls back to the version's newest file when none carries
+   the record's MVID, so a found file whose MVID is not the record's is refetched too, and when no
+   refetch can supply the recorded bytes the store's own answer is returned to the existing
+   stale-build recovery unchanged. Every probe runs through the file-system I/O pool.
 4. Anything not landed falls through to the recovery that was there before, unchanged.
 
 The boot sweep lands its whole `BytesMissing` set in one source call and probes again, so those

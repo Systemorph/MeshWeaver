@@ -66,9 +66,11 @@ public interface IShippedBuildSource
 /// from the record's <see cref="MissingBuild.AssemblyMvid"/> is a DIFFERENT build (the record names
 /// a local compile on another pod, or a newer adoption); landing it under the record's version
 /// would hand the bind-time identity check (<c>ServedBuildIdentity.Mismatch</c>) bytes it must
-/// refuse, and the refusal would recompile anyway — so it is not landed, and the line says so. A
-/// record without an MVID (it predates the field) cannot be checked here; its bytes land and the
-/// bind-time check stays the gate, as it is for every legacy record.</para>
+/// refuse, and the refusal would recompile anyway — so it is not landed, and the line says so.
+/// 🚨 A record that states NO MVID (a legacy record, or a pinned release, which carries only a
+/// content path) is NOT refetched at all: nothing could verify the shipped bytes are the build it
+/// names, and the bind-time check accepts a missing MVID — so an unverified landing would bind the
+/// registry's CURRENT build under a pinned version. Its miss takes the existing recovery.</para>
 ///
 /// <para>Content-addressed stores make the landing exact: the same bytes under the same version
 /// land on the same content-hashed name the record already names, so the record needs no write and
@@ -92,22 +94,41 @@ public static class ShippedBuildRefetch
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(build);
-        return store.TryGetBuildPath(build.NodeTypePath, build.Version, build.ContentPath, build.AssemblyMvid)
-            .Take(1)
-            .SelectMany(path =>
+        var pool = services.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+        return Probe(pool, store, build)
+            .SelectMany(found =>
             {
-                if (!string.IsNullOrEmpty(path))
-                    return Observable.Return<string?>(path);
+                // 🚨 A path is not proof of the build: the store falls back to the version's newest
+                // file when no file carries the record's MVID. Only a file that IS the recorded
+                // build short-circuits; a different build at the same version is refetched, and
+                // when no refetch can supply the recorded bytes the original answer is returned
+                // unchanged — the caller's bind-time identity check and stale-build recovery
+                // decide it exactly as before.
+                if (!string.IsNullOrEmpty(found.Path) && IsRecordedBuild(build, found.Mvid))
+                    return Observable.Return(found.Path);
                 var source = services.GetService<IShippedBuildSource>();
-                if (source is null)
-                    return Observable.Return<string?>(null);
+                if (source is null || string.IsNullOrEmpty(build.AssemblyMvid))
+                    return Observable.Return(found.Path);
                 return Land(services, store, source, [build], logger)
                     .SelectMany(landed => landed.Contains(build.NodeTypePath)
-                        ? store.TryGetBuildPath(build.NodeTypePath, build.Version, build.ContentPath, build.AssemblyMvid)
-                            .Take(1)
-                        : Observable.Return<string?>(null));
+                        ? Probe(pool, store, build).Select(after => after.Path ?? found.Path)
+                        : Observable.Return(found.Path));
             });
     }
+
+    /// <summary>One store probe through the file-system pool (the store reads directories and PE
+    /// headers when subscribed), with the MVID of the file it answered.</summary>
+    private static IObservable<(string? Path, string? Mvid)> Probe(IIoPool pool, IAssemblyStore store, MissingBuild build)
+        => pool.InvokeObservable(_ => store
+            .TryGetBuildPath(build.NodeTypePath, build.Version, build.ContentPath, build.AssemblyMvid)
+            .Take(1)
+            .Select(path => (path, string.IsNullOrEmpty(path) ? null : MvidOfFile(path))));
+
+    /// <summary>Whether a resolved file is the build the record names: true when the record states
+    /// no MVID (nothing to compare — the bind-time check stays the gate), or the MVIDs agree.</summary>
+    private static bool IsRecordedBuild(MissingBuild build, string? fileMvid)
+        => string.IsNullOrEmpty(build.AssemblyMvid)
+           || string.Equals(build.AssemblyMvid, fileMvid, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Fetches the shipped bytes for every <paramref name="missing"/> build in ONE source call
@@ -182,8 +203,16 @@ public static class ShippedBuildRefetch
                 + "assembly — not landed.", shipped.Origin, build.NodeTypePath);
             return Observable.Return<string?>(null);
         }
-        if (!string.IsNullOrEmpty(build.AssemblyMvid)
-            && !string.Equals(build.AssemblyMvid, shippedMvid, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(build.AssemblyMvid))
+        {
+            logger?.LogInformation(
+                "Shipped-build refetch: the record of {NodeType} v{Version} states no build MVID (a legacy "
+                + "record or a pinned release), so nothing can verify {Origin}'s bytes are the build it "
+                + "names — not landed. The existing recovery runs.",
+                build.NodeTypePath, build.Version, shipped.Origin);
+            return Observable.Return<string?>(null);
+        }
+        if (!string.Equals(build.AssemblyMvid, shippedMvid, StringComparison.OrdinalIgnoreCase))
         {
             logger?.LogWarning(
                 "Shipped-build refetch: {Origin} ships build {Shipped} of {NodeType}, but its record names "
@@ -210,6 +239,27 @@ public static class ShippedBuildRefetch
                     + "{Cause}. The existing recovery runs.", build.NodeTypePath, build.Version, ex.Message);
                 return Observable.Return<string?>(null);
             });
+    }
+
+    /// <summary>The module MVID ("N" hex) of an assembly file, or null when it is unreadable.
+    /// Metadata only — nothing is loaded.</summary>
+    /// <param name="path">The assembly path.</param>
+    public static string? MvidOfFile(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            if (!pe.HasMetadata)
+                return null;
+            var md = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
+        }
+        catch (Exception ex) when (ex is IOException or BadImageFormatException
+                                       or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The module MVID ("N" hex) of an in-memory assembly, or null when the bytes are not

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -27,9 +28,10 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>One download per package, shared.</b> Every activation of every instance of a type
 /// whose bytes are missing asks; the in-flight read of a package is shared through an instance
-/// <see cref="PromiseCache{TKey, TValue}"/> and dropped once it settles, so concurrent askers cost
-/// one download and the bytes are not held for the life of the process. A fault evicts (the cache's
-/// contract), so a later ask is a genuinely new attempt.</para>
+/// <see cref="PromiseCache{TKey, TValue}"/> and released pair-exact once it SETTLES (never on one
+/// asker's cancellation), so concurrent askers cost one download and the bytes are not held for
+/// the life of the process. A fault evicts (the cache's contract), so a later ask is a genuinely
+/// new attempt.</para>
 /// </summary>
 public sealed class RegistryShippedBuildSource : IShippedBuildSource
 {
@@ -80,12 +82,22 @@ public sealed class RegistryShippedBuildSource : IShippedBuildSource
     }
 
     private IObservable<IReadOnlyList<ShippedBuild>> FetchPackage(string packageId)
-    {
-        var shared = inFlight.GetOrAdd(packageId, id => ReadPackage(id).Replay(1).RefCount());
-        // Dropped once settled: the cache shares the in-flight read; it must not hold every
-        // package's bytes for the life of the process.
-        return shared.Finally(() => inFlight.Invalidate(packageId));
-    }
+        => Observable.Defer(() =>
+        {
+            // ONE read per package while it is in flight: hot and replayed (the IoPool `Run` shape —
+            // the read is subscribed once into a ReplaySubject and terminates by itself), so a
+            // subscriber that cancels never cancels it for the others.
+            var shared = inFlight.GetOrAdd(packageId, id =>
+            {
+                var settled = new ReplaySubject<IReadOnlyList<ShippedBuild>>(1);
+                ReadPackage(id).Subscribe(settled);
+                return settled.AsObservable();
+            });
+            // Released once SETTLED, never on a subscriber's cancellation, and pair-exact — a
+            // replacement a later caller installed is never dropped. A fault is evicted by the cache
+            // itself. The bytes are therefore held only while the read is in flight.
+            return shared.Do(_ => { }, () => inFlight.Release(packageId, shared));
+        });
 
     private IObservable<IReadOnlyList<ShippedBuild>> ReadPackage(string packageId)
     {

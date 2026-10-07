@@ -145,6 +145,49 @@ public class BytesMissingRefetchesTheShippedBuildTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 A record that states NO MVID — a legacy record, or a pinned release (the release names
+    /// only a content path) — is never refetched: nothing could verify the shipped bytes are its
+    /// build, and the bind-time check accepts a missing MVID, so landing them would bind the
+    /// registry's CURRENT build under a pinned version.
+    /// </summary>
+    [Fact]
+    public async Task ARecordWithoutAnMvid_IsNeverRefetched()
+    {
+        var adopted = await AdoptOnPodA(OtherBuild);
+        var pinned = adopted with { AssemblyMvid = null };
+        var source = new BundleSource(new ShippedBuild(TypePath, Shipped, null, "registry Publish@2.0.0"));
+
+        var resolved = await ShippedBuildRefetch
+            .ResolveOrRefetch(Services(source), storeB, pinned, NullLogger.Instance)
+            .Should().Emit();
+
+        resolved.Should().BeNull();
+        Directory.Exists(podB).Should().BeTrue();
+        Directory.EnumerateFiles(podB, "*.dll", SearchOption.AllDirectories).Should().BeEmpty(
+            "an unverifiable build is never written under the record's version");
+    }
+
+    /// <summary>
+    /// 🚨 A found path is not proof of the build: when this pod holds a DIFFERENT build at the
+    /// record's version, the store falls back to it. The record's shipped build is refetched and
+    /// the resolve answers THAT, not the stale file.
+    /// </summary>
+    [Fact]
+    public async Task ADifferentBuildAtTheSameVersion_IsNotTakenForTheRecordsBuild()
+    {
+        var record = await AdoptOnPodA(Shipped);
+        await storeB.Put(TypePath, Version, OtherBuild, null).Should().Emit();
+        var source = new BundleSource(new ShippedBuild(TypePath, Shipped, null, "registry Publish@1.0.0"));
+
+        var resolved = await ShippedBuildRefetch
+            .ResolveOrRefetch(Services(source), storeB, record, NullLogger.Instance)
+            .Should().Emit();
+
+        ServedBuildIdentity.OfFile(resolved).Should().Be(record.AssemblyMvid);
+        source.Calls.Should().Be(1);
+    }
+
+    /// <summary>
     /// The boot sweep's half: a type the probe classifies <see cref="BakeState.BytesMissing"/>
     /// reads <see cref="BakeState.Baked"/> after the batch land — so the pre-warm does not compile
     /// it — and the whole batch costs ONE source call (one download per package, not per type).
