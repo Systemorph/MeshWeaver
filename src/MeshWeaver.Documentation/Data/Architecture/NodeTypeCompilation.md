@@ -2202,6 +2202,26 @@ one: the defect is in the .NET 10 JIT, not in this repository, and the switch is
 measurement on a runtime that fixes it — the arm above, re-run. The portal hosts live in
 MeshWeaver.Plugins and need the same property there.
 
+**The environment half — policy [`tiered-pgo-off-5212`](../PolicyNotProse), tracked in
+[#5212](https://github.com/Systemorph/MeshWeaver/issues/5212).** The runtimeconfig property reaches only
+hosts BUILT from this tree at or after the commit that added it; a satellite lane runs the tester and the
+portal image at whatever pin it holds, and the portal hosts are built in MeshWeaver.Plugins. So the same
+switch is also set as `DOTNET_TieredPGO=0`, which the runtime reads from the process environment and which
+wins over the runtimeconfig:
+
+- **Core CI** — job `env` on the `test`, `doc-gate` and `platform-compat` jobs of `dotnet-test.yml`.
+- **Satellite lanes** — job `env` on `node-repo-compile-check` (its `dotnet build` compiler server),
+  `node-repo-gate` (`gate`), `node-repo-module-pack` (`build-workspace`, `pack`, `tests`) and
+  `node-repo-publish-bake` (`publish-bake`), plus `-e DOTNET_TieredPGO=0` on every `docker run` that
+  emits, because the runner's environment does not cross into a container.
+- **Portals** — `DOTNET_TieredPGO: "0"` in each portal Deployment record's `extraPortalConfig`, rendered by
+  the chart into the `memex-portal-config` ConfigMap (fed to the container through `envFrom`) only when the
+  key is present. A record change reaches a running instance only through a Reconcile, and only on the
+  next process start.
+
+Every one of these carries a comment naming #5212 and is removed when the runtime fix ships, together with
+the runtimeconfig property — after the split arm above is re-run on that runtime.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present

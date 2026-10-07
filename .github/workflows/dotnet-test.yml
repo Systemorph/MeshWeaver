@@ -861,6 +861,14 @@ jobs:
     # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
     # weights, so a shard that hits this is stuck, not slow.
     timeout-minutes: 20
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     runs-on: ubuntu-latest
     strategy:
       # Don't cancel sibling shards when one fails — we want every shard's
@@ -1891,6 +1899,14 @@ jobs:
     # Same wall-clock contract as plugin-gate: depends on `build` like the shards, so it runs
     # CONCURRENTLY with them; while it stays under the slowest shard it costs the PR nothing.
     timeout-minutes: 12
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     outputs:
       failure: ${{ steps.gate.outputs.failure }}
     steps:
@@ -2087,6 +2103,14 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     permissions:
       contents: read
       actions: read
