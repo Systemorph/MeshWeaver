@@ -87,6 +87,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `.github/workflows/main-cd.yml:2752,2755,2762` | **R/P**: arm phase D never-backwards check and the line pointers | **handled** |
 | `.github/scripts/arm-promoted-set.py:133,151,281` | **R/P**: `run_number_of`, `line_pattern`. The announcement pattern for control's roll lane becomes `3.1.*` | **handled**, self-tested |
 | `.github/scripts/resolve-platform.py:217,240,254,264` | **R/P**: set names, freezes, bake receipts, promotion records, notices, registry tags (vendored into satellites; the lanes fetch the canonical copy) | **handled**: `match_set_name`, `compose_set_name`, `notice_set_number`, self-tested |
+| `.github/scripts/assert-bake-floor.py` `parse` | **R**: the seal-time floor gate (`node-repo-publish-bake.yml`) orders a bundle's floor against the platform version | **handled**: SemVer-era patch is the ordinal; mixed-era pairs self-tested |
 | `.github/workflows/node-repo-gate.yml:844-847` | **R**: `platform-set` input shape | **handled**, executed by `test-gate-lane-forwards-the-callers-set.py` |
 | `.github/workflows/node-repo-publish-bake.yml:2106` | **R**: released-version shape | already accepts `X.Y.Z` |
 | `.github/workflows/edge-images.yml:74-76` | **P**: edge tag; for the new notation it falls through to `<v>-edge.<run>` | already correct |
