@@ -402,6 +402,14 @@ public sealed class InstanceRebootAgent
                 .Where(change => change.Kind != MeshChangeKind.Deleted
                                  && string.Equals(change.NodeType, InstanceRebootRequest.NodeType, StringComparison.OrdinalIgnoreCase)
                                  && string.Equals(change.Namespace?.Trim('/'), InstanceRebootRequest.Namespace, StringComparison.OrdinalIgnoreCase))
+                // A versionless feed event is a path-only invalidation: no floor is known, so the
+                // read may trail the commit — named here, never acted on in silence.
+                .Do(change =>
+                {
+                    if (change.Version <= 0)
+                        logger?.LogWarning("[Reboot] {Path}: the feed announced a commit WITHOUT a version (path-only invalidation); "
+                            + "this process reads its mirror unfloored and may act on the state before that commit", change.Path);
+                })
                 .Select(change => (change.Path, Committed: change.Version));
         var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths)
             .Select(path => (Path: path, Committed: 0L));

@@ -545,6 +545,16 @@ public sealed class ModuleReloadAgent
             ? Observable.Empty<(string Path, long Committed)>()
             : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
                 .Where(IsRequest)
+                // A feed event with NO version is a path-only invalidation (the relay could not
+                // enrich it — StorageChangeFeedRelay.PathOnlyFallback): the commit it announces is
+                // unknown, so the read below has no floor and can return the state BEFORE it. Say
+                // so here, by request, rather than act on a possibly trailing mirror in silence.
+                .Do(change =>
+                {
+                    if (change.Version <= 0)
+                        logger?.LogWarning("[ModuleReload] {Path}: the feed announced a commit WITHOUT a version (path-only invalidation); "
+                            + "this process reads its mirror unfloored and may act on the state before that commit", change.Path);
+                })
                 .Select(change => (change.Path, Committed: change.Version));
         // 🚨 At boot, every OPEN request is asked about — a process that booted after a restart is
         // exactly the evidence the request is waiting for. A LISTING of the request namespace (the
