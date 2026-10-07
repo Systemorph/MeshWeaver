@@ -453,6 +453,35 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private readonly Lazy<string?> _buildMvidFromFile;
 
     /// <summary>
+    /// Makes this context's build RESIDENT — its assembly loaded, so the bytes are in memory and
+    /// no later deletion of its file can take them away — and says whether that succeeded.
+    /// <see cref="BuildMvid"/> alone cannot answer "can this context serve its build": it is read
+    /// once from the header and outlives the file (#5555). An existence check would not answer it
+    /// either: the retention sweep can delete the file between the check and the caller's load.
+    /// Loading IS the durable guarantee, and a load that loses that race — the file already gone,
+    /// or the context retired meanwhile — answers <c>false</c>.
+    /// </summary>
+    public bool TryMakeResident()
+    {
+        try
+        {
+            return LoadNodeAssembly() is not null;
+        }
+        catch (ObjectDisposedException)
+        {
+            // Retired between the caller's IsRetired check and this load — not a fault, the
+            // outcome of the race: this context can no longer be handed to a new caller.
+            return false;
+        }
+        catch (FileNotFoundException)
+        {
+            // The sweep deleted the file between LoadNodeAssembly's existence check and its load —
+            // the very race this method closes; the bytes are not resident, so no reuse.
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Pins the context for the duration of a SCAN of its loaded assembly (GetTypes + attribute
     /// reflection + Activator). While any pin is held, <see cref="Dispose"/> waits before
     /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/> so it cannot tear down the
@@ -1470,7 +1499,17 @@ internal class CompilationCacheService(
             if (!string.Equals(context.NodeName, nodeName, StringComparison.Ordinal)
                 || context.IsRetired)
                 continue;
-            if (string.Equals(context.BuildMvid, mvid, StringComparison.OrdinalIgnoreCase))
+            // 🚨 The same MVID is the same build only while the context can still LOAD it
+            // (#5555). Re-adopting identical bytes lands them under a new store name
+            // (v{version}-…), the retention sweep deletes the old one, and a context over the old
+            // name that never loaded its assembly keeps reporting the MVID it read from the
+            // header. Aliasing a read of the present copy to it made every load answer "No file
+            // at" the deleted path — permanently, since each recompile's identical bytes were
+            // aliased back to the same dead context. So the candidate's bytes are made RESIDENT
+            // before it is returned; a candidate that loses the deletion race is skipped and the
+            // read resolves a context over its own, present path.
+            if (string.Equals(context.BuildMvid, mvid, StringComparison.OrdinalIgnoreCase)
+                && context.TryMakeResident())
                 return context;
         }
         return null;

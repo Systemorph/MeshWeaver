@@ -85,12 +85,19 @@ the threads BOTH opened.
 
 COPILOT IS THE REVIEWER AGAIN — policy `copilot-code-review` (supersedes `internal-code-review`)
 -------------------------------------------------------------------------------------------
-Every ruleset carries `copilot_code_review` again, now with `review_on_push: true`, so Copilot
-reviews every head, and `internal-review` is no longer a required context anywhere. The stage gate
-and the arm gate, which ask about THIS head's review, accept a landed Copilot review submitted
-against the current head (`copilot_review_on`) ahead of an `internal-review` run, so no head waits
-for an internal reviewer that has been switched off. Doc/Architecture/ReviewFindingsAnswered →
-"Copilot is the reviewer again".
+Every ruleset carries `copilot_code_review` again, and `internal-review` is no longer a required
+context anywhere. The stage gate and the arm gate accept a landed Copilot review ahead of an
+`internal-review` run, so no head waits for an internal reviewer that has been switched off.
+Doc/Architecture/ReviewFindingsAnswered → "Copilot is the reviewer again".
+
+ONE REVIEW PER PULL REQUEST — policy `review-once-per-pull-request`
+-------------------------------------------------------------------
+With `review_on_push: true` every push bought a full new review round, and each round's threads
+blocked the merge again until answered. The rule now runs with `review_on_push: false`, and every
+gate in this file counts a landed Copilot review against ANY head of the pull request as "reviewed"
+(`copilot_review_of_pull_request`; the merge gate's condition 1 never looked at the head). Condition
+2 is unchanged: every reviewer thread on the pull request, whichever head it was opened on, needs a
+person's reply. Doc/Architecture/ReviewFindingsAnswered → "One review per pull request".
 
 WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
 ----------------------------------------------------------
@@ -124,6 +131,9 @@ USAGE
         (the negative control: never carry a review over a clean merge of the base branch — see carry_over)
   check-review-answered.py --repo O/R --stage-advance --workflow ci.yml (--head-sha S | --pr N | --sweep)
         (node-repo-stage-advance.yml: re-run a waiting run's failed jobs now that stage 1 is green)
+  check-review-answered.py --repo O/R --pr N --refresh-read-run --event E --run-id R --evaluated-at T
+        (node-repo-review-answered.yml: a GREEN verdict on an event branch protection does not read
+         re-runs the newest `pull_request` run, whose verdict it does read — see refresh_action)
 
 THE STAGE GATE (Doc/Architecture/StagedPullRequestPipeline)
 -----------------------------------------------------------
@@ -143,6 +153,19 @@ a person's, not the infrastructure's.
 `--stage-advance` is the event half: it re-evaluates `stage_readiness` and, only when it is green
 and the head's newest CI run holds a FAILED stage gate, POSTs `rerun-failed-jobs` (the doctrine's
 own re-run remedy, review-answered-on-degradation.yml). `--sweep` is the bounded-fallback timer.
+
+`--refresh-read-run` is the SELF-REFRESH (the #4649 shape, done by the check instead of a person).
+Answering a thread fires `pull_request_review_comment` (and `pull_request_review`), and branch
+protection does not read the `pull_request_review_comment` run's check-run at all: the log said
+GREEN while the pull request stayed BLOCKED on the older `pull_request` run's red until somebody
+re-ran it by hand. So after a GREEN verdict on any event other than `pull_request` (and never for a
+`merge_group` entry, which is its own commit), the lane re-runs the failed jobs of the newest
+`pull_request` run of the SAME workflow for the current head — once per (head, answered state):
+`refresh_action` (pure, self-tested) skips a run that is in flight, already green, or started
+at/after this verdict (it judged a state no older than ours). The re-run decides nothing by itself:
+it applies the whole predicate to live state, so a thread that is really unanswered is red there
+too. No loop: a re-run of a `pull_request` run is a `pull_request` event, which never refreshes, and
+a GITHUB_TOKEN re-run raises no new workflow event.
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
@@ -570,13 +593,14 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      contexts are conditions (2)/(3), never (4). `required_checks_green` is the predicate;
 #      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #
-# No waiver stands in for (2): the question is about THIS head's review, which is exactly what a
-# push invalidates. 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts GitHub
-# Copilot back as the fleet's reviewer, its ruleset rule set to `review_on_push`, so Copilot reviews
-# every head: a Copilot review submitted AGAINST THE CURRENT HEAD (`commit_id` == head, a landed body,
-# never a refusal — `copilot_review_on`) satisfies (2) exactly as a completed `internal-review` run
-# does. It is checked FIRST, so a head is never held waiting for an internal reviewer that has been
-# switched off. A Copilot review of an EARLIER head does not count — the push invalidated it.
+# No waiver stands in for (2). 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts
+# GitHub Copilot back as the fleet's reviewer, and policy `review-once-per-pull-request` reviews each
+# pull request ONCE: the ruleset rule runs with `review_on_push: false`, so a push does not start a
+# new round. A landed Copilot review of the pull request — against the current head, or failing that
+# against ANY earlier head (`copilot_review_of_pull_request`: a landed body, never a refusal) —
+# satisfies (2) exactly as a completed `internal-review` run on the head does. It is checked FIRST,
+# so a head is never held waiting for an internal reviewer that has been switched off. Every thread
+# that review opened still needs a person's reply under (3), whichever head it was opened on.
 
 
 def copilot_review_on(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
@@ -584,16 +608,41 @@ def copilot_review_on(reviews, head_sha: str, as_of: str | None = None) -> dict 
     body `classify_review_body` reads as a review, never a refusal), or None. Provenance is the
     account id AND type Bot — the internal reviewer's reviews are NOT looked at here: its verdict on
     a head is its `internal-review` check run, which the callers read separately."""
-    mine = [r for r in reviews or ()
+    mine = [r for r in landed_copilot_reviews(reviews, as_of) if head_sha and r.get("commit_id") == head_sha]
+    return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
+
+
+def landed_copilot_reviews(reviews, as_of: str | None = None) -> list:
+    """Every Copilot review on the pull request that LANDED (provenance: account id AND type Bot; a
+    non-PENDING state; a body that is a review, never a refusal), whichever head it was submitted on."""
+    return [r for r in reviews or ()
             if (r.get("user") or {}).get("type") == "Bot" and (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID
-            and r.get("state") not in (None, "PENDING") and head_sha and r.get("commit_id") == head_sha
-            and not_after(r.get("submitted_at"), as_of) and classify_review_body(r.get("body")) == "landed"]
+            and r.get("state") not in (None, "PENDING") and not_after(r.get("submitted_at"), as_of)
+            and classify_review_body(r.get("body")) == "landed"]
+
+
+def copilot_review_of_pull_request(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
+    """Policy `review-once-per-pull-request`: the pull request's ONE Copilot review — the newest
+    landed review against `head_sha` when there is one, otherwise the newest landed review against
+    ANY earlier head. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
+    returns reviewed this pull request, and a later push does not undo it. Its threads stay under the
+    thread condition wherever they were opened, so no finding is skipped by a push."""
+    on_head = copilot_review_on(reviews, head_sha, as_of)
+    if on_head is not None:
+        return on_head
+    mine = landed_copilot_reviews(reviews, as_of)
     return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
 
 
 def copilot_note(review: dict, short: str) -> str:
-    return (f"Copilot reviewed head {short}: review {review.get('id')} at {review.get('submitted_at')} "
-            f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
+    reviewed = str(review.get("commit_id") or "")[:10] or "(unknown)"
+    if reviewed == short:
+        return (f"Copilot reviewed head {short}: review {review.get('id')} at {review.get('submitted_at')} "
+                f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
+    return (f"Copilot reviewed this pull request at its earlier head {reviewed} (current head {short}): review "
+            f"{review.get('id')} at {review.get('submitted_at')} (\"{first_line(review.get('body'))}\") — "
+            "one review per pull request, policy review-once-per-pull-request")
+
 
 @dataclasses.dataclass(frozen=True)
 class ArmVerdict:
@@ -795,7 +844,7 @@ def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs
     short = head[:10] or "(unknown)"
     if pr.get("draft"):
         return ArmVerdict(False, f"#{number} is a draft — a draft is never armed; mark it ready for review")
-    copilot = copilot_review_on(reviews, head)
+    copilot = copilot_review_of_pull_request(reviews, head)
     if copilot is not None:
         return _arm_after_review(pr, comments, required, head_runs, head, short, (copilot_note(copilot, short),))
     mine = internal_review_runs(check_runs, head)
@@ -806,9 +855,9 @@ def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs
                                  f"(check run {running[0].get('id')}) — it re-evaluates when that run completes")
     run = carry.run if carried else newest_internal_review_run(mine, None)
     if run is None:
-        return ArmVerdict(False, f"no review has run on the current head {short} — neither a Copilot review against it nor a completed "
-                                 f"`{DEGRADATION_CHECK_NAME}` run; every push that changes the pull request's own diff needs its "
-                                 "own review, and the gate re-evaluates when it lands" + (f" ({carry.why})" if carry is not None else ""))
+        return ArmVerdict(False, f"no review has landed on this pull request — neither a Copilot review (of any of its heads) nor a completed "
+                                 f"`{DEGRADATION_CHECK_NAME}` run on the current head {short}; the pull request owes ONE review "
+                                 "(policy review-once-per-pull-request), and the gate re-evaluates when it lands" + (f" ({carry.why})" if carry is not None else ""))
     if degradation_of([run], None) is not None:
         title = ((run.get("output") or {}).get("title") or "").strip()
         return ArmVerdict(False, f"the reviewer was UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — "
@@ -965,7 +1014,7 @@ def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
                                             f"(or the label `{TESTS_FIRST_LABEL}` to run the suites before the review)")
     # Policy copilot-code-review: a landed Copilot review AGAINST THIS HEAD is the head's review,
     # checked first so no head waits out the fallback for an internal reviewer that is switched off.
-    copilot = copilot_review_on(reviews, head)
+    copilot = copilot_review_of_pull_request(reviews, head)
     if copilot is not None:
         return _stage_after_review(pr, comments, (copilot_note(copilot, short),), False)
     mine = internal_review_runs(check_runs, head)
@@ -986,11 +1035,11 @@ def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
                  else "has not started")
         if waited >= fallback_minutes:
             return StageVerdict(True, "fallback", "", (
-                f"REVIEW UNAVAILABLE: no Copilot review against head {short}, and its `{DEGRADATION_CHECK_NAME}` review {state}, after {waited:.0f} min "
+                f"REVIEW UNAVAILABLE: no Copilot review on this pull request, and head {short}'s `{DEGRADATION_CHECK_NAME}` review {state}, after {waited:.0f} min "
                 f"(fallback {fallback_minutes} min) — stage 2 started WITHOUT it. Arming still waits for the review; "
                 "if the reviewer is down, that is the incident to chase."))
         return StageVerdict(False, "waiting", (
-            f"no Copilot review against head {short} yet, and its `{DEGRADATION_CHECK_NAME}` review {state} ({waited:.0f} of {fallback_minutes} min) — "
+            f"no Copilot review on this pull request yet, and head {short}'s `{DEGRADATION_CHECK_NAME}` review {state} ({waited:.0f} of {fallback_minutes} min) — "
             "stage 2 starts once a review lands and every finding is answered (on the event, or the stage-advance sweep for a Copilot review, whose own event starts no run), or at the fallback"),
             notes=(carry.why,) if carry is not None else ())
     title = ((run.get("output") or {}).get("title") or "").strip()
@@ -1070,6 +1119,53 @@ def lost_rerun_race(readback) -> bool:
     `completed` — another invocation re-ran it. Anything else (still completed, an unreadable shape)
     is False, so the POST's failure is raised, never masked. Pure."""
     return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
+
+
+#: The event whose run of this check branch protection is KNOWN to read and that is re-run for the
+#: pull request's head (measured on #4649; the manual remedy measured on #4652 and #4662).
+PROTECTION_READ_EVENT = "pull_request"
+
+
+def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dict,
+                   candidate: dict | None) -> tuple[str, str]:
+    """After a GREEN verdict: ('rerun' | 'none' | 'manual' | 'fail', why). Pure.
+
+    `candidate` is the newest `pull_request` run of THIS workflow for the pull request's CURRENT
+    head. It is re-run only when it can still carry a stale red that this green verdict supersedes —
+    completed, not successful, and started BEFORE this verdict was taken. Everything else is a no-op
+    that says why, which is what makes the refresh idempotent per (head sha, answered state): once
+    re-run, the candidate is in flight (skip), then green (skip) or red on a NEWER read (skip)."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if event == PROTECTION_READ_EVENT:
+        return "none", f"this run IS a `{PROTECTION_READ_EVENT}` run — its own verdict is the one branch protection reads"
+    if event == "merge_group":
+        return "none", "a merge-queue entry is its own commit with its own check-run — nothing on the pull request head to refresh"
+    if pr.get("state") not in (None, "open"):
+        return "none", f"#{pr.get('number')} is {pr.get('state')}"
+    head_repo = str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "")
+    if head_repo and head_repo != repo:
+        return "manual", (f"#{pr.get('number')} comes from the fork {head_repo}: a fork's token cannot re-run a workflow, so "
+                          f"a maintainer re-runs the newest `{PROTECTION_READ_EVENT}` run of this check for head {head[:10]}")
+    if candidate is None:
+        return "fail", (f"no `{PROTECTION_READ_EVENT}` run of this workflow exists for head {head[:10]} — there is no "
+                        "verdict branch protection reads; push to the pull request to start one")
+    if candidate.get("head_sha") != head:
+        return "none", f"run {candidate.get('id')} is for {str(candidate.get('head_sha'))[:10]}, not the current head {head[:10]}"
+    if str(candidate.get("id")) == str(own_run_id):
+        return "none", f"run {candidate.get('id')} is this run"
+    if candidate.get("status") != "completed":
+        return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is still {candidate.get('status')} — it reads live state itself"
+    if candidate.get("conclusion") == "success":
+        return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} already reads success — nothing to refresh"
+    started, judged = parse_stamp(candidate.get("run_started_at")), parse_stamp(evaluated_at)
+    if judged is None:
+        return "fail", f"the verdict's own time {evaluated_at!r} is unreadable, so staleness cannot be judged"
+    if started is not None and started >= judged:
+        return "none", (f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} ({candidate.get('conclusion')}) started at "
+                        f"{candidate.get('run_started_at')}, not before this verdict ({evaluated_at}) — it judged a state no older "
+                        "than this one, so it is not re-run")
+    return "rerun", (f"this `{event}` verdict is GREEN but branch protection reads `{PROTECTION_READ_EVENT}` run "
+                     f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running its failed jobs")
 
 
 def pr_from_queue_ref(ref: str) -> int:
@@ -1165,8 +1261,9 @@ def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
 
 
 def read_reviews(gh: Gh, number: int) -> list:
-    """Every review on the pull request, all pages — the arm and stage gates look for a Copilot review
-    against the current head among them (`copilot_review_on`, policy copilot-code-review). A failed
+    """Every review on the pull request, all pages — the arm and stage gates look for the pull request's
+    Copilot review among them, on any of its heads (`copilot_review_of_pull_request`, policy
+    review-once-per-pull-request). A failed
     read raises: the gates then answer "cannot read", never "not reviewed"."""
     reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
     if not isinstance(reviews, list):
@@ -1470,6 +1567,45 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
     for e in errors:
         print(f"::error::stage advance failed — {e}")
     return 1 if errors else 0
+
+
+def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str) -> int:
+    """The self-refresh job: exit 0 when it re-ran the read run or had nothing to do (both printed),
+    1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself."""
+    try:
+        gh = Gh(repo)
+        own = gh.api(f"actions/runs/{run_id}")
+        workflow_id = own.get("workflow_id") if isinstance(own, dict) else None
+        if not workflow_id:
+            raise ReadError(f"actions/runs/{run_id} named no workflow_id")
+        pr = gh.api(f"pulls/{number}")
+        if not isinstance(pr, dict) or pr.get("number") != number:
+            raise ReadError(f"pulls/{number} did not return pull request #{number}")
+        head = str((pr.get("head") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise ReadError(f"pulls/{number} reported no head sha")
+        listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&event={PROTECTION_READ_EVENT}&per_page=50")
+        runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        if not isinstance(runs, list):
+            raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
+        candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
+        action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+        if action == "rerun" and not post_rerun(gh, candidate["id"]):
+            action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
+    except (ReadError, KeyError, TypeError) as e:
+        print(f"::error::the protection-read run of #{number} was NOT refreshed: {e}")
+        return 1
+    if action == "rerun":
+        print(f"::notice::#{number}: {why} — {candidate.get('html_url')}")
+    elif action == "manual":
+        print(f"::warning::#{number}: {why}")
+    elif action == "fail":
+        print(f"::error::#{number}: {why}")
+        return 1
+    else:
+        print(f"  #{number}: {why}")
+    _append("GITHUB_STEP_SUMMARY", f"Refresh of the protection-read verdict for #{number}: {action} — {why}\n")
+    return 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -1960,13 +2096,13 @@ def self_test() -> int:
         print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={'ARM' if ready else 'no arm: ' + says} "
               f"got={'ARM' if v.ready else 'no arm: ' + v.missing}")
     draft_pr = dict(_pr(0), draft=True)
-    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "no review has run on the current head")
-    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "no review has run on the current head")
+    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "no review has landed on this pull request")
+    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "no review has landed on this pull request")
     arm_case("review still in progress -> no arm", False, _pr(0), [], [_ir(status="in_progress", conclusion=None)], "still in_progress")
     arm_case("review neutral 'Reviewer unavailable' -> no arm", False, _pr(0), [], [_ir(conclusion="neutral", title=DEGRADED_TITLE)],
              "UNAVAILABLE")
     arm_case("another App's internal-review does not count", False, _pr(0), [],
-             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "no review has run on the current head")
+             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "no review has landed on this pull request")
     arm_case("unanswered bot thread -> no arm", False, _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
              "1 of 1 thread(s)")
     arm_case("a bot reply does not answer -> no arm", False, _pr(2),
@@ -2013,23 +2149,42 @@ def self_test() -> int:
                 [], "no required status check")
     suites_case("not asked (pure review gate) -> ARM on review alone", True, None, None)
 
-    # ── policy copilot-code-review: a landed Copilot review AGAINST THE CURRENT HEAD is that head's
-    # review for BOTH the arm and the stage gate, with no `internal-review` run at all. Each NO case
-    # names what it must fail on, so the acceptance cannot pass vacuously.
+    # ── policy copilot-code-review + review-once-per-pull-request: a landed Copilot review of the
+    # pull request — against the current head OR any earlier one — is the review for BOTH the arm and
+    # the stage gate, with no `internal-review` run at all. Each NO case names what it must fail on,
+    # so the acceptance cannot pass vacuously.
+    # The MERGE gate never looked at the head (condition 1 reads every review on the pull request);
+    # these pin that, so a later "fix" scoping it to the head reds here instead of re-buying rounds.
+    older = dict(_review(rid=60), commit_id="b" * 40)
+    case("ONCE merge: review on an OLDER head, every thread answered -> green", (), _pr(2), [older],
+         [_comment(1), _comment(11, PERSON, 1)])
+    case("ONCE merge: NO review at all -> red", (NOT_LANDED,), _pr(0), [], [])
+    case("ONCE merge: review on an OLDER head, a thread unanswered -> red", (UNANSWERED,), _pr(3), [older],
+         [_comment(1), _comment(2), _comment(11, PERSON, 1)])
     def _cop(sha=HEAD, body=REVIEW_BODY_SEPT, state="COMMENTED", user=REVIEWER_REVIEW_USER, rid=77):
         return dict(_review(body=body, user=user, state=state, rid=rid), commit_id=sha)
-    def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says=""):
+    def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says="", noted=""):
         nonlocal failures
         v = arm_readiness(pr or _pr(len(comments)), list(comments), list(runs), required, head_runs, None, reviews)
-        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        ok = (v.ready == ready and (says in v.missing if not ready else not v.missing)
+              and (not noted or any(noted in n for n in v.notes)))
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} arm+copilot: {name:47} got={'ARM' if v.ready else 'no arm: ' + v.missing}")
     cop_arm("Copilot reviewed the head, no internal run -> ARM", True, [_cop()])
-    cop_arm("Copilot reviewed only an OLDER head -> no arm", False, [_cop(sha="b" * 40)], says="no review has run on the current head")
-    cop_arm("Copilot REFUSED on the head -> no arm", False, [_cop(body=REFUSAL_QUOTA)], says="no review has run on the current head")
-    cop_arm("Copilot review still PENDING -> no arm", False, [_cop(state="PENDING")], says="no review has run on the current head")
+    cop_arm("ONCE: Copilot reviewed only an OLDER head, nothing to answer -> ARM", True, [_cop(sha="b" * 40)],
+            noted="earlier head bbbbbbbbbb")
+    cop_arm("ONCE: older-head review, its threads all answered -> ARM", True, [_cop(sha="b" * 40)],
+            comments=[_comment(1), _comment(2), _comment(11, PERSON, 1), _comment(12, PERSON, 2)], noted="review-once-per-pull-request")
+    cop_arm("ONCE: older-head review, a thread unanswered -> no arm", False, [_cop(sha="b" * 40)],
+            comments=[_comment(1), _comment(2), _comment(11, PERSON, 1)], says="1 of 2 thread(s)")
+    cop_arm("ONCE: an older-head REFUSAL is not a review -> no arm", False, [_cop(sha="b" * 40, body=REFUSAL_QUOTA)],
+            says="no review has landed on this pull request")
+    cop_arm("ONCE: the head's own review is named over an older one -> ARM", True,
+            [_cop(sha="b" * 40, rid=70), _cop(rid=71)], noted="Copilot reviewed head aaaaaaaaaa")
+    cop_arm("Copilot REFUSED on the head -> no arm", False, [_cop(body=REFUSAL_QUOTA)], says="no review has landed on this pull request")
+    cop_arm("Copilot review still PENDING -> no arm", False, [_cop(state="PENDING")], says="no review has landed on this pull request")
     cop_arm("the internal bot's REVIEW alone is not its verdict -> no arm", False, [_cop(user=INTERNAL_REVIEWER_USER)],
-            says="no review has run on the current head")
+            says="no review has landed on this pull request")
     cop_arm("Copilot on the head, its thread unanswered -> no arm", False, [_cop()], comments=[_comment(1)], says="1 of 1 thread(s)")
     cop_arm("Copilot on the head, its thread answered -> ARM", True, [_cop()], comments=[_comment(1), _comment(11, PERSON, 1)])
     cop_arm("Copilot on the head beats a DEGRADED internal run -> ARM", True, [_cop()],
@@ -2038,10 +2193,14 @@ def self_test() -> int:
             head_runs=[suite("Consolidate test results", "failure")], says="concluded failure")
     cop_arm("Copilot on the head, required suite green -> ARM", True, [_cop()], required=REQ,
             head_runs=[suite("Consolidate test results")])
-    cop_arm("NEGATIVE CONTROL: no reviews passed -> no arm", False, None, says="no review has run on the current head")
+    cop_arm("NEGATIVE CONTROL: no reviews passed -> no arm", False, None, says="no review has landed on this pull request")
     for name, ready, mode, reviews, comments, pr in [
         ("Copilot reviewed the head -> stage 2 starts", True, "reviewed", [_cop()], [], None),
-        ("Copilot reviewed only an OLDER head -> waiting", False, "waiting", [_cop(sha="b" * 40)], [], None),
+        ("ONCE: Copilot reviewed only an OLDER head -> stage 2 starts", True, "reviewed", [_cop(sha="b" * 40)], [], None),
+        ("ONCE: older-head review, thread answered -> stage 2 starts", True, "reviewed", [_cop(sha="b" * 40)],
+         [_comment(1), _comment(11, PERSON, 1)], None),
+        ("ONCE: older-head review, thread unanswered -> held", False, "unanswered", [_cop(sha="b" * 40)], [_comment(1)], None),
+        ("ONCE: NEGATIVE CONTROL, no review at all -> waiting", False, "waiting", [], [], None),
         ("Copilot on the head, thread unanswered -> held", False, "unanswered", [_cop()], [_comment(1)], None),
         ("a DRAFT is held even with a Copilot review", False, "draft", [_cop()], [], dict(_pr(0), draft=True)),
     ]:
@@ -2241,7 +2400,7 @@ def self_test() -> int:
               [_ir(sha=M, conclusion="neutral", title=DEGRADED_TITLE)], PURE)
     for name, carry, runs, ready, says in [
         ("arm: pure merge carried -> ARM", PURE, [], True, ""),
-        ("arm: NEGATIVE CONTROL, no carry -> no arm", None, [], False, "no review has run on the current head"),
+        ("arm: NEGATIVE CONTROL, no carry -> no arm", None, [], False, "no review has landed on this pull request"),
         ("arm: carried, a fresh round still running on M -> ARM (it reviews the same diff)", PURE,
          [_ir(sha=M, status="in_progress", conclusion=None)], True, ""),
         ("arm: carry refused -> no arm, and says why", carry_of(dict(NEW_CMP, files=files(PATCH_RESOLVED))), [], False, "own diff changed"),
@@ -2349,6 +2508,42 @@ def self_test() -> int:
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
+    # ── the SELF-REFRESH: a green verdict branch protection does not read re-runs the one it does.
+    ref_pr = {"number": 4649, "state": "open", "head": {"sha": HEAD, "repo": {"full_name": "Systemorph/MeshWeaver"}}}
+    red_read = {"id": 7, "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+                "run_started_at": "2026-10-07T09:40:00Z", "html_url": "u"}
+    def ref_case(name, expect, event, candidate, pr=None, evaluated_at="2026-10-07T10:00:00Z", own=99, says=""):
+        nonlocal failures
+        action, why = refresh_action(event, own, evaluated_at, "Systemorph/MeshWeaver",
+                                     pr if pr is not None else ref_pr, candidate)
+        ok = action == expect and says in why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} refresh: {name:51} expected={expect} got={action} ({why[:60]})")
+    ref_case("#4649: comment-run GREEN, pull_request run RED -> rerun", "rerun", "pull_request_review_comment", red_read,
+             says="re-running")
+    ref_case("review-run GREEN, pull_request run RED -> rerun", "rerun", "pull_request_review", red_read, says="re-running")
+    ref_case("a cancelled (evicted) read run -> rerun", "rerun", "pull_request_review_comment",
+             dict(red_read, conclusion="cancelled"), says="cancelled")
+    ref_case("this run IS the pull_request run -> none (no loop)", "none", "pull_request", red_read, says="IS a `pull_request`")
+    ref_case("merge_group entry -> none", "none", "merge_group", red_read, says="merge-queue")
+    ref_case("read run already re-run, in flight -> none (idempotent)", "none", "pull_request_review_comment",
+             dict(red_read, status="in_progress", conclusion=None), says="still in_progress")
+    ref_case("read run already green -> none", "none", "pull_request_review_comment",
+             dict(red_read, conclusion="success"), says="already reads success")
+    ref_case("read run red but started AFTER this verdict -> none", "none", "pull_request_review_comment",
+             dict(red_read, run_started_at="2026-10-07T10:00:05Z"), says="not before this verdict")
+    ref_case("read run started at the verdict instant -> none", "none", "pull_request_review_comment",
+             dict(red_read, run_started_at="2026-10-07T10:00:00Z"), says="not before this verdict")
+    ref_case("read run is for an older head -> none", "none", "pull_request_review_comment",
+             dict(red_read, head_sha="b" * 40), says="not the current head")
+    ref_case("candidate is this very run -> none", "none", "pull_request_review_comment", red_read, own=7, says="is this run")
+    ref_case("no pull_request run at all -> fail, named", "fail", "pull_request_review_comment", None, says="push to the pull request")
+    ref_case("closed pull request -> none", "none", "pull_request_review_comment", red_read, pr=dict(ref_pr, state="closed"),
+             says="closed")
+    ref_case("fork pull request -> manual, never a silent skip", "manual", "pull_request_review_comment", red_read,
+             pr=dict(ref_pr, head={"sha": HEAD, "repo": {"full_name": "someone/MeshWeaver"}}), says="fork")
+    ref_case("unreadable verdict time -> fail", "fail", "pull_request_review_comment", red_read, evaluated_at="", says="unreadable")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -2408,6 +2603,12 @@ def main(argv=None) -> int:
     ap.add_argument("--workflow", help="--stage-advance: the caller's pull-request CI workflow FILE (ci.yml, dotnet-test.yml)")
     ap.add_argument("--head-sha", help="--stage-advance: the head a check_run event named")
     ap.add_argument("--sweep", action="store_true", help="--stage-advance: every open PR with a failed run (the fallback timer)")
+    ap.add_argument("--refresh-read-run", action="store_true",
+                    help="after a GREEN verdict: re-run the newest `pull_request` run of this workflow for the head when it "
+                         "still carries an older red (refresh_action); takes --repo, --pr, --event, --run-id, --evaluated-at")
+    ap.add_argument("--event", help="--refresh-read-run: the event that produced the GREEN verdict (github.event_name)")
+    ap.add_argument("--run-id", help="--refresh-read-run: this workflow run's id (github.run_id)")
+    ap.add_argument("--evaluated-at", help="--refresh-read-run: when the GREEN verdict was taken (ISO-8601 UTC)")
     ap.add_argument("--wait-minutes", type=int, default=20,
                     help="--stage-advance: how long to let an in-flight held run finish before re-running it")
     args = ap.parse_args(argv)
@@ -2419,6 +2620,19 @@ def main(argv=None) -> int:
     if not 5 <= args.fallback_minutes <= 240:
         print(f"::error::--fallback-minutes must be between 5 and 240, got {args.fallback_minutes}")
         return 2
+    if args.refresh_read_run:
+        if not args.event:
+            print("::error::--refresh-read-run needs --event (github.event_name)")
+            return 2
+        if args.event == "merge_group" or not args.pr:
+            # A merge-queue entry has nothing on a pull request head to refresh (refresh_action says
+            # the same); printed rather than failed on a usage error.
+            print(f"  event {args.event!r} carries no pull request head to refresh — nothing to do")
+            return 0
+        if not re.fullmatch(r"[1-9]\d*", args.pr) or not re.fullmatch(r"[1-9]\d*", args.run_id or ""):
+            print(f"::error::--refresh-read-run needs --pr <number> and --run-id <number>, got {args.pr!r} / {args.run_id!r}")
+            return 2
+        return run_refresh(args.repo, int(args.pr), args.event, args.run_id, args.evaluated_at or "")
     if args.stage_advance:
         if not args.workflow or not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.workflow):
             print("::error::--stage-advance needs --workflow <file>.yml (the caller's pull-request CI workflow)")
