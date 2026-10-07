@@ -33,12 +33,16 @@ For the subject job (`dotnet-test.yml` → `collect-results`):
      a tree the first marker already recorded green. A step that can still fail after the marker
      was written is a verdict the marker did not wait for — the #5988 shape;
   4. every job in the collector's `needs:` is ENFORCED for EACH marker, by one of:
-       a. a VERDICT step before the first marker — one that can fail the job (no
-          `continue-on-error`), whose `if:` fires on `needs.<job>.result != 'success'` and whose
-          `run:` exits non-zero. A step that merely MENTIONS the result
-          (`echo ${{ needs.x.result }}`) or cannot fail the job translates nothing;
-       b. or that marker's OWN `if:` requiring `needs.<job>.result == 'success'`. Another marker's
-          condition never counts: a later marker skipped on a red gate does not un-write the first.
+       a. a VERDICT step before the first marker — one that can fail the job (`continue-on-error`
+          absent or literally false; an EXPRESSION is decided at run time and never credited),
+          whose `if:` is a plain conjunction with `needs.<job>.result != 'success'` as a TOP-LEVEL
+          conjunct (so `!( … )`, a top-level `||` and a constant-false `&& false` are refused), and
+          whose `run:` ends in `exit <non-zero>` with no earlier `exit`/`exit 0`. A step that merely
+          MENTIONS the result (`echo ${{ needs.x.result }}`), or a commented-out `# exit 1`,
+          translates nothing;
+       b. or that marker's OWN `if:` carrying `needs.<job>.result == 'success'` as a top-level
+          conjunct under the same rules. Another marker's condition never counts: a later marker
+          skipped on a red gate does not un-write the first.
      A gate job whose verdict nothing enforces can be red while the job, and therefore the marker,
      is green. Event/reuse exemptions on a verdict's `if:` (`github.event_name == …`,
      `needs.precheck.outputs.skip != 'true'`) are legitimate and preserved.
@@ -84,16 +88,76 @@ def _truthy(value) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
 
 
-VERDICT_EXIT = re.compile(r"\bexit\s+[1-9]")
+def _literally_false(value) -> bool:
+    """`continue-on-error` that certainly does NOT tolerate failure: absent, or literally false. An
+    EXPRESSION (`${{ true }}`, `${{ needs.x.result != 'success' }}`) is decided at run time, so it is
+    never credited as failable — it may well evaluate true and swallow the verdict."""
+    return value is None or value is False or (isinstance(value, str) and value.strip().lower() == "false")
+
+
+def _conjuncts(cond) -> list[str] | None:
+    """Split an `if:` into its TOP-LEVEL `&&` conjuncts, or None when the expression is not a plain
+    conjunction (a top-level `||`, unbalanced parentheses). Only a top-level conjunct is ENFORCED by
+    the expression: a comparison under `!( … )` or beside an `|| …` branch is merely present."""
+    text = str(cond or "").strip()
+    if text.startswith("${{") and text.endswith("}}"):
+        text = text[3:-2].strip()
+    parts, depth, quote, start, i = [], 0, False, 0, 0
+    while i < len(text):
+        c = text[i]
+        if c == "'":
+            quote = not quote
+        elif not quote:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth < 0:
+                    return None
+            elif depth == 0 and text.startswith("||", i):
+                return None
+            elif depth == 0 and text.startswith("&&", i):
+                parts.append(text[start:i].strip())
+                start = i + 2
+                i += 1
+        i += 1
+    if depth or quote:
+        return None
+    parts.append(text[start:].strip())
+    return [p for p in parts if p]
+
+
+# A conjunct that is constantly false makes the whole `if:` false — the step never runs.
+CONSTANT_FALSE = re.compile(r"^\(*\s*(false|0|''|!\s*true|!\s*\(\s*true\s*\))\s*\)*$", re.IGNORECASE)
+
+
+def _enforces(cond, comparison: re.Pattern) -> bool:
+    """The `if:` is a plain conjunction, one of its top-level conjuncts IS `comparison`, and none is a
+    constant false. Negation, `|| …` bypasses and `&& false` are therefore refused, not credited."""
+    parts = _conjuncts(cond)
+    if parts is None or any(CONSTANT_FALSE.match(p) for p in parts):
+        return False
+    return any(comparison.fullmatch(p) for p in parts)
+
+
+def _always_exits_red(run) -> bool:
+    """The body's LAST non-comment line is `exit <non-zero>` and no line exits 0 first. A substring
+    test is not enough: `# exit 1` or `exit 0` before it make the body exit zero."""
+    lines = [l.strip() for l in str(run or "").splitlines()]
+    lines = [l for l in lines if l and not l.startswith("#")]
+    if not lines or not re.fullmatch(r"exit\s+[1-9][0-9]*", lines[-1]):
+        return False
+    return not any(re.search(r"\bexit(\s+0)?\s*(;|$|#)", l) for l in lines[:-1])
 
 
 def _is_verdict_for(step: dict, need: str) -> bool:
-    """A step that turns a red `need` into a red job: it can fail the job, it RUNS when the need is not a
-    success, and its body exits non-zero. Merely mentioning `needs.<need>.result` translates nothing."""
-    if _truthy(step.get("continue-on-error")):
+    """A step that turns a red `need` into a red job: it can fail the job (`continue-on-error` absent or
+    literally false), its `if:` is a conjunction ENFORCING `needs.<need>.result != 'success'`, and its
+    body ends in `exit <non-zero>`. Merely mentioning `needs.<need>.result` translates nothing."""
+    if not _literally_false(step.get("continue-on-error")):
         return False
-    fires_on_red = re.search(rf"needs\.{re.escape(need)}\.result\s*!=\s*'success'", str(step.get("if", "")))
-    return bool(fires_on_red) and bool(VERDICT_EXIT.search(str(step.get("run", ""))))
+    fires_on_red = re.compile(rf"needs\.{re.escape(need)}\.result\s*!=\s*'success'")
+    return _enforces(step.get("if"), fires_on_red) and _always_exits_red(step.get("run"))
 
 
 def check_job(job: dict, label: str) -> list[str]:
@@ -136,7 +200,7 @@ def check_job(job: dict, label: str) -> list[str]:
             continue
         required = re.compile(rf"needs\.{re.escape(need)}\.result\s*==\s*'success'")
         for i in sorted(marker_idx):
-            if not required.search(str(steps[i].get("if", ""))):
+            if not _enforces(steps[i].get("if"), required):
                 errors.append(f"{label}: needed job '{need}' is not enforced for marker '{names[i]}' — no "
                               f"failable verdict step before the first marker fires on "
                               f"needs.{need}.result != 'success' and exits non-zero, and the marker's own "
@@ -238,6 +302,34 @@ def self_test(root: Path) -> int:
     j = copy.deepcopy(good)
     j["steps"][1]["run"] = "echo doc gate red"
     expect("a verdict whose body never exits non-zero fires", j, True, "'doc-gate' is not enforced")
+    for coe in ("${{ true }}", "${{ needs.doc-gate.result != 'success' }}"):
+        j = copy.deepcopy(good)
+        j["steps"][1]["continue-on-error"] = coe
+        expect(f"an EXPRESSION continue-on-error ({coe}) is not credited as failable", j, True,
+               "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    j["steps"][1]["continue-on-error"] = False
+    expect("a literally-false continue-on-error stays credited", j, False)
+    for cond in ("!(needs.doc-gate.result != 'success')",
+                 "needs.doc-gate.result != 'success' && false",
+                 "needs.doc-gate.result != 'success' || github.event_name == 'push'"):
+        j = copy.deepcopy(good)
+        j["steps"][1]["if"] = cond
+        expect(f"a verdict if: that does not ENFORCE the comparison fires ({cond})", j, True,
+               "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    del j["steps"][1]
+    for m in (1, 2):  # an OR branch on each marker bypasses the requirement it appears to state
+        j["steps"][m]["if"] += " && (needs.doc-gate.result == 'success' || true)"
+    expect("a marker requirement under an always-true OR fires", j, True, "'doc-gate' is not enforced")
+    for body in ("echo doc gate red\n# exit 1", "exit 0\nexit 1", "echo red; exit 1 # \nexit"):
+        j = copy.deepcopy(good)
+        j["steps"][1]["run"] = body
+        expect(f"a verdict body that can exit zero fires ({body!r})", j, True, "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    j["steps"][1]["if"] = "(github.event_name == 'pull_request' || github.event_name == 'merge_group')" \
+                          " && needs.doc-gate.result != 'success'"
+    expect("a parenthesised event exemption on a verdict's if: stays silent", j, False)
     j = copy.deepcopy(good)
     del j["steps"][1]
     for m in (1, 2):  # EVERY marker's own if: guards the gate — a legitimate alternative to a verdict
