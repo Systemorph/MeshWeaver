@@ -635,13 +635,13 @@ public static class PublishedBundleCatalogue
         if (string.IsNullOrWhiteSpace(name))
         {
             if (flat.Count != 1)
-                throw new InvalidOperationException(
+                throw new RegistryRefusedException(
                     $"cannot identify the module's entry assembly (no manifest module.assemblyName; "
                     + $"{NuGetPackageWriter.ModuleFolder}/ holds {flat.Count} dll(s))");
             name = Path.GetFileNameWithoutExtension(flat[0].FullName);
         }
         var entry = archive.GetEntry($"{NuGetPackageWriter.ModuleFolder}/{name}.dll")
-            ?? throw new InvalidOperationException(
+            ?? throw new RegistryRefusedException(
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
 
         var carried = ImmutableArray.CreateBuilder<SealedModuleAssembly>(flat.Count);
@@ -661,7 +661,7 @@ public static class PublishedBundleCatalogue
     private static string MvidOf(ZipArchiveEntry entry)
     {
         if (entry.Length is < 0 or > int.MaxValue)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{entry.FullName} declares an implausible length ({entry.Length} bytes) — the module bundle is corrupt");
         using var stream = entry.Open();
         using var bytes = new MemoryStream((int)entry.Length);

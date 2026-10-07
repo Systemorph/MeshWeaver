@@ -66,6 +66,7 @@ public sealed record ModuleContributions(
             attributes.SelectMany(a => a.BuilderConfigurations).ToArray(),
             CarriesEndpointProvider(assembly))
         {
+            Views = attributes.SelectMany(a => a.Views).ToArray(),
             DeclaredRestartReason = assembly.GetCustomAttribute<ModuleRestartRequiredAttribute>()?.Reason,
             DeclaredRestartCategory = assembly.GetCustomAttribute<ModuleRestartRequiredAttribute>()?.Category,
             ModuleContext = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(assembly),
@@ -76,6 +77,9 @@ public sealed record ModuleContributions(
             BuilderHooks = capture.Blockers.IsEmpty ? capture : BuilderHookCapture.Empty with { Blockers = capture.Blockers },
         };
     }
+
+    /// <summary>The module's view registrations (<see cref="MeshNodeProviderAttribute.Views"/>).</summary>
+    public IReadOnlyList<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> Views { get; init; } = [];
 
     /// <summary>The builder hook, decomposed (<see cref="MeshBuilder.CaptureBuilderHooks"/>).</summary>
     public BuilderHookCapture BuilderHooks { get; init; } = BuilderHookCapture.Empty;
@@ -179,8 +183,8 @@ public sealed record ModuleContributions(
                 break;
             }
         blockers.AddRange(BuilderHooks.Blockers.Select(b => $"builder hook: {b}"));
-        if (MapsEndpoints)
-            blockers.Add("maps HTTP endpoints (MeshEndpointProviderAttribute) — the endpoint map is built once");
+        // HTTP endpoints are re-mapped from the current generation on a swap by the host's dynamic
+        // module endpoint source (MeshWeaver.Hosting.AspNetCore.ModuleEndpointDataSource).
         return blockers.ToImmutable();
     }
 

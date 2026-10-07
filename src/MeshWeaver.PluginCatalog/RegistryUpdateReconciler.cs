@@ -243,16 +243,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// survives as data (<see cref="RegistryResponseException.StatusCode"/>), so the policy can ask
     /// what the server actually said instead of inferring it from a CLR type.</para>
     /// </summary>
-    internal static bool ShouldRetryFeedRead(Exception fault) => fault switch
-    {
-        // A definite answer naming a transient server-side condition (503/429/5xx) — re-ask.
-        RegistryResponseException http => http.IsTransientFailure,
-        // Any other definite answer (401/403/404, a malformed payload) — re-asking cannot help.
-        InvalidOperationException => false,
-        // A transport fault (TCP hiccup, DNS blip, request timeout): the original #1500 case,
-        // where the read never reached an HTTP answer at all.
-        _ => true,
-    };
+    internal static bool ShouldRetryFeedRead(Exception fault) =>
+        // The ONE classifier (MeshWeaver#6172 review): a transient status or transport fault is
+        // re-asked; a decided answer (a non-transient status, a RegistryRefusedException) is not.
+        TransientRegistryFailure.IsTransient(fault);
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -306,6 +300,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // Hop off whatever thread completed the default install before the reconcile chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ => Reconcile(options))
+            .SelectMany(_ => RetryFaultedReloads(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread — the chain is synchronous
             // up to its first genuinely-async leaf, so subscribing inline would run it ON the
             // startup thread and re-enter the hub schedulers mid-init. Same fix, same reason, as
@@ -592,6 +587,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
                 .LastAsync())
+            .SelectMany(_ => RetryFaultedReloads(options))
             .Repeat();
     }
 
@@ -610,7 +606,44 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .ToObservable()
             .Concat()
             .DefaultIfEmpty(Unit.Default)
-            .LastAsync();
+            .LastAsync()
+            .SelectMany(_ => RetryFaultedReloads(options));
+    }
+
+    /// <summary>
+    /// 🚨 Ends every full reconcile pass (boot, safety net, <see cref="ReconcileNow"/>): re-arms each
+    /// module reload that CRASHED (<see cref="ModuleReloadStatus.Faulted"/>) and whose backoff is due
+    /// (<see cref="ModuleReload.RetryFaulted"/>). The backoff unit IS this pass's cadence — the
+    /// safety-net interval — doubled per attempt, so a retry needs no timer of its own: the pass
+    /// that already runs asks. With the safety net off, the boot pass is the retry. Never faults —
+    /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
+    /// </summary>
+    private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options)
+    {
+        var unit = options.ReconcileSafetyNetInterval > TimeSpan.Zero ? options.ReconcileSafetyNetInterval : TimeSpan.Zero;
+        var now = DateTimeOffset.UtcNow;
+        // A reboot whose restart request CRASHED is re-armed on the same pass, with the same backoff
+        // (InstanceReboot.RetryFaulted) — a transient failure is never final (#6172).
+        return ModuleReload.RetryFaulted(hub, unit, now)
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted module reload(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            .SelectMany(_ => InstanceReboot.RetryFaulted(hub, unit, now))
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[RegistryUpdate] faulted module reloads or reboots could not be re-armed this pass — the next pass asks again");
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
@@ -1166,6 +1199,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 {
                     Registry = registry.Url,
                     Failure = $"{DisplayName(registry)} could not be asked: {ex.Message}",
+                    Transient = true,
                 }));
 
         IObservable<ModuleAdoptOutcome> Resolve() =>
@@ -1196,6 +1230,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 {
                     Failure = $"the module set could not be proposed, so neither a swap nor a restart "
                               + $"would load {moduleName}: {ex.Message}",
+                    Transient = true,
                 }));
         }
 
@@ -1212,10 +1247,12 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .Select(_ => Volatile.Read(ref answer) ?? new ModuleAdoptOutcome
                 {
                     Failure = "the reload pass did not run (the reconcile lane is shutting down)",
+                    Transient = true,
                 })
                 .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
                 {
                     Failure = $"the reload pass faulted: {ex.Message}",
+                    Transient = true,
                 }))
                 .Take(1);
         });

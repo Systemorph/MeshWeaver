@@ -1444,6 +1444,7 @@
   "activity.compile.notPublished": "Assembly NOT PUBLISHED — Roslyn produced it, but the assembly store did not keep the bytes, so no Release was minted: {detail}",
   "activity.compile.aborted": "Compile aborted by {exceptionType}:\n{detail}",
   "activity.compile.releaseCreated": "Release created: {path}",
+  "activity.compile.releasePostCondition.abandonedAtShutdown": "Release post-condition (#781): {violation}.{firstAttempt} The re-cut did not land either{reason} \u2014 this process was leaving (host stopping or mesh tearing down), which cut it short. The replica that replaces it re-settles this NodeType.",
   "activity.compile.releasePostCondition.restored": "Release post-condition (#781): {violation}.{firstAttempt} Restored at {path} from the bytes this compile produced \u2014 no recompile.",
   "activity.compile.releasePostCondition.violated": "Release post-condition (#781) VIOLATED: {violation}.{firstAttempt} The re-cut did not land either{reason}. This build has no release.",
   "activity.compile.importRefusedSources": "⚠ {count} source node(s) this compile needs were REFUSED by an import of this partition, so the mesh does NOT hold them — the unresolved name(s) below are missing FILES, not missing modules: {paths}. Fix the source file in the repository and re-import.",

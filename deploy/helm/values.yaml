@@ -341,7 +341,10 @@ hostingOperator:
 #     ring, the NodeType assembly cache, the NuGet cache); a ReadWriteOnce claim either pins both
 #     pods to one node or leaves the second pod unschedulable.
 # Both are asserted at render time by .github/workflows/chart-gate.yml, so a values file that
-# raises this without them fails the build instead of the deployment.
+# raises this without them fails the build instead of the deployment. A floor above one with NO
+# persistence.data.claimName (per-pod emptyDir /data) is refused by the chart itself, for every
+# values file including a client's untracked ones: the NodeType assembly cache lives in /data and
+# the shared NodeType records name files in it (MeshWeaver#6052).
 replicas:
   portal: 1
 # ---- Key Vault secrets, DECLARED (renders the SecretProviderClass) ---------

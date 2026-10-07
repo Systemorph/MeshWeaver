@@ -4,6 +4,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -29,6 +30,12 @@ public static class InstanceRebootStatus
 
     /// <summary>Red — <see cref="InstanceRebootRequest.Failure"/> names every failed step.</summary>
     public const string Failed = "Failed";
+
+    /// <summary>The roll/restart request CRASHED (a hand-over that failed, a check that could not be
+    /// made, a call that threw) — a transient fault, never a decided answer. NOT terminal: the plugin
+    /// catalog's reconcile pass re-arms it (<see cref="InstanceReboot.RetryFaulted"/>) once its
+    /// backoff is due, and the executor asks for the restart again.</summary>
+    public const string Faulted = "Faulted";
 
     /// <summary>Whether <paramref name="status"/> is terminal. An unknown value is NOT terminal.</summary>
     public static bool IsTerminal(string? status) =>
@@ -171,6 +178,14 @@ public record InstanceRebootRequest
     /// <summary>When the request reached a terminal status. Executor-owned.</summary>
     public DateTimeOffset? CompletedAt { get; init; }
 
+    /// <summary>Which restart attempt this is: 0 for the first, incremented by each re-arm of a
+    /// <see cref="InstanceRebootStatus.Faulted"/> request (<see cref="InstanceReboot.Rearm"/>).</summary>
+    public int Attempt { get; init; }
+
+    /// <summary>When the current attempt's restart request faulted — the start of its backoff
+    /// (<see cref="InstanceReboot.RetryDueAt"/>). Executor-owned.</summary>
+    public DateTimeOffset? FaultedAt { get; init; }
+
     /// <summary>Every step, in order — the audit trail. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
 }
@@ -276,6 +291,100 @@ public static class InstanceReboot
             return $"'{ActivationRecycle.SanitizeReason(request.Trigger)}' is not a reboot trigger this platform knows "
                    + $"({InstanceRebootTrigger.Person}, {InstanceRebootTrigger.Watchdog})";
         return null;
+    }
+
+    /// <summary>
+    /// When a <see cref="InstanceRebootStatus.Faulted"/> request is due for its next restart attempt —
+    /// pure: <c>FaultedAt + unit × 2^min(Attempt, ModuleReload.MaxBackoffDoublings)</c>, the same
+    /// backoff a faulted module reload uses (<see cref="ModuleReload.RetryDueAt"/>). Null for any other
+    /// status. No timer reads this: the plugin catalog's reconcile pass asks whether it is due.
+    /// </summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="unit">The backoff unit — production passes the reconcile safety-net interval.</param>
+    public static DateTimeOffset? RetryDueAt(InstanceRebootRequest request, TimeSpan unit)
+    {
+        if (!string.Equals(request.Status, InstanceRebootStatus.Faulted, StringComparison.Ordinal))
+            return null;
+        var since = request.FaultedAt ?? request.RequestedAt;
+        var factor = 1L << Math.Clamp(request.Attempt, 0, ModuleReload.MaxBackoffDoublings);
+        return since + TimeSpan.FromTicks(Math.Max(0, unit.Ticks) * factor);
+    }
+
+    /// <summary>
+    /// The re-armed request — pure: the same node, the next attempt, back to
+    /// <see cref="InstanceRebootStatus.AwaitingRestart"/> with the restart stamp, the replica reports
+    /// and the fault cleared, so the executor asks for the ONE restart again. Steps 1–3 (sync, land,
+    /// image) are NOT redone — they succeeded or were recorded red already; only the restart crashed.
+    /// The audit log is kept and extended.
+    /// </summary>
+    /// <param name="request">The faulted request.</param>
+    /// <param name="now">The re-arm instant, for the log line.</param>
+    public static InstanceRebootRequest Rearm(InstanceRebootRequest request, DateTimeOffset now) => request with
+    {
+        Status = InstanceRebootStatus.AwaitingRestart,
+        Attempt = request.Attempt + 1,
+        RestartRequestedAt = null,
+        Replicas = ImmutableDictionary<string, InstanceRebootReplica>.Empty,
+        Failure = null,
+        FaultedAt = null,
+        CompletedAt = null,
+        Log = request.Log.Add($"{now:u} retry {request.Attempt + 1}: re-armed after the fault '{request.Failure}'"),
+    };
+
+    /// <summary>
+    /// 🚨 The retry half of <see cref="InstanceRebootStatus.Faulted"/>: lists the reboot requests,
+    /// reads each one the listing does not show as finished from its OWN node stream, and re-arms
+    /// (<see cref="Rearm"/>) every one whose <see cref="RetryDueAt"/> is due — a
+    /// <c>GetMeshNodeStream(path).Update</c> as System, which also activates the request's own hub
+    /// where the executor runs. Called by the plugin catalog's reconcile pass next to
+    /// <see cref="ModuleReload.RetryFaulted"/>; no timer of its own. Emits the paths it re-armed,
+    /// once; never faults, and a read it cannot make is logged at Warning, never skipped silently.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="unit">The backoff unit (<see cref="RetryDueAt"/>).</param>
+    /// <param name="now">The pass's clock.</param>
+    public static IObservable<ImmutableList<string>> RetryFaulted(IMessageHub hub, TimeSpan unit, DateTimeOffset now)
+    {
+        var mesh = hub.ServiceProvider.GetService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        if (mesh is null || access is null)
+            return Observable.Return(ImmutableList<string>.Empty);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceReboot));
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{InstanceRebootRequest.Namespace} scope:children nodeType:{InstanceRebootRequest.NodeType}"))
+                .Take(1)
+                .Timeout(ActivationRecycle.ReadBudget))
+            .SelectMany(change => change.Items
+                .Where(n => n.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions) is not { } listed
+                            || !InstanceRebootStatus.IsTerminal(listed.Status))
+                .Select(n => n.Path)
+                .ToObservable()
+                .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                    .Select(node => node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions))
+                    .SelectMany(current => current is not null && RetryDueAt(current, unit) is { } due && due <= now
+                        ? access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                                .Update<InstanceRebootRequest>(r =>
+                                    RetryDueAt(r, unit) is { } stillDue && stillDue <= now ? Rearm(r, now) : r))
+                            .Take(1)
+                            .Select(_ => path)
+                        : Observable.Empty<string>())
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[Reboot] {Path}: the faulted-reboot retry could not read or re-arm it this pass ({Reason}) — the next pass asks again",
+                            path, ex.Message);
+                        return Observable.Empty<string>();
+                    }))
+                .Concat()
+                .ToList())
+            .Select(paths => paths.ToImmutableList())
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "[Reboot] the faulted-reboot retry could not list the requests this pass ({Reason}) — the next pass asks again",
+                    ex.Message);
+                return Observable.Return(ImmutableList<string>.Empty);
+            });
     }
 
     /// <summary>The step rows a fresh request starts with: every step <see cref="InstanceRebootStepOutcome.Pending"/>. Pure.</summary>

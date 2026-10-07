@@ -117,9 +117,32 @@ the live test fail (`Restarts` 1, expected 0).
 |---|---|
 | `ModuleServices` (`MeshWeaver.Mesh.Contract`) | The module's registration delegates run against a COPY of the root collection as it stands when the module installs, so every `TryAdd` decision is the boot one; what they ADDED is the module's set, routed (`ModuleServiceRoute`, open vocabulary): a platform **interface** → `Proxy`, a platform **class** → `Current`, `IHostedService` → `Hosted`, a type the module declares itself → `ModuleOwned`, an open generic or infrastructure → `Private`. |
 | Root forwarders (`ModuleServiceForwarding`) | The root gets exactly the platform-typed registrations it would have had — as forwarders that never name a module type. `Proxy` is ONE stable `DispatchProxy` per registration that forwards every call to the CURRENT generation, so a platform singleton that cached it follows a swap. `Hosted` is started at boot and, on a swap, the old generation's instance is STOPPED and the same registration STARTED from the new one. |
-| `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
-| Per-node hubs | Every per-node hub's scope gets forwarders for the module-owned types (and their options) of each module's CURRENT generation, so module code resolving its own service from `hub.ServiceProvider` finds it; a swap recycles the hubs. |
+| `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module — through ONE stand-in **per root registration**, so `IEnumerable<T>` in the module is the root's whole list in the root's order and a single resolve still answers the root's LAST; a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
+| Module types, wherever asked | A type a module DECLARES is answered from the modules wherever it is asked — `ModuleServices.RegistrationsElsewhere`: the declaring module's registrations (`ModuleServiceProvider.ResolveAt`, one per registration) plus every **contribution** another module made of it (`ModuleServiceRoute.Contributed`). The ROOT serves it through `ModuleOwnedRootSource` (so the mesh hub and every per-node hub, which are scopes under the root, see it), and another module's container through `ModuleFallbackSource`. |
+| Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
 | The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
+
+🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
+service to its LAST element in two places — the module container's fallback answered a platform type with
+one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on
+the three portals running core `7585f2a6`: MCP listed ONE tool of 37 (`restore_from_point_in_time`, the
+last declared — the MCP server takes `IEnumerable<McpServerTool>` inside the AI module) while a portal on an
+older image listed all 37; by the same mechanism every per-node hub resolves only the LAST `IHarness` the
+AI module registers, which is how the home-page chat lost the harness it was bound to.
+`ModuleServicesKeepEveryRegistrationTest` pins both, with the collapsed answers as its negative control.
+
+🚨 **A module's lists include what its DEPENDENTS contribute, and a dependent resolves its dependency's
+services.** The first images of this slice served a module type only inside its own container: on the
+control instance every AI provider's catalog sources and chat-client factories stayed in the provider's
+container (the Provider import listed only the platform nodes, `Provider/OpenRouterEU` had 0 models,
+"No IChatClientFactory is registered", every pull-request review stopped), and the provider factories —
+which read MeshWeaver.AI's `ChatClientCredentialResolver` off the mesh hub — found nothing.
+`ModuleContributionsCrossContainersTest` pins all four directions (the declaring module's list, the mesh
+hub, a per-node hub, a dependent resolving its dependency), every one red on the code before it. A
+"find the shared singleton in the collection and mutate it" registration cannot cross containers by
+construction — contribute a list element instead (MeshWeaver.AI's catalog is built from every
+`LanguageModelCatalogSource` registration). A dependent module's service that cached a contribution keeps
+that generation's instance until the hubs holding it are recycled — the same rule as any swap.
 
 What still blocks root services (measured, named): a delegate that removes or replaces a registration it
 did not add, a keyed registration, a class-typed platform service the module implements, an interface
@@ -186,8 +209,8 @@ SelfUpdate.Aks, Testing, Import, Maps, Northwind, OgCard. **16 still blocked:**
 
 | Blocker | Modules | Conversion owed |
 |---|---|---|
-| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | a view-registration seam read per render / per client hub instead of folded into the mesh hub's immutable configuration |
-| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | a dynamic endpoint data source the swap updates |
+| The mesh hub's configuration returns a new configuration (`AddViews`) | Blazor.Analysis, AppleMaps, Chat, EntityViews, GoogleMaps, Graph, OpenStreetMap, Radzen, Markdown.Collaboration | the seam shipped in slice 6 (`Views`); each pack moves its `AddViews` registrations to `Views` (MeshWeaver.Plugins) |
+| HTTP endpoints | Courses, Mail.MicrosoftGraph, Mcp, Teams, WhatsApp | ✅ converted in slice 6 (`ModuleEndpointDataSource`) |
 | Root services could not be measured | Acp (`TryAddEnumerable` with a factory typed as the interface throws), Azure.Blob, Mcp, Radzen (their dependency DLLs were absent from the measured Debug output — an artefact of the measurement, not of the modules) | Acp: register the harness by implementation type; the others re-measure against a published closure |
 
 **Tests:** `ModuleBuilderHookSwapTest` (2): a module contributing ONLY through its builder hook — a node,
@@ -195,6 +218,77 @@ a root service, a mesh-hub type registration, per-node-hub configuration, an aut
 swaps live: the service answers from N+1, the node is served from N+1, the running mesh hub's type
 registry maps the name to N+1's type, and N is collected; the negative control: a hook that adds a
 query routing rule is a blocker the guard names.
+
+## What is shipped (slice 6 — endpoints, views, platform independence)
+
+| Piece | What it does |
+|---|---|
+| `ModuleEndpointDataSource` (`MeshWeaver.Hosting.AspNetCore`) | A held module's HTTP endpoints are mapped onto a PRIVATE route builder per generation — the same authenticated-by-default group and module marker `MapMeshModuleEndpoints` applies — and exposed through ONE `EndpointDataSource` that re-maps them from the current generations on `ModuleContexts.VersionChanged` and fires its change token, so ASP.NET Core routing rebuilds its matcher. The refusal is scoped PER MODULE: each module's endpoints are published with the generation that mapped them, and only a module whose current generation differs is re-mapped. A module whose new map throws, or whose routes collide with another endpoint the host serves (another module's included), keeps serving its previous endpoints; it is logged at Critical with the module and the collision named, and it is retried on every later swap. Its served endpoints hold the previous generation's types, so that generation stays loaded and is not collected — one retained generation per refused module, until a later map is accepted. Every other module's change is still published, so one module's bad generation never freezes endpoint updates for the rest. The pending maps are first decided together, so two modules that exchange routes across swap waves both go live once the exchange completes, rather than each being refused against the other's stale map. Image-bound modules map as before. Endpoints are no longer a blocker. |
+| `MeshNodeProviderAttribute.Views` + `IViewContributionSource` (`MeshWeaver.Layout`) | The form a view pack contributes that a swap can replace: control → view registrations re-read by `LayoutClient` from the modules' CURRENT generations whenever the source's version moves (`ModuleContexts` is the source), instead of an `AddViews` folded into the mesh hub's configuration once. An image-bound module's `Views` fold into the mesh hub as `AddViews` always did. `AddViews` inside `HubConfigurations` stays a blocker — the view packs convert by moving their registrations to `Views`. |
+| Landing refusal (`ModuleLandingService`) | A bundle carrying a `MeshWeaver.*` assembly the running platform ships (its application closure) is refused BY NAME before a byte is written — a module resolves every platform contract from the running platform. Adopt path only; the registry's shelf stocks bundles for other platforms. |
+
+**Tests:** `ModuleEndpointsSwapLiveTest` (real ASP.NET Core routing on a TestServer): the route answers
+from N+1 after the swap with no restart and N is collected; a generation that ADDS endpoints is mapped
+live even when boot mapped none; a held module whose boot route collides with the host is refused at
+startup; the negative control: a colliding re-map is not published and the previous route keeps serving;
+one module's refused swap does not freeze another module's swap, which still goes live; and two modules that exchange routes are both published once the exchange completes.
+`ModuleViewsSwapTest`: the SAME layout client resolves the control to N+1's view after the swap; the
+negative control: views folded through `HubConfigurations`' `AddViews` are a named blocker.
+`ModulesUpdateIndependentlyOfThePlatformTest`: the platform stays fixed while M goes N → N+1 → N+2 live
+through the real landing path — N+2 recorded against an older platform build and a floor below the
+platform, so no identity-equality gate, no seal, no roll. An N+3 whose floor is above the platform is
+declined by name by the reconciler's own decision function (`ModuleUpdateDecision`, called directly —
+the decline happens BEFORE anything lands, so no above-floor bundle reaches the landing path), and the
+next activation pass then takes only the sibling's landed update while M keeps serving N+2. The
+reconciler's own wiring of that decision is exercised end to end elsewhere, from a real registry
+serving an above-floor bundle:
+- `PackagesAutoUpdateTest.AnIncompatibleFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the unattended reconcile pass, `ReconcileNow`);
+- `ModuleReloadByRestartTest.ANewerVersionAboveTheFloor_IsDeclinedByName_AndTheRunningVersionKeepsServing`
+  (the attended reload);
+- `ModuleBundleFloorHoldTest` step 2 (the adopt).
+
+Each asserts the held bundle is not downloaded and the running version keeps serving. A bundle carrying
+a platform assembly is refused naming it, and the same bundle without it lands.
+
+## What is shipped (slice 7 — the REAL MeshWeaver.AI update goes live; keyed services; added background services)
+
+**Measured on the actual incident pair.** MeshWeaver.AI was published twice against this core — from
+MeshWeaver.Plugins `b7a083d98~1` (no `ThreadPreparation.Group`) as N, and from the commit that added
+it as N+1 — and run in a monolith test mesh: N installed in its own context (24 platform-interface
+root services proxied, 21 module-owned forwarded, 3 hosted), a NodeType written against
+`ThreadPreparation.Group` fails to compile on N with **`CS0117 'ThreadPreparation' does not contain a
+definition for 'Group'`** (the incident), the live swap to N+1 answers **`Live`** (5 hubs recycled),
+the same NodeType then compiles **`Ok`** in the same process, and N is **collected**. Three changes
+made that true, each found by running it:
+
+1. **Added background services are not a shape change.** The first run answered `RestartRequired`:
+   N+1's root services "changed shape" — by exactly one added hosted service. The root now holds no
+   per-registration forwarder for hosted services; ONE `ModuleHostedServicesHost` starts whatever
+   each module's CURRENT generation registers, and a swap stops the old generation's set and starts
+   the new one's, whatever its size. Start and stop stay SEQUENTIAL, as the generic host runs root
+   hosted services: modules in name order, each module's services in registration order, each once
+   the previous start completed; stop is the exact reverse (`ModuleHostedServicesStartInSequenceTest`).
+2. **The content-type registry let go of nothing.** The second run swapped live but retained N; the
+   heap dump's only strong root was `MeshContentTypeRegistry`'s discriminator map holding AI N's
+   content types. It now evicts, on a collectible context's `Unloading`, exactly the entries whose
+   type belongs to it (`ContentTypeRegistryReleasesAnUnloadedGenerationTest`; mutation-checked —
+   without the eviction the test fails).
+3. **Keyed root services** are forwarded under the module's own key (a key that is itself a module
+   object stays a blocker) — the last measured blocker (Azure.Blob's keyed `IStreamProviderFactory`).
+   A keyed registration of a type the module DECLARES is answered by key from the root too
+   (`ModuleOwnedRootSource` → `ModuleServices.KeyedRegistrationsElsewhere`), and never counted among
+   the type's unkeyed registrations.
+
+**Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
+Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
+published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations
+needed.**
+
+**Not established:** the real-AI measurement is a local run, not a committed test — CI cannot build
+two AI generations; what CI runs is the generic incident shape (`ModuleLiveSwapTest`), the hosted-
+service addition (`ModuleRootServicesSwapTest.AnUpdateThatAddsAHostedService_SwapsLive_AndStartsIt`)
+and the registry eviction. That a THREAD then runs end to end on N+1 (a model round) was not run.
 
 ## What is owed
 

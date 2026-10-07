@@ -32,6 +32,10 @@ namespace MeshWeaver.PluginCatalog;
 /// <item><b>AwaitingRestart</b>: stamp <see cref="ModuleReloadRequest.RestartRequestedAt"/> FIRST,
 /// then ask <see cref="IModuleActivationRestart"/> once. The stamp is what keeps a resumed executor
 /// from asking twice.</item>
+/// <item><b>Any step → Faulted</b>: a step that CRASHES (an exception, an unreachable registry)
+/// records <see cref="ModuleReloadStatus.Faulted"/>, never <see cref="ModuleReloadStatus.Failed"/>
+/// — a crash says nothing about the version. The reconcile pass re-arms it once its backoff is due
+/// (<see cref="ModuleReload.RetryFaulted"/>), and this executor runs the new attempt from the top.</item>
 /// <item><b>Activating / AwaitingRestart → Done | Failed</b>: decided by
 /// <see cref="ModuleReload.Evaluate"/> over what the replicas REPORT they loaded
 /// (<see cref="ModuleReloadAgent"/>); a failed live swap falls back to the one restart.</item>
@@ -84,12 +88,30 @@ public static class ModuleReloadExecutor
         private int finished;
         private int fallbackStarted;
 
+        /// <summary>The attempt the step flags above belong to. A re-armed request
+        /// (<see cref="ModuleReload.Rearm"/>) carries the next attempt, and the same activation must
+        /// run it from the top — so a new attempt resets the flags. Steps run one at a time
+        /// (<c>Select(Step).Concat()</c>), so this is never read and reset concurrently.</summary>
+        private int attempt = -1;
+
         private AccessService? Access => hub.ServiceProvider.GetService<AccessService>();
 
         public IObservable<Unit> Step(MeshNode node)
         {
             var request = node.ContentAs<ModuleReloadRequest>(hub.JsonSerializerOptions);
             if (request is null || ModuleReloadStatus.IsTerminal(request.Status))
+                return Observable.Empty<Unit>();
+            if (request.Attempt != attempt)
+            {
+                attempt = request.Attempt;
+                Interlocked.Exchange(ref landingStarted, 0);
+                Interlocked.Exchange(ref restartStarted, 0);
+                Interlocked.Exchange(ref finished, 0);
+                Interlocked.Exchange(ref fallbackStarted, 0);
+            }
+            // Faulted waits for the reconcile pass to re-arm it (ModuleReload.RetryFaulted) — the
+            // executor does not retry on its own: it has no clock, and must not grow one.
+            if (string.Equals(request.Status, ModuleReloadStatus.Faulted, StringComparison.Ordinal))
                 return Observable.Empty<Unit>();
             if (!string.Equals(node.CreatedBy, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
                 return Interlocked.Exchange(ref finished, 1) == 0
@@ -125,7 +147,7 @@ public static class ModuleReloadExecutor
             .SelectMany(landed => landed.Problem is { } problem
                 ? Finish(ModuleReloadStatus.Failed, problem)
                 : Decide(landed.Items))
-            .Catch((Exception ex) => Finish(ModuleReloadStatus.Failed, $"the landing step faulted: {ex.Message}"));
+            .Catch((Exception ex) => Fault($"the landing step faulted: {ex.Message}"));
 
         private IObservable<Unit> Decide(ImmutableList<ModuleReloadItem> items)
         {
@@ -140,6 +162,9 @@ public static class ModuleReloadExecutor
             var failure = failures.IsEmpty ? null : string.Join("; ", failures);
 
             if (needing.IsEmpty)
+            {
+                var status = ModuleReload.OutcomeOf(items, failure);
+                var faulted = status == ModuleReloadStatus.Faulted;
                 return Write(r => r with
                     {
                         Items = items,
@@ -147,11 +172,13 @@ public static class ModuleReloadExecutor
                         ActivationDetail = failure is null
                             ? "every resolved version is already the one this process runs"
                             : "nothing that could be resolved needs activating",
-                        Status = failure is null ? ModuleReloadStatus.Done : ModuleReloadStatus.Failed,
+                        Status = status,
                         Failure = failure,
-                        CompletedAt = DateTimeOffset.UtcNow,
+                        FaultedAt = faulted ? DateTimeOffset.UtcNow : null,
+                        CompletedAt = faulted ? null : DateTimeOffset.UtcNow,
                     }, Line(report))
                     .Do(_ => Interlocked.Exchange(ref finished, 1));
+            }
 
             var live = hub.ServiceProvider.GetService<IModuleLiveActivation>();
             var swappable = live is not null && needing.All(i => live.CanSwap(i.Module));
@@ -206,8 +233,12 @@ public static class ModuleReloadExecutor
                         .SelectMany(_ => restart.RequestRestart(reason).Take(1))
                         .SelectMany(outcome => outcome.Scheduled
                             ? Write(r => r with { ActivationDetail = $"{outcome.Kind}: {outcome.Detail}" }, Line($"restart {outcome.Kind}: {outcome.Detail}"))
-                            : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
-                .Catch((Exception ex) => Finish(ModuleReloadStatus.Failed, $"the restart request faulted: {ex.Message}"));
+                            // A failed attempt on a restart path that exists is transient — Faulted,
+                            // retried; only "this install cannot restart" is decided (#6172).
+                            : string.Equals(outcome.Kind, ModuleRestartKinds.Faulted, StringComparison.Ordinal)
+                                ? Fault($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")
+                                : Finish(ModuleReloadStatus.Failed, $"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
+                .Catch((Exception ex) => Fault($"the restart request faulted: {ex.Message}"));
         }
 
         /// <summary>Another open request's restart that THIS process has not been through yet, or
@@ -275,14 +306,35 @@ public static class ModuleReloadExecutor
                 return Finish(ModuleReloadStatus.Failed,
                     (request.Status == ModuleReloadStatus.AwaitingRestart ? "after the restart, " : "after the live swap, ")
                     + verdict.Detail);
-            return Write(r => r with
+            return Write(r =>
             {
-                Status = r.Failure is null ? ModuleReloadStatus.Done : ModuleReloadStatus.Failed,
-                CompletedAt = DateTimeOffset.UtcNow,
+                var status = ModuleReload.OutcomeOf(r.Items, r.Failure);
+                var faulted = status == ModuleReloadStatus.Faulted;
+                return r with
+                {
+                    Status = status,
+                    FaultedAt = faulted ? DateTimeOffset.UtcNow : null,
+                    CompletedAt = faulted ? null : DateTimeOffset.UtcNow,
+                };
             }, Line(verdict.Detail));
         }
 
         // ── Writes ───────────────────────────────────────────────────────────────────────────
+
+        /// <summary>A step CRASHED: <see cref="ModuleReloadStatus.Faulted"/>, never final — the
+        /// reconcile pass re-arms it (<see cref="ModuleReload.RetryFaulted"/>).</summary>
+        private IObservable<Unit> Fault(string failure)
+        {
+            Interlocked.Exchange(ref finished, 1);
+            logger?.LogWarning("[ModuleReload] {Path}: Faulted — {Failure}; the next reconcile pass retries it once its backoff is due",
+                PathOf(hub), failure);
+            return Write(r => r with
+            {
+                Status = ModuleReloadStatus.Faulted,
+                Failure = r.Failure is null ? failure : $"{r.Failure}; {failure}",
+                FaultedAt = DateTimeOffset.UtcNow,
+            }, Line($"faulted (attempt {Volatile.Read(ref attempt)}): {failure} — retried by the next reconcile pass once due"));
+        }
 
         private IObservable<Unit> Finish(string status, string failure)
         {
@@ -390,6 +442,7 @@ public static class ModuleReloadExecutor
             {
                 var entry = activation.Entries.FirstOrDefault(e => string.Equals(e.Name, o.Module, StringComparison.OrdinalIgnoreCase));
                 var verdict = o.Outcome.Verdict;
+                var transient = o.Outcome.Failure is not null && o.Outcome.Transient;
                 var failure = o.Outcome.Failure ?? verdict?.Action switch
                 {
                     ModuleUpdateAction.SkipPlatformBelowFloor => $"declined — {verdict.Reason}",
@@ -410,6 +463,7 @@ public static class ModuleReloadExecutor
                     Landed = o.Outcome.FilesLanded > 0,
                     Decision = verdict is null ? null : $"{verdict.Action}: {verdict.Reason}",
                     Failure = failure,
+                    Transient = transient,
                 };
             })
             .ToImmutableList();
@@ -485,20 +539,34 @@ public sealed class ModuleReloadAgent
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started);
+        // 🚨 The feed announces a COMMIT, and its version travels with it: the read in Handle waits
+        // for this process's mirror to reach that version (see Handle).
         var heard = feed is null
-            ? Observable.Empty<string>()
+            ? Observable.Empty<(string Path, long Committed)>()
             : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
                 .Where(IsRequest)
-                .Select(change => change.Path);
+                // A feed event with NO version is a path-only invalidation (the relay could not
+                // enrich it — StorageChangeFeedRelay.PathOnlyFallback): the commit it announces is
+                // unknown, so the read below has no floor and can return the state BEFORE it. Say
+                // so here, by request, rather than act on a possibly trailing mirror in silence.
+                .Do(change =>
+                {
+                    if (change.Version <= 0)
+                        logger?.LogWarning("[ModuleReload] {Path}: the feed announced a commit WITHOUT a version (path-only invalidation); "
+                            + "this process reads its mirror unfloored and may act on the state before that commit", change.Path);
+                })
+                .Select(change => (change.Path, Committed: change.Version));
         // 🚨 At boot, every OPEN request is asked about — a process that booted after a restart is
         // exactly the evidence the request is waiting for. A LISTING of the request namespace (the
-        // CQRS-sanctioned shape), never a point read.
-        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths);
+        // CQRS-sanctioned shape), never a point read. No commit is announced, so no version floor.
+        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths)
+            .Select(path => (Path: path, Committed: 0L));
         meshHub.RegisterForDisposal(started.SelectMany(_ => heard).Merge(open)
-            .Select(path => Handle(meshHub, path, logger)
+            .Select(heardOf => Handle(meshHub, heardOf.Path, logger, heardOf.Committed)
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogWarning(ex, "[ModuleReload] {Path}: this process could not report on the request", path);
+                    logger?.LogWarning(ex, "[ModuleReload] {Path}: this process could not report on the request (announced v{Committed})",
+                        heardOf.Path, heardOf.Committed);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
@@ -529,11 +597,31 @@ public sealed class ModuleReloadAgent
     /// <summary>
     /// Reads the request (which also activates its executor — the resume after a restart) and, when
     /// this process has something to report for the phase the request is in, swaps and/or reports.
+    /// <para>🚨 <b>The read is of the commit the feed ANNOUNCED, never of whatever the mirror holds.</b>
+    /// The invalidation feed fires post-commit, and this process's mirror of the node receives the
+    /// owner's echo on its own path — under load AFTER the feed. A bare <c>Take(1)</c> then read the
+    /// previous state (<c>Landing</c>) for the event that announced <c>Activating</c>, acted on
+    /// nothing, and — because the executor writes nothing more until a replica reports — no later
+    /// event ever came: the request sat in <c>Activating</c> forever with nothing logged
+    /// (<c>ModuleReloadFaultedBesideActivationTest</c>, CI shard 4, 2026-10-07). So the read waits for
+    /// a state at or past <paramref name="committed"/> — the same floor
+    /// <c>MeshNodeStreamExtensions.RebaseSource</c> applies to an announced version (#1174).</para>
     /// </summary>
-    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, ILogger? logger)
+    /// <param name="meshHub">The mesh hub of this process.</param>
+    /// <param name="path">The request's path.</param>
+    /// <param name="logger">The agent's logger.</param>
+    /// <param name="committed">The version the feed announced for this path, or <c>0</c> when the
+    /// path came from the boot listing (no commit announced — the mirror's state is the answer).</param>
+    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, ILogger? logger, long committed = 0)
     {
         var access = meshHub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path)
+                .Where(node => node is not null && node.Version >= committed)
+                // FirstAsync, never Take(1): a stream that COMPLETES before reaching the floor (a
+                // disposed synchronization stream forwards OnCompleted) must surface as an error on
+                // the agent's warning path, never as a silent empty that reports nothing.
+                .FirstAsync()
+                .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(node =>
             {
                 var request = node.ContentAs<ModuleReloadRequest>(meshHub.JsonSerializerOptions);

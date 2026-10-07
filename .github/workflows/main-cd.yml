@@ -349,6 +349,8 @@ jobs:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           PLATFORM_WEBHOOK_URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
           PLATFORM_WEBHOOK_SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+          CONTROL_WEBHOOK_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
           MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
@@ -360,6 +362,11 @@ jobs:
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
           [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          # `control-first` hands every accepted build to control's roll lane with these two: the
+          # control PLANE's inbox (the instance holding the Deployments records and Ops/Actions) and
+          # the HMAC it verifies. Without them control is tagged a build nothing ever rolls it to.
+          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (org variable, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
+          [ -n "$CONTROL_WEBHOOK_SECRET" ] || missing+=("secrets.CONTROL_WEBHOOK_SECRET    the HMAC that inbox verifies (org secret, byte-identical to that instance's Hosting:PlatformWebhookSecret)")
           [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and `published-modules` READS the sealed module publications from there (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
@@ -682,22 +689,16 @@ jobs:
           fi
           echo "Newest published ci tag: ${newest:-<none>} (${age_min} min ago)"
           echo "age_min=$age_min" >> "$GITHUB_OUTPUT"
-      # 🚨 Resolve the plugins HEAD ONCE, here, and thread it. Everything downstream — the
-      # completeness probe below, promote's pair tag, verify-images' assertion — consumes THIS
-      # output and never re-resolves (MeshWeaver#2622).
-      #
-      # That is not tidiness, it is the correctness condition. The run takes ~20 minutes. If
-      # `verify-images` re-resolved, a plugins merge landing inside that window would make it look
-      # for `…-pB` on an image this run correctly built from `A`, and a successful publish would go
-      # red. Cry wolf, and the ledger becomes noise — the failure mode the gate's own comments
-      # already name. Resolving once means the identity is minted by the run that owns it, exactly
-      # like the staging tag; the NEXT reconcile tick re-resolves and correctly finds the set
-      # stale, which is the desired behaviour at the right moment.
+      # 🚨 Resolve the plugins HEAD ONCE, here, and thread it. The portal HOST lives in
+      # MeshWeaver.Plugins, so every image leg builds the host from THIS commit, and the promotion
+      # record carries it (`plugins_sha`) as the build's provenance. Nothing tags it any more: the
+      # `<core7>-p<plugins7>` pair tag is retired (policy `platform-module-deploy-separate`), and so
+      # is the completeness probe's "built from an older plugins commit" answer (MeshWeaver#2622,
+      # #4688). Resolving once still matters: the legs run in parallel for ~20 minutes, and each
+      # must build the host from the SAME commit the record names.
       #
       # 🚨 No `if:` on a secret and no `continue-on-error`. An unresolvable plugins HEAD means the
-      # image identity cannot be established at all, so this FAILS RED naming what to provision —
-      # a skipped resolution would silently disable the pair check and be indistinguishable from
-      # a passing one.
+      # host cannot be built at all, so this FAILS RED naming what to provision.
       - name: "Resolve the plugins HEAD this image set is bound to"
         id: plugins
         env:
@@ -731,11 +732,15 @@ jobs:
         if: steps.target.outputs.reason == 'reconcile'
         env:
           SHORT: ${{ steps.target.outputs.short_sha }}
-          PLUGINS_SHORT: ${{ steps.plugins.outputs.plugins_short }}
         run: |
           set -uo pipefail
-          # 🚨 The second argument is what lets a plugins-only host change be SEEN. Without it a
-          # complete-for-core's-sha set answers "complete" and the reconciler does nothing (#2622).
+          # 🚨 NO plugins sha (policy `platform-module-deploy-separate`): the `<core7>-p<plugins7>` pair
+          # tag is retired, so "the set" is keyed on core's sha alone. A plugins-only HOST change no
+          # longer makes this probe incomplete — that used to rebuild the portal on EVERY Plugins merge
+          # (up to 24 multi-arch rebuilds a day of mostly identical trees, #4688). Host rebuilds now
+          # come from MeshWeaver.Plugins' `portal-image-rebuild.yml`, which classifies each push
+          # (`scripts/portal-image-relevance.py`) and dispatches this workflow with `rebuild: true` only
+          # for a change that can reach the image.
           #
           # 🚨 NO `--pointers` HERE, and this asymmetry with `verify-images` is deliberate (#3670).
           # This probe runs BEFORE `promote`: this run's `<version>` does not exist yet by
@@ -745,22 +750,14 @@ jobs:
           # the pointer set is asserted (all but the portal's `<version>`, which is `arm`'s arming
           # write — policy `one-promotion-gate`). See Doc/Architecture/ImageTagContract.
           #
-          # 🚨 THREE ANSWERS, NOT TWO (MeshWeaver#4687). Exit 2 means every image of the set is
-          # present and good and ONLY the pair tag is behind — the set is DELIVERABLE, the host
-          # pairing is stale. That used to arrive as exit 1, i.e. as "main's HEAD has no deployable
-          # image", and it is what made `gate` file 28 of the 109 `incomplete image set` issues ever
-          # opened over a set every install could already roll to.
           # 🚨 `|| rc=$?`, never a bare call. GitHub's default shell for `run:` is
           # `bash -eo pipefail`, and `set -uo pipefail` does not clear `-e` — so a bare invocation
-          # would kill the step on exit 1 and 2 alike, and the three-way answer below would only
-          # ever be reached for exit 0. The old `if …; then` form was exempt from `-e` because it
-          # was a condition; this one has to say so.
+          # would kill the step on exit 1, and the answer below would only ever be reached for exit 0.
           rc=0
-          .github/scripts/check-image-set.sh "$SHORT" "$PLUGINS_SHORT" || rc=$?
+          .github/scripts/check-image-set.sh "$SHORT" || rc=$?
           case "$rc" in
-            0) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
-            2) echo "complete=true"  >> "$GITHUB_OUTPUT"; echo "hosts_stale=true"  >> "$GITHUB_OUTPUT" ;;
-            *) echo "complete=false" >> "$GITHUB_OUTPUT"; echo "hosts_stale=false" >> "$GITHUB_OUTPUT" ;;
+            0) echo "complete=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "complete=false" >> "$GITHUB_OUTPUT" ;;
           esac
       # ── Has a publisher ALREADY TRIED this commit and not finished? (reconcile only) ────────
       #
@@ -922,11 +919,10 @@ jobs:
           CONCL: ${{ steps.required.outputs.conclusion }}
           AGE_MIN: ${{ steps.required.outputs.age_min }}
           COMPLETE: ${{ steps.acr.outputs.complete }}
-          # Deliverability and provenance, separately (MeshWeaver#4687). `COMPLETE` is now only ever
-          # about images an install can PULL; `HOSTS_STALE` is "the newest one was built from an
-          # older MeshWeaver.Plugins commit". `ATTEMPTED` is the ledger's evidence: has a publisher
-          # already staged layers for this commit and not finished?
-          HOSTS_STALE: ${{ steps.acr.outputs.hosts_stale }}
+          # `COMPLETE` is only ever about images an install can PULL (MeshWeaver#4687). The
+          # provenance half (`HOSTS_STALE`, "built from an older MeshWeaver.Plugins commit") was
+          # retired with the pair tag. `ATTEMPTED` is the ledger's evidence: has a publisher already
+          # staged layers for this commit and not finished?
           ATTEMPTED: ${{ steps.attempted.outputs.attempted }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ steps.target.outputs.sha }}
@@ -1050,58 +1046,14 @@ jobs:
           # fresh-install engine activation by editing src/Memex.Portal.Distributed/appsettings.json
           # at 14:54Z, and the newest image predated it with no producer that would ever rebuild.
           #
-          # 🚨 THE DURABLE FIX NOW EXISTS and runs above this line: `gate` resolves plugins HEAD
-          # once and passes it to check-image-set.sh, which requires the pair tag
-          # memex-portal-ai:<core-short>-p<plugins-short> that promote phase A stamps. So a
-          # plugins-only host merge makes the set INCOMPLETE and the RECONCILER heals it on its
-          # own — `COMPLETE` below is already pair-aware.
-          #
-          # `rebuild` stays as the operator escape hatch (it is still the only way to force a
-          # rebuild for a reason no tag encodes), but it is no longer the ONLY way this case is
-          # noticed, which is what made it a structural no-op before.
-          # 🚨 A STALE HOST PAIRING IS CADENCE, NOT A DELIVERY HOLE (MeshWeaver#4687), and this
-          # branch exists so that the two stop sharing a verdict — and a ledger entry.
-          #
-          # `HOSTS_STALE` means every image of the set resolved and only `<core>-p<plugins>` is
-          # behind, i.e. main's HEAD is fully deliverable and the newest portal image was built from
-          # an older MeshWeaver.Plugins commit. This run publishes exactly as it did before — the
-          # #2622 behaviour is unchanged, byte for byte — but it does NOT touch the `ci-failure`
-          # ledger, because there is nothing to record: no delivery failed, no install is held back,
-          # and the issue this used to file said in as many words that one was.
-          #
-          # 🚨 IT DOES NOT CONVERGE, AND THAT IS A CADENCE QUESTION THIS BRANCH DELIBERATELY DOES
-          # NOT ANSWER. MeshWeaver.Plugins `main` took 25/42/39/61/48/48/18/43 merges a day over
-          # 2026-09-10…17 — a mean interval near 36 minutes — and a CD publish takes ~43, so the
-          # pair tag this run writes usually names a plugins commit already superseded by the time
-          # `verify-images` reads it back. Ticks therefore keep finding it stale (measured directly:
-          # three consecutive ticks on ONE unchanged core commit resolved three DIFFERENT plugins
-          # HEADs, which does not depend on the rate at all). That is up to 24 full multi-arch
-          # rebuilds a day of trees that are often identical (measured: 418 publishing builds over
-          # 340 distinct core commits; `0dadacc` was built three times in three hours on
-          # 2026-09-17, minting ci.8883, ci.8885 and ci.8886 and moving its own sha tag twice).
-          # Whether a plugins merge should mint a portal image at all — and if so, on what cadence —
-          # is MeshWeaver#4688 and Doc/Architecture/CdLedgerRecordsFailures → "The decision that is
-          # still open". Three options are set out there; do not pick one here.
-          #
-          # 🚨 IT IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK (Copilot on
-          # MeshWeaver#4687). This branch sits ABOVE the required-check guard further down, which
-          # is correct for its neighbours — `bake_only` publishes no image, and `rebuild` is an
-          # operator's explicit dispatch — and would have been a hole here: a HEAD whose
-          # `Consolidate test results` had settled RED still has its old, complete image set, so
-          # `COMPLETE` is true, and this branch would have built and shipped an untested tree. CD
-          # must never publish one. Not green ⇒ fall through to `bake_only`, which re-asserts the
-          # content bake and builds nothing.
-          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
-             && [ "$GREEN" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
-            decision true "🏠 main \`$SHORT\` HAS its complete, deliverable image set; only the host pairing is behind — the published portal image was built from an older MeshWeaver.Plugins commit. Refreshing it (#2622). This is CADENCE, not a delivery hole: no \`ci-failure\` issue is filed, and every install already has a current image to roll to."
-            exit 0
-          fi
-          if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \
-             && [ "$GREEN" != "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
-            echo "bake_only=true" >> "$GITHUB_OUTPUT"
-            decision false "🛑 main \`$SHORT\`'s host pairing is behind, but \`Consolidate test results\` is \`$CONCL\` — refusing to build an untested tree for a cosmetic refresh. The deliverable set is intact; re-asserting the content bake only."
-            exit 0
-          fi
+          # 🚨 A PLUGINS-ONLY HOST CHANGE IS NOT SEEN HERE ANY MORE, ON PURPOSE (policy
+          # `platform-module-deploy-separate`). The `<core7>-p<plugins7>` pair tag that made it
+          # visible is retired, and with it the `HOSTS_STALE` branch that rebuilt the portal whenever
+          # MeshWeaver.Plugins `main` had moved at all — measured at up to 24 multi-arch rebuilds a day
+          # of mostly identical trees (MeshWeaver#4688; Doc/Architecture/CdLedgerRecordsFailures). A
+          # host change that can reach the image is now classified at its source:
+          # MeshWeaver.Plugins `portal-image-rebuild.yml` dispatches this workflow with `rebuild: true`
+          # for exactly those pushes, and that lands in the `rebuild` branch below.
           if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
             echo "bake_only=true" >> "$GITHUB_OUTPUT"
             decision false "✅ main \`$SHORT\` already has a complete image set — no image build; re-asserting the content bake (publication is idempotent)"
@@ -1982,7 +1934,7 @@ jobs:
           --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
           ${{ steps.previous.outputs.args }}
 
-  # Tags the accepted image — `memex-control:<sha>`, `:<sha>-p<plugins>`, `:main` — on ACR and the
+  # Tags the accepted image — `memex-control:<sha>`, `:main` — on ACR and the
   # fleet registry (digest verified). Only after `control-acceptance` is green: an image that failed it
   # never receives a name at all. Its VERSION tag and line pointers — the names a record selects — are
   # written right after, in this same run, by `control-first` (policy `platform-deploy-control-first`):
@@ -2016,25 +1968,21 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      - name: Tag memex-control:<sha>, :<sha>-p<plugins>, :main (ACR, then the fleet registry) — identity only, never the version
-        env:
-          PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
+      - name: Tag memex-control:<sha>, :main (ACR, then the fleet registry) — identity only, never the version
         run: |
           set -euo pipefail
           # 🚨 IDENTITY TAGS ONLY here. The VERSION tag (what a Continuous record with `updatePattern:
           # 3.0.0-ci*` rolls to) and the line pointers are written by `control-first`, the next job of
           # this run — for EVERY accepted build, never waiting for the fleet's arming (policy
-          # `platform-deploy-control-first`). The pair tag `<core7>-p<plugins7>` names the commit of
-          # the portal HOST (it lives in MeshWeaver.Plugins) — provenance, not a module coupling: no
-          # delivery decision joins on it any more. Same shape as `promote`'s portal pair tag.
-          [[ "$SHA-p$PLUGINS_SHORT" =~ ^[0-9a-f]{7}-p[0-9a-f]{7}$ ]] || { echo "::error::the pair tag '$SHA-p$PLUGINS_SHORT' is not <core7>-p<plugins7>"; exit 1; }
+          # `platform-deploy-control-first`). No `<core7>-p<plugins7>` pair tag: it is retired (policy
+          # `platform-module-deploy-separate`); the host commit stays in the promotion record.
           args=(); margs=()
-          for t in "$SHA" "$SHA-p$PLUGINS_SHORT" main; do
+          for t in "$SHA" main; do
             args+=(--tag "${{ env.ACR }}/memex-control:$t"); margs+=("${{ env.REGISTRY }}/memex-control:$t")
           done
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
-          echo "- memex-control \`$SHA\`, \`$SHA-p$PLUGINS_SHORT\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written next by \`control-first\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- memex-control \`$SHA\`, \`main\` — accepted (empty DB · broken NodeType · N−1) and promoted; its version \`$V_CONTROL\` is written next by \`control-first\`" >> "$GITHUB_STEP_SUMMARY"
 
   # ────────── CONTROL FIRST (policy `platform-deploy-control-first`) ──────────
   # "after platform we always deploy control": EVERY platform build the control image's own
@@ -2042,8 +1990,16 @@ jobs:
   # DB) is the control instance's next image — written HERE, in the run that built it, as
   # `memex-control:<version>` plus the line pointers (never backwards). It waits for nothing else:
   # not `arm`, not a MeshWeaver.Plugins verdict, not a seal, not a module publication (policy
-  # `platform-module-deploy-separate`). The control record (Systemorph/Memex `control`) is
-  # Continuous on `3.0.0-ci*` with no `rollGate`, so its self-update rolls to this tag unattended.
+  # `platform-module-deploy-separate`). And it DELIVERS it: the last step POSTs a signed
+  # `self-update-available` announcement for the control record into the control plane's inbox, which
+  # opens a routed `Roll` (MeshWeaver.Plugins `SelfUpdateRouting`). The control record (Systemorph/Memex
+  # `control`) is Continuous on `3.0.0-ci*` with no `rollGate`, so that Roll runs unattended
+  # (`ActionsExecutor.AdmittedUnattended`). 🚨 It used to rely on control's own in-pod self-updater to
+  # find the tag, which could not: it lists `memex-portal-ai` (written only by `arm`, which waits for
+  # control — a circular wait), it had no registry credential, and it handed over to its own inbox,
+  # whose mesh holds no Deployments record — so no build after ci.9939 was ever rolled to control
+  # unattended, and with control-first nothing reached the fleet either
+  # (Doc/Architecture/PlatformAndModuleDeploy → "Who rolls control").
   #
   # The FLEET is offered the build only after control RUNS it: `arm` reads control's
   # `/api/version` + `/health` (`.github/control-instance.json`) as the control half of the platform
@@ -2074,7 +2030,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          # The control declaration sits BESIDE the scripts: `control-announcement` names the record
+          # it reads from there, so the sparse checkout must name it (as `arm`'s does).
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+          sparse-checkout-cone-mode: false
       - name: "The decision can say no (self-test)"
         run: python3 .github/scripts/arm-promoted-set.py --self-test
       - name: Ensure Azure CLI
@@ -2127,6 +2088,52 @@ jobs:
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-control:$STAGING" "${margs[@]}"
           docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/memex-control:$STAGING"
           echo "- memex-control DEPLOYED FIRST: \`$V_CONTROL\`${MOVE:+ (line pointers: $MOVE)} (ACR + ${{ env.REGISTRY }}) — control rolls to it now; the fleet is offered it once control runs it" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE DELIVERY. Tagging alone gives control nothing: this POST is what makes the build
+      # control's next image. The inbox stores it, the control plane verifies the HMAC, resolves
+      # `deployment` to its record (the lookup IS the authorization) and opens
+      # `Ops/Actions/selfupdate-roll-control-<version>-…`, unattended for a Continuous, ungated record
+      # whose pattern admits the tag. Re-sent on a re-run (`done`) — the receiver dedupes, and that
+      # re-delivery is how a lost POST is closed. Never for a build OLDER than control's newest tag.
+      # Every non-success ends the job: a build control was never handed is the outage this fixes.
+      - name: "Hand the build to control's roll lane (signed self-update-available)"
+        if: steps.control_tags.outputs.announce == 'true'
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
+          esac
+          BODY=$(python3 .github/scripts/arm-promoted-set.py control-announcement \
+            --version "$V_CONTROL" --image-repository "${{ env.ACR }}/memex-control" --instance "$RUN_URL")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/announce-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/announce-resp" || true
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/announce-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              # Three answers, as `Did the inbox VERIFY the build fact?` reads them (#3338): `verified`
+              # passes; any other WORD is the receiver saying the HMAC we sent was not checked — RED;
+              # NO verdict is a receiver older than #3312 that cannot answer (its watcher still
+              # verifies before routing) — said, never read as a pass or a refusal.
+              case "$verdict" in
+                verified) ;;
+                "") echo "::warning::the control plane's inbox stored the announcement but answered no signature verdict (a pre-#3312 endpoint) — its watcher verifies before routing; read Ops/Actions/selfupdate-roll-control-* to confirm the Roll opened" ;;
+                *) echo "::error::the control plane's inbox stored the announcement but did not VERIFY its signature (signature: $verdict) — the router drops what it cannot verify, so control would not be rolled. Declare WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on that instance."
+                   exit 1 ;;
+              esac
+              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` stored and verified at the control plane (HTTP $code) — it opens \`Ops/Actions/selfupdate-roll-control-*\`, unattended under the record's Continuous \`3.0.0-ci*\` line" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control plane's inbox at all (DNS/TLS/connection refused) — control was NOT handed $V_CONTROL"; exit 1 ;;
+            401) echo "::error::the control plane's inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical — control was NOT handed $V_CONTROL"; exit 1 ;;
+            404) echo "::error::the control plane's inbox answered 404 (an unlisted target or a wrong URL) — check vars.CONTROL_WEBHOOK_URL; control was NOT handed $V_CONTROL"; exit 1 ;;
+            *)   echo "::error::the control plane's inbox refused the announcement (HTTP $code) — control was NOT handed $V_CONTROL"; exit 1 ;;
+          esac
       # 📣 Like the rest of the control lane, a red here is NOT a fleet-delivery failure — this job is
       # deliberately outside `alert-on-failure` and `delivery-verdict` — so it reports itself on the
       # one open `control-image` issue instead of paging. `control-lane-report` closes that issue on
@@ -2347,8 +2354,8 @@ jobs:
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
-      # 🚨 The plugins sha `gate` resolved, threaded — NOT re-resolved here. See gate's
-      # "Resolve the plugins HEAD" step: re-resolving is what turns a correct publish red (#2622).
+      # The plugins sha `gate` resolved, threaded — NOT re-resolved here. Provenance only: it goes
+      # into the promotion record (`plugins_sha`/`plugins_short`), never into a tag.
       PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
     steps:
       # 🚨 The retried ACR login is a SCRIPT (.github/scripts/acr-login.sh, #2857), and a script
@@ -2402,22 +2409,17 @@ jobs:
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
-          # 🚨 The portal carries a PAIR tag as well as its SHA tag (MeshWeaver#2622): the portal
-          # HOSTS live in MeshWeaver.Plugins, so core's sha alone does not say what is in this
-          # image. `<core-short>-p<plugins-short>` does, and it is what makes a plugins-only host
-          # change visible to check-image-set.sh — the set goes INCOMPLETE on the next reconcile
-          # tick and heals itself, instead of waiting for an unrelated core merge or a human
-          # remembering to pass `rebuild`.
+          # 🚨 NO PAIR TAG (policy `platform-module-deploy-separate`). The portal used to carry
+          # `<core7>-p<plugins7>` as well (MeshWeaver#2622), naming the MeshWeaver.Plugins commit its
+          # HOST was built from. No delivery decision joins on that any more, and the one thing it
+          # still did — give `arm` a tag that names THIS build after a rebuild of the same core moves
+          # the bare `<core7>` tag — is done by the build's own staging tag `staging-<core7>-<run id>`,
+          # which is unique per run and already in the promotion record. The host commit stays in the
+          # record (`plugins_sha`) as provenance.
           #
-          # It belongs HERE, in phase A, with the other identity tags — never on the build. The
-          # build pushes only the staging tag, which is the all-or-nothing gate; putting a
-          # consumer-selectable identity on a leg that has not yet earned promotion is exactly
-          # what that design prevents.
-          #
-          # Additive: it names a tag nothing else writes, so it cannot disturb an existing one.
           # The portal's SHA tag, but NOT its version tag — that is the ARMING write, `arm`'s
           # phase C, made only for a set whose platform verdict is green (policy `one-promotion-gate`).
-          promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"
+          promote memex-portal-ai   "$SHA"
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
@@ -2485,7 +2487,8 @@ jobs:
       # carries several core merges, and ALL of them reach the fleet when it is armed; a first-parent
       # base would name only the last one. `arm-promoted-set.py armed-base` names the
       # newest armed set from memex-portal-ai's manifests (its version tag shares a manifest with the
-      # core/Plugins pair tag; the bare sha tag may have moved to a newer pair). `base_kind` records
+      # build's staging tag — or, for a set armed before its retirement, the core/Plugins pair tag;
+      # the bare sha tag may have moved to a newer build). `base_kind` records
       # which rule produced `base`, and an UNRESOLVED base still promotes for CI but is never armed
       # and never measured (see the script's header) — CI is never held, and
       # the fleet never receives merges nobody measured.
@@ -2658,11 +2661,13 @@ jobs:
         env:
           REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
         run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
-      # 🚨 The arming writes read tags that name THIS set and nothing else: the portal's PAIR tag
-      # `<core7>-p<plugins7>` (phase A) and the migration's VERSION tag (phase A). NOT the staging
-      # tag — retention may purge it before a verdict arrives — and NOT the bare `<core7>` tag,
-      # which a `rebuild` of the same core commit with a newer Plugins commit re-points: arming an
-      # older pair through it would arm the NEWER pair's image under the older version number.
+      # 🚨 The arming writes read tags that name THIS set and nothing else: the portal's STAGING tag
+      # `staging-<core7>-<run id>` (pushed by its build, recorded as `staging` in the promotion
+      # record) and the migration's VERSION tag (phase A). NOT the bare `<core7>` tag, which a
+      # `rebuild` of the same core commit re-points: arming an older set through it would arm the
+      # NEWER build's image under the older version number. The staging tag replaced the retired
+      # `<core7>-p<plugins7>` pair tag here (policy `platform-module-deploy-separate`); both age out
+      # under the same ACR retention rule, and the version tag written from it keeps the manifest.
       - name: Point the arming phases at the selected set
         if: steps.select.outputs.armed == 'true'
         env:
@@ -2670,17 +2675,20 @@ jobs:
           V_MIGRATION_SEL: ${{ steps.select.outputs.v_migration }}
           V_PLUGIN_SEL: ${{ steps.select.outputs.v_plugin }}
           SHA_SEL: ${{ steps.select.outputs.short }}
-          PLUGINS_SEL: ${{ steps.select.outputs.plugins_short }}
+          STAGING_SEL: ${{ steps.select.outputs.staging }}
         run: |
           set -euo pipefail
           # Every variable the arming phases expand under `set -u` is exported HERE — phase C's
           # summary names $V_PLUGIN, and an unbound one failed `arm` after the registry writes.
-          for v in V_PORTAL_SEL V_MIGRATION_SEL V_PLUGIN_SEL SHA_SEL PLUGINS_SEL; do
+          for v in V_PORTAL_SEL V_MIGRATION_SEL V_PLUGIN_SEL SHA_SEL STAGING_SEL; do
             [ -n "${!v}" ] || { echo "::error::the selection gave no $v — refusing to arm half a set"; exit 1; }
           done
+          # The staging tag must name THIS set's core — a record whose staging tag names another
+          # commit would arm a different build under this version.
+          [[ "$STAGING_SEL" =~ ^staging-${SHA_SEL}-[0-9]+$ ]] || { echo "::error::the selected record's staging tag '$STAGING_SEL' does not name core $SHA_SEL — refusing to arm"; exit 1; }
           {
             echo "V_PORTAL=$V_PORTAL_SEL"; echo "V_MIGRATION=$V_MIGRATION_SEL"; echo "V_PLUGIN=$V_PLUGIN_SEL"; echo "SHA=$SHA_SEL"
-            echo "SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL"
+            echo "SRC_PORTAL_TAG=$STAGING_SEL"
           } >> "$GITHUB_ENV"
       # 🚨 A VERSION TAG IS ONLY EVER WRITTEN ONTO AN IMAGE THAT REPORTS THAT VERSION
       # (MeshWeaver.Manufacturing#84). On 2026-10-05 run 9989's `arm` armed 3.0.0-ci.9985 through
@@ -2714,7 +2722,7 @@ jobs:
           .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/memex-portal-ai:$SRC_PORTAL_TAG" \
             "${{ env.REGISTRY }}/memex-portal-ai:$V_PORTAL"
           {
-            echo "### ARMED \`$SHA\` (pair \`$SRC_PORTAL_TAG\`) → $V_PORTAL"
+            echo "### ARMED \`$SHA\` (from \`$SRC_PORTAL_TAG\`) → $V_PORTAL"
             echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\` (ACR + ${{ env.REGISTRY }})"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR + ${{ env.REGISTRY }})"
@@ -4146,9 +4154,8 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Every image for this commit must exist in ACR
-        # 🚨 The SAME plugins sha `gate` resolved — read from its output, never re-resolved. A
-        # plugins merge landing during this ~20 min run must not make this assert a tag the
-        # publish could not have written (#2622).
+        # 🚨 Keyed on core's sha alone — the `<core7>-p<plugins7>` pair tag is retired (policy
+        # `platform-module-deploy-separate`).
         #
         # 🚨 `--pointers` is passed HERE and only here in this workflow (#3670). This job
         # `needs: promote`, so phases A and B are behind us and the promoted pointer set is whole:
@@ -4165,7 +4172,6 @@ jobs:
         run: >
           .github/scripts/check-image-set.sh
           "${{ needs.gate.outputs.short_sha }}"
-          "${{ needs.gate.outputs.plugins_short }}"
           --pointers "${{ needs.portal-image.outputs.version }}"
       # A heal that WORKED has to say so on the same issue that recorded the attempt, or the
       # ledger only ever grows and nobody can tell a fixed hole from an open one.

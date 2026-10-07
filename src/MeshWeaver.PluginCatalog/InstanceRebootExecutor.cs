@@ -68,8 +68,15 @@ public static class RebootActivationKinds
     /// <summary>Handed to the control lane (<c>self-update-available</c> or <c>self-update-restart-pending</c>).</summary>
     public const string HandedOver = "HandedOver";
 
-    /// <summary>Nothing could be rolled or restarted — the detail names why.</summary>
+    /// <summary>Nothing could be rolled or restarted — a DECIDED answer (no restart path on this
+    /// install, a release held by policy, a migration that failed). Final; the detail names why.</summary>
     public const string Unavailable = "Unavailable";
+
+    /// <summary>The roll/restart request CRASHED — a hand-over that failed, a check that could not be
+    /// made, a call that threw. Transient, never final: the request goes
+    /// <see cref="InstanceRebootStatus.Faulted"/> and the reconcile pass re-arms it
+    /// (<see cref="InstanceReboot.RetryFaulted"/>).</summary>
+    public const string Faulted = "Faulted";
 
     /// <summary>A roll or restart was REFUSED before anything was issued — a disruptive rollout strategy, or a
     /// control instance that cannot self-patch (it would hand its own restart to itself). The detail names why.</summary>
@@ -89,7 +96,9 @@ public static class RebootActivationKinds
 /// back is the point — it makes the request Failed at the end, by name.</item>
 /// <item><b>Preparing → AwaitingRestart</b>: stamp <see cref="InstanceRebootRequest.RestartRequestedAt"/>
 /// FIRST, then ask <see cref="IInstanceRebootActivation.Activate"/> once — the stamp is what keeps a
-/// resumed executor from asking twice. Not scheduled ⇒ Failed (nothing would verify).</item>
+/// resumed executor from asking twice. A decided "not scheduled" ⇒ Failed (nothing would verify); a
+/// CRASHED request (<see cref="RebootActivationKinds.Faulted"/>, or a throw) ⇒ <see cref="InstanceRebootStatus.Faulted"/>,
+/// re-armed by the reconcile pass (<see cref="InstanceReboot.RetryFaulted"/>) — never final.</item>
 /// <item><b>AwaitingRestart → Done | Failed</b>: <see cref="InstanceReboot.EvaluateVerification"/>
 /// over what every process booted after the stamp REPORTS from its own checks
 /// (<see cref="InstanceRebootAgent"/>).</item>
@@ -129,6 +138,7 @@ public static class InstanceRebootExecutor
         private int preparing;
         private int restarting;
         private int finished;
+        private int attempt;
 
         private AccessService? Access => hub.ServiceProvider.GetService<AccessService>();
 
@@ -144,8 +154,18 @@ public static class InstanceRebootExecutor
             if (InstanceReboot.Validate(request) is { } invalid)
                 return Once(ref finished, () => Finish(invalid));
 
+            // A re-armed request (InstanceReboot.Rearm) is a new attempt: its restart may be asked for again.
+            if (request.Attempt != attempt)
+            {
+                attempt = request.Attempt;
+                Interlocked.Exchange(ref restarting, 0);
+                Interlocked.Exchange(ref finished, 0);
+            }
+
             return request.Status switch
             {
+                // Faulted waits for the reconcile pass to re-arm it (InstanceReboot.RetryFaulted).
+                InstanceRebootStatus.Faulted => Observable.Empty<Unit>(),
                 InstanceRebootStatus.Requested or InstanceRebootStatus.Preparing when request.RestartRequestedAt is null =>
                     Once(ref preparing, () => Prepare(request)),
                 InstanceRebootStatus.AwaitingRestart when request.RestartRequestedAt is null =>
@@ -258,10 +278,27 @@ public static class InstanceRebootExecutor
                     ? Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Ok, $"{outcome.Kind}: {outcome.Detail}")
                         .SelectMany(_ => Mark(InstanceRebootSteps.Verify, InstanceRebootStepOutcome.Running,
                             "waiting for a process booted after the restart to report its checks"))
-                    : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{outcome.Kind}: {outcome.Detail}")
-                        .SelectMany(_ => Finish($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
-                .Catch((Exception ex) => Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"faulted: {ex.Message}")
-                    .SelectMany(_ => Finish($"the restart request faulted: {ex.Message}")));
+                    : string.Equals(outcome.Kind, RebootActivationKinds.Faulted, StringComparison.Ordinal)
+                        ? Fault($"the restart request faulted ({outcome.Kind}): {outcome.Detail}")
+                        : Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{outcome.Kind}: {outcome.Detail}")
+                            .SelectMany(_ => Finish($"the restart could not be requested ({outcome.Kind}): {outcome.Detail}")))
+                // A restart request that THREW is a crash, never a decided "cannot restart" (#6172).
+                .Catch((Exception ex) => Fault($"the restart request faulted: {ex.Message}"));
+        }
+
+        /// <summary>The restart request crashed: the step is red for THIS attempt and the request goes
+        /// Faulted (not terminal) — the reconcile pass re-arms it once its backoff is due.</summary>
+        private IObservable<Unit> Fault(string why)
+        {
+            logger?.LogWarning("[Reboot] {Path}: attempt {Attempt} Faulted — {Why}; retried once its backoff is due",
+                ModuleReloadExecutor.PathOf(hub), attempt, why);
+            return Mark(InstanceRebootSteps.Restart, InstanceRebootStepOutcome.Failed, $"{why} — retried once its backoff is due")
+                .SelectMany(_ => Write(r => r with
+                {
+                    Status = InstanceRebootStatus.Faulted,
+                    FaultedAt = DateTimeOffset.UtcNow,
+                    Failure = why,
+                }, Line($"attempt {attempt} faulted: {why} — the reconcile pass re-arms it")));
         }
 
         // ── Step 5 ────────────────────────────────────────────────────────────────────────────
@@ -357,19 +394,31 @@ public sealed class InstanceRebootAgent
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started);
+        // The feed announces a COMMIT; its version is the floor of the read in Handle (the mirror can
+        // trail the feed — see ModuleReloadAgent.Handle). The boot listing announces none.
         var heard = feed is null
-            ? Observable.Empty<string>()
+            ? Observable.Empty<(string Path, long Committed)>()
             : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
                 .Where(change => change.Kind != MeshChangeKind.Deleted
                                  && string.Equals(change.NodeType, InstanceRebootRequest.NodeType, StringComparison.OrdinalIgnoreCase)
                                  && string.Equals(change.Namespace?.Trim('/'), InstanceRebootRequest.Namespace, StringComparison.OrdinalIgnoreCase))
-                .Select(change => change.Path);
-        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths);
+                // A versionless feed event is a path-only invalidation: no floor is known, so the
+                // read may trail the commit — named here, never acted on in silence.
+                .Do(change =>
+                {
+                    if (change.Version <= 0)
+                        logger?.LogWarning("[Reboot] {Path}: the feed announced a commit WITHOUT a version (path-only invalidation); "
+                            + "this process reads its mirror unfloored and may act on the state before that commit", change.Path);
+                })
+                .Select(change => (change.Path, Committed: change.Version));
+        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths)
+            .Select(path => (Path: path, Committed: 0L));
         meshHub.RegisterForDisposal(started.SelectMany(_ => heard).Merge(open)
-            .Select(path => Handle(meshHub, path)
+            .Select(heardOf => Handle(meshHub, heardOf.Path, heardOf.Committed)
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogWarning(ex, "[Reboot] {Path}: this process could not report its verification", path);
+                    logger?.LogWarning(ex, "[Reboot] {Path}: this process could not report its verification (announced v{Committed})",
+                        heardOf.Path, heardOf.Committed);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
@@ -396,12 +445,22 @@ public sealed class InstanceRebootAgent
 
     /// <summary>
     /// Reads the request (which also activates its executor) and, when THIS process booted after its
-    /// restart stamp and has not reported yet, runs every check and reports.
+    /// restart stamp and has not reported yet, runs every check and reports. The read is of the
+    /// commit the feed announced (<paramref name="committed"/>), never of a mirror that trails it.
     /// </summary>
-    internal IObservable<Unit> Handle(IMessageHub meshHub, string path)
+    /// <param name="meshHub">The mesh hub of this process.</param>
+    /// <param name="path">The request's path.</param>
+    /// <param name="committed">The version the feed announced, or <c>0</c> for a path from the boot listing.</param>
+    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, long committed = 0)
     {
         var access = meshHub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path)
+                .Where(node => node is not null && node.Version >= committed)
+                // FirstAsync, never Take(1): a stream that COMPLETES before reaching the floor (a
+                // disposed synchronization stream forwards OnCompleted) must surface as an error on
+                // the agent's warning path, never as a silent empty that reports nothing.
+                .FirstAsync()
+                .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(node =>
             {
                 var request = node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions);

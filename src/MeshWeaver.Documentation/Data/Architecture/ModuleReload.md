@@ -36,12 +36,13 @@ A `ModuleReload` node at `Admin/_ModuleReload/{id}`, content `ModuleReloadReques
 | `module` | requester | the module's entry-assembly name (`MeshWeaver.AI`) or its package id (`AI`); blank = every installed module |
 | `reason` | requester | required; carried into the restart announcement and every log line |
 | `requestedBy` / `requestedAt` | requester | who asked — a user id, an agent, a watcher's name |
-| `status` | executor | `Requested` → `Landing` → `Activating` \| `AwaitingRestart` → `Done` \| `Failed` (open string constants, `ModuleReloadStatus`) |
+| `status` | executor | `Requested` → `Landing` → `Activating` \| `AwaitingRestart` → `Done` \| `Failed` \| `Faulted` (open string constants, `ModuleReloadStatus`; `Faulted` is never final — see "A crash is never final" below) |
 | `items[]` | executor | per module: `runningVersion` (what the executor's process ran), `foundVersion` + `foundFloor` + `registry` (what is published), `targetVersion` (what the activation record now names), `landed`, `decision`, `failure` |
 | `activation` / `activationDetail` | executor | `Live`, `Restart` or `NotNeeded`, and the lane's own sentence |
 | `liveSwapRequestedAt` / `restartRequestedAt` | executor | when each process was asked to swap, or when the ONE restart was requested |
 | `replicas{process}` | each process | what that process has LOADED, per module — written under its own key, so reports merge rather than clobber |
-| `failure` | executor | why the request is red, by name |
+| `failure` | executor | why the request is red (or faulted), by name |
+| `attempt` / `faultedAt` | re-arm / executor | how many times a `Faulted` request has been re-armed (drives the backoff, never a cap), and when the current attempt faulted |
 | `log[]` | executor | every step, in order |
 
 **The only writer is `ModuleReload.Request`**, which writes the node as System after its CALLER has
@@ -99,6 +100,68 @@ runs the step again when the node is next read.
    (monolith, no cluster) the counted reports are all there is. A running member that never reports
    leaves the request open — visible on the node, never silently `Done`.
    A failed live swap leaves the previous generation serving and falls back to the one restart.
+   🚨 **The agent reads the commit the feed ANNOUNCED, never whatever its mirror holds.** It hears a
+   request on the invalidation feed, which fires post-commit, while this process's mirror of the node
+   receives the owner's echo on its own path — under load AFTER the feed. An unfloored `Take(1)` then
+   read `Landing` for the event that announced `Activating`, swapped nothing, reported nothing, and
+   nothing later woke it (the executor writes nothing until a replica reports): the request sat in
+   `Activating` with nothing logged. So the read waits for a state at or past the event's `Version`
+   — the floor `RebaseSource` applies to an announced version (#1174) — and a mirror that never gets
+   there times out loudly. A path from the boot listing announces no commit and reads unfloored. The
+   instance reboot's agent ([Instance Reboot](../InstanceReboot)) reads the same way. Pinned by
+   `ModuleReloadAgentReadsTheAnnouncedCommitTest`, whose unfloored control reports nothing.
+
+## A crash is never final
+
+The system repairs itself, so a step that CRASHED must never end a request. The executor tells two
+kinds of red apart:
+
+| status | what produced it | final? |
+|---|---|---|
+| `Failed` | a DECIDED answer: a floor above the running platform, no installed module of that name, a refused bundle, a bundle the registry answers 404 / 401 / 403 for, a bundle whose bytes fail their digest, a replica that loads the wrong version after activation, a request not written by System, an install with no restart path (`ModuleRestartKinds.Unavailable`) | yes — asking again would get the same answer |
+| `Faulted` | a CRASH or an answer that may clear on its own: an exception in the landing or restart step, a registry index or a bundle download that answers 5xx (500, 502, 503, 504), 408 or 429, a transfer that timed out or whose connection was reset or refused, a module-set proposal that faulted, a reconcile lane that was shutting down, a restart attempt whose hand-over failed or whose call threw (`ModuleRestartKinds.Faulted`) — any item whose `transient` flag is set (`ModuleAdoptOutcome.Transient`) | **never** — retried |
+
+**Which answers are transient is decided in ONE place**, `TransientRegistryFailure`
+(`MeshWeaver.PluginCatalog`): a status is transient when it is 5xx, 408 or 429 (the conventional
+transient-HTTP set); a fault is transient when it carries such a status or never reached an answer
+(a timeout, a reset or refused connection, a DNS or socket failure) and decided when it is a digest
+mismatch or a definite refusal — and a definite refusal is the registry clients' own
+`RegistryRefusedException` (no such manifest, blob or repository; a refused challenge or token; a
+manifest with no bundle layer; a corrupt bundle), never a bare `InvalidOperationException`, which any
+code the fetch pipeline runs can throw and which therefore reads as a crash, retried. The registry
+feed read's retry (`RegistryUpdateReconciler.ShouldRetryFeedRead`) asks the same classifier. Every
+download path — the HTTP bundle route and the OCI artifact path
+— asks it; a second copy of the set is how a bundle download answering 503 once read as a final
+`Failed`. Pinned by `ModuleReloadTransientDownloadTest` (503 → `Faulted` → the next pass retries and
+lands; 429, 502, 504 and a timeout → `Faulted`; 404 and 403 → `Failed`, never retried),
+`TransientRegistryFailureTest` (a `RegistryRefusedException` is decided, a bare
+`InvalidOperationException` is a crash; the feed read asks the same classifier) and
+`PluginBundleArtifactFetchTest` (the same split on the artifact path; a tampered layer → decided).
+
+**The restart lane draws the same line.** `ModuleRestartKinds.Unavailable` means this install
+CANNOT restart at all (no updater that can roll, no control inbox configured) — a configuration
+answer, `Failed`. `ModuleRestartKinds.Faulted` means the path exists and this attempt failed (the
+hand-over to the control lane was refused or unreachable, `SelfUpdateOutcome.RestartHandoverFailed`;
+or the restart call threw) — `Faulted`, and the retry asks for the restart again
+(`ModuleReloadRestartAttemptTest`).
+
+A request with several modules is `Faulted` when ANY failing module crashed: that module's answer is
+still unknown (`ModuleReload.OutcomeOf`).
+
+**The retry has no timer of its own.** Every full reconcile pass of the plugin catalog
+(`RegistryUpdateReconciler`: the boot pass, each safety-net tick, `ReconcileNow`) ends by calling
+`ModuleReload.RetryFaulted`: a LISTING of `Admin/_ModuleReload`, a read of each open request from its
+own node stream, and a re-arm (`ModuleReload.Rearm`, written through `GetMeshNodeStream(path).Update`
+as System) of every `Faulted` request whose backoff is due. The backoff is the pass's own cadence,
+doubled per attempt — `faultedAt + interval × 2^min(attempt, 5)`, the interval being
+`PluginCatalog:ReconcileSafetyNetInterval` (30 min); the doubling stops at 32 intervals, the retries
+never do. With the safety net switched off, the boot pass is the retry.
+
+The re-arm keeps the node and its log, increments `attempt`, clears every executor-owned field of the
+faulted attempt (items, activation, replica reports, the restart stamp, the failure) and sets the
+status back to `Requested`; the executor then runs the new attempt from the top. 🚨 The one-restart
+rule therefore holds **per attempt**: a retry of a request that faulted after its restart was stamped
+asks for a restart again.
 
 ## Who can file one
 
@@ -180,6 +243,28 @@ modules; the sync-owned hold on the module lane was.
 - **The sync-owned hold.** An attended reload lands the module even when the package's partition is
   owned by a sync source whose content has not caught up — the same as a Provision click. The item's
   `decision` says what was landed; the content half follows the sync.
+- **The install record is not re-stamped.** A reload writes the ACTIVATION record only; `Plugins/{id}`
+  is written by the installer and the package reconciler/sync, because it also describes the content
+  install. After a Done live reload to 1.2.0 the install record still reads 1.1.0. The instance report
+  therefore carries each package row's running version separately (`runningVersion`, read off the
+  activation record against the loaded generation) — see
+  [DeploymentInventory → Installed version vs running version](../DeploymentInventory).
 - **A restart that never comes.** A restart handed to the control lane that the control plane never
   executes leaves the request `AwaitingRestart` with the hand-over sentence on it — visible, not
-  retried.
+  retried (it did not crash; it is waiting).
+- **The Plugins self-update intake only files and logs.** `FleetTargetIntake` (MeshWeaver.Plugins,
+  `Hosting/PlatformBuildInbox/Source/FleetTargetIntake.cs`) never decides a request's fate from its
+  status. `RequestRefresh` only files a request; the node id `selfupdate-{module}-{version}` is the
+  key, so a second filing collides. On a collision it reads the existing request and passes it to
+  `ExistingReload`, which returns only a log level and a sentence:
+  - `Failed` → Error.
+  - `Faulted` → Warning, naming the attempt and the fault ("core retries it on its reconcile pass").
+    This branch is added by MeshWeaver.Plugins#2893 (open when this was written); until #2893
+    lands, `Faulted` falls into the Information branch below — a log line, no behaviour.
+  - An undated or overdue `Requested`, or no status at all → Warning.
+  - Anything else → Information.
+
+  Neither method marks a request finished or red or files a replacement, so core's re-arm of the same
+  node is undisturbed. With #2893, the state table is pinned by the intake's
+  `AFiledReload_NamesItsState_FailedAndUnclaimedAreLoud` test (its `Faulted` case). Either way the
+  intake never changes the request, so core's retry does not depend on #2893.

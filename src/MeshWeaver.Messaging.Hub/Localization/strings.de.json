@@ -1444,6 +1444,7 @@
   "activity.compile.notPublished": "Assembly NICHT VERÖFFENTLICHT — Roslyn hat sie erzeugt, aber der Assembly-Store hat die Bytes nicht behalten, daher wurde kein Release erstellt: {detail}",
   "activity.compile.aborted": "Kompilierung abgebrochen durch {exceptionType}:\n{detail}",
   "activity.compile.releaseCreated": "Release erstellt: {path}",
+  "activity.compile.releasePostCondition.abandonedAtShutdown": "Release-Nachbedingung (#781): {violation}.{firstAttempt} Auch das erneute Erstellen des Release ist nicht gelandet{reason} \u2014 dieser Prozess wurde gerade beendet (Host stoppt oder Mesh wird abgebaut), was es abgebrochen hat. Das Replikat, das ihn ersetzt, schliesst diesen NodeType erneut ab.",
   "activity.compile.releasePostCondition.restored": "Release-Nachbedingung (#781): {violation}.{firstAttempt} Bei {path} aus den Bytes dieses Compile-Vorgangs wiederhergestellt \u2014 ohne Neukompilierung.",
   "activity.compile.releasePostCondition.violated": "Release-Nachbedingung (#781) VERLETZT: {violation}.{firstAttempt} Auch das erneute Erstellen des Release ist nicht gelandet{reason}. F\u00fcr diesen Build existiert kein Release.",
   "activity.compile.importRefusedSources": "⚠ {count} Quell-Node(s), die diese Kompilierung benötigt, wurden von einem Import dieser Partition ABGELEHNT; das Mesh enthält sie also NICHT — die unten nicht auflösbaren Namen sind fehlende DATEIEN, keine fehlenden Module: {paths}. Korrigieren Sie die Quelldatei im Repository und importieren Sie erneut.",

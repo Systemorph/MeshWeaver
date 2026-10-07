@@ -231,7 +231,12 @@ internal static class ReleasePostCondition
         // Warning, so the ERROR line that announced the consequence never named the cause, and the
         // incident's Loki selector — cut at Error — could not have shown it.
         var firstFailure = FirstAttemptClause(firstAttempt);
-        logger?.LogError(
+        // 🚨 A PROCESS THAT IS LEAVING is not reporting a release fault (#6056). See IsLeaving: the
+        // same violation on a pod being replaced is the pod's own teardown cutting the create short,
+        // and the record it would leave behind is re-settled by the replica that replaces it. The
+        // sentence is identical; only the level says which of the two an operator is reading.
+        logger?.Log(
+            IsLeaving(survivor) ? LogLevel.Warning : LogLevel.Error,
             "[ReleasePostCondition] {HubPath}: {Violation}.{FirstFailure} Re-cutting the release from "
             + "the bytes this compile produced (no recompile) — see issue #781.",
             nodeTypePath, violation, firstFailure);
@@ -287,6 +292,40 @@ internal static class ReleasePostCondition
                 // to the terminal stamp as UnreleasedBuildPath / UnreleasedBuildReason, so the node
                 // stops reading healthy from every field while its build has no release.
                 var unreleased = recut.AttemptedPath ?? firstAttempt.AttemptedPath;
+
+                // 🚨 #6056 — the re-cut did not land because THIS PROCESS IS LEAVING, not because the
+                // release cannot be made. Both production bursts (memex, 2026-10-03 23:15:58Z on
+                // `57d6d7f9cc-tslft`, 2026-10-05 11:25:57Z on `5dcbbd8f4b-jqqxx`) fell in the very
+                // millisecond their pod logged `Host is shutting down, cannot route`: the mesh was
+                // draining its I/O pools, so the create was answered "cancelled before it completed"
+                // (CreateNode's cooperative-cancellation arm, Unavailable). And the "Stamped on the
+                // node" the Error line promised never landed either — the version history of every
+                // named type has no write at that instant (`Signature/SignatureRequest` v3926 →
+                // v3927, 11:25:44Z → 11:26:34Z; `Signature/DeepSignCredential` v3872 → v3873,
+                // 23:15:49Z → 23:16:01Z) — and the replica that replaced the pod re-compiled and cut
+                // the release 41 s and 16 s later. So the ERROR, the sev:H incident it filed and its
+                // claim about the record were all reports of a pod being replaced.
+                //
+                // Classified by the PROCESS's own state, never by parsing the reason: the same
+                // "Unavailable" also means "the store was unreachable", which IS an availability
+                // fault and stays an Error. The stamp still travels — this build has no release, and
+                // if the terminal write does land inside the termination grace period the stamp is
+                // the truth and LateReleaseAdoption watches it.
+                if (IsLeaving(survivor))
+                {
+                    logger?.LogWarning(
+                        "[ReleasePostCondition] {HubPath}: {Violation} — the release could not be "
+                        + "re-cut{Because}, and THIS PROCESS IS LEAVING (host stopping or mesh tearing "
+                        + "down), which is what cut it short. Not a release fault: the record is "
+                        + "re-settled by the replica that replaces this one. unreleasedBuildPath={Unreleased} "
+                        + "is stamped only if this process's terminal write still lands.",
+                        nodeTypePath, violation, recut.Because, unreleased ?? "(no id was minted)");
+                    return new Settle(
+                        null, AbandonedEntry(violation, firstFailure, recut),
+                        UnreleasedBuildPath: unreleased,
+                        UnreleasedBuildReason: AbandonedReason(recut));
+                }
+
                 logger?.LogError(
                     "[ReleasePostCondition] {HubPath}: {Violation} — AND the release could not be "
                     + "re-cut{Because}. The node advertises a build no release names; instances will "
@@ -302,6 +341,57 @@ internal static class ReleasePostCondition
                         : "the re-cut reported no reason, which is itself a defect in this pipeline");
             });
     }
+
+    /// <summary>
+    /// Whether the process this settle runs in is LEAVING — its host has begun stopping, or the mesh
+    /// is tearing down — read off the SURVIVOR (never the NodeType hub, whose scope may already be
+    /// closed: see the note at the top of <see cref="Restore"/>). The one shared predicate,
+    /// <see cref="HubLeavingExtensions.IsLeaving"/>; on a pod the host lifetime is the signal that is
+    /// live for the whole termination window, while the mesh's own flag flips only at its end.
+    /// </summary>
+    /// <param name="survivor">The hub the release creates are issued on.</param>
+    internal static bool IsLeaving(IMessageHub survivor) => survivor.IsLeaving();
+
+    /// <summary>Catalog key for <see cref="AbandonedDiagnosis"/>.</summary>
+    internal const string AbandonedKey = "activity.compile.releasePostCondition.abandonedAtShutdown";
+
+    /// <summary>
+    /// The compile <c>_Activity</c> line for a violation the re-cut could not repair BECAUSE THE
+    /// PROCESS WAS LEAVING (#6056) — the same two causes as <see cref="FailedDiagnosis"/>, plus the
+    /// fact that decides what to do about it: nothing, the replacing replica re-settles. Pure.
+    /// </summary>
+    /// <param name="violation">The violation, as <see cref="Violation"/> worded it.</param>
+    /// <param name="firstAttemptClause"><see cref="FirstAttemptClause"/>.</param>
+    /// <param name="recut">What the re-cut amounted to.</param>
+    internal static string AbandonedDiagnosis(
+        string violation, string firstAttemptClause, NodeTypeBuildState.ReleaseCreateOutcome recut) =>
+        $"Release post-condition (#781): {violation}.{firstAttemptClause} The re-cut did not land "
+        + $"either{recut.Because} — this process was leaving (host stopping or mesh tearing down), "
+        + "which cut it short. The replica that replaces it re-settles this NodeType.";
+
+    /// <summary>
+    /// The shutdown-abandoned verdict as a keyed activity entry — same rule as
+    /// <see cref="RestoredEntry"/>, and <c>Warning</c> because nothing about the release is broken.
+    /// </summary>
+    /// <param name="violation">The violation, as <see cref="Violation"/> worded it.</param>
+    /// <param name="firstAttemptClause"><see cref="FirstAttemptClause"/>.</param>
+    /// <param name="recut">What the re-cut amounted to.</param>
+    internal static LogMessage AbandonedEntry(
+        string violation, string firstAttemptClause,
+        NodeTypeBuildState.ReleaseCreateOutcome recut) =>
+        new LogMessage(AbandonedDiagnosis(violation, firstAttemptClause, recut), LogLevel.Warning)
+            .WithKey(AbandonedKey,
+                ("violation", violation), ("firstAttempt", firstAttemptClause),
+                ("reason", recut.Because));
+
+    /// <summary>
+    /// The <see cref="NodeTypeDefinition.UnreleasedBuildReason"/> for a re-cut a leaving process cut
+    /// short — the re-cut's own reason, followed by the fact that the process was leaving. Pure.
+    /// </summary>
+    /// <param name="recut">What the re-cut amounted to.</param>
+    internal static string AbandonedReason(NodeTypeBuildState.ReleaseCreateOutcome recut) =>
+        (recut.Failure is { Length: > 0 } reason ? reason : "the re-cut reported no reason")
+        + " — while this process was leaving (host stopping or mesh tearing down)";
 
     /// <summary>
     /// What the settle's OWN release create amounted to, as a clause for the sentences below — so

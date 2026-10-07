@@ -101,6 +101,19 @@ A red step before the restart does NOT stop the reboot, because bringing the ins
 point. It does make the request `Failed`, naming every red step. Only the restart failing ends the
 reboot early, because nothing would boot to verify.
 
+How the restart fails decides whether that is final:
+
+| The restart request… | Activation kind | The reboot |
+|---|---|---|
+| was decided against: no restart path on this install, a release held or deferred, a failed migration | `Unavailable` | `Failed` — final |
+| crashed: the restart call threw, a hand-over to the control lane failed, a registry check could not be made | `Faulted` | `Faulted` — not terminal |
+
+A transient failure is never final. A `Faulted` reboot is re-armed by the plugin catalog's reconcile
+pass (`InstanceReboot.RetryFaulted`, next to the module-reload retry and with the same backoff:
+the pass interval doubled per attempt). The re-arm keeps steps 1–3 and clears only the restart
+stamp, so the executor asks for the ONE restart again; the one-restart rule holds per attempt. An
+activation outcome the reboot lane does not name is reported `Unavailable` and logged by name.
+
 ## Who can start one
 
 | surface | authorisation | how |

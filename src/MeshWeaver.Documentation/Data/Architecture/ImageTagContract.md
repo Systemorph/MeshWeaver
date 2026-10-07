@@ -20,7 +20,6 @@ delivery**, and it writes exactly this set across the three repositories of the 
 | Tag | On | Written in | Kind |
 |---|---|---|---|
 | `<short-sha>` | `memex-portal-ai`, `memex-migration`, `mw-plugin-test` | phase A | immutable identity |
-| `<core-short>-p<plugins-short>` | `memex-portal-ai` | phase A | immutable identity (the pair tag, #2622) |
 | `<version>` e.g. `3.0.0-ci.8079` | `memex-migration`, `mw-plugin-test` | phase A | immutable pointer |
 | `main` | all three | phase B | moving pointer |
 | `latest` | `mw-plugin-test` **only** | phase B | moving pointer, repo-scoped |
@@ -93,7 +92,7 @@ reading.
 ### Why nothing caught it
 
 `check-image-set.sh` is the definition of "the set", and it was keyed **entirely on the commit's
-short sha**, plus the pair tag. A sha-keyed assertion says nothing whatsoever about the tags
+short sha**, plus the pair tag (since retired — [Platform and Module Deploy](../PlatformAndModuleDeploy)). A sha-keyed assertion says nothing whatsoever about the tags
 consumers actually name, so a promoted set could be complete and correct on every assertion this
 repository made while a tag a whole satellite fleet resolves did not exist. Every check was green
 throughout. #3438's pinned-digest lock does not cover it either: that guard deliberately classifies

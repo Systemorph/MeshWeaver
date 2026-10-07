@@ -33,6 +33,12 @@ public sealed record ModuleAdoptOutcome
     /// bundle, a link-probe refusal) — or why the adopt could not decide at all. Null otherwise.</summary>
     public string? Failure { get; init; }
 
+    /// <summary>True when <see cref="Failure"/> came from a CRASH — an exception, an unreachable
+    /// registry, a pass that could not run — rather than a decided answer about the bundle. A module
+    /// reload records such a failure as <c>Faulted</c> and retries it; a decided answer stays
+    /// <c>Failed</c> (<c>Doc/Architecture/ModuleReload</c>).</summary>
+    public bool Transient { get; init; }
+
     /// <summary>The registry serves no bundle for the package — the next configured registry may.</summary>
     public bool NotServed => Verdict?.Action == ModuleUpdateAction.SkipNoBundle;
 }

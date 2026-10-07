@@ -679,6 +679,23 @@ spec:
   # self-host (the default), higher for a fixed-size install that wants HA without an autoscaler.
   # ⚠️ Above 1 the same prerequisites apply as for KEDA — AdoNet clustering and RWX on every claim
   # (values.yaml → persistence). helm-template asserts both; see .github/workflows/chart-gate.yml.
+{{- /*
+  🚨 MORE THAN ONE PORTAL POD NEEDS A SHARED /data — refused at render time (MeshWeaver#6052).
+  /data holds the NodeType assembly cache (FileSystemAssemblyStore, collection "local"), and every
+  compiled NodeType's record — which is in the SHARED database — names a file under it. On emptyDir
+  each pod has its own cache, so a type compiled on pod A leaves a record naming bytes pod B never
+  holds; pod B's instances then render "its compiled assembly could not be loaded on this node", and
+  a recompile does not help, because it runs where the NodeType's own hub lives, which may be pod A
+  again. Measured on a client estate on 2026-09-28: two replicas, no shared /data, /health
+  `bake-report bytesmissing=93` on both pods. chart-gate's invariant 3 asserts RWX only over the
+  values files tracked in this repository; a client's values are not, so the render itself refuses.
+  persistDataVolume (a single node's hostPath) counts as shared: every pod lands on that one node.
+*/}}
+{{- $multiReplica := or (.Values.keda).enabled (gt (int ((.Values.replicas).portal | default 1)) 1) }}
+{{- $sharedData := or ((.Values.persistence).data).claimName .Values.persistDataVolume }}
+{{- if and $multiReplica (not $sharedData) }}
+{{- fail "more than one portal replica (keda.enabled, or replicas.portal > 1) needs a SHARED /data, and persistence.data.claimName is empty, so every pod would get its own emptyDir. /data holds the NodeType assembly cache; each compiled NodeType's shared record names a file in it, and a pod that did not compile that type cannot load it (MeshWeaver#6052). Set persistence.data.claimName to a ReadWriteMany claim, or run one replica." }}
+{{- end }}
 {{- if not (.Values.keda).enabled }}
   replicas: {{ (.Values.replicas).portal | default 1 }}
 {{- end }}

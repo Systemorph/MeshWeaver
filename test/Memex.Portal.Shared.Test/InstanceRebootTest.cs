@@ -332,9 +332,15 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
         cannot.Attempts.Should().Be(1, "asked exactly once");
         // Control: the steps before it are not painted red by the failure.
         InstanceRebootTest.Step(red, InstanceRebootSteps.Modules).Outcome.Should().Be(InstanceRebootStepOutcome.Ok);
+
+        // A DECIDED "cannot restart" is final: the retry pass (#6172) re-arms nothing, even at once.
+        var rearmed = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow.AddDays(1))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rearmed.Should().BeEmpty("Unavailable is a decided answer, never retried");
+        cannot.Attempts.Should().Be(1, "still asked exactly once");
     }
 
-    private sealed class CannotRestart : IDeploymentUpdater
+    internal sealed class CannotRestart : IDeploymentUpdater
     {
         private int attempts;
         public int Attempts => Volatile.Read(ref attempts);
@@ -347,6 +353,125 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
             Interlocked.Increment(ref attempts);
             return Task.FromResult(false);
         }
+
+        public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
+            Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));
+    }
+}
+
+/// <summary>
+/// 🚨 <b>The reboot agent reads the commit the feed ANNOUNCED, never whatever its mirror holds</b> —
+/// the reboot twin of <see cref="ModuleReloadAgentReadsTheAnnouncedCommitTest"/>. The handler is
+/// subscribed BEFORE the <c>AwaitingRestart</c> commit is written, so its mirror can only hold the
+/// earlier state. Floored at the announced version it waits for the commit and reports; the negative
+/// control — the same process with no floor, i.e. the old read — answers from the earlier state and
+/// reports nothing.
+/// </summary>
+public class InstanceRebootAgentReadsTheAnnouncedCommitTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    // The restart cannot be taken, so the reboot is DECIDED (Failed) and the executor writes nothing
+    // more on its own: the only writer below is this test.
+    protected override IDeploymentUpdater RebootUpdater => new InstanceRebootFailedStepTest.CannotRestart();
+
+    [Fact(Timeout = 240_000)]
+    public async Task AHandlerAheadOfItsMirror_WaitsForTheAnnouncedCommit_AndReports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var decided = await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Where(n => n.ContentAs<InstanceRebootRequest>(Mesh.JsonSerializerOptions) is { } r && InstanceRebootStatus.IsTerminal(r.Status))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var announced = decided.Version + 1;
+        var restart = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        // Both processes booted AFTER the restart stamp, and both are subscribed before the commit exists.
+        var floored = new InstanceRebootAgent { StartedAt = restart.AddSeconds(30), ProcessOf = _ => "floored-pod" }
+            .Handle(Mesh, path, committed: announced).ToList().Replay(1);
+        var unfloored = new InstanceRebootAgent { StartedAt = restart.AddSeconds(30), ProcessOf = _ => "unfloored-pod" }
+            .Handle(Mesh, path).ToList().Replay(1);
+        using var flooredConnection = floored.Connect();
+        using var unflooredConnection = unfloored.Connect();
+
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<InstanceRebootRequest>(r => r with
+            {
+                Status = InstanceRebootStatus.AwaitingRestart,
+                RestartRequestedAt = restart,
+            }))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        (await floored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().ContainSingle("the handler floored at the announced version reads the AwaitingRestart commit and reports");
+        (await unfloored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the control: the unfloored read answers from the state before the commit and reports nothing");
+        var reported = await AwaitReboot(path, r => r.Replicas.ContainsKey("floored-pod"), ct);
+        reported.Replicas.Should().NotContainKey("unfloored-pod");
+    }
+}
+
+/// <summary>
+/// 🚨 A transient failure is never final (#6172): a restart request that CRASHED (the updater threw)
+/// leaves the reboot <see cref="InstanceRebootStatus.Faulted"/>, not Failed; the retry pass
+/// (<see cref="InstanceReboot.RetryFaulted"/>) re-arms it, the executor asks for the ONE restart again,
+/// and the reboot completes on that attempt.
+/// </summary>
+public class InstanceRebootFaultedRestartTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    private readonly ThrowsOnce flaky = new();
+
+    protected override IDeploymentUpdater RebootUpdater => flaky;
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARestartThatCrashed_IsFaulted_RetriedByThePass_AndCompletesOnTheNextAttempt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var faulted = await AwaitReboot(path, r => r.Status == InstanceRebootStatus.Faulted || InstanceRebootStatus.IsTerminal(r.Status), ct);
+        faulted.Status.Should().Be(InstanceRebootStatus.Faulted, faulted.Failure ?? string.Join(" | ", faulted.Log));
+        InstanceRebootTest.Step(faulted, InstanceRebootSteps.Restart).Detail.Should().Contain("faulted");
+        faulted.FaultedAt.Should().NotBeNull();
+        flaky.Attempts.Should().Be(1);
+
+        // Before its backoff is due the pass re-arms nothing.
+        var early = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.FromHours(1), DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        early.Should().BeEmpty("the backoff is not due yet");
+
+        var rearmed = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.Zero, DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rearmed.Should().ContainSingle().Which.Should().Be(path);
+
+        var waiting = await AwaitReboot(path, r => r.Attempt == 1 && r.Status == InstanceRebootStatus.AwaitingRestart
+            && r.RestartRequestedAt is not null
+            && r.Steps.Any(s => s.Name == InstanceRebootSteps.Restart && s.Outcome == InstanceRebootStepOutcome.Ok), ct);
+        InstanceRebootTest.Step(waiting, InstanceRebootSteps.Restart).Detail.Should().StartWith(RebootActivationKinds.Restarted);
+        flaky.Attempts.Should().Be(2, "the re-armed attempt asked for the restart again, once");
+
+        var restart = waiting.RestartRequestedAt ?? throw new InvalidOperationException("the second attempt carries no restart stamp");
+        await BootedProcessReports(path, restart, Head().Directory ?? throw new InvalidOperationException("no activation head"), ct);
+
+        var done = await AwaitReboot(path, r => InstanceRebootStatus.IsTerminal(r.Status), ct);
+        done.Status.Should().Be(InstanceRebootStatus.Done, done.Failure ?? string.Join(" | ", done.Log));
+        done.Log.Should().Contain(l => l.Contains("retry 1: re-armed after the fault"));
+    }
+
+    private sealed class ThrowsOnce : IDeploymentUpdater
+    {
+        private int attempts;
+        public int Attempts => Volatile.Read(ref attempts);
+        public bool CanPatch => true;
+        public Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct) => Task.FromResult<DateTimeOffset?>(null);
+        public Task PatchToVersionAsync(string versionTag, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<bool> RestartAsync(CancellationToken ct) =>
+            Interlocked.Increment(ref attempts) == 1
+                ? Task.FromException<bool>(new HttpRequestException("the Kubernetes API reset the connection"))
+                : Task.FromResult(true);
 
         public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
             Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));
