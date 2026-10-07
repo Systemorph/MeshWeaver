@@ -69,6 +69,8 @@ public class StaleAdoptionBoundTest
     [InlineData("1.29.7", null)]
     [InlineData("221c6c286785ddf2", "1.10")] // a content hash is not a version
     [InlineData("1.x", "1.56")]
+    [InlineData("1.0", "1.6garbage")]   // the MINOR must end at a separator, as the MAJOR must
+    [InlineData("1.2garbage", "1.9")]
     public void MinorVersionsBehind_IsNotMeasurable_WhenEitherSideIsUnknown(string? adopted, string? current)
         => ModuleVersionCompatibility.MinorVersionsBehind(adopted, current).Should().BeNull(
             "an unmeasured distance must never refuse — the INCONCLUSIVE rule the MAJOR check follows");
@@ -79,6 +81,7 @@ public class StaleAdoptionBoundTest
     [InlineData("1.53.0", "1.59", 5, true)]
     [InlineData("1.29.7", "1.56", -1, false)] // disabled
     [InlineData(null, "1.56", 0, false)]      // unknown never refuses
+    [InlineData("1.0", "1.6garbage", 5, false)] // a malformed MINOR is unknown, never a distance
     public void Exceeds_RefusesOnlyAMeasuredDistancePastAnEnabledBound(
         string? adopted, string current, int bound, bool expected)
         => StaleAdoptionBound.Exceeds(adopted, current, bound).Should().Be(expected);
@@ -254,12 +257,19 @@ public class StaleAdoptionBoundTest
             BuildDeliveryHold.EventOf(pending, lifted, bound).Should().Be(BuildDeliveryHold.DeliveryEvent.HeldStale);
         }
 
-        // Controls: a real MAJOR bump stays refused under a lifted bound, and so does a refusal
-        // with no usable build to fall back to.
+        // A lifted bound-only refusal with NO usable build left settles as any record with
+        // nothing to serve does (null -> the gate's own park), never relabelled a MAJOR bump.
+        BuildDeliveryHold.Settle(pending, hasUsableBuild: false, "no bundle", -1)
+            .Should().BeNull("nothing is left to serve, and the versions are same-MAJOR within the (lifted) bound");
+
+        // Controls: a real MAJOR bump stays refused under a lifted bound, with or without a usable
+        // build, and a refusal still past the bound with no usable build keeps naming the bound.
         var major = pending with { CurrentModuleVersion = "2.0" };
         BuildDeliveryHold.Settle(major, hasUsableBuild: true, "no bundle", -1)!
             .CompilationError.Should().StartWith("Incompatible build, awaiting bundle");
-        BuildDeliveryHold.Settle(pending, hasUsableBuild: false, "no bundle", -1)!
-            .BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused);
+        BuildDeliveryHold.Settle(major, hasUsableBuild: false, "no bundle", -1)!
+            .CompilationError.Should().StartWith("Incompatible build, awaiting bundle");
+        BuildDeliveryHold.Settle(pending, hasUsableBuild: false, "no bundle", 5)!
+            .CompilationError.Should().StartWith("Build too far behind its source");
     }
 }

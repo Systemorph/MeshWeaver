@@ -106,14 +106,16 @@ public static class BuildDeliveryHold
                 BuildProvenance = BuildProvenance.AdoptionRefused,
                 RequestedReleaseForce = false,
             };
-        // A refusal stands unless the versions are MEASURABLY same-MAJOR, within the bound, and a
-        // usable build is there to serve: a refusal made ONLY on the bound recovers to StaleAdopted
+        // A refusal stands unless the versions are MEASURABLY same-MAJOR and within the bound: with
+        // a usable build to serve, a refusal made ONLY on the bound recovers to StaleAdopted
         // (below) once the operator disables or raises the bound, and is never re-written as a
         // MAJOR incompatibility the versions do not have (Memex#668, Copilot review). A refusal
-        // whose versions cannot be compared keeps its pre-#668 behaviour.
+        // whose versions cannot be compared keeps its pre-#668 behaviour. A bound-only refusal
+        // whose bound was lifted and which has NO usable build left settles exactly as a
+        // never-refused record with nothing to serve (null → the gate's own park), never as a
+        // MAJOR incompatibility.
         if (pending.BuildProvenance is BuildProvenance.AdoptionRefused
-            && (!hasUsableBuild
-                || pastBound
+            && (pastBound
                 || ModuleVersionCompatibility.Classify(pending.AdoptedModuleVersion, pending.CurrentModuleVersion)
                     is not ModuleVersionVerdict.Compatible))
             return pending with

@@ -28,7 +28,9 @@ namespace MeshWeaver.Mesh.Services;
 /// <para>🚨 The one refusal is keyed on MODULE VERSION COMPATIBILITY, not on fingerprint
 /// equality (MeshWeaver#3583): a fingerprint that differs says the source MOVED; whether the
 /// build that is serving may keep serving is answered by <see cref="ModuleVersionCompatibility"/>
-/// — same MAJOR (or unknown) keeps it, as <see cref="StaleAdopted"/>; a MAJOR bump refuses it, as
+/// — same MAJOR (or unknown) keeps it, as <see cref="StaleAdopted"/>, but only while it is within
+/// the stale-adoption bound (<see cref="StaleAdoptionBound"/>, Systemorph/Memex#668); a MAJOR bump,
+/// or a same-MAJOR build more MINOR versions behind than that bound, refuses it, as
 /// <see cref="AdoptionRefused"/>. Either way the type never ERRORS because of delivery.</para>
 ///
 /// <para>Appended-only: the persisted ordinal of every existing member must stay unchanged, and
@@ -62,8 +64,10 @@ public enum BuildProvenance
 
     /// <summary>
     /// An adoption was REFUSED: the bundle's recorded source fingerprint DISAGREES with the live
-    /// source set AND the two sides are INCOMPATIBLE by module version — the current source's
-    /// MAJOR differs from the adopted build's (<see cref="ModuleVersionCompatibility"/>). The bytes
+    /// source set AND either the two sides are INCOMPATIBLE by module version — the current
+    /// source's MAJOR differs from the adopted build's (<see cref="ModuleVersionCompatibility"/>) —
+    /// or they share a MAJOR but the build is more MINOR versions behind than the stale-adoption
+    /// bound allows (<see cref="StaleAdoptionBound"/>, Systemorph/Memex#668). The bytes
     /// are not run (the execute-time gate refuses them); on a mesh that compiles module content a
     /// local compile of the live source is driven, on one that does not the type reports
     /// "incompatible, awaiting bundle" until a bundle for this identity lands. This is the
@@ -76,14 +80,17 @@ public enum BuildProvenance
     /// afternoon. The refusal was right about the bytes (they were older) and wrong about the
     /// consequence: a page that renders last week's styling is a page; a refusal overlay is not.
     /// The portal owner's rule: only a declared incompatibility — a MAJOR bump — may refuse the
-    /// last build the mesh holds.</para>
+    /// last build the mesh holds; Systemorph/Memex#668 adds the one bounded exception, a same-MAJOR
+    /// build past the stale-adoption bound. A refusal made only on that bound recovers to
+    /// <see cref="StaleAdopted"/> once the bound is disabled or raised.</para>
     /// </summary>
     AdoptionRefused,
 
     /// <summary>
     /// The LAST build this mesh holds keeps serving while the current source has moved PAST it —
     /// the adopted (or locally compiled) bytes are behind the source by a compatible amount (same
-    /// module MAJOR, or the versions are not known), and no bundle for the running framework
+    /// module MAJOR and within the stale-adoption bound <see cref="StaleAdoptionBound"/>, or the
+    /// versions are not known), and no bundle for the running framework
     /// identity has caught up yet (MeshWeaver#3583, measured 2026-09-09).
     ///
     /// <para>Honest by construction: <c>CompiledSources</c> is cleared so <c>IsDirty</c> reads

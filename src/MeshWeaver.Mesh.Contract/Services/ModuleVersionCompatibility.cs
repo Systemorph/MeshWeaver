@@ -153,6 +153,10 @@ public static class ModuleVersionCompatibility
             end++;
         if (end == 0)
             return null;
+        // Same rule as MajorOf: the MINOR digits must end at a version separator or the end of
+        // the string — "1.2garbage" is not a version, so its distance is not measured.
+        if (end < rest.Length && rest[end] is not ('.' or '-' or '+'))
+            return null;
         return int.TryParse(rest[..end], NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
             ? (major, minor)
             : null;
