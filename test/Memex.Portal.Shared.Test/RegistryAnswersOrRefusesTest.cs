@@ -249,16 +249,17 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, PluginBundleEndpoints.RoutePrefix + "/index.json");
         request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
-        using var cut = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cut.CancelAfter(patience);
+        using var patienceCut = new CancellationTokenSource();
+        using var cut = CancellationTokenSource.CreateLinkedTokenSource(ct, patienceCut.Token);
+        patienceCut.CancelAfter(patience);
         try
         {
             var response = await app.GetTestClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cut.Token);
-            return (response, cut.IsCancellationRequested);
+            return (response, patienceCut.IsCancellationRequested);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return (null, cut.IsCancellationRequested);
+            return (null, patienceCut.IsCancellationRequested);
         }
     }
 

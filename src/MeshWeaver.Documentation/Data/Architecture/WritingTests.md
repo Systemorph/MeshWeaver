@@ -121,8 +121,9 @@ Before writing a test, review the invariants every test must respect:
 > Timeouts, cancellations, and delivery failures are real test failures — the reactive assertion surface exposes them for you. Never wrap a read in `try { … } catch { return null; }`; that silently turns a flaky bug into a green-but-lying test. To assert an *expected* error, use `.Materialize()` (see below) rather than a swallowing `catch`.
 
 > **A client-cancellation negative control checks the cancellation signal.** When a test
-> deliberately cuts an HTTP request with `CancelAfter`, assert that its own token had actually
-> cancelled before accepting a null response or a host-recorded 499. Comparing
+> deliberately cuts an HTTP request with `CancelAfter`, keep that patience token separate from
+> the test's cancellation token and assert that the patience token had actually cancelled before
+> accepting a null response or a host-recorded 499. Comparing
 > `DateTimeOffset.UtcNow - started` with the exact `CancelAfter` duration tests two different
 > clocks at their boundary; `RegistryAnswersOrRefusesTest` failed at a reported 5.0 s despite the
 > intended client cut firing. Use `Stopwatch` for coarse elapsed-time bounds on a successful
