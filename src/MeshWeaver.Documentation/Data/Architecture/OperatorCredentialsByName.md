@@ -121,6 +121,29 @@ credential a script cannot fetch by name itself. Nothing in the fleet declares a
 mounts. Whether that block stays or goes is a separate decision; what this page settles is that the
 Postgres admin password is not what it is for.
 
+## The other direction: a rendered manifest is data, never log text (Memex#626)
+
+Names flow IN. Values must not flow OUT either, and the way out is the step's own output, which
+becomes the job log. The mesh copies that log onto the action node, so every reader of
+`Ops/Actions` can read it. A rendered manifest carries every value the record and the Key Vault
+half render: Secret payloads, connection strings and, on a hand-applied object, whatever a person
+put in an env var. Memex#626 is that leak. An ApplyChart dry-run diff printed a live Deployment's
+env, an Azure Storage SAS included, into the run log and the node's `callbackLogTail`.
+
+So the rule holds in both repositories:
+
+- **`hosting-deploy`** captures `helm template` and the `kubectl create --dry-run` name listing
+  with stdout and stderr APART, and a failure names ONE line of the tool's stderr. It used to
+  capture with `2>&1`, which folded whatever the tool had already written to stdout into the
+  die line. `test/run-tests.sh` ("the rendered manifest never reaches the log") feeds a render
+  carrying a fake SAS through a failing render, a failing rehearsal render and a failing parse.
+  Its negative control fails all three cases against the old capture.
+- **The ApplyChart diff** (Memex `aks-ops-chart.py`) reads both manifests as objects and redacts
+  them structurally, default-deny: a value prints only when it is proven harmless, and everything
+  else prints as a per-run keyed fingerprint.
+- **The sink** (MeshWeaver.Plugins `CredentialMask`) masks credential-shaped text in every log it
+  copies onto a node. It is a regex, so it is the second line of defence, not the first.
+
 ## See also
 
 - [Denied Is Not Absent](../DeniedIsNotAbsent) — the three answers a read owes its reader, which
