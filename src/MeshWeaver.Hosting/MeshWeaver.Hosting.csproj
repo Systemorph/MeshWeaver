@@ -12,6 +12,10 @@
     <!-- InstanceKeyLiveResolutionTest probes MeshNodeStreamCache.IsReadStreamLive / ReadStreamEvictions
          to prove the registry authenticator reads through the process-wide cache (#3119). -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <!-- ChangeFeedGapConsumerTests seeds a grown storm-breaker window (RecordNegative) and reads it
+         (IsStormWindowOpen) on a two-silo cluster, so the negative control measures a missing gap
+         signal rather than a window that expired on the clock (Plugins#3000). -->
+    <InternalsVisibleTo Include="MeshWeaver.FaultInjection.Test" />
   </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>
