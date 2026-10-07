@@ -369,12 +369,24 @@ fi
 # release (nothing to do), UNOWNED live (adopted). A live object owned by ANOTHER release is a
 # refusal, never a takeover — two releases claiming one object is how a teardown deletes the wrong
 # instance's Secret.
-rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>&1)" \
-  || { if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${rendered}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${rendered}"; fi; }
+#
+# 🚨 The rendered manifest is DATA, never log text (Memex#626). It carries every value the record and
+# the Key Vault half render — Secret payloads, connection strings — and this script's stdout/stderr is
+# the job log the mesh copies onto the action node. So stdout and stderr are captured APART, and a
+# failure names ONE line of the tool's stderr; the old `2>&1` folded whatever helm or kubectl had
+# already written to stdout into the die/log line. test/run-tests.sh "the rendered manifest never
+# reaches the log" pins it.
+render_err="$(mktemp)"
+rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>"$render_err")" \
+  || { why="$(grep -m1 . "$render_err" | cut -c1-400)"; rm -f "$render_err"
+       if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${why}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${why}"; fi; }
 adopted=0; owned=0; absent=0
 if [ -n "$rendered" ]; then
-  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>&1)" \
-    || hosting::die "could not list the rendered resources for adoption: ${names}"
+  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>"$render_err")" \
+    || { why="$(grep -m1 . "$render_err" | cut -c1-400)"; rm -f "$render_err"; hosting::die "could not list the rendered resources for adoption: ${why}"; }
+fi
+rm -f "$render_err"
+if [ -n "$rendered" ]; then
   while IFS= read -r res; do
     [ -n "$res" ] || continue
     # 🚨 THREE ANSWERS, not two (MeshWeaver#4722). This read used to be `2>/dev/null` with any
