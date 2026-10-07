@@ -1818,7 +1818,16 @@ internal class MeshNodeCompilationService(
                 // invalid") is the one exit of the #890 process fault the emit canary never sees —
                 // nothing threw inside Emit. Probe the shared compiler with a known-good source so
                 // the line says whether the process, not this type, is what broke.
-                var processProbe = detail.Contains("format is invalid", StringComparison.Ordinal)
+                // Keyed on the exception TYPE where the runtime gives one (BadImageFormatException,
+                // directly or as a loader exception), and on the loader's message for the
+                // TypeLoadException shape, which carries no distinguishing type or HResult. .NET
+                // ships CoreLib's messages in English only, but the wording can change between
+                // runtime versions — NodeTypeCompilation.md records that assumption.
+                var invalidImage = ex is BadImageFormatException
+                    || (ex is System.Reflection.ReflectionTypeLoadException loadFailure
+                        && loadFailure.LoaderExceptions.Any(e => e is BadImageFormatException))
+                    || detail.Contains("format is invalid", StringComparison.Ordinal);
+                var processProbe = invalidImage
                     ? " — " + EmitPipeline.ProbeEmittedImageLoads()
                     : "";
                 logger.LogWarning(ex,

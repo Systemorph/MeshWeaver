@@ -45,7 +45,7 @@ namespace MeshWeaver.Compiler;
 /// <para><b>What the answers mean</b> (<see cref="Classify"/> is pure and owns them):
 /// <list type="bullet">
 ///   <item><c>image=INTACT</c> — the image and its mapping read exactly as at the first compile and
-///     match the file. With <c>compiler=PRIVATE-COPY-EMITS</c>, the only shared-copy state left is
+///     match the file (a rewrite made BEFORE the first compile of the process is invisible to it). With <c>compiler=PRIVATE-COPY-EMITS</c>, the only shared-copy state left is
 ///     the NATIVE CODE (what the JIT produced, or the code heap it lives in): the next measurement
 ///     is the split-arm <c>DOTNET_TieredPGO=0</c> run and the JIT listing, never the file.</item>
 ///   <item><c>image=REWRITTEN-IN-PLACE</c> — the file changed AND the mapped bytes changed with it:
@@ -55,6 +55,8 @@ namespace MeshWeaver.Compiler;
 ///     file is unchanged: the image's pages were corrupted in memory.</item>
 ///   <item><c>image=FILE-REPLACED</c> — the path names different bytes, but the mapping still reads
 ///     the original (a rename over the path; harmless to this process) — not the cause.</item>
+///   <item><c>image=NOT-COMPARED</c> — a baseline exists but no image could be compared with it
+///     (its entries, or the current reading, were unavailable): no verdict either way.</item>
 ///   <item><c>image=NO-BASELINE</c> — the first reading was never taken before the failure (a
 ///     caller that emits through Roslyn directly, never through <see cref="EmitPipeline"/>), so only
 ///     mapped-vs-disk is compared and the verdict says so.</item>
@@ -140,6 +142,7 @@ internal static class RoslynImageIntegrity
 
         var findings = new List<string>();
         var worst = Outcome.Intact;
+        var compared = 0;
         foreach (var current in now.Images)
         {
             var first = before.Images.FirstOrDefault(i => i.Name == current.Name);
@@ -148,6 +151,7 @@ internal static class RoslynImageIntegrity
                 findings.Add($"{current.Name}: not compared ({current.Unavailable ?? first?.Unavailable ?? "no baseline entry"})");
                 continue;
             }
+            compared++;
 
             var fileChanged = current.DiskSha256 != first.DiskSha256;
             var mappedChanged = current.MappedMetadataSha256 != first.MappedMetadataSha256
@@ -173,6 +177,13 @@ internal static class RoslynImageIntegrity
         }
 
         var detail = string.Join("; ", findings);
+        // INTACT is the reading that steers the next occurrence to the JIT and away from the file,
+        // so it must rest on at least one comparison. When every image took the "not compared"
+        // branch (e.g. the first-compile reading of both failed), the leg compared nothing and
+        // says so — the before-side twin of the all-unavailable guard above.
+        if (compared == 0)
+            return $"{Prefix}NOT-COMPARED({detail}) — no image could be compared with the first-compile "
+                + "reading, so the leg says nothing either way";
         return worst switch
         {
             Outcome.RewrittenInPlace => $"{Prefix}REWRITTEN-IN-PLACE({detail}) — 🚨 something wrote INTO a "

@@ -583,9 +583,12 @@ public static class EmitPipeline
     /// <returns>A one-line verdict, safe to append to a log message.</returns>
     internal static string ProbeEmittedImageLoads()
     {
-        // The load verdict is taken ONCE per process: INVALID-IMAGE already attributes every later
-        // load failure to itself, and one poisoned process produced 96 such failures. The image
-        // and host legs stay fresh on every call — the image is the reading that can change.
+        // The load verdict is PUBLISHED once per process: INVALID-IMAGE already attributes every
+        // later load failure to itself, and one poisoned process produced 96 such failures. Two
+        // concurrent first callers may each run the canary and the loser's result is discarded —
+        // deliberately: a lock or Lazy would park every concurrent caller (hub threads among them)
+        // for a whole compile + emit + load on an already-failing path. The image and host legs
+        // stay fresh on every call — the image is the reading that can change.
         if (Volatile.Read(ref loadCanaryVerdict) is null)
             Interlocked.CompareExchange(ref loadCanaryVerdict, RunLoadCanary(), null);
         return $"{Volatile.Read(ref loadCanaryVerdict)} {RoslynImageIntegrity.Reading()} {RoslynImageIntegrity.Host()}";
@@ -634,10 +637,16 @@ public static class EmitPipeline
                 return $"loadcanary=LOADS({types.Length} types) — the shared compiler still writes a loadable "
                     + "nested-generic image, so the invalid image is specific to that compilation";
             }
-            catch (ReflectionTypeLoadException invalid)
+            catch (Exception invalid) when (invalid is ReflectionTypeLoadException or BadImageFormatException)
             {
+                // Both are the loader refusing the canary's own image: a type that cannot be realised
+                // (ReflectionTypeLoadException) or an image LoadFromStream rejects outright
+                // (BadImageFormatException). Either way the bytes the shared compiler wrote are invalid.
+                var messages = invalid is ReflectionTypeLoadException rtl
+                    ? rtl.LoaderExceptions.Where(e => e is not null).Select(e => e!.Message).Distinct().Take(3)
+                    : [$"{invalid.GetType().Name}: {invalid.Message}"];
                 return "loadcanary=INVALID-IMAGE("
-                    + string.Join("; ", invalid.LoaderExceptions.Where(e => e is not null).Select(e => e!.Message).Distinct().Take(3))
+                    + string.Join("; ", messages)
                     + ") — 🚨 the shared compiler wrote an UNLOADABLE image for a trivial known-good source: "
                     + "this process emits invalid metadata (#5212 shape b, the loader-side exit of #890). "
                     + "Attribute every later load failure in this process to this line";

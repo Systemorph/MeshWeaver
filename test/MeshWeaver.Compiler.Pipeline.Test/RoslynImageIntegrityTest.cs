@@ -188,5 +188,15 @@ public class RoslynImageIntegrityTest(ITestOutputHelper output)
             "a reading with nothing to compare to must say so rather than read as intact");
         RoslynImageIntegrity.Classify(first, Reading(RoslynImageIntegrity.ImageFingerprint.Missing("x", "why")))
             .Should().StartWith("image=UNAVAILABLE", "a leg that could not read must never become a verdict");
+        RoslynImageIntegrity.Classify(
+                Reading(RoslynImageIntegrity.ImageFingerprint.Missing("Microsoft.CodeAnalysis.CSharp", "transient read failure")),
+                Reading(Image("d1", "m1", "i1")))
+            .Should().StartWith("image=NOT-COMPARED(",
+                "a baseline that could not be read compares nothing, and INTACT must rest on a comparison");
+        RoslynImageIntegrity.Classify(
+                new([RoslynImageIntegrity.ImageFingerprint.Missing("Microsoft.CodeAnalysis", "transient"), Image("d1", "m1", "i1")]),
+                new([new("Microsoft.CodeAnalysis", "d9", "m9", true, "i9", 100, null), Image("d1", "m1", "i1")]))
+            .Should().StartWith("image=INTACT(",
+                "one image compared is a comparison; the other is listed as not compared");
     }
 }

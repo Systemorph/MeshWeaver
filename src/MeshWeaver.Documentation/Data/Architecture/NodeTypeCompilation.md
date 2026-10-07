@@ -1561,12 +1561,13 @@ appends a fresh reading compared with it:
 
 | reading | means |
 |---|---|
-| `image=INTACT(…)` | image and mapping read exactly as at the first compile and match the file ⇒ with `compiler=PRIVATE-COPY-EMITS` the only shared-copy state left is the **native code** (JIT output or the code heap). Go to the `DOTNET_TieredPGO=0` split arm and the JIT listing — never the file |
+| `image=INTACT(…)` | image and mapping read exactly as at the first compile and match the file (a change made BEFORE the first compile of this process, rewriting file and mapping alike, cannot be seen — the baseline is that moment) ⇒ with `compiler=PRIVATE-COPY-EMITS` the only shared-copy state left is the **native code** (JIT output or the code heap). Go to the `DOTNET_TieredPGO=0` split arm and the JIT listing — never the file |
 | `image=REWRITTEN-IN-PLACE(…)` | file AND mapped bytes changed: something wrote into a loaded compiler image. Find the writer; no runtime report |
 | `image=MAPPED-CHANGED(…)` | mapped bytes changed, file did not: the image's pages were altered in memory |
 | `image=FILE-REPLACED(…)` | the path names new bytes but the mapping reads the original (a rename) — not the cause |
 | `image=NO-BASELINE(…)` | no first-compile reading in this process (a caller that emits through Roslyn directly); only mapped-vs-disk was compared, and they agree |
 | `image=NO-BASELINE-MAPPED-DIFFERS(…)` | no baseline, AND the metadata the runtime executes from is not the metadata of the file at that path now — the image was rewritten or corrupted at some point before |
+| `image=NOT-COMPARED(…)` | a baseline exists but no image could be compared with it (its entries, or the current reading, were unavailable) — it says nothing either way, and is never reported as `INTACT` |
 | `image=UNAVAILABLE(…)` | the leg could not read the images (single-file host, no raw metadata, or the probe itself faulted) — it says nothing either way |
 
 It also appends `host=(runtime, RID, CPU model, ISA flags, any DOTNET_ tiering knobs)` — the
@@ -1580,12 +1581,18 @@ every type, and for every compile after it in the process (96 lines). The failin
 identical to an occurrence one run earlier that DID throw `canary=BELOW-ROSLYN`. Since
 `ProbeSharedEmitState` only runs on a throw, it never ran, and nine NodeTypes read as broken content.
 `EmitPipeline.ProbeEmittedImageLoads` now runs on that load failure (the
-`Failed to extract NodeTypeConfigurations … format is invalid` warning): it emits the nested canary
+`Failed to extract NodeTypeConfigurations … format is invalid` warning — keyed on a
+`BadImageFormatException`, directly or among the loader exceptions, and otherwise on the loader's
+*"format is invalid"* text, because the `TypeLoadException` shape carries no distinguishing type or
+HResult; .NET ships CoreLib's messages in English only, so the text is stable across hosts but can
+change between runtime versions, and a reworded message would leave shape b unprobed): it emits the nested canary
 through the shared compiler, loads it from bytes and realises its types.
-`loadcanary=INVALID-IMAGE(…)` ⇒ the process writes invalid metadata for a known-good source — the
+`loadcanary=INVALID-IMAGE(…)` (a type that cannot be realised, or a `BadImageFormatException` from
+the load itself) ⇒ the process writes invalid metadata for a known-good source — the
 loader-side exit of the same fault; `loadcanary=LOADS(…)` ⇒ the invalid image is specific to that
-compilation; `loadcanary=DIAGNOSTICS(<ids>)`, `loadcanary=THREW <Type> at <frame>` (the canary's
-own emit refused or threw) and `loadcanary=UNAVAILABLE(…)` (no CoreLib to reference) mean the
+compilation; `loadcanary=DIAGNOSTICS(<ids>)`, `loadcanary=THREW <Type> at <frame>` (the probe
+threw outside the loader's own refusals — building the reference set, compiling, emitting, or a
+load failure that is neither a type-load nor a bad-image one; the type and frame say which) and `loadcanary=UNAVAILABLE(…)` (no CoreLib to reference) mean the
 control could not answer. The load verdict is taken once per process (INVALID-IMAGE already
 attributes every later load failure to itself); the image and host legs ride along fresh on every
 line.
