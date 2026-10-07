@@ -849,7 +849,7 @@ jobs:
   # downloads the prebuilt test bins and runs each project's native xUnit v3
   # host — NO restore, NO build, NO MSBuild.
   test:
-    name: "Run tests (shard ${{ matrix.shard }})"
+    name: "Run tests (shard ${{ matrix.shard }} arm ${{ matrix.arm }})"
     needs: [build, precheck]
     # stage-gate has PR-only controls in its ancestry that intentionally skip on main.
     # An implicit success() sees those skipped ancestors and skips every shard even
@@ -866,7 +866,9 @@ jobs:
       # results so the PR shows the full failure picture, not just the first.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        # EXPERIMENT #5212: only shard 3, two arms (A = JIT disasm capture, B = TieredPGO=0).
+        shard: [3]
+        arm: [A, B]
 
     steps:
     - uses: actions/checkout@v7
@@ -1256,6 +1258,19 @@ jobs:
         # resolves this exact binary rather than whatever browser the runner image happens to
         # carry.
         echo "MESHWEAVER_CHROMIUM_PATH=$BROWSER" >> "$GITHUB_ENV"
+    - name: "EXPERIMENT #5212 - arm env (A: JIT capture, B: TieredPGO=0)"
+      run: |
+        set -euo pipefail
+        if [ "${{ matrix.arm }}" = "A" ]; then
+          mkdir -p /tmp/jit
+          {
+            echo "DOTNET_JitStdOutFile=/tmp/jit/jit.txt"
+            echo "DOTNET_JitDisasmSummary=1"
+            echo "DOTNET_JitDisasm=PopulateNestedClassTableRows *getConsolidatedTypeParameters* CreateIndicesForNonTypeMembers AsNestedTypeDefinitionImpl"
+          } >> "$GITHUB_ENV"
+        else
+          echo "DOTNET_TieredPGO=0" >> "$GITHUB_ENV"
+        fi
     - name: Run Tests
       env:
         # The runner VM is destroyed after the job, so Testcontainers' resource
@@ -1624,6 +1639,15 @@ jobs:
         if compgen -G '/tmp/coredumps/*.dmp' > /dev/null; then
           cp /tmp/coredumps/*.dmp collected-logs/
         fi
+    - name: "EXPERIMENT #5212 - upload JIT capture (arm A)"
+      if: always() && matrix.arm == 'A'
+      uses: actions/upload-artifact@v7
+      with:
+        name: jit-capture-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
+        path: /tmp/jit/
+        if-no-files-found: error
+        compression-level: 9
+        retention-days: 15
     - name: "Upload artifact: shard test results"
       uses: actions/upload-artifact@v7
       if: always()
@@ -1645,7 +1669,7 @@ jobs:
         # attempt — so the producer has to say which attempt it is, and the name is its only
         # channel. Same remedy as node-repo-module-pack.yml's lane key (Plugins#1077): when two
         # producers can land one name in one run, the discriminator goes INTO the name.
-        name: testResults-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
+        name: testResults-shard${{ matrix.shard }}${{ matrix.arm }}-attempt${{ github.run_attempt }}
         path: |
           test/**/*.trx
           test/test-results.log
