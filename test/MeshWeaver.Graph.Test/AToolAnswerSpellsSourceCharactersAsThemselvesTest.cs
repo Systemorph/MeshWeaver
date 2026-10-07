@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Test;
 /// <para><b>The incident.</b> The internal pull-request reviewer reads a PR's unified diff with ONE
 /// <c>get</c> of its triage item. That answer was written with the hub's serializer options, whose
 /// default encoder is HTML-safe, so every <c>+</c> in the diff — the added-line marker AND the
-/// operator — reached the model as <c>+</c>. Three review rounds on Plugins#2461 reported the
+/// operator — reached the model as <c>\u002B</c>. Three review rounds on Plugins#2461 reported the
 /// file's only two <c>+=</c> lines as plain assignments, one as a BLOCKING finding that held the PR;
 /// the same spelling sits under rebutted blockers on core (<c>failures +=</c>, <c>names +=</c>,
 /// <c>/// &lt;summary&gt;</c> read as a stray end tag).</para>

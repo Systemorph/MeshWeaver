@@ -16,7 +16,7 @@ namespace MeshWeaver.AI;
 /// <c>&gt;</c>, <c>&amp;</c>, <c>'</c>, <c>`</c>, <c>"</c> and every non-ASCII character as a
 /// <c>\uXXXX</c> escape. That is valid JSON and harmless on the wire, but a language model reads the
 /// TEXT. A pull request's unified diff therefore reached the reviewer as
-/// <c>\n+        runs += json.loads(out or "{}")</c> — the diff marker and the
+/// <c>\n\u002B        runs \u002B= json.loads(out or \u0022{}\u0022)</c> — the diff marker and the
 /// operator spelled identically — and three review rounds on Plugins#2461 independently reported the
 /// file's only two <c>+=</c> lines as plain assignments, one of them as a BLOCKING finding that held
 /// the PR. The same encoding sits under further rebutted blockers on core (<c>failures +=</c>,

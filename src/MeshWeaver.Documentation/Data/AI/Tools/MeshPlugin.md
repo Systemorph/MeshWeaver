@@ -116,9 +116,9 @@ back as the characters themselves, and only what JSON requires (`"`, `\`, contro
 escaped. The answer parses to exactly the same document as before. Only the spelling changed.
 
 The hub's own serializer options use System.Text.Json's HTML-safe default encoder, which writes
-those characters as `+`, `<`, `&` and so on. That is valid JSON, but a language model
+those characters as `\u002B`, `\u003C`, `\u0026` and so on. That is valid JSON, but a language model
 reads the text. A pull request's diff reached the internal reviewer as
-`\n+        runs += json.loads(…)`, with the added-line marker and the operator spelled
+`\n\u002B        runs \u002B= json.loads(…)`, with the added-line marker and the operator spelled
 the same way. Three review rounds on MeshWeaver.Plugins#2461 then reported the file's only two `+=`
 lines as plain assignments, and one of those findings was blocking and held the PR. Rebutted
 blocking findings on core show the same pattern: `failures +=` and `names +=` were read as
