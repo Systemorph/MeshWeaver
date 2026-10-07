@@ -14,18 +14,31 @@ namespace MeshWeaver.Mesh.Threading;
 /// leaves (e.g. <c>File.ReadAllBytes</c>, Roslyn compile, <c>Process</c>). It caps how many run at
 /// once, so a burst of blocking work QUEUES behind the cap instead of fanning out.</para>
 ///
-/// <para>🚨 <b>The drain loops run on threads this scheduler starts itself</b> — one per concurrent
-/// drain loop, each exiting when the queue is empty, so an idle pool holds no thread. The Docs sample
-/// this was adapted from BORROWS ThreadPool workers, and for a blocking leaf that is the defect: the
-/// leaf holds its worker for as long as it blocks, the pool's minimum is <c>ProcessorCount</c> (6 on a
-/// portal pod), and most caps are far above that (<c>FileSystem</c> 256, <c>Http</c> 16). A burst of
-/// network-volume reads, bundle reads or <c>git</c> waits could therefore hold every worker the grain
-/// turns and routing legs need, and the silo then waited on the ThreadPool's slow thread injection —
-/// Orleans' ".NET Thread Pool execution stalled". The CPU lane went first
-/// (<c>IoPoolNames.CompileCpu</c>, <c>Doc/Architecture/CompileOffTheThreadPool</c>); the same argument
-/// holds for anything that holds a thread without yielding it
-/// (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>). A <c>null</c> thread name keeps the
-/// borrowing behaviour; it exists so a test can show the difference.</para>
+/// <para>🚨 <b>The drain loops run on threads this scheduler starts itself</b> — at most one per slot,
+/// started on demand and then KEPT: an idle lane thread parks on the queue's monitor until the next
+/// <see cref="QueueTask"/> wakes it, and exits only once <see cref="Complete"/> has been called (the
+/// owning <see cref="IoPool"/> calls it when its disposal completes). The Docs sample this was adapted
+/// from BORROWS ThreadPool workers, and for a blocking leaf that is the defect: the leaf holds its
+/// worker for as long as it blocks, the pool's minimum is <c>ProcessorCount</c> (6 on a portal pod),
+/// and most caps are far above that (<c>FileSystem</c> 256, <c>Http</c> 16). A burst of network-volume
+/// reads, bundle reads or subprocess waits could therefore hold every worker the grain turns and
+/// routing legs need, and the silo then waited on the ThreadPool's slow thread injection — Orleans'
+/// ".NET Thread Pool execution stalled". The CPU lane went first (<c>IoPoolNames.CompileCpu</c>,
+/// <c>Doc/Architecture/CompileOffTheThreadPool</c>); the same argument holds for anything that holds a
+/// thread without yielding it (<c>Doc/Architecture/BlockingLeavesOffTheThreadPool</c>). A <c>null</c>
+/// thread name keeps the borrowing behaviour; it exists so a test can show the difference.</para>
+///
+/// <para>🚨 <b>Why a lane thread is KEPT rather than started per burst (#4654).</b> This scheduler used
+/// to start a fresh thread whenever a leaf reached an idle lane and let it EXIT the moment the queue
+/// drained — one OS thread created and destroyed per burst, thousands an hour on a portal. A thread
+/// EXIT is the trigger of a CoreCLR defect: a thread that once touched a collectible
+/// <c>[ThreadStatic]</c> (any <c>ArrayPool&lt;T&gt;.Shared</c> over a NodeType-compiled <c>T</c>
+/// creates one) frees, on exit, a loader handle in whatever LIVE collectible context has since been
+/// handed that thread-static index — releasing an unrelated GC-statics box, whose static then dangles
+/// (<c>Doc/Architecture/CollectibleThreadStaticHandleReuse</c>). The runtime fix is upstream; what this
+/// repository controls is how often its own threads exit, and a lane thread now exits once per pool
+/// lifetime instead of once per burst. The cost is that a lane keeps the threads its widest burst
+/// needed (never more than the cap) parked until the pool is disposed.</para>
 ///
 /// <para>The <c>_tasks</c> queue is an INSTANCE field guarded by <c>lock(_tasks)</c>
 /// — not static, so it dies with the owning <see cref="IoPool"/> and never bleeds
@@ -41,8 +54,22 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     private readonly int _maxDegreeOfParallelism;
 
-    // Number of drain loops currently dispatched (running, or started and about to run).
+    // Number of drain loops currently dispatched (running, or started and about to run). In the
+    // dedicated-thread mode this is the number of LIVE lane threads, parked ones included.
     private int _delegatesQueuedOrRunning;
+
+    // Dedicated mode only: lane threads parked in the monitor wait and not yet woken. QueueTask wakes
+    // one per queued task before it considers starting a new thread. Protected by lock(_tasks).
+    private int _parked;
+
+    // Dedicated mode only: set by Complete(); a lane thread that finds the queue empty then exits
+    // instead of parking. Protected by lock(_tasks).
+    private bool _completed;
+
+    // Set by Complete(); invoked exactly once, OUTSIDE the lock, by whichever thread takes the live
+    // drain-loop count to zero after completion (or by Complete() itself when none is alive).
+    // Protected by lock(_tasks).
+    private Action? _onDrained;
 
     // Non-null: each drain loop runs on a thread started here, under this name, never a ThreadPool
     // worker. Null: the drain loops borrow ThreadPool workers (kept for the contrast tests only).
@@ -69,11 +96,19 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
 
     protected override void QueueTask(Task task)
     {
-        // Add the task to the queue and, if we're below the cap, dispatch a
-        // ThreadPool work item to drain it.
+        // Add the task to the queue; wake a parked lane thread if there is one, otherwise — below the
+        // cap — dispatch a new drain loop.
         lock (_tasks)
         {
             var node = _tasks.AddLast(task);
+            if (_parked > 0)
+            {
+                // Counted down HERE, by the waker, so two tasks queued back to back wake two parked
+                // threads instead of pulsing the same one twice and running both serially.
+                --_parked;
+                Monitor.Pulse(_tasks);
+                return;
+            }
             if (_delegatesQueuedOrRunning < _maxDegreeOfParallelism)
             {
                 ++_delegatesQueuedOrRunning;
@@ -96,14 +131,72 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
         }
     }
 
+    /// <summary>
+    /// Ends the lane threads: each finishes whatever is still queued, then exits instead of parking.
+    /// Returns at once — it joins nothing, so it is safe on <see cref="IoPool"/>'s non-blocking
+    /// disposal path, including from a lane thread itself. Idempotent. A task queued AFTER this still
+    /// runs (a drain loop is started for it, and exits when the queue drains), so nothing queued is
+    /// ever stranded.
+    ///
+    /// <para><paramref name="onDrained"/> is the non-blocking completion signal: it runs once, on the
+    /// last lane thread right after it has taken the live count to zero (or inline here when no lane
+    /// thread is alive), so a caller can publish "no lane thread remains" without joining anything.
+    /// That thread is then only returning from its loop.</para>
+    /// </summary>
+    public void Complete(Action? onDrained = null)
+    {
+        Action? fire;
+        lock (_tasks)
+        {
+            _completed = true;
+            _parked = 0;
+            _onDrained ??= onDrained;
+            Monitor.PulseAll(_tasks);
+            fire = TakeDrainedLocked();
+        }
+        fire?.Invoke();
+    }
+
+    private Action? TakeDrainedLocked()
+    {
+        if (!_completed || _delegatesQueuedOrRunning != 0 || _onDrained is not { } action)
+            return null;
+        _onDrained = null;
+        return action;
+    }
+
+    /// <summary>
+    /// Live drain loops: in the dedicated mode the lane threads alive (parked ones included); in the
+    /// borrowing mode the loops in flight.
+    /// </summary>
+    internal int LiveDrainLoops
+    {
+        get
+        {
+            lock (_tasks)
+                return _delegatesQueuedOrRunning;
+        }
+    }
+
+    /// <summary>Lane threads currently parked waiting for work (dedicated mode; always 0 otherwise).</summary>
+    internal int ParkedLaneThreads
+    {
+        get
+        {
+            lock (_tasks)
+                return _parked;
+        }
+    }
+
     private void NotifyThreadPoolOfPendingWork()
     {
         if (_dedicatedThreadName is { } name)
         {
-            // A drain loop of its own: the same loop, on a thread the pool never lends out. Background
-            // so an idle-but-draining loop can never hold the process open; UnsafeStart because each
-            // task carries its own captured ExecutionContext into TryExecuteTask.
-            new Thread(_ => DrainQueue(), maxStackSize: 0)
+            // A lane thread of its own, on a thread the pool never lends out. Background so a parked
+            // lane can never hold the process open; UnsafeStart because each task carries its own
+            // captured ExecutionContext into TryExecuteTask (and a kept thread must not pin whichever
+            // caller's context happened to start it).
+            new Thread(_ => LaneLoop(), maxStackSize: 0)
             {
                 IsBackground = true,
                 Name = name,
@@ -114,27 +207,84 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
         ThreadPool.UnsafeQueueUserWorkItem(_ => DrainQueue(), null);
     }
 
-    private void DrainQueue()
+    /// <summary>
+    /// A dedicated lane thread's whole life: run queued tasks; when the queue is empty, PARK until
+    /// <see cref="QueueTask"/> wakes it; exit only once <see cref="Complete"/> has been called. The
+    /// park is a wait for WORK on a thread this scheduler owns — never a hub turn, a grain turn or a
+    /// ThreadPool worker — so it holds up no scheduler the mesh runs on.
+    /// </summary>
+    private void LaneLoop()
     {
+        while (true)
         {
-            // Process tasks until the queue drains, then relinquish this slot.
-            while (true)
+            Task? item = null;
+            Action? drained = null;
+            var exit = false;
+            lock (_tasks)
             {
-                Task item;
-                lock (_tasks)
+                while (_tasks.Count == 0)
                 {
-                    if (_tasks.Count == 0)
+                    if (_completed)
                     {
                         --_delegatesQueuedOrRunning;
+                        drained = TakeDrainedLocked();
+                        exit = true;
                         break;
                     }
+                    ++_parked;
+                    Monitor.Wait(_tasks);
+                }
 
+                if (!exit)
+                {
                     item = _tasks.First!.Value;
                     _tasks.RemoveFirst();
                 }
-
-                TryExecuteTask(item);
             }
+
+            if (exit)
+            {
+                drained?.Invoke();
+                return;
+            }
+
+            TryExecuteTask(item!);
+        }
+    }
+
+    /// <summary>
+    /// The borrowing mode's drain loop (a ThreadPool worker must never be parked): run until the
+    /// queue is empty, then give the worker back.
+    /// </summary>
+    private void DrainQueue()
+    {
+        while (true)
+        {
+            Task item;
+            Action? drained;
+            lock (_tasks)
+            {
+                if (_tasks.Count == 0)
+                {
+                    --_delegatesQueuedOrRunning;
+                    drained = TakeDrainedLocked();
+                    item = null!;
+                }
+                else
+                {
+                    drained = null;
+                    item = _tasks.First!.Value;
+                    _tasks.RemoveFirst();
+                }
+            }
+
+            if (item is null)
+            {
+                drained?.Invoke();
+                return;
+            }
+
+            TryExecuteTask(item);
         }
     }
 
