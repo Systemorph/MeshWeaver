@@ -250,6 +250,8 @@ jobs:
       issues: write
       actions: read
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       # No `if:` on any step here except the ledger's own `post` decision. The assertions below
       # ASSERT and fail; they never choose whether to run. A step asking "is the secret set?" and
       # skipping would render exactly like a green that had nothing to report.
@@ -315,7 +317,7 @@ jobs:
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
         run: |
           set -euo pipefail
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/ci-failure-ledger.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/ci-failure-ledger.py" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/ci-failure-ledger.py" > "$RUNNER_TEMP/ci-failure-ledger.py" \
             || { echo "::error::could not fetch ci-failure-ledger.py (Systemorph/MeshWeaver, under .github/scripts) at ${SCRIPTS_REF} — a scripts-ref older than the lane needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/ci-failure-ledger.py" | grep -q "ci-failure-ledger" || { echo "::error::the fetched ci-failure-ledger.py at ${SCRIPTS_REF} does not look like the ledger"; exit 1; }
 

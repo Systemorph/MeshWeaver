@@ -66,6 +66,8 @@ jobs:
       actions: write        # cancel runs of this repository
       contents: read
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -77,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the script has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/supersede-main-runs.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/supersede-main-runs.py"
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/supersede-main-runs.py" > "$RUNNER_TEMP/supersede-main-runs.py"
           [ -s "$RUNNER_TEMP/supersede-main-runs.py" ] || { echo "::error::fetched an EMPTY supersede-main-runs.py at ${SCRIPTS_REF}"; exit 1; }
       - name: The decision can say no (self-test)
         run: python3 "$RUNNER_TEMP/supersede-main-runs.py" --self-test
