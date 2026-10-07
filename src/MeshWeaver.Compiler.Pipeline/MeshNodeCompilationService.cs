@@ -1814,9 +1814,25 @@ internal class MeshNodeCompilationService(
                     ? string.Join("; ", rtl.LoaderExceptions
                         .Where(e => e is not null).Select(e => e!.Message).Distinct())
                     : ex.Message;
+                // #5212 shape b: an image that EMITTED and then cannot be loaded ("format is
+                // invalid") is the one exit of the #890 process fault the emit canary never sees —
+                // nothing threw inside Emit. Probe the shared compiler with a known-good source so
+                // the line says whether the process, not this type, is what broke.
+                // Keyed on the exception TYPE where the runtime gives one (BadImageFormatException,
+                // directly or as a loader exception), and on the loader's message for the
+                // TypeLoadException shape, which carries no distinguishing type or HResult. .NET
+                // ships CoreLib's messages in English only, but the wording can change between
+                // runtime versions — NodeTypeCompilation.md records that assumption.
+                var invalidImage = ex is BadImageFormatException
+                    || (ex is System.Reflection.ReflectionTypeLoadException loadFailure
+                        && loadFailure.LoaderExceptions.Any(e => e is BadImageFormatException))
+                    || detail.Contains("format is invalid", StringComparison.Ordinal);
+                var processProbe = invalidImage
+                    ? " — " + EmitPipeline.ProbeEmittedImageLoads()
+                    : "";
                 logger.LogWarning(ex,
-                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}",
-                    assemblyLocation, detail);
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe}",
+                    assemblyLocation, detail, processProbe);
                 return new NodeCompilationResult(null, [],
                     AppendError(log, $"Failed to load the compiled assembly — {detail}",
                         // The loader's own exception text rides verbatim behind a translated lead.
