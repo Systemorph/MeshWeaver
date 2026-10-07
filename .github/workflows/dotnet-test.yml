@@ -2638,6 +2638,14 @@ jobs:
     - name: "A satellite's two package enumerators stay comparable — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-package-enumeration.py --self-test --canonical .github/scripts/gen-manifests.py
+    # The canonical manifest generator decides every satellite's module version, and until now its
+    # own self-test ran only inside the satellites' validate lane. A core change that broke the
+    # derivation was red there, on the next pin, instead of on this PR. One case it now carries is
+    # a trunk lock re-claiming a PUBLISHED number for other content, which must bump past the tag
+    # (MeshWeaver.Education main, tag-modules: "v1.3.6 already released with content 575e…").
+    - name: "The manifest generator derives versions it can defend — incl. the published tag wins (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/gen-manifests.py --self-test
 
     # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
     # (MeshWeaver#3438: three satellite repos dead at `manifest unknown` at once, Education's own
