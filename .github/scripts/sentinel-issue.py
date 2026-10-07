@@ -15,7 +15,11 @@ depend on how many other issues exist or how old the sentinel is. (Not the searc
 lags a freshly created issue by minutes, so a search lookup misses its own issue on the next run.
 The label filter is not instantaneous either — measured on Systemorph/MeshWeaver 2026-10-07, a
 label applied to #5844 was absent from the filtered listing seconds later and present on the next
-read — so the caller serialises its runs; a daily schedule is far outside that lag.)
+read. Serialising the runs does not close that by itself: a queued run can reach its lookup before
+the previous run's NEW issue is visible, find nothing, and create a second one. So creation has a
+postcondition — `await-visible` — and the creating run does not END until the new sentinel is
+found by the very lookup the next run will use; it goes RED if that never happens. With the runs
+serialised, the next lookup therefore starts after the issue is visible by construction.)
 
 🚨 An UNKNOWN label folds to an empty listing — `labels=does-not-exist` answers `[]`, byte-identical
 to "no sentinel yet" — and "no sentinel" leads straight to creating one. So the label's existence
@@ -31,6 +35,8 @@ Selection, when the label matches several issues:
 Usage:
   sentinel-issue.py find --repo OWNER/NAME --label LABEL [--ensure-label --color C --description D]
       prints {"number": N|null, "state": "open"|"closed"|null, "duplicates": [N, ...]}
+  sentinel-issue.py await-visible --repo OWNER/NAME --label LABEL --number N [--within SECONDS]
+      exits 0 once issue N is in the label listing, 1 (loud) if it is not within the bound
   sentinel-issue.py --self-test
 """
 from __future__ import annotations
@@ -39,6 +45,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from typing import Callable, Optional
 from urllib.parse import quote
 
@@ -127,15 +134,45 @@ def find(api: Api, repo: str, label: str, create: bool = False, color: str = "ed
     return select(list_labelled(api, repo, label))
 
 
+def await_visible(api: Api, repo: str, label: str, number: int, within: float = 300.0,
+                  interval: float = 5.0, sleep: Callable[[float], None] = time.sleep,
+                  clock: Callable[[], float] = time.monotonic) -> int:
+    """Block until `number` is returned by the SAME listing `find` uses; return the attempt count.
+
+    This is a read-your-write postcondition, not a retry: nothing is re-done, the run only refuses
+    to finish before its own write is observable by the next run's key. Not visible within the
+    bound ⇒ LookupError_, so the run reds instead of leaving a sentinel the next run cannot see.
+    """
+    deadline = clock() + within
+    attempts = 0
+    while True:
+        attempts += 1
+        if any(i.get("number") == number for i in list_labelled(api, repo, label)):
+            return attempts
+        if clock() >= deadline:
+            raise LookupError_(
+                f"issue #{number} is not in the '{label}' listing {within:.0f}s after it was created — "
+                "the next run would not find it and would open another")
+        sleep(interval)
+
+
 # ── self-test ───────────────────────────────────────────────────────────────────────────────────
 
 class FakeRepo:
     """A repository with N issues, some carrying the label. Answers the REST shapes `find` uses."""
 
-    def __init__(self, issues: list, labels: set):
+    def __init__(self, issues: list, labels: set, hidden_reads: int = 0):
         self.issues = issues          # each: {"number", "state", "labels": [..], "pull_request"?}
         self.labels = set(labels)
         self.posts: list = []
+        # Delayed visibility (measured on the real endpoint): an issue created through `create`
+        # stays out of the label listing for this many listing reads.
+        self.hidden_reads = hidden_reads
+        self.hidden: dict = {}
+
+    def create(self, number: int) -> None:
+        self.issues.append({"number": number, "state": "open", "labels": [self.labels and next(iter(self.labels))]})
+        self.hidden[number] = self.hidden_reads
 
     def __call__(self, method, path, fields):
         if method == "GET" and "/labels/" in path:
@@ -146,8 +183,12 @@ class FakeRepo:
             return 201, {}
         if method == "GET" and "/issues?" in path:
             q = dict(p.split("=", 1) for p in path.split("?", 1)[1].split("&"))
+            if q["page"] == "1":
+                for n in list(self.hidden):
+                    self.hidden[n] -= 1
             hit = [i for i in sorted(self.issues, key=lambda i: -i["number"])  # newest first, as REST
-                   if q["labels"] in i["labels"] and (q["state"] == "all" or i["state"] == q["state"])]
+                   if q["labels"] in i["labels"] and (q["state"] == "all" or i["state"] == q["state"])
+                   and self.hidden.get(i["number"], -1) < 0]
             pg, n = int(q["page"]), int(q["per_page"])
             return 200, hit[(pg - 1) * n: pg * n]
         return 500, None
@@ -219,6 +260,31 @@ def self_test() -> int:
     check("--ensure-label creates the label", find(created, R, L, create=True)["number"], None)
     check("--ensure-label POSTed once", [p["name"] for p in created.posts], [L])
 
+    # 9. DELAYED VISIBILITY (Copilot on #6272). Run A creates a sentinel that the listing hides for
+    #    3 reads; run B (serialised behind A) then looks it up.
+    #    CONTROL: without the postcondition, B finds nothing — the duplicate the reviewer described.
+    lag = FakeRepo([], {L}, hidden_reads=3)
+    lag.create(42)
+    check("CONTROL: an immediate lookup after a lagging create finds nothing", find(lag, R, L)["number"], None)
+    #    With it, A does not finish until the listing shows #42, so B finds it.
+    lag = FakeRepo([], {L}, hidden_reads=3)
+    lag.create(42)
+    slept: list = []
+    check("await-visible waits out the lag", await_visible(lag, R, L, 42, sleep=slept.append, clock=lambda: 0.0), 4)
+    check("await-visible slept between reads, not before the first", len(slept), 3)
+    check("after await-visible the next run finds the sentinel", find(lag, R, L)["number"], 42)
+    #    And a write that never becomes visible reds rather than finishing quietly.
+    never = FakeRepo([], {L}, hidden_reads=10**6)
+    never.create(7)
+    t = [0.0]
+    def tick(dt):
+        t[0] += dt
+    try:
+        await_visible(never, R, L, 7, within=30, interval=5, sleep=tick, clock=lambda: t[0])
+        failures.append("await-visible on a never-visible issue: returned instead of failing")
+    except LookupError_:
+        pass
+
     # 8. An API failure on the listing is a failure, never "none".
     def broken(method, path, fields):
         return (200, {}) if "/labels/" in path else (502, None)
@@ -234,7 +300,8 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("✓ sentinel-issue self-test: aged-out, paginated, duplicate, closed, PR, none, unknown-label "
-          "and API-failure cases all decided correctly; both negative controls miss as the old code did")
+          "API-failure and delayed-visibility cases all decided correctly; all three negative controls "
+          "miss as the unguarded code did")
     return 0
 
 
@@ -248,12 +315,21 @@ def main(argv: list) -> int:
     f.add_argument("--ensure-label", action="store_true")
     f.add_argument("--color", default="ededed")
     f.add_argument("--description", default="")
+    w = sub.add_parser("await-visible")
+    w.add_argument("--repo", required=True)
+    w.add_argument("--label", required=True)
+    w.add_argument("--number", required=True, type=int)
+    w.add_argument("--within", type=float, default=300.0)
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
-    if a.cmd != "find":
-        ap.error("a command is required: find, or --self-test")
+    if a.cmd not in ("find", "await-visible"):
+        ap.error("a command is required: find, await-visible, or --self-test")
     try:
+        if a.cmd == "await-visible":
+            n = await_visible(gh_api, a.repo, a.label, a.number, within=a.within)
+            print(f"#{a.number} is in the '{a.label}' listing (read {n})")
+            return 0
         print(json.dumps(find(gh_api, a.repo, a.label, a.ensure_label, a.color, a.description)))
     except LookupError_ as exc:
         print(f"::error::sentinel lookup failed: {exc}", file=sys.stderr)

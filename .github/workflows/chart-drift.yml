@@ -511,7 +511,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Serialised: a dispatch overlapping the schedule must not let two runs each find "no
-    # sentinel" and both open one. Queued, never cancelled — every run's report is wanted.
+    # sentinel" and both open one. GitHub keeps ONE pending job per group — a third arrival
+    # replaces the pending one — and that is accepted deliberately: the issue body is a STANDING
+    # state that every report overwrites, so a superseded pending report would have been
+    # overwritten by the newer run anyway, and each run's own drift/detector verdict stays on
+    # that run. What this group guarantees is the one thing that matters for duplicates: two
+    # reports never run their lookup-then-create at the same time.
     concurrency:
       group: chart-drift-report
       cancel-in-progress: false
@@ -622,5 +627,10 @@ jobs:
             gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" -f state=open --silent
             echo "updated #$NUM (was $ISSUE_STATE)"
           else
-            gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '"opened #\(.number)"'
+            NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '.number')
+            echo "opened #$NEW"
+            # Postcondition, not a retry: the label listing lags a new issue (measured), and the
+            # next run — serialised behind this one — must find it by that listing. So this run
+            # does not finish until it does, and reds if it never does.
+            python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
           fi

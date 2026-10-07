@@ -367,7 +367,13 @@ it aged out the scan found nothing and the workflow opened a fresh one — #5049
 - the `report` job is serialised (`concurrency: chart-drift-report`). The label filter is not
   instantaneous — measured 2026-10-07, a label applied to #5844 was missing from the filtered
   listing seconds later and present on the next read — so two overlapping runs could otherwise
-  each find "none" and both create one.
+  each find "none" and both create one;
+- serialising alone does not close that lag: a queued run could still look up before the previous
+  run's NEW issue is listed. So creating has a postcondition — `sentinel-issue.py await-visible` —
+  and the creating run does not finish until the new issue is returned by the same label lookup
+  the next run will use, and goes red if it never is. GitHub keeps one pending job per concurrency
+  group (a third arrival replaces it); that is accepted, because the issue body is a standing state
+  every report overwrites.
 
 `sentinel-issue.py --self-test` runs on every pull request (`dotnet-test.yml` → *CI's own shell*),
 with the old window scan and a first-page-only pager as negative controls that must miss.
