@@ -1,3 +1,4 @@
+using System.Globalization;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -297,9 +298,14 @@ public static class BuildDeliveryHold
             : nodeTypePath;
         var package = NodeTypeCompilationHelpers.PartitionOf(nodeTypePath);
         var adopted = ModuleVersionCompatibility.Display(after.AdoptedModuleVersion);
+        var current = ModuleVersionCompatibility.Display(after.CurrentModuleVersion);
+        var behind = ModuleVersionCompatibility.MinorVersionsBehind(
+            after.AdoptedModuleVersion, after.CurrentModuleVersion) is { } measured
+            ? measured.ToString(CultureInfo.InvariantCulture)
+            : "?";
         var fingerprint = Short(after.CurrentSourceFingerprint);
         var framework = NodeTypeCompilationHelpers.FrameworkVersion;
-        // 🚨 The HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice/TooFarBehindNotice are declared as the
+        // 🚨 The two HOLD bodies stay VERBATIM. ServingNotice/IncompatibleNotice are declared as the
         // operator/log wording of the record's own fields — "the page localizes its own copy from
         // the same fields" — so keying them here would put a second, divergent translation of the
         // same facts in the catalog. Every TITLE is keyed, and so is each body the notifier itself
@@ -328,15 +334,26 @@ public static class BuildDeliveryHold
                     + $"{fingerprint}); the build it was serving from is retired.",
                     "notification.delivery.compiled.body",
                     ("nodeTypePath", nodeTypePath), ("fingerprint", fingerprint))),
-            // Memex#668 — the refusal on the BOUND: the record's own persisted notice (both
-            // versions, the distance and the configured bound), never the MAJOR-bump sentence.
+            // Memex#668 — the refusal on the BOUND: both versions, the distance and the configured
+            // bound, never the MAJOR-bump sentence. Unlike the two hold bodies below, this one is
+            // COMPOSED here from the record's fields (the record's persisted TooFarBehindNotice
+            // stays the operator/log wording), so it is keyed: a German viewer reads it in German.
             DeliveryEvent.HeldTooFarBehind => (
                 LocalizableText.Keyed(
                     $"'{typeName}' is not run: its build is too far behind its source",
                     "notification.delivery.heldTooFarBehind.title", ("typeName", typeName)),
-                LocalizableText.Verbatim(after.CompilationError is { Length: > 0 } persisted
-                    ? persisted
-                    : TooFarBehindNotice(after, maxMinorVersionsBehind))),
+                LocalizableText.Keyed(
+                    $"'{nodeTypePath}' is not run: its build (module version {adopted}) is "
+                    + $"{behind} minor version(s) behind the current source (module version "
+                    + $"{current}, fingerprint {fingerprint}), past the stale-adoption bound of "
+                    + $"{maxMinorVersionsBehind} ({StaleAdoptionBound.ConfigKey}). A build of the "
+                    + $"current source (a successful compile, or a bundle for framework {framework}) "
+                    + "lifts it.",
+                    "notification.delivery.heldTooFarBehind.body",
+                    ("nodeTypePath", nodeTypePath), ("adopted", adopted), ("behind", behind),
+                    ("current", current), ("fingerprint", fingerprint),
+                    ("bound", maxMinorVersionsBehind), ("configKey", StaleAdoptionBound.ConfigKey),
+                    ("framework", framework))),
             DeliveryEvent.HeldIncompatible => (
                 LocalizableText.Keyed(
                     $"'{typeName}' is awaiting a bundle (incompatible build)",
