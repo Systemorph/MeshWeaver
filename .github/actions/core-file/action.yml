@@ -1,0 +1,28 @@
+name: Read the platform's files over git
+description: >-
+  Install $RUNNER_TEMP/mw-core-file, which prints Systemorph/MeshWeaver's <path> at <ref>
+  (`"$RUNNER_TEMP/mw-core-file" "$REF" .github/scripts/x.py > "$RUNNER_TEMP/x.py"`) over anonymous
+  git — no REST call, so a lane's script fetches no longer spend the caller's github.token budget.
+  Also prints that token's REST budget once (GET /rate_limit is free).
+# Doc/Architecture/CiRestBudget. The reader lives in .github/scripts/mw-core-file.sh beside this
+# action, at the ref `uses:` named; the ref it READS is the caller's, passed on every call.
+#
+# 🚨 ORDER: the FIRST step of every job that reads a platform file — before any step whose script
+# calls the reader. RUNNER_TEMP survives `actions/checkout` (which cleans the workspace only).
+inputs:
+  token:
+    description: The token whose REST budget is reported (never used to read files).
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Install the platform file reader (git, no REST budget)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        READER: ${{ github.action_path }}/../../scripts/mw-core-file.sh
+      run: |
+        set -euo pipefail
+        [ -f "$READER" ] || { echo "::error::the core-file action has no reader at $READER"; exit 1; }
+        install -m 0755 "$READER" "$RUNNER_TEMP/mw-core-file"
+        "$RUNNER_TEMP/mw-core-file" --budget
