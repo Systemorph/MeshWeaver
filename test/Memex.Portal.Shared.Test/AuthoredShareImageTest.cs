@@ -183,10 +183,14 @@ public class AuthoredShareImageTest
         Assert.Equal(2, foreign.Requests);
     }
 
-    /// <summary>A normalised picture is fetched ONCE per source URL — the foreign host is not asked
-    /// again for every unfurler that comes by.</summary>
+    /// <summary>
+    /// Nothing is cached in the process — an unbounded per-URL cache would grow with every public
+    /// node and edit, and go stale when an author replaces the bytes behind one URL. Each request
+    /// re-reads the source; the response's strong ETag and day-long shared cacheability are what
+    /// spare the foreign host. Same bytes in, same bytes out, so the ETag holds across requests.
+    /// </summary>
     [Fact]
-    public async Task ANormalisedPicture_IsFetchedOnce()
+    public async Task EachRequestReReadsTheSource_AndYieldsTheSameBytes()
     {
         var foreign = new ForeignHost(_ => Image(ProgressiveFixture));
         using var renderer = new OgCardRenderer("Memex");
@@ -195,29 +199,132 @@ public class AuthoredShareImageTest
         var second = await Serve(foreign, renderer, "second request");
 
         Assert.Equal(first.Bytes, second.Bytes);
-        Assert.Equal(1, foreign.Requests);
+        Assert.Equal(2, foreign.Requests);
+    }
+
+    /// <summary>
+    /// A phone photo stored sideways is served UPRIGHT. The fixture with an EXIF Orientation of 6
+    /// (stored rotated; display turns it 90° clockwise) puts its red half on TOP; read without the
+    /// orientation it would sit on the left, so top and bottom of the centre column would agree.
+    /// </summary>
+    [Fact]
+    public async Task AnExifRotatedPicture_IsServedUpright()
+    {
+        var foreign = new ForeignHost(_ => Image(WithExifOrientation(ProgressiveFixture, 6)));
+        using var renderer = new OgCardRenderer("Memex");
+
+        var jpeg = await Serve(foreign, renderer, "the rotated picture must be re-served");
+
+        Assert.Equal(Hue.Red, HueAt(jpeg.Bytes, 600, 120));
+        Assert.Equal(Hue.Blue, HueAt(jpeg.Bytes, 600, 510));
+    }
+
+    /// <summary>
+    /// 🚨 A decompression bomb is refused BEFORE allocation: a few-hundred-byte PNG declaring
+    /// 60000×60000 pixels would be a 14 GB bitmap. It never reaches a decode — the declared size is
+    /// over <see cref="OgCardRenderer.MaxDecodedPixels"/> — and the route serves the drawn card.
+    /// </summary>
+    [Fact]
+    public async Task APictureDeclaringHugeDimensions_IsRefusedAndTheDrawnCardServed()
+    {
+        var bomb = PngDeclaring(60_000, 60_000);
+        using var renderer = new OgCardRenderer("Memex");
+        Assert.Null(renderer.NormaliseAuthored(bomb));
+
+        var foreign = new ForeignHost(_ => Image(bomb, "image/png"));
+        var served = await Serve(foreign, renderer, "a refused picture must still answer");
+        var (_, width, height) = JpegFrame(served.Bytes);
+        Assert.Equal((OgCardRenderer.Width, OgCardRenderer.Height), (width, height));
+        Assert.NotEqual(Hue.Red, HueAt(served.Bytes, 400, 315));
+    }
+
+    /// <summary>
+    /// A SCHEME-RELATIVE authored URL (<c>//host/…</c>) starts with <c>/</c> but names another host,
+    /// so it is re-served like an absolute one — declared as the portal card, fetched as https —
+    /// rather than slipping through as a raw, undeclared foreign picture.
+    /// </summary>
+    [Fact]
+    public async Task ASchemeRelativeMediaUrl_IsTreatedAsForeign()
+    {
+        const string networkPath = "//203.0.113.10/storage/v1/object/public/post-images/master.jpg";
+        var post = Post(Json(new { text = "post", mediaUrl = networkPath }));
+        Assert.Equal("/api/og/Posts/CrossingTheChasmPlaybook.jpg", SeoResolver.ShareImage(post));
+
+        Uri? asked = null;
+        var foreign = new ForeignHost(request => { asked = request.RequestUri; return Image(ProgressiveFixture); });
+        using var renderer = new OgCardRenderer("Memex");
+        var served = await Serve(foreign, renderer, "the network-path picture must be re-served", networkPath);
+
+        Assert.Equal("https://203.0.113.10/storage/v1/object/public/post-images/master.jpg", asked?.ToString());
+        Assert.Equal(Hue.Red, HueAt(served.Bytes, 400, 315));
     }
 
     // ── Harness ──────────────────────────────────────────────────────────────────────────────────
 
     private sealed record Served(byte[] Bytes, string? ContentType, string CacheControl);
 
-    private static async Task<Served> Serve(ForeignHost foreign, OgCardRenderer renderer, string because)
+    private static async Task<Served> Serve(
+        ForeignHost foreign, OgCardRenderer renderer, string because, string mediaUrl = MediaUrl)
     {
         var http = new DefaultHttpContext();
         var result = await SeoEndpoints.AuthoredCardResult(
                 foreign.Fetcher, NullLogger.Instance, http, renderer,
-                Post(Json(new { text = "post", mediaUrl = MediaUrl })), sharedCacheable: true)
+                Post(Json(new { text = "post", mediaUrl })), sharedCacheable: true)
             .Should().Within(TestTimeouts.Convergence).Emit(because);
         var file = Assert.IsType<FileContentHttpResult>(result);
         return new Served(file.FileContents.ToArray(), file.ContentType, http.Response.Headers.CacheControl.ToString());
     }
 
-    private static HttpResponseMessage Image(byte[] bytes)
+    private static HttpResponseMessage Image(byte[] bytes, string mediaType = "image/jpeg")
     {
         var content = new ByteArrayContent(bytes);
-        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(mediaType);
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+    }
+
+    /// <summary>The JPEG with an APP1 Exif segment carrying one Orientation tag, spliced in after SOI.</summary>
+    private static byte[] WithExifOrientation(byte[] jpeg, ushort orientation)
+    {
+        byte[] tiff =
+        [
+            (byte)'M', (byte)'M', 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08, // big-endian header, IFD0 at 8
+            0x00, 0x01,                                               // one entry
+            0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,           // Orientation, SHORT, count 1
+            (byte)(orientation >> 8), (byte)orientation, 0x00, 0x00,  // value
+            0x00, 0x00, 0x00, 0x00,                                   // no next IFD
+        ];
+        byte[] exifHeader = [(byte)'E', (byte)'x', (byte)'i', (byte)'f', 0x00, 0x00];
+        var length = 2 + exifHeader.Length + tiff.Length;
+        byte[] app1 = [0xFF, 0xE1, (byte)(length >> 8), (byte)length, .. exifHeader, .. tiff];
+        return [.. jpeg.Take(2), .. app1, .. jpeg.Skip(2)];
+    }
+
+    /// <summary>A structurally valid PNG whose IHDR declares <paramref name="width"/>×<paramref name="height"/>
+    /// and whose image data is a single empty deflate stream — tiny on the wire, huge if decoded.</summary>
+    private static byte[] PngDeclaring(int width, int height)
+    {
+        static byte[] Chunk(string type, byte[] data)
+        {
+            var typed = System.Text.Encoding.ASCII.GetBytes(type).Concat(data).ToArray();
+            var crc = Crc32(typed);
+            return [.. BigEndian(data.Length), .. typed, .. BigEndian((int)crc)];
+        }
+        static byte[] BigEndian(int v) => [(byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v];
+        static uint Crc32(byte[] bytes)
+        {
+            var crc = 0xFFFFFFFFu;
+            foreach (var b in bytes)
+            {
+                crc ^= b;
+                for (var k = 0; k < 8; k++)
+                    crc = (crc & 1) != 0 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+            }
+            return ~crc;
+        }
+        byte[] ihdr = [.. BigEndian(width), .. BigEndian(height), 8, 2, 0, 0, 0]; // 8-bit RGB
+        byte[] idat = [0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];           // empty zlib stream
+        return [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            .. Chunk("IHDR", ihdr), .. Chunk("IDAT", idat), .. Chunk("IEND", [])];
     }
 
     /// <summary>The foreign picture host: a real <see cref="OpenGraphPreviewService"/> whose client

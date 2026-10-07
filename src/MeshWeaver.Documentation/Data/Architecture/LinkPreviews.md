@@ -57,15 +57,18 @@ Blazor circuit exists:
    mirrors it as `twitter:image`.
 
    **An authored image on ANOTHER host is re-served, never declared raw.** A social post's
-   `mediaUrl`, or an `ogImage` that is an absolute `https://…` URL, is declared as
-   **`/api/og/{path}.jpg`** (`SeoResolver.AuthoredCard`): the route fetches the picture ONCE through
+   `mediaUrl`, or an `ogImage` that is an absolute `https://…` (or scheme-relative `//host/…`)
+   URL, is declared as **`/api/og/{path}.jpg`** (`SeoResolver.AuthoredCard`): the route fetches the picture through
    the SSRF-guarded Http-pool fetcher (`OpenGraphPreviewService.FetchImage`), and
    `OgCardRenderer.NormaliseAuthored` redraws it as exactly what the head declares — a **baseline**
    JPEG of exactly 1200×630, at most `MaxShareImageBytes` (280 KB), the whole picture fitted inside
    the card with a blurred copy of itself filling the margin (nothing cropped), EXIF orientation
-   applied. The result is cached per source URL in the renderer (a failure is evicted, so the next
-   request tries again) and served with the card's own cache directive and a strong ETag. When the
-   picture cannot be had — the host is down, answers a challenge page, or the node no longer
+   applied, the source decoded at the smallest scale that covers the card and refused above
+   `MaxDecodedPixels` (a tiny PNG can declare enormous dimensions). Nothing is cached in the
+   process — a per-URL cache would be unbounded across nodes and edits, and stale when an author
+   replaces the bytes behind one URL — so the response carries the card's own cache directive and
+   a strong ETag, and the unfurlers and any CDN hold it. When the picture cannot be had — the host
+   is down, answers a challenge page, exceeds the pixel or byte budget, or the node no longer
    authors one — the node's **drawn card is served as JPEG**, so the declared type and size stay
    true and the unfurl still carries a picture; the failure is logged.
 

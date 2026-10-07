@@ -326,7 +326,7 @@ public static class SeoEndpoints
     /// <para>A node whose authored share image lives on ANOTHER host (a Social post's
     /// <c>mediaUrl</c>) is declared in its head as this URL, not as the foreign one, with
     /// <c>og:image:type</c> <c>image/jpeg</c> and 1200×630. This answers it: the authored picture,
-    /// fetched once through the SSRF-guarded Http-pool fetcher and normalised by
+    /// fetched through the SSRF-guarded Http-pool fetcher and normalised by
     /// <see cref="OgCardRenderer.NormaliseAuthored"/> — so what an unfurler receives is exactly what
     /// the head promised, from an origin whose headers we set. Same gate as the drawn card (the
     /// caller already cleared the node through <see cref="SeoResolver.ResolveShareableNode"/>), same
@@ -336,8 +336,8 @@ public static class SeoEndpoints
     /// something that is no picture, or the node no longer authors one — the node's DRAWN card is
     /// served, as JPEG. That is not a cover-up: the head's promise is "a 1200×630 JPEG share picture
     /// of this page", the drawn card is exactly that, and an image URL that 404s makes several
-    /// unfurlers drop the whole preview. The failure is logged, and the promise-cache evicted it, so
-    /// the next request tries the authored picture again.</para>
+    /// unfurlers drop the whole preview. The failure is logged, and nothing about it is cached in
+    /// the process, so the next request tries the authored picture again.</para>
     /// </summary>
     /// <param name="fetcher">The mesh's SSRF-guarded external fetcher.</param>
     /// <param name="logger">Where a picture that could not be re-served is reported.</param>
@@ -354,7 +354,7 @@ public static class SeoEndpoints
         if (SeoResolver.ExtractImage(node) is not { } source || !SeoResolver.IsExternal(source))
             return Observable.Return(Drawn());
 
-        return renderer.AuthoredCard(source, fetcher)
+        return renderer.AuthoredCard(SeoResolver.AbsoluteSource(source), fetcher)
             .Select(jpeg => JpegResult(http, jpeg, sharedCacheable))
             .Catch<IResult, Exception>(ex =>
             {

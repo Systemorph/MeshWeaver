@@ -781,10 +781,18 @@ public static class SeoResolver
         : image.EndsWith(AuthoredCardSuffix, StringComparison.OrdinalIgnoreCase) ? OgCardRenderer.AuthoredMediaType
         : "image/png";
 
-    /// <summary>An absolute http(s) URL — a picture on some other host.</summary>
+    /// <summary>A picture on some other host: an absolute http(s) URL, or a scheme-relative
+    /// (<c>//host/…</c>) network-path reference, which every consumer resolves to another host
+    /// although it starts with <c>/</c>.</summary>
     internal static bool IsExternal(string image) =>
         image.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-        || image.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        || image.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        || image.StartsWith("//", StringComparison.Ordinal);
+
+    /// <summary>The absolute URL to FETCH an external picture from — a scheme-relative reference is
+    /// resolved as https, the scheme the share page itself is served on.</summary>
+    internal static string AbsoluteSource(string image) =>
+        image.StartsWith("//", StringComparison.Ordinal) ? "https:" + image : image;
 
     /// <summary>
     /// The generated card's URL for one node path. The <c>.png</c> suffix is deliberate: some

@@ -152,9 +152,9 @@ public sealed class OpenGraphPreviewService
     /// client, same two-sided SSRF guard and the same deadline as the Open Graph fetch.
     ///
     /// <para>NOT cached here, and <paramref name="decode"/> runs INSIDE the pooled leaf: the
-    /// promise <see cref="IoPoolExtensions.Run{T}"/> returns replays its ONE result, so a caller that
-    /// caches it caches what it derived from the bytes (far smaller than the bytes) and derives it
-    /// once — a <c>Select</c> applied after the promise would re-run per subscriber.</para>
+    /// promise <see cref="IoPoolExtensions.Run{T}"/> returns replays its ONE result, so the CPU work
+    /// of deriving the result shares the bounded pool slot and runs once per fetch — a
+    /// <c>Select</c> applied after the promise would re-run per subscriber.</para>
     /// </summary>
     /// <typeparam name="T">What the caller derives from the picture.</typeparam>
     /// <param name="url">The absolute http(s) URL of the picture.</param>

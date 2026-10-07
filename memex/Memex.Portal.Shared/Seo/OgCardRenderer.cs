@@ -2,7 +2,6 @@ using System.Collections.Immutable;
 using System.Reflection;
 using System.Text;
 using MeshWeaver.Graph;
-using MeshWeaver.Mesh.Threading;
 using SkiaSharp;
 
 namespace Memex.Portal.Shared.Seo;
@@ -147,7 +146,10 @@ public sealed class OgCardRenderer : IDisposable
     public byte[] RenderJpeg(OgCardContent card)
     {
         using var image = DrawCard(card);
-        return EncodeShareJpeg(image);
+        // The drawn card is flat colour and text — tens of kilobytes at the first rung — so an
+        // over-budget encoding is a defect in the renderer, not content to degrade around.
+        return EncodeShareJpeg(image)
+            ?? throw new InvalidOperationException("The drawn card exceeded the share-image byte budget.");
     }
 
     private SKImage DrawCard(OgCardContent card)
@@ -194,7 +196,9 @@ public sealed class OgCardRenderer : IDisposable
     /// bytes out — no clock, no randomness.</para>
     /// </summary>
     /// <param name="source">The encoded source picture (any format Skia decodes: JPEG, PNG, WebP, GIF, BMP).</param>
-    /// <returns>The normalised JPEG, or null when <paramref name="source"/> is not a decodable picture.</returns>
+    /// <returns>The normalised JPEG, or null when <paramref name="source"/> is not a decodable
+    /// picture, exceeds <see cref="MaxDecodedPixels"/>, or cannot be encoded within
+    /// <see cref="MaxShareImageBytes"/>.</returns>
     public byte[]? NormaliseAuthored(byte[] source)
     {
         using var decoded = DecodeUpright(source);
@@ -226,24 +230,31 @@ public sealed class OgCardRenderer : IDisposable
         return EncodeShareJpeg(card);
     }
 
-    /// <summary>The normalised authored pictures, by source URL — instance state on this singleton,
-    /// so it dies with the host. A changed picture is a changed URL (a post's <c>mediaUrl</c> is
-    /// content-addressed by its upload), so an entry never goes stale; a failed fetch or decode is
-    /// EVICTED by the promise-cache, so the next request is a new attempt and never a replayed fault.</summary>
-    private readonly PromiseCache<string, byte[]> authoredCards = new(StringComparer.Ordinal);
-
     /// <summary>
     /// The normalised share picture for an authored image URL (<see cref="NormaliseAuthored"/>),
-    /// fetched ONCE through <paramref name="fetcher"/> — the SSRF-guarded, Http-pool fetch — and
-    /// served from memory afterwards. Errors when the URL is refused, fails, or is no picture; the
-    /// caller decides the fallback, and the next call tries again.
+    /// fetched through <paramref name="fetcher"/> — the SSRF-guarded, Http-pool fetch — with the
+    /// normalisation run inside the pooled leaf. Errors when the URL is refused, fails, or is no
+    /// usable picture; the caller decides the fallback.
+    ///
+    /// <para>🚨 Deliberately NOT cached in the process. A cache keyed by URL is unbounded across
+    /// public nodes and edits, and stale for an author who replaces the bytes behind the same URL;
+    /// the response is shared-cacheable for a day with a strong ETag instead, so the unfurlers and
+    /// any CDN in front hold it, and the bounded Http pool caps what a burst can cost.</para>
     /// </summary>
     /// <param name="url">The authored absolute image URL.</param>
     /// <param name="fetcher">The mesh's external fetcher.</param>
     public IObservable<byte[]> AuthoredCard(string url, OpenGraphPreviewService fetcher) =>
-        authoredCards.GetOrAdd(url, source => fetcher.FetchImage(source, bytes =>
+        fetcher.FetchImage(url, bytes =>
             NormaliseAuthored(bytes)
-            ?? throw new InvalidDataException($"'{source}' is not a picture this portal can decode.")));
+            ?? throw new InvalidDataException(
+                $"'{url}' is not a picture this portal can decode within its pixel and byte budgets."));
+
+    /// <summary>🚨 The most pixels a source is ever decoded into. The transfer cap
+    /// (<see cref="OpenGraphPreviewService.MaxImageBytes"/>) does not bound this: a tiny crafted
+    /// PNG can declare enormous dimensions. The source is decoded at the smallest scale its codec
+    /// offers that still covers the card, and refused when even that exceeds this budget (64 MB of
+    /// RGBA) — the route then serves the drawn card.</summary>
+    public const int MaxDecodedPixels = 16_000_000;
 
     private static SKRect Centred(float width, float height)
     {
@@ -258,10 +269,29 @@ public sealed class OgCardRenderer : IDisposable
     {
         using var data = SKData.CreateCopy(source);
         using var codec = SKCodec.Create(data);
-        if (codec is null)
+        if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0)
             return null;
-        var raw = SKBitmap.Decode(codec);
-        if (raw is null || codec.EncodedOrigin == SKEncodedOrigin.TopLeft)
+
+        // The smallest decode that still COVERS the card (the backdrop is drawn at cover scale), in
+        // the codec's own terms: a JPEG decodes at 1/2, 1/4, 1/8 natively; other formats answer
+        // their full size. Dimensions read in stored orientation, so compare against both axes.
+        var stored = codec.Info;
+        var need = Math.Max(
+            Math.Max((float)Width / stored.Width, (float)Height / stored.Height),
+            Math.Max((float)Width / stored.Height, (float)Height / stored.Width));
+        var size = need < 1f ? codec.GetScaledDimensions(need) : new SKSizeI(stored.Width, stored.Height);
+        if ((long)size.Width * size.Height > MaxDecodedPixels)
+            return null;
+
+        var info = new SKImageInfo(size.Width, size.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+        var raw = new SKBitmap(info);
+        var result = codec.GetPixels(info, raw.GetPixels());
+        if (result is not (SKCodecResult.Success or SKCodecResult.IncompleteInput))
+        {
+            raw.Dispose();
+            return null;
+        }
+        if (codec.EncodedOrigin == SKEncodedOrigin.TopLeft)
             return raw;
 
         var swap = codec.EncodedOrigin is SKEncodedOrigin.LeftTop or SKEncodedOrigin.RightTop
@@ -292,20 +322,19 @@ public sealed class OgCardRenderer : IDisposable
         _ => SKMatrix.Identity,
     };
 
-    /// <summary>Baseline JPEG down the fixed quality ladder until it fits the byte budget; the last
-    /// rung is returned even if it does not, since a 1200×630 JPEG at that quality exceeding the
-    /// budget would take pathological noise, and a slightly large picture beats none.</summary>
-    private static byte[] EncodeShareJpeg(SKImage image)
+    /// <summary>Baseline JPEG down the fixed quality ladder until it fits the byte budget, or null
+    /// when even the last rung does not: bytes over the budget the head declares are never served —
+    /// that would recreate the empty card this exists to prevent — so the caller falls back to the
+    /// drawn card instead.</summary>
+    private static byte[]? EncodeShareJpeg(SKImage image)
     {
-        byte[] encoded = [];
         foreach (var quality in JpegQualityLadder)
         {
             using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
-            encoded = data.ToArray();
-            if (encoded.Length <= MaxShareImageBytes)
-                break;
+            if (data.Size <= MaxShareImageBytes)
+                return data.ToArray();
         }
-        return encoded;
+        return null;
     }
 
     /// <summary>
