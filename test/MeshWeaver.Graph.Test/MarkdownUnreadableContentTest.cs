@@ -147,6 +147,24 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
     }
 
     /// <summary>
+    /// A doc page's body arrives RENDERED: remote clients (React web, the React Native app) show
+    /// <see cref="CollaborativeMarkdownControl.Html"/> directly instead of a second, separately
+    /// authenticated render-markdown request. It must be the ONE parser's output — the same bytes
+    /// the endpoint answers — and survive the layout stream's serialization.
+    /// </summary>
+    [HubFact]
+    public async Task ReadableContent_ArrivesServerRendered()
+    {
+        var control = await RenderAsync(PresentView);
+
+        var body = control.Should().BeOfType<CollaborativeMarkdownControl>().Subject;
+        body.Html.Should().Be(
+            MarkdownViewLogic.Render("# Readable\n\nBody.", "test/present/Page", "test/present/Page").Html,
+            "the control carries exactly what POST /api/mesh/render-markdown would answer");
+        body.Html.Should().Contain("<h1", "…which is HTML, not the markdown source");
+    }
+
+    /// <summary>
     /// The classification itself, asserted directly: the three states, and the two shapes that
     /// MUST stay Absent because calling them unreadable would be false.
     /// </summary>

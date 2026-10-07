@@ -385,8 +385,12 @@ public static class MarkdownOverviewLayoutArea
     {
         if (read.State == MarkdownContentState.Present && !string.IsNullOrWhiteSpace(read.Text))
         {
+            // Html: the page ARRIVES rendered for remote clients — the same MarkdownViewLogic.Render
+            // the render-markdown endpoint runs, so a native app no longer needs a second request
+            // (and a second authentication) to show a doc page.
             return new CollaborativeMarkdownControl()
                 .WithValue(read.Text)
+                .WithHtml(MarkdownViewLogic.Render(read.Text, nodePath, nodePath).Html)
                 .WithNodePath(nodePath)
                 .WithHubAddress(host.Hub.Address.ToString())
                 .WithCanComment(canComment)
