@@ -341,6 +341,28 @@ now takes the Deployment records as the denominator:
 - reports from instances with **no** record are still read: an unexpected consumer is a consumer;
 - the denominator is logged on every pass.
 
+🚨 **An adoption stamp has THREE states, and both readers used to fold two of them** (measured
+2026-10-06). `NodeTypeAdoptionStamp.CompiledFrameworkVersionOf` is now the one reading, shared by the
+report's inventory and the bundle-retention pass:
+
+| A NodeType record carries… | It means | The reading |
+|---|---|---|
+| no content | a static NodeType that declares nothing (`ControlLaneRecord`, `WebhookEvent`) — code in the image, nothing compiled | null — adopts nothing, an ANSWER |
+| a readable `NodeTypeDefinition` | its `CompiledFrameworkVersion` | the stamp, or null if it never compiled |
+| content that is not readable as one | the stamp is UNKNOWN | throws — the reference set is incomplete |
+
+The report read the first row as the third: every portal that registers the control lane (all of
+them) threw `NodeType adoption record ControlLaneRecord could not be read` on every tick, reported
+`adoptedFrameworkInventoryComplete: false`, and this interlock therefore refused every report — on
+memex, memex-cloud and control alike. The retention pass read the third row as the first, so an
+unreadable record silently left the reference set and its bundle became deletable.
+`AdoptedInventoryReadsDeclarationLessNodeTypesTest` pins both readers: the report end-to-end (a
+declaration-less `ControlLaneRecord` leaves the inventory complete), the helper's three states, the
+retention pass's reference fold (`StampedIdentitiesOf` throws on an unreadable record rather than
+dropping it), and what that throw does to a pass — `PassOver` never invokes the sweep, and
+`GuardedPass` records the fault and completes, so that pass deletes nothing and the next tick
+plans again.
+
 🚨 **Zero expected consumers is a true answer on a host that is nobody's fleet.** The source is
 registered on every portal, not only the control instance, so an ordinary installation holds no
 Deployment records and has nothing to account for — its own live identity, its adoption stamps and
