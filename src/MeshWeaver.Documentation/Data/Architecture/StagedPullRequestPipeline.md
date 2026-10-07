@@ -31,7 +31,7 @@ one before it is green **for that head**:
 | Stage | What runs | Cost | What moves the head on |
 |---|---|---|---|
 | **0 — static controls** | shape/validate, confidential terms ("no client names"), AGENTS.md shared-rule blocks, generated files and locks, repo policy gates, CI inputs (core: shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell, cross-repo pair) | minutes, one light runner each | they finish; a red one **fails fast** — nothing heavy starts |
-| **1 — automatic review** | the head has its review — a landed Copilot review against the head (policy [`copilot-code-review`](../PolicyNotProse)), or a completed `internal-review` (App `systemorph-com`) — and every thread a reviewer opened has a reply from a person | the reviewer's time, no runner | Copilot: its review event starts no workflow, so the scheduled stage-advance sweep moves the head on (up to ~15 minutes later); internal: `check_run: completed` of the review; either way a person's reply — see [the event half](#what-moves-a-head-on--events-not-polling) |
+| **1 — automatic review** | the pull request has its review — a landed Copilot review against the head or any earlier head (policies [`copilot-code-review`, `review-once-per-pull-request`](../PolicyNotProse)), or a completed `internal-review` (App `systemorph-com`) — and every thread a reviewer opened has a reply from a person | the reviewer's time, no runner | Copilot: its review event starts no workflow, so the scheduled stage-advance sweep moves the head on (up to ~15 minutes later); internal: `check_run: completed` of the review; either way a person's reply — see [the event half](#what-moves-a-head-on--events-not-polling) |
 | **2 — expensive suites** | core: build + test shards, doc gate, platform-compat, the dependent-suites request · Plugins: module bundles, compile-check, gate shards, portal hosts (every leg behind `admission`) | the run's runner-minutes, almost all of them | the suites finish |
 | **3 — arming** | the control plane's babysitter arms auto-merge (Plugins `PrArming`, #2828) | none | the arm gate (`check-review-answered.py` → `arm_readiness`): the review answered (conditions 1–3) AND every required status check of the base `success` on the head (condition 4, `required_checks_green`) |
 
@@ -346,8 +346,9 @@ nothing arms before the tests. A head released by any of the three loud releases
 that release.
 
 Under policy [`copilot-code-review`](../PolicyNotProse), `PrArming` is to take the same review as
-`arm_readiness`: a landed Copilot review against the current head (`copilot_review_on`) first, then a
-real `internal-review` run. **That port is owed** (Systemorph/MeshWeaver.Plugins#3088): until it is
+`arm_readiness`: a landed Copilot review of the pull request, on the current head or an earlier one
+(`copilot_review_of_pull_request`, policy `review-once-per-pull-request`) first, then a real
+`internal-review` run. **That port is owed** (Systemorph/MeshWeaver.Plugins#3088): until it is
 merged and deployed on the control instance, `PrArming` still requires an `internal-review` run, and
 with the internal reviewer retired it arms nothing, so a Copilot-reviewed head is not armed by the
 control plane yet.

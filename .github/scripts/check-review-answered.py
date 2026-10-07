@@ -85,12 +85,19 @@ the threads BOTH opened.
 
 COPILOT IS THE REVIEWER AGAIN — policy `copilot-code-review` (supersedes `internal-code-review`)
 -------------------------------------------------------------------------------------------
-Every ruleset carries `copilot_code_review` again, now with `review_on_push: true`, so Copilot
-reviews every head, and `internal-review` is no longer a required context anywhere. The stage gate
-and the arm gate, which ask about THIS head's review, accept a landed Copilot review submitted
-against the current head (`copilot_review_on`) ahead of an `internal-review` run, so no head waits
-for an internal reviewer that has been switched off. Doc/Architecture/ReviewFindingsAnswered →
-"Copilot is the reviewer again".
+Every ruleset carries `copilot_code_review` again, and `internal-review` is no longer a required
+context anywhere. The stage gate and the arm gate accept a landed Copilot review ahead of an
+`internal-review` run, so no head waits for an internal reviewer that has been switched off.
+Doc/Architecture/ReviewFindingsAnswered → "Copilot is the reviewer again".
+
+ONE REVIEW PER PULL REQUEST — policy `review-once-per-pull-request`
+-------------------------------------------------------------------
+With `review_on_push: true` every push bought a full new review round, and each round's threads
+blocked the merge again until answered. The rule now runs with `review_on_push: false`, and every
+gate in this file counts a landed Copilot review against ANY head of the pull request as "reviewed"
+(`copilot_review_of_pull_request`; the merge gate's condition 1 never looked at the head). Condition
+2 is unchanged: every reviewer thread on the pull request, whichever head it was opened on, needs a
+person's reply. Doc/Architecture/ReviewFindingsAnswered → "One review per pull request".
 
 WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
 ----------------------------------------------------------
@@ -570,13 +577,14 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      contexts are conditions (2)/(3), never (4). `required_checks_green` is the predicate;
 #      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #
-# No waiver stands in for (2): the question is about THIS head's review, which is exactly what a
-# push invalidates. 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts GitHub
-# Copilot back as the fleet's reviewer, its ruleset rule set to `review_on_push`, so Copilot reviews
-# every head: a Copilot review submitted AGAINST THE CURRENT HEAD (`commit_id` == head, a landed body,
-# never a refusal — `copilot_review_on`) satisfies (2) exactly as a completed `internal-review` run
-# does. It is checked FIRST, so a head is never held waiting for an internal reviewer that has been
-# switched off. A Copilot review of an EARLIER head does not count — the push invalidated it.
+# No waiver stands in for (2). 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts
+# GitHub Copilot back as the fleet's reviewer, and policy `review-once-per-pull-request` reviews each
+# pull request ONCE: the ruleset rule runs with `review_on_push: false`, so a push does not start a
+# new round. A landed Copilot review of the pull request — against the current head, or failing that
+# against ANY earlier head (`copilot_review_of_pull_request`: a landed body, never a refusal) —
+# satisfies (2) exactly as a completed `internal-review` run on the head does. It is checked FIRST,
+# so a head is never held waiting for an internal reviewer that has been switched off. Every thread
+# that review opened still needs a person's reply under (3), whichever head it was opened on.
 
 
 def copilot_review_on(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
@@ -584,16 +592,41 @@ def copilot_review_on(reviews, head_sha: str, as_of: str | None = None) -> dict 
     body `classify_review_body` reads as a review, never a refusal), or None. Provenance is the
     account id AND type Bot — the internal reviewer's reviews are NOT looked at here: its verdict on
     a head is its `internal-review` check run, which the callers read separately."""
-    mine = [r for r in reviews or ()
+    mine = [r for r in landed_copilot_reviews(reviews, as_of) if head_sha and r.get("commit_id") == head_sha]
+    return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
+
+
+def landed_copilot_reviews(reviews, as_of: str | None = None) -> list:
+    """Every Copilot review on the pull request that LANDED (provenance: account id AND type Bot; a
+    non-PENDING state; a body that is a review, never a refusal), whichever head it was submitted on."""
+    return [r for r in reviews or ()
             if (r.get("user") or {}).get("type") == "Bot" and (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID
-            and r.get("state") not in (None, "PENDING") and head_sha and r.get("commit_id") == head_sha
-            and not_after(r.get("submitted_at"), as_of) and classify_review_body(r.get("body")) == "landed"]
+            and r.get("state") not in (None, "PENDING") and not_after(r.get("submitted_at"), as_of)
+            and classify_review_body(r.get("body")) == "landed"]
+
+
+def copilot_review_of_pull_request(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
+    """Policy `review-once-per-pull-request`: the pull request's ONE Copilot review — the newest
+    landed review against `head_sha` when there is one, otherwise the newest landed review against
+    ANY earlier head. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
+    returns reviewed this pull request, and a later push does not undo it. Its threads stay under the
+    thread condition wherever they were opened, so no finding is skipped by a push."""
+    on_head = copilot_review_on(reviews, head_sha, as_of)
+    if on_head is not None:
+        return on_head
+    mine = landed_copilot_reviews(reviews, as_of)
     return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
 
 
 def copilot_note(review: dict, short: str) -> str:
-    return (f"Copilot reviewed head {short}: review {review.get('id')} at {review.get('submitted_at')} "
-            f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
+    reviewed = str(review.get("commit_id") or "")[:10] or "(unknown)"
+    if reviewed == short:
+        return (f"Copilot reviewed head {short}: review {review.get('id')} at {review.get('submitted_at')} "
+                f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
+    return (f"Copilot reviewed this pull request at its earlier head {reviewed} (current head {short}): review "
+            f"{review.get('id')} at {review.get('submitted_at')} (\"{first_line(review.get('body'))}\") — "
+            "one review per pull request, policy review-once-per-pull-request")
+
 
 @dataclasses.dataclass(frozen=True)
 class ArmVerdict:
@@ -795,7 +828,7 @@ def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs
     short = head[:10] or "(unknown)"
     if pr.get("draft"):
         return ArmVerdict(False, f"#{number} is a draft — a draft is never armed; mark it ready for review")
-    copilot = copilot_review_on(reviews, head)
+    copilot = copilot_review_of_pull_request(reviews, head)
     if copilot is not None:
         return _arm_after_review(pr, comments, required, head_runs, head, short, (copilot_note(copilot, short),))
     mine = internal_review_runs(check_runs, head)
@@ -806,9 +839,9 @@ def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs
                                  f"(check run {running[0].get('id')}) — it re-evaluates when that run completes")
     run = carry.run if carried else newest_internal_review_run(mine, None)
     if run is None:
-        return ArmVerdict(False, f"no review has run on the current head {short} — neither a Copilot review against it nor a completed "
-                                 f"`{DEGRADATION_CHECK_NAME}` run; every push that changes the pull request's own diff needs its "
-                                 "own review, and the gate re-evaluates when it lands" + (f" ({carry.why})" if carry is not None else ""))
+        return ArmVerdict(False, f"no review has landed on this pull request — neither a Copilot review (of any of its heads) nor a completed "
+                                 f"`{DEGRADATION_CHECK_NAME}` run on the current head {short}; the pull request owes ONE review "
+                                 "(policy review-once-per-pull-request), and the gate re-evaluates when it lands" + (f" ({carry.why})" if carry is not None else ""))
     if degradation_of([run], None) is not None:
         title = ((run.get("output") or {}).get("title") or "").strip()
         return ArmVerdict(False, f"the reviewer was UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — "
@@ -965,7 +998,7 @@ def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
                                             f"(or the label `{TESTS_FIRST_LABEL}` to run the suites before the review)")
     # Policy copilot-code-review: a landed Copilot review AGAINST THIS HEAD is the head's review,
     # checked first so no head waits out the fallback for an internal reviewer that is switched off.
-    copilot = copilot_review_on(reviews, head)
+    copilot = copilot_review_of_pull_request(reviews, head)
     if copilot is not None:
         return _stage_after_review(pr, comments, (copilot_note(copilot, short),), False)
     mine = internal_review_runs(check_runs, head)
@@ -986,11 +1019,11 @@ def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
                  else "has not started")
         if waited >= fallback_minutes:
             return StageVerdict(True, "fallback", "", (
-                f"REVIEW UNAVAILABLE: no Copilot review against head {short}, and its `{DEGRADATION_CHECK_NAME}` review {state}, after {waited:.0f} min "
+                f"REVIEW UNAVAILABLE: no Copilot review on this pull request, and head {short}'s `{DEGRADATION_CHECK_NAME}` review {state}, after {waited:.0f} min "
                 f"(fallback {fallback_minutes} min) — stage 2 started WITHOUT it. Arming still waits for the review; "
                 "if the reviewer is down, that is the incident to chase."))
         return StageVerdict(False, "waiting", (
-            f"no Copilot review against head {short} yet, and its `{DEGRADATION_CHECK_NAME}` review {state} ({waited:.0f} of {fallback_minutes} min) — "
+            f"no Copilot review on this pull request yet, and head {short}'s `{DEGRADATION_CHECK_NAME}` review {state} ({waited:.0f} of {fallback_minutes} min) — "
             "stage 2 starts once a review lands and every finding is answered (on the event, or the stage-advance sweep for a Copilot review, whose own event starts no run), or at the fallback"),
             notes=(carry.why,) if carry is not None else ())
     title = ((run.get("output") or {}).get("title") or "").strip()
@@ -1165,8 +1198,9 @@ def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
 
 
 def read_reviews(gh: Gh, number: int) -> list:
-    """Every review on the pull request, all pages — the arm and stage gates look for a Copilot review
-    against the current head among them (`copilot_review_on`, policy copilot-code-review). A failed
+    """Every review on the pull request, all pages — the arm and stage gates look for the pull request's
+    Copilot review among them, on any of its heads (`copilot_review_of_pull_request`, policy
+    review-once-per-pull-request). A failed
     read raises: the gates then answer "cannot read", never "not reviewed"."""
     reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
     if not isinstance(reviews, list):
@@ -1960,13 +1994,13 @@ def self_test() -> int:
         print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={'ARM' if ready else 'no arm: ' + says} "
               f"got={'ARM' if v.ready else 'no arm: ' + v.missing}")
     draft_pr = dict(_pr(0), draft=True)
-    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "no review has run on the current head")
-    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "no review has run on the current head")
+    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "no review has landed on this pull request")
+    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "no review has landed on this pull request")
     arm_case("review still in progress -> no arm", False, _pr(0), [], [_ir(status="in_progress", conclusion=None)], "still in_progress")
     arm_case("review neutral 'Reviewer unavailable' -> no arm", False, _pr(0), [], [_ir(conclusion="neutral", title=DEGRADED_TITLE)],
              "UNAVAILABLE")
     arm_case("another App's internal-review does not count", False, _pr(0), [],
-             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "no review has run on the current head")
+             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "no review has landed on this pull request")
     arm_case("unanswered bot thread -> no arm", False, _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
              "1 of 1 thread(s)")
     arm_case("a bot reply does not answer -> no arm", False, _pr(2),
@@ -2013,23 +2047,42 @@ def self_test() -> int:
                 [], "no required status check")
     suites_case("not asked (pure review gate) -> ARM on review alone", True, None, None)
 
-    # ── policy copilot-code-review: a landed Copilot review AGAINST THE CURRENT HEAD is that head's
-    # review for BOTH the arm and the stage gate, with no `internal-review` run at all. Each NO case
-    # names what it must fail on, so the acceptance cannot pass vacuously.
+    # ── policy copilot-code-review + review-once-per-pull-request: a landed Copilot review of the
+    # pull request — against the current head OR any earlier one — is the review for BOTH the arm and
+    # the stage gate, with no `internal-review` run at all. Each NO case names what it must fail on,
+    # so the acceptance cannot pass vacuously.
+    # The MERGE gate never looked at the head (condition 1 reads every review on the pull request);
+    # these pin that, so a later "fix" scoping it to the head reds here instead of re-buying rounds.
+    older = dict(_review(rid=60), commit_id="b" * 40)
+    case("ONCE merge: review on an OLDER head, every thread answered -> green", (), _pr(2), [older],
+         [_comment(1), _comment(11, PERSON, 1)])
+    case("ONCE merge: NO review at all -> red", (NOT_LANDED,), _pr(0), [], [])
+    case("ONCE merge: review on an OLDER head, a thread unanswered -> red", (UNANSWERED,), _pr(3), [older],
+         [_comment(1), _comment(2), _comment(11, PERSON, 1)])
     def _cop(sha=HEAD, body=REVIEW_BODY_SEPT, state="COMMENTED", user=REVIEWER_REVIEW_USER, rid=77):
         return dict(_review(body=body, user=user, state=state, rid=rid), commit_id=sha)
-    def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says=""):
+    def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says="", noted=""):
         nonlocal failures
         v = arm_readiness(pr or _pr(len(comments)), list(comments), list(runs), required, head_runs, None, reviews)
-        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        ok = (v.ready == ready and (says in v.missing if not ready else not v.missing)
+              and (not noted or any(noted in n for n in v.notes)))
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} arm+copilot: {name:47} got={'ARM' if v.ready else 'no arm: ' + v.missing}")
     cop_arm("Copilot reviewed the head, no internal run -> ARM", True, [_cop()])
-    cop_arm("Copilot reviewed only an OLDER head -> no arm", False, [_cop(sha="b" * 40)], says="no review has run on the current head")
-    cop_arm("Copilot REFUSED on the head -> no arm", False, [_cop(body=REFUSAL_QUOTA)], says="no review has run on the current head")
-    cop_arm("Copilot review still PENDING -> no arm", False, [_cop(state="PENDING")], says="no review has run on the current head")
+    cop_arm("ONCE: Copilot reviewed only an OLDER head, nothing to answer -> ARM", True, [_cop(sha="b" * 40)],
+            noted="earlier head bbbbbbbbbb")
+    cop_arm("ONCE: older-head review, its threads all answered -> ARM", True, [_cop(sha="b" * 40)],
+            comments=[_comment(1), _comment(2), _comment(11, PERSON, 1), _comment(12, PERSON, 2)], noted="review-once-per-pull-request")
+    cop_arm("ONCE: older-head review, a thread unanswered -> no arm", False, [_cop(sha="b" * 40)],
+            comments=[_comment(1), _comment(2), _comment(11, PERSON, 1)], says="1 of 2 thread(s)")
+    cop_arm("ONCE: an older-head REFUSAL is not a review -> no arm", False, [_cop(sha="b" * 40, body=REFUSAL_QUOTA)],
+            says="no review has landed on this pull request")
+    cop_arm("ONCE: the head's own review is named over an older one -> ARM", True,
+            [_cop(sha="b" * 40, rid=70), _cop(rid=71)], noted="Copilot reviewed head aaaaaaaaaa")
+    cop_arm("Copilot REFUSED on the head -> no arm", False, [_cop(body=REFUSAL_QUOTA)], says="no review has landed on this pull request")
+    cop_arm("Copilot review still PENDING -> no arm", False, [_cop(state="PENDING")], says="no review has landed on this pull request")
     cop_arm("the internal bot's REVIEW alone is not its verdict -> no arm", False, [_cop(user=INTERNAL_REVIEWER_USER)],
-            says="no review has run on the current head")
+            says="no review has landed on this pull request")
     cop_arm("Copilot on the head, its thread unanswered -> no arm", False, [_cop()], comments=[_comment(1)], says="1 of 1 thread(s)")
     cop_arm("Copilot on the head, its thread answered -> ARM", True, [_cop()], comments=[_comment(1), _comment(11, PERSON, 1)])
     cop_arm("Copilot on the head beats a DEGRADED internal run -> ARM", True, [_cop()],
@@ -2038,10 +2091,14 @@ def self_test() -> int:
             head_runs=[suite("Consolidate test results", "failure")], says="concluded failure")
     cop_arm("Copilot on the head, required suite green -> ARM", True, [_cop()], required=REQ,
             head_runs=[suite("Consolidate test results")])
-    cop_arm("NEGATIVE CONTROL: no reviews passed -> no arm", False, None, says="no review has run on the current head")
+    cop_arm("NEGATIVE CONTROL: no reviews passed -> no arm", False, None, says="no review has landed on this pull request")
     for name, ready, mode, reviews, comments, pr in [
         ("Copilot reviewed the head -> stage 2 starts", True, "reviewed", [_cop()], [], None),
-        ("Copilot reviewed only an OLDER head -> waiting", False, "waiting", [_cop(sha="b" * 40)], [], None),
+        ("ONCE: Copilot reviewed only an OLDER head -> stage 2 starts", True, "reviewed", [_cop(sha="b" * 40)], [], None),
+        ("ONCE: older-head review, thread answered -> stage 2 starts", True, "reviewed", [_cop(sha="b" * 40)],
+         [_comment(1), _comment(11, PERSON, 1)], None),
+        ("ONCE: older-head review, thread unanswered -> held", False, "unanswered", [_cop(sha="b" * 40)], [_comment(1)], None),
+        ("ONCE: NEGATIVE CONTROL, no review at all -> waiting", False, "waiting", [], [], None),
         ("Copilot on the head, thread unanswered -> held", False, "unanswered", [_cop()], [_comment(1)], None),
         ("a DRAFT is held even with a Copilot review", False, "draft", [_cop()], [], dict(_pr(0), draft=True)),
     ]:
@@ -2241,7 +2298,7 @@ def self_test() -> int:
               [_ir(sha=M, conclusion="neutral", title=DEGRADED_TITLE)], PURE)
     for name, carry, runs, ready, says in [
         ("arm: pure merge carried -> ARM", PURE, [], True, ""),
-        ("arm: NEGATIVE CONTROL, no carry -> no arm", None, [], False, "no review has run on the current head"),
+        ("arm: NEGATIVE CONTROL, no carry -> no arm", None, [], False, "no review has landed on this pull request"),
         ("arm: carried, a fresh round still running on M -> ARM (it reviews the same diff)", PURE,
          [_ir(sha=M, status="in_progress", conclusion=None)], True, ""),
         ("arm: carry refused -> no arm, and says why", carry_of(dict(NEW_CMP, files=files(PATCH_RESOLVED))), [], False, "own diff changed"),
