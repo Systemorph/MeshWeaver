@@ -1,3 +1,4 @@
+using Autofac.Builder;
 using Autofac.Core;
 using MeshWeaver.ServiceProvider;
 
@@ -27,11 +28,32 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
     public IEnumerable<IComponentRegistration> RegistrationsFor(
         Service service, Func<Service, IEnumerable<ServiceRegistration>> registrationAccessor)
     {
+        if (service is KeyedService { ServiceKey: { } key } keyed)
+            return KeyedStandIns(keyed.ServiceType, key, registrationAccessor(service).Any());
         if (service is not TypedService typed)
             return [];
         var resolvers = ModuleServices.RegistrationsElsewhere(contexts, null, typed.ServiceType);
         return resolvers.Count == 0
             ? []
             : ModuleServiceProvider.StandIns(typed.ServiceType, resolvers, registrationAccessor(service).Any());
+    }
+
+    // A module's KEYED registration of a type it declares, asked for by its key — a module keeps the key
+    // in its own container, so a consumer resolving by key on the mesh hub or a per-node hub gets the
+    // module's (core #6128: keyed module services are forwarded under their own key, not refused).
+    private IEnumerable<IComponentRegistration> KeyedStandIns(Type type, object key, bool explicitRegistrationsExist)
+    {
+        var resolvers = ModuleServices.KeyedRegistrationsElsewhere(contexts, null, type, key);
+        var standIns = resolvers
+            .Select(resolve => RegistrationBuilder
+                .ForDelegate(type, (_, _) => resolve())
+                .Keyed(key, type)
+                .ExternallyOwned()
+                .InstancePerDependency()
+                .CreateRegistration())
+            .ToArray();
+        // As ModuleServiceProvider.StandIns: the FIRST a source yields becomes the default, which must be
+        // the LAST of the list unless the container registers the key itself.
+        return explicitRegistrationsExist ? standIns : standIns.Reverse();
     }
 }

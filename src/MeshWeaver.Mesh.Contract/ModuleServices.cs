@@ -55,7 +55,8 @@ public sealed record ModuleServiceRegistration(int Index, ServiceDescriptor Desc
     /// which is a different <see cref="Type"/> in every generation.</summary>
     public string Shape => Route == ModuleServiceRoute.ModuleOwned || Route == ModuleServiceRoute.Private
         ? $"{Route}:{Descriptor.ServiceType.FullName}"
-        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}";
+        : $"{Route}:{Descriptor.ServiceType.AssemblyQualifiedName}:{Descriptor.Lifetime}"
+          + (Descriptor.IsKeyedService ? $":key={Descriptor.ServiceKey}" : "");
 }
 
 /// <summary>
@@ -115,7 +116,11 @@ public sealed class ModuleServices : IDisposable
 
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>).</summary>
     public ImmutableList<string> Shape => Registrations
-        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted)
+        // Hosted services are NOT part of the shape: the root holds no per-registration forwarder for
+        // them — one ModuleHostedServicesHost starts whatever the CURRENT generation registers — so a
+        // generation may add or drop a background service and still swap live (measured: the AI
+        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else).
+        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
         .Select(r => r.Shape)
         .ToImmutableList();
 
@@ -169,9 +174,20 @@ public sealed class ModuleServices : IDisposable
     {
         blocker = null;
         var type = descriptor.ServiceType;
-        if (descriptor.IsKeyedService)
+        // A keyed registration is forwarded under its OWN key — unless the key pins the module: a key
+        // that is a module object, or a key that IS a module type (the keyed-by-marker-type shape,
+        // `AddKeyedSingleton<IService>(typeof(SomeModuleType), …)`, whose runtime type is CoreLib's
+        // RuntimeType and so passes an instance check). A root registration would hold either for the
+        // life of the process, and with it the module's collectible load context. Not only THIS
+        // module's: a key typed from ANOTHER collectible context (a module this one depends on, a
+        // compiled NodeType) would pin that context after it swaps, and its owner's own probe cannot
+        // see a registration it did not make.
+        if (descriptor.IsKeyedService && descriptor.ServiceKey is { } key
+            && (PinsACollectibleContext(key.GetType(), module)
+                || (key is Type keyType && PinsACollectibleContext(keyType, module))))
         {
-            blocker = "keyed root services are not forwarded";
+            var named = key is Type t ? t.Name : key.GetType().Name;
+            blocker = $"its service key is a module type ({named}) — the root would hold it";
             return ModuleServiceRoute.Private;
         }
         var implementation = ImplementationTypeOf(descriptor);
@@ -208,9 +224,13 @@ public sealed class ModuleServices : IDisposable
     }
 
     private static Type? ImplementationTypeOf(ServiceDescriptor descriptor) =>
-        descriptor.ImplementationType
-        ?? descriptor.ImplementationInstance?.GetType()
-        ?? descriptor.ImplementationFactory?.Method.ReturnType;
+        descriptor.IsKeyedService
+            ? descriptor.KeyedImplementationType
+              ?? descriptor.KeyedImplementationInstance?.GetType()
+              ?? descriptor.KeyedImplementationFactory?.Method.ReturnType
+            : descriptor.ImplementationType
+              ?? descriptor.ImplementationInstance?.GetType()
+              ?? descriptor.ImplementationFactory?.Method.ReturnType;
 
     /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from
     /// <paramref name="module"/>.</summary>
@@ -219,6 +239,16 @@ public sealed class ModuleServices : IDisposable
         && (ReferenceEquals(AssemblyLoadContext.GetLoadContext(type.Assembly), module)
             || (type.IsGenericType && type.GetGenericArguments().Any(a => IsOwned(a, module)))
             || (type.HasElementType && IsOwned(type.GetElementType(), module)));
+
+    /// <summary>Whether a root registration holding <paramref name="type"/> would pin a collectible load
+    /// context: the type (or a generic argument or element type of it) comes from
+    /// <paramref name="module"/> or from ANY collectible assembly.</summary>
+    private static bool PinsACollectibleContext(Type? type, AssemblyLoadContext module) =>
+        type is not null
+        && (IsOwned(type, module)
+            || type.Assembly.IsCollectible
+            || (type.IsGenericType && type.GetGenericArguments().Any(a => PinsACollectibleContext(a, module)))
+            || (type.HasElementType && PinsACollectibleContext(type.GetElementType(), module)));
 
     /// <summary>Whether <paramref name="type"/> (or a generic argument of it) comes from a module context
     /// OTHER than <paramref name="module"/> — a type a module this one depends on declares.</summary>
@@ -244,8 +274,11 @@ public sealed class ModuleServices : IDisposable
             foreach (var registration in Registrations)
             {
                 var d = registration.Descriptor;
+                // A keyed registration keeps its own key — the root forwards by that key; an unkeyed
+                // forwarded or contributed one is held under its index key so the root can ask for exactly it.
                 if (registration.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current or ModuleServiceRoute.Hosted
-                    or ModuleServiceRoute.Contributed)
+                        or ModuleServiceRoute.Contributed
+                    && !d.IsKeyedService)
                     services.Add(Keyed(d, registration.Key));
                 else
                     services.Add(d);
@@ -281,6 +314,29 @@ public sealed class ModuleServices : IDisposable
     /// <param name="requester">The module whose container asks, or null for the root.</param>
     /// <param name="type">The service type asked for.</param>
     public static IReadOnlyList<Func<object>> RegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type)
+        => ElsewhereByKey(contexts, requester, type, null);
+
+    /// <summary>
+    /// As <see cref="RegistrationsElsewhere(ModuleContexts, string?, Type)"/>, for the registrations of
+    /// <paramref name="type"/> under service key <paramref name="key"/>: a module's keyed registration
+    /// keeps its own key in its container, so a consumer asking by that key — on the mesh hub or a per-node
+    /// hub (<see cref="ModuleOwnedRootSource"/>) — gets the module's.
+    /// </summary>
+    /// <param name="contexts">The mesh's module registry.</param>
+    /// <param name="requester">The module whose container asks, or null for the root.</param>
+    /// <param name="type">The service type asked for.</param>
+    /// <param name="key">The service key asked for.</param>
+    public static IReadOnlyList<Func<object>> KeyedRegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type, object key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return ElsewhereByKey(contexts, requester, type, key);
+    }
+
+    // key null = the unkeyed registrations. An unkeyed request never sees a keyed registration and a
+    // keyed one sees only the registrations under its own key: the module container holds a keyed
+    // registration under that key, so counting it among the unkeyed positions would point ResolveAt
+    // past the end of the type's registrations.
+    private static IReadOnlyList<Func<object>> ElsewhereByKey(ModuleContexts contexts, string? requester, Type type, object? key)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(type);
@@ -297,20 +353,33 @@ public sealed class ModuleServices : IDisposable
         if (owner.Name != requester)
         {
             var ownerName = owner.Name;
-            var count = owner.Services!.Registrations.Count(r => r.Route == ModuleServiceRoute.ModuleOwned && r.Descriptor.ServiceType == type);
-            for (var position = 0; position < count; position++)
+            if (key is not null)
             {
-                var at = position;
-                resolvers.Add(() => ModuleServiceProvider.ResolveAt(
-                    contexts.ModuleScope(ownerName) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
-                    type, at));
+                if (owner.Services!.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned
+                        && r.Descriptor.ServiceType == type && Matches(r.Descriptor, key)))
+                    resolvers.Add(() => (contexts.ModuleScope(ownerName)
+                            ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."))
+                        .GetRequiredKeyedService(type, key));
+            }
+            else
+            {
+                var count = owner.Services!.Registrations.Count(r => r.Route == ModuleServiceRoute.ModuleOwned
+                    && r.Descriptor.ServiceType == type && !r.Descriptor.IsKeyedService);
+                for (var position = 0; position < count; position++)
+                {
+                    var at = position;
+                    resolvers.Add(() => ModuleServiceProvider.ResolveAt(
+                        contexts.ModuleScope(ownerName) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
+                        type, at));
+                }
             }
         }
         foreach (var contributor in generations.Where(g => g.Name != requester && g.Name != owner.Name))
         {
             var name = contributor.Name;
             foreach (var registration in contributor.Services!.Registrations
-                         .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type))
+                         .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type
+                             && (key is null ? !r.Descriptor.IsKeyedService : Matches(r.Descriptor, key))))
             {
                 var index = registration.Index;
                 resolvers.Add(() => contexts.ResolveModuleService(name, index));
@@ -318,6 +387,9 @@ public sealed class ModuleServices : IDisposable
         }
         return resolvers.ToImmutable();
     }
+
+    private static bool Matches(ServiceDescriptor descriptor, object key) =>
+        descriptor.IsKeyedService && Equals(descriptor.ServiceKey, key);
 
     private static ServiceDescriptor Keyed(ServiceDescriptor d, string key) =>
         d.ImplementationInstance is { } instance
@@ -330,7 +402,9 @@ public sealed class ModuleServices : IDisposable
     public object Resolve(IServiceProvider root, int index)
     {
         var registration = Registrations[index];
-        return Scope(root).GetRequiredKeyedService(registration.Descriptor.ServiceType, registration.Key);
+        var descriptor = registration.Descriptor;
+        return Scope(root).GetRequiredKeyedService(
+            descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
     }
 
     /// <summary>Starts hosted registration <paramref name="index"/> from this generation and records
@@ -367,14 +441,34 @@ public sealed class ModuleServices : IDisposable
             "[MeshWeaver.Mesh.IncompatibleModule] a hosted service of module {Module} could not start — its feature is absent",
             ModuleName);
 
+    /// <summary>Starts EVERY hosted registration of this generation — the host at boot, and the swap
+    /// for the generation it puts in service. ONE AFTER ANOTHER in registration order, each once the
+    /// previous start has completed — the order the generic host itself uses for root
+    /// <see cref="IHostedService"/>s, which the per-registration forwarders this replaced inherited
+    /// (#6128 review).</summary>
+    public Task StartAllHosted(IServiceProvider root, CancellationToken ct, ILogger? logger) =>
+        InSequence(Registrations
+            .Where(r => r.Route == ModuleServiceRoute.Hosted)
+            .OrderBy(r => r.Index)
+            .Select(r => (Func<Task>)(() => StartHosted(root, r.Index, ct, logger))));
+
+    /// <summary>Runs <paramref name="steps"/> one after another, each once the previous task completed.
+    /// Every step this type hands it reports its own fault and completes, so one failing step never
+    /// keeps the next from running. Task-shaped because <see cref="IHostedService"/> is — no <c>await</c>.</summary>
+    internal static Task InSequence(IEnumerable<Func<Task>> steps) =>
+        steps.Aggregate(Task.CompletedTask, (prior, next) => prior.ContinueWith(
+                _ => next(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default)
+            .Unwrap());
+
     /// <summary>The hosted registrations this generation has started.</summary>
     public ImmutableList<int> StartedHosted
     {
         get { lock (gate) return started.Select(s => s.Index).ToImmutableList(); }
     }
 
-    /// <summary>Stops every hosted service this generation started — before it is retired. A stop
-    /// that faults is logged; it never keeps the others running.</summary>
+    /// <summary>Stops every hosted service this generation started — before it is retired — one after
+    /// another in REVERSE registration order, as the generic host stops its own. A stop that faults is
+    /// logged; it never keeps the others running.</summary>
     public Task StopHosted(CancellationToken ct, ILogger? logger)
     {
         ImmutableList<(int Index, IHostedService Instance)> running;
@@ -383,7 +477,7 @@ public sealed class ModuleServices : IDisposable
             running = started;
             started = [];
         }
-        return Task.WhenAll(running.Select(r =>
+        return InSequence(running.OrderByDescending(r => r.Index).Select(r => (Func<Task>)(() =>
         {
             Task stopping;
             try
@@ -402,7 +496,7 @@ public sealed class ModuleServices : IDisposable
                         logger?.LogWarning(t.Exception, "[ModuleLiveUpdate] stopping a hosted service of {Module} faulted", ModuleName);
                 },
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        }));
+        })));
     }
 
     /// <summary>Disposes the scope — this generation's singletons with it.</summary>
