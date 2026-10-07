@@ -813,6 +813,19 @@ data:
   {{- if and (hasKey .Values.config.memex_portal "Hosting__TriageAssignments__Enabled") (not (kindIs "invalid" $triageAssignmentsOn)) (ne ($triageAssignmentsOn | toString | trim) "") }}
   Hosting__TriageAssignments__Enabled: "{{ $triageAssignmentsOn | toString | trim }}"
   {{- end }}
+  # ---- Runtime JIT switch: Tiered PGO OFF — TEMPORARY STOPGAP (#5212) --------------------------
+  # Policy tiered-pgo-off-5212; remove when the .NET runtime fix ships. The .NET 10 Tier-1 JIT
+  # under Dynamic PGO can drop a type check in an inlined guarded devirtualisation on Roslyn's
+  # MetadataWriter.PopulateNestedClassTableRows / getConsolidatedTypeParameters path; from then on
+  # every in-process NodeType Emit in that replica NREs (Doc/Architecture/NodeTypeCompilation,
+  # "The defect, in one listing"). The runtime reads DOTNET_TieredPGO from the process environment,
+  # which this ConfigMap feeds through envFrom. Set from a Deployment record's extraPortalConfig
+  # (`DOTNET_TieredPGO: "0"`); rendered only when the key is PRESENT and non-empty, so an instance
+  # that does not set it keeps the runtime default rather than a chart-chosen one.
+  {{- $tieredPgo := .Values.config.memex_portal.DOTNET_TieredPGO }}
+  {{- if and (hasKey .Values.config.memex_portal "DOTNET_TieredPGO") (not (kindIs "invalid" $tieredPgo)) (ne ($tieredPgo | toString | trim) "") }}
+  DOTNET_TieredPGO: "{{ $tieredPgo | toString | trim }}"
+  {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
   {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
