@@ -281,6 +281,8 @@ jobs:
       contents: read
       packages: read
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Resolve and bind the artifact store
         id: store
         uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
@@ -508,7 +510,7 @@ jobs:
               # another repository, so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
               [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the compose script has no ref to be fetched at"; exit 1; }
-              gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$SCRIPT" \
+              "$RUNNER_TEMP/mw-core-file" "${PLATFORM_REF}" ".github/scripts/compose-sealed-modules.sh" > "$SCRIPT" \
                 || { echo "::error::could not fetch compose-sealed-modules.sh at ${PLATFORM_REF} from Systemorph/MeshWeaver"; exit 1; }
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${PLATFORM_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
@@ -553,7 +555,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical compile-check.py has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compile-check.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/compile-check.py" \
+          "$RUNNER_TEMP/mw-core-file" "${PLATFORM_REF}" ".github/scripts/compile-check.py" > "$RUNNER_TEMP/compile-check.py" \
             || { echo "::error::could not fetch .github/scripts/compile-check.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/compile-check.py" | grep -q "compile-check" || { echo "::error::the fetched compile-check.py at ${PLATFORM_REF} does not look like the checker"; exit 1; }
       - name: Compile-check every NodeType
@@ -660,7 +662,7 @@ jobs:
           BASELINE_REASON: ${{ inputs.baseline-unavailable-reason }}
         run: |
           set -euo pipefail
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compat-verdict.py?ref=${PLATFORM_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/compat-verdict.py" \
+          "$RUNNER_TEMP/mw-core-file" "${PLATFORM_REF}" ".github/scripts/compat-verdict.py" > "$RUNNER_TEMP/compat-verdict.py" \
             || { echo "::error::could not fetch .github/scripts/compat-verdict.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — judge-against-baseline needs a platform ref that carries the judge"; exit 1; }
           head -c 400 "$RUNNER_TEMP/compat-verdict.py" | grep -q "compat-verdict" || { echo "::error::the fetched compat-verdict.py at ${PLATFORM_REF} does not look like the judge"; exit 1; }
           python3 "$RUNNER_TEMP/compat-verdict.py" --self-test

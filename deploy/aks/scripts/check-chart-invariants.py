@@ -580,6 +580,49 @@ if _fetch is not None:
             "the publication is addressed by framework identity; without one the script exits 1 "
             "on every boot.",
         )
+    # 13b. MeshWeaver#6052 ask 3 — the identity follows the RUNNING IMAGE. A static
+    # BUNDLES_IDENTITY is a value fixed per helm release; a roll that moves only the portal image
+    # left the fetch naming the previous image's identity. So the fetch must read the identity a
+    # `bundle-identity` init container copied out of THE PORTAL'S OWN IMAGE, ahead of it, through a
+    # volume both mount — unless an operator-owned identity file was declared instead.
+    _inits = [c.get("name") for c in (pod.get("initContainers") or [])]
+    _ident = next((c for c in (pod.get("initContainers") or []) if c.get("name") == "bundle-identity"), None)
+    if _env.get("BUNDLES_IDENTITY"):
+        finding(
+            "bundle-fetch is handed a static BUNDLES_IDENTITY",
+            "a value fixed per helm release does not follow a self-update or a roll that moves only "
+            "the portal image (MeshWeaver#6052); the identity is read from the running image by the "
+            "bundle-identity init container.",
+        )
+    _id_file = _env.get("BUNDLES_IDENTITY_FILE") or ""
+    if _ident is None:
+        if not _id_file.startswith("/data/"):
+            finding(
+                "bundle-fetch reads no identity derived from the portal image and no operator identity file",
+                f"BUNDLES_IDENTITY_FILE={_id_file!r}; without the bundle-identity init container the "
+                "identity is not the running image's (MeshWeaver#6052).",
+            )
+    else:
+        if _ident.get("image") != portal.get("image"):
+            finding(
+                f"bundle-identity runs {_ident.get('image')!r}, not the portal's image {portal.get('image')!r}",
+                "it reads the identity file the build wrote INTO the portal image; any other image "
+                "answers for a build the pod does not run.",
+            )
+        if _inits.index("bundle-identity") > _inits.index("bundle-fetch"):
+            finding(
+                "bundle-identity runs AFTER bundle-fetch",
+                f"init containers run in order {_inits}; the fetch would read an identity not yet written.",
+            )
+        _ident_mounts = {m.get("mountPath"): m.get("name") for m in (_ident.get("volumeMounts") or [])}
+        _id_dir = _id_file.rsplit("/", 1)[0]
+        if not _id_dir or _ident_mounts.get(_id_dir) is None \
+                or _ident_mounts.get(_id_dir) != _fetch_mounts.get(_id_dir):
+            finding(
+                f"BUNDLES_IDENTITY_FILE={_id_file!r} is not on a volume bundle-identity writes and bundle-fetch reads",
+                f"bundle-identity mounts {sorted(_ident_mounts.items())}, bundle-fetch mounts "
+                f"{sorted(_fetch_mounts.items())}.",
+            )
     if not (_env.get("BUNDLES_SOURCES") or "").strip():
         finding(
             "bundle-fetch has an empty BUNDLES_SOURCES",

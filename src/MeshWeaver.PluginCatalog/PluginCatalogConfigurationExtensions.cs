@@ -90,6 +90,11 @@ public static class PluginCatalogConfigurationExtensions
                 .AddSingleton<RegistryUpdateReconciler>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<RegistryUpdateReconciler>())
+                // Where a pod re-fetches the SHIPPED bytes a NodeType record names when its own
+                // assembly store lacks them, instead of compiling them (MeshWeaver#6052 ask 2).
+                // Mesh-scoped: its in-flight cache dies with the mesh.
+                .AddSingleton<IShippedBuildSource>(
+                    sp => new RegistryShippedBuildSource(sp.GetRequiredService<IMessageHub>()))
                 // The first step of every test run on this mesh (MeshOperations.RunTests reads
                 // it): resolve the target set from the feed, read what is installed, converge,
                 // or refuse naming the skew (maintainer, 2026-10-04).

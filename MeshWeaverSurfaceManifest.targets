@@ -69,4 +69,59 @@
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>
+  <!-- 🚨 THE FRAMEWORK IDENTITY, AS A FILE IN THE IMAGE (MeshWeaver#6052 ask 3). The chart's
+       `bundle-fetch` init container pulls the sealed plugin publication tagged with the framework
+       identity of the image the pod RUNS. That identity used to come from `bundles.identity`, a value
+       fixed per helm release — so after an in-portal self-update (or any roll that only moves the
+       portal's image) the init container kept naming the previous image's identity. The identity is
+       the platform COMPATIBILITY KEY c<major:D3>e<epoch:D3> (MeshWeaver.Compiler.PlatformCompatibility
+       .KeyOf), and both halves are known HERE, from the same sources the runtime reads: the major is
+       the AssemblyVersion of the MeshWeaver.Compiler assembly this host references (the very file
+       PlatformCompatibility.KeyOfAssembly reads at run time), and the epoch is
+       $(PlatformCompatibilityEpoch) — or, for a host built in another repository that does not
+       evaluate the platform's Directory.Build.props, the checked-in declaration beside this file that
+       Directory.Build.props itself reads. Written beside the binaries as `meshweaver-framework.identity`
+       (one line) and published with them, so the image carries its own identity and the chart reads
+       it FROM THE IMAGE. FrameworkBuildIdentityFileTest asserts the written value equals the runtime
+       FrameworkBuildIdentity.FrameworkVersion, so the two cannot drift. -->
+  <Target Name="_MeshWeaverWriteFrameworkIdentity"
+          AfterTargets="Build"
+          Condition="'$(MeshWeaverSurfaceManifest)' == 'true' or '$(MeshWeaverFrameworkIdentityFile)' == 'true'">
+    <ItemGroup>
+      <_MeshWeaverCompilerRef Include="@(ReferencePath)"
+                              Condition="'%(Filename)' == 'MeshWeaver.Compiler'" />
+    </ItemGroup>
+    <GetAssemblyIdentity AssemblyFiles="@(_MeshWeaverCompilerRef)" Condition="'@(_MeshWeaverCompilerRef)' != ''">
+      <Output TaskParameter="Assemblies" ItemName="_MeshWeaverCompilerIdentity" />
+    </GetAssemblyIdentity>
+    <PropertyGroup>
+      <_MeshWeaverCompatibilityFile>$(MSBuildThisFileDirectory)src/MeshWeaver.Compiler/platform-compatibility.json</_MeshWeaverCompatibilityFile>
+      <_MeshWeaverIdentityEpoch>$(PlatformCompatibilityEpoch)</_MeshWeaverIdentityEpoch>
+      <_MeshWeaverIdentityEpoch Condition="'$(_MeshWeaverIdentityEpoch)' == '' and Exists('$(_MeshWeaverCompatibilityFile)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_MeshWeaverCompatibilityFile)')), '"epoch"\s*:\s*(\d+)').Groups[1].Value)</_MeshWeaverIdentityEpoch>
+      <_MeshWeaverIdentityVersion>@(_MeshWeaverCompilerIdentity->'%(Version)')</_MeshWeaverIdentityVersion>
+      <_MeshWeaverIdentityMajor Condition="'$(_MeshWeaverIdentityVersion)' != ''">$(_MeshWeaverIdentityVersion.Split('.')[0])</_MeshWeaverIdentityMajor>
+    </PropertyGroup>
+    <!-- No silent default: a host that cannot state both halves writes NO file, and the chart's
+         init container then refuses (or uses the operator's declared fallback) naming the file. -->
+    <Warning Condition="'$(_MeshWeaverIdentityMajor)' == '' or '$(_MeshWeaverIdentityEpoch)' == ''"
+             Code="MW6052"
+             Text="meshweaver-framework.identity NOT written: this host references no MeshWeaver.Compiler assembly or no compatibility epoch is declared (major='$(_MeshWeaverIdentityMajor)', epoch='$(_MeshWeaverIdentityEpoch)')." />
+    <WriteLinesToFile Condition="'$(_MeshWeaverIdentityMajor)' != '' and '$(_MeshWeaverIdentityEpoch)' != ''"
+                      File="$(TargetDir)meshweaver-framework.identity"
+                      Lines="c$(_MeshWeaverIdentityMajor.PadLeft(3, '0'))e$(_MeshWeaverIdentityEpoch.PadLeft(3, '0'))"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+  </Target>
+  <Target Name="_MeshWeaverAddFrameworkIdentityToPublish"
+          AfterTargets="ComputeFilesToPublish"
+          DependsOnTargets="_MeshWeaverWriteFrameworkIdentity"
+          Condition="'$(MeshWeaverSurfaceManifest)' == 'true' or '$(MeshWeaverFrameworkIdentityFile)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(TargetDir)meshweaver-framework.identity"
+                             Condition="Exists('$(TargetDir)meshweaver-framework.identity')">
+        <RelativePath>meshweaver-framework.identity</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>

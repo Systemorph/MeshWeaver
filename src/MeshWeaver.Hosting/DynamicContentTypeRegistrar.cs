@@ -180,8 +180,17 @@ public static class DynamicContentTypeRegistrar
             : mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
 
         // 🚨 The store lookup is file I/O too — FileSystemAssemblyStore probes the directory and
-        // reads timestamps when SUBSCRIBED — so it runs inside the pool, never on the emitting thread.
-        return pool.InvokeObservable(_ => store.TryGetBuildPath(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
+        // reads timestamps when SUBSCRIBED — so every probe runs inside the pool.
+        // 🚨 #6052 ask 2 — the record's build, refetched from the SHIPPED bundle when this pod lacks
+        // it or holds a different build at the same version (ShippedBuildRefetch). Each store probe
+        // runs through the file-system pool inside ResolveOrRefetch, never holding a slot while the
+        // refetch writes through that same pool; a build it cannot supply returns the store's own
+        // answer, which the identity check below reports exactly as before.
+        var isFramework = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal);
+        return (isFramework
+                ? pool.InvokeObservable(_ => store.TryGetBuildPath(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
+                : ShippedBuildRefetch.ResolveOrRefetch(mesh.ServiceProvider, store,
+                    new MissingBuild(path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid), logger))
             .SelectMany(localPath =>
             {
                 if (string.IsNullOrEmpty(localPath))

@@ -1400,7 +1400,7 @@ internal static class NodeTypeEnrichmentHelpers
                     // resolves to ITS bytes, never to a newer build sharing the version key.
                     return ResolveAssembly(
                             meshHub, release.AssemblyCollection, release.NodeTypePath, releaseVersion,
-                            release.AssemblyContentPath)
+                            release.AssemblyContentPath, logger: logger)
                         .SelectMany(localPath =>
                         {
                             if (string.IsNullOrEmpty(localPath))
@@ -1495,7 +1495,7 @@ internal static class NodeTypeEnrichmentHelpers
             // TriggerRecompileAndRetry kicks a fresh compile below.
             var compileVersion = def.LastCompiledVersion ?? typeNode.Version;
             return ResolveAssembly(meshHub, def.LatestAssemblyCollection, typeNode.Path, compileVersion,
-                    def.LatestAssemblyPath, def.LatestAssemblyMvid)
+                    def.LatestAssemblyPath, def.LatestAssemblyMvid, logger)
                 .SelectMany(localPath =>
                 {
                     if (string.IsNullOrEmpty(localPath))
@@ -2174,15 +2174,23 @@ internal static class NodeTypeEnrichmentHelpers
 
     private static IObservable<string?> ResolveAssembly(
         IMessageHub meshHub, string? collection, string nodeTypePath, long version,
-        string? contentPath = null, string? assemblyMvid = null)
+        string? contentPath = null, string? assemblyMvid = null, ILogger? logger = null)
     {
         if (string.IsNullOrEmpty(collection)) return Observable.Return<string?>(null);
-        var store = string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
-            ? (IAssemblyStore)FrameworkAssemblyStore.Instance
-            : meshHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
+        // The framework's own assemblies are in-process by construction — nothing to re-fetch.
+        if (string.Equals(collection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal))
+            return ((IAssemblyStore)FrameworkAssemblyStore.Instance).TryGetBuildPath(nodeTypePath, version, contentPath, assemblyMvid);
+        var store = meshHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
         // 🚨 By IDENTITY, not by key: the record names the content path and MVID it published,
         // and several builds can share one version key (see IAssemblyStore.TryGetBuildPath).
-        return store.TryGetBuildPath(nodeTypePath, version, contentPath, assemblyMvid);
+        // 🚨 #6052 ask 2 — a miss here is the bytes-missing state of a SHARED record over a store
+        // this pod may not share. Before any recompile is routed to the owner (which lands the
+        // bytes on the owner's pod again), the shipped build is re-fetched from the registry and
+        // landed under the record's own key — only when it IS the build the record names
+        // (ShippedBuildRefetch). A null still falls through to the recovery below, unchanged.
+        return ShippedBuildRefetch.ResolveOrRefetch(
+            meshHub.ServiceProvider, store,
+            new MissingBuild(nodeTypePath, version, contentPath, assemblyMvid), logger);
     }
 
     /// <summary>

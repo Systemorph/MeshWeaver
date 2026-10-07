@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.Messaging;
@@ -303,6 +304,80 @@ public sealed class PluginBundleClient
                         ? Miss(pluginId, result.Kind, result.Reason)
                         : SeedAll(pluginId, result.Bytes));
             });
+
+    /// <summary>
+    /// 🚨 <b>The shipped bytes of <paramref name="pluginId"/>'s NodeTypes, WITHOUT adopting them</b>
+    /// (MeshWeaver#6052 ask 2) — the read half <see cref="RegistryShippedBuildSource"/> re-lands under
+    /// a record's existing key when this pod's store lacks the bytes that record names.
+    ///
+    /// <para>Same index, same download route (OCI artifact by digest, else HTTP), same gate as
+    /// <see cref="Adopt"/>: the bundle's compatibility key and platform range
+    /// (policy <c>platform-backwards-compatibility</c>) — never an exact build identity. Unlike
+    /// <see cref="Adopt"/> it writes NOTHING: no record stamp, no store upload, no ledger entry — the
+    /// caller decides, by MVID, whether these bytes are the build its record names. Emits the empty
+    /// list on every miss (logged); never faults.</para>
+    /// </summary>
+    /// <param name="pluginId">The package whose bundle carries the NodeTypes.</param>
+    public IObservable<IReadOnlyList<ShippedBuild>> FetchShippedBuilds(string pluginId) =>
+        SharedIndex()
+            .Take(1)
+            .SelectMany(index =>
+            {
+                if (PrebuiltAssemblySeeder.DeclineReason(index.FrameworkMvid) is { } reason)
+                {
+                    _logger?.LogInformation(
+                        "Shipped builds of {Plugin}: {Registry} serves no compatible lane ({Reason})",
+                        pluginId, _registryUrl, reason);
+                    return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
+                }
+                var bundle = index.Bundles?.FirstOrDefault(b =>
+                    string.Equals(b.Plugin, pluginId, StringComparison.OrdinalIgnoreCase));
+                if (bundle is null)
+                {
+                    _logger?.LogInformation(
+                        "Shipped builds of {Plugin}: {Registry} does not advertise it on {Identity}/{Architecture}",
+                        pluginId, _registryUrl, PrebuiltAssemblySeeder.LiveFrameworkMvid, ReleaseArchitecture.Live);
+                    return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
+                }
+                var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
+                return Download(pluginId, bundle)
+                    .SelectMany(result => result.Bytes is null
+                        ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
+                        : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger)));
+            })
+            .Catch((Exception ex) =>
+            {
+                _logger?.LogWarning(ex,
+                    "Shipped builds of {Plugin} from {Registry} could not be read — {Cause}",
+                    pluginId, _registryUrl, ex.Message);
+                return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
+            });
+
+    /// <summary>
+    /// The compatible payloads of a read bundle as <see cref="ShippedBuild"/>s, or none when the
+    /// bundle's compatibility key or platform range declines (policy
+    /// <c>platform-backwards-compatibility</c>) — the same rule every adoption applies, never an
+    /// exact build identity.
+    /// </summary>
+    /// <param name="read">The bundle as <see cref="BundleReader.Read(byte[])"/> returns it.</param>
+    /// <param name="origin">Where the bundle came from, carried for the log line.</param>
+    /// <param name="logger">Logger for a whole-bundle decline.</param>
+    internal static IReadOnlyList<ShippedBuild> ShippedBuildsOf(
+        (BundleReader.Manifest? Manifest, IReadOnlyList<BundleReader.Payload> Assemblies) read, string origin,
+        ILogger? logger)
+    {
+        var (manifest, assemblies) = read;
+        if (PrebuiltAssemblySeeder.DeclineReason(
+                manifest?.FrameworkMvid, manifest?.ProducerPlatformVersion, manifest?.PlatformCeiling,
+                PrebuiltAssemblySeeder.LiveFrameworkMvid, PrebuiltAssemblySeeder.LivePlatformVersion) is { } reason)
+        {
+            logger?.LogInformation("Shipped builds from {Origin} declined whole: {Reason}", origin, reason);
+            return [];
+        }
+        return assemblies
+            .Select(a => new ShippedBuild(a.NodePath, a.Assembly, a.Pdb, origin))
+            .ToList();
+    }
 
     /// <summary>
     /// Records a miss and reports it as the zero every caller already handles — or, on a mesh that

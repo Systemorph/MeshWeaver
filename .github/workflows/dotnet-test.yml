@@ -2434,6 +2434,16 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
 
+    # The lookup a standing tracking issue is found by (chart-drift.yml). It scanned the 200 newest
+    # issues, so the long-lived sentinel aged out of the window and the workflow opened a fresh one
+    # each time — #5049, #5491, #5844. It now filters on a dedicated label, server-side, to the last
+    # page. Offline cases: aged-out, paginated, duplicates (keep the oldest), closed-only, a labelled
+    # PR, an unknown label (must FAIL, not answer "none"), an API failure; the old window scan and a
+    # first-page-only pager are the negative controls and must miss.
+    - name: "A standing tracking issue is found by its label, never by a recent-issues window (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/sentinel-issue.py --self-test
+
     # 🚨 THE STEWARD THAT SPENT A WEEK DECIDING WITHOUT READING ANYTHING (#4534). Its `gh api …/logs`
     # read failed on every run from at least 2026-09-10, because the hosted runner's `gh` refuses a
     # body carrying terminal escape sequences and every Actions log has them — and it reported that
