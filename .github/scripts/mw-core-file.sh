@@ -16,8 +16,8 @@
 # therefore see ONE commit — a moving `main` can no longer hand two steps of the same job two
 # different trees, which per-file REST reads could.
 #
-# Refs: a branch, a tag, or a FULL commit sha. An abbreviated sha is refused by the server (git
-# cannot fetch by prefix), loudly — never resolved to a guess.
+# Refs: a branch, a tag, or a FULL commit sha. An abbreviated sha (7–39 hex) is refused by SHAPE
+# before any fetch — never resolved to a guess, and never to a same-named branch or tag.
 #
 # Exit status: 0 with the bytes on stdout; non-zero with a line on stderr naming the ref or path
 # that could not be read. A caller keeps its own `|| { echo "::error::…"; exit 1; }`.
@@ -48,6 +48,13 @@ fi
 
 ref=${1:?mw-core-file: no ref given (usage: mw-core-file.sh <ref> <path>)}
 path=${2:?mw-core-file: no path given (usage: mw-core-file.sh <ref> <path>)}
+# An abbreviated sha is refused BY SHAPE, before any fetch: git would resolve a 7–39-hex ref as a
+# same-named branch or tag if one existed, and read an unrelated tree. A hash-like NAMED ref must be
+# spelled refs/heads/… or refs/tags/….
+if printf '%s' "$ref" | grep -Eq '^[0-9a-fA-F]{7,39}$'; then
+  echo "mw-core-file: '$ref' looks like an ABBREVIATED sha — pass the full 40-hex sha (or refs/heads/… / refs/tags/… for a hash-like name)" >&2
+  exit 2
+fi
 root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mw-core/$(printf '%s' "$ref" | tr -c 'A-Za-z0-9._-' '_')"
 if [ ! -f "$root/.fetched" ]; then
   rm -rf "$root"

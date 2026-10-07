@@ -1,7 +1,7 @@
 ---
 Name: The CI REST Budget
 Category: Architecture
-Description: Every REST call a satellite's CI makes with `github.token` is charged to ONE per-repository budget — 1,000 requests an hour on the organisation's plan — and when it runs out every job of every pull request goes red on "API rate limit exceeded for installation" while fetching a file. What spent it (measured on MeshWeaver.Plugins), the two consumers that were fixed at the root, the instrument every job now prints, and what was not measured.
+Description: Every REST call a satellite's CI makes with `github.token` is charged to ONE per-repository budget — 1,000 requests an hour on the organisation's plan — and when it runs out every job of every pull request goes red on "API rate limit exceeded for installation" while fetching a file. What spent it (measured on MeshWeaver.Plugins), the two consumers that were fixed at the root, the instrument every job that reads a platform file now prints, and what was not measured.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5l3 3"/><path d="M16 3h5v5"/></svg>
 ---
 
@@ -70,10 +70,13 @@ every read is
 One shallow, blob-less fetch per (job, ref); every later read in the job is local, the blobs are
 fetched on demand. Two properties the REST reads did not have: **one commit per job** (a moving
 `main` can no longer hand two steps of one job two different trees), and **an abbreviated sha is
-refused** (git cannot fetch by prefix) rather than resolved. `CiRestBudgetGuard` holds every
+refused by shape** (7–39 hex, before any fetch) rather than resolved — git would otherwise take a
+same-named branch or tag for it; a hash-like NAMED ref is spelled `refs/heads/…` / `refs/tags/…`. `CiRestBudgetGuard` holds every
 `node-repo-*.yml` at zero contents-API reads, requires the install before the first call in each
 job, and drives the reader against a local repository (branch, tag, full sha, a moving branch, an
-abbreviated sha, a missing path); its negative control proves both detectors fire on the old shapes.
+abbreviated sha even with a same-named branch present, a missing path) and the budget mode against
+a stubbed `curl` (a normal reading, the 80 % warning, an unanswered request); its negative control
+proves both detectors fire on the old shapes.
 
 **2. The stage-advance listener answers `pull_request_review` only.** The comment trigger was a
 pure duplicate (above); dropping it removes ~60 of ~100 runs an hour at ~10 calls each. The caller
@@ -89,12 +92,15 @@ REST budget of this job's token: 412 of 1000 used, resets 11:42:07Z
 ```
 
 and turns it into a `::warning title=REST budget nearly spent::` at 80 %. A saturated hour is
-therefore visible in every job's log BEFORE it reds anything, with the reset time beside it.
+therefore visible in the log of every job that reads a platform file BEFORE it reds anything, with
+the reset time beside it. (A job that reads no platform file does not install the reader and prints
+no reading.)
 
 ## What was NOT measured
 
 - **The limit itself was not read.** No job in the window printed `/rate_limit`; 1,000/hour is
-  GitHub's documented figure for the plan. The new instrument reads it on every job from now on.
+  GitHub's documented figure for the plan. The new instrument reads it on every job that installs the
+  reader from now on.
 - **Calls inside Python scripts other than the review predicate** (`resolve-platform.py`,
   `platform-requirement.py`, `retry-known-transients.py`, `module-publication.py`) were not counted,
   and loops were counted once. The per-run figures are floors.
