@@ -52,11 +52,14 @@ gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f 
 🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
 before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
 
-🚨 **And answering every thread is NECESSARY, NOT SUFFICIENT.** The verdict branch protection
-reads can still be an older failure taken on the same head, while the check's own newest run says
-GREEN. The remedy — re-run the check's `pull_request` run — the measurement behind it, and what was
-changed so it stops happening are below, under **"The check's log says GREEN and the pull request
-is still BLOCKED"**.
+🚨 **Answering every thread used to be NECESSARY, NOT SUFFICIENT — the check now finishes the job
+itself.** Branch protection reads the check's `pull_request` run, not the
+`pull_request_review_comment` run your reply starts, so the verdict it read stayed an older failure
+on the same head while the newest run said GREEN, until somebody re-ran the `pull_request` run by
+hand. The lane's `refresh` job now does that re-run on its own after every GREEN verdict taken on a
+different event. The measurement, the self-refresh, and the manual fallback for the cases it cannot
+cover (a fork, or a red `refresh` job) are below, under **"The check's log says GREEN and the pull
+request is still BLOCKED"**.
 
 ## Why: a review was advisory
 
@@ -972,7 +975,29 @@ Two traps when sweeping a repo for stubs, both of which produce a confident unde
 
 ### 🚨 The check's log says GREEN and the pull request is still BLOCKED
 
-**The remedy first, because this is found under pressure. Re-run the check's `pull_request` run:**
+**The check now refreshes itself.** After a GREEN verdict on any event other than `pull_request`
+(and never for a `merge_group` entry, which is its own commit), the `refresh` job of
+`node-repo-review-answered.yml` (`lane / Refresh the verdict branch protection reads` in core)
+re-runs the failed jobs of the newest `pull_request` run of the same workflow for the current head
+(`check-review-answered.py --refresh-read-run`). The decision is the pure function `refresh_action`,
+covered by the script's `--self-test`. It re-runs that run only if it has **completed**, is **not
+`success`**, and **started before** this GREEN verdict was taken. A run that is in flight, already
+green, or started after the verdict is left alone, and the job prints why. That makes it idempotent
+per (head sha, answered state), with no loop and no polling: the re-run is itself a `pull_request`
+run, which never refreshes, and a re-run made with the workflow token raises no new event. Covered
+the same way: a pull request that went RED because answers were missing goes green when a later
+reply's run is GREEN, because that run refreshes too. `refresh` is the only job in the lane that
+writes, and it holds `actions: write` alone. A caller adopting the lane grants it on its `uses:`
+job and records the grant in `.github/lane-caller-grants.yml` in the same change.
+
+The staged pipeline's hold is re-evaluated on the same reply events by the existing listener,
+`stage-advance.yml` → `node-repo-stage-advance.yml`. Its `on-answer` job fires on
+`pull_request_review_comment: created` and `pull_request_review: submitted` and re-runs the failed
+jobs of the head's held `dotnet-test.yml` run once stage 1 is green.
+
+**Manual fallback.** The self-refresh cannot help in two cases. A **fork** pull request's token
+cannot re-run a workflow, so the job warns and names this remedy. And if the `refresh` job itself
+is **red**, it names what it could not read. In both cases, re-run the check's `pull_request` run:
 
 ```bash
 # the run whose verdict branch protection actually reads

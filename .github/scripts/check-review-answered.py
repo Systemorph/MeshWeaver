@@ -124,6 +124,9 @@ USAGE
         (the negative control: never carry a review over a clean merge of the base branch — see carry_over)
   check-review-answered.py --repo O/R --stage-advance --workflow ci.yml (--head-sha S | --pr N | --sweep)
         (node-repo-stage-advance.yml: re-run a waiting run's failed jobs now that stage 1 is green)
+  check-review-answered.py --repo O/R --pr N --refresh-read-run --event E --run-id R --evaluated-at T
+        (node-repo-review-answered.yml: a GREEN verdict on an event branch protection does not read
+         re-runs the newest `pull_request` run, whose verdict it does read — see refresh_action)
 
 THE STAGE GATE (Doc/Architecture/StagedPullRequestPipeline)
 -----------------------------------------------------------
@@ -143,6 +146,19 @@ a person's, not the infrastructure's.
 `--stage-advance` is the event half: it re-evaluates `stage_readiness` and, only when it is green
 and the head's newest CI run holds a FAILED stage gate, POSTs `rerun-failed-jobs` (the doctrine's
 own re-run remedy, review-answered-on-degradation.yml). `--sweep` is the bounded-fallback timer.
+
+`--refresh-read-run` is the SELF-REFRESH (the #4649 shape, done by the check instead of a person).
+Answering a thread fires `pull_request_review_comment` (and `pull_request_review`), and branch
+protection does not read the `pull_request_review_comment` run's check-run at all: the log said
+GREEN while the pull request stayed BLOCKED on the older `pull_request` run's red until somebody
+re-ran it by hand. So after a GREEN verdict on any event other than `pull_request` (and never for a
+`merge_group` entry, which is its own commit), the lane re-runs the failed jobs of the newest
+`pull_request` run of the SAME workflow for the current head — once per (head, answered state):
+`refresh_action` (pure, self-tested) skips a run that is in flight, already green, or started
+at/after this verdict (it judged a state no older than ours). The re-run decides nothing by itself:
+it applies the whole predicate to live state, so a thread that is really unanswered is red there
+too. No loop: a re-run of a `pull_request` run is a `pull_request` event, which never refreshes, and
+a GITHUB_TOKEN re-run raises no new workflow event.
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
@@ -1072,6 +1088,53 @@ def lost_rerun_race(readback) -> bool:
     return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
 
 
+#: The event whose run of this check branch protection is KNOWN to read and that is re-run for the
+#: pull request's head (measured on #4649; the manual remedy measured on #4652 and #4662).
+PROTECTION_READ_EVENT = "pull_request"
+
+
+def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dict,
+                   candidate: dict | None) -> tuple[str, str]:
+    """After a GREEN verdict: ('rerun' | 'none' | 'manual' | 'fail', why). Pure.
+
+    `candidate` is the newest `pull_request` run of THIS workflow for the pull request's CURRENT
+    head. It is re-run only when it can still carry a stale red that this green verdict supersedes —
+    completed, not successful, and started BEFORE this verdict was taken. Everything else is a no-op
+    that says why, which is what makes the refresh idempotent per (head sha, answered state): once
+    re-run, the candidate is in flight (skip), then green (skip) or red on a NEWER read (skip)."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if event == PROTECTION_READ_EVENT:
+        return "none", f"this run IS a `{PROTECTION_READ_EVENT}` run — its own verdict is the one branch protection reads"
+    if event == "merge_group":
+        return "none", "a merge-queue entry is its own commit with its own check-run — nothing on the pull request head to refresh"
+    if pr.get("state") not in (None, "open"):
+        return "none", f"#{pr.get('number')} is {pr.get('state')}"
+    head_repo = str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "")
+    if head_repo and head_repo != repo:
+        return "manual", (f"#{pr.get('number')} comes from the fork {head_repo}: a fork's token cannot re-run a workflow, so "
+                          f"a maintainer re-runs the newest `{PROTECTION_READ_EVENT}` run of this check for head {head[:10]}")
+    if candidate is None:
+        return "fail", (f"no `{PROTECTION_READ_EVENT}` run of this workflow exists for head {head[:10]} — there is no "
+                        "verdict branch protection reads; push to the pull request to start one")
+    if candidate.get("head_sha") != head:
+        return "none", f"run {candidate.get('id')} is for {str(candidate.get('head_sha'))[:10]}, not the current head {head[:10]}"
+    if str(candidate.get("id")) == str(own_run_id):
+        return "none", f"run {candidate.get('id')} is this run"
+    if candidate.get("status") != "completed":
+        return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} is still {candidate.get('status')} — it reads live state itself"
+    if candidate.get("conclusion") == "success":
+        return "none", f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} already reads success — nothing to refresh"
+    started, judged = parse_stamp(candidate.get("run_started_at")), parse_stamp(evaluated_at)
+    if judged is None:
+        return "fail", f"the verdict's own time {evaluated_at!r} is unreadable, so staleness cannot be judged"
+    if started is not None and started >= judged:
+        return "none", (f"`{PROTECTION_READ_EVENT}` run {candidate.get('id')} ({candidate.get('conclusion')}) started at "
+                        f"{candidate.get('run_started_at')}, not before this verdict ({evaluated_at}) — it judged a state no older "
+                        "than this one, so it is not re-run")
+    return "rerun", (f"this `{event}` verdict is GREEN but branch protection reads `{PROTECTION_READ_EVENT}` run "
+                     f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running its failed jobs")
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -1470,6 +1533,45 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
     for e in errors:
         print(f"::error::stage advance failed — {e}")
     return 1 if errors else 0
+
+
+def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str) -> int:
+    """The self-refresh job: exit 0 when it re-ran the read run or had nothing to do (both printed),
+    1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself."""
+    try:
+        gh = Gh(repo)
+        own = gh.api(f"actions/runs/{run_id}")
+        workflow_id = own.get("workflow_id") if isinstance(own, dict) else None
+        if not workflow_id:
+            raise ReadError(f"actions/runs/{run_id} named no workflow_id")
+        pr = gh.api(f"pulls/{number}")
+        if not isinstance(pr, dict) or pr.get("number") != number:
+            raise ReadError(f"pulls/{number} did not return pull request #{number}")
+        head = str((pr.get("head") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise ReadError(f"pulls/{number} reported no head sha")
+        listing = gh.api(f"actions/workflows/{workflow_id}/runs?head_sha={head}&event={PROTECTION_READ_EVENT}&per_page=50")
+        runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        if not isinstance(runs, list):
+            raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
+        candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
+        action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
+        if action == "rerun" and not post_rerun(gh, candidate["id"]):
+            action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
+    except (ReadError, KeyError, TypeError) as e:
+        print(f"::error::the protection-read run of #{number} was NOT refreshed: {e}")
+        return 1
+    if action == "rerun":
+        print(f"::notice::#{number}: {why} — {candidate.get('html_url')}")
+    elif action == "manual":
+        print(f"::warning::#{number}: {why}")
+    elif action == "fail":
+        print(f"::error::#{number}: {why}")
+        return 1
+    else:
+        print(f"  #{number}: {why}")
+    _append("GITHUB_STEP_SUMMARY", f"Refresh of the protection-read verdict for #{number}: {action} — {why}\n")
+    return 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -2349,6 +2451,42 @@ def self_test() -> int:
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
+    # ── the SELF-REFRESH: a green verdict branch protection does not read re-runs the one it does.
+    ref_pr = {"number": 4649, "state": "open", "head": {"sha": HEAD, "repo": {"full_name": "Systemorph/MeshWeaver"}}}
+    red_read = {"id": 7, "head_sha": HEAD, "status": "completed", "conclusion": "failure",
+                "run_started_at": "2026-10-07T09:40:00Z", "html_url": "u"}
+    def ref_case(name, expect, event, candidate, pr=None, evaluated_at="2026-10-07T10:00:00Z", own=99, says=""):
+        nonlocal failures
+        action, why = refresh_action(event, own, evaluated_at, "Systemorph/MeshWeaver",
+                                     pr if pr is not None else ref_pr, candidate)
+        ok = action == expect and says in why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} refresh: {name:51} expected={expect} got={action} ({why[:60]})")
+    ref_case("#4649: comment-run GREEN, pull_request run RED -> rerun", "rerun", "pull_request_review_comment", red_read,
+             says="re-running")
+    ref_case("review-run GREEN, pull_request run RED -> rerun", "rerun", "pull_request_review", red_read, says="re-running")
+    ref_case("a cancelled (evicted) read run -> rerun", "rerun", "pull_request_review_comment",
+             dict(red_read, conclusion="cancelled"), says="cancelled")
+    ref_case("this run IS the pull_request run -> none (no loop)", "none", "pull_request", red_read, says="IS a `pull_request`")
+    ref_case("merge_group entry -> none", "none", "merge_group", red_read, says="merge-queue")
+    ref_case("read run already re-run, in flight -> none (idempotent)", "none", "pull_request_review_comment",
+             dict(red_read, status="in_progress", conclusion=None), says="still in_progress")
+    ref_case("read run already green -> none", "none", "pull_request_review_comment",
+             dict(red_read, conclusion="success"), says="already reads success")
+    ref_case("read run red but started AFTER this verdict -> none", "none", "pull_request_review_comment",
+             dict(red_read, run_started_at="2026-10-07T10:00:05Z"), says="not before this verdict")
+    ref_case("read run started at the verdict instant -> none", "none", "pull_request_review_comment",
+             dict(red_read, run_started_at="2026-10-07T10:00:00Z"), says="not before this verdict")
+    ref_case("read run is for an older head -> none", "none", "pull_request_review_comment",
+             dict(red_read, head_sha="b" * 40), says="not the current head")
+    ref_case("candidate is this very run -> none", "none", "pull_request_review_comment", red_read, own=7, says="is this run")
+    ref_case("no pull_request run at all -> fail, named", "fail", "pull_request_review_comment", None, says="push to the pull request")
+    ref_case("closed pull request -> none", "none", "pull_request_review_comment", red_read, pr=dict(ref_pr, state="closed"),
+             says="closed")
+    ref_case("fork pull request -> manual, never a silent skip", "manual", "pull_request_review_comment", red_read,
+             pr=dict(ref_pr, head={"sha": HEAD, "repo": {"full_name": "someone/MeshWeaver"}}), says="fork")
+    ref_case("unreadable verdict time -> fail", "fail", "pull_request_review_comment", red_read, evaluated_at="", says="unreadable")
+
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
     for name, ref, expect in [
@@ -2408,6 +2546,12 @@ def main(argv=None) -> int:
     ap.add_argument("--workflow", help="--stage-advance: the caller's pull-request CI workflow FILE (ci.yml, dotnet-test.yml)")
     ap.add_argument("--head-sha", help="--stage-advance: the head a check_run event named")
     ap.add_argument("--sweep", action="store_true", help="--stage-advance: every open PR with a failed run (the fallback timer)")
+    ap.add_argument("--refresh-read-run", action="store_true",
+                    help="after a GREEN verdict: re-run the newest `pull_request` run of this workflow for the head when it "
+                         "still carries an older red (refresh_action); takes --repo, --pr, --event, --run-id, --evaluated-at")
+    ap.add_argument("--event", help="--refresh-read-run: the event that produced the GREEN verdict (github.event_name)")
+    ap.add_argument("--run-id", help="--refresh-read-run: this workflow run's id (github.run_id)")
+    ap.add_argument("--evaluated-at", help="--refresh-read-run: when the GREEN verdict was taken (ISO-8601 UTC)")
     ap.add_argument("--wait-minutes", type=int, default=20,
                     help="--stage-advance: how long to let an in-flight held run finish before re-running it")
     args = ap.parse_args(argv)
@@ -2419,6 +2563,19 @@ def main(argv=None) -> int:
     if not 5 <= args.fallback_minutes <= 240:
         print(f"::error::--fallback-minutes must be between 5 and 240, got {args.fallback_minutes}")
         return 2
+    if args.refresh_read_run:
+        if not args.event:
+            print("::error::--refresh-read-run needs --event (github.event_name)")
+            return 2
+        if args.event == "merge_group" or not args.pr:
+            # A merge-queue entry has nothing on a pull request head to refresh (refresh_action says
+            # the same); printed rather than failed on a usage error.
+            print(f"  event {args.event!r} carries no pull request head to refresh — nothing to do")
+            return 0
+        if not re.fullmatch(r"[1-9]\d*", args.pr) or not re.fullmatch(r"[1-9]\d*", args.run_id or ""):
+            print(f"::error::--refresh-read-run needs --pr <number> and --run-id <number>, got {args.pr!r} / {args.run_id!r}")
+            return 2
+        return run_refresh(args.repo, int(args.pr), args.event, args.run_id, args.evaluated_at or "")
     if args.stage_advance:
         if not args.workflow or not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.workflow):
             print("::error::--stage-advance needs --workflow <file>.yml (the caller's pull-request CI workflow)")
