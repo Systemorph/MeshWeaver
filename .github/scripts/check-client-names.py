@@ -56,6 +56,14 @@ RETRY_DELAY_S = float(os.environ.get("NAME_CHECK_RETRY_DELAY_S", "5"))
 POLL_S = float(os.environ.get("NAME_CHECK_POLL_S", "3"))
 ANSWER_TIMEOUT_S = float(os.environ.get("NAME_CHECK_TIMEOUT_S", "180"))
 STATUS_NAMES = {1: "Requested", 2: "Pass", 3: "Fail", 4: "NotChecked"}
+# What a refused CREATE means and who fixes it. The caller's grant is an access-control change, so
+# the build never makes it: it is the governed standard `namecheck.caller.grant` on the CRM-owning
+# instance (input: the token's service identity, `svc-…`; signed by a global admin who is not the
+# proposer), which writes `Governance/NameChecks/_Access/{svc}_Access` with the NameCheckCaller role.
+GRANT_REMEDY = ("the build's service user may not create on " + NAMESPACE + ". Owed by a global admin, never "
+                "by the build: propose a Governance/Activity under Governance/Activities with standard "
+                "'namecheck.caller.grant' and inputs.service = the token's service identity (svc-…), signed by "
+                "another global admin; it writes " + NAMESPACE + "/_Access/{svc}_Access with role NameCheckCaller")
 
 
 class NotChecked(RuntimeError):
@@ -275,10 +283,14 @@ def submit_and_wait(mesh: Mesh, repo: str, sha: str, run: str, parts: list[list[
         node = {"id": nid, "namespace": NAMESPACE, "name": f"{repo}@{sha[:12]} ({i + 1}/{len(parts)})",
                 "nodeType": NODE_TYPE,
                 "content": {"$type": CONTENT_TYPE, "repo": repo, "sha": sha, "lines": part}}
-        text = mesh.call("create", {"node": json.dumps(node)}).strip()
+        try:
+            text = mesh.call("create", {"node": json.dumps(node)}).strip()
+        except NotChecked as exc:
+            if "unreachable" in str(exc) or "HTTP 401" in str(exc):
+                raise                                         # not a grant question: the endpoint or the token
+            raise NotChecked(f"{exc} — {GRANT_REMEDY}") from exc
         if not text.startswith("Created"):
-            raise NotChecked("the check request was not created (the build's service user may lack create on "
-                             f"{NAMESPACE})")
+            raise NotChecked(f"the check request was not created — {GRANT_REMEDY}")
         ids.append(nid)
     answers: dict[str, dict] = {}
     deadline = time.monotonic() + ANSWER_TIMEOUT_S
@@ -469,6 +481,9 @@ def self_test() -> int:
             if method == "initialize":
                 return self._send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": PROTOCOL_VERSION}})
             name, args = req["params"]["name"], req["params"]["arguments"]
+            if name == "create" and flags.get("no_grant"):
+                return self._send({"jsonrpc": "2.0", "id": rid, "result": {"content": [
+                    {"type": "text", "text": "Access denied: secret detail never printed"}]}})
             if name == "create" and flags["rpc_error"]:
                 return self._send({"jsonrpc": "2.0", "id": rid,
                                    "error": {"code": -32602, "message": "secret detail never printed"}})
@@ -625,7 +640,15 @@ def self_test() -> int:
         rc, out = run(ok_env, "--base", "HEAD~1")
         check("🚨 a JSON-RPC error FAILS closed, naming the refused call and not its message",
               rc == 1 and "tools/call create: JSON-RPC error -32602" in out and "secret detail" not in out)
-        flags["rpc_error"] = False
+        flags["rpc_error"], flags["no_grant"] = False, True
+        rc, out = run(ok_env, "--base", "HEAD~1")
+        check("🚨 a refused create (no grant) FAILS closed and names the governed grant to propose",
+              rc == 1 and "::error::" in out and "namecheck.caller.grant" in out and "NameCheckCaller" in out
+              and "secret detail" not in out)
+        rc, out = run(ok_env, "--base", "HEAD~1", "--report-only")
+        check("…and --report-only (private repositories) still prints the remedy, as a warning",
+              rc == 0 and "::warning::" in out and "namecheck.caller.grant" in out)
+        flags["no_grant"] = False
         flags["not_checked"], flags["answer"] = False, False
         rc, out = run(ok_env, "--base", "HEAD~1")
         check("🚨 no answer in time FAILS closed", rc == 1 and "no answer within" in out)
