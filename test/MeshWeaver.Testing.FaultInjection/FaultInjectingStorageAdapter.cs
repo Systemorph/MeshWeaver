@@ -158,7 +158,17 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<DataChangeNotification> Changes { get; }
 
     /// <inheritdoc />
-    public IObservable<ChangeFeedGap> ChangeFeedGaps => Observable.Merge(_inner.ChangeFeedGaps, _gaps.AsObservable());
+    /// <remarks>Each subscriber isolated — one that throws must not keep the next from seeing the
+    /// gap, or the harness would model a weaker contract than production's.</remarks>
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => Observable.Create<ChangeFeedGap>(observer =>
+        Observable.Merge(_inner.ChangeFeedGaps, _gaps.AsObservable()).Subscribe(
+            gap =>
+            {
+                try { observer.OnNext(gap); }
+                catch (Exception) { /* isolated: the throwing consumer is the test's to see, not its siblings' */ }
+            },
+            observer.OnError,
+            observer.OnCompleted));
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)

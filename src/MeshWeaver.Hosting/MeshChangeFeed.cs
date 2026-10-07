@@ -63,7 +63,29 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     }
 
     /// <inheritdoc />
-    public IObservable<ChangeFeedGap> Gaps => _gaps.AsObservable();
+    /// <remarks>
+    /// 🚨 Each subscriber is ISOLATED, exactly as <see cref="IMeshInvalidationFeed.Subscribe"/>
+    /// callbacks are: a raw Subject aborts its fan-out at the first observer that throws, so one
+    /// cache faulting while it drops its state (or one torn down mid-delivery) would keep every
+    /// later subscriber stale — the very failure a gap exists to end.
+    /// </remarks>
+    public IObservable<ChangeFeedGap> Gaps => Observable.Create<ChangeFeedGap>(observer =>
+        _gaps.Subscribe(
+            gap =>
+            {
+                try
+                {
+                    observer.OnNext(gap);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex,
+                        "Mesh change-feed gap subscriber failed for '{Source}'; continuing with the others",
+                        gap.Source);
+                }
+            },
+            observer.OnError,
+            observer.OnCompleted));
 
     private void PublishGap(ChangeFeedGap gap)
     {
@@ -74,9 +96,9 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
             + "commits made by other processes in that window were never announced here; "
             + "process-local caches now re-read their authoritative state",
             gap.Source, gap.LostAt, gap.ResumedAt, gap.Reason ?? "no reason given");
-        // Every in-tree subscriber guards its own handler (state hygiene must never break the
-        // producer); this catch keeps a foreign one from throwing back into the backend's
-        // listener loop, where it would read as a connection error and cost another reconnect.
+        // Subscribers are isolated in Gaps; this catch is only the backstop that keeps anything
+        // escaping the subject itself from reaching the backend's listener loop, where it would
+        // read as a connection error and cost another reconnect.
         try
         {
             _gaps.OnNext(gap);
@@ -84,8 +106,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         catch (Exception ex)
         {
             logger?.LogError(ex,
-                "A change-feed gap subscriber failed for '{Source}'; later subscribers in this "
-                + "delivery may not have dropped their derived state", gap.Source);
+                "Delivering the change-feed gap for '{Source}' faulted", gap.Source);
         }
     }
 

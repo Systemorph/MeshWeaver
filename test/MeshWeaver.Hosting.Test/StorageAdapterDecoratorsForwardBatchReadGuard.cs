@@ -118,7 +118,7 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
     public void EveryDecoratorThatForwardsTheFeed_ForwardsItsGaps()
     {
         var feedForwarders = Decorators()
-            .Where(t => DeclaresProperty(t, nameof(IStorageAdapter.Changes)))
+            .Where(ForwardsTheFeed)
             .ToList();
         feedForwarders.Count.Should().BeGreaterThanOrEqualTo(3,
             "the production chain's SubtreeDeletionGuard, MonotonicWriteGuard and VersionWriting all "
@@ -126,7 +126,7 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             + $"Saw: {string.Join(", ", feedForwarders.Select(t => t.Name))}");
 
         var hiding = feedForwarders
-            .Where(t => !DeclaresProperty(t, nameof(IStorageAdapter.ChangeFeedGaps)))
+            .Where(HidesTheGaps)
             .Select(t => $"{t.FullName} forwards Changes but declares no ChangeFeedGaps")
             .ToList();
 
@@ -135,9 +135,33 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             + "cache above it misses the one signal that says notifications were lost. Offenders:\n  "
             + string.Join("\n  ", hiding));
 
-        // Mutation arm: the predicate must be able to fail.
-        DeclaresProperty(typeof(ForgetfulDouble), nameof(IStorageAdapter.ChangeFeedGaps)).Should().BeFalse(
-            "the planted double inherits the default — the shape this rule exists to catch");
+        // Mutation arms, through the SAME two predicates the rule applies: a decorator that
+        // forwards the feed but inherits the gap default must be flagged, one that forwards both
+        // must be cleared, and one that forwards neither is out of scope.
+        ForwardsTheFeed(typeof(GapHidingDouble)).Should().BeTrue("it declares Changes");
+        HidesTheGaps(typeof(GapHidingDouble)).Should().BeTrue(
+            "it forwards Changes and inherits ChangeFeedGaps — the omission this rule exists to catch");
+        ForwardsTheFeed(typeof(GapForwardingDouble)).Should().BeTrue("it declares Changes");
+        HidesTheGaps(typeof(GapForwardingDouble)).Should().BeFalse("it forwards both halves of the feed");
+        ForwardsTheFeed(typeof(ForgetfulDouble)).Should().BeFalse(
+            "it publishes no feed, so it has no gap to hide and is out of this rule's scope");
+    }
+
+    private static bool ForwardsTheFeed(Type type) => DeclaresProperty(type, nameof(IStorageAdapter.Changes));
+
+    private static bool HidesTheGaps(Type type) => !DeclaresProperty(type, nameof(IStorageAdapter.ChangeFeedGaps));
+
+    /// <summary>Forwards the feed but inherits the gap default — the mutation the gap rule must catch.</summary>
+    private sealed class GapHidingDouble(IStorageAdapter inner) : InertDecorator(inner)
+    {
+        public IObservable<DataChangeNotification> Changes => Inner.Changes;
+    }
+
+    /// <summary>Forwards both halves of the feed — the shape the gap rule wants.</summary>
+    private sealed class GapForwardingDouble(IStorageAdapter inner) : InertDecorator(inner)
+    {
+        public IObservable<DataChangeNotification> Changes => Inner.Changes;
+        public IObservable<ChangeFeedGap> ChangeFeedGaps => Inner.ChangeFeedGaps;
     }
 
     /// <summary>
