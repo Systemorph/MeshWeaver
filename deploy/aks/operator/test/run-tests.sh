@@ -1990,6 +1990,61 @@ else
 fi
 rm -rf "$_ki_dir"
 
+# ── hosting-deploy wires the portal's workload identity from the identity it federates to ───────
+# 🚨 Systemorph/MeshWeaver.Plugins#2994, measured on control.systemorph.com 2026-10-06/07: every
+# self-update check failed `CredentialUnavailableException … WorkloadIdentityCredential
+# authentication unavailable`. hosting-federate had bound the namespace's ServiceAccount to
+# $AZ_PORTAL_IDENTITY, but nothing set selfUpdate.azureClientId — the ONE value the chart turns into
+# the SA annotation, the pod label and AZURE_CLIENT_ID — because the record carries the identity's
+# name, never its client id. These cases pin: the id is READ from that identity and --set on BOTH the
+# adoption render and the upgrade; no identity named → none set, said by name; an unreadable
+# identity (absent OR refused) is a refusal before helm, never a release without the credential.
+echo
+echo "── hosting-deploy: wires the portal's workload identity (Plugins#2994) ──"
+_wi_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_wi_dir/"; _wi_log="$_wi_dir/calls.log"; : > "$_wi_log"
+mkdir -p "$_wi_dir/identity"; printf '11111111-2222-3333-4444-555555555555\n' > "$_wi_dir/identity/memexaks-portal-mi"
+_wi_vals="$_wi_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 2\n' > "$_wi_vals"
+_wi_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_wi_dir" HOSTING_DEPLOY_STUB_LOG="$_wi_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_wi_vals" --image cr.example.test/memex-control:1 2>&1; }
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"; _wi_tp="$(grep '^helm template' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && grep -q '^az identity show -g memex-aks-rg -n memexaks-portal-mi --query clientId -o tsv$' "$_wi_log" \
+   && printf '%s' "$_wi_up" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_tp" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=11111111-2222-3333-4444-555555555555'; then
+  ok "the client id is read from \$AZ_PORTAL_IDENTITY and --set as selfUpdate.azureClientId on the render AND the upgrade"
+else
+  bad "the portal identity's client id reaches selfUpdate.azureClientId" "rc=${_wi_rc} upgrade: '${_wi_up}' log: $(cat "$_wi_log") out: ${_wi_out}"
+fi
+# NEGATIVE CONTROL: no identity named → nothing set, nothing read, and the absence is SAID.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY= )"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && [ -n "$_wi_up" ] && ! printf '%s' "$_wi_up" | grep -q -- 'selfUpdate.azureClientId' \
+   && ! grep -q '^az identity' "$_wi_log" && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=none'; then
+  ok "no AZ_PORTAL_IDENTITY → no azureClientId set, no identity read, and portal_identity=none is said"
+else
+  bad "no identity named sets nothing and says so" "rc=${_wi_rc} upgrade: '${_wi_up}' out: ${_wi_out}"
+fi
+# An identity that does not exist is a refusal BEFORE helm — never a release with no credential.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=no-such-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'could not read the client id of the portal identity no-such-mi' \
+   && ! grep -q '^helm ' "$_wi_log"; then
+  ok "an unreadable portal identity is refused before helm, naming it"
+else
+  bad "an unreadable portal identity is refused before helm" "rc=${_wi_rc} out: ${_wi_out} log: $(cat "$_wi_log")"
+fi
+# A REFUSED read says refused — it ruled nothing out.
+: > "$_wi_log"; : > "$_wi_dir/identity/memexaks-portal-mi.forbidden"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'REFUSED, not absent' && ! grep -q '^helm ' "$_wi_log"; then
+  ok "a refused identity read is reported as REFUSED, not absent, before helm"
+else
+  bad "a refused identity read is reported as refused" "rc=${_wi_rc} out: ${_wi_out}"
+fi
+rm -rf "$_wi_dir"
+
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
 # and its --atomic rollback erred too. The preflight asks `kubectl auth can-i` per rendered kind

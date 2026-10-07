@@ -394,19 +394,31 @@ public sealed class InstanceRebootAgent
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started);
+        // The feed announces a COMMIT; its version is the floor of the read in Handle (the mirror can
+        // trail the feed — see ModuleReloadAgent.Handle). The boot listing announces none.
         var heard = feed is null
-            ? Observable.Empty<string>()
+            ? Observable.Empty<(string Path, long Committed)>()
             : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
                 .Where(change => change.Kind != MeshChangeKind.Deleted
                                  && string.Equals(change.NodeType, InstanceRebootRequest.NodeType, StringComparison.OrdinalIgnoreCase)
                                  && string.Equals(change.Namespace?.Trim('/'), InstanceRebootRequest.Namespace, StringComparison.OrdinalIgnoreCase))
-                .Select(change => change.Path);
-        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths);
+                // A versionless feed event is a path-only invalidation: no floor is known, so the
+                // read may trail the commit — named here, never acted on in silence.
+                .Do(change =>
+                {
+                    if (change.Version <= 0)
+                        logger?.LogWarning("[Reboot] {Path}: the feed announced a commit WITHOUT a version (path-only invalidation); "
+                            + "this process reads its mirror unfloored and may act on the state before that commit", change.Path);
+                })
+                .Select(change => (change.Path, Committed: change.Version));
+        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths)
+            .Select(path => (Path: path, Committed: 0L));
         meshHub.RegisterForDisposal(started.SelectMany(_ => heard).Merge(open)
-            .Select(path => Handle(meshHub, path)
+            .Select(heardOf => Handle(meshHub, heardOf.Path, heardOf.Committed)
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogWarning(ex, "[Reboot] {Path}: this process could not report its verification", path);
+                    logger?.LogWarning(ex, "[Reboot] {Path}: this process could not report its verification (announced v{Committed})",
+                        heardOf.Path, heardOf.Committed);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
@@ -433,12 +445,22 @@ public sealed class InstanceRebootAgent
 
     /// <summary>
     /// Reads the request (which also activates its executor) and, when THIS process booted after its
-    /// restart stamp and has not reported yet, runs every check and reports.
+    /// restart stamp and has not reported yet, runs every check and reports. The read is of the
+    /// commit the feed announced (<paramref name="committed"/>), never of a mirror that trails it.
     /// </summary>
-    internal IObservable<Unit> Handle(IMessageHub meshHub, string path)
+    /// <param name="meshHub">The mesh hub of this process.</param>
+    /// <param name="path">The request's path.</param>
+    /// <param name="committed">The version the feed announced, or <c>0</c> for a path from the boot listing.</param>
+    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, long committed = 0)
     {
         var access = meshHub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path)
+                .Where(node => node is not null && node.Version >= committed)
+                // FirstAsync, never Take(1): a stream that COMPLETES before reaching the floor (a
+                // disposed synchronization stream forwards OnCompleted) must surface as an error on
+                // the agent's warning path, never as a silent empty that reports nothing.
+                .FirstAsync()
+                .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(node =>
             {
                 var request = node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions);

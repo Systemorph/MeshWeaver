@@ -115,6 +115,17 @@ the break.
 You author a series. The build derives the patch against the last published release and settles it
 on `main` in `tag-modules`, so a branch never races the trunk for a number.
 
+🚨 **A published tag fixes what its number means.** The derivation reads two witnesses, the
+highest `<Module>/vX.Y.Z` tag and the trunk's committed lock. When a tag sits on the highest
+patch, only the tag can say "this tree is already released". A trunk lock that claims the same
+number for a different hash is two merges that took one number. It derives `patch+1`. It never
+vouches for itself. Before this rule, "either witness recorded this hash" let main's own lock pass
+`--check-versions`, because on main that witness *is* the tree being checked. Meanwhile
+`tag-modules` refused the cut. MeshWeaver.Education main, 2026-10-06:
+*"AgenticBusiness/v1.3.6 already released with content 575e2a2fc0c0b921, but the tree is
+8deea0be3cad66db"*. The trunk-only case is unchanged: in the window between a merge and its tag
+job, the trunk's own record still counts as released.
+
 **The hash input is the Git-visible package tree:** tracked files plus non-ignored untracked files
 in the working tree. Git-ignored local outputs (for example, a test `.trx` file under a package)
 are not package content and do not affect `moduleVersion`. This keeps a developer's post-merge lock

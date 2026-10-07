@@ -2457,6 +2457,18 @@ jobs:
     - name: "No guard in the shared validate lane is masked by the guard before it"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-guard-step-masking.py --root .
+    # 🚨 A GREEN MARKER VOUCHES FOR EVERY VERDICT, SO IT MUST FOLLOW EVERY VERDICT (#5988). The
+    # collector's `Record green tree` is what a later run on the same tree reuses as proof — and on
+    # that reuse path the gate verdicts are skipped. It once sat in front of eleven gate verdicts, so a
+    # red-gate tree was recorded green (#5852, run 36480427008). Moving it was the fix; this holds it:
+    # no failable step after a marker, no status function in a marker's `if:`, and every needed gate
+    # read by a verdict before it. The self-test includes a negative control on THIS workflow.
+    - name: "A green marker follows every gate verdict — the gate can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-green-marker-order.py --self-test
+    - name: "The collector records a tree green only after every gate verdict"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-green-marker-order.py --root .
     # 💸 GitHub Actions cost is zero (maintainer, 2026-09-17: "we still incur cost for github actions.
     # wtf? please see that it goes to 0"). A `workflow_call` lane's hosted minutes bill the CALLER, and
     # every caller of these lanes but core itself is private — so no job inside one may name a literal
@@ -2645,6 +2657,14 @@ jobs:
     - name: "A satellite's two package enumerators stay comparable — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-package-enumeration.py --self-test --canonical .github/scripts/gen-manifests.py
+    # The canonical manifest generator decides every satellite's module version, and until now its
+    # own self-test ran only inside the satellites' validate lane. A core change that broke the
+    # derivation was red there, on the next pin, instead of on this PR. One case it now carries is
+    # a trunk lock re-claiming a PUBLISHED number for other content, which must bump past the tag
+    # (MeshWeaver.Education main, tag-modules: "v1.3.6 already released with content 575e…").
+    - name: "The manifest generator derives versions it can defend — incl. the published tag wins (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/gen-manifests.py --self-test
 
     # 🚨 The fleet pins platform images BY DIGEST, and ACR retention deletes what is pinned
     # (MeshWeaver#3438: three satellite repos dead at `manifest unknown` at once, Education's own

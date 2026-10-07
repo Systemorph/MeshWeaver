@@ -764,6 +764,11 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                // @-autocomplete on the mesh hub — PLATFORM behaviour the portal owns. It used to ride
+                // the Blazor.Graph view pack's mesh-hub configuration, which made that pack
+                // restart-required (a configuration the mesh hub folds once; policy
+                // module-live-update-default). Idempotent: both registrations dedupe.
+                .ConfigureHub(hub => hub.AddMeshNavigation())
                 // Plugin catalog: registers the Package/PluginCatalog content types + (below) the
                 // platform-admin "Plugin Catalog" settings tab — NOT a browsable Plugins Space. This
                 // instance ALSO acts as the registry: /api/plugins serves its configured source

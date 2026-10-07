@@ -216,7 +216,7 @@ public static class DynamicContentTypeRegistrar
                     path, ContentTypeRegistrationStatus.Faulted, $"{ex.GetType().Name}: {ex.Message}")));
     }
 
-    private static ContentTypeRegistrationOutcome Register(
+    internal static ContentTypeRegistrationOutcome Register(
         IMessageHub mesh,
         IMeshContentTypeRegistry registry,
         string path,
@@ -232,7 +232,13 @@ public static class DynamicContentTypeRegistrar
             return new ContentTypeRegistrationOutcome(
                 path, ContentTypeRegistrationStatus.Faulted, "the recorded build carries no configuration");
 
-        ContentTypeRegistration.ProbeRegister(mesh, path, config.HubConfiguration, logger);
+        // 🚨 A probe that FAULTED is Faulted, never "declares no content type": the latter is a
+        // verdict about the type, the former is a failure of this replica, and only Faulted is named
+        // in the pass's summary.
+        if (ContentTypeRegistration.ProbeRegister(mesh, path, config.HubConfiguration, logger) is { } fault)
+            return new ContentTypeRegistrationOutcome(
+                path, ContentTypeRegistrationStatus.Faulted,
+                $"the registration probe faulted: {fault.GetType().Name}: {fault.Message}");
         return registry.TryResolveByNodeType(path, out var registered)
             ? new ContentTypeRegistrationOutcome(path, ContentTypeRegistrationStatus.Registered, registered.FullName)
             : new ContentTypeRegistrationOutcome(path, ContentTypeRegistrationStatus.DeclaresNoContentType);
