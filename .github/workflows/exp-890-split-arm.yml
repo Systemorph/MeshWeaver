@@ -36,7 +36,8 @@ jobs:
           for n in 0 1 2 3 4 5; do
             rm -rf dl && mkdir dl
             gh run download "$SOURCE_RUN" -R Systemorph/MeshWeaver -n "build-output-$n" -D dl
-            if tar -I 'zstd --long=27' -tf dl/build-output-$n.tar.zst | grep -q "test/Memex.Portal.Shared.Test/bin/Release/net10.0/Memex.Portal.Shared.Test.dll"; then
+            tar -I 'zstd --long=27' -tf dl/build-output-$n.tar.zst > list.txt
+            if grep -q "test/Memex.Portal.Shared.Test/bin/Release/net10.0/Memex.Portal.Shared.Test.dll" list.txt; then
               tar -I 'zstd --long=27' -xf dl/build-output-$n.tar.zst
               echo "suite found in build-output-$n"
               break
