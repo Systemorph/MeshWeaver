@@ -104,6 +104,8 @@ public class PlatformFileReaderGuard
     [InlineData("{\"resources\":{\"core\":{\"limit\":1000,\"used\":799,\"remaining\":201,\"reset\":1791386342}}}", true, "799 of 1000 used", false)]
     [InlineData("{\"resources\":{\"core\":{\"limit\":1000,\"used\":800,\"remaining\":200,\"reset\":1791386342}}}", true, "::warning title=REST budget nearly spent::REST budget of this job's token: 800 of 1000 used", true)]
     [InlineData(null, true, "REST budget: /rate_limit did not answer — not read", false)]
+    [InlineData("{\"resources\":{\"core\":", true, "REST budget: /rate_limit answered something unreadable — not read", false)]
+    [InlineData("[1,2,3]", true, "REST budget: /rate_limit answered something unreadable — not read", false)]
     [InlineData("{}", false, "REST budget: no token in this step — not read", false)]
     public void TheBudgetMode_ReadsTheBudget_WarnsAtEightyPercent_AndNeverFailsTheJob(
         string? body, bool withToken, string expected, bool warns)
