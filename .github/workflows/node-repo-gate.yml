@@ -837,8 +837,17 @@ jobs:
             # resolve-platform.py's SET_NAME, segment for segment: a prerelease is dot-separated
             # NON-EMPTY identifiers, so `3.0.0-rc..ci.1` is refused here exactly as the resolver
             # would refuse it — this input may never name a set the resolver cannot.
-            [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]] \
-              || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N) — pass the resolver's \`set\` output, or nothing"; exit 1; }
+            # And its SemVer notation (policy `platform-semver-versioning`): `<major>.<minor>.<run>`
+            # from line 3.1 on, the run (patch) never 0 — `match_set_name` in the resolver.
+            is_set=false
+            if [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]]; then
+              is_set=true
+            elif [[ "$PINNED_SET" =~ ^([0-9]+)\.([0-9]+)\.[1-9][0-9]*$ ]] \
+                && { [ "${BASH_REMATCH[1]}" -gt 3 ] || { [ "${BASH_REMATCH[1]}" -eq 3 ] && [ "${BASH_REMATCH[2]}" -ge 1 ]; }; }; then
+              is_set=true
+            fi
+            [ "$is_set" = true ] \
+              || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N, or <major>.<minor>.N from 3.1 on) — pass the resolver's \`set\` output, or nothing"; exit 1; }
             # Only when NEITHER digest is pinned; a half-pin falls through to its own, more
             # specific refusal below rather than being misdescribed as "none".
             if [ -z "${IMAGE_DIGEST:-}" ] && [ -z "${PLATFORM_DIGEST:-}" ]; then
