@@ -161,10 +161,10 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Identity.Web" Version="4.15.0" />
-    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.15.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="4.16.0" />
+    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.16.0" />
+    <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.0" />
     <!-- 1.17.0 is where the agent-store abstractions MeshWeaver.AI.Stores implements over mesh
          nodes (AgentFileStore, AgentSkillsSource) reached their current shape. Kept in lockstep —
          these three ship together and mixing versions breaks their shared abstractions. -->
@@ -178,8 +178,8 @@
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
          multi-arch portal image requires. -->
-    <PackageVersion Include="SkiaSharp" Version="4.152.1" />
-    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.1" />
+    <PackageVersion Include="SkiaSharp" Version="4.153.1" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
     <!-- 🚨 SkiaSharp DRAWS; it does not PARSE. The favicon rasterizer (IconRasterizer, issue
          #2075) has to turn a node's AUTHORED &lt;svg&gt; mark into PNG bytes because Safari
          renders no SVG favicon at all, so the whole per-content favicon feature was invisible on
@@ -209,6 +209,7 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
@@ -216,13 +217,13 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
-    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Core" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.4.0" />
     <!-- Orleans test cluster — a src pin because MeshWeaver.Hosting.Orleans.TestBase ships it. -->
-    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Serialization.SystemTextJson" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.63.0" />
     <PackageVersion Include="NuGet.Protocol" Version="7.9.0" />
     <PackageVersion Include="NuGet.Packaging" Version="7.9.0" />
@@ -302,10 +303,16 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.14.4" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.14.4" />
     <PackageVersion Include="Namotion.Reflection" Version="3.5.1" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.3.1" />
-    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.3.1" />
+    <!-- 🚨 ONE Orleans family, one version. These four are referenced only by MeshWeaver.Plugins'
+         hosts (this file is its version source), so no core project shows them to Dependabot and a
+         grouped Orleans bump leaves them behind. A split family ships Microsoft.Orleans.Reminders at
+         the OLD version in the portal image; the image-derived central list then pins it there, and
+         every Plugins test project on Microsoft.Orleans.TestingHost fails restore with NU1109
+         (TestingHost needs Reminders at the family version). Move them with the rest of the family. -->
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.4.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.4.6" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.4.6" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />

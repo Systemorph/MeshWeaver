@@ -39,7 +39,7 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// while the mesh is degraded — and a fresh image is precisely what recovers a degraded pod. The
 /// policy READ was decoupled in #611; the availability WRITE in #1020.</para>
 /// </summary>
-public class SelfUpdateHostedService : IHostedService
+public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart, IInstanceRebootActivation
 {
     private readonly IMessageHub _hub;
     private readonly IAcrTagLister _acr;
@@ -396,7 +396,7 @@ public class SelfUpdateHostedService : IHostedService
             return landing.GetActivation()
                 .Take(1)
                 .SelectMany(activation => activation.PendingRestart
-                    ? Restart(platform)
+                    ? LiveFirst(platform)
                     : Observable.Return(platform))
                 .Catch((Exception ex) =>
                 {
@@ -406,6 +406,34 @@ public class SelfUpdateHostedService : IHostedService
                     return Observable.Return(platform);
                 });
         });
+
+    /// <summary>
+    /// The live module activation, resolved from the mesh's services — the seam through which a
+    /// pending module is swapped in LIVE before any restart is considered. Null on a host without
+    /// the plugin catalog, which keeps the restart path exactly as it was. Virtual for the same
+    /// reason <see cref="ResolveLandingService"/> is.
+    /// </summary>
+    protected virtual ModuleLiveActivation? ResolveLiveActivation() =>
+        _hub.ServiceProvider.GetService<ModuleLiveActivation>();
+
+    /// <summary>
+    /// 🚨 LIVE FIRST (policy <c>module-live-update-default</c>): a landed module generation is swapped
+    /// into the running process, and ONLY what does not go live — a module that cannot be swapped
+    /// in-process, a swap that failed at runtime, a module this process does not hold in its own
+    /// context — is left to the automatic restart, which still needs no approval (#4607). A pass that
+    /// cannot establish what is pending keeps the restart that was always taken.
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> LiveFirst(SelfUpdateVerdict platform)
+    {
+        var live = ResolveLiveActivation();
+        if (live is null)
+            return Restart(platform);
+        return live.ActivatePending("self-update: a landed module generation is pending activation")
+            .SelectMany(result => result.NeedsRestart
+                ? Restart(platform, honourFloor: true,
+                    reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
+                : Observable.Return(SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
+    }
 
     /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):
     /// the plan-tier sentence when the patcher's package was refused by the instance's plan, else
@@ -420,7 +448,201 @@ public class SelfUpdateHostedService : IHostedService
 
     /// <summary>The restart itself: detect-only says so; the floor defers; otherwise the updater rolls
     /// the running image, or reports that it cannot.</summary>
-    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform)
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform) =>
+        Restart(platform, honourFloor: true, reason: null);
+
+    /// <summary>
+    /// 🚨 <see cref="IModuleActivationRestart"/> — the restart half of an explicit module reload
+    /// (<c>Doc/Architecture/ModuleReload</c>), taken through THIS service's one restart path: a
+    /// self-patch restart of the running image, or <c>self-update-restart-pending</c> handed to the
+    /// control lane, which routes it to an unattended Restart (no approval, no confirmation). The
+    /// same three apply modes, the same hand-over, the same verdict sentences — only two things
+    /// differ, both because the caller is an authorised one-shot request rather than a recurring
+    /// check: the roll FLOOR does not defer it (the reload issues exactly one, stamped on its node
+    /// before it asks), and the announcement carries the reload's own reason.
+    ///
+    /// <para>Exactly one restart still holds against this service's own checks: a check that
+    /// follows a self-patch restart reads the fresh roll instant and the floor defers its own
+    /// restart; on the control lane the control plane treats an open or freshly done Restart as
+    /// having delivered the announcement.</para>
+    /// </summary>
+    /// <param name="reason">Why — carried into the announcement and the log line.</param>
+    public IObservable<ModuleRestartOutcome> RequestRestart(string reason) =>
+        Restart(new SelfUpdateVerdict(SelfUpdateOutcome.NoNewerRelease, $"Module reload ({reason}):"),
+                honourFloor: false, reason: $"a landed module generation is pending activation — {reason}")
+            .Select(verdict => new ModuleRestartOutcome(
+                verdict.Outcome switch
+                {
+                    SelfUpdateOutcome.Restarted => ModuleRestartKinds.Restarted,
+                    SelfUpdateOutcome.RestartHandedOver => ModuleRestartKinds.HandedOver,
+                    // The mechanism exists and the attempt failed — transient, retried (#6172).
+                    SelfUpdateOutcome.RestartHandoverFailed => ModuleRestartKinds.Faulted,
+                    _ => ModuleRestartKinds.Unavailable,
+                },
+                verdict.Message))
+            // A restart call that THREW (a Kubernetes API blip, a timeout) is a crash, never a
+            // decided "cannot restart" — the reload records it Faulted and retries (#6172).
+            .Catch((Exception ex) => Observable.Return(new ModuleRestartOutcome(
+                ModuleRestartKinds.Faulted, $"the restart request faulted: {ex.Message}")));
+
+    /// <summary>
+    /// 🚨 <see cref="IInstanceRebootActivation.SelectImage"/> — the reboot's Image step
+    /// (<c>Doc/Architecture/InstanceReboot</c>), answered by THIS service's own selection: the tags the
+    /// registry lists, the channel this instance's update policy admits (<see cref="VersionSelect.SelectCandidates"/>),
+    /// the walk over the availability gate (<see cref="FirstRollable"/>), and the gate's verdict on the
+    /// chosen tag. "Newest" never means backwards (except the stranded-tag recovery the selection already
+    /// owns), and a held release is never forced: the reboot then restarts on the running image, saying why.
+    /// <paramref name="wedged"/> leaves the combo (dependent-suite) verdict out of the walk and the decision,
+    /// and the detail says so — a wedged instance does not wait for it.
+    /// </summary>
+    /// <param name="wedged">Whether the instance was judged wedged.</param>
+    public IObservable<RebootImageChoice> SelectImage(bool wedged)
+    {
+        var installed = ShippedReleaseSeed.InstalledPlatformVersion;
+        var waived = wedged ? " The instance is WEDGED, so the dependent-suite (combo) verdict was NOT waited for." : "";
+        return Observable.Defer(() => ReadPolicyStream().Take(1).Timeout(TimeSpan.FromSeconds(30)))
+            .SelectMany(policy =>
+            {
+                if (policy.Policy == UpdatePolicyKind.None)
+                    return Observable.Return(new RebootImageChoice(installed, null,
+                        "this instance's update policy is None (pinned) — the image is not moved; restart on the running image."));
+                return ListTags()
+                    .Select(tags => VersionSelect.SelectCandidates(tags, installed, policy.Policy, policy.RequireCiGreen, policy.Pattern))
+                    .SelectMany(selection => selection.Candidates.Length == 0
+                        ? Observable.Return(new RebootImageChoice(installed, null, NothingToRoll(selection).Message + waived))
+                        : FirstRollable(policy, [.. selection.Candidates], ignoreCombo: wedged)
+                            // The walk answers null when EVERY admitted candidate is condemned (each one
+                            // already recorded RED by the combo gate) — a hold, named as one; a held
+                            // release is never forced and never reported as an Image-step failure.
+                            .SelectMany(target => target is { } rollable
+                                ? ChooseGated(policy, rollable, installed, wedged, waived)
+                                : Observable.Return(new RebootImageChoice(installed, null,
+                                    $"every release the update policy admits ({string.Join(", ", selection.Candidates)}) is already "
+                                    + "recorded RED in the combo gate for this instance's modules — restart on the running image." + waived))));
+            })
+            .Catch((Exception ex) => Observable.Return(new RebootImageChoice(installed, null,
+                $"the image could not be selected ({ex.GetType().Name}: {ex.Message}) — restart on the running image", Failed: true)));
+    }
+
+    /// <summary>The gate's verdict on the walked-to target, as the reboot's choice: rolled only when it clears.</summary>
+    private IObservable<RebootImageChoice> ChooseGated(UpdatePolicyContent policy, string target, string installed, bool wedged, string waived)
+    {
+        var gate = ResolveAvailabilityGate();
+        if (gate is null)
+            return Observable.Return(new RebootImageChoice(installed, null,
+                $"{target} is the newest admitted release, but no release-availability gate is registered on this host — "
+                + "an unverified image is not rolled by a reboot; restart on the running image." + waived));
+        return gate.IsUpdatable(target).Select(verdict =>
+        {
+            if (!verdict.IsUpdatable)
+                return new RebootImageChoice(installed, null,
+                    $"{target} is the newest admitted release and is HELD by the availability gate: {verdict.HoldReason} — restart on the running image." + waived);
+            if (!wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } red)
+                return new RebootImageChoice(installed, null,
+                    $"{target} is RED in the combo gate for this instance's modules ({red.Reason}) — restart on the running image.");
+            return new RebootImageChoice(installed, target,
+                $"{target} is the newest release the update policy admits ({policy.Policy}{(policy.Pattern is null ? "" : $", pattern {policy.Pattern}")}) "
+                + $"and the availability gate clears{(verdict.NotEnforcedReason is { } why ? $" (not enforced: {why})" : "")}." + waived);
+        });
+    }
+
+    /// <summary>
+    /// 🚨 <see cref="IInstanceRebootActivation.Activate"/> — the reboot's ONE roll/restart, through this
+    /// service's one path: a roll to the chosen image (migration FIRST, <see cref="MigrateThenPatch"/>) or
+    /// the control-lane hand-over (<c>self-update-available</c>), and with no target a restart of the
+    /// running image (<see cref="RequestRestart"/>'s path). The roll floor does not defer it: the reboot is
+    /// one explicit request, stamped on its node before it asks.
+    /// </summary>
+    public IObservable<RebootActivationOutcome> Activate(RebootImageChoice choice, string reason) =>
+        Observable.Defer(() =>
+        {
+            var settings = ResolveHandover().ReadSettings();
+            var route = SelfUpdateHandover.RouteFor(settings);
+            var mode = SelfUpdateHandover.ApplyModeFor(_options.CanPatch, _updater.CanPatch, route);
+            // 🚨 THE SELF-HAND-OVER LOOP. Route.Local means THIS is the control instance: a hand-over would
+            // deliver its own restart into its own inbox, to be executed by the very control plane that is
+            // wedged. A control instance must self-patch through its own service account; when it cannot,
+            // the reboot is refused loudly rather than parked on itself.
+            if (mode != SelfUpdateApply.SelfPatch && route == SelfUpdateHandover.Route.Local)
+                return Observable.Return(new RebootActivationOutcome(RebootActivationKinds.Refused,
+                    "this instance IS the control instance (its hand-over route is its own inbox), and it cannot self-patch "
+                    + $"(SelfUpdate:CanPatch={_options.CanPatch}, updater can patch={_updater.CanPatch}) — handing its own restart to its own "
+                    + "control lane would depend on the instance being rebooted. Give the control instance self-patch through its own "
+                    + "service account (SelfUpdate:CanPatch and the portal Role's get,patch on apps/deployments); nothing was handed over"));
+            if (mode != SelfUpdateApply.SelfPatch)
+                return ActivateCore(choice, reason);
+            // 🚨 Keep serving: a self-patched roll is a rolling update of the portal Deployment, so it is issued
+            // only when that update cannot take the portal below its serving replicas (maxSurge ≥ 1, maxUnavailable 0).
+            return _http.Invoke(ct => _updater.ReadRolloutStrategyAsync(ct))
+                .Catch((Exception ex) =>
+                {
+                    _logger?.LogWarning(ex, "[SelfUpdate] could not read the portal rollout strategy for a reboot");
+                    return Observable.Return<RolloutStrategyReading?>(null);
+                })
+                .SelectMany(reading => RolloutStrategyReading.NonDisruptiveRefusal(reading) is { } why
+                    ? Observable.Return(new RebootActivationOutcome(RebootActivationKinds.Refused, why + " — nothing was rolled"))
+                    : ActivateCore(choice, reason));
+        });
+
+    private IObservable<RebootActivationOutcome> ActivateCore(RebootImageChoice choice, string reason)
+    {
+        if (choice.Target is not { } target)
+            return Restart(new SelfUpdateVerdict(SelfUpdateOutcome.NoNewerRelease, $"Reboot ({reason}):"),
+                    honourFloor: false, reason: reason)
+                .Select(verdict => new RebootActivationOutcome(RebootKindOf(verdict.Outcome, reason), verdict.Message))
+                // A restart call that THREW is a crash, never a decided "cannot restart" (#6172).
+                .Catch((Exception ex) => Observable.Return(new RebootActivationOutcome(
+                    RebootActivationKinds.Faulted, $"the restart faulted: {ex.Message}")));
+        return Observable.Defer(() => ReadPolicyStream().Take(1).Timeout(TimeSpan.FromSeconds(30)))
+            .SelectMany(policy => Apply(SelfUpdateTrigger.PolicyChange, policy, target, honourFloor: false))
+            .Where(verdict => verdict.Outcome != SelfUpdateOutcome.NoOutcome)
+            .Take(1)
+            .Select(verdict => new RebootActivationOutcome(RebootKindOf(verdict.Outcome, reason), verdict.Message))
+            .Catch((Exception ex) => Observable.Return(new RebootActivationOutcome(
+                RebootActivationKinds.Faulted, $"the roll to {target} faulted: {ex.Message}")));
+    }
+
+    /// <summary>
+    /// How a self-update verdict reads as a reboot's activation. A roll or restart on its way is
+    /// scheduled; an attempt that CRASHED (a hand-over that failed, a registry check that could not
+    /// be made) is <see cref="RebootActivationKinds.Faulted"/> and retried, never final (#6172); a
+    /// decided refusal (held, deferred, no restart path, a failed migration) is
+    /// <see cref="RebootActivationKinds.Unavailable"/>. An outcome this switch does not name is still
+    /// reported Unavailable, but it is logged BY NAME so it is never folded away silently.
+    /// </summary>
+    /// <param name="outcome">The verdict's outcome.</param>
+    /// <param name="reason">The reboot's reason, for the log line.</param>
+    internal string RebootKindOf(SelfUpdateOutcome outcome, string reason)
+    {
+        switch (outcome)
+        {
+            case SelfUpdateOutcome.Applied: return RebootActivationKinds.Rolled;
+            case SelfUpdateOutcome.Restarted: return RebootActivationKinds.Restarted;
+            case SelfUpdateOutcome.HandedOver:
+            case SelfUpdateOutcome.RestartHandedOver: return RebootActivationKinds.HandedOver;
+            case SelfUpdateOutcome.RestartHandoverFailed:
+            case SelfUpdateOutcome.HandoverFailed:
+            case SelfUpdateOutcome.CheckFailed: return RebootActivationKinds.Faulted;
+            case SelfUpdateOutcome.UpdatesDisabled:
+            case SelfUpdateOutcome.NoNewerRelease:
+            case SelfUpdateOutcome.Held:
+            case SelfUpdateOutcome.Deferred:
+            case SelfUpdateOutcome.DetectOnly:
+            case SelfUpdateOutcome.ComboBlocked:
+            case SelfUpdateOutcome.MigrationFailed:
+            case SelfUpdateOutcome.MigrationUnavailable:
+            case SelfUpdateOutcome.InstalledTagWithdrawn:
+            case SelfUpdateOutcome.RestartDeferred:
+            case SelfUpdateOutcome.RestartUnavailable: return RebootActivationKinds.Unavailable;
+            default:
+                _logger?.LogWarning(
+                    "[Reboot] activation for '{Reason}' answered {Outcome}, which the reboot lane does not name — reported as {Kind}",
+                    reason, outcome, RebootActivationKinds.Unavailable);
+                return RebootActivationKinds.Unavailable;
+        }
+    }
+
+    private IObservable<SelfUpdateVerdict> Restart(SelfUpdateVerdict platform, bool honourFloor, string? reason)
     {
         var installed = ShippedReleaseSeed.InstalledPlatformVersion;
         var handover = ResolveHandover();
@@ -437,7 +659,7 @@ public class SelfUpdateHostedService : IHostedService
                     "[SelfUpdate] a landed module generation is pending activation — handing the restart to the "
                     + "control lane ({Destination}); this install does not roll its own pods.",
                     DescribeRoute(route, settings));
-                return handover.Announce(RestartAnnouncement(installed))
+                return handover.Announce(RestartAnnouncement(installed, reason))
                     .Select(outcome => SelfUpdateVerdict.RestartHandedOver(
                         platform, installed, outcome.Destination, outcome.Detail))
                     .Catch((Exception ex) =>
@@ -451,19 +673,19 @@ public class SelfUpdateHostedService : IHostedService
                     platform, installed,
                     "this install does not self-patch, and " + (SelfUpdateHandover.Missing(settings) ?? "no control inbox is configured")));
             case SelfUpdateApply.DetectOnly:
-                return CannotPatchReason().Select(reason => SelfUpdateVerdict.RestartUnavailable(
-                    platform, installed, "this install does not self-patch" + reason));
+                return CannotPatchReason().Select(why => SelfUpdateVerdict.RestartUnavailable(
+                    platform, installed, "this install does not self-patch" + why));
         }
 
         // The same floor read Apply makes, and skipped for the same reason when the floor is off:
         // LastRolledAtAsync is a Kubernetes GET whose answer cannot change a decision the floor
         // does not take.
-        var lastRolled = _options.MinRollInterval <= TimeSpan.Zero
+        var lastRolled = !honourFloor || _options.MinRollInterval <= TimeSpan.Zero
             ? Observable.Return<DateTimeOffset?>(null)
             : _http.Invoke(ct => _updater.LastRolledAtAsync(ct));
         return lastRolled.SelectMany(lastRolledAt =>
         {
-            if (SelfUpdateVerdict.RestartDeferredBy(
+            if (honourFloor && SelfUpdateVerdict.RestartDeferredBy(
                     platform, installed, lastRolledAt, _options.MinRollInterval, DateTimeOffset.UtcNow)
                 is { } deferred)
                 return Observable.Return(deferred);
@@ -538,6 +760,7 @@ public class SelfUpdateHostedService : IHostedService
                      // A release this install could neither apply nor hand over is a delivery that
                      // stopped (#4098) — the pairing or the inbox is what an operator has to look at.
                      or SelfUpdateOutcome.HandoverFailed
+                     or SelfUpdateOutcome.RestartHandoverFailed
                      || verdict.UnresolvedInstalledTag is not null)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else
@@ -945,13 +1168,14 @@ public class SelfUpdateHostedService : IHostedService
     /// (<c>/api/plugins/roll-target</c>) that answers for CD and for an operator rolling by hand
     /// asks the same method, so the three roll paths cannot select differently.
     /// </remarks>
-    private IObservable<string?> FirstRollable(UpdatePolicyContent policy, string[] candidates)
+    private IObservable<string?> FirstRollable(UpdatePolicyContent policy, string[] candidates, bool ignoreCombo = false)
     {
         if (candidates.Length == 0)
             return Observable.Return<string?>(null);
 
         var gate = ResolveAvailabilityGate();
-        var combo = ResolveComboGate();
+        // A wedged reboot does not wait for (or step past) a dependent-suite verdict — it says so itself.
+        var combo = ignoreCombo ? null : ResolveComboGate();
         // Neither gate wired: preserve today's behaviour exactly — the head, and GateThenApply
         // reports the not-wired case itself.
         if (gate is null && combo is null)
@@ -1315,13 +1539,17 @@ public class SelfUpdateHostedService : IHostedService
     }
 
     /// <summary>The <c>self-update-restart-pending</c> event: the image this install runs, and why the pods should be re-created on it.</summary>
-    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed) =>
+    private SelfUpdateHandover.Announcement RestartAnnouncement(string installed, string? reason = null) =>
         new()
         {
             Event = SelfUpdateHandover.RestartEvent,
             CurrentVersion = installed,
             CurrentImage = _options.PortalImage(installed.Split('+')[0]),
-            Reason = "a landed module generation is pending activation (restart-as-activation, #3650)",
+            // Callers pass the whole sentence: a live swap that did not go live and an explicit
+            // module reload explain the restart differently.
+            Reason = reason is { Length: > 0 }
+                ? reason
+                : "a landed module generation is pending activation (restart-as-activation, #3650)",
             DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
         };
 
@@ -1420,7 +1648,7 @@ public class SelfUpdateHostedService : IHostedService
     /// install left — it read like a registry problem while the registry was fine. Deferred so the
     /// announcement runs per subscription (per tick), not at composition.
     /// </summary>
-    private IObservable<SelfUpdateVerdict> Apply(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target) =>
+    private IObservable<SelfUpdateVerdict> Apply(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target, bool honourFloor = true) =>
         Observable.Defer(() =>
         {
             var handover = ResolveHandover();
@@ -1472,7 +1700,9 @@ public class SelfUpdateHostedService : IHostedService
             // A disabled floor must not pay for the stamp read: LastRolledAtAsync is a Kubernetes GET
             // in the AKS implementation, and its answer cannot change the decision when the floor is
             // zero. Skipping it removes an API call and a failure point from the happy path.
-            if (_options.MinRollInterval <= TimeSpan.Zero)
+            // An explicit reboot is ONE authorised roll, stamped on its request before it asks — the
+            // floor paces the AUTOMATIC cadence only (the same exemption a module reload's restart has).
+            if (!honourFloor || _options.MinRollInterval <= TimeSpan.Zero)
                 return MigrateThenPatch(target, lastRolledAt: null);
 
             return _http.Invoke(ct => _updater.LastRolledAtAsync(ct)).SelectMany(lastRolledAt =>

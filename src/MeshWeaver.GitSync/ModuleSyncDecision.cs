@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using MeshWeaver.Plugin.Packaging;
 
@@ -33,7 +34,17 @@ public static class ModuleSyncOutcomeKind
 /// the manifest carries none.</param>
 /// <param name="Floor">The module's declared platform floor (<c>content.minMeshVersion</c> of its
 /// root <c>index.json</c>), or null when it declares none.</param>
-public sealed record ModuleReading(string Module, string Root, string? ModuleVersion, string? Floor);
+public sealed record ModuleReading(string Module, string Root, string? ModuleVersion, string? Floor)
+{
+    /// <summary>
+    /// The module root's declared package requirements (<c>content.requires</c> of its
+    /// <c>index.json</c>, entries shaped <c>AI@^1.21.0</c>) — what
+    /// <see cref="ModuleSyncDecision.DeclineUnmetRequirements"/> holds against the loaded
+    /// dependencies (MeshWeaver#6067 follow-up). Empty when none are declared. An INIT property: the
+    /// record's primary-constructor arity is public surface.
+    /// </summary>
+    public ImmutableList<string> Requires { get; init; } = [];
+}
 
 /// <summary>
 /// One module's outcome for one import, as recorded on the sync config
@@ -52,6 +63,12 @@ public sealed record ModuleSyncOutcome(
 
     /// <summary>The declared floor, when the module was declined on it.</summary>
     public string? Floor { get; init; }
+
+    /// <summary>
+    /// The requirement the module was declined on — <c>AI@^1.21.0</c> — when the decline is a
+    /// dependency floor rather than a platform floor (MeshWeaver#6067 follow-up); null otherwise.
+    /// </summary>
+    public string? UnmetRequirement { get; init; }
 }
 
 /// <summary>
@@ -156,6 +173,90 @@ public static class ModuleSyncDecision
     }
 
     /// <summary>
+    /// 🚨 <b>A package's sources never move onto a dependency build that does not meet their declared
+    /// floor</b> (MeshWeaver#6067 follow-up). Every <see cref="ModuleSyncOutcomeKind.Synced"/>
+    /// outcome whose module declares a requirement (<see cref="ModuleReading.Requires"/>) that the
+    /// LOADED dependency (<paramref name="loaded"/>) does not satisfy becomes
+    /// <see cref="ModuleSyncOutcomeKind.Declined"/> — the same per-module decline a platform floor
+    /// takes, so its paths are neither written nor pruned, its NodeTypes keep serving their last good
+    /// build, the baseline stays (its files remain in the next diff), and the reason names the
+    /// requirement, the module that loaded and its version.
+    ///
+    /// <para><b>Measured 2026-10-04 on the control instance.</b> Hosting 1.56 declared
+    /// <c>AI@^1.21.0</c>; its sources were imported and Roslyn-compiled at 20:00:50Z while AI 1.20.4
+    /// was the loaded build, and every thread start then threw <c>MissingMethodException</c>
+    /// (<c>ThreadPreparation.set_Group</c>). The module-set proposal checked the floor
+    /// (<c>ModuleDependencyFloor</c>); the import that put the sources in front of the compiler did
+    /// not.</para>
+    ///
+    /// <para><b>Release.</b> Nothing to arm: the next import judges again, and once the restart that
+    /// activates a satisfying dependency has happened, the module syncs. A dependency whose loaded
+    /// version is unknown (absent from <paramref name="loaded"/>), and a range this rule cannot read
+    /// (<see cref="PackageRequirement.Satisfies"/> → null), are NOT judged — the module syncs as it
+    /// did before this rule existed. <see cref="ModuleSyncOutcomeKind.Unchanged"/> and an already
+    /// <see cref="ModuleSyncOutcomeKind.Declined"/> outcome pass through untouched. Pure.</para>
+    /// </summary>
+    /// <param name="outcomes">The outcomes <see cref="Decide"/> produced.</param>
+    /// <param name="incoming">The readings they were decided from.</param>
+    /// <param name="loaded">Package id → the module this process has loaded for it.</param>
+    /// <returns>The outcomes, with every unmet requirement declined.</returns>
+    public static ImmutableList<ModuleSyncOutcome> DeclineUnmetRequirements(
+        IReadOnlyList<ModuleSyncOutcome> outcomes,
+        IReadOnlyList<ModuleReading> incoming,
+        IReadOnlyDictionary<string, LoadedPackageModule> loaded)
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+        ArgumentNullException.ThrowIfNull(incoming);
+        ArgumentNullException.ThrowIfNull(loaded);
+        return outcomes.Select(outcome =>
+            {
+                if (outcome.Outcome != ModuleSyncOutcomeKind.Synced)
+                    return outcome;
+                var reading = incoming.FirstOrDefault(m =>
+                    string.Equals(m.Module, outcome.Module, StringComparison.Ordinal)
+                    && string.Equals(m.Root, outcome.Root, StringComparison.Ordinal));
+                if (reading is null)
+                    return outcome;
+                foreach (var requirement in reading.Requires)
+                {
+                    var dependency = PackageRequirement.DependencyId(requirement);
+                    if (dependency.Length == 0
+                        || !TryLoaded(loaded, dependency, out var module))
+                        continue;
+                    if (PackageRequirement.Satisfies(PackageRequirement.RangeOf(requirement), module.Version) != false)
+                        continue;
+                    return outcome with
+                    {
+                        Outcome = ModuleSyncOutcomeKind.Declined,
+                        Reason = $"module '{outcome.Module}' requires {requirement.Trim()}, but this instance "
+                                 + $"runs '{module.Module}' (package '{dependency}') at {module.Version}, "
+                                 + "which does not satisfy it — its sources are not written and its "
+                                 + "NodeTypes keep serving their last good build until a satisfying "
+                                 + $"'{dependency}' is loaded (the import after the restart that "
+                                 + "activates it syncs this module); every other module syncs "
+                                 + "(MeshWeaver#6067)",
+                        UnmetRequirement = requirement.Trim(),
+                    };
+                }
+                return outcome;
+            })
+            .ToImmutableList();
+
+        static bool TryLoaded(
+            IReadOnlyDictionary<string, LoadedPackageModule> map, string id,
+            [NotNullWhen(true)] out LoadedPackageModule? module)
+        {
+            if (map.TryGetValue(id, out var exact))
+            {
+                module = exact;
+                return !string.IsNullOrWhiteSpace(exact.Version);
+            }
+            module = map.FirstOrDefault(kv => string.Equals(kv.Key, id, StringComparison.OrdinalIgnoreCase)).Value;
+            return module is { Version.Length: > 0 };
+        }
+    }
+
+    /// <summary>
     /// Reads every module an incoming tree states: each <c>manifest.lock</c> (at the Space root or
     /// any depth), its <c>moduleVersion</c>, and the declared floor from the module root's
     /// <c>index.json</c> (<c>content.minMeshVersion</c>). Pure and tolerant: an unparsable manifest
@@ -183,8 +284,12 @@ public static class ModuleSyncDecision
                     ? module
                     : root.Length > 0 ? root[(root.LastIndexOf('/') + 1)..] : "(root)";
                 var indexPath = root.Length == 0 ? "index.json" : root + "/index.json";
-                var floor = byPath.TryGetValue(indexPath, out var index) ? ParseFloor(index) : null;
-                return new ModuleReading(name, root, version, floor);
+                var index = byPath.GetValueOrDefault(indexPath);
+                var floor = index is { } floorJson ? ParseFloor(floorJson) : null;
+                return new ModuleReading(name, root, version, floor)
+                {
+                    Requires = index is { } requiresJson ? ParseRequires(requiresJson) : [],
+                };
             })
             .OrderBy(m => m.Root, StringComparer.Ordinal)
             .ToImmutableList();
@@ -233,6 +338,30 @@ public static class ModuleSyncDecision
         catch (JsonException)
         {
             return (null, null);
+        }
+    }
+
+    private static ImmutableList<string> ParseRequires(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            if (r.ValueKind != JsonValueKind.Object
+                || !r.TryGetProperty("content", out var content)
+                || content.ValueKind != JsonValueKind.Object
+                || !content.TryGetProperty("requires", out var requires)
+                || requires.ValueKind != JsonValueKind.Array)
+                return [];
+            return [.. requires.EnumerateArray()
+                .Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() : null)
+                .OfType<string>()
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text.Trim())];
+        }
+        catch (JsonException)
+        {
+            return [];
         }
     }
 

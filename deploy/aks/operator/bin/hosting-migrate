@@ -134,11 +134,24 @@ if [ -z "$image" ]; then
   hosting::log "image     ${image} (the release's own migration repository, moved to ${tag})"
 fi
 
-# Rename, and move ONLY the containers that run the migration image. wait-for-postgres (busybox)
-# and anything else keep their images; the rehearsal init container runs the migration image and
-# must rehearse the SAME build it then executes.
+# Rename, and move ONLY the migration containers. wait-for-postgres (busybox) and anything else keep
+# their images; the rehearsal init container runs the migration image and must rehearse the SAME
+# build it then executes.
+#
+# A migration container is one that RUNS a memex-migration image OR carries the chart's own
+# migration container name (`memex-migration`, `memex-migration-rehearsal` — templates/memex-migration/
+# job.yaml). The name matters for exactly one case, and it is the one that wedges an instance: a
+# release whose `migration.image` was written as the PORTAL image. Measured on control 2026-10-06:
+# hosting-deploy derived the migration image by substituting `memex-portal-ai`, which is a no-op on
+# `memex-control`, so helm revision 4 rendered the Job as `memex-control:3.0.0-ci.10043` (its own Job
+# `memex-migration-4` Failed) — and every later Roll refused here, because no container ran a
+# memex-migration image any more. --image is already proven a memex-migration reference above, so
+# moving the chart's named migration containers onto it runs the migration and nothing else; it is
+# what puts such a release back on its feet, where refusing left only a hand-run helm upgrade.
 body="$(printf '%s' "$rendered" | jq -c --arg name "$job" --arg img "$image" '
-  def retarget: if (.image // "" | test("/memex-migration:")) then .image = $img else . end;
+  def migration_container: (.image // "" | test("/memex-migration:"))
+    or (.name // "" | test("^memex-migration(-rehearsal)?$"));
+  def retarget: if migration_container then .image = $img else . end;
   .metadata = { name: $name, labels: (.metadata.labels // {}) }
   | .spec.template.spec.containers |= map(retarget)
   | if .spec.template.spec.initContainers then .spec.template.spec.initContainers |= map(retarget) else . end

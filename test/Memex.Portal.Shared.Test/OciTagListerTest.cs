@@ -157,7 +157,7 @@ public class OciTagListerTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var ct = TestContext.Current.CancellationToken;
         mirror.RefuseKey = true;
 
-        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var fault = await Assert.ThrowsAsync<RegistryRefusedException>(() =>
             Lister().ListTags(Repository).FirstAsync().Timeout(Budget).Await(ct));
 
         fault.Message.Should().Contain("refused",

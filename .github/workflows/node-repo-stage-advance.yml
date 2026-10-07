@@ -1,0 +1,102 @@
+# The staged pull-request pipeline's EVENT HALF (reusable) — start stage 2 the moment stage 1 turns green.
+#
+# 🔀 Needed by EVERY caller on the default ordering (policy review-then-suites: the stage gate holds
+# for the review). Only a caller that opts out (`review-before-suites: false`) can do without it.
+#
+# A held run's stage gate (node-repo-stage-gate.yml) is RED and stays red until something asks again.
+# The doctrine already has the shape for "an event outside the pull_request run changed live state":
+# review-answered-on-degradation.yml RE-RUNS the read-eligible pull_request run rather than judging
+# from a default-branch run (whose check runs would land on main's commit, where branch protection
+# never reads them). This lane is that shape, generalised: it re-evaluates
+# `check-review-answered.py --stage-advance` and POSTs `rerun-failed-jobs` on the head's newest held
+# run only when ALL of these hold (`advance_action`, self-tested):
+#   * the pull request is open and the run is for its CURRENT head (a new head restarts at stage 0 —
+#     no stale verdict is ever carried);
+#   * that run's stage gate concluded `failure` (a gate still evaluating reads live state itself; a
+#     passed gate already started stage 2; a cancelled one was superseded);
+#   * stage 1 is green NOW (`stage_readiness`): reviewed and answered, or one of the three loud
+#     releases (degradation, fallback, label).
+#
+# The caller's thin `stage-advance.yml` owns the triggers, because `check_run` and `schedule` only
+# fire for a workflow file on the CALLER's default branch:
+#   check_run: completed                  the review landed (or degraded) — the happy path
+#   pull_request_review_comment: created  a person answered a finding
+#   pull_request_review: submitted        a review (or a person's reply) arrived
+#   schedule: every 15 min                the bounded FALLBACK — a review outage raises no event
+#
+# 🔁 No loop: runs created by GitHub Actions raise no `check_run` workflow events, and a re-run of a
+# gate that is still red changes nothing this lane reads. Not a gate itself, and not a required context.
+name: Node repo stage advance (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: "The caller's pull-request CI workflow FILE whose held runs are re-run (ci.yml, dotnet-test.yml)"
+        required: true
+        type: string
+      mode:
+        description: "'head' (a check_run named a head sha), 'pr' (a review/comment event named a PR), or 'sweep'"
+        required: true
+        type: string
+      head-sha:
+        required: false
+        type: string
+        default: ""
+      pr:
+        required: false
+        type: string
+        default: ""
+      scripts-ref:
+        required: false
+        type: string
+        default: main
+      fallback-minutes:
+        description: "Must equal the caller's node-repo-stage-gate.yml fallback (both default to the measured value)"
+        required: false
+        type: number
+        default: 120
+
+jobs:
+  advance:
+    name: Start stage 2 when stage 1 is green
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    # 25 = the predicate's 20-minute bounded wait for an in-flight held run to finish + reads.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: write
+    steps:
+      - name: Fetch the platform's review predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+          python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
+
+      - name: Re-run the held run iff stage 1 is green for the current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.workflow }}
+          MODE: ${{ inputs.mode }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+          PR: ${{ inputs.pr }}
+          FALLBACK: ${{ inputs.fallback-minutes }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            head)  target=(--head-sha "$HEAD_SHA") ;;
+            pr)    target=(--pr "$PR") ;;
+            sweep) target=(--sweep) ;;
+            *) echo "::error::mode must be head | pr | sweep, got '$MODE'"; exit 1 ;;
+          esac
+          python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --stage-advance \
+            --workflow "$WORKFLOW" "${target[@]}" --fallback-minutes "$FALLBACK"

@@ -33,8 +33,14 @@ Blazor circuit exists:
    emits `<title>`, `meta description`, canonical URL, the node's own icon, the full Open Graph
    set (`og:site_name/type/title/description/url/image`), `twitter:card`, and — for store
    plugins — Course/Product JSON-LD.
-2. **`og:image`** is the node's authored image when it declares one (`PluginContent.OgImage`,
-   else `poster`/`thumbnail`), and otherwise **`/api/og/{path}.png`** — a 1200×630 card the
+2. **`og:title` and `og:description` default to the NODE** — its name, and its description
+   (`Description`, else the content fallbacks listed below) — so a card needs no configuration.
+   A node that wants its SHARE to read differently authors **`ogTitle`** / **`ogDescription`**
+   in its content (`SeoResolver.ShareTitle` / `ShareDescription`); they win on the public card,
+   the PublicPreview card and an ancestor card alike, while the page `<title>` and the search
+   `meta description` keep the node's own text.
+3. **`og:image`** is the node's authored image when it declares one (`PluginContent.OgImage`,
+   else `poster`/`thumbnail`, else a social post's `mediaUrl`), and otherwise **`/api/og/{path}.png`** — a 1200×630 card the
    portal draws itself (`OgCardRenderer`, SkiaSharp with an embedded font). *Having* a share
    image is the default, not something each page remembers to author.
 
@@ -54,7 +60,7 @@ Blazor circuit exists:
    nothing read from the mesh). A node the anonymous gate withholds shares as its nearest PUBLIC
    ANCESTOR when it has one (below), and as the instance when it does not. A private page's own
    name, description and mark never reach either block.
-3. **`SeoNoScriptBody`** serves the page's pre-rendered markdown inside `<noscript>`, so non-JS
+4. **`SeoNoScriptBody`** serves the page's pre-rendered markdown inside `<noscript>`, so non-JS
    crawlers index actual content rather than an empty Blazor shell.
 
 The **node's own icon** is part of that head, and it is declared twice — as the node's `<svg>` mark

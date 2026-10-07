@@ -87,6 +87,13 @@ falsifies both stated causes and is the cheapest way to recognise this failure �
   its type registers, and `Clear` removes one the moment a read of that type succeeds. Only the
   **×count** is cumulative since boot. Measured: over 2.7 h on one deployment the named set
   CHANGED and members left it — which a counter that never decayed could not do.
+- **Each entry prints its WINDOW** — `Store/Tier ×377 between 2026-09-21T07:45:16Z and
+  2026-09-21T07:47:04Z (last Admin/Tiers/free)`: the instants its first and its last counted read
+  degraded ([Plugins#2812](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2812)). Without it
+  the bare `×377` read as "failing now" when every one of those reads fell in the two minutes after
+  boot. A window whose end is long past is a type that is STILL unregistered here (the presence is
+  re-checked) but that nothing has read since — a latent gap, not reads failing now. A window whose
+  end is the last few seconds is reads degrading NOW. One probe tells them apart.
 - **A GROWING count is positive evidence, and it is the reading to take.** The ×count only rises
   when a read degrades, so comparing two probes turns the weakest part of this instrument into its
   strongest: measured on the public instance, `Hosting/DeploymentStatus` went ×260 and ×257 to
@@ -192,7 +199,7 @@ adopted-but-not-yet-loadable bundle. Nothing gates on the pass: a replica serves
 | the bytes in this process's store | `IAssemblyStore.TryGetAssemblyPath(path, LastCompiledVersion)` | `BytesMissing` |
 | are they the published build? | `ServedBuildIdentity.Mismatch(LatestAssemblyMvid, the file's MVID)` | `StaleBytes` — registering would bind a type family the activations will not use |
 | load the configuration | `GetConfigurationsFromExistingAssembly` (reflection over the existing file) | `Faulted` — the recorded build did not load |
-| build it once | `ContentTypeRegistration.ProbeRegister` — a transient probe, nothing started | `DeclaresNoContentType` when the build registered nothing |
+| build it once | `ContentTypeRegistration.ProbeRegister` — a transient probe, nothing started | `Faulted` when the probe's configuration threw; `DeclaresNoContentType` only when the build ran and registered nothing |
 
 That is the enrichment hot path with every write removed. **No compile is driven, no NodeType record
 is written** (no stale-`Ok` self-heal, no `Pending` flip) and no rebind watcher is armed. That is why
@@ -213,6 +220,16 @@ compiles a type with a content type **without activating a hub**, which is the `
 state, and the control asserts the registry does not know it. The pass then registers it from the
 existing bytes and leaves the record's build stamp unchanged. A type with no build is skipped and not
 compiled. With the probe call removed, the first case fails (`DeclaresNoContentType`).
+
+🚨 **A probe that throws is `Faulted`, never `DeclaresNoContentType`.** The probe used to build through
+`GetHostedHub`, which answers a configuration that throws with a null hub and no exception, and the
+probe also caught anything that did escape, at Debug. Either way the pass then asked the registry,
+found nothing, and filed the type under `DeclaresNoContentType`. That is the one outcome the Warning
+does not name, so its content stayed untyped on this replica and no production line said why. The
+probe now builds through `TryGetHostedHub` and returns the fault to its caller. The pass files it as
+`Faulted`, and the static sweep names it at Error. Pinned by
+`AFaultedRegistrationProbeIsNotADeclarationTest`, which fails on the old probe with
+`found DeclaresNoContentType`.
 
 ## What this does not establish
 

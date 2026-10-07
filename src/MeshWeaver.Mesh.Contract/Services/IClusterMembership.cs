@@ -66,4 +66,13 @@ public interface IClusterMembership
     /// throws: anything it cannot answer is <see cref="ClusterMemberState.Unknown"/>.
     /// </summary>
     ClusterMemberState StateOf(string identity);
+
+    /// <summary>
+    /// The identity of every member the cluster POSITIVELY records as <see cref="ClusterMemberState.Alive"/>
+    /// right now, in the same opaque form as <see cref="LocalIdentity"/> — or <c>null</c> when this
+    /// membership cannot enumerate (no cluster, or an implementation that answers only per identity).
+    /// A consumer that needs "every running process has answered" reads <c>null</c> as "no roster is
+    /// known", never as "nobody is running". Never throws.
+    /// </summary>
+    IReadOnlyCollection<string>? AliveMembers => null;
 }

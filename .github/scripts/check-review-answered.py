@@ -81,8 +81,16 @@ through the `systemorph-com` GitHub App, under ONE login and ONE account id on b
   pulls/{n}/comments   `systemorph-com[bot]`  type Bot  id 328286035
 It reviews every HEAD (not once per pull request), at state COMMENTED or CHANGES_REQUESTED — never
 APPROVED. Both reviewers are accepted: a review by EITHER lands condition 1, and condition 2 counts
-the threads BOTH opened. Copilot stays in the set until its `copilot_code_review` rule is gone from
-every repository that calls this lane and no open pull request carries an unanswered Copilot thread.
+the threads BOTH opened.
+
+COPILOT IS THE REVIEWER AGAIN — policy `copilot-code-review` (supersedes `internal-code-review`)
+-------------------------------------------------------------------------------------------
+Every ruleset carries `copilot_code_review` again, now with `review_on_push: true`, so Copilot
+reviews every head, and `internal-review` is no longer a required context anywhere. The stage gate
+and the arm gate, which ask about THIS head's review, accept a landed Copilot review submitted
+against the current head (`copilot_review_on`) ahead of an `internal-review` run, so no head waits
+for an internal reviewer that has been switched off. Doc/Architecture/ReviewFindingsAnswered →
+"Copilot is the reviewer again".
 
 WHAT MAKES A REVIEW A REVIEW: PROVENANCE, NOT PRESENTATION
 ----------------------------------------------------------
@@ -110,6 +118,31 @@ USAGE
   check-review-answered.py --repo O/R --pr N [--as-of 2026-09-14T14:04:21Z]
   check-review-answered.py --repo O/R --pr N --arm-gate     (the control plane's arm decision: may auto-merge be armed now?)
   check-review-answered.py --repo O/R --merge-group-ref refs/heads/gh-readonly-queue/main/pr-N-<sha>
+  check-review-answered.py --repo O/R --pr N --stage-gate --since <run created_at>
+        (node-repo-stage-gate.yml: may the expensive suites start for this head?)
+  … --stage-gate / --arm-gate … --no-carry
+        (the negative control: never carry a review over a clean merge of the base branch — see carry_over)
+  check-review-answered.py --repo O/R --stage-advance --workflow ci.yml (--head-sha S | --pr N | --sweep)
+        (node-repo-stage-advance.yml: re-run a waiting run's failed jobs now that stage 1 is green)
+
+THE STAGE GATE (Doc/Architecture/StagedPullRequestPipeline)
+-----------------------------------------------------------
+Stage 0 (cheap static controls) and stage 1 (this head's automatic review landed AND every
+reviewer thread answered) must be green before stage 2 (test shards, portal hosts, gate shards,
+bundles) spends a runner on the head; arming waits for stage 2. `stage_readiness` is stage 1's
+predicate. It shares `internal_review_runs`, `listing_incomplete` and `reviewer_threads` with the
+arm gate, so the two can never disagree about "reviewed" or "answered". It differs from the arm
+gate in exactly the three places where a stage-1 hold would otherwise freeze the fleet:
+  * the reviewer-unavailable degradation RELEASES stage 2 (arming still refuses it);
+  * no completed review `--fallback-minutes` after the head's run was created RELEASES stage 2
+    (a review OUTAGE posts nothing at all, so no event could ever release it);
+  * the label `tests-before-review` RELEASES stage 2 (runner spend only — arming is unaffected).
+Each release is LOUD (::warning:: + job summary). Unanswered threads never fall back: that wait is
+a person's, not the infrastructure's.
+
+`--stage-advance` is the event half: it re-evaluates `stage_readiness` and, only when it is green
+and the head's newest CI run holds a FAILED stage gate, POSTs `rerun-failed-jobs` (the doctrine's
+own re-run remedy, review-answered-on-degradation.yml). `--sweep` is the bounded-fallback timer.
 
 `--as-of` evaluates the pull request as it stood at that instant (reviews, comments and waiver
 events created later are ignored) — the controls in Doc/Architecture/ReviewFindingsAnswered use it
@@ -121,12 +154,14 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import datetime
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.parse
 
 REVIEWER_ACCOUNT_ID = 175728472
 # The INTERNAL reviewer — policy `internal-code-review` (Doc/Architecture/PolicyNotProse, the
@@ -528,10 +563,38 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      review, and arming on it would land an unreviewed change with nobody having decided to —
 #      a person who wants that merges by hand;
 #   3. every thread the automatic reviewer opened has a reply from a person (`reviewer_threads`,
-#      the SAME predicate as the merge gate), read from a provably complete listing.
+#      the SAME predicate as the merge gate), read from a provably complete listing;
+#   4. (policy `review-then-suites`) every REQUIRED status check of the base branch has COMPLETED
+#      with `success` on the current head — the suites ran (on a fresh merge with the current main,
+#      policy `suites-test-fresh-merge`) and are green. Review first, then the suites, then the arm:
+#      nothing is armed while a required check is pending, missing or red. The review's own
+#      contexts are conditions (2)/(3), never (4). `required_checks_green` is the predicate;
+#      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #
-# No waiver and no Copilot review stand in for (2): the question is about THIS head's internal
-# review, which is exactly what a push invalidates.
+# No waiver stands in for (2): the question is about THIS head's review, which is exactly what a
+# push invalidates. 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts GitHub
+# Copilot back as the fleet's reviewer, its ruleset rule set to `review_on_push`, so Copilot reviews
+# every head: a Copilot review submitted AGAINST THE CURRENT HEAD (`commit_id` == head, a landed body,
+# never a refusal — `copilot_review_on`) satisfies (2) exactly as a completed `internal-review` run
+# does. It is checked FIRST, so a head is never held waiting for an internal reviewer that has been
+# switched off. A Copilot review of an EARLIER head does not count — the push invalidated it.
+
+
+def copilot_review_on(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
+    """The newest Copilot review submitted against `head_sha` that LANDED (a non-PENDING state and a
+    body `classify_review_body` reads as a review, never a refusal), or None. Provenance is the
+    account id AND type Bot — the internal reviewer's reviews are NOT looked at here: its verdict on
+    a head is its `internal-review` check run, which the callers read separately."""
+    mine = [r for r in reviews or ()
+            if (r.get("user") or {}).get("type") == "Bot" and (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID
+            and r.get("state") not in (None, "PENDING") and head_sha and r.get("commit_id") == head_sha
+            and not_after(r.get("submitted_at"), as_of) and classify_review_body(r.get("body")) == "landed"]
+    return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
+
+
+def copilot_note(review: dict, short: str) -> str:
+    return (f"Copilot reviewed head {short}: review {review.get('id')} at {review.get('submitted_at')} "
+            f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
 
 @dataclasses.dataclass(frozen=True)
 class ArmVerdict:
@@ -550,28 +613,216 @@ def internal_review_runs(check_runs, head_sha: str) -> list:
             and (not c.get("head_sha") or c.get("head_sha") == head_sha)]
 
 
-def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
+#: Contexts the arm gate judges through the REVIEW conditions (2)/(3), never as a suite in (4): the
+#: review itself, and the merge-gate check that reports on it (it turns green only after (3) holds,
+#: and its lane re-runs on review events — requiring it here would wait on a re-run nobody started).
+REVIEW_CONTEXTS = frozenset({DEGRADATION_CHECK_NAME, "Automatic review answered", "lane / Automatic review answered"})
+
+
+def required_checks_green(required, head_runs, head_sha: str) -> str:
+    """'' when every required context (minus REVIEW_CONTEXTS) has a check run on `head_sha` whose
+    NEWEST run completed `success`; otherwise ONE line naming the first that is missing, pending or
+    red. `required=None` means the caller did not ask (the pure review gate); an EMPTY list is
+    refused — 'no required check' must never read as 'all green'."""
+    if required is None:
+        return ""
+    wanted = [c for c in dict.fromkeys(required) if c not in REVIEW_CONTEXTS]
+    if not wanted:
+        return "no required status check could be read for the base branch, so the suites cannot be shown green — not armed on a guess"
+    short = head_sha[:10]
+    for ctx in wanted:
+        mine = [r for r in head_runs or () if r.get("name") == ctx and (not r.get("head_sha") or r.get("head_sha") == head_sha)]
+        if not mine:
+            return f"required check `{ctx}` has not reported on head {short} — the suites have not run (or not started) on this head"
+        newest = max(mine, key=lambda r: (r.get("started_at") or "", r.get("id") or 0))
+        if newest.get("status") != "completed":
+            return f"required check `{ctx}` is still {newest.get('status') or 'running'} on head {short} — arming waits for the suites"
+        if newest.get("conclusion") != "success":
+            return f"required check `{ctx}` concluded {newest.get('conclusion')} on head {short} — arming waits for green suites"
+    return ""
+
+
+# ─────────────────────────────── the CARRY-OVER (pure) ───────────────────────────────
+#
+# Policy `review-carries-over-clean-base-merge` (Doc/Architecture/StagedPullRequestPipeline → "A clean merge of the base branch carries the review"). Measured
+# 2026-10-05 22:38Z: 25 open non-draft pull requests across core, Plugins and Memex and 7 merges in
+# 2.5 h, six of them DIRTY at once. The loop: main moves → a PR goes DIRTY → main is merged into the
+# branch → the new head has no `internal-review` → the stage gate holds it at stage 1 → a full review
+# round queues behind admission → main moves again. A merge of the base branch that applied cleanly
+# changes nothing a reviewer read, so it must not cost a review.
+#
+# A review CARRIES OVER to the new head when, computed from the repository (never from a commit
+# message or a branch name):
+#   (a) walking back from the new head through MERGE commits only, the first commit with a real
+#       (completed, non-degraded) `internal-review` from the reviewer's App is reached — the reviewed
+#       head; every merge walked has exactly ONE parent on the pull request's side (the other is in the
+#       base branch);
+#   (b) every commit that is on the pull request now and was not on it at the reviewed head is a merge
+#       commit — any non-merge commit is new content and owes a fresh review;
+#   (c) the pull request's OWN diff — merge-base(base, head)..head, as GitHub's compare computes it —
+#       is byte-identical to the reviewed head's: the same patch-id (hunk line numbers ignored, as
+#       `git patch-id` does; context lines, file status and names kept). A conflict resolution that
+#       changed what the pull request does changes the patch-id and is reviewed fresh.
+# Anything unreadable or incomplete (a short commit listing, the compare API's 300-file cap, a file
+# with neither a patch nor a blob id) does NOT carry: the head is reviewed as it was before.
+
+CARRY_MAX_WALK = 20
+COMPARE_FILES_CAP = 300
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+
+
+@dataclasses.dataclass(frozen=True)
+class Carry:
+    ok: bool
+    #: ONE line: the evidence when it carries (reviewed head, check run, the merges, the patch-ids),
+    #: or why it does not. Printed in the check's log and its job summary either way.
+    why: str
+    from_head: str = ""
+    run: dict | None = None
+
+
+#: Titles of `internal-review` runs that ARE a review — an ALLOW-list, so the carry fails SAFE. The
+#: App also posts runs that are not a review (the *Reviewer unavailable* degradation, the steward's
+#: *Review not completed* exit — on the replay of the last 60 core pull requests three clean merges sat
+#: on that exit), and their titles are owned by MeshWeaver.Plugins. A deny-list would turn a reworded
+#: exit into a carried "review" in silence; with an allow-list a reworded REVIEW title only means a
+#: fresh round. The shapes are Plugins `PullRequestActions` (`No blocking findings`,
+#: `{n} blocking finding(s)`) and `ReviewCarryOver.CarriedTitlePrefix` (a carried review carries on).
+REVIEW_CONCLUSIONS = frozenset({"success", "failure"})
+REVIEW_TITLES = re.compile(r"^(?:No blocking findings|[1-9]\d* blocking finding\(s\)|Review carried from )")
+
+
+def real_review_run(check_runs, sha: str) -> dict | None:
+    """The newest COMPLETED `internal-review` run of the reviewer's App on `sha` when it is a REVIEW
+    (REVIEW_TITLES); None when there is none, or when the newest is anything else."""
+    run = newest_internal_review_run(internal_review_runs(check_runs, sha), None)
+    title = ((run or {}).get("output") or {}).get("title") or ""
+    # The conclusion must be READ as one a review posts: an unread or empty one is never carried.
+    return run if run is not None and run.get("conclusion") in REVIEW_CONCLUSIONS and REVIEW_TITLES.match(title.strip()) else None
+
+
+def pr_diff_id(files) -> tuple[str | None, str]:
+    """(patch-id, '') of a compare's `files`, or (None, why it cannot be fingerprinted). Pure.
+
+    Per file: status, previous name, name and the patch with every hunk header reduced to `@@`
+    (line numbers move when the base branch changes elsewhere in the file; the change does not).
+    A file GitHub sends no patch for (binary, too large, a pure rename) contributes its blob id."""
+    if not isinstance(files, list):
+        return None, "the file listing was not read"
+    if len(files) >= COMPARE_FILES_CAP:
+        return None, f"{len(files)} files — the compare API stops at {COMPARE_FILES_CAP}, so the listing cannot be proven complete"
+    parts = []
+    for f in sorted(files, key=lambda f: (str(f.get("filename")), str(f.get("previous_filename") or ""))):
+        patch = f.get("patch")
+        if patch is None:
+            if not f.get("sha"):
+                return None, f"{f.get('filename')} has neither a patch nor a blob id"
+            body = "blob " + str(f.get("sha"))
+        else:
+            # Every byte of every line is hashed — trailing whitespace too (a hard line break in
+            # Markdown, content in a docstring or a YAML scalar); only the hunk header is reduced.
+            body = "\n".join("@@" if HUNK_HEADER.match(line) else line for line in patch.split("\n"))
+        parts.append("\0".join((str(f.get("status")), str(f.get("previous_filename") or ""), str(f.get("filename")), body)))
+    return hashlib.sha256("\n\0\n".join(parts).encode("utf-8")).hexdigest(), ""
+
+
+def find_reviewed_ancestor(head: str, own_commits: dict, runs_of) -> tuple[str | None, dict | None, tuple, str]:
+    """(reviewed head, its run, the merges walked, '') or (None, None, (), why not). `own_commits` maps
+    sha → commit for every commit on the pull request now (compare(base...head).commits, with
+    `parents`); `runs_of(sha)` lists that commit's `internal-review` check runs. Walks MERGES only."""
+    walked: list = []
+    c = head
+    for _ in range(CARRY_MAX_WALK):
+        commit = own_commits.get(c)
+        if commit is None:
+            return None, None, (), f"{c[:10]} is not among the pull request's own commits"
+        parents = [str((p or {}).get("sha") or "") for p in commit.get("parents") or []]
+        if len(parents) < 2:
+            return None, None, (), (f"{c[:10]} is not a merge commit and has no review of its own — "
+                                    "a non-merge commit since the last review is new content")
+        own = [p for p in parents if p in own_commits]
+        if len(own) != 1:
+            return None, None, (), (f"merge {c[:10]} has {len(own)} parent(s) on the pull request's side — "
+                                    "it is not a merge OF the base branch into the pull request")
+        walked.append(c)
+        parent = own[0]
+        run = real_review_run(runs_of(parent), parent)
+        if run is not None:
+            return parent, run, tuple(walked), ""
+        c = parent
+    return None, None, (), f"no reviewed head within {CARRY_MAX_WALK} merges of {head[:10]}"
+
+
+def carry_over(head: str, new_cmp: dict, old_cmp: dict, old: str, run: dict) -> Carry:
+    """Conditions (b) and (c) for a reviewed ancestor `old` that (a) found. `new_cmp`/`old_cmp` are
+    compare(base...head) / compare(base...old) with COMPLETE `commits` (the adapter pages them). Pure."""
+    def no(why: str) -> Carry:
+        return Carry(False, f"no carry-over from reviewed head {old[:10]}: {why} — the head owes a fresh review")
+    commits_new = {c.get("sha"): c for c in new_cmp.get("commits") or []}
+    commits_old = {c.get("sha") for c in old_cmp.get("commits") or []}
+    for name, cmp_, got in (("head", new_cmp, len(commits_new)), ("reviewed head", old_cmp, len(commits_old))):
+        if not isinstance(cmp_.get("total_commits"), int) or got < cmp_["total_commits"]:
+            return no(f"the {name}'s commit listing returned {got} of {cmp_.get('total_commits')} commits")
+    if old not in commits_old:
+        return no("the reviewed head is no longer ahead of the base branch, so its diff is not comparable")
+    if head not in commits_new:
+        return no("the head is not ahead of the base branch")
+    fresh = [c for s, c in commits_new.items() if s not in commits_old]
+    content = [c for c in fresh if len(c.get("parents") or []) < 2]
+    if content:
+        return no(f"{len(content)} non-merge commit(s) since it (first: {str(content[0].get('sha'))[:10]})")
+    id_old, why_old = pr_diff_id(old_cmp.get("files"))
+    id_new, why_new = pr_diff_id(new_cmp.get("files"))
+    if id_old is None or id_new is None:
+        return no(f"the pull request's diff cannot be fingerprinted ({why_old or why_new})")
+    mb_old = str((old_cmp.get("merge_base_commit") or {}).get("sha") or "")[:10]
+    mb_new = str((new_cmp.get("merge_base_commit") or {}).get("sha") or "")[:10]
+    if id_old != id_new:
+        return no(f"the pull request's own diff changed — patch-id {id_old[:16]} ({mb_old}..{old[:10]}) vs "
+                  f"{id_new[:16]} ({mb_new}..{head[:10]}): a conflict resolution or a change inside the merge altered it")
+    title = ((run.get("output") or {}).get("title") or "").strip()
+    merges = ", ".join(str(c.get("sha"))[:10] for c in fresh)
+    return Carry(True, (f"review CARRIED from head {old[:10]} (`{DEGRADATION_CHECK_NAME}` check run {run.get('id')}: "
+                        f"{run.get('conclusion')} \"{title}\") to {head[:10]}: the {len(fresh)} commit(s) since it are all merges "
+                        f"of the base branch ({merges}), and the pull request's own diff is byte-identical — patch-id "
+                        f"{id_new[:16]} over {len(new_cmp.get('files') or [])} file(s), {mb_old}..{old[:10]} = {mb_new}..{head[:10]} "
+                        "(policy review-carries-over-clean-base-merge)"), old, run)
+
+
+def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs=None, carry: Carry | None = None,
+                  reviews=None) -> ArmVerdict:
     number = pr.get("number")
     head = str((pr.get("head") or {}).get("sha") or "")
     short = head[:10] or "(unknown)"
     if pr.get("draft"):
         return ArmVerdict(False, f"#{number} is a draft — a draft is never armed; mark it ready for review")
+    copilot = copilot_review_on(reviews, head)
+    if copilot is not None:
+        return _arm_after_review(pr, comments, required, head_runs, head, short, (copilot_note(copilot, short),))
     mine = internal_review_runs(check_runs, head)
+    carried = carry is not None and carry.ok and real_review_run(mine, head) is None
     running = [c for c in mine if c.get("status") != "completed"]
-    if running:
+    if running and not carried:
         return ArmVerdict(False, f"the `{DEGRADATION_CHECK_NAME}` review of head {short} is still {running[0].get('status') or 'running'} "
                                  f"(check run {running[0].get('id')}) — it re-evaluates when that run completes")
-    run = newest_internal_review_run(mine, None)
+    run = carry.run if carried else newest_internal_review_run(mine, None)
     if run is None:
-        return ArmVerdict(False, f"the `{DEGRADATION_CHECK_NAME}` review has not run on the current head {short} — "
-                                 "every push needs its own review; it re-evaluates when that check run completes")
+        return ArmVerdict(False, f"no review has run on the current head {short} — neither a Copilot review against it nor a completed "
+                                 f"`{DEGRADATION_CHECK_NAME}` run; every push that changes the pull request's own diff needs its "
+                                 "own review, and the gate re-evaluates when it lands" + (f" ({carry.why})" if carry is not None else ""))
     if degradation_of([run], None) is not None:
         title = ((run.get("output") or {}).get("title") or "").strip()
         return ArmVerdict(False, f"the reviewer was UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — "
                                  "that is not a review, so auto-merge stays off; merge by hand once someone has reviewed it, "
                                  "or push/re-kick for a real review")
-    notes = (f"`{DEGRADATION_CHECK_NAME}` completed on head {short}: {run.get('conclusion')} "
-             f"\"{((run.get('output') or {}).get('title') or '').strip()}\" (check run {run.get('id')})",)
+    notes = ((carry.why,) if carried else
+             (f"`{DEGRADATION_CHECK_NAME}` completed on head {short}: {run.get('conclusion')} "
+              f"\"{((run.get('output') or {}).get('title') or '').strip()}\" (check run {run.get('id')})",))
+    return _arm_after_review(pr, comments, required, head_runs, head, short, notes)
+
+
+def _arm_after_review(pr: dict, comments: list, required, head_runs, head: str, short: str, notes: tuple) -> ArmVerdict:
+    """Conditions (3) and (4), once (2) — this head's review — holds; `notes` names the review."""
     incomplete = listing_incomplete(pr, comments)
     if incomplete:
         return ArmVerdict(False, incomplete + " — it re-evaluates on the next event", notes)
@@ -581,7 +832,245 @@ def arm_readiness(pr: dict, comments: list, check_runs) -> ArmVerdict:
         first = unanswered[0]
         return ArmVerdict(False, f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person "
                                  f"(first: {first.get('html_url') or first.get('id')}) — reply to each (fixed, or why not)", notes)
+    suites = required_checks_green(required, head_runs, head)
+    if suites:
+        return ArmVerdict(False, suites, notes)
+    if required is not None:
+        notes += (f"every required check is green on head {short}",)
     return ArmVerdict(True, "", notes)
+
+
+# ─────────────────────────────── the STAGE gate (pure) ───────────────────────────────
+#
+# Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
+# must pass before we start test. and we arm only at end of test". Stage 1's predicate — the head's
+# automatic review landed and every thread answered — asked BEFORE the expensive suites, not after.
+# Design of record, with the measurements: Doc/Architecture/StagedPullRequestPipeline.
+
+TESTS_FIRST_LABEL = "tests-before-review"
+#: Minutes after the head's CI run was created with NO completed review, after which stage 2
+#: starts anyway (loudly). Derived from the measured review latency — see the design doc.
+STAGE_FALLBACK_MINUTES = 120
+STAGE_GATE_JOB = "Stage gate: may the suites start"
+#: Every name the gate job has carried (renamed: with the `review-before-suites: false` opt-out the
+#: gate does not wait for the review, so "review landed" on a green tick could lie). Runs held under
+#: the OLD name must still be found and released by the event half.
+STAGE_GATE_JOBS = (STAGE_GATE_JOB, "Stage 1: review landed and answered")
+#: Every hold's error MESSAGE starts with this (stage gate, Plugins `admission`, core `Consolidate test
+#: results`), so a hold is recognisable from the annotations alone — Plugins' PrBabysitter reads it.
+STAGE_HOLD_MARKER = "STAGE 2 HELD ("
+
+
+@dataclasses.dataclass(frozen=True)
+class StageVerdict:
+    ready: bool
+    #: reviewed | carried | degraded | fallback | label | draft | waiting | unanswered | unreadable
+    mode: str
+    #: ONE line naming what holds stage 2 (empty when ready).
+    missing: str
+    #: When `ready` came from a RELEASE rather than a review: the line every surface prints LOUDLY.
+    loud: str = ""
+    notes: tuple[str, ...] = ()
+    #: True when the review judged was CARRIED from an earlier head (its evidence is notes[0]).
+    carried: bool = False
+
+
+def parse_stamp(stamp: str | None) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.strptime(stamp or "", "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+
+
+# 🚨 GENERATED-ONLY BOT PULL REQUESTS (2026-10-04, Plugins #2860): main's own jobs propose generated
+# files as pull requests — `settle-locks` (every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock`
+# plus each package root's `minMeshVersion`). There is nothing for a reviewer to read, the settle job
+# REWRITES the head on every main merge (so a per-head fallback clock restarts forever), and during a
+# review outage the stage-1 hold deadlocked module publishing (AI 1.21 stuck behind #2860). Such a
+# pull request skips stage 1 — on PROVENANCE, never on a title or a branch name: authored by the App
+# that writes them, every commit by that App, and every changed file generated (a lock, or a root
+# `index.json` whose changed lines are all `minMeshVersion`). Anything else — a person's PR that
+# touches a lock, a bot PR with one hand-written line — is staged like any other.
+GENERATED_BOT_IDS = frozenset({300054957})          # meshweaver-cloud[bot] (GET /users/meshweaver-cloud%5Bbot%5D)
+GENERATED_BOT_LOGINS = frozenset({"meshweaver-cloud[bot]"})
+GENERATED_BASENAMES = frozenset({"manifest.lock", "mesh-floor.lock"})
+
+
+def is_generated_bot(user: dict | None) -> bool:
+    return bool(user) and user.get("type") == "Bot" and user.get("id") in GENERATED_BOT_IDS \
+        and user.get("login") in GENERATED_BOT_LOGINS
+
+
+# A changed line of a floor stamp is NOTHING BUT the key/value — never a line that merely CONTAINS the
+# key (`"minMeshVersion": "3.0.0", "requires": [...]`, or a minified single-line index.json), whose
+# other content no validator backs (#6097 review).
+FLOOR_LINE = re.compile(r'\s*"minMeshVersion"\s*:\s*"[^"]*"\s*,?\s*')
+
+
+def _floor_only_patch(patch: str | None) -> bool:
+    changed = [l for l in (patch or "").splitlines()
+               if l[:1] in "+-" and not l.startswith(("+++", "---")) and l[1:].strip()]
+    return bool(changed) and all(FLOOR_LINE.fullmatch(l[1:]) for l in changed)
+
+
+def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[bool, str]:
+    """(True, why) when the pull request is a generated-files proposal by the App. Pure."""
+    if not is_generated_bot(pr.get("user")):
+        return False, "not authored by the generated-files App"
+    if not files:
+        return False, "its file listing is empty or unread"
+    if len(files) < int(pr.get("changed_files") or 0):
+        return False, f"the file listing returned {len(files)} of {pr.get('changed_files')} files"
+    if not commits:
+        return False, "its commit listing is empty or unread"
+    if len(commits) < int(pr.get("commits") or 0):
+        return False, f"the commit listing returned {len(commits)} of {pr.get('commits')} commits"
+    if not all(is_generated_bot(c.get("author")) for c in commits):
+        return False, "a commit on it is not the App's"
+    for f in files:
+        name = str(f.get("filename") or "")
+        base = name.rsplit("/", 1)[-1]
+        if base in GENERATED_BASENAMES:
+            continue
+        if base == "index.json" and name.count("/") == 1 and _floor_only_patch(f.get("patch")):
+            continue
+        return False, f"{name} is not a generated file"
+    return True, f"{len(files)} generated file(s) by {pr['user'].get('login')}, every commit the App's"
+
+
+def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
+                    fallback_minutes: int = STAGE_FALLBACK_MINUTES,
+                    files: list | None = None, commits: list | None = None, carry: Carry | None = None,
+                    reviews=None) -> StageVerdict:
+    """May stage 2 start for this head? Pure; `now` and `since` are ISO-8601 UTC stamps (`since` =
+    when the head's CI run was created, i.e. when stage 1 began — for a pull request the App
+    authored, when the PULL REQUEST was created: its head is rewritten on every main merge, and a
+    per-head clock would restart forever)."""
+    number = pr.get("number")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    short = head[:10] or "(unknown)"
+    if is_generated_bot(pr.get("user")):
+        since = min(since, str(pr.get("created_at") or since)) if since else str(pr.get("created_at") or "")
+        ok, why = generated_only(pr, files, commits)
+        # A DRAFT is held like any other (#6097 review): the skip removes the review, never the
+        # author's own "not ready yet".
+        if ok and not pr.get("draft"):
+            return StageVerdict(True, "generated", "", notes=(f"stage 1 skipped: {why} — nothing to review",))
+    labels = {l.get("name") for l in pr.get("labels") or []}
+    if TESTS_FIRST_LABEL in labels:
+        return StageVerdict(True, "label", "", (
+            f"STAGE 2 STARTED BEFORE THE REVIEW of {short}: label `{TESTS_FIRST_LABEL}` is on #{number}. "
+            "Runner minutes only — arming still waits for this head's review and every answer."))
+    if pr.get("draft"):
+        return StageVerdict(False, "draft", f"#{number} is a draft — a draft is not reviewed, so stage 2 waits for ready-for-review "
+                                            f"(or the label `{TESTS_FIRST_LABEL}` to run the suites before the review)")
+    # Policy copilot-code-review: a landed Copilot review AGAINST THIS HEAD is the head's review,
+    # checked first so no head waits out the fallback for an internal reviewer that is switched off.
+    copilot = copilot_review_on(reviews, head)
+    if copilot is not None:
+        return _stage_after_review(pr, comments, (copilot_note(copilot, short),), False)
+    mine = internal_review_runs(check_runs, head)
+    run = newest_internal_review_run(mine, None)
+    # A clean merge of the base branch over a reviewed head carries that review (policy
+    # review-carries-over-clean-base-merge): no wait, no new round. The head's OWN real review, when
+    # it has one, always wins; a carry replaces only absent, running or degraded.
+    if carry is not None and carry.ok and real_review_run(mine, head) is None:
+        run = carry.run
+    if run is None:
+        t_now, t_since = parse_stamp(now), parse_stamp(since)
+        if t_now is None or t_since is None:
+            return StageVerdict(False, "unreadable", f"cannot tell how long head {short} has waited (now={now!r}, since={since!r}) — "
+                                                     "not released on a guess")
+        waited = (t_now - t_since).total_seconds() / 60
+        running = [c for c in mine if c.get("status") != "completed"]
+        state = (f"is still {running[0].get('status') or 'running'} (check run {running[0].get('id')})" if running
+                 else "has not started")
+        if waited >= fallback_minutes:
+            return StageVerdict(True, "fallback", "", (
+                f"REVIEW UNAVAILABLE: no Copilot review against head {short}, and its `{DEGRADATION_CHECK_NAME}` review {state}, after {waited:.0f} min "
+                f"(fallback {fallback_minutes} min) — stage 2 started WITHOUT it. Arming still waits for the review; "
+                "if the reviewer is down, that is the incident to chase."))
+        return StageVerdict(False, "waiting", (
+            f"no Copilot review against head {short} yet, and its `{DEGRADATION_CHECK_NAME}` review {state} ({waited:.0f} of {fallback_minutes} min) — "
+            "stage 2 starts once a review lands and every finding is answered (on the event, or the stage-advance sweep for a Copilot review, whose own event starts no run), or at the fallback"),
+            notes=(carry.why,) if carry is not None else ())
+    title = ((run.get("output") or {}).get("title") or "").strip()
+    carried = carry is not None and carry.ok and run is carry.run
+    if degradation_of([run], None) is not None:
+        return StageVerdict(True, "degraded", "", (
+            f"REVIEWER UNAVAILABLE for head {short} (check run {run.get('id')}: \"{title}\") — stage 2 started without a review. "
+            "Arming still refuses a degraded head; a person merges, and a post-merge review is owed."))
+    notes = ((carry.why,) if carried else
+             (f"`{DEGRADATION_CHECK_NAME}` completed on head {short}: {run.get('conclusion')} \"{title}\" (check run {run.get('id')})",))
+    return _stage_after_review(pr, comments, notes, carried)
+
+
+def _stage_after_review(pr: dict, comments: list, notes: tuple, carried: bool) -> StageVerdict:
+    """Stage 1's thread condition, once this head's review holds; `notes` names the review."""
+    incomplete = listing_incomplete(pr, comments)
+    if incomplete:
+        return StageVerdict(False, "unreadable", incomplete + " — it re-evaluates on the next event", notes=notes, carried=carried)
+    roots, unanswered = reviewer_threads(comments)
+    notes += (f"threads opened by the automatic reviewer: {len(roots)}, answered by a person: {len(roots) - len(unanswered)}",)
+    if unanswered:
+        first = unanswered[0]
+        return StageVerdict(False, "unanswered", (
+            f"{len(unanswered)} of {len(roots)} reviewer thread(s) have no reply from a person "
+            f"(first: {first.get('html_url') or first.get('id')}) — reply to each (fixed, or why not); a fix push restarts at stage 0"),
+            notes=notes, carried=carried)
+    return StageVerdict(True, "carried" if carried else "reviewed", "", notes=notes, carried=carried)
+
+
+def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: StageVerdict) -> tuple[str, str]:
+    """What the event half does for ONE pull request: ('rerun' | 'wait' | 'none', why). Pure.
+
+    `run` is the newest `pull_request` run of the caller's CI workflow for the PR's CURRENT head,
+    `gate_job` that run's stage-gate job. Only a FAILED gate on the current head with a GREEN stage
+    1 is re-run — never a run of an older head (no stale verdict carried), never a gate that is
+    still evaluating (it reads live state itself), never a gate that already passed."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if pr.get("state") not in (None, "open"):
+        return "none", f"#{pr.get('number')} is {pr.get('state')}"
+    if run is None:
+        return "none", f"no pull_request CI run exists for head {head[:10]} yet — the push's own run evaluates stage 1"
+    if run.get("head_sha") != head:
+        return "none", f"run {run.get('id')} is for {str(run.get('head_sha'))[:10]}, not the current head {head[:10]} — a new head restarts at stage 0"
+    if gate_job is None:
+        return "none", f"run {run.get('id')} has no `{STAGE_GATE_JOB}` job — this caller has not adopted the stage gate"
+    if gate_job.get("status") != "completed":
+        return "none", f"the stage gate of run {run.get('id')} is still {gate_job.get('status')} — it evaluates live state itself"
+    if gate_job.get("conclusion") == "success":
+        return "none", f"the stage gate of run {run.get('id')} already passed — stage 2 started"
+    if gate_job.get("conclusion") != "failure":
+        return "none", f"the stage gate of run {run.get('id')} concluded {gate_job.get('conclusion')} — only a failed gate is re-run"
+    if not verdict.ready:
+        return "none", f"stage 1 still holds head {head[:10]}: {verdict.missing}"
+    if run.get("status") != "completed":
+        return "wait", f"run {run.get('id')} is still {run.get('status')} — a re-run needs it completed"
+    if run.get("conclusion") == "cancelled":
+        return "none", f"run {run.get('id')} was cancelled (superseded) — a cancelled run is never revived"
+    return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
+
+
+def post_rerun(gh, run_id) -> bool:
+    """POST rerun-failed-jobs. True when this call re-ran the run; False when it lost a race (the sweep
+    and a listener) and another invocation already re-ran it. Any other failure is RAISED: `Gh.post`
+    and `Gh.api` both raise ReadError on a failed call, so a refused POST whose run is still
+    `completed`, or an unreadable read-back, is never masked. Self-tested with a stub `gh`."""
+    try:
+        gh.post(f"actions/runs/{run_id}/rerun-failed-jobs")
+        return True
+    except ReadError:
+        if lost_rerun_race(gh.api(f"actions/runs/{run_id}")):
+            return False
+        raise
+
+
+def lost_rerun_race(readback) -> bool:
+    """After a rerun POST failed: True only when the read-back run is a run object that is no longer
+    `completed` — another invocation re-ran it. Anything else (still completed, an unreadable shape)
+    is False, so the POST's failure is raised, never masked. Pure."""
+    return isinstance(readback, dict) and bool(readback.get("status")) and readback.get("status") != "completed"
 
 
 def pr_from_queue_ref(ref: str) -> int:
@@ -617,6 +1106,12 @@ class Gh:
                 raise ReadError(f"GET repos/{self.repo}/{path} did not return a list of pages")
             data = [item for page in data for item in page]
         return data
+
+    def post(self, path: str) -> None:
+        p = subprocess.run(["gh", "api", "-X", "POST", "-H", "Accept: application/vnd.github+json", f"repos/{self.repo}/{path}"],
+                           capture_output=True, text=True, check=False)
+        if p.returncode != 0:
+            raise ReadError(f"POST repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
 
     def role(self, login: str) -> str:
         data = self.api(f"collaborators/{login}/permission")
@@ -655,9 +1150,10 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
     return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs
 
 
-def read_arm_inputs(gh: Gh, number: int):
-    """The arm gate's three reads — the pull request (its `review_comments` count FIRST, so it
-    bounds the listing), its review comments, and the `internal-review` runs on its head."""
+def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
+    """The arm gate's reads — the pull request (its `review_comments` count FIRST, so it bounds the
+    listing), its review comments, the `internal-review` runs on its head, and — only when that head
+    has no real review of its own — the carry-over (`read_carry`; `carry=False` is the negative control)."""
     pr = gh.api(f"pulls/{number}")
     if not isinstance(pr, dict) or pr.get("number") != number:
         raise ReadError(f"pulls/{number} did not return pull request #{number}")
@@ -665,27 +1161,132 @@ def read_arm_inputs(gh: Gh, number: int):
     head_sha = (pr.get("head") or {}).get("sha") or ""
     if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
         raise ReadError(f"pulls/{number} reported no head sha")
-    listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
-    check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
-    if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
-            or len(check_runs) < listing["total_count"]:
-        raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
-    return pr, comments, check_runs
+    check_runs = internal_review_listing(gh, head_sha)
+    return pr, comments, check_runs, (read_carry(gh, pr, check_runs) if carry else None)
 
 
-def run_arm_gate(repo: str, number: int) -> int:
+def read_reviews(gh: Gh, number: int) -> list:
+    """Every review on the pull request, all pages — the arm and stage gates look for a Copilot review
+    against the current head among them (`copilot_review_on`, policy copilot-code-review). A failed
+    read raises: the gates then answer "cannot read", never "not reviewed"."""
+    reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
+    if not isinstance(reviews, list):
+        raise ReadError(f"pulls/{number}/reviews did not return a listing")
+    return reviews
+
+
+def read_compare(gh: Gh, base_sha: str, sha: str) -> dict:
+    """compare(base...sha) — merge-base(base, sha)..sha, the pull request's own diff — with EVERY commit:
+    the compare API sends `files` on the first page only and pages the commits, so the commits are
+    paged until `total_commits`; a short listing is a ReadError, never a partial answer."""
+    first = gh.api(f"compare/{base_sha}...{sha}?per_page=100")
+    if not isinstance(first, dict) or not isinstance(first.get("commits"), list):
+        raise ReadError(f"compare/{base_sha[:10]}...{sha[:10]} did not return a comparison")
+    commits, total = list(first["commits"]), first.get("total_commits")
+    for page in range(2, 21):
+        if not isinstance(total, int) or len(commits) >= total:
+            break
+        more = (gh.api(f"compare/{base_sha}...{sha}?per_page=100&page={page}") or {}).get("commits") or []
+        if not more:
+            break
+        commits += more
+    if not isinstance(total, int) or len(commits) < total:
+        raise ReadError(f"compare/{base_sha[:10]}...{sha[:10]} returned {len(commits)} of {total} commits")
+    return dict(first, commits=commits)
+
+
+def internal_review_listing(gh: Gh, sha: str) -> list:
+    """Every `internal-review` check run on `sha`; a short listing is a ReadError."""
+    listing = gh.api(f"commits/{sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
+    runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list) or not isinstance(listing.get("total_count"), int) or len(runs) < listing["total_count"]:
+        raise ReadError(f"commits/{sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
+    return runs
+
+
+def read_carry(gh: Gh, pr: dict, check_runs) -> Carry | None:
+    """The carry-over for the pull request's head (policy review-carries-over-clean-base-merge), or None
+    when the head has a real review of its own (nothing to carry). Every input comes from the
+    repository through REST — the base branch's tip, compare(base...head), the walked commits'
+    `internal-review` runs, compare(base...reviewed head) — never from a commit message. A failed read
+    does NOT carry: the head is reviewed fresh, exactly as before this policy."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if real_review_run(check_runs, head) is not None:
+        return None
+    try:
+        base_ref = str((pr.get("base") or {}).get("ref") or "")
+        if not base_ref:
+            raise ReadError("the pull request names no base branch")
+        branch = gh.api(f"branches/{urllib.parse.quote(base_ref, safe='')}")
+        base_sha = str(((branch or {}).get("commit") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise ReadError(f"branches/{base_ref} reported no tip sha")
+        new_cmp = read_compare(gh, base_sha, head)
+        own = {c.get("sha"): c for c in new_cmp["commits"]}
+        old, run, _walked, why = find_reviewed_ancestor(head, own, lambda sha: internal_review_listing(gh, sha))
+        if old is None:
+            return Carry(False, f"no carry-over: {why} — the head owes a fresh review")
+        return carry_over(head, new_cmp, read_compare(gh, base_sha, old), old, run)
+    except (ReadError, KeyError, TypeError, AttributeError) as e:
+        return Carry(False, f"no carry-over: its inputs could not be read ({e}) — the head owes a fresh review")
+
+
+def read_required_contexts(gh: Gh, base: str) -> list:
+    """The base branch's required status-check contexts, from BOTH places protection lives (rulesets
+    and classic protection — the fleet is split between them). A 404 from one is 'look in the
+    other'; nothing readable from either is an empty list, which the predicate refuses."""
+    names = []
+    try:
+        for rule in gh.api(f"rules/branches/{base}") or []:
+            if rule.get("type") == "required_status_checks":
+                names += [c.get("context") for c in (rule.get("parameters") or {}).get("required_status_checks") or []]
+    except ReadError:
+        pass
+    try:
+        prot = (gh.api(f"branches/{base}") or {}).get("protection") or {}
+        names += list((prot.get("required_status_checks") or {}).get("contexts") or [])
+    except ReadError:
+        pass
+    return [n for n in dict.fromkeys(names) if n]
+
+
+def read_head_runs(gh: Gh, head_sha: str) -> list:
+    """Every check run on the head, all pages; a short listing is a ReadError, never a partial answer."""
+    runs, total = [], None
+    for page in range(1, 21):
+        data = gh.api(f"commits/{head_sha}/check-runs?filter=all&per_page=100&page={page}")
+        if not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
+            raise ReadError(f"commits/{head_sha[:10]}/check-runs page {page} did not return a listing")
+        total = data.get("total_count")
+        runs += data["check_runs"]
+        if not data["check_runs"] or (isinstance(total, int) and len(runs) >= total):
+            break
+    if not isinstance(total, int) or len(runs) < total:
+        raise ReadError(f"commits/{head_sha[:10]}/check-runs returned {len(runs)} of {total} runs")
+    return runs
+
+
+def run_arm_gate(repo: str, number: int, carry: bool = True) -> int:
     """Prints the verdict, writes ONE line to the job summary and `ready=true|false` to
     $GITHUB_OUTPUT. Exit 0 either way — not-ready is an answer, not a failure; a read that cannot
     complete is NOT ready (never armed on a guess) and says so."""
     try:
-        pr, comments, check_runs = read_arm_inputs(Gh(repo), number)
-        verdict = arm_readiness(pr, comments, check_runs)
+        gh = Gh(repo)
+        pr, comments, check_runs, carried = read_arm_inputs(gh, number, carry)
+        head = (pr.get("head") or {}).get("sha") or ""
+        required = read_required_contexts(gh, (pr.get("base") or {}).get("ref") or "main")
+        verdict = arm_readiness(pr, comments, check_runs, required, read_head_runs(gh, head), carried,
+                                read_reviews(gh, number))
     except (ReadError, KeyError) as e:
         verdict = ArmVerdict(False, f"cannot read #{number}'s review state, so it is not armed on a guess: {e}")
         print(f"::warning::{verdict.missing}")
     for n in verdict.notes:
         print(f"  {n}")
-    line = (f"Ready to arm #{number}: internal review completed on the current head and every reviewer thread is answered."
+    # Name the review that released the gate from the verdict's own notes — Copilot, carried or
+    # internal — so the line never claims a reviewer that did not run.
+    released_by = next((n for n in verdict.notes if n.startswith(("review CARRIED", "Copilot reviewed head"))),
+                       "internal review completed on the current head")
+    line = (f"Ready to arm #{number}: {released_by}; every reviewer thread is answered, and every required check is green."
             if verdict.ready else f"Not armed #{number}: {verdict.missing}")
     print(line)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -697,6 +1298,179 @@ def run_arm_gate(repo: str, number: int) -> int:
         with open(out, "a", encoding="utf-8") as f:
             f.write(f"ready={'true' if verdict.ready else 'false'}\n")
     return 0
+
+
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _append(env_key: str, text: str) -> None:
+    path = os.environ.get(env_key)
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+
+
+def read_stage_inputs(gh: Gh, number: int, carry: bool = True):
+    """The arm gate's reads (the carry-over included), plus — only for a pull request the
+    generated-files App authored — its files (with patches) and commits, so `generated_only` can judge
+    provenance. A failed read raises."""
+    pr, comments, check_runs, carried = read_arm_inputs(gh, number, carry)
+    files = commits = None
+    if is_generated_bot(pr.get("user")):
+        files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
+        commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
+    return pr, comments, check_runs, files, commits, carried
+
+
+def run_stage_gate(repo: str, number: int, since: str, fallback_minutes: int, carry: bool = True) -> int:
+    """The stage gate job: exit 0 when stage 2 may start, 1 (RED, named) when it may not. A RED here
+    is a HOLD, not a defect: the heavy legs skip, the required aggregators read red naming this line,
+    and the event half (`--stage-advance`) re-runs the failed jobs when stage 1 turns green."""
+    try:
+        gh = Gh(repo)
+        pr, comments, check_runs, files, commits, carried = read_stage_inputs(gh, number, carry)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), since, fallback_minutes, files, commits, carried,
+                                  read_reviews(gh, number))
+    except (ReadError, KeyError) as e:
+        verdict = StageVerdict(False, "unreadable", f"cannot read #{number}'s review state, so stage 2 is not started on a guess: {e}")
+    for n in verdict.notes:
+        print(f"  {n}")
+    if verdict.ready and verdict.loud:
+        print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::{verdict.loud}")
+        line = f"⚠️ Stage 2 started for #{number} — {verdict.loud}"
+    elif verdict.ready and verdict.mode == "generated":
+        line = f"✅ Stage 1 not owed for #{number}: {verdict.notes[0] if verdict.notes else 'generated files only'} — stage 2 starts."
+    elif verdict.ready and verdict.carried:
+        line = (f"✅ Stage 1 green for #{number} by CARRY-OVER — no new review round: {verdict.notes[0]}; "
+                "every reviewer thread is answered — stage 2 starts.")
+    elif verdict.ready:
+        line = f"✅ Stage 1 green for #{number}: the head's review landed and every reviewer thread is answered — stage 2 starts."
+    else:
+        # The MESSAGE carries the marker (STAGE_HOLD_MARKER): an annotation's title is not what a reader
+        # of the check's annotations sees first, and the PR babysitter keys its "a hold, not a defect"
+        # class on the message (MeshWeaver.Plugins PrBabysitter.StageHoldMarker).
+        print(f"::error title=Stage 2 held — stage 1 ({verdict.mode})::{STAGE_HOLD_MARKER}stage 1, {verdict.mode}): {verdict.missing}")
+        line = f"⏸ Stage 2 held for #{number} ({verdict.mode}): {verdict.missing}"
+        carry_notes = [n for n in verdict.notes if n.startswith("no carry-over")]
+        if carry_notes:
+            line += f"\n\n🔁 {carry_notes[0]}"
+    print(line)
+    _append("GITHUB_STEP_SUMMARY", "### Staged pipeline — stage 1\n\n" + line + "\n")
+    _append("GITHUB_OUTPUT", f"ready={'true' if verdict.ready else 'false'}\nmode={verdict.mode}\n")
+    return 0 if verdict.ready else 1
+
+
+def newest_ci_run(gh: Gh, workflow: str, head_sha: str) -> dict | None:
+    listing = gh.api(f"actions/workflows/{workflow}/runs?head_sha={head_sha}&event=pull_request&per_page=50")
+    runs = (listing or {}).get("workflow_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list):
+        raise ReadError(f"actions/workflows/{workflow}/runs?head_sha={head_sha[:10]} did not return a run listing")
+    return max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
+
+
+def stage_gate_job(gh: Gh, run_id: int) -> dict | None:
+    # The jobs listing pages are objects ({total_count, jobs}), not lists, so they are paged by hand;
+    # a short listing is an unreadable one (a gate job missing from page 3 must not read as absent).
+    flat: list = []
+    for page in range(1, 11):
+        data = gh.api(f"actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}")
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list) or not isinstance(data.get("total_count"), int):
+            raise ReadError(f"actions/runs/{run_id}/jobs page {page} did not return a job listing")
+        flat += data["jobs"]
+        if len(flat) >= data["total_count"] or not data["jobs"]:
+            break
+    if len(flat) < (data.get("total_count") or 0):
+        raise ReadError(f"actions/runs/{run_id}/jobs returned {len(flat)} of {data.get('total_count')} jobs")
+    gates = [j for j in flat if str(j.get("name") or "").endswith(STAGE_GATE_JOBS)]
+    return max(gates, key=lambda j: (j.get("started_at") or "", j.get("id") or 0)) if gates else None
+
+
+def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_minutes: int) -> str:
+    pr = gh.api(f"pulls/{number}")
+    head = str((pr.get("head") or {}).get("sha") or "")
+    run = newest_ci_run(gh, workflow, head) if re.fullmatch(r"[0-9a-f]{40}", head) else None
+    job = stage_gate_job(gh, int(run["id"])) if run else None
+    verdict = StageVerdict(False, "unread", "not evaluated")
+    if job is not None and job.get("status") == "completed" and job.get("conclusion") == "failure":
+        _, comments, check_runs, files, commits, carried = read_stage_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes,
+                                  files, commits, carried, read_reviews(gh, number))
+    action, why = advance_action(pr, run, job, verdict)
+    deadline = time.monotonic() + wait_minutes * 60
+    waited = action == "wait"
+    while action == "wait" and time.monotonic() < deadline:
+        print(f"  #{number}: {why}")
+        time.sleep(30)
+        run = gh.api(f"actions/runs/{run['id']}")
+        action, why = advance_action(pr, run, job, verdict)
+    if action == "wait":
+        raise ReadError(f"#{number}: {why} — still not completed after {wait_minutes} min; the sweep re-tries")
+    if action == "rerun" and waited:
+        # 🚨 Everything judged before the wait is stale now (#6070 review): a fix push may have made a
+        # new head (and cancelled this run), the PR may be closed, an answer may have been deleted.
+        # Re-read the pull request and re-judge stage 1 before POSTing, never on the snapshot.
+        pr = gh.api(f"pulls/{number}")
+        _, comments, check_runs, files, commits, carried = read_stage_inputs(gh, number)
+        verdict = stage_readiness(pr, comments, check_runs, utc_now(), str(run.get("created_at") or ""), fallback_minutes,
+                                  files, commits, carried, read_reviews(gh, number))
+        action, why = advance_action(pr, run, job, verdict)
+    if action == "rerun":
+        if not post_rerun(gh, run["id"]):
+            print(f"  #{number}: run {run['id']} was already re-run by another invocation")
+            return "none"
+        if verdict.loud:
+            print(f"::warning title=Stage 2 released without a completed review ({verdict.mode})::#{number}: {verdict.loud}")
+        print(f"::notice::#{number}: {why} — {run.get('html_url')}")
+    else:
+        print(f"  #{number}: {why}")
+    return action
+
+
+def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str | None, sweep: bool,
+                      fallback_minutes: int, wait_minutes: int, max_per_run: int = 25) -> int:
+    gh = Gh(repo)
+    errors: list[str] = []
+    try:
+        if pr is not None:
+            numbers = [pr]
+        elif head_sha:
+            pulls = gh.api(f"commits/{head_sha}/pulls?per_page=100")
+            numbers = [p["number"] for p in pulls or () if p.get("state") == "open"
+                       and (p.get("head") or {}).get("sha") == head_sha]
+            if not numbers:
+                print(f"  no OPEN pull request has {head_sha[:10]} as its head — nothing to advance (an older head never is)")
+        else:
+            # The fallback timer: every open pull request whose newest CI run FAILED in the last six
+            # hours. One listing of open PRs and one of failed runs; per-PR reads only for those.
+            open_heads = {p["head"]["sha"]: p["number"] for p in gh.api("pulls?state=open&per_page=100", paginate=True)
+                          if not p.get("draft") and (p.get("head") or {}).get("sha")}
+            cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Paged by hand (the pages are objects): a mass outage is exactly when more than one page
+            # of failed runs exists, and a head on page 2 must not wait for page 1 to age out.
+            failed: set = set()
+            for page in range(1, 11):
+                listing = gh.api(f"actions/workflows/{workflow}/runs?event=pull_request&status=failure"
+                                 f"&created=%3E%3D{cutoff}&per_page=100&page={page}")
+                runs = (listing or {}).get("workflow_runs") if isinstance(listing, dict) else None
+                if not isinstance(runs, list):
+                    raise ReadError(f"the failed-run listing of {workflow} (page {page}) is unreadable")
+                failed |= {r.get("head_sha") for r in runs}
+                if len(runs) < 100:
+                    break
+            numbers = sorted({open_heads[s] for s in failed if s in open_heads})[:max_per_run]
+            print(f"sweep: {len(open_heads)} open non-draft PR(s), {len(failed)} head(s) with a failed run since {cutoff}; examining {numbers}")
+    except ReadError as e:
+        print(f"::error::cannot list what to advance: {e}")
+        return 1
+    for number in numbers:
+        try:
+            advance_one(gh, number, workflow, fallback_minutes, wait_minutes)
+        except (ReadError, KeyError, TypeError) as e:
+            errors.append(f"#{number}: {e}")
+    for e in errors:
+        print(f"::error::stage advance failed — {e}")
+    return 1 if errors else 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -1187,13 +1961,13 @@ def self_test() -> int:
         print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={'ARM' if ready else 'no arm: ' + says} "
               f"got={'ARM' if v.ready else 'no arm: ' + v.missing}")
     draft_pr = dict(_pr(0), draft=True)
-    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "has not run on the current head")
-    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "has not run on the current head")
+    arm_case("review not run on the head -> no arm", False, _pr(0), [], [], "no review has run on the current head")
+    arm_case("review only on an OLDER head -> no arm", False, _pr(0), [], [_ir(sha="b" * 40)], "no review has run on the current head")
     arm_case("review still in progress -> no arm", False, _pr(0), [], [_ir(status="in_progress", conclusion=None)], "still in_progress")
     arm_case("review neutral 'Reviewer unavailable' -> no arm", False, _pr(0), [], [_ir(conclusion="neutral", title=DEGRADED_TITLE)],
              "UNAVAILABLE")
     arm_case("another App's internal-review does not count", False, _pr(0), [],
-             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "has not run on the current head")
+             [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], "no review has run on the current head")
     arm_case("unanswered bot thread -> no arm", False, _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
              "1 of 1 thread(s)")
     arm_case("a bot reply does not answer -> no arm", False, _pr(2),
@@ -1213,6 +1987,368 @@ def self_test() -> int:
     arm_case("a degradation after a real round -> no arm", False, _pr(0), [],
              [_ir(at="2026-10-04T07:00:00Z", crid=940), _ir(conclusion="neutral", title=DEGRADED_TITLE)], "UNAVAILABLE")
     arm_case("draft -> no arm (even when reviewed and answered)", False, draft_pr, [], [_ir()], "is a draft")
+
+    # ── condition 4 (policy review-then-suites): reviewed AND answered is not enough — the required
+    # suites must be green on the SAME head. Each NO names the context it holds on.
+    def suite(name, conclusion="success", status="completed", sha=HEAD, at="2026-10-04T09:00:00Z", crid=990):
+        return {"name": name, "status": status, "conclusion": conclusion, "head_sha": sha, "started_at": at, "id": crid}
+    REQ = ["Consolidate test results", "Automatic review answered"]
+    def suites_case(name, ready, required, head_runs, says=""):
+        nonlocal failures
+        v = arm_readiness(_pr(0), [], [_ir()], required, head_runs)
+        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm+suites: {name:48} got={'ARM' if v.ready else 'no arm: ' + v.missing}")
+    suites_case("reviewed, suites green -> ARM", True, REQ, [suite("Consolidate test results")])
+    suites_case("reviewed, suite still running -> no arm", False, REQ,
+                [suite("Consolidate test results", conclusion=None, status="in_progress")], "still in_progress")
+    suites_case("reviewed, suite red -> no arm", False, REQ, [suite("Consolidate test results", "failure")], "concluded failure")
+    suites_case("reviewed, suite never reported -> no arm", False, REQ, [], "has not reported")
+    suites_case("suite green only on an OLDER head -> no arm", False, REQ,
+                [suite("Consolidate test results", sha="b" * 40)], "has not reported")
+    suites_case("newest re-run red after an older green -> no arm", False, REQ,
+                [suite("Consolidate test results", crid=1), suite("Consolidate test results", "failure", at="2026-10-04T10:00:00Z", crid=2)],
+                "concluded failure")
+    suites_case("NO required context readable -> no arm (never vacuous)", False, [], [suite("x")], "no required status check")
+    suites_case("only review contexts required -> no arm (never vacuous)", False, ["Automatic review answered", "internal-review"],
+                [], "no required status check")
+    suites_case("not asked (pure review gate) -> ARM on review alone", True, None, None)
+
+    # ── policy copilot-code-review: a landed Copilot review AGAINST THE CURRENT HEAD is that head's
+    # review for BOTH the arm and the stage gate, with no `internal-review` run at all. Each NO case
+    # names what it must fail on, so the acceptance cannot pass vacuously.
+    def _cop(sha=HEAD, body=REVIEW_BODY_SEPT, state="COMMENTED", user=REVIEWER_REVIEW_USER, rid=77):
+        return dict(_review(body=body, user=user, state=state, rid=rid), commit_id=sha)
+    def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says=""):
+        nonlocal failures
+        v = arm_readiness(pr or _pr(len(comments)), list(comments), list(runs), required, head_runs, None, reviews)
+        ok = v.ready == ready and (says in v.missing if not ready else not v.missing)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm+copilot: {name:47} got={'ARM' if v.ready else 'no arm: ' + v.missing}")
+    cop_arm("Copilot reviewed the head, no internal run -> ARM", True, [_cop()])
+    cop_arm("Copilot reviewed only an OLDER head -> no arm", False, [_cop(sha="b" * 40)], says="no review has run on the current head")
+    cop_arm("Copilot REFUSED on the head -> no arm", False, [_cop(body=REFUSAL_QUOTA)], says="no review has run on the current head")
+    cop_arm("Copilot review still PENDING -> no arm", False, [_cop(state="PENDING")], says="no review has run on the current head")
+    cop_arm("the internal bot's REVIEW alone is not its verdict -> no arm", False, [_cop(user=INTERNAL_REVIEWER_USER)],
+            says="no review has run on the current head")
+    cop_arm("Copilot on the head, its thread unanswered -> no arm", False, [_cop()], comments=[_comment(1)], says="1 of 1 thread(s)")
+    cop_arm("Copilot on the head, its thread answered -> ARM", True, [_cop()], comments=[_comment(1), _comment(11, PERSON, 1)])
+    cop_arm("Copilot on the head beats a DEGRADED internal run -> ARM", True, [_cop()],
+            runs=[_ir(conclusion="neutral", title=DEGRADED_TITLE)])
+    cop_arm("Copilot on the head, required suite red -> no arm", False, [_cop()], required=REQ,
+            head_runs=[suite("Consolidate test results", "failure")], says="concluded failure")
+    cop_arm("Copilot on the head, required suite green -> ARM", True, [_cop()], required=REQ,
+            head_runs=[suite("Consolidate test results")])
+    cop_arm("NEGATIVE CONTROL: no reviews passed -> no arm", False, None, says="no review has run on the current head")
+    for name, ready, mode, reviews, comments, pr in [
+        ("Copilot reviewed the head -> stage 2 starts", True, "reviewed", [_cop()], [], None),
+        ("Copilot reviewed only an OLDER head -> waiting", False, "waiting", [_cop(sha="b" * 40)], [], None),
+        ("Copilot on the head, thread unanswered -> held", False, "unanswered", [_cop()], [_comment(1)], None),
+        ("a DRAFT is held even with a Copilot review", False, "draft", [_cop()], [], dict(_pr(0), draft=True)),
+    ]:
+        v = stage_readiness(pr or _pr(len(comments)), comments, [], "2026-10-04T08:20:00Z", "2026-10-04T08:00:00Z", 60, reviews=reviews)
+        ok = v.ready == ready and v.mode == mode
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage+copilot: {name:45} expected={mode} got={v.mode}: {v.missing}")
+
+    # ── the STAGE gate (node-repo-stage-gate.yml): stage 2 starts only on a reviewed, answered head —
+    # or on one of the three LOUD releases (degradation, fallback, label). Each case names the mode
+    # it must land in AND, for a hold, the phrase it must hold on.
+    T0, T_EARLY, T_LATE = "2026-10-04T08:00:00Z", "2026-10-04T08:20:00Z", "2026-10-04T09:05:00Z"
+    def stage_case(name, mode, pr, comments, runs, now=T_EARLY, says=""):
+        nonlocal failures
+        v = stage_readiness(pr, comments, runs, now, T0, 60)
+        expect_ready = mode in ("reviewed", "degraded", "fallback", "label")
+        ok = (v.mode == mode and v.ready == expect_ready and (says in v.missing if not v.ready else True)
+              and (bool(v.loud) == (mode in ("degraded", "fallback", "label"))))
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage: {name:53} expected={mode} got={v.mode}"
+              f"{'' if v.ready else ' — ' + v.missing[:70]}")
+    stage_case("no review yet, 20 of 60 min -> waiting", "waiting", _pr(0), [], [], says="has not started")
+    stage_case("review running, 20 of 60 min -> waiting", "waiting", _pr(0), [], [_ir(status="in_progress", conclusion=None)],
+               says="still in_progress")
+    stage_case("review only on an OLDER head -> waiting (no stale verdict)", "waiting", _pr(0), [], [_ir(sha="b" * 40)],
+               says="has not started")
+    stage_case("another App's internal-review -> waiting", "waiting", _pr(0), [],
+               [dict(_ir(), app={"id": 15368, "slug": "github-actions"})], says="has not started")
+    stage_case("no review after 65 min -> FALLBACK (loud)", "fallback", _pr(0), [], [], now=T_LATE)
+    stage_case("review still running after 65 min -> FALLBACK (loud)", "fallback", _pr(0), [],
+               [_ir(status="in_progress", conclusion=None)], now=T_LATE)
+    stage_case("reviewer unavailable -> DEGRADED release (loud)", "degraded", _pr(0), [],
+               [_ir(conclusion="neutral", title=DEGRADED_TITLE)])
+    stage_case("neutral but not the unavailable title -> reviewed, not degraded", "reviewed", _pr(0), [],
+               [_ir(conclusion="neutral", title="Nothing to review")])
+    stage_case("reviewed, no findings -> stage 2", "reviewed", _pr(0), [], [_ir()])
+    stage_case("findings answered by a person -> stage 2", "reviewed", _pr(2),
+               [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1)], [_ir(conclusion="failure", title="1 blocking finding")])
+    stage_case("unanswered finding -> held", "unanswered", _pr(1), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()], says="1 of 1")
+    stage_case("unanswered finding after 65 min -> STILL held (no fallback)", "unanswered", _pr(1),
+               [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()], now=T_LATE, says="1 of 1")
+    stage_case("a bot reply does not answer -> held", "unanswered", _pr(2),
+               [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, OTHER_BOT, 1)], [_ir()], says="1 of 1")
+    stage_case("incomplete comment listing -> held", "unreadable", _pr(5), [_comment(1, INTERNAL_REVIEWER_USER)], [_ir()],
+               says="listing returned")
+    stage_case("draft -> held even after the fallback", "draft", dict(_pr(0), draft=True), [], [], now=T_LATE, says="is a draft")
+    stage_case("label tests-before-review -> released (loud)", "label",
+               dict(_pr(0), draft=True, labels=[{"name": TESTS_FIRST_LABEL}]), [], [])
+    # ── generated-only bot PRs (Plugins #2860): skip stage 1 on PROVENANCE, never on a branch name.
+    BOT = {"login": "meshweaver-cloud[bot]", "type": "Bot", "id": 300054957}
+    HUMAN = {"login": "rbuergi", "type": "User", "id": 6334612}
+    def gpr(user=BOT, n_files=2, created="2026-10-04T08:00:00Z"):
+        return dict(_pr(0), user=user, changed_files=n_files, created_at=created)
+    LOCKS = [{"filename": "AI/manifest.lock", "patch": "-a\n+b"}, {"filename": "Hosting/manifest.lock", "patch": "-a\n+b"}]
+    FLOOR = [{"filename": "AI/mesh-floor.lock", "patch": "+x"},
+             {"filename": "AI/index.json", "patch": '@@ -3 +3 @@\n-    "minMeshVersion": "3.0.0-ci.9900",\n+    "minMeshVersion": "3.0.0-ci.9939",'}]
+    BOT_COMMITS = [{"author": BOT}]
+    def gen_case(name, mode, pr, files, commits, now=T_EARLY):
+        nonlocal failures
+        v = stage_readiness(pr, [], [], now, T0, 60, files, commits)
+        ok = v.mode == mode
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage: {name:53} expected={mode} got={v.mode}")
+    gen_case("settle PR (App, locks only) -> stage 1 not owed", "generated", gpr(), LOCKS, BOT_COMMITS)
+    gen_case("floor stamp (App, mesh-floor.lock + minMeshVersion) -> not owed", "generated", gpr(), FLOOR, BOT_COMMITS)
+    gen_case("a PERSON's PR touching only locks -> waits for the review", "waiting", gpr(user=HUMAN), LOCKS, [{"author": HUMAN}])
+    gen_case("App PR with one non-generated file -> waits", "waiting", gpr(),
+             LOCKS[:1] + [{"filename": "Hosting/Deployment/Source/X.cs", "patch": "+x"}], BOT_COMMITS)
+    gen_case("App PR whose index.json changes more than the floor -> waits", "waiting", gpr(),
+             [{"filename": "AI/index.json", "patch": '-    "minMeshVersion": "a",\n+    "minMeshVersion": "b",\n+    "requires": []'}], BOT_COMMITS)
+    gen_case("App PR with a person's commit on it -> waits", "waiting", gpr(), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    gen_case("App PR whose file listing is short -> waits", "waiting", gpr(n_files=3), LOCKS, BOT_COMMITS)
+    gen_case("a look-alike bot (another id) -> waits", "waiting", gpr(user=dict(BOT, id=1)), LOCKS, BOT_COMMITS)
+    gen_case("a generated-only App DRAFT -> held as a draft", "draft", dict(gpr(), draft=True), LOCKS, BOT_COMMITS)
+    gen_case("App PR whose commit listing is short -> waits", "waiting", dict(gpr(), commits=2), LOCKS, BOT_COMMITS)
+    gen_case("a floor line carrying more than the floor -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-    "minMeshVersion": "a",\n+    "minMeshVersion": "b", "requires": ["x"],'}],
+             BOT_COMMITS)
+    gen_case("a minified index.json change -> waits", "waiting", gpr(n_files=1),
+             [{"filename": "AI/index.json", "patch": '-{"minMeshVersion": "a", "id": "AI"}\n+{"minMeshVersion": "b", "id": "AI"}'}],
+             BOT_COMMITS)
+    # The fallback clock keys on the PULL REQUEST for the App's PRs: a head rewritten 1 min ago on a
+    # PR opened 4 h ago is past the fallback (the per-head clock would restart forever).
+    v = stage_readiness(gpr(created="2026-10-04T04:00:00Z"), [], [], T_EARLY, "2026-10-04T08:19:00Z", 60,
+                        LOCKS[:1] + [{"filename": "Hosting/X.cs"}], BOT_COMMITS)
+    ok = v.mode == "fallback"
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an App PR falls back on the PR clock, not the head clock':53} got={v.mode}")
+    v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
+    ok = (not v.ready) and v.mode == "unreadable"
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an unreadable clock is never a fallback':53} got={v.mode}")
+
+    # ── the CARRY-OVER (policy review-carries-over-clean-base-merge): a review carries to a head that
+    # differs from the reviewed one only by a clean merge of the base branch — computed from the
+    # commits' parents and the pull request's own diff, never from a message. Topology of the fixture:
+    #   B0 ── B1 ── B2              (base)
+    #    └ P1 ── O ──── M           (O reviewed; M = merge of B2 into O; M's parents [O, B2])
+    def sha(c):
+        return (c * 40)[:40]
+    B0, B2, P1, O, M = sha("0"), sha("2"), sha("3"), sha("4"), sha("5")
+    def commit(s, *parents):
+        return {"sha": s, "parents": [{"sha": p} for p in parents]}
+    PATCH_OLD = "@@ -10,3 +10,4 @@ class X\n context\n-old line\n+new line\n+added line"
+    PATCH_SHIFTED = "@@ -42,3 +42,4 @@ class X moved\n context\n-old line\n+new line\n+added line"   # main added 32 lines above
+    PATCH_RESOLVED = "@@ -42,3 +42,4 @@ class X\n context\n-old line\n+new line, as the conflict resolution rewrote it\n+added line"
+    def files(patch=PATCH_OLD, extra=()):
+        return [{"filename": "src/X.cs", "status": "modified", "sha": "f" * 40, "patch": patch}, *extra]
+    def cmp_(commits, fs, mb, total=None):
+        return {"commits": commits, "total_commits": len(commits) if total is None else total, "files": fs,
+                "merge_base_commit": {"sha": mb}, "status": "diverged"}
+    OLD_CMP = cmp_([commit(P1, B0), commit(O, P1)], files(), B0)
+    NEW_CMP = cmp_([commit(P1, B0), commit(O, P1), commit(M, O, B2)], files(PATCH_SHIFTED), B2)
+    REVIEW_O = _ir(sha=O, crid=960, title="No blocking findings")
+    RUNS = {O: [REVIEW_O]}
+    def carry_of(new_cmp, old_cmp=OLD_CMP, runs=RUNS, head=M):
+        own = {c["sha"]: c for c in new_cmp["commits"]}
+        old, run, _walked, why = find_reviewed_ancestor(head, own, lambda s: runs.get(s, []))
+        return Carry(False, f"no carry-over: {why}") if old is None else carry_over(head, new_cmp, old_cmp, old, run)
+    def carry_case(name, expect_ok, c, says):
+        nonlocal failures
+        ok = c.ok == expect_ok and says in c.why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} carry: {name:53} expected={'CARRY' if expect_ok else 'fresh'} "
+              f"got={'CARRY' if c.ok else 'fresh'}{'' if ok else ' — ' + c.why}")
+    PURE = carry_of(NEW_CMP)
+    carry_case("pure clean main-merge -> carries (hunk lines moved)", True, PURE, f"review CARRIED from head {O[:10]}")
+    carry_case("  ...and the evidence names the merge + the patch-id", True, PURE, f"({M[:10]}), and the pull request's own diff is byte-identical — patch-id")
+    carry_case("merge whose conflict resolution changed the PR diff -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_RESOLVED))), "own diff changed — patch-id")
+    carry_case("merge that ADDED a file to the PR diff -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED, [{"filename": "src/Y.cs", "status": "added", "sha": "e" * 40, "patch": "+y"}]))),
+               "own diff changed")
+    X = sha("6")
+    carry_case("an extra (non-merge) commit on top -> fresh", False,
+               carry_of(cmp_(NEW_CMP["commits"] + [commit(X, M)], files(PATCH_SHIFTED), B2), head=X), "is not a merge commit")
+    M3 = sha("7")
+    carry_case("an extra commit, THEN a main-merge -> fresh", False,
+               carry_of(cmp_(OLD_CMP["commits"] + [commit(X, O), commit(M3, X, B2)], files(PATCH_SHIFTED), B2), head=M3),
+               f"{X[:10]} is not a merge commit")
+    F1 = sha("8")
+    carry_case("a merge of ANOTHER branch (both parents on the PR side) -> fresh", False,
+               carry_of(cmp_(OLD_CMP["commits"] + [commit(F1, B0), commit(M, O, F1)], files(PATCH_SHIFTED), B0)),
+               "2 parent(s) on the pull request's side")
+    carry_case("an evil merge bringing a non-merge commit (fresh set) -> fresh", False,
+               carry_over(M, cmp_(NEW_CMP["commits"] + [commit(F1, B2)], files(PATCH_SHIFTED), B2), OLD_CMP, O, REVIEW_O),
+               "non-merge commit(s) since it")
+    carry_case("the reviewed head was DEGRADED -> nothing to carry", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="neutral", title=DEGRADED_TITLE)]}), "is not a merge commit")
+    carry_case("the reviewed head's run is 'Review not completed' -> nothing to carry", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="failure", title="Review not completed — a round ended for a cause …")]}),
+               "is not a merge commit")
+    carry_case("a REWORDED no-review exit is not carried (allow-list fails safe)", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion="failure", title="Review could not finish — …")]}), "is not a merge commit")
+    carry_case("a review title with an UNREAD conclusion is not carried", False,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, conclusion=None)]}), "is not a merge commit")
+    carry_case("a carried review carries on", True,
+               carry_of(NEW_CMP, runs={O: [_ir(sha=O, title=f"Review carried from {P1[:10]} — No blocking findings")]}), "CARRIED")
+    carry_case("a merge that only changed TRAILING WHITESPACE on a changed line -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED.replace("+new line", "+new line  ")))), "own diff changed")
+    carry_case("another App's internal-review on the old head -> nothing to carry", False,
+               carry_of(NEW_CMP, runs={O: [dict(REVIEW_O, app={"id": 15368, "slug": "github-actions"})]}), "is not a merge commit")
+    M2 = sha("9")
+    carry_case("two clean main-merges in a row (middle unreviewed) -> carries", True,
+               carry_of(cmp_(NEW_CMP["commits"] + [commit(M2, M, sha("a"))], files(PATCH_SHIFTED), sha("a")), head=M2),
+               "the 2 commit(s) since it are all merges")
+    carry_case("short commit listing -> fresh (never a partial answer)", False,
+               carry_of(dict(NEW_CMP, total_commits=4)), "returned 3 of 4 commits")
+    carry_case("300 files (the compare cap) -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED, [{"filename": f"f{i}", "status": "added", "sha": "e" * 40, "patch": "+"} for i in range(299)]))),
+               "cannot be fingerprinted")
+    carry_case("a binary file with the same blob -> carries", True,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED, [{"filename": "a.png", "status": "added", "sha": "d" * 40}])),
+                        dict(OLD_CMP, files=files(PATCH_OLD, [{"filename": "a.png", "status": "added", "sha": "d" * 40}]))), "CARRIED")
+    carry_case("a binary file whose blob changed -> fresh", False,
+               carry_of(dict(NEW_CMP, files=files(PATCH_SHIFTED, [{"filename": "a.png", "status": "added", "sha": "c" * 40}])),
+                        dict(OLD_CMP, files=files(PATCH_OLD, [{"filename": "a.png", "status": "added", "sha": "d" * 40}]))), "own diff changed")
+    # ...and what the GATES do with it. M's own internal-review: none (the whole point).
+    MPR = dict(_pr(0), head={"sha": M})
+    def gate_case(name, mode, pr, comments, runs, carry, says=""):
+        nonlocal failures
+        v = stage_readiness(pr, comments, runs, T_EARLY, T0, 60, carry=carry)
+        ok = v.mode == mode and (says in "\n".join(v.notes + (v.missing,)))
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} stage+carry: {name:47} expected={mode} got={v.mode}"
+              f"{'' if ok else ' — ' + v.missing + ' ' + str(v.notes)}")
+    gate_case("pure merge -> stage 2 starts NOW, no new round", "carried", MPR, [], [], PURE, "patch-id")
+    gate_case("NEGATIVE CONTROL: carry disabled -> the pure merge WAITS", "waiting", MPR, [], [], None, "has not started")
+    gate_case("conflict-resolved merge -> waits for a fresh review", "waiting", MPR, [], [],
+              carry_of(dict(NEW_CMP, files=files(PATCH_RESOLVED))), "own diff changed")
+    gate_case("carried, but a thread is unanswered -> still held", "unanswered", dict(MPR, review_comments=1),
+              [_comment(1, INTERNAL_REVIEWER_USER)], [], PURE, "1 of 1")
+    gate_case("carried, threads answered on the PR -> stage 2", "carried", dict(MPR, review_comments=2),
+              [_comment(1, INTERNAL_REVIEWER_USER), _comment(11, PERSON, 1)], [], PURE)
+    gate_case("the head's OWN review wins over a carry", "reviewed", MPR, [], [_ir(sha=M)], PURE)
+    gate_case("a degraded own run is replaced by the carried real review", "carried", MPR, [],
+              [_ir(sha=M, conclusion="neutral", title=DEGRADED_TITLE)], PURE)
+    for name, carry, runs, ready, says in [
+        ("arm: pure merge carried -> ARM", PURE, [], True, ""),
+        ("arm: NEGATIVE CONTROL, no carry -> no arm", None, [], False, "no review has run on the current head"),
+        ("arm: carried, a fresh round still running on M -> ARM (it reviews the same diff)", PURE,
+         [_ir(sha=M, status="in_progress", conclusion=None)], True, ""),
+        ("arm: carry refused -> no arm, and says why", carry_of(dict(NEW_CMP, files=files(PATCH_RESOLVED))), [], False, "own diff changed"),
+    ]:
+        v = arm_readiness(MPR, [], runs, carry=carry)
+        ok = v.ready == ready and (says in v.missing) and (not ready or any("CARRIED" in n for n in v.notes))
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} got={'ARM' if v.ready else 'no arm: ' + v.missing[:80]}")
+    # The ADAPTER, through a stub REST: read_carry walks, pages and compares — and `carry=False` (the
+    # negative control the CLI's --no-carry selects) reads nothing and carries nothing.
+    class _RestStub:
+        def __init__(self, routes):
+            self.routes, self.calls = routes, []
+        def api(self, path, paginate=False):
+            self.calls.append(path)
+            for prefix, value in self.routes.items():
+                if path.startswith(prefix):
+                    return value
+            raise ReadError(f"GET {path} (no stub)")
+    def listing(runs):
+        return {"total_count": len(runs), "check_runs": runs}
+    routes = {
+        "pulls/1/comments": [], "pulls/1": dict(MPR, base={"ref": "main"}),
+        f"commits/{M}/check-runs": listing([]), f"commits/{O}/check-runs": listing([REVIEW_O]),
+        "branches/main": {"commit": {"sha": sha("b")}},
+        f"compare/{sha('b')}...{M}": NEW_CMP, f"compare/{sha('b')}...{O}": OLD_CMP,
+    }
+    stub = _RestStub(routes)
+    _, _, _, got = read_arm_inputs(stub, 1)
+    ok = got is not None and got.ok and got.from_head == O
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} adapter: {'read_carry carries the pure merge (walk + 2 compares)':51} got={got}")
+    stub = _RestStub(routes)
+    _, _, _, got = read_arm_inputs(stub, 1, carry=False)
+    ok = got is None and not any(c.startswith("compare/") for c in stub.calls)
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} adapter: {'carry=False (--no-carry) reads and carries nothing':51} got={got}")
+    stub = _RestStub({k: v for k, v in routes.items() if k != f"compare/{sha('b')}...{O}"})
+    _, _, _, got = read_arm_inputs(stub, 1)
+    ok = got is not None and not got.ok and "could not be read" in got.why
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} adapter: {'an unreadable compare does NOT carry':51} got={got.why[:60] if got else got}")
+
+    # ── the EVENT half: only a FAILED gate on the CURRENT head with a GREEN stage 1 is re-run.
+    def adv_case(name, expect, pr, run, job, verdict, says=""):
+        nonlocal failures
+        action, why = advance_action(pr, run, job, verdict)
+        ok = action == expect and says in why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} advance: {name:51} expected={expect} got={action} ({why[:60]})")
+    GREEN_S = StageVerdict(True, "reviewed", "")
+    HELD_S = StageVerdict(False, "unanswered", "1 of 1 reviewer thread(s) have no reply")
+    open_pr = dict(_pr(0), state="open")
+    done_run = {"id": 7, "head_sha": HEAD, "status": "completed", "created_at": T0}
+    failed_gate = {"status": "completed", "conclusion": "failure", "name": f"stage-gate / {STAGE_GATE_JOB}"}
+    for legacy, expect in ((f"stage-gate / {STAGE_GATE_JOBS[1]}", True), ("stage-gate / Stage 1: something else", False)):
+        ok = legacy.endswith(STAGE_GATE_JOBS) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} gate-name: {legacy!r} recognised={expect}")
+    adv_case("held run + green stage 1 -> rerun", "rerun", open_pr, done_run, failed_gate, GREEN_S, "re-running")
+    adv_case("held run + stage 1 still held -> none", "none", open_pr, done_run, failed_gate, HELD_S, "still holds")
+    adv_case("run of an OLDER head -> none (no stale verdict)", "none", open_pr, dict(done_run, head_sha="b" * 40),
+             failed_gate, GREEN_S, "new head restarts")
+    adv_case("gate already passed -> none", "none", open_pr, done_run, dict(failed_gate, conclusion="success"), GREEN_S, "already passed")
+    adv_case("gate still evaluating -> none", "none", open_pr, done_run, dict(failed_gate, status="in_progress"), GREEN_S, "still in_progress")
+    adv_case("gate cancelled (superseded) -> none", "none", open_pr, done_run, dict(failed_gate, conclusion="cancelled"), GREEN_S,
+             "only a failed gate")
+    adv_case("run still finishing -> wait", "wait", open_pr, dict(done_run, status="in_progress"), failed_gate, GREEN_S, "needs it completed")
+    adv_case("no stage gate in the caller -> none", "none", open_pr, done_run, None, GREEN_S, "not adopted")
+    adv_case("no CI run yet -> none", "none", open_pr, None, None, GREEN_S, "no pull_request CI run")
+    adv_case("cancelled (superseded) run -> none, never revived", "none", open_pr, dict(done_run, conclusion="cancelled"),
+             failed_gate, GREEN_S, "never revived")
+    for name, readback, expect in [
+        ("race: the run is in_progress again -> another invocation re-ran it", {"status": "in_progress"}, True),
+        ("race: the run is queued again -> another invocation re-ran it", {"status": "queued"}, True),
+        ("race: still completed -> the POST really failed, raise", {"status": "completed"}, False),
+        ("race: no status -> never masks the failure", {}, False),
+        ("race: not a run object -> never masks the failure", None, False),
+    ]:
+        ok = lost_rerun_race(readback) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect}")
+    class _StubGh:
+        def __init__(self, post_fails, readback):
+            self.post_fails, self.readback = post_fails, readback
+        def post(self, path):
+            if self.post_fails:
+                raise ReadError(f"POST {path} failed (409)")
+        def api(self, path):
+            if isinstance(self.readback, Exception):
+                raise self.readback
+            return self.readback
+    for name, stub, expect in [
+        ("post_rerun: the POST succeeds -> True", _StubGh(False, None), True),
+        ("post_rerun: refused, run in_progress again -> lost race (False)", _StubGh(True, {"status": "in_progress"}), False),
+        ("post_rerun: refused, run still completed -> RAISES", _StubGh(True, {"status": "completed"}), "raise"),
+        ("post_rerun: refused, read-back fails -> RAISES", _StubGh(True, ReadError("GET failed")), "raise"),
+    ]:
+        try:
+            got = post_rerun(stub, 7)
+        except ReadError:
+            got = "raise"
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
+    adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
@@ -1258,12 +2394,57 @@ def main(argv=None) -> int:
                     help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
                          "many minutes (its own event cannot start a run here — see waiting_would_help), "
                          "then answer RED")
+    ap.add_argument("--stage-gate", action="store_true",
+                    help="the staged pipeline's stage-1 gate: may stage 2 start for this head (stage_readiness)? "
+                         "exit 0 = yes, 1 = held (RED, named); takes --repo, --pr, --since, --fallback-minutes")
+    ap.add_argument("--stage-advance", action="store_true",
+                    help="the event half: re-run a held run's failed jobs once stage 1 is green; takes --repo, "
+                         "--workflow and exactly one of --pr / --head-sha / --sweep")
+    ap.add_argument("--since", help="--stage-gate: when the head's CI run was created (ISO-8601 UTC)")
+    ap.add_argument("--no-carry", action="store_true",
+                    help="--stage-gate / --arm-gate: do NOT carry a review over a clean merge of the base branch — the "
+                         "negative control of policy review-carries-over-clean-base-merge (see carry_over)")
+    ap.add_argument("--fallback-minutes", type=int, default=STAGE_FALLBACK_MINUTES,
+                    help="minutes without a completed review after which stage 2 starts anyway, loudly")
+    ap.add_argument("--workflow", help="--stage-advance: the caller's pull-request CI workflow FILE (ci.yml, dotnet-test.yml)")
+    ap.add_argument("--head-sha", help="--stage-advance: the head a check_run event named")
+    ap.add_argument("--sweep", action="store_true", help="--stage-advance: every open PR with a failed run (the fallback timer)")
+    ap.add_argument("--wait-minutes", type=int, default=20,
+                    help="--stage-advance: how long to let an in-flight held run finish before re-running it")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not args.repo:
         print("::error::--repo (or GH_REPO) is required")
         return 2
+    if not 5 <= args.fallback_minutes <= 240:
+        print(f"::error::--fallback-minutes must be between 5 and 240, got {args.fallback_minutes}")
+        return 2
+    if args.stage_advance:
+        if not args.workflow or not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.workflow):
+            print("::error::--stage-advance needs --workflow <file>.yml (the caller's pull-request CI workflow)")
+            return 2
+        chosen = [x for x in (args.pr, args.head_sha, args.sweep or None) if x]
+        if len(chosen) != 1:
+            print("::error::--stage-advance takes exactly one of --pr, --head-sha, --sweep")
+            return 2
+        if args.pr and not re.fullmatch(r"[1-9]\d*", args.pr):
+            print(f"::error::--pr must be a pull request number, got {args.pr!r}")
+            return 2
+        if args.head_sha and not re.fullmatch(r"[0-9a-f]{40}", args.head_sha):
+            print(f"::error::--head-sha must be a full 40-hex sha (an abbreviated one lists nothing, silently), got {args.head_sha!r}")
+            return 2
+        return run_stage_advance(args.repo, args.workflow, pr=int(args.pr) if args.pr else None, head_sha=args.head_sha,
+                                 sweep=args.sweep, fallback_minutes=args.fallback_minutes,
+                                 wait_minutes=max(0, min(args.wait_minutes, 30)))
+    if args.stage_gate:
+        if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print("::error::--stage-gate takes --repo, --pr <number>, --since and --fallback-minutes")
+            return 2
+        if parse_stamp(args.since) is None:
+            print(f"::error::--since must be an ISO-8601 UTC instant like 2026-10-04T08:00:00Z, got {args.since!r}")
+            return 2
+        return run_stage_gate(args.repo, int(args.pr), args.since, args.fallback_minutes, not args.no_carry)
     if bool(args.pr) == bool(args.merge_group_ref):
         print("::error::exactly one of --pr or --merge-group-ref is required — refusing to guess which pull request to judge")
         return 2
@@ -1274,7 +2455,7 @@ def main(argv=None) -> int:
         if not re.fullmatch(r"[1-9]\d*", args.pr):
             print(f"::error::--pr must be a pull request number, got {args.pr!r}")
             return 2
-        return run_arm_gate(args.repo, int(args.pr))
+        return run_arm_gate(args.repo, int(args.pr), not args.no_carry)
     if args.merge_group_ref:
         try:
             number = pr_from_queue_ref(args.merge_group_ref)

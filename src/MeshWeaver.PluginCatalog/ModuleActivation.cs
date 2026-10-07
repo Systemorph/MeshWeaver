@@ -2812,6 +2812,55 @@ public static class ModuleActivationBoot
         Action<string, string>? onSkipped,
         Action<string, string>? onAdvisory,
         IReadOnlyCollection<string>? platformIdentities)
+        => ComputeEffectiveModuleEntriesAgainstImage(baselineEntries, persisted, platformGate,
+            landedModuleDllExists, onSkipped, onAdvisory, platformIdentities, imageSeedOf: null);
+
+    /// <summary>
+    /// <see cref="ComputeEffectiveModuleEntriesForPlatform"/> with the image's own record of what
+    /// each copy it ships was built AS (<see cref="ImageModuleSeed"/>, MeshWeaver#6044) — the
+    /// VERSION discriminator between an image copy and a store copy of one module, for the case the
+    /// framework identity cannot decide.
+    ///
+    /// <para>🚨 <b>Why the identity alone stopped deciding.</b> Under the compatibility key every
+    /// build of one platform epoch states the SAME identity, so "the store copy states this
+    /// platform's identity" became true of every store copy, older or newer — and pass 1 then let
+    /// any of them override the image. Measured on memex.meshweaver.cloud 2026-09-28: the image
+    /// built from Plugins <c>8931656f</c> ran the store's <c>MeshWeaver.AI</c> 1.16.3 (built from
+    /// <c>6d21172e</c>) and <c>MeshWeaver.Hosting.Instance</c> 1.0.6 instead of its own copies, so
+    /// the admin page rendered pre-<c>8931656f</c> code from a correct image.</para>
+    ///
+    /// <para>With a stamp, a store copy of an image-shipped module overrides only when it is a
+    /// strictly newer release (<see cref="ImageModuleSeed.DeclineReason"/>); otherwise it is
+    /// declined exactly as an identity mismatch is — reported on <paramref name="onSkipped"/>, and
+    /// the baseline emitted with <see cref="EffectiveModule.PreferImageCopy"/> so the resolver
+    /// cannot hand the declined bytes back. With no stamp (an image from before it, a module the
+    /// build found no package for) the computation is <see cref="ComputeEffectiveModuleEntriesForPlatform"/>
+    /// byte for byte.</para>
+    ///
+    /// <para>A DISTINCT name, deliberately not an overload: dependent repositories cite these
+    /// methods in <c>&lt;see cref&gt;</c> without a parameter list, and an added overload turns each
+    /// such cref into CS0419 under <c>-warnaserror</c>.</para>
+    /// </summary>
+    /// <param name="baselineEntries">The raw <c>Modules:Assemblies</c> values (may be null/empty).</param>
+    /// <param name="persisted">The sidecar list (may be null).</param>
+    /// <param name="platformGate">Words the declared-floor ADVISORY; skips nothing (#3648).</param>
+    /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists.</param>
+    /// <param name="onSkipped">The loud channel, one call per persisted entry that does NOT become
+    /// effective, with (module name, reason).</param>
+    /// <param name="onAdvisory">The advisory channel (#3648), for EFFECTIVE entries only.</param>
+    /// <param name="platformIdentities">Every identity this platform states about itself.</param>
+    /// <param name="imageSeedOf">The image's stamp for a module name, or null when it ships none —
+    /// production passes <see cref="ImageModuleSeed.OfImageCopy"/>. Asked only for modules the
+    /// image ships. Null asks nothing and decides nothing.</param>
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntriesAgainstImage(
+        IReadOnlyList<string>? baselineEntries,
+        ModuleActivationList? persisted,
+        Func<string?, string?> platformGate,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
+        Action<string, string>? onSkipped,
+        Action<string, string>? onAdvisory,
+        IReadOnlyCollection<string>? platformIdentities,
+        Func<string, ImageModuleSeed?>? imageSeedOf)
     {
         var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2911,6 +2960,20 @@ public static class ModuleActivationBoot
                           + "published stating an identity this platform also states "
                           + $"({string.Join(", ", identity.PlatformReadings)}), which the platform's "
                           + "own build states for every module it packs."));
+                declined.Add(module.Name);
+                continue;
+            }
+
+            // 🚨 MeshWeaver#6044 — and where the identity cannot tell the two copies apart (one
+            // compatibility key across a whole platform epoch), the VERSION the image's copy was
+            // built as does. A store copy that is not a strictly newer release than the image's own
+            // runs OLDER-or-equal sources, and the image's copy was compiled against this very
+            // platform: the image wins. Same bounds as the identity rule above — an image that ships
+            // no copy, or either side stating no version, decides nothing.
+            if (imageSeedOf is not null && imageShips.Contains(module.Name)
+                && ImageModuleSeed.DeclineReason(module, imageSeedOf(module.Name)) is { } olderThanImage)
+            {
+                onSkipped?.Invoke(module.Name, olderThanImage);
                 declined.Add(module.Name);
                 continue;
             }

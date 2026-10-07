@@ -121,8 +121,56 @@ public static class NodeTypeAccessRuleGate
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(context);
 
-        var nodeType = context.Node.NodeType ?? rule.NodeType;
-        return Observable.Defer(() => rule.HasAccess(context, userId))
+        return EvaluateVerdict(() => rule.HasAccess(context, userId),
+            context.Node.NodeType ?? rule.NodeType, context.Node.Path, userId, logger);
+    }
+
+    /// <summary>
+    /// The non-CRUD twin of <see cref="Find"/>: the <see cref="INodeTypePermissionRule"/> that decides
+    /// <paramref name="permission"/> (Comment, Thread, Execute, …) on a node of
+    /// <paramref name="nodeType"/>, or <c>null</c> when none does. <c>null</c> is "no rule has an
+    /// opinion" — the caller's denial stands.
+    /// </summary>
+    /// <param name="hub">The hub whose service provider carries the mesh's rule index.</param>
+    /// <param name="nodeType">The subject node's <see cref="MeshNode.NodeType"/>.</param>
+    /// <param name="permission">The single non-CRUD permission being decided.</param>
+    /// <returns>The governing rule, or null.</returns>
+    public static INodeTypePermissionRule? FindPermissionRule(IMessageHub hub, string? nodeType, Permission permission)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return hub.ServiceProvider.GetService<NodeTypeAccessRuleSet>()?.FindPermissionRule(nodeType, permission);
+    }
+
+    /// <summary>
+    /// Runs a <see cref="INodeTypePermissionRule"/> for a non-CRUD permission and reports it with the
+    /// same three terminals as <see cref="Evaluate"/> — a fault or an empty completion is
+    /// <see cref="PermissionCheckOutcome.Undetermined(string)"/>, never a grant.
+    /// </summary>
+    /// <param name="rule">The governing rule.</param>
+    /// <param name="node">The node the rule governs.</param>
+    /// <param name="accessContext">The caller's captured context; may be null.</param>
+    /// <param name="userId">The identity being decided for.</param>
+    /// <param name="permission">The permission being decided.</param>
+    /// <param name="logger">Operator log for a faulting rule; optional.</param>
+    /// <returns>Exactly one outcome, always.</returns>
+    public static IObservable<PermissionCheckOutcome> EvaluatePermission(
+        INodeTypePermissionRule rule,
+        MeshNode node,
+        AccessContext? accessContext,
+        string userId,
+        Permission permission,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(node);
+        return EvaluateVerdict(() => rule.HasPermission(node, accessContext, userId, permission),
+            node.NodeType ?? rule.NodeType, node.Path, userId, logger);
+    }
+
+    private static IObservable<PermissionCheckOutcome> EvaluateVerdict(
+        Func<IObservable<bool>> verdict, string nodeType, string? path, string userId, ILogger? logger)
+    {
+        return Observable.Defer(verdict)
             // TakeDecisionOutsideGate, not a bare Take(1) — the rules reach the very same permission
             // fold every other check does, and the caller chains real work (a delete pipeline, the
             // downstream delivery handler) onto this verdict. See HubPermissionExtensions.
@@ -133,7 +181,7 @@ public static class NodeTypeAccessRuleGate
                 logger?.LogWarning(ex,
                     "The {NodeType} access rule for {Path} could not reach a verdict for {User} — "
                     + "reporting an availability failure, not a denial",
-                    nodeType, context.Node.Path, userId);
+                    nodeType, path, userId);
                 return Observable.Return(PermissionCheckOutcome.Undetermined(
                     $"the '{nodeType}' access rule failed ({ex.GetType().Name})"));
             })

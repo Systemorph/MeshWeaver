@@ -60,6 +60,22 @@ repos:
   Systemorph/MeshWeaver.Plugins:
     asserted-by: node-repo-validate
     callers:
+      - workflow: ci.yml
+        job: stage-gate
+        lane: node-repo-stage-gate.yml
+        grants: {actions: read, checks: read, contents: read, pull-requests: read}
+      - workflow: stage-advance.yml
+        job: on-answer
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
+      - workflow: stage-advance.yml
+        job: on-review
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
+      - workflow: stage-advance.yml
+        job: sweep
+        lane: node-repo-stage-advance.yml
+        grants: {actions: write, checks: read, contents: read, pull-requests: read}
       - workflow: auto-arm.yml
         job: arm
         lane: auto-arm.yml
@@ -93,21 +109,6 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: {contents: read}
-      # ── A HELD promoted pair has an audience (policy `one-promotion-gate`, the held-set ledger) —
-      # ARRIVING. When `core-candidate.yml` writes a red `pair-` verdict, `arm` never arms that pair;
-      # these two file ONE `core-release-held` issue + a signed triage event naming the failing suites
-      # and the bundle's pull requests, and close it on the next green pair. Landed here first so the
-      # lane's demand is paired before the Plugins wiring spends it.
-      - workflow: core-candidate.yml
-        job: release-held
-        lane: node-repo-ci-failure.yml
-        grants: {contents: read, issues: write, actions: read}
-        pending: the held-set ledger for a red promoted pair; MeshWeaver.Plugins wires it in core-candidate.yml (maintainer decision 2026-09-27, the three gaps ported onto one-promotion-gate)
-      - workflow: core-candidate.yml
-        job: release-passed
-        lane: node-repo-ci-failure.yml
-        grants: {contents: read, issues: write, actions: read}
-        pending: the held-set ledger for a red promoted pair; MeshWeaver.Plugins wires it in core-candidate.yml (maintainer decision 2026-09-27, the three gaps ported onto one-promotion-gate)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core

@@ -17,6 +17,8 @@ namespace Memex.Portal.Shared.Test;
 public class SeoResolverContentTest
 {
     private sealed record FakePluginContent(string? Poster, decimal? Price);
+    private sealed record FakeShareOverrides(string? OgTitle, string? OgDescription);
+    private sealed record FakeSocialPost(string Text, string? MediaUrl);
 
     private static MeshNode Node(object? content, string? description = null) =>
         new("Overview", "Space") { NodeType = "Markdown", Description = description, Content = content };
@@ -28,6 +30,59 @@ public class SeoResolverContentTest
     {
         Assert.Equal("/api/content/S/p.png", SeoResolver.ExtractImage(Node(Json(new { poster = "/api/content/S/p.png" }))));
         Assert.Equal("/api/content/S/t.png", SeoResolver.ExtractImage(Node(Json(new { thumbnail = "/api/content/S/t.png" }))));
+    }
+
+    [Fact]
+    public void ExtractImage_SocialPost_ReadsMediaUrl()
+    {
+        const string media = "https://cdn.example.com/post-images/visual.png";
+        Assert.Equal(media, SeoResolver.ExtractImage(Node(Json(new { text = "post", mediaUrl = media }))));
+        Assert.Equal(media, SeoResolver.ExtractImage(Node(new FakeSocialPost("post", media))));
+        // An explicitly authored share image still wins over the post's visual.
+        Assert.Equal("/api/content/S/og.png",
+            SeoResolver.ExtractImage(Node(Json(new { ogImage = "/api/content/S/og.png", mediaUrl = media }))));
+    }
+
+    [Fact]
+    public void ShareTitleAndDescription_DefaultToTheNode()
+    {
+        var node = Node(Json(new { text = "body" }), description: "The node's own summary.") with { Name = "Node Name" };
+
+        Assert.Equal("Node Name", SeoResolver.ShareTitle(node));
+        Assert.Equal("The node's own summary.", SeoResolver.ShareDescription(node));
+        Assert.Equal("Overview", SeoResolver.ShareTitle(Node(Json(new { text = "body" }))));
+    }
+
+    [Fact]
+    public void ShareTitleAndDescription_AuthoredOverridesWin_PageDescriptionUnchanged()
+    {
+        var node = Node(Json(new { ogTitle = "Share Headline", ogDescription = "Share blurb." }),
+            description: "The node's own summary.") with { Name = "Node Name" };
+
+        Assert.Equal("Share Headline", SeoResolver.ShareTitle(node));
+        Assert.Equal("Share blurb.", SeoResolver.ShareDescription(node));
+        // The search snippet keeps the page's own description; the override is for the unfurl.
+        Assert.Equal("The node's own summary.", SeoResolver.ExtractDescription(node));
+
+        var typed = Node(new FakeShareOverrides("Typed Headline", "Typed blurb.")) with { Name = "Node Name" };
+        Assert.Equal("Typed Headline", SeoResolver.ShareTitle(typed));
+        Assert.Equal("Typed blurb.", SeoResolver.ShareDescription(typed));
+    }
+
+    [Fact]
+    public void ShareOverrides_ReachThePreviewAndAncestorCards()
+    {
+        var node = Node(Json(new { ogTitle = "Share Headline", ogDescription = "Share blurb." }),
+            description: "The node's own summary.") with { Name = "Node Name" };
+
+        var preview = SeoResolver.ComposePreviewCard(node, null);
+        Assert.Equal("Share Headline", preview.Title);
+        Assert.Equal("Share blurb.", preview.Description);
+
+        var ancestor = SeoResolver.ComposeAncestorCard(
+            new SeoPageData(node, SeoResolver.ExtractDescription(node), null), "Space/Overview/Child", null);
+        Assert.Equal("Share Headline · Child", ancestor.Title);
+        Assert.Equal("Share blurb.", ancestor.Description);
     }
 
     [Fact]

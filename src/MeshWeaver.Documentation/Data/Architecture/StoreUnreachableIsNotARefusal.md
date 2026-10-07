@@ -123,6 +123,22 @@ and keep their loud "unexpected failure" treatment:
 second case, "answer `Unavailable` for every exception" would pass every other assertion in the
 file.
 
+### Partition bootstrap must preserve a failed read
+
+A child create first reads its partition root, its creator grant and the GitSync ownership record.
+The storage adapter already returns `null` when a partition schema does not exist. The bootstrap
+must therefore preserve any exception from these reads. Previously its two read helpers caught
+*every* exception and returned `null`; a connect timeout while reading an existing root made the
+bootstrap attempt to create that root again. The nested create's error then reached the child as a
+`ValidationFailed` refusal. It reaches the same nested root-create boundary named by the
+`Store/Core` and `Signature/DeepSignCredential` release failures in #6055/#6056. The original
+root-read outcome was swallowed, so those incident logs cannot establish why each read failed.
+
+`AnUnreadableExistingPartitionRoot_DoesNotTriggerAFalseHeal` creates a real partition, faults only
+the next root read, and checks that the child gets `Unavailable` without a false root repair. It
+failed before the change with `ValidationFailed` from the nested root create and passes with the
+read fault propagated to the create handler's existing availability classifier.
+
 ## 🚨 "Unreachable" does not mean the store was down
 
 The classification above is about **what this process could reach**, and that is deliberately all it

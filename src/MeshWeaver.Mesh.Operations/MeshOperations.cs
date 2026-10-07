@@ -1889,6 +1889,19 @@ public partial class MeshOperations
                 var versionBefore = meshNode.Version;
                 var currentPath = meshNode.Path;
                 var nodeForCapture = meshNode;
+                // 🚨 The sync CLAIM is ownership metadata, not authorable content: a caller that
+                // does not NAME `syncBehavior` has not decided it. Deserialising the omitted key
+                // yields the default (Include), so a full-entity update by an agent that sent
+                // back the content it meant to change silently RELEASED the node's claim — and
+                // the next static-repo import pruned a runtime record as "absent from the repo"
+                // (MeshWeaver.Plugins#2803: a triage item's verdict write, v3 of
+                // Hosting/Triage/ci-failure/systemorph-meshweaver-36988365138). Carry the live
+                // node's claim unless the caller states one; an explicit value — including
+                // Include, the "resume sync" decision — is written as given.
+                var claimRead = NamesSyncBehavior(
+                        rawArray is not null && index < rawArray.Count ? rawArray[index] as JsonObject : null)
+                    ? null
+                    : FetchNode(currentPath);
                 // The caller's OWN intended field values (#2469 — see WaitForPatchApplied):
                 // restrict to the mutable surface (PatchableFields) so identity/audit fields
                 // (version, lastModified*, …) — which the OWNER re-stamps on apply and will
@@ -1903,7 +1916,14 @@ public partial class MeshOperations
                     ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
                         validationError != null
                             ? Observable.Return(validationError)
-                            : mesh.UpdateNode(nodeForCapture)
+                            : (claimRead is null
+                                ? Observable.Return(NodeReadOutcome.Found(nodeForCapture))
+                                : claimRead.Take(1).Select(outcome => outcome.IsUnavailable || outcome.Node is not { } live
+                                    ? outcome
+                                    : NodeReadOutcome.Found(nodeForCapture with { SyncBehavior = live.SyncBehavior })))
+                            .SelectMany(claimed => claimed.IsUnavailable
+                                ? Observable.Return(UnavailableMessage(currentPath, claimed.UnavailableReason!))
+                                : mesh.UpdateNode(claimed.Node ?? nodeForCapture)
                                 // Gate the success string on the update PROVABLY landing — see
                                 // WaitForPatchApplied's #2469 note on Patch above; the same
                                 // late-NACK-after-optimistic-emit gap applies here.
@@ -1928,7 +1948,7 @@ public partial class MeshOperations
                                         return $"Updated: {after.Path}";
                                     }))
                                 .Catch((Exception ex) =>
-                                    Observable.Return($"Error: updating {currentPath}: {ex.Message}"))));
+                                    Observable.Return($"Error: updating {currentPath}: {ex.Message}")))));
             }
 
             return perNode
@@ -4121,6 +4141,192 @@ public partial class MeshOperations
     }
 
     /// <summary>
+    /// "Reload module M on this instance" (<c>Doc/Architecture/ModuleReload</c>) — or every installed
+    /// module when <paramref name="module"/> is blank. Files ONE durable request at
+    /// <c>Admin/_ModuleReload/{id}</c>; the instance's executor resolves the newest COMPATIBLE
+    /// published version (declared platform floor ≤ the running platform), lands it, activates it —
+    /// live when the module can be swapped, otherwise exactly one automatic restart, no approval —
+    /// and reports on the request node: the version found, what landed, how it was activated, what
+    /// every replica loaded, or why it could not (RED, by name). Returns a JSON
+    /// <c>{status, path, message}</c> envelope at once; read the request node for the outcome.
+    ///
+    /// <para>🚨 Global admins only (<c>IsGlobalAdmin</c> — a platform admin on the Admin partition):
+    /// a reload restarts the instance when it cannot swap live. The request is written as System on
+    /// the caller's behalf, carrying the caller as <c>RequestedBy</c>; the executor acts only on a
+    /// request written that way.</para>
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name (<c>MeshWeaver.AI</c>) or its package
+    /// id; blank reloads every installed module.</param>
+    /// <param name="reason">Why — required; carried into the restart announcement and every log line.</param>
+    public IObservable<string> ReloadModule(string? module, string? reason)
+    {
+        logger.LogInformation("ReloadModule called with module={Module}", module ?? "(all)");
+        if (string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
+                hub.JsonSerializerOptions));
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        return hub.IsGlobalAdmin().Take(1)
+            .Catch((Exception _) => Observable.Return(false))
+            .SelectMany(admin => admin
+                ? ModuleReload.Request(hub, new ModuleReloadRequest
+                {
+                    Module = module,
+                    Reason = reason,
+                    RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+                })
+                : Observable.Return(new ModuleReloadTicket(null,
+                    "reloading a module requires a platform admin (an admin on the Admin partition) — it can restart this instance")))
+            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+                    ? new
+                    {
+                        status = "Requested",
+                        path = ticket.Path,
+                        message = "Read the request node: status, items (found / landed / target version), "
+                                  + "activation (Live / Restart / NotNeeded), replicas (what each process loaded) and failure.",
+                    }
+                    : new { status = "Error", path = (string?)null, message = ticket.Refusal ?? "refused" },
+                hub.JsonSerializerOptions));
+    }
+
+    /// <summary>How long <see cref="UninstallPackage"/> waits for phase 1 to reach its preview.</summary>
+    internal static readonly TimeSpan UninstallPreviewBudget = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Uninstalls a package from THIS instance (<c>Doc/Architecture/PackageUninstall</c>), in two
+    /// phases. Called with <paramref name="package"/> and <paramref name="reason"/>: files the request
+    /// and waits for phase 1 — module retired, hubs closed, install record removed, re-install blocked
+    /// — then answers the PREVIEW of what phase 2 would destroy (partitions, store, rows per table,
+    /// sync configuration, what cannot be counted) and the EXACT confirmation string. Called with
+    /// <paramref name="requestPath"/> and <paramref name="confirmation"/>: records the confirmation;
+    /// phase 2 drops the partition storage only when it matches and comes from the requester. No
+    /// confirmation: the package stays uninstalled with its data retained.
+    ///
+    /// <para>🚨 Platform admins only (<c>IsGlobalAdmin</c>), both phases.</para>
+    /// </summary>
+    /// <param name="package">The package id (phase 1).</param>
+    /// <param name="reason">Why — required for phase 1.</param>
+    /// <param name="requestPath">The request to confirm (phase 2).</param>
+    /// <param name="confirmation">The exact confirmation string the preview named (phase 2).</param>
+    public IObservable<string> UninstallPackage(string? package, string? reason, string? requestPath = null, string? confirmation = null)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        string Error(string message) => JsonSerializer.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
+        IObservable<string> Gate(Func<IObservable<string>> act) =>
+            hub.IsGlobalAdmin().Take(1).Catch((Exception _) => Observable.Return(false))
+                .SelectMany(admin => admin
+                    ? act()
+                    : Observable.Return(Error("uninstalling a package requires a platform admin (an admin on the Admin partition)")));
+
+        if (!string.IsNullOrWhiteSpace(requestPath))
+            return string.IsNullOrWhiteSpace(confirmation)
+                ? Observable.Return(Error("a confirmation is required to drop the partition data — send the exact string the preview named"))
+                : Gate(() => PackageUninstall.Confirm(hub, requestPath.Trim(), confirmation,
+                        string.IsNullOrWhiteSpace(caller) ? null : caller)
+                    .SelectMany(ticket => ticket is { Accepted: true, Path: { } confirmed }
+                        ? AwaitUninstall(confirmed, r => PackageUninstallStatus.IsTerminal(r.Status) || r.ConfirmationRefusal is not null)
+                        : Observable.Return(Error(ticket.Refusal ?? "refused"))));
+
+        if (string.IsNullOrWhiteSpace(package) || string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(Error("a package id and a reason are required"));
+        return Gate(() => PackageUninstall.Request(hub, new PackageUninstallRequest
+            {
+                Package = package,
+                Reason = reason,
+                RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+            })
+            .SelectMany(ticket => ticket is { Accepted: true, Path: { } filed }
+                ? AwaitUninstall(filed, r => PackageUninstallStatus.IsTerminal(r.Status)
+                                             || r.Status == PackageUninstallStatus.AwaitingConfirmation)
+                : Observable.Return(Error(ticket.Refusal ?? "refused"))));
+    }
+
+    private IObservable<string> AwaitUninstall(string path, Func<PackageUninstallRequest, bool> until)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return access.RunAsSystem(() => hub.GetMeshNodeStream(path))
+            .Select(n => n.ContentAs<PackageUninstallRequest>(hub.JsonSerializerOptions))
+            .OfType<PackageUninstallRequest>()
+            .Where(until)
+            .Take(1)
+            .Timeout(UninstallPreviewBudget)
+            .Select(r => JsonSerializer.Serialize(new
+            {
+                status = r.Status,
+                path,
+                package = r.Package,
+                module = r.Module,
+                moduleOutcome = r.ModuleOutcome,
+                partitions = r.Partitions,
+                confirmationRequired = r.Status == PackageUninstallStatus.AwaitingConfirmation ? r.ConfirmationRequired : null,
+                confirmationRefusal = r.ConfirmationRefusal,
+                failure = r.Failure,
+                message = r.Status switch
+                {
+                    PackageUninstallStatus.AwaitingConfirmation =>
+                        $"UNINSTALLED, data RETAINED. To DROP the data listed in partitions (irreversible), call again with "
+                        + $"requestPath='{path}' and confirmation='{r.ConfirmationRequired}'.",
+                    PackageUninstallStatus.Done => "uninstalled and its partition storage dropped",
+                    _ => r.Failure ?? r.Status,
+                },
+            }, hub.JsonSerializerOptions))
+            .Catch((Exception ex) => Observable.Return(JsonSerializer.Serialize(
+                new { status = "Pending", path, message = $"the request is still running ({ex.Message}) — read {path}" },
+                hub.JsonSerializerOptions)));
+    }
+
+    /// <summary>
+    /// "Reboot this instance" (<c>Doc/Architecture/InstanceReboot</c>, policy <c>instance-reboot</c>) —
+    /// bring it to a known-good, NEWEST state in one step. Files ONE durable request at
+    /// <c>Admin/_Reboot/{id}</c>; the instance's executor then, in order and each step reported on the
+    /// request with a named reason when skipped or failed: syncs every GitSynced module source to its
+    /// branch HEAD, lands the newest compatible version of every installed module, picks the newest
+    /// image its update policy admits, takes ONE roll/restart that activates all of it, and verifies
+    /// every process booted after it (health readings plus a thread-start smoke check) — RED with the
+    /// named failure otherwise. Returns a JSON <c>{status, path, message}</c> envelope at once.
+    ///
+    /// <para>🚨 Global admins only (<c>IsGlobalAdmin</c>). The caller's own call IS the signature — no
+    /// second approver — and the request records who (<c>requestedBy</c>).</para>
+    /// </summary>
+    /// <param name="reason">Why — required; carried into the restart announcement and every log line.</param>
+    /// <param name="wedged">The instance is wedged: the image step does not wait for a dependent-suite verdict (and says so).</param>
+    public IObservable<string> RebootInstance(string? reason, bool wedged = false)
+    {
+        logger.LogInformation("RebootInstance called (wedged={Wedged})", wedged);
+        if (string.IsNullOrWhiteSpace(reason))
+            return Observable.Return(JsonSerializer.Serialize(
+                new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
+                hub.JsonSerializerOptions));
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
+        return hub.IsGlobalAdmin().Take(1)
+            .Catch((Exception _) => Observable.Return(false))
+            .SelectMany(admin => admin
+                ? InstanceReboot.Request(hub, new InstanceRebootRequest
+                {
+                    Reason = reason,
+                    RequestedBy = string.IsNullOrWhiteSpace(caller) ? null : caller,
+                    Trigger = InstanceRebootTrigger.Person,
+                    Wedged = wedged,
+                })
+                : Observable.Return(new InstanceRebootTicket(null,
+                    "rebooting an instance requires a platform admin (an admin on the Admin partition) — it restarts this instance")))
+            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+                    ? new
+                    {
+                        status = "Requested",
+                        path = ticket.Path,
+                        message = "Read the request node: status (Preparing / AwaitingRestart / Done / Failed), steps "
+                                  + "(Sync, Modules, Image, Restart, Verify — each Ok / Skipped / Failed with its reason), "
+                                  + "modules, targetImage, replicas (each booted process's checks) and failure.",
+                    }
+                    : new { status = "Error", path = (string?)null, message = ticket.Refusal ?? "refused" },
+                hub.JsonSerializerOptions));
+    }
+
+    /// <summary>
     /// The Update pre-flight a verb takes on its own path — the raw <c>(path, Update)</c> fold, bounded,
     /// with an unfinished fold classified <see cref="PermissionCheckOutcome.Undetermined(string)"/>, and a
     /// DEFINITIVE denial re-decided through the node's <c>INodeTypeAccessRule</c> exactly as the owner's
@@ -5070,6 +5276,18 @@ public partial class MeshOperations
     {
         "name", "description", "icon", "category", "order", "content", "preRenderedHtml", "mainNode",
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a caller's raw node JSON NAMES the sync claim (<c>syncBehavior</c>, any casing). An
+    /// absent key is "not decided by this caller" — <see cref="Update"/> then carries the live node's
+    /// claim rather than writing the deserialiser's default (MeshWeaver.Plugins#2803). A null element
+    /// (no raw JSON to read) is treated as not naming it. Pure.
+    /// </summary>
+    /// <param name="rawNode">The caller's raw JSON object for one node, or null.</param>
+    /// <returns><c>true</c> when the caller stated a <c>syncBehavior</c> value.</returns>
+    internal static bool NamesSyncBehavior(JsonObject? rawNode) =>
+        rawNode is not null
+        && rawNode.Any(pair => string.Equals(pair.Key, "syncBehavior", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The keys of a patch payload that <see cref="Patch"/> cannot apply — so it can REFUSE instead

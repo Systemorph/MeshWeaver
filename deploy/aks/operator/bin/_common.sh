@@ -122,8 +122,12 @@ hosting::probe() {
   HOSTING_PROBE_OUT="$("$@" 2>"$errfile")"; rc=$?
   HOSTING_PROBE_ERR="$(head -1 "$errfile")"; rm -f "$errfile"
   if [ "$rc" -ne 0 ]; then
+    # kubectl and Key Vault say Forbidden; ARM (`az identity show`, `az acr show`, …) says
+    # `(AuthorizationFailed) The client … does not have authorization …` with NO "Forbidden" in
+    # it — matching only the first would read every ARM refusal as an absence. Same set as
+    # hosting-aks-upgrade's classifier.
     case "$HOSTING_PROBE_ERR" in
-      *Forbidden*|*forbidden*) return 2 ;;
+      *Forbidden*|*forbidden*|*AuthorizationFailed*|*"does not have authorization"*) return 2 ;;
       *)                       return 1 ;;
     esac
   fi

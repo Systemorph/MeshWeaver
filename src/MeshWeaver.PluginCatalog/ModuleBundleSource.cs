@@ -187,6 +187,50 @@ public static class ModuleBundleSource
             .ToList();
     }
 
+    /// <summary>
+    /// 🚨 THE ONE ANSWER to "which shelf generation may be served under the version an index
+    /// entry ADVERTISES" (MeshWeaver#6067) — the version to hand
+    /// <see cref="CollectVersion"/> / <see cref="NativeAssetsOf"/> for that entry.
+    ///
+    /// <para><b>The mislabel this closes.</b> A registry's index advertises a package at the
+    /// version its INSTALL RECORD (or its registry anchor) carries, and that record moves through
+    /// the node-content path — GitSync, an install — independently of the module bytes the
+    /// package's own CI publishes onto the shelf. Such an entry carried no shelf version, so the
+    /// null-version call served the activation HEAD, whatever version the head was shelved at.
+    /// Measured 2026-10-04: the public registry's <c>Plugins/AI</c> record advanced to 1.20.1
+    /// through the content path while its shelf still held the 1.19.4 bytes (the publish lane had
+    /// POSTed nothing since); the index advertised <c>AI 1.20.1</c> with a module section, the
+    /// download route served the 1.19.4 bytes under it, and every consumer landed them stamped
+    /// "1.20.1". A dependent requiring <c>AI@^1.20.0</c> then passed every version check and threw
+    /// <c>MissingMethodException</c> at run time.</para>
+    ///
+    /// <para><b>The rule.</b> A stated <paramref name="shelfVersion"/> (the published-module
+    /// contributor's own generation) is used verbatim. Otherwise, when THIS deployment holds an
+    /// activation entry for the module, the generation must be the one shelved AT
+    /// <paramref name="advertisedVersion"/> — the head or its retained previous — and
+    /// <see cref="CollectVersion"/> declines when neither carries it, so the module section is
+    /// simply not served under a version it does not have (the shelf's own entry still advertises
+    /// the bytes under the version they were shelved at). Only a module with NO activation entry
+    /// at all — one this deployment runs from its image, whose bytes no landing ever labelled —
+    /// keeps the unversioned head/image lookup, exactly as before.</para>
+    /// </summary>
+    /// <param name="activation">This deployment's activation list.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    /// <param name="advertisedVersion">The version the index entry advertises.</param>
+    /// <param name="shelfVersion">The retained published generation the entry resolves, or null
+    /// for an install-record or anchor entry.</param>
+    /// <returns>The version to resolve, or null to follow the head / image copy.</returns>
+    public static string? GenerationVersionFor(
+        ModuleActivationList activation, string moduleName, string advertisedVersion, string? shelfVersion)
+    {
+        ArgumentNullException.ThrowIfNull(activation);
+        if (!string.IsNullOrWhiteSpace(shelfVersion))
+            return shelfVersion;
+        var landed = activation.Entries.Any(e =>
+            string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+        return landed && !string.IsNullOrWhiteSpace(advertisedVersion) ? advertisedVersion : null;
+    }
+
     /// <summary>The activation entry whose bytes represent <paramref name="version"/>: the head
     /// for a null or matching version, the retained previous generation for its matching version,
     /// or null when this deployment retains neither. Versions match by their exact TEXT

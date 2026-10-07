@@ -639,6 +639,19 @@ data:
   {{- if (.Values.selfUpdate).registry }}
   SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
   {{- end }}
+  # The REPOSITORIES the self-updater lists and rolls to, on that registry (Systemorph/
+  # MeshWeaver.Plugins#2994). Rendered from the Deployment record (DeploymentPortalConfig
+  # .SelfUpdatePortalRepository / .SelfUpdateMigrationRepository) ONLY where the record's image
+  # repository differs from the image default (memex-portal-ai / memex-migration) — control runs
+  # memex-control, and a self-updater listing memex-portal-ai there would roll it onto the working
+  # instances' image. Same rule as the line above: both are strings WITH a real default, so an
+  # empty value must render NOTHING (an empty repository rolls to "<registry>/:<tag>").
+  {{- if (.Values.config.memex_portal.SelfUpdate__PortalRepository | default "" | trim) }}
+  SelfUpdate__PortalRepository: "{{ .Values.config.memex_portal.SelfUpdate__PortalRepository | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.SelfUpdate__MigrationRepository | default "" | trim) }}
+  SelfUpdate__MigrationRepository: "{{ .Values.config.memex_portal.SelfUpdate__MigrationRepository | trim }}"
+  {{- end }}
   # 🚨 The portal that VALIDATES this installation's instance key at that registry — the registry
   # record's own `validationUrl` (MeshWeaver#4093). The fleet registry cr.meshweaver.cloud decides a
   # pull by forwarding the caller's key to memex.meshweaver.cloud, so the image registry and the
@@ -706,6 +719,14 @@ data:
   {{- $prSweep := .Values.config.memex_portal.Hosting__Triage__PullRequestSweep__Enabled }}
   {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestSweep__Enabled") (not (kindIs "invalid" $prSweep)) (ne ($prSweep | toString | trim) "") }}
   Hosting__Triage__PullRequestSweep__Enabled: "{{ $prSweep | toString | trim }}"
+  {{- end }}
+  # The PR reviewer's admission share while the review pool is EXHAUSTED (MeshWeaver.Plugins
+  # Hosting/Deployment/Source/ReviewAdmission.cs, TargetLoadKey; code default 0.1). One provider 429
+  # marks the pool exhausted, and at 0.1 the bound drops to a tenth of the measured capacity until it
+  # recovers; "1.0" keeps the full measured capacity. Rendered only when set.
+  {{- $prReviewLoad := .Values.config.memex_portal.Hosting__Triage__PullRequestReview__TargetLoad }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestReview__TargetLoad") (not (kindIs "invalid" $prReviewLoad)) (ne ($prReviewLoad | toString | trim) "") }}
+  Hosting__Triage__PullRequestReview__TargetLoad: "{{ $prReviewLoad | toString | trim }}"
   {{- end }}
   # The F5b READ MIRROR (MeshWeaver.Plugins Hosting/Deployment/Source/OperationalSpaceProvisioning.cs,
   # HostingReadMirrorKey): "true" ONLY on a control instance — every platform admin gets Viewer on

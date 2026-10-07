@@ -452,6 +452,210 @@ finding the stamp exists to make visible. Why a release create takes more than 2
 compile wave is **not** answered here. It is a slow owner, not a lost create, and it belongs to the
 compile-lane load work.
 
+## A release that will never land is cut by the next activation (#6056)
+
+### What was still live after late adoption
+
+Late adoption answers a create that is slow. It cannot answer a create that was never written, and
+the stamp says nothing about which of the two it is. Measured on the control instance on
+2026-10-03: at 23:15:58Z the replica `memex-portal-deployment-57d6d7f9cc-tslft` was being replaced
+by the roll to `3.0.0-ci.9887` (`Ops/Actions/selfupdate-roll-memex-3-0-0-ci-9887-5d9e2ac9`: run
+concluded 22:56Z, the observer was lost and resumed by a replacement process at 23:16:28Z, the new
+ReplicaSet is `7b74d6bfb7`). Two NodeTypes settled on it, `Store/Core` and
+`Signature/DeepSignCredential`. Both their release create and the same-id re-cut were answered
+*"Node creation at '…' was cancelled before it completed"*. That is the create handler's answer to
+a cooperative cancellation. A draining host's I/O pool cancels every leaf. The handler answers
+`Unavailable`, meaning nothing was written and a retry with the same id is meaningful. The settle
+stamped `unreleasedBuildPath`, which was correct, and nothing was left that would ever write that
+node:
+
+- late adoption waits for a landing that cannot come;
+- a non-forced release request is absorbed by the "already has a usable build" branch of the
+  release-request watcher, which cuts no release;
+- only a recompile mints a new release.
+
+The roll was a framework change, so both types recompiled minutes later on the new image. That is
+the only reason they recovered. A same-image restart would have left them advertising a build no
+release names. A timeout can strand a type the same way when its create is never written. The id
+`Edu/CourseCatalog/Release/20260928125119-xvYPDMt7` read `Not found` two days after its stamp.
+
+### The change: the stamp is an obligation the next activation honours
+
+`LateReleaseAdoption.Install` also runs `CompleteInheritedRelease`. On the FIRST emission of the hub's
+own record, if that record already carries a stamp, this activation inherited it. The activation that
+wrote the stamp is gone or recycled. The new activation cuts the release at exactly the stamped id,
+from the bytes the record names (`LatestAssemblyCollection`, `LatestAssemblyPath`,
+`LastCompiledVersion`, `CompiledSources`). It runs as System and through the same
+`TryCreateReleaseNode`. It then adopts the release in one owner write. `InheritedObligation` is the
+pure gate, and it requires:
+
+- the compile is settled (`Ok`), because a compile in flight rewrites the stamp at its own settle;
+- the build was compiled against THIS framework, because a stale one is about to be recompiled and a
+  release for it would name the wrong framework;
+- the stamped id's content hash names the recorded store coordinates (`IsReusableAttempt`), so a
+  stamp for other bytes is never cut.
+
+It is idempotent by construction. A late landing of the earlier attempt collides at the same id and
+is adopted, and a create that was never made is made there. It runs once per activation and never
+on the activation that wrote the stamp, so it is not a retry loop. A host that cannot create, such
+as a draining one, leaves the stamp standing for the next activation, and the stamp is still the
+report.
+
+### The control
+
+`ALateReleaseIsAdoptedWhenItLandsTest.AnInheritedStamp_WhoseCreateNeverLanded_IsCutByTheNextActivation`
+runs on a real monolith mesh. It seeds the incident's state: a settled build of this framework whose
+bytes are in the assembly store, stamped with an id for those bytes, and no release node anywhere.
+Activating the owner must leave `latestReleasePath` on the stamped id, the stamp cleared, and a
+release node there naming the recorded store version and coordinates. With the completion's
+subscription removed from `Install`, the test is red at that wait. The gate is covered as a table by
+`InheritedObligation_NamesTheStamp_OnlyForTheRecordedBytesOfThisFramework`.
+
+### Not established
+
+The draining host as the canceller is inferred from the roll's timeline. No log line records the
+SIGTERM on that replica against those two creates. The first attempts' failures named nested
+partition-root creates. #6088 stops a root-read fault from being misread as absence. Why those
+reads faulted is still not recorded.
+
+## A re-cut cut short by the process's own shutdown is a Warning (#6056, second half)
+
+### What the logs and the version history show
+
+The draining host is no longer only inferred from the roll's timeline. Two governed `Logs` actions
+on the control instance read the two replicas' own lines (`Ops/Actions/logs-6056-tslft-shutdown-20261006`
+and `Ops/Actions/logs-6056-jqqxx-shutdown-20261006`). Both bursts of the failure fall in the same
+millisecond as that replica's `DeliveryFailureException: Host is shutting down, cannot route` lines:
+
+| Burst | Replica | Shutdown lines | NodeTypes |
+|---|---|---|---|
+| 2026-10-03 23:15:58Z | `57d6d7f9cc-tslft` | from 23:15:58.008Z | `Store/Core`, `Signature/DeepSignCredential` |
+| 2026-10-05 11:25:57Z | `5dcbbd8f4b-jqqxx` | from 11:25:57.722Z, 200 read (cut) | `Signature/SignatureRequest`, `Store/Core`, `Signature/Desk` |
+
+The second burst ran on core `d205295b`, which already carried #6088 and #6101. It is the same
+shape: the roll to `3.0.0-ci.9978` was replacing that replica.
+
+The version history corrects one sentence above. The settle's stamp did **not** land. The dying
+process's terminal write never reached the store:
+
+- `Signature/SignatureRequest` goes v3926 (11:25:44Z, `Compiling`) → v3927 (11:26:34Z, the new
+  replica's compile). Its release `…/Release/20261005112638-sEwNSJCA` landed 41 s after the failure.
+- `Signature/DeepSignCredential` goes v3872 (23:15:49Z) → v3873 (23:16:01Z). Its release landed at
+  23:16:14Z, 16 s after the failure.
+
+No NodeType carries `unreleasedBuildPath`. The sweep
+`nodeType:NodeType content.unreleasedBuildPath:* partitions:all` answers `count: 0` over 125
+readable partitions. The positive control `content.latestReleasePath:*` returns rows. So in both
+bursts no NodeType advertised a build that no release names. The Error line said one did and named
+a stamp, and the sev:H incident was filed from that line. What it actually recorded was a replica
+being replaced.
+
+### The change
+
+`ReleasePostCondition.Restore` asks the survivor `IsLeaving()`, the shared predicate in
+`HubLeavingExtensions`: the mesh is shutting down, or the host lifetime has begun stopping. On a pod the host lifetime fires at SIGTERM and stays live for the whole termination
+window. When it is true, the violation line and the could-not-re-cut line are logged at `Warning`.
+The compile `_Activity` entry is the keyed `activity.compile.releasePostCondition.abandonedAtShutdown`
+at `Warning`. The stamp and its reason still travel, because the build still has no release. If the
+terminal write does land inside the grace window, the stamp is the truth, and #6101's
+inherited-obligation completion cuts the release on the next activation.
+
+The decision reads the PROCESS's state and never parses the reason. The same `Unavailable` answer
+also means "the store was unreachable". That is an availability fault, and on a process that is not
+leaving it stays an `Error`. Nothing that is attempted changes: the re-cut still runs, because
+inside the grace window it can land.
+
+### The control
+
+`AReleaseRecutCutShortByShutdownTest` runs on a real monolith mesh. A real `INodeValidator` fails
+this type's Release create with the cancellation a drained pool raises. That drives CreateNode's
+own cooperative-cancellation arm to the production answer, *"Node creation at '…' was cancelled
+before it completed."*. The process's leaving comes from the host's real `ApplicationLifetime`,
+stopped through `StopApplication()`.
+
+- **Leaving:** a keyed Warning naming the shutdown, and no Error line. Against the code before this
+  change it is red, because the key is `…violated`.
+- **Negative control:** the identical failure on a process that is NOT leaving stays the Error and
+  the `…violated` entry.
+
+### Not established
+
+- **What re-drives a record a dying process leaves at `Compiling`.** In both bursts the new replica
+  compiled the type within a minute, and both records name the same framework identity (`c003e001`)
+  before and after. What triggered that compile was not established: the record left at
+  `Compiling`, a pending source change (v3926 reads `buildProvenance: StaleAdopted`), or the boot
+  bake. So it is not shown that every such record is re-driven.
+- **The first attempts' nested root-create failures** (above). They are still unexplained, apart
+  from happening in this same shutdown window.
+
+## Where the 10 s bound is spent (#5057, fourth half)
+
+### What was measured
+
+#6056's shape is a create cut short because its own process was shutting down. That shape is
+classified separately; see the section above. Measured on the control instance, the incident
+`Admin/_LogIncident/17578d9fadcb0174` holds #5057's own shape: *"the create did not land within
+00:00:10"*. It stood at 743 occurrences, last seen 2026-10-05 17:47Z. A Release node carries three
+timestamps, and the create handler logs `Node created at …` only after the storage write emits. Those
+four facts together place the delay:
+
+| Release (memex) | id stamp | `createdDate` (pre-write stamp) | `Node created at` lines |
+|---|---|---|---|
+| `Hosting/ModuleInventory/…174622-9wQzFEsa` | 17:46:22 | 17:46:22.62 | 17:46:34.69, 17:46:48.29 |
+| `Hosting/PlatformBuildInbox/…174705-36aDAzi_` | 17:47:05 | 17:47:05.78 | 17:47:34.57, 17:47:45.66 |
+
+- **Before the write is fast.** Each first attempt reached its pre-write stamp within a second of
+  being minted.
+- **The re-cut's handler is fast too.** It was composed 1 ms after the first expiry was logged and
+  reached its own pre-write stamp 7–20 ms later.
+- **The write leg is slow.** The first attempt's write emitted at least 12 s (`ModuleInventory`) and
+  at least 29 s (`PlatformBuildInbox`) after its pre-write stamp. Both expiries fired before any
+  `Node created` line.
+
+For these two, the bound was spent in the storage write leg. It was not spent in queueing at the
+node-operation hub or in the handler's reads.
+
+The 10-04 releases on memex (`Hosting/LogEntry`, `Essentials/OperationRequest`, `Store/Publishing`,
+`Store/InstallRequest`) show a different shape:
+- Their pre-write stamps came 10–15 s after composition, so the delay there was BEFORE the write.
+- Three of them, in two partitions, were stamped within 4 ms of each other (20:14:34.80Z). That
+  looks like a shared gate releasing all at once. Which gate it was has not been established.
+
+### The one gate in the write leg
+
+The write leg runs from `CreateNode` step 5 through `MonotonicWriteGuard`, `SubtreeDeletionGuard`,
+`VersionWriting`, `PersistenceService` and the Postgres routing adapter to the per-schema adapter's
+`Write`. That call runs inside `pg:{provider}`. The pool is capped at ONE, and every per-schema
+adapter shares it (`PostgreSqlPathRoutingAdapter.GetOrCreateAdapter` passes `_provider.WritePool`),
+so it is a process-wide FIFO for every node write in every partition. `IoPoolNames.PostgresAdapterPrefix`
+says so and carries a 2026-09-16 reading of a quiet window: 2,786 admissions, max wait 205 ms. A
+compile wave is not a quiet window. Whether the release create was QUEUED behind other writes there,
+or the write that held the slot was itself slow (a long batch, schema provisioning, a lock wait),
+cannot be read from the expiry line. Those two causes need opposite fixes.
+
+### The instrument
+
+`NodeTypeBuildState.Bounded` now takes `IoPoolRegistry.Snapshot()` when the wait opens. On expiry it
+appends `IoPoolQueueReport.Describe(pools, baseline)`, the same reading the recursive-delete drain
+attaches to its timeout (#1198). It names every pool with work queued at the expiry, with its cap and
+depth, and counts the admissions that waited a second or more during the window. A window with
+nothing queued reads `NothingQueued`. A host with no registry reads `NotMeasured`.
+
+The control is `AReleaseCreateExpiryNamesTheQueuedPoolTest`. It drives the production seam on a
+`HistoricalScheduler` with a real registry:
+- With a cap-1 `pg:` pool holding one leaf and queueing a second, the expiry must name that pool.
+- The idle negative control must read `NothingQueued`.
+
+All three cases are red with the reading removed.
+
+### Not established
+
+- **Which of the two write-leg causes it was.** The next expiry's own line now answers that. The
+  `[LIVENESS]` ticks for the 17:46Z window, which would show ThreadPool backlog and GC pauses, were
+  not read: the control instance's MCP connection failed for the rest of the session.
+- **The 10-04 shape's gate.** Its delay was before the write, so this instrument does not cover it.
+- **The mix across the 743 occurrences.** Only six releases were measured.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was

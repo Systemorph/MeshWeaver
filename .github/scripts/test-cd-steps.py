@@ -46,7 +46,6 @@ STEP_ID = "release"
 # the bake share ONE resolution of the release version. The cases moved with it — the harness
 # executes the step wherever it lives, which is the whole point of extracting by `id:`.
 BAKE_VERSION_STEP_ID = "bake_version"
-SEAL_STEP_ID = "seal"
 DECIDE_STEP_ID = "decide"
 VERDICT_STEP_ID = "verdict"
 HEAL_STEP_ID = "heal"
@@ -556,23 +555,37 @@ def run_decide_cases(root, case) -> None:
     # read GH_CALLS.
     ledger = {**reconcile, "REASON": "reconcile", "GH_VIEW_RESULT": "0", "GH_ISSUE_RESULT": ""}
 
+    # 🚨 THE PAIR TAG IS RETIRED (policy `platform-module-deploy-separate`), and with it the
+    # `HOSTS_STALE` branch that rebuilt the portal whenever MeshWeaver.Plugins `main` had moved
+    # (#2622, #4688). A complete set is bake-only whatever a stale caller still passes; a host
+    # change reaches the image only through an explicit `rebuild` (Plugins' relevance-classified
+    # dispatch). Fed the retired input on purpose: a decide step that still read it would build.
     calls: list[str] = []
     rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None,
                                 calls_out=calls)
     filed = [c for c in calls if "issue create" in c or "issue comment" in c]
-    case("a COMPLETE set whose only gap is the host pairing still publishes (#2622 unchanged)",
-         rc == 0 and "publish=true" in outputs and "bake_only=true" not in outputs,
+    case("a COMPLETE set is bake-only even if the retired HOSTS_STALE input is set — no plugins-move rebuild",
+         rc == 0 and "bake_only=true" in outputs and "publish=true" not in outputs,
          f"rc={rc} out={outputs!r} log={log}")
-    case("...and files NOTHING on the ci-failure ledger — nothing was undelivered",
+    case("...and files NOTHING on the ci-failure ledger",
          not filed, f"calls={filed!r} log={log}")
-    case("...and says so, so a reader is not left guessing why it built",
-         "cadence" in log.lower() and "deliverable" in log.lower(), f"log={log}")
-
-    # The control on that pair: without HOSTS_STALE a complete set is still the cheap bake-only
-    # tick. If these collapsed, every quiet hour would start building an image again.
-    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "false"}, None)
-    case("MUTATION CONTROL: a complete set with a CURRENT pairing is still bake-only, not a build",
-         rc == 0 and "bake_only=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    # MUTATION CONTROL: put the retired branch back and the same inputs must build — otherwise the
+    # case above would pass on a step that never looked at the variable at all.
+    retired_branch = (
+        'if [ "$COMPLETE" = "true" ] && [ "${HOSTS_STALE:-false}" = "true" ] \\\n'
+        '   && [ "$GREEN" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then\n'
+        '  decision true "host pairing behind"\n'
+        '  exit 0\n'
+        'fi\n')
+    # `body` is the YAML-dedented `run:` block, so the anchor carries no workflow indentation.
+    anchor = 'if [ "$COMPLETE" = "true" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then\n'
+    mutated = body.replace(anchor, retired_branch + anchor, 1)
+    rc, log, outputs = run_step(mutated, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true"}, None)
+    case("MUTATION CONTROL: the retired HOSTS_STALE branch, put back, DOES build on the same inputs",
+         mutated != body and rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
+    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "FORCE_REBUILD": "true"}, None)
+    case("...and an explicit `rebuild` (Plugins' host-change dispatch) still builds a complete set",
+         rc == 0 and "publish=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
 
     calls = []
     rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "false", "ATTEMPTED": "false"}, None,
@@ -615,21 +628,6 @@ def run_decide_cases(root, case) -> None:
     case("a settled-RED required check is still reported, attempt probe or not",
          rc == 0 and "publish=false" in outputs and any("issue comment" in c for c in calls),
          f"rc={rc} out={outputs!r} calls={calls!r} log={log}")
-
-    # 🚨 <b>A HOST REFRESH IS AN AUTOMATIC PUBLISH, SO IT IS BEHIND THE GREEN CHECK.</b>
-    # (Copilot on MeshWeaver#4687.) The stale-pair branch sits above the required-check guard,
-    # which is right for its neighbours — `bake_only` ships no image, `rebuild` is an operator's
-    # explicit dispatch — and was a hole here: a HEAD whose required check settled RED still has
-    # its old complete set, so COMPLETE is true, and the branch would have built and SHIPPED an
-    # untested tree for a cosmetic refresh.
-    rc, log, outputs = run_step(body, {**ledger, "COMPLETE": "true", "HOSTS_STALE": "true",
-                                       "GREEN": "false", "CONCL": "failure", "AGE_MIN": "300"}, None)
-    case("a stale host pairing on a RED required check publishes NOTHING",
-         rc == 0 and "publish=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and falls through to the bake, which builds no image",
-         "bake_only=true" in outputs, f"out={outputs!r} log={log}")
-    case("...and names the check rather than the pairing as the reason",
-         "untested" in log.lower(), f"log={log}")
 
     # 🚨 <b>A STAGING TAG IS NOT EVIDENCE OF FAILURE WHILE ITS RUN IS ALIVE.</b>
     # (Copilot on MeshWeaver#4687.) The in-flight tie-break filters to LOWER run ids so that two
@@ -1207,239 +1205,6 @@ def run_heal_cases(root, case) -> None:
     case("...and the heal comment is still written, so the delivery record survives",
          "gh issue comment 3176" in joined, f"calls={calls}")
 
-# ── the SEAL step: "does this sealed set still owe its plugins publication?" (#4539) ─────────
-#
-# 🚨 THE BROKEN STATE IS CONSTRUCTED, NOT ASSUMED. The lane being fixed "works" whenever nothing
-# is missing, so a case that only exercises the healthy path proves nothing. Every outcome below
-# is produced by a stub `check-release-availability.sh` that prints the REAL script's sentences and
-# exits with the REAL script's codes, and the step under test is extracted from the workflow and
-# executed against it — exit code, log parsing, ledger calls and all.
-#
-# 🚨 AND THE STUB IS PINNED TO THE REAL SCRIPT. A stub is only evidence about what it stubs: if the
-# probe ever reworded these lines, every case here would keep passing while the step stopped
-# recognising a definite absence and silently answered "nothing due" — the exact failure this whole
-# change exists to remove. So the phrases are asserted to still exist in the real script.
-SEAL_PHRASES = (
-    # the step parses the identity out of this line, and refuses to act without one
-    "identity resolved: ",
-    # the ONLY outcome that licenses a re-attempt
-    "are not available for framework identity",
-    # the refusal that means "the platform bake has not published this release yet" — keyed on its
-    # OWN wording: an empty marker shares the "CANNOT RESOLVE" prefix and must NOT read as pending
-    "has no marker at",
-    # the refusal that means "the marker's existence could not be established" (#4539 review) — the
-    # case the old script reported as "no marker", which the step then answered with a green
-    "exists could not be established",
-    # the refusal that means "the producer wrote a marker and recorded no identity" — a defect
-    "is empty — the producer recorded none",
-    # the refusal that means "the store could not be read" — a red, never a verdict
-    "CANNOT DETERMINE release availability",
-)
-
-IDENTITY = "s5ec352bb102e5a2275e3831a08ac0c8d"
-SEAL_VERSION = "3.0.0-ci.8765"
-
-
-def _probe_stub(kind: str) -> str:
-    """A stand-in for check-release-availability.sh reproducing one of its outcomes verbatim."""
-    resolved = f'echo "identity resolved: {IDENTITY} — from the release marker at acct/share/_releases/$1"'
-    bodies = {
-        # exit 0 — `plugins` IS sealed for this identity. The control.
-        "sealed": f'{resolved}\necho "release availability: all 1 source(s) are published for '
-                  f'identity {IDENTITY} (release $1)."\nexit 0',
-        # exit 1 — the measured #4539 state: the set is sealed, the publication is not there.
-        "absent": f'{resolved}\necho "::error::release availability: 1 of 1 source(s) are not '
-                  f'available for framework identity {IDENTITY} (release $1)."\nexit 1',
-        # exit 1 — no `_releases` marker at all: the platform bake has not published this release.
-        "unmarked": 'echo "::error::CANNOT RESOLVE a framework identity: release \'$1\' has no '
-                    'marker at acct/share/prebuilt-bundles/_releases/$1."\nexit 1',
-        # exit 1 — the MARKER's existence could not be established (auth / throttling / network).
-        # Before the #4539 review fix the real script reported this as "has no marker", and the step
-        # answered it NOT MEASURED — a storage outage read as a pending bake.
-        "marker-unreadable": 'echo "::error::CANNOT DETERMINE release availability: whether the '
-                             'release marker at acct/share/prebuilt-bundles/_releases/$1 exists could '
-                             'not be established (az returned \'<nothing>\')."\nexit 1',
-        # exit 1 — a marker EXISTS but carries no identity: the producer's defect, not a pending bake.
-        "empty": 'echo "::error::CANNOT RESOLVE a framework identity: the release marker for \'$1\' '
-                 'is empty — the producer recorded none."\nexit 1',
-        # exit 1 — the store could not be read. A refusal, in neither direction.
-        "unreadable": f'{resolved}\necho "::error::CANNOT DETERMINE release availability for '
-                      f'framework identity {IDENTITY} (release $1): 1 of 1 source(s) could not be '
-                      f'queried."\nexit 1',
-        # exit 1 — absent, but the identity line never printed. Must refuse, not act.
-        "nameless": 'echo "::error::release availability: 1 of 1 source(s) are not available for '
-                    'framework identity (release $1)."\nexit 1',
-    }
-    return "#!/usr/bin/env bash\n" + bodies[kind] + "\n"
-
-
-def run_seal_cases(root, case) -> None:
-    body = extract_step(root, SEAL_STEP_ID)
-
-    # A stub is only evidence about the call it stubs.
-    if AVAILABILITY.split("/")[-1] not in body:
-        die(f"step `{SEAL_STEP_ID}` no longer calls {AVAILABILITY} — the probe these cases drive is "
-            "no longer the seam under test, so every case below would pass vacuously.")
-    if "plugins_seal_due=" not in body:
-        die(f"step `{SEAL_STEP_ID}` no longer writes `plugins_seal_due` — the output the three "
-            "`plugins-*` jobs gate on is gone or renamed, so these cases test nothing.")
-    real = (root / AVAILABILITY).read_text()
-    for phrase in SEAL_PHRASES:
-        if phrase not in real:
-            die(f"{AVAILABILITY} no longer emits {phrase!r}, but step `{SEAL_STEP_ID}` still "
-                "classifies its answer by that text. The stubs below would keep passing while the "
-                "real lane stopped telling a definite absence from a refusal — re-point both.")
-
-    def seal(kind: str, **env):
-        """Run the step against one probe outcome, in a tree holding that stub."""
-        with tempfile.TemporaryDirectory() as td:
-            tree = Path(td)
-            scripts = tree / ".github" / "scripts"
-            scripts.mkdir(parents=True)
-            probe = tree / AVAILABILITY
-            probe.write_text(_probe_stub(kind))
-            probe.chmod(0o755)
-            calls: list[str] = []
-            base = {
-                "RELEASE_VERSION": SEAL_VERSION, "SHORT": "836d447", "PSHORT": "07bcf72",
-                "REPO": "Systemorph/MeshWeaver", "GH_TOKEN": "",
-                "RUN_URL": "https://example.invalid/run", "MAX_SEAL_ATTEMPTS": "3",
-                "BAKE_PUBLISH_TARGETS": "acct/share",
-            }
-            rc, log, outputs = run_step(body, {**base, **env}, None,
-                                        calls_out=calls, cwd=str(tree))
-            return rc, log, outputs, "\n".join(calls)
-
-    # ── 1. THE BROKEN STATE: sealed set, no `plugins` publication for its identity ──
-    rc, log, outputs, calls = seal("absent")
-    case("a sealed set whose `plugins` publication is ABSENT re-attempts the seal",
-         rc == 0 and "plugins_seal_due=true" in outputs, f"rc={rc} out={outputs!r} log={log}")
-    # 🚨 Assert on the step's OWN verdict line, never on `log` as a whole: `log` also carries the
-    # probe's relayed "identity resolved: <id>" line, so `IDENTITY in log` held WHATEVER the step
-    # extracted — a mutation reading the wrong field (identity `—`) stayed green on 86 of 86.
-    case("...and it NAMES the framework identity it is acting on",
-         f"NOT sealed for `{IDENTITY}`" in log,
-         f"the verdict named the wrong identity, or none:\n{log}")
-    case("...and it records the attempt on the ledger before acting",
-         "issue comment" in calls and "cd-seal:836d447-p07bcf72" in calls,
-         f"no attempt marker was written; gh calls were:\n{calls}")
-
-    # ── 2. THE CONTROL: the publication IS there, so the lane must do NOTHING ──
-    # Without this, "it re-attempts" would also pass if it re-attempted unconditionally — which is
-    # the expensive, alarm-every-hour shape the probe exists to prevent.
-    rc, log, outputs, calls = seal("sealed")
-    case("a set whose `plugins` publication IS sealed re-attempts NOTHING",
-         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it touches no ledger at all",
-         "issue comment" not in calls and "issue create" not in calls,
-         f"a healthy tick wrote to the ledger; gh calls were:\n{calls}")
-
-    # ── 3. REFUSALS ARE NOT VERDICTS, in either direction ──
-    rc, log, outputs, calls = seal("unreadable")
-    case("an UNREADABLE store fails RED rather than answering",
-         rc != 0, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it never claims the publication is fine",
-         "plugins_seal_due=true" not in outputs, f"out={outputs!r}")
-    case("...and it says the store could not be read, not that Plugins is at fault",
-         "CANNOT DETERMINE" in log or "could not ANSWER" in log, f"log={log}")
-
-    # A release with no marker yet is the platform bake's turn, not a defect: this tick writes it.
-    rc, log, outputs, calls = seal("unmarked")
-    case("a release with no `_releases` marker yet is NOT MEASURED, and is not a red",
-         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it says so instead of folding into a silent pass",
-         "NOT MEASURED" in log, f"log={log}")
-    case("...and it writes no ledger entry for a measurement it did not take",
-         "issue comment" not in calls, f"gh calls were:\n{calls}")
-
-    # 🚨 The #4539 review finding. The marker's EXISTENCE could not be read — the case the old script
-    # folded into "has no marker". It must be RED, never NOT MEASURED.
-    rc, log, outputs, calls = seal("marker-unreadable")
-    case("a marker whose existence CANNOT be read fails RED, not NOT MEASURED",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it is not reported as a pending bake",
-         "NOT MEASURED" not in log, f"a storage outage was answered as a pending bake:\n{log}")
-
-    # An EMPTY marker shares the "CANNOT RESOLVE" prefix with the benign absent case. Keyed on the
-    # prefix, the step read a producer defect as "the bake has not run yet" and went green.
-    rc, log, outputs, calls = seal("empty")
-    case("an EMPTY release marker (producer recorded no identity) fails RED",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it is not reported as a pending bake",
-         "NOT MEASURED" not in log, f"a producer defect was answered as a pending bake:\n{log}")
-
-    # Absent, but the probe named no identity: acting would be acting on the wrong identity.
-    rc, log, outputs, calls = seal("nameless")
-    case("an absence with NO resolved identity refuses rather than acting",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-
-    # ── 3b. THE LEDGER FAILS CLOSED (Copilot on #4565) ──
-    # The attempt ledger IS the budget. A failed read must not look like "no ledger yet", and a failed
-    # write must not launch a repair that consumed no attempt — either way the three-per-pair bound is
-    # gone, silently, for as long as the API is unhappy. `set -e` is what enforces both.
-    rc, log, outputs, calls = seal("absent", GH_LIST_FAIL="1")
-    case("a FAILED ledger listing stops the step instead of reading as 'no ledger yet'",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it creates no second ledger issue",
-         "issue create" not in calls, f"a failed listing still created a ledger; gh calls were:\n{calls}")
-    rc, log, outputs, calls = seal("absent", GH_COMMENT_FAIL="1")
-    case("a FAILED attempt-marker write stops the repair — it never launches uncounted",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-
-    # ── 3c. THE BUDGET IS ATOMIC: claim, then rank (Copilot on #4565) ──
-    # Two overlapping reconciles both read a count of 2. Read-then-append let BOTH launch "3/3".
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="3")
-    case("a reconcile whose claim ranks PAST the budget stands down, though it read a count under it",
-         rc == 0 and "plugins_seal_due=false" in outputs and "standing down" in log,
-         f"rc={rc} out={outputs!r} log={log}")
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2", GH_SEAL_RANK="2")
-    case("...while the reconcile whose claim ranks inside it proceeds as 3/3",
-         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log, f"rc={rc} out={outputs!r} log={log}")
-    rc, log, outputs, calls = seal("absent", GH_SEAL_RANK="")
-    case("a claim that cannot be RANKED refuses rather than proceeding unbounded",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    rc, log, outputs, calls = seal("absent")
-    # Split the log into CALLS, not lines: a `--body` spans several lines, so `issue comment` and its
-    # `cd-seal-run:` claim sit on DIFFERENT lines and a line-based search never finds the write.
-    records = re.split(r"\n(?=gh )", calls)
-    claim_at = next((i for i, r in enumerate(records)
-                     if r.startswith("gh issue comment") and "cd-seal-run:" in r), -1)
-    rank_at = next((i for i, r in enumerate(records)
-                    if r.startswith("gh issue view") and "index(true)" in r), -1)
-    case("...and the claim is WRITTEN before it is RANKED — read-then-write is the race itself",
-         0 <= claim_at < rank_at, f"claim at {claim_at}, rank read at {rank_at}; gh calls were:\n{calls}")
-
-    # ── 4. BOUNDED. The budget stops the re-attempt; it does not stop the reporting ──
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3")
-    case("a spent re-attempt budget stops re-attempting",
-         rc == 0 and "plugins_seal_due=false" in outputs, f"rc={rc} out={outputs!r} log={log}")
-    case("...and it says so ONCE, with the stopped marker",
-         "cd-seal-stopped:836d447-p07bcf72" in calls, f"gh calls were:\n{calls}")
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="3", GH_STOPPED_COUNT="1")
-    case("...and having said it once, it does not say it again",
-         "issue comment" not in calls, f"it repeated the stop comment; gh calls were:\n{calls}")
-    # One BELOW the budget must still act — otherwise "bounded" would also pass if it never acted.
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="2")
-    case("...and the last attempt inside the budget still runs",
-         rc == 0 and "plugins_seal_due=true" in outputs and "3/3" in log,
-         f"rc={rc} out={outputs!r} log={log}")
-
-    # An unreadable ledger must not silently grant a fresh attempt every hour. Two shapes: the API
-    # call FAILS (gh exits non-zero, `$(…)` is empty), and it answers something that is not a count.
-    rc, log, outputs, calls = seal("absent", GH_VIEW_FAIL="1")
-    case("an unreadable attempt ledger refuses rather than defaulting the count to zero",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-    rc, log, outputs, calls = seal("absent", GH_SEAL_COUNT="null")
-    case("...and a non-numeric ledger answer is refused too, not coerced",
-         rc != 0 and "plugins_seal_due=true" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-
-    # An empty release version cannot name an identity — refuse before probing anything.
-    rc, log, outputs, calls = seal("sealed", RELEASE_VERSION="")
-    case("an empty release version refuses instead of probing an unnamed release",
-         rc != 0 and "plugins_seal_due" not in outputs, f"rc={rc} out={outputs!r} log={log}")
-
-
-# ── the BAKE_VERSION step: the ACR read that moved out of `publish-bake` (#4539) ──────────────
 def run_bake_version_cases(root, case) -> None:
     body = extract_step(root, BAKE_VERSION_STEP_ID)
     if "az acr manifest list-metadata" not in body:
@@ -1470,102 +1235,124 @@ def run_bake_version_cases(root, case) -> None:
     case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
 
 
-def plugins_leg_problems(workflow_text: str) -> list[str]:
-    """🚨 On a seal re-attempt `plugin-test-image` is SKIPPED, so `needs.plugin-test-image.outputs.version`
-    is the EMPTY STRING — and `test-image` / `platform-image` are REQUIRED inputs of the bake lane,
-    so an empty value does not even fail loudly: it yields `…/mw-plugin-test:` and the lane dies on
-    a manifest that can never resolve. `gate.image_tag` exists precisely so there is ONE place to
-    get this right; the workflow's own comment records SEVEN times a per-reference conditional got
-    it wrong. So: no `plugins-*` job may name the tester job's version output."""
+def separation_problems(workflow_text: str) -> list[str]:
+    """🚨 Policy `platform-module-deploy-separate` + `platform-deploy-control-first`, held structurally.
+
+    "we separate platform deploy 100% from module deploy" — so `main-cd.yml` (the PLATFORM deploy):
+      1. calls NO module lane: no `node-repo-module-pack.yml`, `node-repo-publish-bake.yml` or
+         `node-repo-module-publish.yml` (packing, baking or sealing a module is the module's own lane);
+      2. reads NO MeshWeaver.Plugins verdict and holds no Plugins credential (`refs/core-candidate`,
+         `PLUGINS_TOKEN`, the content App) — what guards a platform roll is the platform verdict;
+      3. checks MeshWeaver.Plugins out ONLY in the jobs that build the portal HOST (it lives there);
+      4. `arm` needs the ladder (`platform-ladder-compat`) and nothing module-shaped;
+      5. `control-first` gives control the build from `control-promote`, and never needs `arm`;
+      6. a module-input job that carries `always()` PAYS for it: every need whose output it consumes,
+         and `preflight`, is asserted `== 'success'` (else it runs on an EMPTY digest/identity)."""
     import yaml
 
     problems: list[str] = []
     doc = yaml.safe_load(workflow_text)
-    for name, job in (doc.get("jobs") or {}).items():
-        if not name.startswith("plugins-"):
+    jobs = doc.get("jobs") or {}
+    # The portal HOST lives in MeshWeaver.Plugins: `gate` resolves the host commit (ls-remote), the
+    # three image jobs check it out to build the host. That is platform provenance, not a module.
+    host_builders = {"gate", "portal-image", "migration-image", "control-image"}
+    for name, job in jobs.items():
+        body = json.dumps(job)
+        for lane in ("node-repo-module-pack.yml", "node-repo-publish-bake.yml", "node-repo-module-publish.yml"):
+            if lane in str(job.get("uses", "")):
+                problems.append(f"{name} calls the module lane `{lane}` — the platform deploy packs, bakes and seals no module")
+        for needle in ("refs/core-candidate", "core-candidate/", "PLUGINS_TOKEN", "DEPENDENT_DISPATCH_APP"):
+            if needle in body:
+                problems.append(f"{name} reads `{needle}` — the platform deploy reads no MeshWeaver.Plugins verdict or credential")
+        if "Systemorph/MeshWeaver.Plugins" in body and name not in host_builders:
+            problems.append(f"{name} checks MeshWeaver.Plugins out — only the portal HOST resolver/builders may ({sorted(host_builders)})")
+    arm = jobs.get("arm")
+    if arm is None:
+        problems.append("`arm` is missing — the guard's subject moved; re-point it rather than let it pass on nothing")
+    else:
+        needs = arm.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        if "platform-ladder-compat" not in needs:
+            problems.append("`arm` does not need `platform-ladder-compat` — the ladder is half of the platform verdict")
+        for n in needs:
+            if n.startswith("plugins-") or n in ("published-modules", "satellite-compat"):
+                problems.append(f"`arm` needs `{n}` — a module job must never gate the platform arm")
+        # `select` reads `.github/control-instance.json`; a sparse checkout without it refuses every
+        # arming (review on #6143) — the file sits BESIDE the scripts, so it must be named.
+        checkout = next((s for s in arm.get("steps") or [] if str(s.get("uses", "")).startswith("actions/checkout")), {})
+        sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
+        if sparse and ".github/control-instance.json" not in sparse:
+            problems.append("`arm`'s sparse checkout omits `.github/control-instance.json` — `select` cannot name control and refuses every arming")
+    cf = jobs.get("control-first")
+    if cf is None:
+        problems.append("`control-first` is missing — control is no longer deployed first")
+    else:
+        needs = cf.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        if "arm" in needs or "notify-platform-update" in needs:
+            problems.append("`control-first` waits for the fleet's arming — control must be deployed FIRST")
+        if "control-promote" not in needs:
+            problems.append("`control-first` does not follow `control-promote` — it would tag an image that was never accepted")
+        if "control-promote.result == 'success'" not in " ".join(str(cf.get("if", "")).split()):
+            problems.append("`control-first`'s `if:` does not assert `needs.control-promote.result == 'success'`")
+        # 7. ...and DELIVERS it: tagging memex-control rolls nothing. A step must sign the
+        #    `control-announcement` body to the control plane's inbox, or control is handed a build
+        #    nothing ever rolls it to (control sat on ci.9939 for 22 h, 2026-10-06).
+        steps = cf.get("steps") or []
+        hand = [st for st in steps if "arm-promoted-set.py control-announcement" in str(st.get("run", ""))]
+        if not hand:
+            problems.append("`control-first` tags memex-control but never hands the build to control's roll lane "
+                            "(no step POSTs the `control-announcement` body) — control would never roll to it")
+        elif not any("vars.CONTROL_WEBHOOK_URL" in json.dumps(st.get("env") or {})
+                     and "secrets.CONTROL_WEBHOOK_SECRET" in json.dumps(st.get("env") or {}) for st in hand):
+            problems.append("`control-first`'s handover is not signed to the control plane's inbox "
+                            "(vars.CONTROL_WEBHOOK_URL + secrets.CONTROL_WEBHOOK_SECRET)")
+    for name in ("published-modules", "platform-ladder-compat"):
+        job = jobs.get(name)
+        if job is None:
+            problems.append(f"`{name}` is missing — the ladder has no input / no verdict")
             continue
-        if "plugin-test-image.outputs.version" in json.dumps(job):
-            problems.append(
-                f"{name} still reads `needs.plugin-test-image.outputs.version`, which is EMPTY on a "
-                "seal re-attempt (that job is skipped there). Use `needs.gate.outputs.image_tag`.")
         cond = " ".join(str(job.get("if", "")).split())
-        if "plugins_seal_due" not in cond:
-            problems.append(
-                f"{name} has no `plugins_seal_due` arm in its `if:`, so the reconcile cannot repair "
-                "a sealed set whose plugins publication is missing (MeshWeaver#4539).")
-        elif not cond.startswith("always()"):
-            problems.append(
-                f"{name}'s `if:` does not start with `always()`, so it inherits `promote`'s skip on "
-                "the reconcile path and the repair is inert — the exact shape it is fixing.")
-        # 🚨 `always()` HAS TO BE PAID FOR. It stops a job inheriting a SKIP — and a skip is also
-        # what GitHub gives a job whose need FAILED. So once a job carries `always()`, every need
-        # whose OUTPUT it consumes must be asserted `== 'success'` by hand, or the job runs with
-        # that output EMPTY. For these legs that is not a loud failure: `platform-image-digest` and
-        # `tester-image-digest` are OPTIONAL inputs of the bake lane, which resolves the platform
-        # ITSELF when they are empty — so the bundles would be packed, quietly, against a set this
-        # run did not promote.
-        if cond.startswith("always()"):
-            consumed = {m for m in re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", json.dumps(job))}
-            for dep in sorted(consumed):
-                if f"needs.{dep}.result == 'success'" not in cond:
-                    problems.append(
-                        f"{name} carries `always()` and consumes `needs.{dep}.outputs.*`, but its "
-                        f"`if:` never asserts `needs.{dep}.result == 'success'` — so a failed "
-                        f"`{dep}` lets this job run with that output empty instead of skipping.")
-        # `preflight` gates the run — it proves the external inputs exist — but exposes no output
-        # these legs READ, so the consumed-output rule above never saw it: an unasserted preflight
-        # stayed green while a FAILED preflight no longer stopped the leg (Copilot on #4565).
-        if cond.startswith("always()"):
-            needs = job.get("needs") or []
-            needs = [needs] if isinstance(needs, str) else needs
-            if "preflight" in needs and "needs.preflight.result == 'success'" not in cond:
-                problems.append(
-                    f"{name} carries `always()` and needs `preflight`, but its `if:` never asserts "
-                    "`needs.preflight.result == 'success'` — so a FAILED preflight (the inputs this run "
-                    "was never proven to have) no longer stops the leg.")
+        if not cond.startswith("always()"):
+            continue
+        consumed = {m for m in re.findall(r"needs\.([A-Za-z0-9_-]+)\.(?:outputs|result)", json.dumps(job.get("steps") or []))}
+        consumed |= {m for m in re.findall(r"needs\.([A-Za-z0-9_-]+)\.outputs\.", json.dumps(job))}
+        for dep in sorted(consumed):
+            asserted_in_if = f"needs.{dep}.result == 'success'" in cond
+            asserted_in_step = f"needs.{dep}.result" in json.dumps(job.get("steps") or [])
+            if not (asserted_in_if or asserted_in_step):
+                problems.append(f"{name} carries `always()` and consumes `needs.{dep}.*` without asserting it succeeded")
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        if "preflight" in needs and "needs.preflight.result == 'success'" not in cond:
+            problems.append(f"{name} carries `always()` and needs `preflight`, but never asserts `needs.preflight.result == 'success'`")
     return problems
 
 
-def plugin_module_build_problems(workflow_text: str) -> list[str]:
-    """The platform bake must have one compiler for every module it composes (#3732)."""
-    import yaml
+PAIR_TAG_WRITE = re.compile(r"-p\$\{?(?:PLUGINS|PLUGINS_SHORT|PLUGINS_SEL|PS)\b")
 
-    doc = yaml.safe_load(workflow_text)
-    job = (doc.get("jobs") or {}).get("plugins-modules") or {}
-    inputs = job.get("with") or {}
-    raw = inputs.get("modules")
-    if not raw:
-        return ["plugins-modules has no module catalog"]
-    try:
-        entries = json.loads(raw)
-    except (TypeError, json.JSONDecodeError) as exc:
-        return [f"plugins-modules module catalog is not valid JSON: {exc}"]
-    if not entries:
-        return ["plugins-modules module catalog is empty"]
-    problems = []
-    accepts = []
-    for entry in entries:
-        module = entry.get("module") or "<unnamed>"
-        if entry.get("build") != "container":
-            problems.append(f"{module} does not use the shared container workspace")
+
+def pair_tag_problems(workflow_text: str) -> list[str]:
+    """🚨 Policy `platform-module-deploy-separate`: the `<core7>-p<plugins7>` pair tag is RETIRED.
+
+    `main-cd.yml` must not mint it (no `<sha>-p$PLUGINS…` in any executable line), must not ask the
+    completeness probe about it (`check-image-set.sh` gets the core sha only), and `arm` must write
+    the version tag FROM the build's staging tag — the immutable per-run identity that replaced the
+    pair tag as the arming source. Readers stay tolerant of legacy pair tags; only WRITING is barred."""
+    problems: list[str] = []
+    for n, line in enumerate(workflow_text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
             continue
-        accept = entry.get("accept") or ""
-        accepts.append(accept)
-        if "targets" not in accept.split():
-            problems.append(f"{module} does not reuse the shared workspace targets")
-    if len(set(accepts)) > 1:
-        problems.append("plugins-modules container entries do not share one accept contract")
-    for name in ("platform-image", "platform-image-digest", "tester-image", "tester-image-digest"):
-        if not inputs.get(name):
-            problems.append(f"plugins-modules does not pass {name} to the container workspace")
-    if inputs.get("acr-login") != "oidc":
-        problems.append("plugins-modules does not select its available OIDC registry login")
-    secrets = job.get("secrets") or {}
-    for name in ("azure-client-id", "azure-tenant-id", "azure-subscription-id"):
-        if not secrets.get(name):
-            problems.append(f"plugins-modules does not pass {name}")
-    if (job.get("permissions") or {}).get("id-token") != "write":
-        problems.append("plugins-modules does not grant id-token: write for OIDC")
+        # A trailing comment (whitespace, then `#`) is not code: a line that only NAMES the retired
+        # tag in its comment must not trip the guard. A bare `#` stays code — `${VAR#prefix}` is a
+        # shell expansion, and cutting there would hide a real write behind it (#6177 review).
+        code = re.split(r"\s#", line, maxsplit=1)[0]
+        if PAIR_TAG_WRITE.search(code):
+            problems.append(f"main-cd.yml:{n} composes a `<core7>-p<plugins7>` pair tag — it is retired: {line.strip()[:120]}")
+        if "check-image-set.sh" in code and re.search(r'check-image-set\.sh\s+"\$SHORT"\s+"\$', code):
+            problems.append(f"main-cd.yml:{n} passes a second (plugins) argument to check-image-set.sh — the pair probe is retired")
+    if "SRC_PORTAL_TAG=$STAGING_SEL" not in workflow_text:
+        problems.append("`arm` does not arm FROM the selected record's staging tag (`SRC_PORTAL_TAG=$STAGING_SEL`)")
     return problems
 
 
@@ -1620,31 +1407,128 @@ def main() -> int:
             failures.append(name)
 
     workflow_text = (root / WORKFLOW).read_text()
-    module_problems = plugin_module_build_problems(workflow_text)
-    case("every plugin module composed by CD reuses one container workspace",
-         not module_problems, "; ".join(module_problems))
-    mutated_workflow = workflow_text.replace('"build": "container"', '"build": "sdk"', 1)
-    mutation_problems = plugin_module_build_problems(mutated_workflow)
-    case("the plugin-module workspace guard fails when one entry leaves that workspace",
-         bool(mutation_problems), "the mutation passed having changed one producer")
-    divergent_accept = workflow_text.replace(
-        '"accept": "targets"', '"accept": "targets embedded-resource:build-output"', 1)
-    accept_problems = plugin_module_build_problems(divergent_accept)
-    case("the plugin-module workspace guard fails when one entry changes the accept contract",
-         any("one accept contract" in problem for problem in accept_problems),
-         "the mutation passed with divergent global-build acknowledgments")
-    missing_targets = workflow_text.replace(
-        '"accept": "targets"', '"accept": "embedded-resource:build-output"', 1)
-    targets_problems = plugin_module_build_problems(missing_targets)
-    case("the plugin-module workspace guard still requires target reuse",
-         any("workspace targets" in problem for problem in targets_problems),
-         "the mutation passed without the target-reuse contract")
-    missing_digest = workflow_text.replace(
-        "      platform-image-digest: ${{ needs.plugins-bake-image.outputs.platform_digest }}\n", "", 1)
-    digest_problems = plugin_module_build_problems(missing_digest)
-    case("the plugin-module workspace guard fails when its image pin is absent",
-         any("platform-image-digest" in problem for problem in digest_problems),
-         "the mutation passed without a platform image digest")
+    # 🚨 Policy `platform-module-deploy-separate`: the platform deploy packs, bakes and seals no
+    # module, reads no Plugins verdict, and deploys control first. Each detector has a mutation
+    # control that re-introduces one coupling and must be caught — a guard that cannot fail is not one.
+    sep = separation_problems(workflow_text)
+    case("the platform deploy is separate from module deploy, and deploys control first",
+         not sep, "; ".join(sep))
+    back_pack = workflow_text.replace(
+        "  published-modules:\n",
+        "  plugins-modules:\n    uses: ./.github/workflows/node-repo-module-pack.yml\n"
+        "    needs: [gate]\n    if: needs.gate.outputs.publish == 'true'\n\n  published-modules:\n", 1)
+    case("...and the guard catches a module lane back inside the platform deploy",
+         any("node-repo-module-pack.yml" in p for p in separation_problems(back_pack)),
+         "the mutation passed with core CD packing a Plugins module again")
+    back_verdict = workflow_text.replace(
+        "          GH_TOKEN: ${{ github.token }}\n          ARMED_MAX:",
+        "          GH_TOKEN: ${{ github.token }}\n          PLUGINS_TOKEN: ${{ steps.token.outputs.token }}\n          ARMED_MAX:", 1)
+    case("...and the guard catches the arm reading a MeshWeaver.Plugins verdict again",
+         back_verdict != workflow_text and any("PLUGINS_TOKEN" in p for p in separation_problems(back_verdict)),
+         "the mutation passed (or could not apply) with a Plugins credential on the arm")
+    no_ladder = workflow_text.replace(
+        "    needs: [preflight, gate, promote, platform-ladder-compat]",
+        "    needs: [preflight, gate, promote]", 1)
+    case("...and the guard catches the arm losing the ladder half of its verdict",
+         no_ladder != workflow_text and any("platform-ladder-compat" in p for p in separation_problems(no_ladder)),
+         "the mutation passed (or could not apply) with an arm that no longer waits for the ladder")
+    no_decl = workflow_text.replace(
+        "          sparse-checkout: |\n            .github/scripts\n            .github/control-instance.json\n"
+        "          sparse-checkout-cone-mode: false\n      - name: \"The selection can say no (self-test)\"",
+        "          sparse-checkout: .github/scripts\n      - name: \"The selection can say no (self-test)\"", 1)
+    case("...and the guard catches the arm checking out no control declaration",
+         no_decl != workflow_text and any("control-instance.json" in p for p in separation_problems(no_decl)),
+         "the mutation passed (or could not apply) with an arm that cannot read which instance is control")
+    alarm = (root / ".github/workflows/control-always-latest.yml").read_text()
+    case("the control-always-latest alarm checks out the control declaration it reads",
+         ".github/control-instance.json" in alarm.split("steps:", 1)[1].split("- name:", 1)[0],
+         "control-always-latest.yml's checkout omits .github/control-instance.json — every tick would refuse")
+    # 🚨 The one-producer gate in `portal-image` READS the published module set out of this workflow
+    # (check-platform-reference-set.sh). #6143 removed the job it read and CD published nothing for
+    # ~30 runs — so the reader is executed here against the real workflow, and against a mutation.
+    def reference_set_reader(text: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "main-cd.yml"
+            wf.write_text(text)
+            script = (root / ".github/scripts/check-platform-reference-set.sh").read_text()
+            reader = script[script.index("composed=\"$(python3 - \"$workflow\" <<'PY'"):script.index("\nPY\n)\"") + 4]
+            reader = reader.replace("composed=\"$(python3 - \"$workflow\" <<'PY'", "python3 - \"$1\" <<'PY'")
+            proc = subprocess.run(["bash", "-c", reader, "reader", str(wf)], capture_output=True, text=True)
+            return proc.returncode, proc.stdout + proc.stderr
+    rc, out = reference_set_reader(workflow_text)
+    case("the portal-image one-producer gate can read the published module set out of main-cd.yml",
+         rc == 0 and "MeshWeaver.AI" in out and len(out.split()) >= 4, f"rc={rc} out={out}")
+    no_set = workflow_text.replace("      PUBLISHED_MODULES: >-\n", "      PUBLISHED_MODULES_GONE: >-\n", 1)
+    rc, out = reference_set_reader(no_set)
+    case("...and a workflow without that declaration makes the reader RED (never an empty pass)",
+         no_set != workflow_text and rc != 0 and "PUBLISHED_MODULES" in out, f"rc={rc} out={out}")
+    module_gates_arm = workflow_text.replace(
+        "    needs: [preflight, gate, promote, platform-ladder-compat]",
+        "    needs: [preflight, gate, promote, platform-ladder-compat, published-modules]", 1)
+    case("...and the guard catches a module job gating the platform arm",
+         any("published-modules" in p and "arm" in p for p in separation_problems(module_gates_arm)),
+         "the mutation passed with a module job in the arm's needs")
+    control_last = workflow_text.replace(
+        "    needs: [preflight, gate, control-image, control-promote]",
+        "    needs: [preflight, gate, control-image, control-promote, arm]", 1)
+    case("...and the guard catches control waiting for the fleet's arming (control LAST again)",
+         control_last != workflow_text and any("FIRST" in p for p in separation_problems(control_last)),
+         "the mutation passed (or could not apply) with control-first needing arm")
+    undelivered = workflow_text.replace("arm-promoted-set.py control-announcement", "arm-promoted-set.py control-REMOVED", 1)
+    case("...and the guard catches control-first TAGGING control without handing it the build (the 2026-10-06 outage)",
+         undelivered != workflow_text and any("never hands the build" in p for p in separation_problems(undelivered)),
+         "the mutation passed (or could not apply) with no handover step in control-first")
+    case("...and the shipped control-first hands the build over (no handover problem on main-cd.yml)",
+         not any("hands the build" in p or "handover" in p for p in separation_problems(workflow_text)),
+         str(separation_problems(workflow_text)))
+    unpaid = workflow_text.replace(
+        "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&\n"
+        "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    env:\n"
+        "      # 🚨 THE ONE DECLARATION",
+        "      always() && needs.gate.result == 'success' &&\n"
+        "      needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'\n"
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      contents: read\n      id-token: write\n    env:\n"
+        "      # 🚨 THE ONE DECLARATION", 1)
+    case("...and the guard catches `always()` that no longer stops on a FAILED preflight",
+         unpaid != workflow_text and any("needs.preflight.result" in p for p in separation_problems(unpaid)),
+         "the mutation passed (or could not apply) with a module-input leg that runs after preflight failed")
+    plugins_checkout = workflow_text.replace(
+        "          sparse-checkout: .github/scripts\n      - name: \"The input must exist",
+        "          sparse-checkout: .github/scripts\n      - uses: actions/checkout@v7\n        with:\n"
+        "          repository: Systemorph/MeshWeaver.Plugins\n      - name: \"The input must exist", 1)
+    case("...and the guard catches a Plugins checkout outside the portal-host builders",
+         plugins_checkout != workflow_text
+         and any("checks MeshWeaver.Plugins out" in p for p in separation_problems(plugins_checkout)),
+         "the mutation passed (or could not apply) with a module job checking out Plugins")
+
+    # 🚨 The retired pair tag stays retired — with a mutation control per detector.
+    pt = pair_tag_problems(workflow_text)
+    case("main-cd mints no `<core7>-p<plugins7>` pair tag and arms from the staging tag", not pt, "; ".join(pt))
+    minted = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                   '          promote memex-portal-ai   "$SHA" "$SHA-p$PLUGINS_SHORT"\n', 1)
+    case("...and the guard catches promote minting the pair tag again",
+         minted != workflow_text and any("pair tag" in p for p in pair_tag_problems(minted)),
+         "the mutation passed (or could not apply) with phase A writing <sha>-p<plugins>")
+    pair_armed = workflow_text.replace('SRC_PORTAL_TAG=$STAGING_SEL', 'SRC_PORTAL_TAG=$SHA_SEL-p$PLUGINS_SEL', 1)
+    case("...and the guard catches `arm` arming from a pair tag again",
+         pair_armed != workflow_text and len(pair_tag_problems(pair_armed)) >= 2,
+         "the mutation passed (or could not apply) with arm reading <sha>-p<plugins>")
+    probe = workflow_text.replace('check-image-set.sh "$SHORT" || rc=$?', 'check-image-set.sh "$SHORT" "$PLUGINS_SHORT" || rc=$?', 1)
+    case("...and the guard catches the completeness probe asking about the pair again",
+         probe != workflow_text and any("second (plugins) argument" in p for p in pair_tag_problems(probe)),
+         "the mutation passed (or could not apply) with gate passing the plugins sha to check-image-set.sh")
+
+    commented = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA"  # no "$SHA-p$PLUGINS_SHORT" any more\n', 1)
+    case("...and a pair tag named only in a trailing comment is not a write",
+         commented != workflow_text and not any("pair tag" in p for p in pair_tag_problems(commented)),
+         "the mutation could not apply, or an inline comment naming the retired tag tripped the guard")
+    expansion = workflow_text.replace('          promote memex-portal-ai   "$SHA"\n',
+                                      '          promote memex-portal-ai   "$SHA" "${SHA#x}-p$PLUGINS_SHORT"\n', 1)
+    case("...and a write behind a `${VAR#…}` expansion is still caught",
+         expansion != workflow_text and any("pair tag" in p for p in pair_tag_problems(expansion)),
+         "the mutation passed (or could not apply) with a pair-tag write after a ${VAR#…} expansion")
 
     module_pack_text = (root / MODULE_PACK_WORKFLOW).read_text()
     permission_problems = module_pack_permission_problems(module_pack_text)
@@ -1670,46 +1554,6 @@ def main() -> int:
          any(problem.startswith("the called workflow declares permissions")
              for problem in workflow_narrowed_problems),
          "the mutation passed with workflow-level id-token: write")
-
-    # 🚨 The three `plugins-*` jobs must be able to run on the reconcile path, and must not name an
-    # output that is empty there (MeshWeaver#4539). Asserted structurally, with its own mutation
-    # controls below — a guard that cannot fail is not a guard.
-    leg_problems = plugins_leg_problems(workflow_text)
-    case("every `plugins-*` job can run on a seal re-attempt, off `gate.image_tag`",
-         not leg_problems, "; ".join(leg_problems))
-    reverted_tag = workflow_text.replace(
-        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.gate.outputs.image_tag }}",
-        "      test-image: meshweaver.azurecr.io/mw-plugin-test:${{ needs.plugin-test-image.outputs.version }}",
-        1)
-    case("...and the guard catches a leg reaching for the SKIPPED tester job's version",
-         any("plugin-test-image.outputs.version" in p for p in plugins_leg_problems(reverted_tag)),
-         "the mutation passed with a leg reading an output that is empty on a re-attempt")
-    reverted_if = workflow_text.replace(
-        "       needs.gate.outputs.plugins_seal_due == 'true')",
-        "       needs.gate.outputs.publish == 'true')", 1)
-    case("...and the guard catches a leg losing its reconcile arm",
-         any("plugins_seal_due" in p for p in plugins_leg_problems(reverted_if)),
-         "the mutation passed with a leg that can never repair a half-sealed set")
-    unpaid_always = workflow_text.replace(
-        "      needs.plugins-bake-image.result == 'success' &&\n"
-        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
-        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
-        "    permissions:",
-        "      ((needs.gate.outputs.publish == 'true' && needs.promote.result == 'success') ||\n"
-        "       needs.gate.outputs.plugins_seal_due == 'true')\n"
-        "    permissions:", 1)
-    case("...and the guard catches `always()` that does not assert a consumed need succeeded",
-         any("result == 'success'" in p and "plugins-bake-image" in p
-             for p in plugins_leg_problems(unpaid_always)),
-         "the mutation passed with a leg that runs on an EMPTY image digest — which the bake lane "
-         "silently replaces by resolving the platform itself")
-
-    unguarded_preflight = workflow_text.replace(
-        "      always() && needs.gate.result == 'success' && needs.preflight.result == 'success' &&",
-        "      always() && needs.gate.result == 'success' &&", 1)
-    case("...and the guard catches `always()` that no longer stops on a FAILED preflight",
-         any("needs.preflight.result" in p for p in plugins_leg_problems(unguarded_preflight)),
-         "the mutation passed with a leg that runs after preflight failed — inputs never asserted")
 
     base = {"RELEASE_VERSION": "", "BAKE_ONLY": "true", "SHORT_SHA": SHORT_SHA,
             "RECOVERED": VERSION}
@@ -1742,9 +1586,6 @@ def main() -> int:
     print(f"── step `{BAKE_VERSION_STEP_ID}` ──")
     run_bake_version_cases(root, case)
 
-    print()
-    print(f"── step `{SEAL_STEP_ID}` ──")
-    run_seal_cases(root, case)
 
     print()
     print(f"── step `{DECIDE_STEP_ID}` ──")
@@ -1771,7 +1612,7 @@ def main() -> int:
         print(f"::error::{len(failures)} case(s) failed: {', '.join(failures)}")
         return 1
     print(f"all cases passed against {WORKFLOW} steps `{STEP_ID}` + `{BAKE_VERSION_STEP_ID}` "
-          f"+ `{SEAL_STEP_ID}` + `{DECIDE_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
+          f"+ `{DECIDE_STEP_ID}` + `{ATTEMPTED_STEP_ID}` "
           f"+ `{VERDICT_STEP_ID}` + `{HANDOFF_STEP_ID}` + `{HEAL_STEP_ID}` "
           f"(extracted, not copied)")
     return 0

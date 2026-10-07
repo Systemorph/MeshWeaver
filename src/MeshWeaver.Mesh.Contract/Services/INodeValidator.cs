@@ -40,6 +40,27 @@ public interface IOwnerEnforcedNodeValidator
 }
 
 /// <summary>
+/// Marker for a Read-capable <see cref="INodeValidator"/> that admits a read by
+/// <see cref="MeshWeaver.Mesh.Security.WellKnownUsers.System"/> UNCONDITIONALLY — whatever the node
+/// and whatever any other node in the mesh holds. Row-level security is the one in the platform
+/// (its system bypass is its first line).
+///
+/// <para><b>What the marker licenses.</b> A secured read answered as System is then exactly the raw
+/// read: no grant, membership or policy can move its result. So a LIVE secured query running as
+/// System may skip the re-read for a change that cannot touch its rows, exactly as a raw query does
+/// (<c>NodeTypeChangeRelevance</c>, Doc/Architecture/LiveQueryRequeryCost). A Read validator WITHOUT
+/// this marker switches that pruning off for every System query in the mesh — the safe direction:
+/// the re-read simply runs, as it always used to.</para>
+///
+/// <para>🚨 Only implement it when the claim holds by construction. A validator whose verdict for
+/// System could depend on another node (a grant, a flag, a parent) must NOT carry it, or a System
+/// live query would miss a change that moved its result.</para>
+/// </summary>
+public interface ISystemReadTransparentNodeValidator
+{
+}
+
+/// <summary>
 /// Context for node validation containing all relevant information.
 /// </summary>
 public record NodeValidationContext
@@ -179,6 +200,48 @@ public interface INodeTypeAccessRule
     /// awaiting hub round-trips.
     /// </summary>
     IObservable<bool> HasAccess(NodeValidationContext context, string? userId);
+}
+
+/// <summary>
+/// An <see cref="INodeTypeAccessRule"/> that also speaks for permissions OUTSIDE the CRUD four —
+/// <see cref="Permission.Comment"/>, <see cref="Permission.Thread"/>, <see cref="Permission.Execute"/>
+/// and the like — on the node it governs.
+///
+/// <para><b>Why a second interface.</b> <see cref="INodeTypeAccessRule.SupportedOperations"/> is
+/// expressed in <see cref="NodeOperation"/>s, so a rule could never have an opinion about a
+/// <c>[RequiresPermission(Permission.Thread)]</c> delivery at its own node: the delivery gate maps
+/// only Read/Update/Delete to an operation (<see cref="NodeTypeAccessRuleGate.SubjectOperationFor"/>)
+/// and left every other permission to the raw path fold. A node type that must declare "who may use
+/// THIS node" for a non-CRUD permission — a conversation that a person may write into without
+/// holding a write grant on the data around it — had no declared place to say so.</para>
+///
+/// <para><b>Same contract as the CRUD half.</b> Consulted ONLY after the standard fold DENIED, and
+/// only about the node at the hub being addressed (the node the rule governs) — never about a node
+/// that does not exist yet, so <see cref="Permission.Create"/> is never asked here. A rule that
+/// refuses leaves the denial standing; a rule that faults or completes empty is
+/// <see cref="PermissionCheckOutcome.Undetermined(string)"/>, still fail-closed
+/// (<see cref="NodeTypeAccessRuleGate.EvaluatePermission"/>). The CRUD permissions are never routed
+/// here: they are decided through <see cref="INodeTypeAccessRule.HasAccess"/>, so a rule cannot give
+/// two different answers to one question.</para>
+/// </summary>
+public interface INodeTypePermissionRule : INodeTypeAccessRule
+{
+    /// <summary>
+    /// The non-CRUD permissions this rule decides on its own node. Read, Create, Update and Delete
+    /// listed here are ignored (<see cref="NodeTypeAccessRuleSet.FindPermissionRule"/>).
+    /// </summary>
+    IReadOnlyCollection<Permission> SupportedPermissions { get; }
+
+    /// <summary>
+    /// Whether <paramref name="userId"/> holds <paramref name="permission"/> on
+    /// <paramref name="node"/>. Emits <c>true</c> to grant, <c>false</c> to leave the denial standing.
+    /// </summary>
+    /// <param name="node">The node the rule governs — the subject of the check.</param>
+    /// <param name="accessContext">The caller's context as the asking seam captured it; may be null.</param>
+    /// <param name="userId">The identity being decided for.</param>
+    /// <param name="permission">One of <see cref="SupportedPermissions"/>.</param>
+    /// <returns>One verdict.</returns>
+    IObservable<bool> HasPermission(MeshNode node, AccessContext? accessContext, string? userId, Permission permission);
 }
 
 /// <summary>

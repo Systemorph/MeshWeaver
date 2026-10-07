@@ -199,7 +199,7 @@ public sealed class OciRegistryClient
             // 🚨 A continuation that points back at a page already read is a registry looping,
             // and following it would be an unbounded poll. Refuse rather than "cap".
             if (!visited.Add(next.AbsoluteUri))
-                throw new InvalidOperationException(
+                throw new RegistryRefusedException(
                     $"{registry} named {next.AbsoluteUri} as the next tags page twice — the listing loops.");
 
             using var response = await SendAuthenticatedAsync(next, repository, key, null, ct).ConfigureAwait(false);
@@ -224,7 +224,7 @@ public sealed class OciRegistryClient
             }, ct).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{registry} has no manifest {reference} in {repository} (MANIFEST_UNKNOWN) — the "
                 + "publication is unsealed, the reference is stale, or the repository is not served.");
         if (!response.IsSuccessStatusCode)
@@ -259,7 +259,7 @@ public sealed class OciRegistryClient
         using var response = await SendAuthenticatedAsync(uri, repository, key, null, ct).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{registry} has no blob {digest} in {repository} (BLOB_UNKNOWN) — the manifest names "
                 + "a layer the registry does not hold, which a sealed publication cannot do.");
         if (!response.IsSuccessStatusCode)
@@ -330,7 +330,7 @@ public sealed class OciRegistryClient
         if (retried.StatusCode == HttpStatusCode.Unauthorized)
         {
             retried.Dispose();
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{registry} refused the bearer it had just issued for {repository} — the credential "
                 + "was revoked between the exchange and the request.");
         }
@@ -358,7 +358,7 @@ public sealed class OciRegistryClient
         var header = challenge.Headers.WwwAuthenticate
             .FirstOrDefault(h => h.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase));
         if (header is null)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{baseUri.Host} answered 401 without a Bearer challenge — not an OCI registry, or the "
                 + "route is not the registry's.");
 
@@ -366,7 +366,7 @@ public sealed class OciRegistryClient
             .ToDictionary(m => m.Groups["key"].Value, m => m.Groups["value"].Value,
                 StringComparer.OrdinalIgnoreCase);
         if (!parameters.TryGetValue("realm", out var realm) || realm.Length == 0)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{baseUri.Host}'s Bearer challenge names no realm: {header.Parameter}");
 
         var query = new List<string>();
@@ -388,7 +388,7 @@ public sealed class OciRegistryClient
             Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{key}")));
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{realmUri.Host} refused this installation's instance key at its token endpoint "
                 + $"({(int)response.StatusCode}). The key presented is the plugin-registry credential "
                 + "for that host; if it was rotated, the pods must restart onto the new synced Secret.");
@@ -404,7 +404,7 @@ public sealed class OciRegistryClient
                 ? a.GetString()
                 : null;
         return string.IsNullOrEmpty(token)
-            ? throw new InvalidOperationException($"{realmUri.Host}'s token endpoint answered no token.")
+            ? throw new RegistryRefusedException($"{realmUri.Host}'s token endpoint answered no token.")
             : token;
     }
 
@@ -413,7 +413,7 @@ public sealed class OciRegistryClient
         HttpResponseMessage response, string repository, List<string> tags, CancellationToken ct)
     {
         if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{registry} has no repository {repository} — its tags list answered 404.");
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
@@ -423,7 +423,7 @@ public sealed class OciRegistryClient
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
         if (!doc.RootElement.TryGetProperty("tags", out var arr) || arr.ValueKind != JsonValueKind.Array)
-            throw new InvalidOperationException(
+            throw new RegistryRefusedException(
                 $"{registry} answered a tags/list body for {repository} with no \"tags\" array.");
         foreach (var t in arr.EnumerateArray())
             if (t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } s)

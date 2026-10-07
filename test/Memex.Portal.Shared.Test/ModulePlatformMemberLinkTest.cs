@@ -408,6 +408,53 @@ public class ModulePlatformMemberLinkTest : IDisposable
         Assert.Equal(ModuleLinkState.Unlinkable, inScope.State);
     }
 
+    /// <summary>
+    /// 🚨 <b>A protected member reached through a chain of GENERIC platform bases</b>
+    /// (MeshWeaver#6007 follow-up). <c>TextView : InputBase&lt;string&gt;</c>, where the platform's
+    /// <c>InputBase`1 : FormBase`1 : ViewCore`1</c> are generic bases defined in the platform
+    /// assembly itself — the shape of every <c>MeshWeaver.Blazor</c> form view
+    /// (<c>InputBase`3 : FormComponentBase`3 : … : BlazorView`2</c>). The derivation walk used to stop
+    /// at the first such base (a TypeSpec over a TypeDefinition), so <c>Frame</c> read as "no longer
+    /// accessible" and the probe refused a plugin that runs: measured on image 3.0.0-ci.9984, the
+    /// image's own <c>MeshWeaver.Blazor.EntityViews</c> was refused for 8 of 265 member references.
+    /// Static verdict and ground truth must agree: Linkable, and it runs.
+    /// </summary>
+    [Fact]
+    public void AProtectedMemberThroughGenericPlatformBases_IsAccessible_AndRuns()
+    {
+        const string platformSource = """
+            [assembly: System.Reflection.AssemblyVersion("3.0.0.0")]
+            namespace MeshWeaver.Test.Ladder;
+            public abstract class ViewCore<T> { protected string Frame(T value) => "[" + value + "]"; }
+            public abstract class FormBase<T> : ViewCore<T> { }
+            public abstract class InputBase<T> : FormBase<T> { }
+            """;
+        const string pluginSource = """
+            using MeshWeaver.Test.Ladder;
+            public sealed class TextView : InputBase<string> { public string Render() => Frame("text"); }
+            public static class LadderPlugin { public static string Run() => new TextView().Render(); }
+            """;
+        var platform = Platform(platformSource);
+        var plugin = Path.Combine(NewDirectory("plugin"), Plugin + ".dll");
+        File.WriteAllBytes(plugin, Emit(Plugin, pluginSource, MetadataReference.CreateFromFile(platform)));
+
+        var verdict = ModulePlatformLink.Check(plugin, Surface(platform), ModuleLinkOptions.WithMembers);
+
+        Assert.True(verdict.MayLoad, verdict.Report());
+        Assert.True(verdict.CheckedMemberReferences > 0, verdict.Report());
+        Assert.Empty(verdict.MissingMembers);
+        var context = new PlatformContext([platform]);
+        try
+        {
+            var run = context.LoadFromAssemblyPath(plugin).GetType("LadderPlugin", throwOnError: true)!.GetMethod("Run")!;
+            Assert.Equal("[text]", (string)run.Invoke(null, null)!);
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════════ helpers
 
     private static string Mutate(string p1Text, string p2Text)
@@ -517,10 +564,6 @@ public class ModulePlatformMemberLinkTest : IDisposable
             [CSharpSyntaxTree.ParseText(source)],
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var buffer = new MemoryStream();
-        var result = compilation.Emit(buffer);
-        Assert.True(result.Success, string.Join(Environment.NewLine,
-            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        return buffer.ToArray();
+        return StandInCompile.Emit(compilation);
     }
 }

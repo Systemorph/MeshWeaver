@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -348,7 +349,10 @@ public static class NodeTypeBuildState
                             : System.Reactive.Disposables.Disposable.Empty,
                         _ => meshService.CreateNode(node).Take(1))
                     .Select(_ => System.Reactive.Unit.Default),
-                releasePath, scheduler: null, logger);
+                releasePath, scheduler: null, logger,
+                // The survivor's mesh-scoped pool registry, so an expiry can say whether the create
+                // was QUEUED for an I/O slot (#5057) — see Bounded.
+                issuing.ServiceProvider.GetService<IoPoolRegistry>());
         }
         catch (Exception ex)
         {
@@ -454,11 +458,34 @@ public static class NodeTypeBuildState
     /// <param name="releasePath">The path being minted — named in every outcome.</param>
     /// <param name="scheduler">The clock the bound is measured on; null uses the default.</param>
     /// <param name="logger">Where an exception's stack is published.</param>
+    /// <param name="pools">
+    /// 🚨 The mesh-scoped I/O pool registry, or <c>null</c> when the hub has none (#5057). A
+    /// <see cref="IoPoolRegistry.Snapshot"/> is taken when the wait OPENS, and an expiry reports
+    /// <see cref="IoPoolQueueReport.Describe"/> over that window: which pools had work queued at
+    /// the expiry and how many admissions waited a second or more during it. Measured on memex
+    /// (2026-10-05, <c>Hosting/ModuleInventory</c>, <c>Hosting/PlatformBuildInbox</c>): the create
+    /// reached its pre-write stamp in under a second and its storage write emitted 12–29 s later,
+    /// so the bound was spent in the write leg — and the one write gate in that leg,
+    /// <c>pg:{provider}</c>, is a cap-1, process-wide FIFO. Whether the create was QUEUED there or
+    /// the write itself was slow is what this reading decides, and nothing else in the expiry line
+    /// could. The same reading the recursive-delete drain attaches to its own timeout (#1198).
+    /// </param>
     internal static IObservable<ReleaseCreateOutcome> Bounded(
         IObservable<System.Reactive.Unit> create,
         string releasePath,
         IScheduler? scheduler,
-        ILogger? logger) =>
+        ILogger? logger,
+        IoPoolRegistry? pools = null) =>
+        Observable.Defer(() => BoundedFrom(create, releasePath, scheduler, logger, pools, pools?.Snapshot()));
+
+    /// <summary><see cref="Bounded"/>, with the window's pool baseline already taken.</summary>
+    private static IObservable<ReleaseCreateOutcome> BoundedFrom(
+        IObservable<System.Reactive.Unit> create,
+        string releasePath,
+        IScheduler? scheduler,
+        ILogger? logger,
+        IoPoolRegistry? pools,
+        IReadOnlyList<IoPoolReading>? baseline) =>
         create
             .Take(1)
             .Select(_ => ReleaseCreateOutcome.Landed(releasePath))
@@ -523,7 +550,10 @@ public static class NodeTypeBuildState
                 logger?.LogWarning(ex,
                     "CompileWatcher: failed to create Release node at {ReleasePath}",
                     releasePath);
-                return Observable.Return(ReleaseCreateOutcome.Failed(Describe(ex, releasePath), releasePath));
+                return Observable.Return(ReleaseCreateOutcome.Failed(
+                    Describe(ex, releasePath,
+                        ex is TimeoutException ? IoPoolQueueReport.Describe(pools, baseline) : null),
+                    releasePath));
             });
 
     /// <summary>
@@ -544,11 +574,14 @@ public static class NodeTypeBuildState
     /// </summary>
     /// <param name="ex">The exception the create failed with.</param>
     /// <param name="releasePath">The path the attempt was minting.</param>
-    internal static string Describe(Exception ex, string releasePath) =>
+    /// <param name="queueing">For an expiry, <see cref="IoPoolQueueReport.Describe"/> over the wait's
+    /// window (#5057); <c>null</c> when it was not read.</param>
+    internal static string Describe(Exception ex, string releasePath, string? queueing = null) =>
         ex is TimeoutException
             ? $"the create did not land within {CreateBound} — the bound stops this process WAITING, "
               + "not the create, so the node may well exist and nothing here advanced the pointer to "
               + $"it: LOOK AT '{releasePath}' before concluding the release is missing"
+              + (queueing is null ? "" : $". At the expiry: {queueing}")
             : $"the create at '{releasePath}' failed: {ex.GetType().Name}: {ex.Message}";
 
     /// <summary>

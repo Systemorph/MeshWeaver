@@ -222,6 +222,11 @@ public sealed record PackageCoordinate
     /// <summary>The package's display name, as the manifest recorded it.</summary>
     public string? Name { get; init; }
 
+    /// <summary>The compiled module the package carries — its DLL name without extension
+    /// (<see cref="PackageManifest.Module"/>), the identity the activation record and a module
+    /// reload key on. Null for a content-only package.</summary>
+    public string? CompiledModule { get; init; }
+
     /// <summary>The module's content version from its <c>manifest.lock</c> — a hash over the
     /// module's own files, so it is exact AND does not move when a sibling module changes.</summary>
     public string? ModuleVersion { get; init; }
@@ -237,6 +242,18 @@ public sealed record PackageCoordinate
 
     /// <summary>The configured registry source the package came from.</summary>
     public string? SourceName { get; init; }
+
+    /// <summary>The published SemVer of what is installed (<c>releasedVersion</c>), when recorded.</summary>
+    public string? ReleasedVersion { get; init; }
+
+    /// <summary>The installed version's platform floor (<c>minMeshVersion</c>).</summary>
+    public string? MinMeshVersion { get; init; }
+
+    /// <summary>Why the newest served version is NOT installed, when an update is held.</summary>
+    public string? HeldUpdate { get; init; }
+
+    /// <summary>When the current hold began.</summary>
+    public DateTimeOffset? HeldSince { get; init; }
 }
 
 /// <summary>A module a configured repo ships that this instance does NOT carry, as the last

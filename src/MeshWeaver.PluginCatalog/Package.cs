@@ -502,6 +502,15 @@ public record PackageManifest
     public PackageUpdatePolicy? UpdatePolicy { get; init; }
 
     /// <summary>
+    /// When a global administrator last set <see cref="UpdatePolicy"/> explicitly
+    /// (<c>PackageInstaller.SetUpdatePolicy</c>) — null for a policy the installer SEEDED. Policy
+    /// <c>packages-auto-update</c> moves every seeded reminder-only record to Auto
+    /// (<see cref="PackageAutoUpdateMigration"/>) and keeps a policy an administrator chose; this
+    /// stamp is how the two are told apart.
+    /// </summary>
+    public DateTimeOffset? UpdatePolicySetAt { get; init; }
+
+    /// <summary>
     /// The policy this package actually follows. Every reconciler branches on THIS, never on a
     /// field. Pure.
     ///
@@ -583,6 +592,16 @@ public record PackageManifest
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? HeldUpdateDispatchedAt { get; init; }
+
+    /// <summary>
+    /// When the CURRENT hold began — stamped the first time <see cref="HeldUpdate"/> is set and kept
+    /// while it stays set, whatever the sentence says (it names the running platform, so it changes
+    /// on every roll while the package stays held). Cleared with the hold. The fleet version view's
+    /// "held since" and the "not in prod for too long" rule read it (maintainer, 2026-10-04: a hold
+    /// on the control instance went unseen from 09-18 until a manual refresh on 10-03).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? HeldSince { get; init; }
 
     /// <summary>
     /// The module manifest's per-file hash map as it stands AT THE CATALOG'S REF

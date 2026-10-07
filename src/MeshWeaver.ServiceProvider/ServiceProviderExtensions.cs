@@ -56,6 +56,15 @@ public static class ServiceProviderExtensions
         {
             var containerBuilder = new ContainerBuilder();
             containerBuilder.Populate(services);
+            // A ROOT container also takes every registration SOURCE registered as an instance — how a
+            // mesh's module registry answers the types its modules declare (MeshWeaver.Mesh's
+            // ModuleOwnedRootSource). Only the root: every hub's scope asks its way up to it.
+            foreach (var source in services
+                         .Where(d => d.ServiceType == typeof(Autofac.Core.IRegistrationSource) && !d.IsKeyedService)
+                         .Select(d => d.ImplementationInstance)
+                         .OfType<Autofac.Core.IRegistrationSource>()
+                         .ToArray())
+                containerBuilder.RegisterSource(source);
 
             ret = new AutofacServiceProvider(containerBuilder.Build());
         }

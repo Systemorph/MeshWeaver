@@ -519,6 +519,13 @@ public static class JsonSynchronizationStream
         // fan-out) was left latched as the captured user or as `system-security`. RunAs owns both
         // ends inside one Subscribe, and keeps exactly the property the paragraph above needs: the
         // post below is still issued inside the scope.
+        // 1 while the owner has ACKNOWLEDGED the subscription this stream holds (the initial
+        // SubscribeRequest, or the latest re-subscribe), 0 before that and while a re-subscribe is
+        // in flight. Only then does the heartbeat name the stream (#6047): the owner answers a named
+        // heartbeat for a stream it does not serve with StreamEndedEvent, and a subscription still
+        // on its way to a slow-initialising owner must never read as "unknown" — the heartbeat is
+        // not deferred behind an owner's initialisation, a SubscribeRequest is.
+        var acknowledged = 0;
         var postSubscribeRequest = () => hub.Observe(
                 MintSubscribeRequest(reduced.StreamId, reference, identityForSubscribe),
                 o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
@@ -528,10 +535,14 @@ public static class JsonSynchronizationStream
                 : accessService.RunAsSystem(postSubscribeRequest))
             .Subscribe(
                 _ =>
+                {
                     // The owner sends the first DataChangedEvent as the response; it is already
-                    // forwarded to the inner sync hub by RouteStreamMessage. Just acknowledge.
+                    // forwarded to the inner sync hub by RouteStreamMessage. Just acknowledge —
+                    // and from now on the heartbeat may name this stream (see `acknowledged`).
+                    Interlocked.Exchange(ref acknowledged, 1);
                     logger.LogDebug("SubscribeRequest for stream {StreamId} acknowledged by owner",
-                        reduced.StreamId),
+                        reduced.StreamId);
+                },
                 ex =>
                 {
                     // 🚨 TRANSIENT shutdown reject (ErrorType.ShuttingDown): our SubscribeRequest
@@ -721,7 +732,8 @@ public static class JsonSynchronizationStream
         // HeartBeatEvent is fire-and-forget — HandleHeartBeat returns Processed() but
         // posts no response, so subscribing to a response would always time out and
         // mis-trigger Resubscribe. Recycle/recreate detection runs through the mesh
-        // change feed below instead.
+        // change feed below AND through the owner itself: a heartbeat naming a stream the
+        // owner's activation does not serve is answered with StreamEndedEvent (#6047).
         if (!owner.Equals(hub.Address))
         {
             var resubscribing = 0;
@@ -745,6 +757,8 @@ public static class JsonSynchronizationStream
             void Resubscribe(string reason)
             {
                 if (Interlocked.Exchange(ref resubscribing, 1) != 0) return;
+                // Not acknowledged again until the owner answers this re-ask — see `acknowledged`.
+                Interlocked.Exchange(ref acknowledged, 0);
 
                 logger.LogInformation(
                     "Stream {StreamId}: owner {Owner} {Reason} — resubscribing for fresh snapshot.",
@@ -784,6 +798,7 @@ public static class JsonSynchronizationStream
                             {
                                 // Owner's first DataChangedEvent is already routed to the
                                 // inner hub by RouteStreamMessage; just clear the flag.
+                                Interlocked.Exchange(ref acknowledged, 1);
                                 Interlocked.Exchange(ref resubscribing, 0);
                                 // 🚨 …and give the re-arm budget back. MaxRecycleReArms exists to
                                 // stop a DEGENERATE loop — an owner stuck recycling, where each
@@ -1155,12 +1170,25 @@ public static class JsonSynchronizationStream
                     // heartbeat is [CanBeIgnored], so routing DROPS it without a NACK (RoutingServiceBase
                     // AND RoutingGrain.PostFailureToSender both skip [CanBeIgnored]) — no NotFound storm,
                     // nothing to observe. A recycled/restarted owner is re-detected by the change-feed
-                    // resubscribe below — the sole recycled-grain detector now that the heartbeat is
-                    // fire-and-forget. A permanently-gone owner (a one-shot import-activity lock whose
+                    // resubscribe below, and by the owner's own answer to a heartbeat naming a stream it
+                    // does not serve (see the note after this one, #6047). A permanently-gone owner (a one-shot import-activity lock whose
                     // change feed fires no pulse) is simply heart-beaten into routing's ignore path every
                     // interval — a benign dropped post, not a storm — until this subscriber hub is itself
                     // collected (the weak-ref check above disposes the timer then).
-                    h.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    //
+                    // 🚨 …but the heartbeat is no longer only a keep-alive (#6047). While the owner
+                    // has acknowledged this stream it NAMES it, and an owner activation that does not
+                    // serve it (a hand-off or recycle whose goodbye never reached us) answers with
+                    // StreamEndedEvent — the announced-end re-ask below. That makes the OWNER the
+                    // detector of an orphaned subscription instead of this process's change feed,
+                    // whose notification can be late or lost (a LISTEN connection that died). Still
+                    // fire-and-forget: nothing here waits, and a healthy owner still answers nothing.
+                    h.Post(
+                        new HeartBeatEvent
+                        {
+                            StreamId = Volatile.Read(ref acknowledged) == 1 ? reduced.StreamId : null,
+                        },
+                        o => o.WithTarget(owner));
                 });
             // On keepAlive (not directly on reduced): a terminal NotFound from the initial
             // SubscribeRequest disposes keepAlive → stops this heartbeat. Normal teardown
@@ -1168,8 +1196,9 @@ public static class JsonSynchronizationStream
             keepAlive.Add(sub);
 
             // Resubscribe when the mesh change feed reports a Created/Deleted event
-            // on the owner's path. This is the sole recycled-grain detector now that
-            // heartbeats are fire-and-forget. Compare against Address.Path (segments
+            // on the owner's path. This was the sole recycled-grain detector until the heartbeat
+            // learned to name its stream (#6047); it remains the detector for a stream the owner has
+            // not yet acknowledged and for a write's VERSION the mirror missed. Compare against Address.Path (segments
             // only) — ToString() can include a "~host" suffix for hosted addresses
             // which never matches MeshChangeEvent.Path (the bare node.Path).
             //

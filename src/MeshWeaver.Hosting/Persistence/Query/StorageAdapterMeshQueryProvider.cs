@@ -124,38 +124,41 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     /// <summary>
     /// #20: in <see cref="StorageAdapterQueryProviderOptions.DeferToNativeProvider"/> mode,
-    /// true when the native <c>PostgreSqlPartitionedMeshQuery</c> owns this query and the
-    /// pedestrian should contribute nothing — removing its <c>ListChildPaths</c> scope-walk
-    /// (the storm fix) for those shapes: <b>unscoped / wildcard-first-segment</b> (native
-    /// cross-schema fan-out) and <b>scoped primary (<c>mesh_nodes</c>)</b> reads (native
-    /// per-schema delegate, live). Returns <see langword="false"/> ONLY for scoped SATELLITE
-    /// reads (a <c>_</c>-prefixed path segment, a satellite nodeType, or
-    /// <c>source:activity</c>/<c>accessed</c>) — the pedestrian stays their live server until
-    /// the delegate's satellite Query Initial is fixed.
+    /// true when the native partitioned provider (<c>PostgreSqlPartitionedMeshQuery</c> /
+    /// <c>SnowflakePartitionedMeshQuery</c>) owns this query and the pedestrian should contribute
+    /// nothing — removing its <c>ListChildPaths</c> scope-walk for those shapes:
+    /// <b>unscoped / wildcard-first-segment</b> (native cross-schema fan-out), <b>scoped primary
+    /// (<c>mesh_nodes</c>)</b> reads and <b>scoped SATELLITE</b> reads (a <c>_</c>-prefixed path
+    /// segment or a satellite nodeType) — the last two both served live by the native provider's
+    /// per-schema delegate.
+    /// <para>Returns <see langword="false"/> ONLY for <c>source:activity</c> / <c>source:accessed</c>:
+    /// the native provider answers those from its cross-schema fan-out, and on Snowflake that
+    /// fan-out is one-shot — so the pedestrian keeps serving them rather than risk a live query
+    /// losing its re-query trigger.</para>
+    /// <para>🚨 Why scoped satellites defer (Doc/Architecture/QueryFanInStallTerminal → "Head-of-line
+    /// starvation of pg-read"): on the partitioned backends the pedestrian's persistence is the
+    /// path-routing adapter, which is NOT an <see cref="IScopedQueryStorageAdapter"/>, so the walk
+    /// short-circuit never fired and <c>namespace:Admin scope:descendants nodeType:Thread</c> ran a
+    /// full <c>ListChildPaths</c> + <c>Read</c> walk of the partition — two <c>pg-read:</c> admissions
+    /// per node, queued ahead of every other read in the process — and found NOTHING: threads live
+    /// in the <c>threads</c> satellite table under node-less <c>_Thread</c> segments, which a
+    /// <c>mesh_nodes</c> child listing never returns. The delegate already serves those rows
+    /// (Plugins <c>SatelliteSyncedInitialTests</c>), so the walk was pure cost.</para>
     /// </summary>
     private bool DefersToNativeProvider(MeshQueryRequest request)
     {
         var parsed = _parser.Parse(request.EffectiveQueries.FirstOrDefault());
         var path = parsed.Path;
-        // Unscoped / wildcard-first-segment → the native PostgreSqlPartitionedMeshQuery fans
-        // out across partitions; defer.
+        // Unscoped / wildcard-first-segment → the native provider fans out across partitions;
+        // defer (whatever the source — unchanged from before scoped satellites deferred too).
         if (string.IsNullOrEmpty(path)) return true;
         var slash = path.IndexOf('/');
         var first = slash < 0 ? path : path[..slash];
         if (first.Length == 0 || first == "*") return true;
-        // Scoped. Keep serving scoped SATELLITE reads here — the native provider's per-schema
-        // delegate doesn't yet serve satellite Query Initial correctly (it under-returns
-        // pre-existing rows), and source:activity/accessed are cross-partition JOINs. A
-        // satellite query is one whose path carries a `_`-prefixed segment, whose nodeType maps
-        // to a satellite table, or which is an activity/accessed source.
+        // Scoped source:activity / source:accessed — the only shapes the pedestrian keeps (see summary).
         if (parsed.Source is QuerySource.Activity or QuerySource.Accessed) return false;
-        foreach (var seg in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
-            if (seg.StartsWith('_')) return false;
-        var nodeType = parsed.ExtractNodeType();
-        if (!string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType))
-            return false;
-        // Scoped PRIMARY (mesh_nodes) read → the per-schema delegate now serves it live; defer
-        // so the pedestrian's ListChildPaths scope-walk is removed for this shape (the storm fix).
+        // Scoped primary (mesh_nodes) AND scoped satellite reads → the per-schema delegate serves
+        // both live; defer so the pedestrian's ListChildPaths scope-walk never runs for them.
         return true;
     }
 
@@ -220,7 +223,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // order is not paging — it is three independent samples of an arbitrary order.
                 //
                 // The arbitrary order was real and it was NOT the store's: the scope walk reads
-                // each path with `SelectMany(path => persistence.Read(path))`, which MERGES, so
+                // its paths with a MERGE (unbounded then; bounded chunks of WalkConcurrency now), so
                 // the emission order is the order the pooled reads COMPLETE. Idle, that is the
                 // walk order and three successive page queries agree; under load the reads
                 // interleave differently each time and the pages re-serve one row while dropping
@@ -337,8 +340,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// True when the query explicitly TARGETS satellite nodes — a <c>_</c>-prefixed path segment,
     /// a satellite nodeType, or <c>source:activity</c>/<c>accessed</c>. Such queries keep their
     /// satellites; every other (content) query has satellite-path rows filtered out so the
-    /// in-memory adapter matches PG's separate-table behaviour. Mirrors the satellite detection in
-    /// <see cref="DefersToNativeProvider"/>.
+    /// in-memory adapter matches PG's separate-table behaviour.
     /// </summary>
     /// <summary>
     /// True when the query explicitly asks for satellites, so the satellite exclusion is skipped.
@@ -753,13 +755,15 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // whose namespace is its parent path).
                 .Where(mainPath => string.IsNullOrEmpty(basePath)
                     || PathMatcher.ShouldNotify(mainPath!, basePath, effectiveScope))
-                .SelectMany(mainPath => persistence.Read(mainPath!, options)
+                .ToList()
+                // Bounded — see WalkConcurrency.
+                .SelectMany(mainPaths => Bounded(mainPaths, mainPath => persistence.Read(mainPath!, options)
                     .Take(1)
                     // Surface as warning so silent swallow-and-return-null doesn't make
                     // TimeoutException disappear into "node dropped by Where(!= null)" — visible
                     // cause when a query mysteriously returns fewer rows than expected. Teardown
                     // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "SourceActivity.ReadMain", mainPath!, completeness)))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "SourceActivity.ReadMain", mainPath!, completeness))))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
@@ -784,11 +788,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             return WalkAdapter(basePath, QueryScope.Descendants, completeness)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .ToList()
-                .SelectMany(allPaths => NamespaceFrontier.Frontier(basePath, allPaths).ToInlineObservable())
-                .Where(path => emittedFrontier.Add(path))
-                .SelectMany(path => persistence.Read(path, options)
-                    .Take(1)
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "NextLevel.Read", path, completeness)))
+                // Bounded — see WalkConcurrency.
+                .SelectMany(allPaths => Bounded(
+                    NamespaceFrontier.Frontier(basePath, allPaths).Where(path => emittedFrontier.Add(path)).ToList(),
+                    path => persistence.Read(path, options)
+                        .Take(1)
+                        .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "NextLevel.Read", path, completeness))))
                 .Where(node => node != null)
                 .Select(node => node!)
                 .Where(node => _evaluator.Matches(node, parsedQuery)
@@ -868,18 +873,22 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             walkPairs.Add((basePath, effectiveScope));
         }
 
+        // 🚨 Bounded, both halves — see WalkConcurrency. The walks of a multi-pair scope
+        // (Hierarchy / AncestorsAndSelf) run one after the other (an ENUMERABLE Concat), and the
+        // per-path reads run at most WalkConcurrency at a time over the walked set.
         var matchedScopeNodes = walkPairs
-            .ToInlineObservable()
-            .SelectMany(pair => WalkAdapter(pair.Root, pair.Scope, completeness))
+            .Select(pair => WalkAdapter(pair.Root, pair.Scope, completeness))
+            .Concat()
             .Where(path => !string.IsNullOrEmpty(path))
             .Where(path => emittedPaths.Add(path))
-            .SelectMany(path =>
+            .ToList()
+            .SelectMany(paths => Bounded(paths, path =>
                 persistence.Read(path, options)
                     .Take(1)
                     // Surface swallowed read errors at warning level so a timeout / RLS-deny /
                     // corrupt-row doesn't silently drop the node out of the result set. Teardown
                     // cancellation is NOT swallowed: it terminates the walk (see SwallowedReadOrStop).
-                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "MatchScope.Read", path, completeness)))
+                    .Catch<MeshNode?, Exception>(ex => SwallowedReadOrStop(ex, "MatchScope.Read", path, completeness))))
             .Where(node => node != null)
             .Select(node => node!)
             .Where(node => _evaluator.Matches(node, parsedQuery)
@@ -896,10 +905,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <summary>
-    /// Pure-IObservable BFS walk through <see cref="IStorageAdapter.ListChildPaths"/>.
-    /// Children scope = one level; Descendants/Subtree/Hierarchy = recursive.
-    /// Composes via <c>SelectMany</c>; no <c>await</c>, no <c>.ToTask()</c> —
-    /// runs end-to-end reactively (per AsynchronousCalls.md).
+    /// Pure-IObservable breadth-first walk through <see cref="IStorageAdapter.ListChildPaths"/>.
+    /// Children scope = one level; Descendants/Subtree/Hierarchy = recursive, one level at a time,
+    /// at most <see cref="WalkConcurrency"/> listings in flight. No <c>await</c>, no
+    /// <c>.ToTask()</c> — runs end-to-end reactively (per AsynchronousCalls.md).
     /// </summary>
     private IObservable<string> WalkAdapter(string basePath, QueryScope scope, ReadCompleteness? completeness)
     {
@@ -993,7 +1002,80 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         return Observable.Empty<T>();
     }
 
+    /// <summary>
+    /// 🚨 The most storage operations ONE query's pedestrian walk keeps outstanding at a time — per
+    /// stage: at most this many <see cref="IStorageAdapter.ListChildPaths"/> calls, and at most this
+    /// many per-path <see cref="IStorageAdapter.Read"/> calls.
+    ///
+    /// <para><b>Why a bound at all.</b> The leaves run through a process-wide FIFO I/O pool (on
+    /// Postgres the shared <c>pg-read:</c> pool), and a walk used to expand with unbounded
+    /// <c>SelectMany</c>s: every child listing and every read of a level was SUBSCRIBED at once, so one
+    /// query over a partition of N nodes enqueued ~2×N admissions ahead of every other read in the
+    /// process — head-of-line starvation. A one-row <c>path:</c> probe issued behind it waited for the
+    /// whole walk and missed the query fan-in's Initial budget (production: <c>QueryProviderStalledException</c>
+    /// on <c>path:Hosting/PlatformBuilds</c>, Doc/Architecture/QueryFanInStallTerminal). With the bound
+    /// a walk holds at most a handful of queue positions, and another query's read waits behind those,
+    /// never behind the walk's whole remainder. The total work is unchanged — this is fairness, not
+    /// headroom; it is NOT a pool cap and raising it is not a fix for anything.</para>
+    /// </summary>
+    private const int WalkConcurrency = 4;
+
+    /// <summary>
+    /// Runs <paramref name="leaf"/> over <paramref name="items"/> with at most
+    /// <see cref="WalkConcurrency"/> leaves subscribed at a time — a chunk at a time, the chunks
+    /// joined by an ENUMERABLE <c>Concat</c>.
+    ///
+    /// <para>🚨 Deliberately NOT <c>Select(leaf).Merge(maxConcurrent)</c>: Rx's bounded Merge
+    /// subscribes the next queued inner from inside the previous inner's <c>OnCompleted</c>, so a run of
+    /// SYNCHRONOUSLY completing leaves queued behind asynchronous ones recurses once per leaf and
+    /// overflows the stack (measured: Rx 7, 4 delayed + 200,000 synchronous inners → "Stack overflow").
+    /// A cached or in-memory adapter answers synchronously, so that shape is real. The enumerable
+    /// <c>Concat</c> is tail-recursive (trampolined), and each chunk's <c>Merge</c> is over at most
+    /// <see cref="WalkConcurrency"/> leaves.</para>
+    /// </summary>
+    private static IObservable<TResult> Bounded<TSource, TResult>(
+        IEnumerable<TSource> items, Func<TSource, IObservable<TResult>> leaf)
+        => items
+            .Chunk(WalkConcurrency)
+            .Select(chunk => chunk.Select(item => Observable.Defer(() => leaf(item))).Merge())
+            .Concat();
+
     private IObservable<string> WalkLevel(string? parent, bool recursive, ReadCompleteness? completeness)
+        => WalkFrontier([parent], recursive, completeness);
+
+    /// <summary>
+    /// One breadth-first level: lists every parent of <paramref name="frontier"/> (bounded — see
+    /// <see cref="WalkConcurrency"/>), emits the node paths found, and — when
+    /// <paramref name="recursive"/> — walks the next level (those nodes plus the node-less
+    /// directories). The emission order is level order; every consumer either materialises the walk
+    /// or orders its result afterwards (see <see cref="RunQueryNodes"/>'s <c>PathTiebreak</c>).
+    /// </summary>
+    private IObservable<string> WalkFrontier(
+        IReadOnlyList<string?> frontier, bool recursive, ReadCompleteness? completeness)
+        => Bounded(frontier, parent => ListLevel(parent, recursive, completeness))
+            .ToList()
+            .SelectMany(levels =>
+            {
+                var nodePaths = levels.SelectMany(l => l.NodePaths).ToList();
+                var emitted = nodePaths.ToInlineObservable();
+                if (!recursive)
+                    return emitted;
+                var next = nodePaths
+                    .Concat(levels.SelectMany(l => l.DirectoryPaths))
+                    .Select(p => (string?)p)
+                    .ToList();
+                return next.Count == 0
+                    ? emitted
+                    : emitted.Concat(WalkFrontier(next, recursive: true, completeness));
+            });
+
+    /// <summary>
+    /// One <see cref="IStorageAdapter.ListChildPaths"/> call of the walk, with its own catch: a
+    /// failed listing drops that parent's subtree (recorded on <paramref name="completeness"/>), a
+    /// teardown cancellation propagates so the walk stops (see <see cref="IsTeardownCancellation"/>).
+    /// </summary>
+    private IObservable<(IReadOnlyList<string> NodePaths, IReadOnlyList<string> DirectoryPaths)> ListLevel(
+        string? parent, bool recursive, ReadCompleteness? completeness)
         => Observable.Defer(() =>
             {
                 try
@@ -1014,26 +1096,18 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 parent ?? "(null)", recursive,
                 string.Join(",", level.Item1 ?? Enumerable.Empty<string>()),
                 string.Join(",", level.Item2 ?? Enumerable.Empty<string>())))
-            .SelectMany(level =>
-            {
-                var nodePaths = (level.Item1 ?? Enumerable.Empty<string>()).ToInlineObservable();
-                if (!recursive)
-                    return nodePaths;
-                var nodesAndDeeper = nodePaths.SelectMany(p =>
-                    Observable.Return(p).Concat(WalkLevel(p, recursive: true, completeness)));
-                var dirs = (level.Item2 ?? Enumerable.Empty<string>()).ToInlineObservable()
-                    .SelectMany(d => WalkLevel(d, recursive: true, completeness));
-                return nodesAndDeeper.Concat(dirs);
-            })
-            .Catch<string, Exception>(ex =>
+            .Select(level => (
+                NodePaths: (IReadOnlyList<string>)(level.Item1 ?? Enumerable.Empty<string>()).ToList(),
+                DirectoryPaths: (IReadOnlyList<string>)(level.Item2 ?? Enumerable.Empty<string>()).ToList()))
+            .Catch<(IReadOnlyList<string> NodePaths, IReadOnlyList<string> DirectoryPaths), Exception>(ex =>
             {
                 // A drained pool cancels the listing exactly like a read — propagate so the walk
                 // stops at this level instead of continuing over dead siblings (see IsTeardownCancellation).
                 if (IsTeardownCancellation(ex))
-                    return Observable.Throw<string>(ex);
+                    return Observable.Throw<(IReadOnlyList<string>, IReadOnlyList<string>)>(ex);
                 completeness?.RecordDroppedRead();
                 logger?.LogWarning(ex, "[StorageAdapterMeshQueryProvider.WalkLevel] parent={Parent} failed", parent);
-                return Observable.Empty<string>();
+                return Observable.Empty<(IReadOnlyList<string>, IReadOnlyList<string>)>();
             });
 
     /// <summary>
@@ -1097,6 +1171,29 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// validators in the Concat queue never subscribe — same semantics as the
     /// old loop's early <c>return false</c>).
     /// </summary>
+    /// <summary>
+    /// Whether the SECURED read of <paramref name="request"/> returns exactly what the raw read
+    /// returns, on every run of it: the request is stamped as <see cref="WellKnownUsers.System"/>
+    /// (so every re-run resolves the same viewer — <see cref="QueryIdentityResolver"/> honours an
+    /// explicit request identity before any ambient one), and every validator that judges a Read
+    /// declares that it admits System unconditionally (<see cref="ISystemReadTransparentNodeValidator"/>).
+    /// A Read validator without that declaration answers false, which keeps today's re-read.
+    /// </summary>
+    private bool SecuredReadIsTheRawRead(MeshQueryRequest request)
+    {
+        if (!string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal))
+            return false;
+        if (nodeValidators == null)
+            return true;
+        // Resolved here, at subscribe time, for the same reason ValidateRead resolves per row: a
+        // constructor-time resolution would re-enter SecurityService (see the field's comment).
+        return nodeValidators
+            .Select(lv => lv.Value)
+            .Where(v => v.SupportedOperations.Count == 0
+                     || v.SupportedOperations.Contains(NodeOperation.Read))
+            .All(v => v is ISystemReadTransparentNodeValidator);
+    }
+
     private IObservable<bool> ValidateRead(MeshNode node, string userId)
     {
         if (nodeValidators == null)
@@ -1492,7 +1589,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // types both lie outside a query's required types cannot move its result, so it does
             // not trigger one. RAW surface only: a secured result also moves with grants, and a
             // grant is exactly a node of another type (see NodeTypeChangeRelevance).
-            var relevantNodeTypes = useSecurityFilter
+            //
+            // 🚨 …UNLESS the secured read is the raw read. One that runs as SYSTEM, in a mesh whose
+            // every Read validator admits System unconditionally, is filtered by nothing: no grant
+            // can move its result, so the type test is exact for it too. That is the shape of every
+            // mesh-wide catalog the platform keeps open for the life of the mesh — the UiContribution
+            // menu catalog, the NodeType catalogs, the package index, all read as System — and with
+            // three of them re-walking the WHOLE mesh on every write, one write cost ~1 s at the end
+            // of a node-repo gate's install and the gate ran past its 45-minute cap
+            // (Doc/Architecture/LiveQueryRequeryCost, "The secured surface").
+            var relevantNodeTypes = (useSecurityFilter && !SecuredReadIsTheRawRead(request))
                 || scopeFilters.Any(sf => sf.Scope == QueryScope.NextLevel)
                     ? null
                     : NodeTypeChangeRelevance.RequiredNodeTypes(effectiveQueries.Select(q => _parser.Parse(q)));

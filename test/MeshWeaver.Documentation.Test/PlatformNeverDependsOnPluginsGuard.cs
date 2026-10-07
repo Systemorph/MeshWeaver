@@ -62,8 +62,10 @@ public class PlatformNeverDependsOnPluginsGuard
         ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
         [
             new KeyValuePair<string, string>("main-cd.yml",
-                "publishes portal-ai + memex-migration from plugins-repo/src, keys the image set on the "
-                + "core/plugins PAIR (#2622), packs+bakes the Plugins module bundles for that identity, "
+                "publishes portal-ai + memex-migration + memex-control from plugins-repo/src (the portal "
+                + "HOST lives there) and keys the image set on the core/host PAIR (#2622). It packs, bakes "
+                + "and seals NO module (policy platform-module-deploy-separate: modules publish on their own "
+                + "lanes; `published-modules` only READS the sealed publication from the portals' storage), "
                 + "and — since 2026-09-12, the counterweight to the satellites' once-a-day rebuild — "
                 + "points the reusable compile gate at each satellite's main in `satellite-compat`. "
                 + "This guard's hazard (commit c88cd5d5c, 2026-09-01) is an edge by which 'core's own "
@@ -104,13 +106,6 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "against this candidate — a fact about the candidate, never Plugins source. Under "
                 + "policy `core-merge-never-blocked` it is ADVISORY: no required "
                 + "context reads it, so a sibling's state reports on a core PR and blocks nothing"),
-            new KeyValuePair<string, string>("main-cd.yml",
-                "`arm` (policy `one-promotion-gate`) reads the dependent-suites verdict "
-                + "MeshWeaver.Plugins writes at refs/core-candidate/pair-<core7>-p<plugins7> for a "
-                + "PROMOTED set, and arms the fleet (the portal's version tag, the line pointers, the "
-                + "release event) only for a green one. It is on no pull request and holds no platform "
-                + "delivery leg: promote, verify, the platform bake and delivery-verdict never need it "
-                + "(PlatformDeliveryNeverWaitsOnPluginsGuard). A read token, no checkout, no dispatch"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),

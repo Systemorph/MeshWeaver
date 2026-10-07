@@ -1964,7 +1964,86 @@ if [ "$_ki_rc" -ne 0 ] && printf '%s' "$_ki_out" | grep -q 'no image to deploy' 
 else
   bad "nothing running and no portal.image is refused before helm" "rc=${_ki_rc} out: ${_ki_out} log: $(cat "$_ki_log")"
 fi
+# 🚨 The migration image is paired by REGISTRY PATH, never by substituting `memex-portal-ai`. Measured
+# on control 2026-10-06 06:05Z: running `…/memex-control:3.0.0-ci.10043`, the substitution was a no-op,
+# helm revision 4 rendered the migration Job to run the PORTAL (Job memex-migration-4 Failed), and
+# every later Roll refused in hosting-migrate. A repository other than memex-portal-ai keeps the
+# running image and pairs `memex-migration` beside it — never the portal image as the migration.
+printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n  imagePullSecret: "registry-pull"\n' > "$_ki_vals"
+printf '%s' "cr.example.test/memex-control:3.0.0-ci.10043" > "$_ki_dir/running-image"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+_ki_up="$(grep '^helm upgrade' "$_ki_log" | head -1)"
+if [ "$_ki_rc" -eq 0 ] && printf '%s' "$_ki_up" | grep -q -- "--set portal.image=cr.example.test/memex-control:3.0.0-ci.10043" \
+   && printf '%s' "$_ki_up" | grep -q -- "--set migration.image=cr.example.test/memex-migration:3.0.0-ci.10043" \
+   && ! printf '%s' "$_ki_up" | grep -q -- "--set migration.image=cr.example.test/memex-control"; then
+  ok "a non-memex-portal-ai portal (memex-control) pairs memex-migration at its tag — never the portal image as the migration"
+else
+  bad "memex-control pairs memex-migration, not itself" "rc=${_ki_rc} upgrade: '${_ki_up}' out: ${_ki_out}"
+fi
+# A digest-pinned running image has no tag to pair: refused before helm, never a guessed migration.
+printf '%s' "cr.example.test/memex-control@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" > "$_ki_dir/running-image"; : > "$_ki_log"
+_ki_out="$(_ki_run)"; _ki_rc=$?
+if [ "$_ki_rc" -ne 0 ] && printf '%s' "$_ki_out" | grep -q 'cannot pair a memex-migration image' && ! grep -q '^helm upgrade' "$_ki_log"; then
+  ok "a running image with no tag to pair is refused before helm"
+else
+  bad "a digest-pinned running image is refused before helm" "rc=${_ki_rc} out: ${_ki_out} log: $(cat "$_ki_log")"
+fi
 rm -rf "$_ki_dir"
+
+# ── hosting-deploy wires the portal's workload identity from the identity it federates to ───────
+# 🚨 Systemorph/MeshWeaver.Plugins#2994, measured on control.systemorph.com 2026-10-06/07: every
+# self-update check failed `CredentialUnavailableException … WorkloadIdentityCredential
+# authentication unavailable`. hosting-federate had bound the namespace's ServiceAccount to
+# $AZ_PORTAL_IDENTITY, but nothing set selfUpdate.azureClientId — the ONE value the chart turns into
+# the SA annotation, the pod label and AZURE_CLIENT_ID — because the record carries the identity's
+# name, never its client id. These cases pin: the id is READ from that identity and --set on BOTH the
+# adoption render and the upgrade; no identity named → none set, said by name; an unreadable
+# identity (absent OR refused) is a refusal before helm, never a release without the credential.
+echo
+echo "── hosting-deploy: wires the portal's workload identity (Plugins#2994) ──"
+_wi_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_wi_dir/"; _wi_log="$_wi_dir/calls.log"; : > "$_wi_log"
+mkdir -p "$_wi_dir/identity"; printf '11111111-2222-3333-4444-555555555555\n' > "$_wi_dir/identity/memexaks-portal-mi"
+_wi_vals="$_wi_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 2\n' > "$_wi_vals"
+_wi_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_wi_dir" HOSTING_DEPLOY_STUB_LOG="$_wi_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_wi_vals" --image cr.example.test/memex-control:1 2>&1; }
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"; _wi_tp="$(grep '^helm template' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && grep -q '^az identity show -g memex-aks-rg -n memexaks-portal-mi --query clientId -o tsv$' "$_wi_log" \
+   && printf '%s' "$_wi_up" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_tp" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=11111111-2222-3333-4444-555555555555'; then
+  ok "the client id is read from \$AZ_PORTAL_IDENTITY and --set as selfUpdate.azureClientId on the render AND the upgrade"
+else
+  bad "the portal identity's client id reaches selfUpdate.azureClientId" "rc=${_wi_rc} upgrade: '${_wi_up}' log: $(cat "$_wi_log") out: ${_wi_out}"
+fi
+# NEGATIVE CONTROL: no identity named → nothing set, nothing read, and the absence is SAID.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY= )"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && [ -n "$_wi_up" ] && ! printf '%s' "$_wi_up" | grep -q -- 'selfUpdate.azureClientId' \
+   && ! grep -q '^az identity' "$_wi_log" && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=none'; then
+  ok "no AZ_PORTAL_IDENTITY → no azureClientId set, no identity read, and portal_identity=none is said"
+else
+  bad "no identity named sets nothing and says so" "rc=${_wi_rc} upgrade: '${_wi_up}' out: ${_wi_out}"
+fi
+# An identity that does not exist is a refusal BEFORE helm — never a release with no credential.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=no-such-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'could not read the client id of the portal identity no-such-mi' \
+   && ! grep -q '^helm ' "$_wi_log"; then
+  ok "an unreadable portal identity is refused before helm, naming it"
+else
+  bad "an unreadable portal identity is refused before helm" "rc=${_wi_rc} out: ${_wi_out} log: $(cat "$_wi_log")"
+fi
+# A REFUSED read says refused — it ruled nothing out.
+: > "$_wi_log"; : > "$_wi_dir/identity/memexaks-portal-mi.forbidden"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'REFUSED, not absent' && ! grep -q '^helm ' "$_wi_log"; then
+  ok "a refused identity read is reported as REFUSED, not absent, before helm"
+else
+  bad "a refused identity read is reported as refused" "rc=${_wi_rc} out: ${_wi_out}"
+fi
+rm -rf "$_wi_dir"
 
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`
@@ -2417,6 +2496,33 @@ if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'renders no migration
   ok "a release with no migration Job is a refusal — the image must not move without one"
 else
   bad "a release with no migration Job refuses" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+
+# 🚨 a release whose migration.image was written as the PORTAL image (control, helm revision 4,
+# 2026-10-06): the chart's NAMED migration containers move to the target, wait-for-postgres does not,
+# and the Roll migrates instead of refusing "nothing to retarget" forever.
+_mg_new; jq '(.items[] | select(.kind=="Job") | .spec.template.spec | .containers[0].image, .initContainers[1].image) = "cr.example.test/memex-control:3.0.0-ci.10043"' \
+  "$MG_FIXTURES/rendered.json" > "$_mg_dir/rendered.json"; echo succeeded > "$_mg_dir/outcome"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+_mg_c="$_mg_dir/created.json"
+if [ "$_mg_rc" -eq 0 ] && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed' && [ -f "$_mg_c" ] \
+   && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_c")" = "$_mg_img" ] \
+   && [ "$(jq -r '.spec.template.spec.initContainers[] | select(.name=="memex-migration-rehearsal") | .image' "$_mg_c")" = "$_mg_img" ] \
+   && [ "$(jq -r '.spec.template.spec.initContainers[] | select(.name=="wait-for-postgres") | .image' "$_mg_c")" = "busybox:1.36" ]; then
+  ok "a release whose migration Job runs the PORTAL image is healed: the named migration containers move to the target"
+else
+  bad "a portal-image migration Job is retargeted by container name" "rc=${_mg_rc} out: ${_mg_out} created: $(cat "$_mg_c" 2>/dev/null)"
+fi
+rm -rf "$_mg_dir"
+# …but a Job with neither a memex-migration image NOR the chart's migration container names still refuses.
+_mg_new; jq '(.items[] | select(.kind=="Job") | .spec.template.spec) |= (.containers[0].name = "something-else" | .containers[0].image = "cr.example.test/memex-control:1" | .initContainers |= map(select(.name != "memex-migration-rehearsal")))' \
+  "$MG_FIXTURES/rendered.json" > "$_mg_dir/rendered.json"
+_mg_out="$(_mg_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'nothing to retarget' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "a Job with no migration container (by image or by name) still refuses — nothing else runs as the migration"
+else
+  bad "a Job with no migration container refuses" "rc=${_mg_rc} out: ${_mg_out}"
 fi
 rm -rf "$_mg_dir"
 

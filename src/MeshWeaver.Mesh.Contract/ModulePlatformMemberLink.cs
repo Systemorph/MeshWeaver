@@ -6,17 +6,19 @@ namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// What <see cref="ModulePlatformLink"/> measures BEYOND its type and version halves, and over
-/// which assemblies. The default (<see cref="TypesOnly"/>) is what every runtime call site uses —
-/// the boot probe, the landing, prebuilt adoption and the roll gate — and is byte-for-byte the
-/// verdict those sites always received.
+/// which assemblies. <see cref="TypesOnly"/> is the default of the option-less overloads and what
+/// the roll gate and prebuilt adoption use; boot, the landing and the live swap measure against
+/// this process's own files and pass <see cref="WithMembers"/> (MeshWeaver#6007).
 /// </summary>
 public sealed record ModuleLinkOptions
 {
-    /// <summary>The runtime default: types and assembly versions, no member walk.</summary>
+    /// <summary>Types and assembly versions, no member walk — the option-less default, and the only
+    /// setting a PUBLISHED surface document can answer.</summary>
     public static ModuleLinkOptions TypesOnly { get; } = new();
 
-    /// <summary>The static compatibility gate's setting: every member reference into a platform
-    /// assembly is resolved by NAME and SIGNATURE as well.</summary>
+    /// <summary>Every member reference into a platform assembly is resolved by NAME and SIGNATURE as
+    /// well — the static compatibility gate's setting, and the runtime one wherever the surface is
+    /// file-backed (boot, landing, live swap).</summary>
     public static ModuleLinkOptions WithMembers { get; } = new() { CheckMembers = true };
 
     /// <summary>
@@ -262,6 +264,10 @@ public static partial class ModulePlatformLink
                 case HandleKind.TypeDefinition:
                     yield return (reader, (TypeDefinitionHandle)supertype);
                     break;
+                case HandleKind.TypeSpecification when GenericDefinitionOf(reader, supertype) is { } localGeneric:
+                    // A generic supertype defined in this same assembly (see PlatformBasesOf).
+                    yield return (reader, localGeneric);
+                    break;
                 case HandleKind.TypeReference:
                 case HandleKind.TypeSpecification:
                     if (ParentTypeReference(reader, supertype) is not { } referenceHandle)
@@ -343,6 +349,17 @@ public static partial class ModulePlatformLink
                 TypeDefinitionHandle next;
                 if (baseType.Kind == HandleKind.TypeDefinition)
                     next = (TypeDefinitionHandle)baseType;
+                // 🚨 A generic base DEFINED IN THE ASSEMBLY BEING WALKED. `TextFieldView :
+                // InputBase<…>` reaches MeshWeaver.Blazor's InputBase`3 through a TypeRef, but
+                // InputBase`3 : FormComponentBase`3<…> : … : BlazorView`2 are generic bases defined
+                // in MeshWeaver.Blazor itself — TypeSpecs whose generic type is a TypeDefinition of
+                // that same reader, for which ParentTypeReference answers null. That ended the walk
+                // and dropped every platform class above it, so every protected BlazorView`2 member
+                // such a view calls read as "no longer accessible". Measured on image
+                // 3.0.0-ci.9984: the image's OWN MeshWeaver.Blazor.EntityViews (built with that very
+                // MeshWeaver.Blazor) was refused for 8 of its 265 member references.
+                else if (GenericDefinitionOf(reader, baseType) is { } localGeneric)
+                    next = localGeneric;
                 else if (ParentTypeReference(reader, baseType) is { } referenceHandle
                          && reader.GetTypeReference(referenceHandle) is var reference
                          && ResolveScope(reader, reference) is { } scope
@@ -358,6 +375,21 @@ public static partial class ModulePlatformLink
             }
         }
         return bases;
+    }
+
+    /// <summary>The generic type definition of a <c>GenericTypeInstance</c> TypeSpec when that
+    /// definition lives in <paramref name="metadata"/> itself; null for anything else (a TypeRef
+    /// generic is <see cref="ParentTypeReference"/>'s case).</summary>
+    private static TypeDefinitionHandle? GenericDefinitionOf(MetadataReader metadata, EntityHandle handle)
+    {
+        if (handle.Kind != HandleKind.TypeSpecification)
+            return null;
+        var blob = metadata.GetBlobReader(metadata.GetTypeSpecification((TypeSpecificationHandle)handle).Signature);
+        if (blob.ReadSignatureTypeCode() != SignatureTypeCode.GenericTypeInstance)
+            return null;
+        _ = blob.ReadCompressedInteger(); // CLASS or VALUETYPE
+        var generic = blob.ReadTypeHandle();
+        return generic.Kind == HandleKind.TypeDefinition ? (TypeDefinitionHandle)generic : null;
     }
 
     /// <summary>Whether a platform type is visible to the plugin: public (nested: public or

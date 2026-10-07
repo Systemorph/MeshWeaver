@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -51,6 +52,7 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private volatile string? unreadableExistingRoot;
     /// <summary>Any path carrying this segment marker faults with a transient CONNECT timeout.</summary>
     private const string Unreachable = "unreachable-";
 
@@ -99,7 +101,9 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
     /// <c>ResolvePath</c> and <c>ListDescendantPaths</c>, or the behaviour they carry is silently
     /// lost at the outermost decorator that falls back to the interface default.</para>
     /// </summary>
-    private sealed class PathFaultingStorageAdapter(IStorageAdapter inner, Func<string, Exception?> faultFor)
+    private sealed class PathFaultingStorageAdapter(
+        IStorageAdapter inner, Func<string, Exception?> faultFor,
+        Func<string, Exception?> readFaultFor)
         : IStorageAdapter
     {
         private static IObservable<T> Fault<T>(Exception ex) => Observable.Throw<T>(ex);
@@ -107,7 +111,9 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
         public IObservable<DataChangeNotification> Changes => inner.Changes;
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => faultFor(path) is { } ex ? Fault<MeshNode?>(ex) : inner.Read(path, options);
+            => (readFaultFor(path) ?? faultFor(path)) is { } ex
+                ? Fault<MeshNode?>(ex)
+                : inner.Read(path, options);
 
         public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
             => paths.Select(faultFor).FirstOrDefault(e => e is not null) is { } ex
@@ -179,7 +185,11 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
             var registered = services.Last(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService);
             services.Remove(registered);
             return services.AddSingleton<IStorageAdapter>(sp =>
-                new PathFaultingStorageAdapter(Materialise(registered, sp), FaultFor));
+                new PathFaultingStorageAdapter(
+                    Materialise(registered, sp), FaultFor,
+                    path => string.Equals(path, unreadableExistingRoot, StringComparison.Ordinal)
+                        ? ConnectTimeout()
+                        : null));
         });
 
     private static IStorageAdapter Materialise(ServiceDescriptor descriptor, IServiceProvider sp)
@@ -318,6 +328,54 @@ public class CreateWhenTheStoreIsUnreachableTest(ITestOutputHelper output) : Mon
             $"the faulting adapter only fails the marked paths — {response.Error}");
         (await ReadNode(PathOf(id)).FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken))
             .Should().NotBeNull("the create landed and must be readable back");
+    }
+
+    /// <summary>
+    /// A failed read of an EXISTING partition root cannot be turned into "root absent". That
+    /// guess makes the bootstrap issue a second create for the root and masks the read fault
+    /// behind that nested create's error. That root-create boundary is the one the release
+    /// incidents #6055/#6056 reported.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AnUnreadableExistingPartitionRoot_DoesNotTriggerAFalseHeal()
+    {
+        var partition = "readfaultroot" + Guid.NewGuid().ToString("N")[..8];
+        var root = new MeshNode(partition)
+        {
+            Name = partition,
+            NodeType = SpaceNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = new Space(),
+        };
+        (await Create(root, TestContext.Current.CancellationToken)).Success.Should().BeTrue(
+            "the root must exist before its read is made unreachable");
+
+        var child = new MeshNode("release", partition)
+        {
+            Name = "release",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+            Content = new MarkdownContent { Content = "# Release" },
+        };
+        unreadableExistingRoot = partition;
+        try
+        {
+            var response = await Create(child, TestContext.Current.CancellationToken);
+
+            response.Success.Should().BeFalse(
+                "a failed root read proves neither presence nor absence, so no repair may start");
+            response.RejectionReason.Should().Be(NodeCreationRejectionReason.Unavailable,
+                "the root read never reached the store; the same child id can be retried");
+            response.Error.Should().Contain("Nothing was written");
+        }
+        finally
+        {
+            unreadableExistingRoot = null;
+        }
+
+        (await Create(child, TestContext.Current.CancellationToken)).Success.Should().BeTrue(
+            "the unavailable answer left the child id unused, so the same request can succeed "
+            + "when its root is readable again");
     }
 
     /// <summary>

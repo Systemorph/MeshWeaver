@@ -12,6 +12,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -98,6 +99,104 @@ public class LiveQueryIgnoresOtherNodeTypesTest
                 Options)
             .Subscribe(changes);
         return (changes, subscription);
+    }
+
+    /// <summary>A Read validator that admits everything and DECLARES it admits System unconditionally.</summary>
+    private sealed class TransparentReadValidator : INodeValidator, ISystemReadTransparentNodeValidator
+    {
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+            => Observable.Return(NodeValidationResult.Valid());
+    }
+
+    /// <summary>The same verdicts WITHOUT the declaration — the provider may assume nothing.</summary>
+    private sealed class UndeclaredReadValidator : INodeValidator
+    {
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+            => Observable.Return(NodeValidationResult.Valid());
+    }
+
+    /// <summary>Opens the SECURED live query (the <c>IMeshQueryProvider</c> surface) as <paramref name="viewer"/>.</summary>
+    private static (ReplaySubject<QueryResultChange<MeshNode>> Changes, IDisposable Subscription) OpenSecured(
+        StorageAdapterMeshQueryProvider provider, string viewer)
+    {
+        var changes = new ReplaySubject<QueryResultChange<MeshNode>>();
+        var subscription = ((IMeshQueryProvider)provider)
+            .Query<MeshNode>(
+                MeshQueryRequest.FromQueries(
+                    [$"path:{Base} scope:descendants nodeType:{Watched} select:path,id,namespace,name,nodeType,content"],
+                    viewer),
+                Options)
+            .Subscribe(changes);
+        return (changes, subscription);
+    }
+
+    private static StorageAdapterMeshQueryProvider SecuredProvider(IStorageAdapter adapter, INodeValidator validator)
+        => new(adapter, nodeValidators: [new Lazy<INodeValidator>(() => validator)]);
+
+    /// <summary>
+    /// 🚨 THE SECURED-SURFACE REGRESSION (the node-repo gate's 45-minute cut). A secured live query
+    /// answered as SYSTEM, in a mesh whose Read validators all admit System unconditionally, IS the
+    /// raw read — so a write of another type costs it no walk either. The mesh-wide catalogs the
+    /// platform keeps open for the life of a mesh (UiContribution, NodeType, the package index) have
+    /// exactly this shape, and before the fix each one re-walked the whole mesh on every write.
+    /// </summary>
+    [Fact]
+    public async Task ASystemSecuredQuery_SkipsWritesOfAnotherNodeType()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var adapter = new CountingAdapter(new InMemoryStorageAdapter());
+        var provider = SecuredProvider(adapter, new TransparentReadValidator());
+        var (changes, subscription) = OpenSecured(provider, WellKnownUsers.System);
+        using var _ = subscription;
+        await changes.Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Should().Within(TestTimeouts.Convergence).Emit("Initial", cancellationToken: ct);
+        var afterInitial = adapter.Walks;
+
+        for (var i = 0; i < UnrelatedWrites; i++)
+            await Write(adapter, Node($"doc{i:D2}", Other))
+                .Should().Within(TestTimeouts.Convergence).Emit($"write doc{i:D2}", cancellationToken: ct);
+
+        adapter.Walks.Should().Be(afterInitial,
+            "a System read in a mesh of System-transparent validators is filtered by nothing, so a write of "
+            + $"'{Other}' cannot move a '{Watched}' result and must not re-read the scope");
+
+        await Write(adapter, Node("hit", Watched))
+            .Should().Within(TestTimeouts.Convergence).Emit("write hit", cancellationToken: ct);
+        await Carrying(changes, QueryChangeType.Added, "hit")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a write of the watched type must still reach the secured System query", cancellationToken: ct);
+        adapter.Walks.Should().Be(afterInitial + 1, "the one relevant write costs exactly one re-read");
+    }
+
+    /// <summary>
+    /// The two shapes that must KEEP re-reading on every write under the scope: a secured query for
+    /// a real viewer (a grant — a node of another type — can make other rows visible to it), and a
+    /// System query in a mesh with a Read validator that never declared it admits System
+    /// unconditionally.
+    /// </summary>
+    [Theory]
+    [InlineData("alice", true)]
+    [InlineData(WellKnownUsers.System, false)]
+    public async Task ASecuredQueryTheRuleCannotProve_StillReReadsOnAForeignWrite(string viewer, bool declared)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var adapter = new CountingAdapter(new InMemoryStorageAdapter());
+        INodeValidator validator = declared ? new TransparentReadValidator() : new UndeclaredReadValidator();
+        var provider = SecuredProvider(adapter, validator);
+        var (changes, subscription) = OpenSecured(provider, viewer);
+        using var _ = subscription;
+        await changes.Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Should().Within(TestTimeouts.Convergence).Emit("Initial", cancellationToken: ct);
+        var afterInitial = adapter.Walks;
+
+        await Write(adapter, Node("doc", Other))
+            .Should().Within(TestTimeouts.Convergence).Emit("write doc", cancellationToken: ct);
+
+        adapter.Walks.Should().BeGreaterThan(afterInitial,
+            $"viewer '{viewer}' with a {(declared ? "declared" : "undeclared")} Read validator: nothing proves a "
+            + "foreign write leaves the filtered result unmoved, so it must re-read exactly as it always has");
     }
 
     private static IObservable<QueryResultChange<MeshNode>> Carrying(

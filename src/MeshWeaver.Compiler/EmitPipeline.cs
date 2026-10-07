@@ -270,6 +270,9 @@ public static class EmitPipeline
         IReadOnlyCollection<ResourceDescription> manifestResources, CancellationToken ct,
         Action<CSharpCompilation, Exception>? captureFailure)
     {
+        // #5212 leg 6: the process's first reading of the compiler image, taken BEFORE any emit can
+        // fail, so a later canary can say whether the image or its mapping changed since.
+        RoslynImageIntegrity.EnsureBaseline();
         var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
         var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
         var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
@@ -534,12 +537,19 @@ public static class EmitPipeline
         // shared Microsoft.CodeAnalysis*, so none of them can separate "the process cannot emit"
         // from "the shared copy of Roslyn cannot emit"; this one can, and it is the reading the
         // BELOW-ROSLYN verdict has been missing on every occurrence.
+        // Leg 6 (#5212) — the IMAGE leg: does the shared copy's image and its mapping still read as
+        // at the first compile? Leg 5 left image, mapping and native code open; this splits the
+        // first two from the third. Plus the host the JIT generated code for, which no earlier
+        // occurrence recorded. Appended, never folded into the verdict word: the existing
+        // classifiers (IsProcessEmitFailure) key on the prefix and must not move.
         return Verdict(
             shared,
             EmitCanary(() => pristineRefs),
             () => DissectTheNull(() => faulted.References),
             () => EmitCanary(() => faulted.References, FlatCanarySource),
-            () => PrivateRoslynCopy.Emit(EmitCanarySource));
+            () => PrivateRoslynCopy.Emit(EmitCanarySource))
+            + " " + RoslynImageIntegrity.Reading()
+            + " " + RoslynImageIntegrity.Host();
     }
 
     /// <summary>
@@ -551,6 +561,102 @@ public static class EmitPipeline
     internal static string EmitCanaryForTest(
         IReadOnlyList<MetadataReference> references, string source = EmitCanarySource)
         => EmitCanary(() => references, source);
+
+    /// <summary>
+    /// The canary for #5212's SECOND shape, which every leg above is blind to by construction: the
+    /// emit RETURNS an image, the publisher proves the file on disk is that image, and only the
+    /// first <c>Assembly.GetTypes()</c> fails — <i>"Could not load type 'X' … because the format is
+    /// invalid"</i>, for every type of the assembly, and for every compile after it in the process.
+    /// <see cref="ProbeSharedEmitState"/> runs only when <c>Emit</c> THROWS, so on run
+    /// 37535577344 (96 such lines, the same failing tests as an occurrence that DID throw) it never
+    /// ran and the failures read as content faults in nine unrelated NodeTypes.
+    ///
+    /// <para>It emits the nested-generic canary through the SHARED compiler against the pristine
+    /// image-backed CoreLib, loads it from bytes into a throw-away collectible context and realises
+    /// its types — the exact step that failed. <c>loadcanary=LOADS</c> ⇒ this process still
+    /// produces loadable nested images, so the invalid one is specific to its own compilation;
+    /// <c>loadcanary=INVALID-IMAGE</c> ⇒ the shared compiler is writing invalid metadata for a
+    /// trivial known-good source: the same process-level fault as <c>PROCESS CANNOT EMIT</c>,
+    /// exiting through the loader instead of through <c>Emit</c>. The image and host legs are
+    /// appended either way. Never throws; runs only on the already-failing load path.</para>
+    /// </summary>
+    /// <returns>A one-line verdict, safe to append to a log message.</returns>
+    internal static string ProbeEmittedImageLoads()
+    {
+        // The load verdict is PUBLISHED once per process: INVALID-IMAGE already attributes every
+        // later load failure to itself, and one poisoned process produced 96 such failures. Two
+        // concurrent first callers may each run the canary and the loser's result is discarded —
+        // deliberately: a lock or Lazy would park every concurrent caller (hub threads among them)
+        // for a whole compile + emit + load on an already-failing path. The image and host legs
+        // stay fresh on every call — the image is the reading that can change.
+        if (Volatile.Read(ref loadCanaryVerdict) is null)
+            Interlocked.CompareExchange(ref loadCanaryVerdict, RunLoadCanary(), null);
+        return $"{Volatile.Read(ref loadCanaryVerdict)} {RoslynImageIntegrity.Reading()} {RoslynImageIntegrity.Host()}";
+    }
+
+    /// <summary>The process's one load-canary verdict; written once, never replaced or cleared.</summary>
+    private static string? loadCanaryVerdict;
+
+    /// <summary>Runs the load canary itself, bypassing the once-per-process verdict (test seam).</summary>
+    /// <returns>The <c>loadcanary=</c> token alone.</returns>
+    internal static string RunLoadCanary()
+    {
+        string load;
+        try
+        {
+            var references = TryBuildPristineControl(out var unavailable);
+            if (unavailable is not null)
+                return $"loadcanary=UNAVAILABLE({unavailable})";
+
+            var canary = CSharpCompilation.Create(
+                "MeshWeaverLoadCanary",
+                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
+                references: references,
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using var image = new MemoryStream();
+            var result = canary.Emit(image);
+            if (!result.Success)
+                load = "loadcanary=DIAGNOSTICS(" + string.Join(",", result.Diagnostics
+                    .Where(d => d.Severity == DiagnosticSeverity.Error).Select(d => d.Id).Distinct().Take(5)) + ")";
+            else
+                load = LoadAndRealise(image);
+        }
+        catch (Exception probeError)
+        {
+            load = $"loadcanary=THREW {probeError.GetType().Name} at {ThrowSite(probeError)}: {probeError.Message}";
+        }
+        return load;
+
+        static string LoadAndRealise(MemoryStream image)
+        {
+            var context = new System.Runtime.Loader.AssemblyLoadContext("mw-load-canary", isCollectible: true);
+            try
+            {
+                image.Position = 0;
+                var types = context.LoadFromStream(image).GetTypes();
+                return $"loadcanary=LOADS({types.Length} types) — the shared compiler still writes a loadable "
+                    + "nested-generic image, so the invalid image is specific to that compilation";
+            }
+            catch (Exception invalid) when (invalid is ReflectionTypeLoadException or BadImageFormatException)
+            {
+                // Both are the loader refusing the canary's own image: a type that cannot be realised
+                // (ReflectionTypeLoadException) or an image LoadFromStream rejects outright
+                // (BadImageFormatException). Either way the bytes the shared compiler wrote are invalid.
+                var messages = invalid is ReflectionTypeLoadException rtl
+                    ? rtl.LoaderExceptions.Where(e => e is not null).Select(e => e!.Message).Distinct().Take(3)
+                    : [$"{invalid.GetType().Name}: {invalid.Message}"];
+                return "loadcanary=INVALID-IMAGE("
+                    + string.Join("; ", messages)
+                    + ") — 🚨 the shared compiler wrote an UNLOADABLE image for a trivial known-good source: "
+                    + "this process emits invalid metadata (#5212 shape b, the loader-side exit of #890). "
+                    + "Attribute every later load failure in this process to this line";
+            }
+            finally
+            {
+                context.Unload();
+            }
+        }
+    }
 
     /// <summary>
     /// Builds leg 2's control reference set: CoreLib, and nothing else.

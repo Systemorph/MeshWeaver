@@ -243,16 +243,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// survives as data (<see cref="RegistryResponseException.StatusCode"/>), so the policy can ask
     /// what the server actually said instead of inferring it from a CLR type.</para>
     /// </summary>
-    internal static bool ShouldRetryFeedRead(Exception fault) => fault switch
-    {
-        // A definite answer naming a transient server-side condition (503/429/5xx) — re-ask.
-        RegistryResponseException http => http.IsTransientFailure,
-        // Any other definite answer (401/403/404, a malformed payload) — re-asking cannot help.
-        InvalidOperationException => false,
-        // A transport fault (TCP hiccup, DNS blip, request timeout): the original #1500 case,
-        // where the read never reached an HTTP answer at all.
-        _ => true,
-    };
+    internal static bool ShouldRetryFeedRead(Exception fault) =>
+        // The ONE classifier (MeshWeaver#6172 review): a transient status or transport fault is
+        // re-asked; a decided answer (a non-transient status, a RegistryRefusedException) is not.
+        TransientRegistryFailure.IsTransient(fault);
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -306,6 +300,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // Hop off whatever thread completed the default install before the reconcile chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ => Reconcile(options))
+            .SelectMany(_ => RetryFaultedReloads(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread — the chain is synchronous
             // up to its first genuinely-async leaf, so subscribing inline would run it ON the
             // startup thread and re-enter the hub schedulers mid-init. Same fix, same reason, as
@@ -592,7 +587,63 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 .Concat()
                 .DefaultIfEmpty(Unit.Default)
                 .LastAsync())
+            .SelectMany(_ => RetryFaultedReloads(options))
             .Repeat();
+    }
+
+    /// <summary>
+    /// ONE full pass against every configured registry, NOW, on the serialized lane — the same work
+    /// a safety-net tick does, for a caller that must not wait half an hour: the test-run preflight
+    /// (<see cref="CatalogTestRunPreflight"/>) converges a mesh before it tests it. Completes when
+    /// the pass has ended; never faults (a registry that cannot be read is logged and skipped, and
+    /// the caller re-reads the records to see what moved).
+    /// </summary>
+    public IObservable<Unit> ReconcileNow()
+    {
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+            .Select(SafetyNetReconcile)
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync()
+            .SelectMany(_ => RetryFaultedReloads(options));
+    }
+
+    /// <summary>
+    /// 🚨 Ends every full reconcile pass (boot, safety net, <see cref="ReconcileNow"/>): re-arms each
+    /// module reload that CRASHED (<see cref="ModuleReloadStatus.Faulted"/>) and whose backoff is due
+    /// (<see cref="ModuleReload.RetryFaulted"/>). The backoff unit IS this pass's cadence — the
+    /// safety-net interval — doubled per attempt, so a retry needs no timer of its own: the pass
+    /// that already runs asks. With the safety net off, the boot pass is the retry. Never faults —
+    /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
+    /// </summary>
+    private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options)
+    {
+        var unit = options.ReconcileSafetyNetInterval > TimeSpan.Zero ? options.ReconcileSafetyNetInterval : TimeSpan.Zero;
+        var now = DateTimeOffset.UtcNow;
+        // A reboot whose restart request CRASHED is re-armed on the same pass, with the same backoff
+        // (InstanceReboot.RetryFaulted) — a transient failure is never final (#6172).
+        return ModuleReload.RetryFaulted(hub, unit, now)
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted module reload(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            .SelectMany(_ => InstanceReboot.RetryFaulted(hub, unit, now))
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[RegistryUpdate] faulted module reloads or reboots could not be re-armed this pass — the next pass asks again");
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>One safety-net pass against one registry: read the feed once, reconcile on the lane.</summary>
@@ -746,6 +797,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 LastReconciledAt = DateTimeOffset.UtcNow,
                 LastReconciledVia = via,
                 UndeliveredModules = undelivered,
+                Served = packages.Select(ServedPackage.Of).ToImmutableList(),
+                TargetPlatform = TargetSet.Platform(packages.Select(ServedPackage.Of)),
             }))
             .Select(_ => Unit.Default);
     }
@@ -1007,7 +1060,8 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// same policy in <see cref="PackageUpdateReconciler"/>, so a package never lands one half
     /// without the other — which is also why the CONTENT half's ownership hold (#4355,
     /// <see cref="PartitionContentOwnership"/>) rides this lane's own decline seam; see
-    /// <see cref="OwnershipDecline"/>.</para>
+    /// <c>OwnershipDecline</c> — retired by policy <c>packages-auto-update</c>: the module half no
+    /// longer waits for the partition's sync.</para>
     ///
     /// <para>Sequential, and failure-tolerant per package — one unreachable bundle must not
     /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
@@ -1033,20 +1087,22 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     .Take(1)
                     .SelectMany(record => record is null
                         // Not installed here → somebody else's module; nothing to reconcile.
-                        ? Observable.Return(Unit.Default)
+                        ? Observable.Return<LandedModule?>(null)
                         : AdoptOne(bundles, registryName, pkg.Id, pkg.Module!, recordPath,
                             record.ContentAs<PackageManifest>(hub.JsonSerializerOptions)));
             })
             .ToObservable()
             .Concat()
-            .DefaultIfEmpty(Unit.Default)
-            .LastAsync()
+            .ToList()
             // 🚨 #3395 — the wave ENDS here, and ending it is what moves the mesh's module set.
             // Deliberately outside the per-package Concat: proposing after each module would
             // publish every intermediate combination as a set the next boot could adopt, which is
             // the torn half-landed mix the set exists to make unreachable. A wave that dies before
             // this point proposes nothing, so the mesh keeps running the set it was on.
-            .SelectMany(_ => ProposeMeshModuleSet());
+            .SelectMany(landed => ProposeMeshModuleSet().Select(_ => landed))
+            // 🚨 policy packages-auto-update — and ending it ACTIVATES what it landed, through the
+            // module reload's one activation path (live, else exactly one automatic restart).
+            .SelectMany(ActivateLanded);
     }
 
     /// <summary>
@@ -1081,7 +1137,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                             logger.LogDebug(
                                 "[RegistryUpdate] {Name} published {Package}, which is not installed here — nothing to reconcile.",
                                 name, packageId);
-                            return Observable.Return(Unit.Default);
+                            return Observable.Return<LandedModule?>(null);
                         }
                         var manifest = record.ContentAs<PackageManifest>(hub.JsonSerializerOptions);
                         var module = manifest?.Module;
@@ -1090,13 +1146,116 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                             logger.LogDebug(
                                 "[RegistryUpdate] {Name} published {Package}, whose install record here declares no module — nothing to reconcile.",
                                 name, packageId);
-                            return Observable.Return(Unit.Default);
+                            return Observable.Return<LandedModule?>(null);
                         }
                         return AdoptOne(bundles, name, packageId, module, recordPath, manifest);
                     });
             })
-            // The wave of one: ends the same way every wave ends (#3395).
-            .SelectMany(_ => ProposeMeshModuleSet());
+            // The wave of one: ends the same way every wave ends (#3395) — set, then activation.
+            .SelectMany(landed => ProposeMeshModuleSet().Select(_ => (IList<LandedModule?>)[landed]))
+            .SelectMany(ActivateLanded);
+    }
+
+    /// <summary>
+    /// 🚨 The module half of an EXPLICIT reload (<c>Doc/Architecture/ModuleReload</c>): resolve the
+    /// newest COMPATIBLE version the configured registries publish for <paramref name="packageId"/>,
+    /// land it through the one landing path, and propose the module set — on this service's
+    /// serialised lane, so it never interleaves with a boot, broadcast or safety-net wave.
+    ///
+    /// <para><b>Attended, not unattended.</b> The reload is an authorised request, exactly like a
+    /// Provision click, so the package's own update policy does not decline it
+    /// (<see cref="PluginBundleClient.AdoptModuleOutcome"/> with <c>unattended: false</c>). The
+    /// declared platform FLOOR still holds: a bundle whose <c>minMeshVersion</c> is above the running
+    /// platform is not downloaded, the landed generation keeps serving, and the outcome names the
+    /// floor and the running version (policy <c>package-min-mesh-version</c>). Neither a seal nor a
+    /// green platform build is consulted — compatibility is the floor and the link probe.</para>
+    ///
+    /// <para>Registries are asked in order and the first that SERVES the package answers, the same
+    /// rule <c>ModuleRefresh</c> follows. Never faults: an unreachable registry, a refused bundle and
+    /// a refused module-set proposal each come back as <see cref="ModuleAdoptOutcome.Failure"/>.</para>
+    /// </summary>
+    /// <param name="packageId">The package (<c>Plugins/{packageId}</c>) declaring the module.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    public IObservable<ModuleAdoptOutcome> ReloadModule(string packageId, string moduleName)
+    {
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        var tokenResolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
+        if (tokenResolver is null || registries.Count == 0)
+            return Observable.Return(new ModuleAdoptOutcome
+            {
+                Failure = "this installation reads no plugin registry (PluginCatalog:Registries is empty) — "
+                          + "there is no published version to resolve",
+            });
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{packageId}";
+
+        IObservable<ModuleAdoptOutcome> Ask(PluginRegistryReference registry) =>
+            Observable.Defer(() => tokenResolver.ResolveToken(registry).Take(1)
+                    .SelectMany(token => new PluginBundleClient(hub, registry.Url, token)
+                        .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: false))
+                    .Timeout(PerPackageAdoptBudget))
+                // Per registry, INSIDE the Concat: one registry's failure must not leave the next untried.
+                .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
+                {
+                    Registry = registry.Url,
+                    Failure = $"{DisplayName(registry)} could not be asked: {ex.Message}",
+                    Transient = true,
+                }));
+
+        IObservable<ModuleAdoptOutcome> Resolve() =>
+            registries.Select(Ask).ToObservable().Concat()
+                .Scan(ImmutableList<ModuleAdoptOutcome>.Empty, (seen, outcome) => seen.Add(outcome))
+                .Where(seen => !seen[^1].NotServed || seen.Count == registries.Count)
+                .Take(1)
+                .Select(seen => seen[^1].NotServed
+                    ? seen[^1] with
+                    {
+                        Failure = $"no configured registry publishes a module bundle for '{packageId}' "
+                                  + $"({string.Join(", ", registries.Select(DisplayName))})",
+                    }
+                    : seen[^1]);
+
+        IObservable<ModuleAdoptOutcome> ProposeSet(ModuleAdoptOutcome outcome)
+        {
+            var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+            if (outcome.Failure is not null || landing is null)
+                return Observable.Return(outcome);
+            // 🚨 #3395 — a landing reaches a boot (or a swap) only through the mesh's module set, and
+            // the set is checked against what installed packages require (#6067). A refusal here
+            // means a restart would NOT load the module, so it is the reload's failure, named.
+            return ModuleDependencyFloor.ProposeChecked(hub, landing)
+                .Select(_ => outcome)
+                .DefaultIfEmpty(outcome)
+                .Catch((Exception ex) => Observable.Return(outcome with
+                {
+                    Failure = $"the module set could not be proposed, so neither a swap nor a restart "
+                              + $"would load {moduleName}: {ex.Message}",
+                    Transient = true,
+                }));
+        }
+
+        return Observable.Defer(() =>
+        {
+            // The pass runs on the lane and hands its answer out through this slot; the lane's own
+            // completion (which follows the pass) is what reads it. A pass enqueued during teardown
+            // never runs, and says so instead of leaving the caller waiting.
+            ModuleAdoptOutcome? answer = null;
+            return OnLane(() => Resolve()
+                    .SelectMany(ProposeSet)
+                    .Do(outcome => Volatile.Write(ref answer, outcome))
+                    .Select(_ => Unit.Default))
+                .Select(_ => Volatile.Read(ref answer) ?? new ModuleAdoptOutcome
+                {
+                    Failure = "the reload pass did not run (the reconcile lane is shutting down)",
+                    Transient = true,
+                })
+                .Catch((Exception ex) => Observable.Return(new ModuleAdoptOutcome
+                {
+                    Failure = $"the reload pass faulted: {ex.Message}",
+                    Transient = true,
+                }))
+                .Take(1);
+        });
     }
 
     /// <summary>
@@ -1105,32 +1264,39 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// nor fail the packages after it. Shared by the boot pass and the broadcast drain, so the two
     /// cannot differ in what "adopt" means.
     /// </summary>
-    private IObservable<Unit> AdoptOne(
+    /// <param name="bundles">The registry's bundle client.</param>
+    /// <param name="registryName">For log copy.</param>
+    /// <param name="packageId">The package.</param>
+    /// <param name="moduleName">Its declared module.</param>
+    /// <param name="recordPath">Its install record.</param>
+    /// <param name="record">The install record as read.</param>
+    /// <returns>The module and version that LANDED, or null when nothing did.</returns>
+    private IObservable<LandedModule?> AdoptOne(
         PluginBundleClient bundles, string registryName, string packageId, string moduleName, string recordPath,
         PackageManifest? record) =>
-        // 🚨 #4355 — THE MODULE HALF TAKES THE SAME HOLD AS THE CONTENT HALF. The policy gate above
-        // exists so "a package never lands one half without the other"; the ownership gate that
-        // holds the CONTENT apply (PackageUpdateReconciler) would break exactly that promise if it
-        // stopped there — the partition's synced content would stay on the sealed tree while this
-        // lane advanced the package's compiled module, which is the same sources-and-bundle split
-        // MeshWeaver.Plugins#1430 removed, one level over. So the hold rides the SAME
-        // `policyDecline` seam, in the ONE place both unattended module lanes share (the boot pass
-        // and the broadcast drain), and the package's own policy still speaks first: a Notify/None
-        // record declines for that reason, which is the more specific answer.
-        PartitionContentOwnership
-            .Observe(hub, record is null
-                ? packageId
-                : PackageInstaller.TargetPartitionOf(packageId, record))
-            .SelectMany(ownership => bundles
-                .AdoptModule(packageId, moduleName, recordPath, unattended: true,
-                    policyDecline: PolicyDecline(record) ?? OwnershipDecline(ownership))
-                // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
-                // so a single adopt that never answers (a wedged record read, a download that stalls)
-                // silently starves EVERY package after it — on memex.systemorph.com the Northwind
-                // adopt was never even attempted while earlier packages logged failures
-                // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
-                // the chain proceeds.
-                .Timeout(PerPackageAdoptBudget))
+        // 🚨 policy packages-auto-update — the module lands on TWO inputs only: a newer version was
+        // published, and its declared platform floor is met (the floor is decided inside the adopt,
+        // ModuleUpdateDecision). The package's own policy still speaks (an administrator's
+        // deliberate None pins it), but NOTHING about the platform's deploy, a seal, a framework
+        // identity or the partition's sync source holds it any more. The sync-owned hold that rode
+        // this seam (#4355 gate 1b: "its module waits for the same seal its content does") is
+        // removed: it made a published, compatible module wait for the platform's seal of the
+        // content repo — exactly the dependency the policy rules out. The CONTENT half of a
+        // sync-owned partition still has one writer, its sync (PackageUpdateReconciler); only the
+        // code no longer waits for it.
+        bundles
+            .AdoptModuleOutcome(packageId, moduleName, recordPath, unattended: true,
+                policyDecline: PolicyDecline(record))
+            // 🚨 A HANG is worse than a failure here: the packages run as one sequential Concat,
+            // so a single adopt that never answers (a wedged record read, a download that stalls)
+            // silently starves EVERY package after it — on memex.systemorph.com the Northwind
+            // adopt was never even attempted while earlier packages logged failures
+            // (Plugins#959). A bounded wait turns the hang into the loud, caught failure below and
+            // the chain proceeds.
+            .Timeout(PerPackageAdoptBudget)
+            .Select(outcome => outcome.FilesLanded > 0
+                ? new LandedModule(moduleName, outcome.LandedVersion ?? outcome.ServedVersion ?? "")
+                : null)
             .Catch((Exception ex) =>
             {
                 // The CAUSE goes into the message itself, not only the attached exception:
@@ -1140,9 +1306,64 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                     "[RegistryUpdate] module reconcile of {Id} against {Name} failed — "
                     + "its landed module is unchanged. Cause: {Cause}",
                     packageId, registryName, ex.Message);
-                return Observable.Return(0);
+                return Observable.Return<LandedModule?>(null);
+            });
+
+    /// <summary>One module a wave landed, and the version it landed.</summary>
+    /// <param name="Module">The module's entry-assembly name.</param>
+    /// <param name="Version">The version that landed.</param>
+    internal sealed record LandedModule(string Module, string Version);
+
+    /// <summary>
+    /// 🚨 policy <c>packages-auto-update</c>: a wave that LANDED anything files ONE module reload
+    /// request for it (<see cref="ModuleReload.Request"/>, <c>Doc/Architecture/ModuleReload</c>), so
+    /// an unattended update activates through the same path an explicit reload does — live when
+    /// the module can be swapped, otherwise exactly one automatic restart, reported per replica —
+    /// instead of waiting for whatever restart happens next. The id is derived from what landed, so
+    /// two replicas that land the same set (or a re-run of the same wave) file one request. Never
+    /// faults: the landing is done; a request that cannot be filed is a Warning, and the module
+    /// still loads at the next restart.
+    /// </summary>
+    private IObservable<Unit> ActivateLanded(IList<LandedModule?> landed)
+    {
+        var modules = landed.OfType<LandedModule>()
+            .Where(m => m.Module.Length > 0)
+            .OrderBy(m => m.Module, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableList();
+        if (modules.IsEmpty)
+            return Observable.Return(Unit.Default);
+        var what = string.Join(", ", modules.Select(m => $"{m.Module} {m.Version}"));
+        return ModuleReload.Request(hub, new ModuleReloadRequest
+            {
+                Module = modules.Count == 1 ? modules[0].Module : null,
+                Reason = $"auto-update (policy packages-auto-update): landed {what}",
+                RequestedBy = "auto-update",
+            }, AutoUpdateRequestId(modules))
+            .Do(ticket =>
+            {
+                if (ticket.Accepted)
+                    logger.LogInformation("[RegistryUpdate] auto-update landed {What}; activation requested at {Path}", what, ticket.Path);
+                else
+                    logger.LogWarning("[RegistryUpdate] auto-update landed {What} but its activation could not be requested: {Refusal}", what, ticket.Refusal);
             })
-            .Select(_ => Unit.Default);
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "[RegistryUpdate] auto-update landed {What} but its activation could not be requested", what);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>The request id for a landed set — stable for the same (module, version) set. Pure.</summary>
+    /// <param name="modules">What landed.</param>
+    internal static string AutoUpdateRequestId(IEnumerable<LandedModule> modules)
+    {
+        var key = string.Join(";", modules
+            .Select(m => $"{m.Module}@{m.Version}".ToLowerInvariant())
+            .OrderBy(k => k, StringComparer.Ordinal));
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)))[..16];
+        return $"auto-{hash}";
+    }
 
     /// <summary>
     /// Why THIS package's own policy declines an unattended module landing, or null when it is
@@ -1160,32 +1381,6 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Why an unattended module landing declines because the package's CONTENT half is held —
-    /// its target partition's content is kept by a sync source, not by the installer
-    /// (<see cref="PartitionContentOwnership"/>, MeshWeaver#4355) — or null when the installer owns
-    /// it and the module may land.
-    ///
-    /// <para>🚨 A HOLD, not a refusal of the module itself. Such a partition has a delivery path for
-    /// its module already: the sealed publication its content is held to. Landing the registry's
-    /// newer bundle instead would advance the package's CODE past the content the seal pins, which
-    /// is the split the one-bookkeeping invariant exists to prevent. A human's manual Update lands
-    /// both halves together, as it always did.</para>
-    ///
-    /// <para>Pure, so both unattended lanes' behaviour is pinnable without a registry.</para>
-    /// </summary>
-    /// <param name="ownership">Who owns the target partition's content.</param>
-    /// <returns>The decline sentence, or null when the module may land.</returns>
-    internal static string? OwnershipDecline(PartitionContentOwnershipVerdict ownership)
-    {
-        ArgumentNullException.ThrowIfNull(ownership);
-        return ownership.InstallerOwnsTheContent
-            ? null
-            : $"the CONTENT half of this package is held — {ownership.Because}. A package never "
-              + "lands one half without the other (MeshWeaver#4355), so its module waits for the "
-              + "same seal its content does; the catalog's manual Update lands both";
-    }
-
-    /// <summary>
     /// Closes the landing wave by proposing the module set the activation record now describes
     /// (#3395). Never fails the reconcile: a proposal that cannot be written leaves the mesh on its
     /// previous set — every replica still agrees with every other one, and the next wave proposes
@@ -1196,7 +1391,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return(Unit.Default);
-        return landing.ProposeModuleSet()
+        // 🚨 #6067 — CHECKED against what the installed packages require: a set whose declared
+        // dependency floors are not met is refused (faults), and the catch below keeps the mesh on
+        // the set it runs.
+        return ModuleDependencyFloor.ProposeChecked(hub, landing)
             .Select(_ => Unit.Default)
             .Catch((Exception ex) =>
             {

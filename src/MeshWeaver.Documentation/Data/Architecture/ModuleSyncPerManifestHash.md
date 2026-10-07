@@ -54,6 +54,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 | Order | Condition | Outcome | Written |
 |---|---|---|---|
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
+| 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged; the image's OWN copy is judged at the version its `module.seed.json` stamp states — see below) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
@@ -67,6 +68,18 @@ after the fetch, over each `manifest.lock` in the incoming tree:
   `Declined` when a module was declined, and the fetched commit counts as seen.
 - A tree with **no** `manifest.lock` (a course or content repository) states no module and imports
   exactly as before.
+- **Rule 1b judges the image's own copy too** (Systemorph/MeshWeaver.Plugins#2715). The loaded
+  reading (`LoadedPackageModuleReader.ResolveWithImageCopies`) states a landed generation at the
+  version its activation entry recorded, and a module that loaded from the IMAGE's copy at the
+  version that copy's `module.seed.json` states (`ImageModuleSeed`), keyed by the package the stamp
+  names. It used to leave the image copy out as "not judged", and that was the commonest copy there
+  is. Measured on the control instance on 2026-10-05: its image (Plugins `29bfaefb`) ships AI
+  stamped `1.21.1`; Hosting's tree declared `AI@^1.22.0` and called `LanePolicy`, which only AI 1.22
+  carries. With no reading for AI the import wrote Hosting's sources, and twenty Hosting NodeTypes,
+  `InstanceAction` among them, parked at `CS0246 LanePolicy`. A seed stamp can only UNDERSTATE the
+  image's bytes (an unsettled `manifest.lock` keeps its number while the sources move on), so this
+  can hold an import the image would have satisfied, but it never admits one the image cannot
+  satisfy. An image copy with no stamp, a substituted load and an ambiguous load stay unjudged.
 
 **Recorded hashes** live on the sync config as `ModuleVersions` (module → `moduleVersion`). They
 advance only when the import's nodes **all** landed (`MayAdvanceBaseline`), the
@@ -75,11 +88,38 @@ land had its hash recorded, the next attempt would read it as unchanged and the 
 permanent. A declined module keeps the hash it had. The first import after this change has no hashes
 recorded, so every module syncs.
 
+### A dependency floor the loaded build does not meet (#6067)
+
+**Measured 2026-10-04 on the control instance.** Hosting 1.56 declared `requires: ["AI@^1.21.0"]`.
+Its sources were GitSync-imported and Roslyn-compiled at 20:00:50Z while AI 1.20.4 was the loaded
+build, and every thread start — reviews, watchdog fixers, the bug pool — then threw
+`MissingMethodException` (`ThreadPreparation.set_Group`). The module-set proposal already refused a
+set with an unmet floor ([Module Set Convergence](../ModuleSetConvergence)); the import that put the
+sources in front of the compiler never asked.
+
+So rule 1b runs in the same decision, after rule 1: a **Synced** module whose requirement the
+loaded dependency does not satisfy becomes **Declined**, exactly like a platform floor. Its sources
+are neither written nor pruned, so its NodeTypes keep serving their last good build; the baseline
+stays, so its files remain in the next diff; the decline is on the sync config
+(`LastSyncNote`, `ModuleOutcomes[].UnmetRequirement`) and in the `/health` module census, which
+escalates a decline that persists. Nothing has to be armed to release it: the next import judges
+again, and the import after the restart that activates a satisfying dependency syncs the module.
+
+🚨 **Loaded, never landed.** `LoadedPackageModuleReader` (MeshWeaver.PluginCatalog) maps each
+package to the generation its module actually LOADED from — the activation head's version when the
+head loaded, the retained previous generation's when that one did, and nothing otherwise. A landing
+is restart-as-activation, so judging against the head would let an import compile sources against a
+1.21 that is landed but not running — the very shape this rule exists to stop. A mesh with no module
+host registers no reader and judges nothing, which is the behaviour before the rule.
+
+The range rule is `PackageRequirement` (MeshWeaver.Plugin.Packaging), shared with the proposal's
+`ModuleDependencyFloor`: one reading, so the two checks can never disagree about the same range.
+
 ## What each lane does now
 
 | Lane | Before | Now |
 |---|---|---|
-| Green-build webhook (`DecideBuild`) | landed on the sealed commit, or held | imports the **built commit**; `SealedCommit` reports whether this identity's bytes were baked from it |
+| Green-build webhook (`DecideBuild`) | landed on the sealed commit, or held | imports the **built commit**; `SealedCommit` reports whether this identity's bytes were baked from it. **Superseded** by policy `sources-sync-on-push`: the `push` webhook (and a periodic branch reconcile) imports at the pushed commit, and a green build only records the build — see [Sources Sync on Push](../SourcesSyncOnPush) |
 | A person's Update / Re-import (`DecideRequestedImport`) | redirected onto the seal, or held | imports **exactly what was asked** |
 | First import (`DecideFirstImport`: discovery and boot install) | landed on the seal, or held | resolves the **configured branch** |
 | Seal arrival (`SealedSyncReconcile`) | imported the sealed commit when the source sat elsewhere or had no commit | imports **nothing by itself**. A source on another commit is usually AHEAD of the seal, and a source with no commit yet is brought by its first import or its next green build, which an import at the seal would race. What remains: re-importing a source AT the seal whose types were declined, and releasing a bundle hold at the commit whose sources were held |
@@ -114,10 +154,13 @@ way (see the per-NodeType page).
 
 - **The sync config** (`_GitSync`): `ModuleOutcomes` lists every module of the last attempt as
   `Unchanged`, `Synced` or `Declined` with its reason, and `ModuleVersions` holds the recorded hashes.
-  `LastSyncOutcome` is the import's own outcome (`Declined` only when every module was declined) and
+  `LastSyncOutcome` is the import's own outcome (`Declined` only when every module was declined, and
+  at least one on its platform floor; `RequirementUnmet` when every decline was an unmet `requires` —
+  a loaded dependency below the range, whose remedy is loading that dependency, not a roll) and
   never the whole-Space `Held` the gate used to write. `LastSyncNote` names each declined module.
-- **The activity**: one keyed Warning line, `activity.gitsync.modulesDeclined`, rendered in the
-  viewer's language.
+- **The activity**: one keyed Warning line per kind of decline, rendered in the viewer's language —
+  `activity.gitsync.modulesDeclined` for a platform floor, `activity.gitsync.modulesRequirementUnmet`
+  for an unmet requirement.
 - **The settings tab**: `ui.gitSync.modulesDeclined` and `ui.gitSync.modulesUnchanged`.
 - **`/health`** (`publication-seal`): every module's last outcome, by Space. A decline that outlives
   the 45-minute CI job cap reads Degraded, never Unhealthy.

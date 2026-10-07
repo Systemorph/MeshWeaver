@@ -115,7 +115,18 @@ uses:
 | `pulls/{n}/comments` | `Copilot` | Bot | 175728472 |
 | `pulls/{n}/reviews` and `pulls/{n}/comments` | `systemorph-com[bot]` — the **internal GLM-5.3 reviewer** | Bot | 328286035 |
 
-**Two reviewers are accepted** (policy [`internal-code-review`](../PolicyNotProse)): Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App on every head (COMMENTED or CHANGES_REQUESTED, never APPROVED). A review by either lands the review; the threads both opened need a person's reply. Copilot leaves the set once its `copilot_code_review` rule is gone from every repository and no open pull request carries an unanswered Copilot thread.
+**Historical — superseded by the next section.** Under the retired policy [`internal-code-review`](../PolicyNotProse) two reviewers were accepted: Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App (COMMENTED or CHANGES_REQUESTED, never APPROVED). That policy planned for Copilot to leave the set; the next section reverses it.
+
+### Copilot is the reviewer again
+
+Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
+
+- **The request.** Every repository's ruleset carries `copilot_code_review` with `review_on_push: true` and `review_draft_pull_requests: false`. So Copilot reviews every pushed head, not only the first commit as in the measurement above, where the rule carried `review_on_push: false`.
+- **What branch protection requires.** `internal-review` is not a required context in any repository. Core still requires `Automatic review answered`.
+- **This merge gate.** It takes a landed Copilot review, as it always did. Every thread Copilot or the internal reviewer opened still needs a person's reply.
+- **The stage gate and the arm gate.** They ask about THIS HEAD's review. They accept a Copilot review submitted against the current head: `commit_id` equal to the head, not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_on` in `check-review-answered.py`). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
+- **What does not count.** A Copilot review of an earlier head does not count; the push invalidated it. The internal bot's *review* alone does not count either, because its verdict on a head is its `internal-review` check run. The self-test pins every one of these cases, and replacing `copilot_review_on` with one that finds nothing turns the acceptance cases red.
+- **One timing difference.** Copilot's own `pull_request_review` event starts no workflow run (see *The reviewer's own event cannot start a run here* below). So a Copilot review releases a held stage gate on the next `stage-advance.yml` sweep, at most about 15 minutes later, rather than on the event itself.
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
 check matches on the account id or either login, and only for `type: Bot`, so a person who names

@@ -110,7 +110,7 @@ public static class PackageInstaller
         // update is held upstream, before anything is fetched (CatalogLayoutAreas.InstallOrUpdate).
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
             .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
-            .SelectMany(_ => PackagePlatformFloorGate.RequireForFreshInstall(hub, manifest, logger))
+            .SelectMany(_ => PackagePlatformFloorGate.RequireForInstall(hub, manifest, logger))
             .SelectMany(_ => HoldRootDuringInstall(hub, manifest, InstallCore(
                 hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId)));
     }
@@ -523,17 +523,30 @@ public static class PackageInstaller
 
     /// <summary>
     /// THE per-package policy seed: an existing record's own policy wins (declared, or its legacy
-    /// flag read as Auto / Notify), else the deployment's <see cref="PluginCatalogOptions.DefaultUpdatePolicy"/>,
-    /// else the legacy <see cref="PluginCatalogOptions.AutoUpdateByDefault"/> (true → Auto, else
-    /// Notify), else Notify — the platform default is reminder-only. Pure; pinned in
-    /// <c>MeshWeaver.PluginCatalog.Test</c>. An update re-stamp therefore never resets a policy an
-    /// administrator chose, and flipping the deployment default later changes nothing for
-    /// already-installed packages.
+    /// flag read as Auto / Notify), else the deployment's explicitly configured
+    /// <see cref="PluginCatalogOptions.DefaultUpdatePolicy"/>, else <see cref="PackageUpdatePolicy.Auto"/>.
+    ///
+    /// <para>🚨 policy <c>packages-auto-update</c>: every installed package updates by itself as soon
+    /// as a newer compatible version is published, so a fresh install that nobody configured is
+    /// AUTO — never the reminder-only default this used to fall back to. The legacy
+    /// <see cref="PluginCatalogOptions.AutoUpdateByDefault"/> flag is no longer consulted: its
+    /// <c>false</c> is the CLR default, indistinguishable from "nobody said anything", and reading
+    /// it as Notify is exactly the default the policy retires. Records that already say Notify are
+    /// moved to Auto by <see cref="PackageAutoUpdateMigration"/>.</para>
+    ///
+    /// <para>Pure; pinned in <c>Memex.Portal.Shared.Test</c> (<c>PackagesAutoUpdateTest</c>). An
+    /// update re-stamp never resets a policy an administrator chose.</para>
     /// </summary>
     internal static PackageUpdatePolicy SeedUpdatePolicy(PackageManifest? existingRecord, PluginCatalogOptions? options) =>
-        existingRecord?.EffectiveUpdatePolicy
-        ?? options?.DefaultUpdatePolicy
-        ?? (options?.AutoUpdateByDefault == true ? PackageUpdatePolicy.Auto : PackageUpdatePolicy.Notify);
+        existingRecord is not null
+            // An existing record re-stamps through the SAME rule the migration applies, so an
+            // update of a seeded reminder-only record lands it on Auto rather than carrying the
+            // retired default forward; a deliberate administrator choice is kept.
+            ? PackageAutoUpdateMigration.Migrated(existingRecord).EffectiveUpdatePolicy
+            // A fresh install is Auto. A deployment-wide default is no longer consulted: the
+            // policy keeps PER-PACKAGE opt-outs only (an administrator's pin on the catalog card).
+            // (`options` stays in the signature: callers in other repositories pass it.)
+            : PackageUpdatePolicy.Auto;
 
     /// <summary>
     /// Sets ONE installed package's update policy — the catalog card's per-package control for a
@@ -576,6 +589,10 @@ public static class PackageInstaller
                         // A new policy is a new question for the reminder path: forget what was
                         // told under the old one, so a switch back to Notify reminds again.
                         NotifiedModuleVersion = null,
+                        // 🚨 policy packages-auto-update: an administrator's explicit choice is the
+                        // ONE opt-out the auto-update migration keeps — stamped so it can tell a
+                        // deliberate Notify/None from a seeded default.
+                        UpdatePolicySetAt = DateTimeOffset.UtcNow,
                     },
                 };
                 logger?.LogInformation(
@@ -3020,6 +3037,7 @@ public static class PackageInstaller
                     HeldUpdate = null,
                     HeldUpdateDispatch = null,
                     HeldUpdateDispatchedAt = null,
+                    HeldSince = null,
                     // The per-package policy (Auto / Notify / None) — seeded once, carried
                     // forward on every re-stamp; the legacy flag is kept consistent for readers
                     // that still branch on it.

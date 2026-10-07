@@ -28,31 +28,42 @@ namespace MeshWeaver.GitSync;
 /// synced. The write runs under the system identity (an infrastructure mirror update, the same
 /// identity model as the instance-sync pull and <c>StaticRepoImporter</c>).
 ///
-/// <para><b><c>workflow_run</c> success keeps GitSync'd Spaces CURRENT without polling — and only
-/// ever with content CI accepted.</b> A green build of a repository's DEFAULT branch gives every
-/// Space whose sync config targets that repository + branch a headless import
-/// <b>at that build's commit</b>
-/// (<see cref="GitHubActivityExtensions.UpdateToProvenCommitFromGitHub"/>, <c>force: false</c> so
-/// two-way conflict resolution still protects server-side edits). The mesh writes run under
-/// the system identity; the GitHub pull authenticates as the sync config's CREATOR (their
+/// <para><b>A <c>push</c> to a sync source's configured branch keeps GitSync'd Spaces CURRENT</b>
+/// (policy <c>sources-sync-on-push</c>; <c>Doc/Architecture/SourcesSyncOnPush</c>). Every Space
+/// whose sync config targets that repository + branch gets a headless import <b>at the pushed
+/// commit</b> (<see cref="GitHubActivityExtensions.UpdateToPushedCommitFromGitHub"/>,
+/// <c>force: false</c> so two-way conflict resolution still protects server-side edits). Inside the
+/// import every module is judged alone by its manifest hash (policy
+/// <c>module-sync-per-manifest-hash</c>): unchanged writes nothing, changed syncs, and a module whose
+/// declared platform floor is above the running platform is the ONE decline. The mesh writes run
+/// under the system identity; the GitHub pull authenticates as the sync config's CREATOR (their
 /// connected credential, or the GitHub App when they have none).</para>
 ///
-/// <para>🚨 <b>AT THAT BUILD'S COMMIT, not "latest".</b> The GUI button's
-/// <see cref="GitHubActivityExtensions.UpdateToLatestFromGitHub"/> resolves the branch when it
-/// fetches, which is right for a human asking for latest and wrong for every machine trigger: the
-/// branch can move between the build completing and the fetch happening, and what lands is then a
-/// tree no build ever proved. That is Systemorph/MeshWeaver.Plugins#1430 — a ~5 h outage on two
-/// production portals. The contract is in <c>Doc/Architecture/SyncRefContract</c>.</para>
+/// <para>🚨 <b>A red CI on the branch does not hold sources.</b> The import used to wait for a
+/// GREEN build of the branch, and that re-introduced the whole-repository hold
+/// <c>module-sync-per-manifest-hash</c> had removed: on 2026-10-04 MeshWeaver.Plugins' main was red
+/// from 14:39Z, no green build arrived for 15 h, and every instance froze on a stale AI module and a
+/// Hosting module that called a member it did not have. A broken commit is safe to take because the
+/// per-NodeType compile keeps the last good build of a type whose new sources do not compile, and
+/// the readiness gate refuses a type that regressed — the residual risk is stated on the doc
+/// page.</para>
 ///
-/// <para>🚨 <b>The import is gated on CI, so <c>push</c> imports nothing.</b> A push event arrives
-/// BEFORE the build it starts, so importing on push shipped content to live Spaces seconds ahead of
-/// the gate meant to vet it. Because a repo's own content CI is the only thing that knows whether a
-/// commit is installable, the green build — not the merge — is the publish signal. A repository with
-/// NO CI workflow therefore never auto-imports: give it one, or sync it by hand.</para>
+/// <para>🚨 <b>AT THE PUSHED COMMIT, not "latest".</b> Every machine trigger names the commit it
+/// imports (<c>Doc/Architecture/SyncRefContract</c>, MeshWeaver.Plugins#1430): the delivery carries
+/// <c>after</c>, and the fallback reconcile (<see cref="ReconcileBranches"/>) names the head it
+/// resolved. Only a person's button resolves the branch at fetch time.</para>
 ///
-/// <para>Register the repo webhook with <c>Workflow runs</c> (required — it is the trigger) and
-/// <c>Pushes</c> (optional; logged only, and the breadcrumb that tells you a repo's pushes are
-/// arriving while its green builds are not) next to <c>Issues</c>/<c>Issue comments</c>.</para>
+/// <para><b>A lost delivery self-repairs.</b> GitHub does not redeliver a webhook on its own, so a
+/// periodic reconcile (<see cref="GitSyncBranchReconcileService"/>) resolves each configured
+/// branch's head with one cheap ref lookup and imports where a source is not on it.</para>
+///
+/// <para><c>workflow_run</c> still records the repository's <see cref="BuildCompletion"/> — the
+/// green-build FACT the plugin catalog consumes — but no longer triggers an import: the push already
+/// did, and a green build arriving for an OLDER commit after a newer push had landed would have
+/// moved the Space backwards.</para>
+///
+/// <para>Register the repo webhook with <c>Pushes</c> (required — it is the sync trigger),
+/// <c>Workflow runs</c> (the build record) and <c>Issues</c>/<c>Issue comments</c>.</para>
 ///
 /// <para>Pull-request events are intentionally ignored: PR state is read LIVE (delegated) and
 /// never materialized, so there is no node to refresh. Reactive end-to-end — no
@@ -176,7 +187,11 @@ public sealed class GitHubWebhookProcessor
     /// (GitHub caps the <c>commits</c> array at 20 — a larger push must sync every candidate
     /// rather than silently skipping a subdirectory it can't see).
     /// </summary>
-    internal sealed record PushEvent(string Branch, IReadOnlyList<string>? ChangedPaths);
+    /// <param name="Branch">The pushed branch.</param>
+    /// <param name="ChangedPaths">The union of paths the push touched, or null when unknown.</param>
+    /// <param name="HeadSha">The commit the branch points at AFTER the push (<c>after</c>) — the one
+    /// commit a push-triggered import may land on. Empty when the payload carried none.</param>
+    internal sealed record PushEvent(string Branch, IReadOnlyList<string>? ChangedPaths, string HeadSha = "");
 
     /// <summary>A Space sync source to update: the Space path, the source id (null = primary),
     /// and the user whose GitHub credential authenticates the pull — the sync config's CREATOR
@@ -234,7 +249,7 @@ public sealed class GitHubWebhookProcessor
             var size = GetInt(payload, "size");
             changed = size > commitCount ? null : set.ToList();
         }
-        push = new PushEvent(@ref[headsPrefix.Length..], changed);
+        push = new PushEvent(@ref[headsPrefix.Length..], changed, GetString(payload, "after") ?? "");
         return true;
 
         static string? Self(JsonElement el)
@@ -242,63 +257,100 @@ public sealed class GitHubWebhookProcessor
     }
 
     /// <summary>
-    /// A verified <c>push</c> → nothing. **The import is gated on CI**, so it is triggered by the
-    /// repository's GREEN build (<see cref="ProcessWorkflowRun"/>), not by the push that started it.
+    /// A verified <c>push</c> to a branch → a headless import AT THE PUSHED COMMIT for every sync
+    /// source that targets this repository + branch and is not already on it (policy
+    /// <c>sources-sync-on-push</c>).
     ///
-    /// <para>🚨 This used to import on every push, and that is precisely the hole it left: the push
-    /// event arrives BEFORE the build it triggers, so a red main reached production seconds ahead
-    /// of the gate meant to stop it (observed 2026-08-07 — a merge synced at 09:20:53, its CI failed
-    /// at 09:52). Content repos are GitSync'd straight into live Spaces, so "imported, then found
-    /// broken" is indistinguishable from shipping broken content to users.</para>
+    /// <para>🚨 <b>No CI verdict is waited for.</b> This used to log and import nothing, deferring
+    /// to the repository's GREEN build — and a red branch therefore held every module of every Space
+    /// of that repository, for as long as it stayed red (2026-10-04: 15 h, fleet-wide). What makes a
+    /// broken commit safe to take is per NodeType, not per repository: a type whose new sources do not
+    /// compile keeps serving its last good build, the readiness gate refuses a type that REGRESSED on
+    /// a new image, and a module that needs a newer platform is declined alone. See
+    /// <c>Doc/Architecture/SourcesSyncOnPush</c> for what that does and does not cover.</para>
     ///
-    /// <para>The push is still parsed and logged: it is the signal that a build is COMING, and the
-    /// log line is what makes "the merge landed but nothing synced" diagnosable — a repo whose
-    /// pushes are seen but whose green builds never arrive has no CI workflow, and will never
-    /// auto-import until it gets one.</para>
+    /// <para>A push carries no build, so nothing here records a <see cref="BuildCompletion"/>; that
+    /// fact still comes from <see cref="ProcessWorkflowRun"/>.</para>
     /// </summary>
     private IObservable<int> ProcessPush(JsonElement payload)
     {
         if (!TryParsePush(payload, out var push) || !TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
-
-        logger?.LogInformation(
-            "GitHub push webhook ({Repo}@{Branch}) — no import: the sync is CI-gated and waits for a "
-            + "green build of this ref (workflow_run/success on the default branch).",
-            repoUrl, push.Branch);
-        return Observable.Return(0);
+        if (!IsCommitSha(push.HeadSha))
+        {
+            // A branch push always carries `after`; one without it names no commit, and an
+            // unattended import without a commit is refused (no branch-HEAD fallback — #1430). The
+            // periodic reconcile resolves the head itself, so nothing is lost by declining here.
+            logger?.LogWarning(
+                "GitHub push webhook ({Repo}@{Branch}) carried no commit sha ('after') — not importing "
+                + "on it; the branch reconcile resolves the head itself.", repoUrl, push.Branch);
+            return Observable.Return(0);
+        }
+        if (GitHubRepoIdentityResolver.Parse(repoUrl) is not { } target)
+        {
+            logger?.LogWarning(
+                "GitHub push webhook carried a repository url that cannot be parsed to owner/repo: '{Repo}'.",
+                repoUrl);
+            return Observable.Return(0);
+        }
+        return TriggerSyncAtCommit(target, push.Branch, push.HeadSha, SyncTrigger.Push)
+            .Catch((Exception ex) =>
+            {
+                // A failed trigger must not fail the delivery: a non-2xx makes GitHub redeliver, and
+                // the branch reconcile is the retry for a push whose import never started.
+                logger?.LogWarning(ex,
+                    "GitHub push webhook ({Repo}@{Branch} {Sha}): triggering the sync failed — the "
+                    + "branch reconcile will bring the sources to the head.",
+                    repoUrl, push.Branch, push.HeadSha);
+                return Observable.Return(0);
+            });
     }
 
     /// <summary>
-    /// A verified GREEN build of the default branch → a headless import AT THAT BUILD'S COMMIT for
-    /// every sync source that targets this repo + branch and is not already sitting on it. TRIGGERS
-    /// the updates (each its own activity, fire-and-forget with error logging) and emits the number
-    /// triggered — it does NOT await the imports, so the webhook response returns within GitHub's
-    /// delivery timeout.
-    ///
-    /// <para>🚨 <b><paramref name="headSha"/>, never the branch — this is the #1430 fix.</b> The
-    /// candidate filter has always been the built commit while the import itself said "bring the
-    /// Space to latest", and those are the same tree only when nothing merges in between. When
-    /// something does, the mesh receives a tree NO build proved: a MeshWeaver.Plugins <c>main</c> run
-    /// for <c>8d4920c93</c> finished at 2026-09-06 22:38:18Z with <c>main</c> already past #1413, and
-    /// both production portals imported #1413's <c>Store/*</c> sources — against a platform carrying
-    /// neither <c>IPaymentProvider</c> nor the Payments module — leaving four <c>Store</c> NodeTypes
-    /// in compile <c>Error</c> for ~5 h. The publication and the sources it was compiled from are one
-    /// artefact; resolving the ref a second time at fetch time is what split them. The sibling
-    /// consumer of the same fact, <c>PluginUpdateWatcher</c>, already read
-    /// <c>BuildCompletion.HeadSha</c>; this makes GitSync agree with it. See
-    /// <c>Doc/Architecture/SyncRefContract</c>.</para>
-    ///
-    /// <para>Scoping differs from the old push path in one way that matters: a <c>workflow_run</c>
-    /// payload carries no file list, so a source's <c>Subdirectory</c> cannot be used to skip it.
-    /// Every source of the repo is brought to the built commit; an unchanged subdirectory imports as
-    /// a no-op. The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run
-    /// of an already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all,
-    /// and now compares like with like: what the source RECORDS is the commit it was told to fetch.
-    /// 🚨 …and for a source whose import does NOT converge, that check never fires by construction,
-    /// which is why <see cref="SkipReason"/> carries a second, weaker one (#3945).</para>
+    /// What started an unattended import — log copy and the activity title. OPEN string constants
+    /// (policy <c>open-vocabulary-string-constants</c>).
     /// </summary>
-    private IObservable<int> TriggerSyncForGreenBuild(RepoIdentity repo, string branch, string headSha)
-        => MatchingBuildTargets(repo, branch, headSha).Select(targets =>
+    internal static class SyncTrigger
+    {
+        /// <summary>A <c>push</c> webhook delivery for the configured branch.</summary>
+        public const string Push = "push";
+
+        /// <summary>The periodic branch reconcile — the self-repair for a lost delivery.</summary>
+        public const string Reconcile = "branch reconcile";
+    }
+
+    /// <summary>Whether <paramref name="sha"/> is a full 40-hex commit id other than the all-zero
+    /// id GitHub sends for a deleted ref.</summary>
+    /// <param name="sha">The candidate.</param>
+    internal static bool IsCommitSha(string? sha)
+        => sha is { Length: 40 }
+           && sha.All(Uri.IsHexDigit)
+           && sha.Any(c => c != '0');
+
+    /// <summary>
+    /// The unattended import, AT <paramref name="commit"/>, for every sync source that targets this
+    /// repository + branch and is not already on it. TRIGGERS the updates (each its own activity,
+    /// fire-and-forget with error logging) and emits the number triggered — it does NOT await the
+    /// imports, so the webhook response returns within GitHub's delivery timeout.
+    ///
+    /// <para>🚨 <paramref name="commit"/>, never the branch — the #1430 fix: the candidate filter and
+    /// the import must agree about which tree lands. See <c>Doc/Architecture/SyncRefContract</c>.</para>
+    ///
+    /// <para>A push payload's file list is deliberately NOT used to skip a source by its
+    /// <c>Subdirectory</c>: the import is diff-scoped from the source's last commit, so an untouched
+    /// subdirectory imports as a cheap no-op, and the source's recorded commit then moves with the
+    /// branch — which is what keeps the reconcile from fetching it again. The
+    /// <c>lastSyncCommitSha</c> check keeps a redelivery free, and the final-verdict arm of
+    /// <see cref="CommitSkipReason"/> keeps a non-converging source from re-cloning on every delivery
+    /// (#3945).</para>
+    /// </summary>
+    /// <param name="repo">The repository the trigger is for.</param>
+    /// <param name="branch">The branch it names — a source configured for another branch is skipped.</param>
+    /// <param name="commit">The commit to import at.</param>
+    /// <param name="trigger">A <see cref="SyncTrigger"/> value — log copy.</param>
+    /// <returns>The number of imports triggered.</returns>
+    internal IObservable<int> TriggerSyncAtCommit(RepoIdentity repo, string branch, string commit, string trigger)
+        => MatchingSyncTargets(repo, branch, commit, trigger).Select(targets =>
         {
             if (targets.Count == 0)
             {
@@ -307,61 +359,120 @@ public sealed class GitHubWebhookProcessor
                 // is a different animal and is reported at Warning by ConfigsTargeting — the two must
                 // not read alike, which is exactly how #1856 hid for four days.
                 logger?.LogInformation(
-                    "Green build of {Repo}@{Branch} ({Sha}) matched no sync source that needs updating.",
-                    repo, branch, headSha);
+                    "GitSync {Trigger} of {Repo}@{Branch} ({Sha}) matched no sync source that needs updating.",
+                    trigger, repo, branch, commit);
                 return 0;
             }
             logger?.LogInformation(
-                "Green build of {Repo}@{Branch} ({Sha}) → importing {Count} sync source(s): {AtBuilt} AT THAT "
-                + "COMMIT, {AtSeal} at the commit sealed for this instance instead.",
-                repo, branch, headSha, targets.Count,
-                targets.Count(t => !t.LandsOnSeal), targets.Count(t => t.LandsOnSeal));
+                "GitSync {Trigger} of {Repo}@{Branch} ({Sha}) → importing {Count} sync source(s) AT THAT COMMIT.",
+                trigger, repo, branch, commit, targets.Count);
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-            foreach (var (t, commit, landsOnSeal, reason, notice) in targets)
+            foreach (var target in targets)
             {
-                if (landsOnSeal)
-                    // Its own line: the build's commit is NOT what lands. The ACTIVITY says so too —
-                    // see the import call below, which for a landing runs the sealed-commit surface
-                    // and carries `notice` onto the activity (review on #4576); this line is the
-                    // operator's grep in the server log, not the only record.
-                    logger?.LogInformation(
-                        "Green build of {Repo} at {Sha}: {Space} lands on the sealed commit {Sealed} — {Reason}.",
-                        repo, headSha, t.SpacePath, commit, reason);
+                var t = target.Target;
+                var landing = target.Commit;
                 // 🚨 RunAsSystem, never `Observable.Using(() => ImpersonateAsSystem(), …)` — #1790.
                 // Rx disposes a Using's resource on whichever thread the INNER observable
                 // terminates on, so the subscribing thread stays latched as system-security while
                 // the restore lands somewhere else entirely. RunAsSystem opens the scope, composes
-                // AND subscribes the work inside it, and leaves it on the same thread — one
-                // synchronous frame it owns. Ratcheted down here (Copilot review) because this is
-                // the very expression this change rewrites; the file's three remaining sites are
-                // untouched work, still on the inventory.
+                // AND subscribes the work inside it, and leaves it on the same thread.
                 accessService.RunAsSystem(
-                        // 🚨 A COMMIT, NOT "latest" — see the remarks. The candidates were selected
-                        // against headSha and the gate decided which commit each may land on
-                        // (headSha, or the sealed one); resolving the branch here would mean the
-                        // selection and the import disagree about which tree was proved (#1430).
-                        //
-                        // 🚨 …and a landing on the SEALED commit runs its own activity surface: the
-                        // proven-commit one titles the commit "the built commit", which for this
-                        // lane's redirect is exactly the thing that is not true (review on #4576).
-                        () => landsOnSeal
-                            ? hub.UpdateToSealedCommitFromGitHub(
-                                t.SpacePath, t.UserId, commit, notice, sourceId: t.SourceId)
-                            : hub.UpdateToProvenCommitFromGitHub(
-                                t.SpacePath, t.UserId, commit, sourceId: t.SourceId))
+                        // 🚨 A COMMIT, NOT "latest" — see the remarks.
+                        () => hub.UpdateToPushedCommitFromGitHub(
+                            t.SpacePath, t.UserId, landing, trigger, sourceId: t.SourceId))
                     .Subscribe(
                         activity => logger?.LogInformation(
-                            "Build-triggered import of {Space} at {Sha} completed ({Activity}).",
-                            t.SpacePath, commit, activity),
+                            "GitSync {Trigger} import of {Space} at {Sha} completed ({Activity}).",
+                            trigger, t.SpacePath, landing, activity),
                         exception => logger?.LogWarning(exception,
-                            "Build-triggered import of {Space} at {Sha} (source {Source}) failed.",
-                            t.SpacePath, commit, t.SourceId ?? "(primary)"));
+                            "GitSync {Trigger} import of {Space} at {Sha} (source {Source}) failed.",
+                            trigger, t.SpacePath, landing, t.SourceId ?? "(primary)"));
             }
             return targets.Count;
         });
 
     /// <summary>
-    /// Whether one sync source should import for a green build of <paramref name="branch"/> at
+    /// 🚨 <b>The self-repair for a lost push delivery</b> (policy <c>sources-sync-on-push</c>).
+    /// GitHub does not redeliver a failed webhook by itself, so a delivery that never arrived would
+    /// leave every Space of that repository on its old commit until the next push. This pass reads
+    /// every sync config, resolves each distinct (repository, branch) head with ONE ref lookup
+    /// (<see cref="GitHubSyncService.GetBranchHead"/>, as the first config's creator), and runs the
+    /// very same per-source selection a push runs at that head — so a source already on it, or
+    /// settled at it with a final verdict, costs the ref lookup and nothing else.
+    ///
+    /// <para>Never faults: a repository whose head cannot be resolved is logged at Warning and the
+    /// rest still reconcile.</para>
+    /// </summary>
+    /// <returns>The number of imports triggered across every repository.</returns>
+    public IObservable<int> ReconcileBranches()
+    {
+        var sync = hub.ServiceProvider.GetRequiredService<GitHubSyncService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return QueryConfigNodesAsSystem().SelectMany(c =>
+        {
+            var groups = c.Items
+                .Select(node => (Node: node, Config: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)))
+                .Where(x => x.Config is { RepositoryUrl.Length: > 0 }
+                            && x.Config.Direction != SyncDirection.ExportOnly
+                            && ToPushTarget(x.Node) is not null)
+                .Select(x => (x.Node, Config: x.Config!, Repo: GitHubRepoIdentityResolver.Parse(x.Config!.RepositoryUrl)))
+                .Where(x => x.Repo is not null)
+                .GroupBy(x => (Repo: x.Repo!.ToString(), Branch: BranchOf(x.Config)), new RepoBranchComparer())
+                .ToList();
+            if (groups.Count == 0)
+                return Observable.Return(0);
+            logger?.LogInformation(
+                "GitSync branch reconcile: {Configs} sync config(s), {Groups} distinct repository branch(es).",
+                c.Items.Count, groups.Count);
+            return groups
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var repo = first.Repo!;
+                    var branch = g.Key.Branch;
+                    var userId = ToPushTarget(first.Node)!.UserId;
+                    return accessService
+                        .RunAsSystem(() => sync.GetBranchHead(first.Config.RepositoryUrl!, branch, userId))
+                        .Take(1)
+                        .SelectMany(head => IsCommitSha(head)
+                            ? TriggerSyncAtCommit(repo, branch, head, SyncTrigger.Reconcile)
+                            : Observable.Return(0).Do(_ => logger?.LogWarning(
+                                "GitSync branch reconcile: {Repo}@{Branch} resolved to '{Head}', which is "
+                                + "not a commit sha — not importing.", repo, branch, head)))
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex,
+                                "GitSync branch reconcile: the head of {Repo}@{Branch} could not be "
+                                + "resolved — its sources stay where they are until the next pass or push.",
+                                repo, branch);
+                            return Observable.Return(0);
+                        });
+                })
+                .MergeBounded(4)
+                .Sum();
+        });
+    }
+
+    /// <summary>The branch a config syncs — its configured one, <c>main</c> when blank (the same
+    /// default <see cref="GitHubSyncService.AskBranchState"/> applies).</summary>
+    private static string BranchOf(GitHubSyncConfig config)
+        => string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
+
+    /// <summary>Groups repository branches the way GitHub names them: case-insensitively.</summary>
+    private sealed class RepoBranchComparer : IEqualityComparer<(string Repo, string Branch)>
+    {
+        public bool Equals((string Repo, string Branch) x, (string Repo, string Branch) y)
+            => string.Equals(x.Repo, y.Repo, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(x.Branch, y.Branch, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Repo, string Branch) obj)
+            => HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Repo),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Branch));
+    }
+
+    /// <summary>
+    /// Whether one sync source should import for a push or reconcile of <paramref name="branch"/> at
     /// <paramref name="headSha"/>: the branch must match, the source must be allowed to import, and
     /// the source must not already sit on that commit.
     /// </summary>
@@ -371,10 +482,10 @@ public sealed class GitHubWebhookProcessor
         => SkipReason(cfg, branch, headSha) is null;
 
     /// <summary>The distinct sync sources whose config targets <paramref name="repo"/> AND
-    /// matches the green build's branch, minus those already at <paramref name="headSha"/>.</summary>
-    private IObservable<IReadOnlyList<BuildImport>> MatchingBuildTargets(
-        RepoIdentity repo, string branch, string headSha)
-        => ConfigsTargeting(repo, $"green build of {branch}")
+    /// matches the trigger's branch, minus those already at <paramref name="headSha"/>.</summary>
+    private IObservable<IReadOnlyList<BuildImport>> MatchingSyncTargets(
+        RepoIdentity repo, string branch, string headSha, string trigger)
+        => ConfigsTargeting(repo, $"{trigger} of {branch}")
             .Select(match =>
             {
                 // 🚨 Classify EVERY candidate and say what happened to it. A fan-out that reports
@@ -404,9 +515,9 @@ public sealed class GitHubWebhookProcessor
                 // The sources arrive at the built commit; each changed NodeType compiles from them.
                 if (SealedSyncGate.RefusedForUnreadableIndex(readOutcome, identity) is { HoldReason: { } unreadable })
                     logger?.LogWarning(
-                        "Green build of {Repo}@{Branch} ({Sha}): {Unreadable}. The sources still sync at the "
-                        + "built commit; no prebuilt bytes are adopted on this reading.",
-                        repo, branch, headSha, unreadable);
+                        "Sync {Trigger} of {Repo}@{Branch} ({Sha}): {Unreadable}. The sources still sync at "
+                        + "that commit; no prebuilt bytes are adopted on this reading.",
+                        trigger, repo, branch, headSha, unreadable);
                 // 🚨 The half a hold cannot state about itself (#4063): whether the registry has
                 // sealed a NEWER line that this instance does not run. Without it "not sealed for
                 // this instance" reads the same whether the lane stopped publishing or this image
@@ -496,9 +607,9 @@ public sealed class GitHubWebhookProcessor
                     .ToList();
 
                 logger?.LogInformation(
-                    "Green build of {Repo}@{Branch} ({Sha}): {Candidates} sync config(s) in the mesh, "
+                    "Sync {Trigger} of {Repo}@{Branch} ({Sha}): {Candidates} sync config(s) in the mesh, "
                     + "{Targeting} targeting this repository, {Selected} selected, {Skipped} skipped{SkipDetail}.",
-                    repo, branch, headSha, match.Candidates, match.Configs.Count, targets.Count,
+                    trigger, repo, branch, headSha, match.Candidates, match.Configs.Count, targets.Count,
                     skipped.Count, skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
                 // 🚨 THE INSTANCE-LEVEL FACT, published (#4063). The per-space note #4065 writes is
                 // read one node at a time by an operator who already suspects something; the census
@@ -528,11 +639,11 @@ public sealed class GitHubWebhookProcessor
                     // quietly stops arriving until the registry seals this commit for this identity
                     // — an operator must be able to find it without reading the skip detail.
                     logger?.LogWarning(
-                        "Green build of {Repo}@{Branch} ({Sha}): {Held} sync source(s) HELD — the build is "
+                        "Sync {Trigger} of {Repo}@{Branch} ({Sha}): {Held} sync source(s) HELD — the commit is "
                         + "not sealed for this instance's framework identity {Identity}; {Landed} of them "
-                        + "import the commit that IS sealed instead, and none receives this build until it is "
+                        + "import the commit that IS sealed instead, and none receives this commit until it is "
                         + "sealed for this identity (MeshWeaver.Plugins#1430, #3845).",
-                        repo, branch, headSha, held, identity, landed);
+                        trigger, repo, branch, headSha, held, identity, landed);
 
                 return targets;
             });
@@ -547,7 +658,7 @@ public sealed class GitHubWebhookProcessor
     /// lastAttemptedCommitSha == 24c2d024</c>, <c>lastAttemptWasFinal: true</c> — the exact
     /// signature of a SETTLED source — while <c>Hosting/v1.17.1</c> and <c>v1.18.0</c> had been
     /// tagged by a green <c>main</c> run nine hours earlier and the space had never seen them. Every
-    /// green build in between reached <see cref="MatchingBuildTargets"/>, was held by
+    /// green build in between reached <see cref="MatchingSyncTargets"/>, was held by
     /// <see cref="SealedSyncGate"/>, and left NOTHING behind: the record said "final", the note was
     /// empty, and the only trace was a Warning in a log an operator must already suspect something
     /// to go looking in. Two sessions read "settled" off that node before the activity list gave the
@@ -1124,18 +1235,12 @@ public sealed class GitHubWebhookProcessor
                     return RecordMissedBuildFact(target, completion, d.Message.Error)
                         .Select(_ => 0);
                 }
-                // The build record is the CI gate's verdict; the import is what the verdict authorises.
-                // Both hang off this one green-build event so they cannot disagree about what shipped.
-                return TriggerSyncForGreenBuild(target, completion.Branch, headSha)
-                    .Select(_ => 1)
-                    .Catch((Exception ex) =>
-                    {
-                        // A failed import must not fail the delivery — the build record is already
-                        // written, and a non-2xx would make GitHub redeliver and re-import.
-                        logger?.LogWarning(ex,
-                            "Green build of {Repo} recorded, but triggering the sync failed.", repoUrl);
-                        return Observable.Return(1);
-                    });
+                // 🚨 The build record is a FACT for its consumers (the plugin catalog). It no longer
+                // triggers an import (policy sources-sync-on-push): the PUSH that started this build
+                // already brought the sources, and a green build of an OLDER commit finishing after a
+                // newer push had landed would have moved the Space backwards. A red build therefore
+                // holds nothing either — see ProcessPush.
+                return Observable.Return(1);
             });
     }
 

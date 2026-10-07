@@ -913,6 +913,24 @@ public sealed class ModuleLandingService : IDisposable
     /// </summary>
     /// <returns>The set that was proposed, or null when the wave changed nothing.</returns>
     public IObservable<ModuleSet?> ProposeModuleSet()
+        => ProposeCheckedModuleSet([]);
+
+    /// <summary>
+    /// <see cref="ProposeModuleSet"/>, with the set CHECKED against what the installed packages
+    /// require (MeshWeaver#6067): when any requirement of <paramref name="installed"/> is not met
+    /// by the version the set would load for the dependency's module
+    /// (<see cref="ModuleDependencyFloor.Unmet"/>), nothing is proposed — every unmet requirement
+    /// is logged as an error naming both packages and both versions, and the call FAULTS, which
+    /// every caller already answers by leaving the mesh on the set it runs. A set no replica should
+    /// boot onto is never written; the next wave that lands a satisfying dependency proposes.
+    /// </summary>
+    /// <param name="installed">The install records whose <see cref="PackageManifest.Requires"/>
+    /// the set must meet. Empty checks nothing — the unchecked proposal.</param>
+    /// <para>🚨 A distinct NAME, deliberately not an overload of <see cref="ProposeModuleSet"/>:
+    /// an overload turns every <c>&lt;see cref="ModuleLandingService.ProposeModuleSet"/&gt;</c> in
+    /// a dependent repository into a CS0419 under <c>-warnaserror</c>.</para>
+    /// <returns>The set that was proposed, or null when the wave changed nothing.</returns>
+    public IObservable<ModuleSet?> ProposeCheckedModuleSet(IReadOnlyList<PackageManifest> installed)
         => pool.InvokeBlocking(_ =>
         {
             // 🚨 Never from a PARTIAL read (post-merge review of #4427): a module the read dropped,
@@ -931,6 +949,21 @@ public sealed class ModuleLandingService : IDisposable
                     $"Not proposing a module set: the activation record could not be read whole "
                     + $"({faults.Count} fault(s): {string.Join(" | ", faults)}). A set proposed from it "
                     + "could name generations the whole record does not.");
+            // 🚨 #6067 — a set in which a declared dependency floor is not met is not a set any
+            // replica may boot onto: the dependent's code calls into a dependency build that does
+            // not have what it needs, and fails at RUN time with nothing pointing back here.
+            var unmet = ModuleDependencyFloor.Unmet(installed ?? [], landed);
+            if (!unmet.IsEmpty)
+            {
+                foreach (var floor in unmet)
+                    logger?.LogError(
+                        "[ModuleSet] NOT proposing the landed module set: {Unmet}", floor.Describe());
+                throw new InvalidOperationException(
+                    $"Not proposing a module set: {unmet.Count} declared dependency floor(s) are not met "
+                    + $"by the modules it would load — {string.Join(" | ", unmet.Select(u => u.Describe()))}. "
+                    + "The mesh stays on the set it runs until a wave lands a dependency that satisfies "
+                    + "every floor (MeshWeaver#6067).");
+            }
             var proposed = ModuleSetStore.Propose(baseDirectory, landed,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
@@ -963,6 +996,21 @@ public sealed class ModuleLandingService : IDisposable
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
+
+    /// <summary>
+    /// The MeshWeaver.* assemblies in <paramref name="assemblies"/> — other than the module's own entry
+    /// — that this running platform ships in its application closure. Pure over the process's
+    /// trusted-platform list.
+    /// </summary>
+    public static IReadOnlyList<string> BundledPlatformAssemblies(
+        string name, IReadOnlyList<(string FileName, byte[] Bytes)> assemblies) =>
+        assemblies
+            .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
+            .Where(simple => !string.Equals(simple, name, StringComparison.OrdinalIgnoreCase)
+                             && MeshWeaver.Compiler.PlatformShippedAssemblies.IsPlatformAssemblyName(simple)
+                             && MeshWeaver.Mesh.ModuleContexts.IsImageBound(simple))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     // Internal for the #4026 pin (InternalsVisibleTo): a second REPLICA's landing runs to
     // completion inside the first one's recording window, on the calling thread — a replica is
@@ -999,6 +1047,19 @@ public sealed class ModuleLandingService : IDisposable
             throw new ArgumentException(
                 $"Module '{name}': the assembly list does not contain its entry '{entryDll}' — "
                 + "such a folder could never load.", nameof(assemblies));
+        // 🚨 A module never bundles a platform contract (policy module-live-update-default): it
+        // resolves every one from the RUNNING platform, which is what lets it update independently of
+        // the platform. A bundle carrying a MeshWeaver.* assembly this platform ships is refused, by
+        // name, before a byte is written — the packer drops them (`meshweaver-plugin-build
+        // --platform-app`), so one that arrives here was packed without the witness. Only the ADOPT
+        // path refuses: the registry's shelf stocks bundles for other platforms and the consumer's own
+        // landing measures them.
+        if (!holdUnloadable && BundledPlatformAssemblies(name, assemblies) is { Count: > 0 } bundled)
+            throw new InvalidOperationException(
+                $"Module '{name}' refused: its bundle carries platform assembl{(bundled.Count == 1 ? "y" : "ies")} "
+                + $"{string.Join(", ", bundled)} that this platform ships. A module resolves every platform "
+                + "contract from the running platform and never bundles one — re-pack it against the platform "
+                + "(meshweaver-plugin-build --platform-app).");
 
         // 🚨 THE PLATFORM GATE, at placement — MEASURED, never declared (#3538, #3648).
         // `minMeshVersion` is a CLAIM its author writes; the module's real requirement is the SET
@@ -1070,7 +1131,7 @@ public sealed class ModuleLandingService : IDisposable
             var closure = assemblies
                 .Select(a => Path.GetFileNameWithoutExtension(a.FileName))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return ModulePlatformLink.Check(entryBytes, name, closure, surface);
+            return ModulePlatformLink.Check(entryBytes, name, closure, surface, ModuleLinkOptions.WithMembers);
         }
 
         // 🚨 THE GENERATION IS CONTENT-ADDRESSED (#3656) — `name@<16 hex of SHA-256 over the bytes
@@ -1405,7 +1466,8 @@ public sealed class ModuleLandingService : IDisposable
                 && !string.IsNullOrWhiteSpace(measured.FrameworkMvid))
                 return true;
             var headDll = ModuleActivationBoot.LandedDllPath(baseDirectory, head);
-            return !File.Exists(headDll) || !ModulePlatformLink.Check(headDll, surface).MayLoad;
+            return !File.Exists(headDll)
+                   || !ModulePlatformLink.Check(headDll, surface, ModuleLinkOptions.WithMembers).MayLoad;
         }
 
         if (restartRequired)

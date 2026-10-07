@@ -495,12 +495,7 @@ public class ModuleLinkVersionTest : IDisposable
             platform,
             options);
 
-        using var buffer = new MemoryStream();
-        var result = compilation.Emit(buffer);
-        Assert.True(result.Success, string.Join(
-            Environment.NewLine,
-            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        return buffer.ToArray();
+        return StandInCompile.Emit(compilation);
     }
 
     /// <summary>Writes an assembly into its OWN directory under the test root.</summary>

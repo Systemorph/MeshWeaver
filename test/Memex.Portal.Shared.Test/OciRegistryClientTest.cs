@@ -125,7 +125,7 @@ public class OciRegistryClientTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         var ct = TestContext.Current.CancellationToken;
 
-        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var fault = await Assert.ThrowsAsync<RegistryRefusedException>(() =>
             Client("mwi_not-this-registrys-key").GetManifest(Repository, registry.ManifestDigest)
                 .FirstAsync().Timeout(Budget).Await(ct));
 

@@ -279,6 +279,33 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         // Keep-alive timer — independent of node resolution, no-op until the hub
         // starts processing long-running work.
+        // An IDLE singleton must leave a draining pod too — not only when the next delivery arrives.
+        // Polled on the grain's own scheduler (a grain may only migrate itself from its own context);
+        // the check is two reads, so a short period costs nothing.
+        _drainWatchTimer = this.RegisterGrainTimer(
+            _ =>
+            {
+                // HandOffTheAddress is latched once a target is asked for and a cheap no-op without one,
+                // so this tick re-asks only while no survivor is Active (a single-pod instance, or one
+                // still joining) — never a repeated migration.
+                if (MustLeaveOnDrain())
+                {
+                    if (Interlocked.Exchange(ref _drainReported, 1) == 0)
+                        logger.LogWarning(
+                            "Grain {GrainId}: this pod has begun to DRAIN and this hub is an instance singleton "
+                            + "(RelocateOnDrain) — handing it off to a live silo now, not at SIGTERM",
+                            this.GetPrimaryKeyString());
+                    HandOffTheAddress();
+                }
+                return Task.CompletedTask;
+            },
+            new GrainTimerCreationOptions
+            {
+                DueTime = DrainWatchPeriod,
+                Period = DrainWatchPeriod,
+                Interleave = true
+            });
+
         _keepAliveTimer = this.RegisterGrainTimer(
             _ =>
             {
@@ -965,6 +992,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     private IGrainTimer? _keepAliveTimer;
+
+    /// <summary>How often an activation checks whether it is a singleton on a draining pod.</summary>
+    internal static readonly TimeSpan DrainWatchPeriod = TimeSpan.FromSeconds(2);
+
+    private IGrainTimer? _drainWatchTimer;
     private int _activeOperations;
     // Wall-clock ticks when the CURRENT run of long-running operations began (0 = none active). Bounds
     // how long the keep-alive may extend: a hung AI stream (no timeout — #147) would otherwise hold
@@ -1095,7 +1127,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // same refused router, so accepting it is the silent wait this gate exists to remove; the
         // refusal at least tells the sender. (The migration itself waits for the activation to go
         // idle, so the held work is not cut short by the hand-off.)
-        if (meshHub.IsLeaving())
+        // 🚨 …and an always-on SINGLETON leaves a pod the moment it begins to DRAIN (HostDrainSignal, the
+        // first /drain probe) — not 30 minutes later at SIGTERM: the same refusal and hand-off, opted in
+        // per hub (RelocateOnDrain), so the sessions that hold the pod open are not disturbed.
+        if (meshHub.IsLeaving() || MustRefuseOnDrain())
             return Task.FromResult(RefuseBecauseTheHostIsLeaving(delivery));
 
         EnsureActivationStarted();
@@ -1319,8 +1354,35 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     private static IMessageDelivery Acknowledge(IMessageDelivery delivery) =>
         DeliveryPayloadBounds.WithoutEchoedPayload(delivery);
 
+    /// <summary>
+    /// True when this activation's hub is an instance SINGLETON (<see cref="HostDrainExtensions.RelocateOnDrain"/>)
+    /// and its pod has begun to drain (<see cref="HostDrainSignal"/>): it must not stay here.
+    /// </summary>
+    private bool MustLeaveOnDrain() =>
+        _hub is { } built
+        && built.ServiceProvider.GetService(typeof(HostDrainSignal)) is HostDrainSignal signal
+        && signal.MustLeave(built.Address);
+
+    /// <summary>
+    /// True when a delivery to this drain-bound singleton must be REFUSED rather than served: drain has
+    /// begun AND the activation can actually leave — a hand-off is already under way, or another silo is
+    /// Active to take it (#6092 review). With nowhere to go (a single-pod instance, or every survivor
+    /// still joining) it keeps serving exactly as before drain existed, until SIGTERM's
+    /// <c>IsLeaving()</c> takes over — a refusal there would only bounce the work for the whole grace
+    /// period with no relocation to show for it.
+    /// </summary>
+    private bool MustRefuseOnDrain() =>
+        MustLeaveOnDrain()
+        && (Volatile.Read(ref _handOffRequested) != 0 || AnotherActiveSilo() is not null);
+
     /// <summary>0 until this activation has reported that its host is leaving — the report is once per activation.</summary>
     private int _leavingReported;
+
+    /// <summary>
+    /// 0 until this activation has reported that its pod began to DRAIN. Kept apart from
+    /// <see cref="_leavingReported"/> so the drain report never swallows the later SIGTERM report.
+    /// </summary>
+    private int _drainReported;
 
     /// <summary>0 until this activation has asked Orleans to move it off its leaving host.</summary>
     private int _handOffRequested;

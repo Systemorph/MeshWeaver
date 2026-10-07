@@ -164,6 +164,23 @@ public enum SelfUpdateOutcome
     /// <para>🚨 Appended, never inserted: the members before it keep their ordinals.</para>
     /// </summary>
     MigrationUnavailable,
+
+    /// <summary>
+    /// A landed module generation was pending and went LIVE in the running process (policy
+    /// <c>module-live-update-default</c>): swapped into its own load context, its hubs recycled —
+    /// no restart was announced or taken. Appended, never inserted.
+    /// </summary>
+    ActivatedLive,
+
+    /// <summary>
+    /// A landed module generation is pending activation and the RESTART hand-over to the control
+    /// lane FAILED (the inbox was unreachable or refused the announcement). Named apart from
+    /// <see cref="RestartUnavailable"/> because it is TRANSIENT — the mechanism exists and the next
+    /// attempt may get through — whereas <c>RestartUnavailable</c> is a decided answer (this install
+    /// cannot restart itself at all). A module reload records this as <c>Faulted</c> and retries it,
+    /// never a final <c>Failed</c> (MeshWeaver#6172). Appended, never inserted.
+    /// </summary>
+    RestartHandoverFailed,
 }
 
 /// <summary>
@@ -504,6 +521,16 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         UnresolvedInstalledTag = after.UnresolvedInstalledTag,
     };
 
+    /// <summary>The pending module generations went LIVE in the running process — no restart.</summary>
+    public static SelfUpdateVerdict ActivatedLive(SelfUpdateVerdict after, string detail) => new(
+        SelfUpdateOutcome.ActivatedLive,
+        $"{after.Message} A landed module generation was pending activation and went LIVE without a "
+        + $"restart ({detail}).",
+        after.Tag)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
     /// <summary>The roll floor deferred a pending restart, exactly as it defers a roll.</summary>
     public static SelfUpdateVerdict RestartDeferred(SelfUpdateVerdict after, string installed, TimeSpan elapsed, TimeSpan floor) => new(
         SelfUpdateOutcome.RestartDeferred,
@@ -538,10 +565,14 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         UnresolvedInstalledTag = after.UnresolvedInstalledTag,
     };
 
-    /// <summary>The restart hand-over failed: named as unavailable, with the cause, so the pending
-    /// module is a state an operator can see — exactly as an updater without the seam is.</summary>
+    /// <summary>The restart hand-over failed: named with the cause, so the pending module is a state
+    /// an operator can see — and its own outcome (<see cref="SelfUpdateOutcome.RestartHandoverFailed"/>),
+    /// because unlike <see cref="RestartUnavailable"/> it is transient: the next attempt may get through.</summary>
     public static SelfUpdateVerdict RestartHandoverFailed(SelfUpdateVerdict after, string installed, string detail) =>
-        RestartUnavailable(after, installed, $"the hand-over to the control lane failed: {detail}");
+        RestartUnavailable(after, installed, $"the hand-over to the control lane failed: {detail}") with
+        {
+            Outcome = SelfUpdateOutcome.RestartHandoverFailed,
+        };
 
     /// <summary>
     /// 🚨 Whether a pending restart may follow <paramref name="platform"/>'s verdict at all. Only a

@@ -31,6 +31,117 @@ namespace MeshWeaver.Graph.Configuration;
 public record DispatchCompileTrigger(MeshNode PendingNode);
 
 /// <summary>
+/// Re-establish backoff for a watcher whose query provider stalled (#5344). After a
+/// <c>QueryProviderStalledException</c> the watcher is re-subscribed with a bounded, growing delay
+/// plus jitter instead of straight away, so a stalled watcher does not go back into the same
+/// saturated pg-read queue every 16 s. Only an UNBROKEN run of stalls adds delay: the count resets on
+/// any other outcome of an attempt — the first element it delivers, a fault that is not a stall, or a
+/// completion — so a non-stall fault never pays an earlier stall's delay (the re-establish primitive
+/// keeps its own schedule). One instance per watcher install.
+/// </summary>
+public sealed class SourcesWatcherStallBackoff
+{
+    /// <summary>First extra delay after a stall, before jitter.</summary>
+    public static readonly TimeSpan DefaultBaseDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>Upper bound of the extra delay, before jitter.</summary>
+    public static readonly TimeSpan DefaultCap = TimeSpan.FromSeconds(120);
+
+    private readonly TimeSpan baseDelay;
+    private readonly TimeSpan cap;
+    private readonly Func<double> nextRandom;
+    private readonly Func<Exception, bool> isStall;
+    private readonly System.Reactive.Concurrency.IScheduler scheduler;
+    private int consecutiveStalls;
+
+    /// <summary>Creates the backoff. Every argument has a production default; they exist so a test can pin them.</summary>
+    public SourcesWatcherStallBackoff(
+        TimeSpan? baseDelay = null,
+        TimeSpan? cap = null,
+        Func<double>? nextRandom = null,
+        Func<Exception, bool>? isStall = null,
+        System.Reactive.Concurrency.IScheduler? scheduler = null)
+    {
+        this.baseDelay = baseDelay ?? DefaultBaseDelay;
+        this.cap = cap ?? DefaultCap;
+        this.nextRandom = nextRandom ?? (() => Random.Shared.NextDouble());
+        this.isStall = isStall ?? (e => IsQueryStall(e));
+        this.scheduler = scheduler ?? System.Reactive.Concurrency.DefaultScheduler.Instance;
+    }
+
+    /// <summary>Stalls seen since the last element was delivered.</summary>
+    public int ConsecutiveStalls => Volatile.Read(ref consecutiveStalls);
+
+    /// <summary>
+    /// True when the exception, or any exception it wraps, is a query-provider stall. Walks the
+    /// <see cref="Exception.InnerException"/> chain AND every member of an
+    /// <see cref="AggregateException"/> — whose <see cref="Exception.InnerException"/> is only its
+    /// first member — so a stall surfacing beside other faults is still recognised.
+    /// </summary>
+    public static bool IsQueryStall(Exception ex) => ex switch
+    {
+        QueryProviderStalledException => true,
+        AggregateException aggregate => aggregate.InnerExceptions.Any(IsQueryStall),
+        { InnerException: { } inner } => IsQueryStall(inner),
+        _ => false,
+    };
+
+    /// <summary>The extra delay before the next attempt: zero while no stall is outstanding.</summary>
+    public TimeSpan NextDelay()
+    {
+        var stalls = ConsecutiveStalls;
+        if (stalls <= 0)
+            return TimeSpan.Zero;
+        var ceilingTicks = Math.Min(cap.Ticks, (long)(baseDelay.Ticks * Math.Pow(2, Math.Min(stalls - 1, 20))));
+        var jitter = Math.Clamp(nextRandom(), 0d, 1d);
+        // Equal jitter: between half the ceiling and the ceiling.
+        return TimeSpan.FromTicks((long)(ceilingTicks * (0.5 + 0.5 * jitter)));
+    }
+
+    /// <summary>Records one more stall.</summary>
+    public void OnStall() => Interlocked.Increment(ref consecutiveStalls);
+
+    /// <summary>Records a delivered element: the watcher is healthy again.</summary>
+    public void OnDelivered() => Interlocked.Exchange(ref consecutiveStalls, 0);
+
+    /// <summary>Records an attempt that ended without a stall (another fault, or a completion): the
+    /// run of stalls is broken, so the next attempt pays no stall delay.</summary>
+    public void OnNotStalled() => Interlocked.Exchange(ref consecutiveStalls, 0);
+
+    /// <summary>
+    /// Wraps ONE subscription attempt of the watcher's stream: waits <see cref="NextDelay"/> first,
+    /// then subscribes; counts a stall fault and resets on a delivered element, a non-stall fault or a
+    /// completion.
+    /// </summary>
+    public IObservable<T> Apply<T>(IObservable<T> source)
+        => Observable.Defer(() =>
+        {
+            var delay = NextDelay();
+            var attempt = delay > TimeSpan.Zero
+                ? Observable.Timer(delay, scheduler).SelectMany(_ => source)
+                : source;
+            return attempt.Do(
+                _ => OnDelivered(),
+                ex =>
+                {
+                    if (isStall(ex))
+                        OnStall();
+                    else
+                        OnNotStalled();
+                },
+                OnNotStalled);
+        });
+}
+
+/// <summary>Operator form of <see cref="SourcesWatcherStallBackoff.Apply{T}"/>.</summary>
+public static class SourcesWatcherStallBackoffExtensions
+{
+    /// <summary>Applies the stall backoff to one subscription attempt of a watcher stream.</summary>
+    public static IObservable<T> WithStallBackoff<T>(this IObservable<T> source, SourcesWatcherStallBackoff backoff)
+        => backoff.Apply(source);
+}
+
+/// <summary>
 /// Static helpers for NodeType compilation, owned by the per-NodeType hub
 /// (the actor that "is" the NodeType). The hub is at <c>Address(nodeTypePath)</c>;
 /// its own <see cref="MeshNode"/> carries every property the compile needs
@@ -1960,6 +2071,11 @@ internal static class NodeTypeCompilationHelpers
         // watcher; it issues nothing at all for a source set with no `@@` in it.
         var includeReader = SourceFingerprintIncludeReader.For(hub, logger);
 
+        // #5344 - after a QueryProviderStalledException this watcher re-establishes with a bounded,
+        // jittered, growing delay instead of straight into the saturated pg-read queue. One
+        // instance per install, so the failure count survives the primitive's re-subscriptions.
+        var stallBackoff = new SourcesWatcherStallBackoff();
+
         // Outer subscription: discover the source path set via the shared
         // synced query (NodeSources.GetSources). When the path set changes
         // (sources added / removed), we re-subscribe to per-path streams.
@@ -2108,7 +2224,14 @@ internal static class NodeTypeCompilationHelpers
                 // root keeps the previous value, exactly as an unreadable include does.
                 .SelectMany(p => ReadModuleVersion(hub, accessService, hubPath, logger)
                     .Select(mv => (p.Snapshot, p.Fingerprint, p.Includes, ModuleVersion: mv))))
-            .Switch(),
+            .Switch()
+            // #5344 — the backoff wraps the WHOLE factory above, not only the per-path tail: the
+            // path-set discovery (NodeSources.GetSources, the read the #5344 stall faults) and the
+            // include-arrival watch both sit upstream of the Switch()es and pass their errors here.
+            // The include reader and the module-version read never fault the stream (EmitNull
+            // timeouts; SourceIncludeUnavailableException is caught), so there is nothing else to
+            // classify — every QueryProviderStalledException this watcher can raise lands here.
+            .WithStallBackoff(stallBackoff),
                 published =>
                 {
                     var snapshot = published.Snapshot;
@@ -3219,13 +3342,16 @@ internal static class NodeTypeCompilationHelpers
     internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub)
     {
         var versions = ModuleVersionsOf(hub);
+        var packageVersions = ModulePackageVersionsOf(hub);
         // 🚨 Platform entries are keyed on the COMPATIBILITY KEY (policy
         // platform-backwards-compatibility), never on per-build ref-asm hashes: a platform roll
-        // within one epoch must not move a single type's record.
+        // within one epoch must not move a single type's record. Module entries prefer the
+        // module's PACKAGE version (pkg:), the one module id that moves between module builds.
         return Compiler.CompiledDependencies.CreateCompatibilityIdResolver(
             FrameworkVersion,
             ModuleMvidsOf(hub),
-            name => versions.TryGetValue(name, out var version) ? version : null);
+            name => versions.TryGetValue(name, out var version) ? version : null,
+            name => packageVersions.TryGetValue(name, out var version) ? version : null);
     }
 
     /// <summary>Installed module simple name → implementation MVID ("N"), the resolver's fallback
@@ -3257,6 +3383,24 @@ internal static class NodeTypeCompilationHelpers
         {
             var name = module.Assembly.GetName().Name;
             if (!string.IsNullOrEmpty(name) && module.Version is { Length: > 0 } version)
+                map[name] = version;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Installed module simple name → the PACKAGE version stamped into it
+    /// (<see cref="InstalledModuleAssembly.PackageVersion"/>), for the resolver's <c>pkg:</c>
+    /// floor ids. A module carrying no stamp is absent and resolves as before.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ModulePackageVersionsOf(IMessageHub hub)
+    {
+        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name) && module.PackageVersion is { Length: > 0 } version)
                 map[name] = version;
         }
         return map;

@@ -193,11 +193,30 @@ internal class MeshNodeCompilationService(
     // which assemblies Roslyn can see is part of the compile input. This service only resolves
     // THIS mesh's installed-module composition from its service tree and threads it in. Lazy per
     // service instance: modules install at boot, before any compile runs.
-    private IReadOnlyList<MetadataReference> References => meshReferences.Value;
+    // 🚨 Keyed by the installed modules' MVIDs, not computed once: a module in its own load context
+    // answers with its CURRENT generation (policy module-live-update-default), so after a live swap
+    // the next compile must see the new generation's metadata — a once-per-service reference set is
+    // the boot generation for the life of the process, and a NodeType written against the new
+    // member would fail exactly as the 2026-10-05 incident did (CS0117). Unchanged module set ⇒ the
+    // same instance, so the steady state costs one MVID read per module.
+    private IReadOnlyList<MetadataReference> References
+    {
+        get
+        {
+            var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray();
+            var key = string.Join(";", modules.Select(m => m.Mvid.ToString("N")).OrderBy(x => x, StringComparer.Ordinal));
+            var cached = meshReferences;
+            if (cached is not null && string.Equals(cached.Key, key, StringComparison.Ordinal))
+                return cached.References;
+            var composed = new ModuleReferenceSet(key, CompileReferences.ComposeWithModules(modules));
+            Interlocked.Exchange(ref meshReferences, composed);
+            return composed.References;
+        }
+    }
 
-    private readonly Lazy<IReadOnlyList<MetadataReference>> meshReferences = new(() =>
-        CompileReferences.ComposeWithModules(
-            hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray()));
+    private ModuleReferenceSet? meshReferences;
+
+    private sealed record ModuleReferenceSet(string Key, IReadOnlyList<MetadataReference> References);
 
     /// <summary>
     /// Resolves every <c>@@</c> include via the toolchain's shaping
@@ -1795,9 +1814,25 @@ internal class MeshNodeCompilationService(
                     ? string.Join("; ", rtl.LoaderExceptions
                         .Where(e => e is not null).Select(e => e!.Message).Distinct())
                     : ex.Message;
+                // #5212 shape b: an image that EMITTED and then cannot be loaded ("format is
+                // invalid") is the one exit of the #890 process fault the emit canary never sees —
+                // nothing threw inside Emit. Probe the shared compiler with a known-good source so
+                // the line says whether the process, not this type, is what broke.
+                // Keyed on the exception TYPE where the runtime gives one (BadImageFormatException,
+                // directly or as a loader exception), and on the loader's message for the
+                // TypeLoadException shape, which carries no distinguishing type or HResult. .NET
+                // ships CoreLib's messages in English only, but the wording can change between
+                // runtime versions — NodeTypeCompilation.md records that assumption.
+                var invalidImage = ex is BadImageFormatException
+                    || (ex is System.Reflection.ReflectionTypeLoadException loadFailure
+                        && loadFailure.LoaderExceptions.Any(e => e is BadImageFormatException))
+                    || detail.Contains("format is invalid", StringComparison.Ordinal);
+                var processProbe = invalidImage
+                    ? " — " + EmitPipeline.ProbeEmittedImageLoads()
+                    : "";
                 logger.LogWarning(ex,
-                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}",
-                    assemblyLocation, detail);
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe}",
+                    assemblyLocation, detail, processProbe);
                 return new NodeCompilationResult(null, [],
                     AppendError(log, $"Failed to load the compiled assembly — {detail}",
                         // The loader's own exception text rides verbatim behind a translated lead.

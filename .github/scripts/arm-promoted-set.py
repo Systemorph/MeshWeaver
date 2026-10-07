@@ -3,16 +3,20 @@
 
     python3 .github/scripts/arm-promoted-set.py select --armed-max N [--override SET] [--resume SET]
     python3 .github/scripts/arm-promoted-set.py armed-state --manifests portal.json   # the cursor
-    python3 .github/scripts/arm-promoted-set.py pending            # MeshWeaver.Plugins' poller
+    python3 .github/scripts/arm-promoted-set.py control-first --control-manifests control.json --version V
+    python3 .github/scripts/arm-promoted-set.py control-announcement --version V --image-repository R --instance URL
+    python3 .github/scripts/arm-promoted-set.py control-lag        # policy control-always-latest (platform half)
     python3 .github/scripts/arm-promoted-set.py armed-base --manifests portal.json   # promote's record base
-    python3 .github/scripts/arm-promoted-set.py control-follow --manifests portal.json --control-manifests control.json
     python3 .github/scripts/arm-promoted-set.py --self-test
 
-Policy `one-promotion-gate` (register: Doc/Architecture/PolicyNotProse). Design of record:
-Doc/Architecture/OnePromotionGate.
+Policies `one-promotion-gate`, `platform-deploy-control-first`, `platform-module-deploy-separate` and
+`control-always-latest` (register: Doc/Architecture/PolicyNotProse). Design of record:
+Doc/Architecture/PlatformAndModuleDeploy (and Doc/Architecture/OnePromotionGate for the arming
+mechanics this file still owns: the cursor, the completion marker, the resume, the base).
 
 WHAT A SET IS. main-cd builds core main HEAD together with MeshWeaver.Plugins main HEAD as of its
-`gate` job (the pair tag `<core7>-p<plugins7>` on memex-portal-ai names both). `promote` tags the
+`gate` job (both full commits are in the promotion record; the `<core7>-p<plugins7>` pair tag that
+used to name them on memex-portal-ai is retired). `promote` tags the
 set for CI — identity tags, `main`, `mw-plugin-test:latest`, the tester's and the migration's
 version tags — and uploads a PROMOTION RECORD (artifact `promotion-record`, one JSON object: the
 run number, both full commits, the staging tag, the three image versions and the verdict key).
@@ -26,14 +30,26 @@ the control instance. main-cd's `arm` job writes those, for the set this script 
 
   * the NEWEST promoted set NEWER than every set already armed (never backwards — a set older than
     the armed one is passed over, saying so);
-  * whose MeshWeaver.Plugins dependent-suites verdict for exactly that PAIR is `success` — the
-    verdict `core-candidate.yml` writes at `refs/core-candidate/pair-<core7>-p<plugins7>` in
-    MeshWeaver.Plugins, validated field by field (key, candidate, base, and the Plugins commit);
+  * whose PLATFORM verdict is green (`judge`): the platform's own tests (a promoted set comes only
+    from a commit whose required check is green), that run's compatibility LADDER (the module set
+    the fleet runs, as PUBLISHED by the modules' own lanes, links unchanged against this platform),
+    and CONTROL FIRST — the control instance (`.github/control-instance.json`) is RUNNING a build
+    that contains the set's core commit and answers `/health` 200. No MeshWeaver.Plugins
+    dependent-suites verdict, seal or pair is read: a module's own problems never hold a platform
+    roll (policy `platform-module-deploy-separate`);
   * or the one set named by `--override` (a workflow_dispatch carrying its reason) — an
     instruction, so a set that is not promoted is a RED, never a substitution.
 
-A set whose verdict is absent is WAITING, one whose verdict is red is REFUSED: neither is armed,
-and a newer set with a green verdict supersedes both. Silence is never a pass.
+A set whose ladder is still running (or unreadable), or whose control reading is absent, is
+WAITING; one whose ladder is red, MISSING (the run has no ladder job) or AMBIGUOUS (several jobs
+answer to the ladder's name) is REFUSED: neither is armed, and a newer green set supersedes both.
+Silence is never a pass.
+
+CONTROL FIRST. `control-first` decides the control image's tags for THIS run's accepted build:
+every platform build that passed the control image's own acceptance is tagged
+`memex-control:<version>` (+ line pointers, never backwards) in the run that built it — before,
+and independent of, any arming. `control-lag` is the alarm on the other end: control not running
+the newest build it was given, past the bound in `.github/control-instance.json`, is RED.
 
 ARMING IS COMPLETE ONLY WHEN THE WHOLE SEQUENCE LANDED. The cursor — the newest `<version>` tag on
 memex-portal-ai — moves at phase C, before phase D (the line pointers) and before the release event.
@@ -47,40 +63,38 @@ again — the control instance consumes a repeated build fact idempotently). A n
 wins: arming it moves the pointers and sends the event past the incomplete one.
 
 THE BUNDLE'S BASE — the newest ARMED set, never the first parent. A promoted set usually carries
-several core merges (the batch window; `pending` supersedes older pairs instead of queueing them), and
+several core merges (the batch window), and
 every one of them reaches the fleet when the set is armed. So the record's `base` — the commit the
 Plugins run diffs from and re-runs its control arm at, and the one the verdict is pinned to — is the
 core commit of the newest ARMED set: `base..candidate` is then exactly the merges the fleet has not
 seen. `armed-base` resolves it from memex-portal-ai's manifests (the armed version tag shares its
-manifest with a core sha or pair tag). The record says which rule produced `base` in
+manifest with a core sha or staging tag — or, for a set armed before the pair tag's retirement, a
+pair tag). The record says which rule produced `base` in
 `base_kind`:
 
   * `armed`         — the newest armed set's commit (the normal case);
   * `first-parent`  — no set has ever been armed, or the candidate IS the armed set: nothing wider
                       exists to measure, said out loud;
   * `unresolved`    — the armed set could not be read. The record keeps the first parent so CI still
-                      promotes, but `select` REFUSES to arm it and `pending` does not measure it: a
+                      promotes, but `select` REFUSES to arm it: a
                       narrower bundle than the truth would arm merges nobody measured. The next
                       promoted set tries again.
 
 A record written before this rule carries no `base_kind` and is judged as before (legacy, first
 parent), so a set promoted in the transition is never stranded.
 
-`pending` is the other consumer's half: MeshWeaver.Plugins' `promotion-candidate.yml` asks it for
-the newest promoted-but-unarmed pair that has NO verdict yet, and runs its suites against it. So a
-burst of merges coalesces: the poller always takes the newest pair, and the older ones are simply
-superseded — never queued.
+There is no second consumer any more. MeshWeaver.Plugins' advisory poller (`promotion-candidate.yml`)
+and the `pending` command that answered it were retired once no verdict it wrote decided anything
+(Doc/Architecture/PlatformAndModuleDeploy, migration step 6).
 
 "Does armed set X contain core commit C / Plugins commit P?" is answered by ANCESTRY against the
 record's two commits — Memex `scripts/image-contains.py`, which reads the same record.
 
-API budget: one runs page, one artifact listing per run examined (+1 download per record), two
-reads per verdict ref. REST only (AGENTS.md: never GraphQL).
+API budget: one runs page, one artifact listing per run examined (+1 download per record). REST only (AGENTS.md: never GraphQL).
 """
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import io
 import json
 import os
@@ -93,7 +107,6 @@ from pathlib import Path
 from typing import Callable
 
 CORE = "Systemorph/MeshWeaver"
-PLUGINS = "Systemorph/MeshWeaver.Plugins"
 API = "https://api.github.com"
 WORKFLOW = "main-cd.yml"
 RECORD_ARTIFACT = "promotion-record"
@@ -102,16 +115,16 @@ RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugin
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SHORT_SHA_TAG = re.compile(r"^[0-9a-f]{7}$")
+# LEGACY — the retired `<core7>-p<plugins7>` pair tag (policy `platform-module-deploy-separate`).
+# main-cd no longer mints it; sets promoted before the retirement still carry it, so it is READ,
+# never written. The per-run identity that replaced it is the staging tag below.
 PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
+# `staging-<core7>-<run id>` — the build's own tag, written before promote, unique per run and never
+# moved to another build, so it names the core of the manifest it sits on even after a rebuild of the
+# same core commit re-points the bare `<core7>` tag. `arm` writes the version tag FROM it.
+STAGING_TAG = re.compile(r"^staging-([0-9a-f]{7})-[0-9]+$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
-
-# The waiter's validation is THE definition of a valid verdict — imported, never restated.
-_spec = importlib.util.spec_from_file_location(
-    "await_dependent_verdict", Path(__file__).with_name("await-dependent-verdict.py"))
-_adv = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-_spec.loader.exec_module(_adv)  # type: ignore[union-attr]
-validate_verdict = _adv.validate
 
 Get = Callable[[str, str], tuple[int, object]]
 
@@ -174,9 +187,11 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
     metadata (`az acr manifest list-metadata -o json`), or None when no manifest carries a version
     tag at all (nothing was ever armed). Pure.
 
-    The version tag is written by `arm` onto the promoted image's manifest. `promote` writes both a
-    core sha tag and a core/Plugins pair tag, but a later pair for the SAME core moves the sha tag
-    to that later manifest. The pair tag remains on the armed manifest and still names its core.
+    The version tag is written by `arm` onto the promoted image's manifest, FROM its staging tag
+    `staging-<core7>-<run id>`. `promote` also writes the bare core sha tag, but a rebuild of the SAME
+    core commit (a host-relevant MeshWeaver.Plugins change, or an operator's `rebuild`) moves that tag
+    to the later manifest. The staging tag stays on the armed manifest and still names its core. Sets
+    armed before the pair tag was retired are read through their legacy `<core7>-p<plugins7>` tag.
     Conflicting or missing identities are errors, never guesses (a wrong base narrows the bundle)."""
     if not isinstance(manifests, list):
         raise ValueError("the manifest metadata is not a JSON list")
@@ -195,45 +210,37 @@ def armed_commit(manifests: object, require_sha: bool = True) -> tuple[str, str]
         return best[1], ""
     shas = {t for t in best[2] if SHORT_SHA_TAG.match(t)}
     shas.update(m.group(1) for t in best[2] if (m := PAIR_TAG.match(t)))
+    shas.update(m.group(1) for t in best[2] if (m := STAGING_TAG.match(t)))
     if len(shas) != 1:
         raise ValueError(f"the newest armed manifest {best[1]} names {len(shas)} distinct core commits "
                          f"({best[2]}) — cannot name its core commit")
     return best[1], next(iter(shas))
 
 
-def control_follow(portal_manifests: object, control_manifests: object) -> dict:
-    """What the CONTROL image (`memex-control`) must be told about the newest ARMED set. Pure.
+def control_first(control_manifests: object, version: str) -> dict:
+    """Policy `platform-deploy-control-first`: what the CONTROL image (`memex-control`) must be told
+    about THIS run's accepted platform build. Pure.
 
-    The control image is the same build as memex-portal-ai under another repository name
-    (`-p:MemexControlImage=true`), so it follows the SAME promotion gate: `control-promote` writes
-    only identity tags (the core sha and the `<core7>-p<plugins7>` pair), and a version tag — the
-    thing a Continuous record with `updatePattern: 3.0.0-ci*` rolls to — and the line pointers are
-    written only for a set `arm` armed on memex-portal-ai. The pair tag is the join: the armed
-    version shares its manifest with exactly one pair tag, and the accepted control image of that
-    pair carries the same pair tag (the bare sha tag is re-pointed by a rebuild, the pair is not).
+    Every platform build that passed the control image's own acceptance (`control-acceptance`:
+    empty DB, a broken NodeType row, N-1 on the migrated DB) is the control instance's NEXT image,
+    unconditionally — it never waits for the fleet's arming, a MeshWeaver.Plugins verdict, a seal
+    or a module publication (policy `platform-module-deploy-separate`). So the version tag (what a
+    Continuous record with `updatePattern: 3.0.0-ci*` rolls to) and the line pointers are written
+    for `version` here, in the same run that accepted the image. The fleet is offered the build
+    only AFTER control is running it (`select`, the control half of the platform verdict).
 
-    Returns {"action", "version", "pair", "move_pointers", "control_newest"}:
-      * `none`    — nothing was ever armed;
-      * `done`    — memex-control already carries the armed version;
-      * `tag`     — its accepted image for the armed pair exists: tag the version (and the line
-                    pointers when `move_pointers` — never backwards past a newer control version);
-      * `missing` — no accepted control image for the armed pair (its control lane failed or has not
-                    finished): the control image stays where it is, and the caller SAYS so.
-    An armed manifest naming zero or several pairs is a ValueError — never a guess."""
-    got = armed_commit(portal_manifests, require_sha=False)
-    if got is None:
-        return {"action": "none", "version": "", "pair": "", "move_pointers": False, "control_newest": ""}
-    version = got[0]
-    armed_tags: list[str] = []
-    for row in portal_manifests:  # armed_commit validated it is a list
-        t = row.get("tags") if isinstance(row, dict) else None
-        if isinstance(t, list) and version in t:
-            armed_tags = [str(x) for x in t]
-            break
-    pairs = sorted({t for t in armed_tags if PAIR_TAG.match(t)})
-    if len(pairs) != 1:
-        raise ValueError(f"the armed manifest {version} names {len(pairs)} pair tags ({armed_tags}) — "
-                         f"cannot name the control image that belongs to it")
+    Returns {"action", "version", "move_pointers", "announce", "control_newest"}:
+      * `done` — memex-control already carries `version` (idempotent re-run);
+      * `tag`  — write the version tag, and the line pointers when `move_pointers` (never backwards:
+                 a NEWER control version already tagged keeps the pointers where they are).
+    `announce` — hand THIS build to control's roll lane (`control_announcement`): true unless a NEWER
+    control version is already tagged, on `done` as on `tag` (a re-run re-announces; the routing
+    side dedupes, and a re-delivery is how a lost POST is closed). Never an older build: that
+    would only be refused as a backwards roll on the receiving side.
+    A version that is not `X.Y.Z[-pre]-ci.N` is a ValueError — never a guess."""
+    n_self = run_number_of(version)
+    if n_self is None:
+        raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N — refusing to tag memex-control with it")
     if not isinstance(control_manifests, list):
         raise ValueError("the memex-control manifest metadata is not a JSON list")
     control_tags: set[str] = set()
@@ -243,16 +250,70 @@ def control_follow(portal_manifests: object, control_manifests: object) -> dict:
             control_tags.update(str(x) for x in t)
     numbered = [(n, t) for t in control_tags if (n := run_number_of(t)) is not None]
     newest = max(numbered)[1] if numbered else ""
-    n_self = run_number_of(version) or 0
+    newest_or_self = not numbered or n_self >= max(numbered)[0]
     if version in control_tags:
-        action = "done"
-    elif pairs[0] in control_tags:
-        action = "tag"
-    else:
-        action = "missing"
-    return {"action": action, "version": version, "pair": pairs[0],
-            "move_pointers": action == "tag" and (not numbered or n_self >= max(numbered)[0]),
-            "control_newest": newest}
+        return {"action": "done", "version": version, "move_pointers": False,
+                "announce": newest_or_self, "control_newest": newest}
+    return {"action": "tag", "version": version, "move_pointers": newest_or_self,
+            "announce": newest_or_self, "control_newest": newest}
+
+
+SELF_UPDATE_AVAILABLE = "self-update-available"
+CONTROL_FIRST_REPORTER = "main-cd control-first"
+
+
+def line_pattern(version: str) -> str:
+    """The version LINE a set belongs to, as the self-update pattern syntax spells it:
+    `3.0.0-ci.10052` → `3.0.0-ci*`. Pure; a non-set name is a ValueError."""
+    m = SET_NAME.match(version or "")
+    if m is None:
+        raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N — it names no line")
+    return version[: m.start(1) - 1] + "*"
+
+
+def control_announcement(deployment: str, version: str, image_repository: str, instance: str,
+                         detected_at: str) -> dict:
+    """Policy `platform-deploy-control-first`, the DELIVERY half: the signed `self-update-available`
+    event `control-first` POSTs into the control plane's inbox (`Hosting/PlatformBuilds`) for the
+    control record, so the build it just tagged becomes a routed `Roll` (MeshWeaver.Plugins
+    `SelfUpdateRouting`) — which runs UNATTENDED because the record is Continuous, its pattern admits
+    the tag and it carries no `rollGate` (`ActionsExecutor.AdmittedUnattended`). Pure.
+
+    🚨 WHY CD SENDS IT, and not control's own in-pod self-updater. That updater lists
+    `SelfUpdate:PortalRepository` — `memex-portal-ai` by default, rendered by nothing for control —
+    and `memex-portal-ai:<version>` is written only by `arm`, which waits for control to RUN the
+    build: a circular wait, so control could only ever follow the fleet, never lead it. Measured
+    2026-10-06: control's `Admin/UpdatePolicy` read `check FAILED: CredentialUnavailableException`
+    on every hourly check, its handover route was its own inbox (whose mesh holds no `Deployments`
+    record), and `Ops/Actions` held NO `selfupdate-roll-control-*` ever. The job that tagged the
+    image is the one place that knows, deterministically, that control has a new build.
+
+    The record still decides everything: the receiving side resolves `deployment` to its record
+    (the lookup IS the authorization), refuses a repository other than the record's
+    `imageRepository`, never rolls backwards, and parks the roll for an approval whenever the
+    record is not Continuous, its pattern does not admit the tag, or it declares a `rollGate`.
+    `pattern` is the build's own line (`line_pattern`) — the narrowest admission that names this
+    tag; the record's `updatePattern` is the ceiling it is intersected with."""
+    dep = (deployment or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", dep):
+        raise ValueError(f"{deployment!r} is not a plain deployment id or path")
+    repo = (image_repository or "").strip()
+    if not repo or ":" in repo.rsplit("/", 1)[-1] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9./_:-]*", repo):
+        raise ValueError(f"{image_repository!r} is not a plain image repository (registry/name, no tag)")
+    pattern = line_pattern(version)
+    # Key order is the wire order: `event` first, as the instance's own announcer writes it.
+    return {
+        "event": SELF_UPDATE_AVAILABLE,
+        "deployment": dep,
+        "instance": instance,
+        "newVersion": version,
+        "newImage": f"{repo}:{version}",
+        "policy": "platform-deploy-control-first",
+        "pattern": pattern,
+        "trigger": "control-first",
+        "reporter": CONTROL_FIRST_REPORTER,
+        "detectedAt": detected_at,
+    }
 
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
@@ -318,43 +379,159 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
             log(f"  run #{number}: record refused — {why}")
             continue
         rec["run_url"] = run.get("html_url", "")
+        rec["run_id"] = run.get("id")
         out.append(rec)
     out.sort(key=lambda r: int(r["run_number"]), reverse=True)
     return out
 
 
-def read_verdict(get: Get, plugins_token: str, key: str) -> tuple[object | None, str]:
-    code, ref = get(f"repos/{PLUGINS}/git/ref/core-candidate/{key}", plugins_token)
-    if code == 404:
-        return None, "no verdict yet"
-    if code != 200 or not isinstance(ref, dict):
-        return None, f"verdict ref unreadable (HTTP {code})"
-    code, commit = get(f"repos/{PLUGINS}/git/commits/{ref['object']['sha']}", plugins_token)
-    if code != 200 or not isinstance(commit, dict):
-        return None, f"verdict commit unreadable (HTTP {code})"
+def read_run_jobs(get: Get, core_token: str, run_id: object) -> list[dict] | None:
+    """Every job of one main-cd run (REST, one page of 100 — main-cd has fewer jobs than that, the
+    matrix legs included), or None when the run is unreadable."""
+    code, page = get(f"repos/{CORE}/actions/runs/{run_id}/jobs?per_page=100&filter=latest", core_token)
+    if code != 200 or not isinstance(page, dict):
+        return None
+    return [j for j in page.get("jobs", []) if isinstance(j, dict)]
+
+
+def ladder_of(jobs: list[dict] | None) -> str | None:
+    """The ladder's conclusion in one run's jobs: its `conclusion` once completed, `missing` when the
+    run has no ladder job at all (a refusal — a promoted set nobody linked the modules against),
+    `ambiguous` when SEVERAL jobs answer to the ladder's name (a refusal — a green first one must
+    never mask a red later one; a matrix ladder would need this reading rewritten, not guessed), None
+    while it runs or when the run could not be read. Pure."""
+    if jobs is None:
+        return None
+    hits = [j for j in jobs if str(j.get("name", "")).rstrip().endswith(LADDER_JOB_SUFFIX)]
+    if not hits:
+        return "missing"
+    if len(hits) > 1:
+        return "ambiguous"
+    j = hits[0]
+    return str(j.get("conclusion")) if j.get("status") == "completed" and j.get("conclusion") else None
+
+
+def control_given_at(jobs: list[dict] | None) -> str | None:
+    """When the run's `Deploy control first` job SUCCEEDED (ISO timestamp), else None. Pure."""
+    for j in jobs or []:
+        if str(j.get("name", "")).startswith(CONTROL_FIRST_JOB_PREFIX) and j.get("conclusion") == "success":
+            return str(j.get("completed_at") or "") or None
+    return None
+
+
+def read_control(url: str, get: Get, core_token: str, core_shas: list[str],
+                 fetch: Callable[[str], tuple[int, str]] | None = None) -> dict:
+    """The control instance as the platform verdict reads it: its running core commit (public
+    `/api/version`), whether `/health` answers 200, and — by ANCESTRY, never by timestamps — whether
+    that commit contains each of `core_shas` (GitHub compare: `identical` or `ahead`). Every failure
+    is recorded in `why` and leaves the answer unknown, which `judge` and `control_lag` read as
+    NOT shown — never as a pass."""
+    fetch = fetch or _fetch_public
+    out: dict = {"commit": "", "healthy": False, "contains": {}, "why": ""}
+    code, body = fetch(f"{url.rstrip('/')}/api/version")
     try:
-        return json.loads(commit.get("message", "")), "found"
-    except ValueError as e:
-        return {"malformed": str(e)}, "found"
+        commit = str(json.loads(body).get("commit") or "") if code == 200 else ""
+    except (ValueError, AttributeError):
+        commit = ""
+    if not SHA.match(commit):
+        out["why"] = f"{url}/api/version answered {code} without a 40-hex commit"
+        return out
+    out["commit"] = commit
+    hcode, _ = fetch(f"{url.rstrip('/')}/health")
+    out["healthy"] = hcode == 200
+    if hcode != 200:
+        out["why"] = f"{url}/health answered {hcode}"
+    for sha in dict.fromkeys(core_shas):
+        out["contains"][sha] = contains_commit(get, core_token, commit, sha)
+    return out
 
 
-def judge(rec: dict, verdict: object | None, why: str) -> tuple[str, str]:
-    """(state, sentence): state is `green`, `waiting` or `refused`. Pure."""
-    if rec.get("base_kind") == "unresolved":
-        return "refused", ("its bundle base could not be resolved when it was promoted (the newest armed set was "
-                           "unreadable), so its verdict would cover fewer merges than the fleet would receive")
-    if verdict is None:
-        return ("waiting" if why == "no verdict yet" else "refused"), why
-    ok, text = validate_verdict(verdict, rec["key"], rec["core_sha"], rec["base"])
-    if ok and isinstance(verdict, dict) and verdict.get("pluginsSha") != rec["plugins_sha"]:
-        return "refused", (f"the verdict tested Plugins {str(verdict.get('pluginsSha'))[:9]}, not the image's "
-                           f"{rec['plugins_short']} — it is about a different pair")
-    return ("green" if ok else "refused"), text
+def contains_commit(get: Get, core_token: str, commit: str, sha: str) -> bool | None:
+    """Whether `commit` contains `sha`, by ANCESTRY (GitHub compare `identical`/`ahead`); None when
+    the compare could not be read — never a guess."""
+    code, cmp = get(f"repos/{CORE}/compare/{sha}...{commit}", core_token)
+    return (cmp.get("status") in CONTAINED) if code == 200 and isinstance(cmp, dict) else None
 
 
-def select(records: list[dict], verdicts: dict[str, tuple[object | None, str]], armed_max: int,
+def _fetch_public(url: str) -> tuple[int, str]:
+    """GET a PUBLIC endpoint of the control instance — no credential is ever sent to it."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}),
+                                    timeout=60) as r:
+            return r.status, r.read().decode(errors="replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return 0, str(e)
+
+
+def load_control_instance(path: Path) -> dict:
+    """`.github/control-instance.json` — the ONE declaration of which instance is control, for the
+    platform verdict and the `control-always-latest` alarm. RED (ValueError) on anything missing."""
+    d = json.loads(path.read_text())
+    if not isinstance(d, dict) or not str(d.get("url", "")).startswith("https://"):
+        raise ValueError(f"{path}: `url` must be the control instance's https:// base URL")
+    bound = d.get("platformLagBoundMinutes")
+    if type(bound) is not int or bound <= 0:  # not isinstance: `true` is an int in Python
+        raise ValueError(f"{path}: `platformLagBoundMinutes` must be a positive integer")
+    return d
+
+
+LADDER_JOB_SUFFIX = "(ladder)"
+CONTROL_FIRST_JOB_PREFIX = "Deploy control first"
+CONTAINED = ("identical", "ahead")
+
+
+def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
+    """(state, sentence) — the PLATFORM verdict on one promoted set: `green`, `waiting` or
+    `refused`. Pure. Policy `platform-module-deploy-separate`: nothing here asks MeshWeaver.Plugins
+    (no dependent-suites verdict, no seal, no pair). What guards a fleet roll is
+
+      1. the platform's OWN tests — a set is promoted only from a commit whose required check is
+         green (`gate`), so every record here already carries them;
+      2. the compatibility LADDER of that run (`platform-ladder-compat`, conclusion `ladder`): the
+         module set the fleet runs, PUBLISHED by the modules' own lanes, links unchanged against
+         this platform image. A platform that breaks a module's declared compatibility is red here,
+         and is answered by fixing compatibility or a declared epoch bump, never by re-baking;
+      3. CONTROL FIRST (policy `platform-deploy-control-first`): the control instance is RUNNING a
+         build that contains this set's core commit, and answers `/health` 200. `control` is
+         {"commit", "healthy", "contains": {core_sha: True|False|None}, "why"}.
+
+    A still-running (or unreadable) ladder is WAITING. A ladder that is `missing` (the run has no
+    ladder job), `ambiguous` (several jobs answer to its name) or ended any other way than `success`
+    is REFUSED — each with its own sentence. Control not (yet) on the set, unreadable, or unhealthy
+    is WAITING: the fleet is offered a build only after control proved it, and
+    `control-always-latest` alarms on a control that does not take it. Silence is never a pass."""
+    if ladder is None:
+        return "waiting", "its compatibility ladder has not finished (or its run is unreadable)"
+    if ladder == "missing":
+        return "refused", ("its run has NO compatibility-ladder job — nobody linked the published module set "
+                           "against this platform, so there is no verdict to arm on")
+    if ladder == "ambiguous":
+        return "refused", ("its run has SEVERAL jobs answering to the ladder's name — one verdict cannot be read "
+                           "off them (a green leg must never mask a red one); fix the workflow, not the set")
+    if ladder != "success":
+        return "refused", (f"its compatibility ladder ended `{ladder}` — the published module set does not link "
+                           "against this platform; fix compatibility (or declare an epoch bump), never re-bake")
+    commit = control.get("commit") or ""
+    if not commit:
+        return "waiting", f"the control instance's running build is unknown ({control.get('why') or 'not read'})"
+    contains = (control.get("contains") or {}).get(rec["core_sha"])
+    if contains is None:
+        return "waiting", f"could not establish whether control's {commit[:9]} contains {rec['core_sha'][:9]}"
+    if not contains:
+        return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
+                           "control first: the fleet is offered a build only after control runs it")
+    if not control.get("healthy"):
+        return "waiting", (f"control runs {commit[:9]} (contains this set) but /health is not 200 "
+                           f"({control.get('why') or 'unhealthy'}) — not offered to the fleet until control is healthy")
+    return "green", f"ladder success; control runs {commit[:9]} (contains it) and is healthy"
+
+
+def select(records: list[dict], ladders: dict[int, str | None], control: dict, armed_max: int,
            override: str = "", resume: str = "") -> tuple[dict | None, list[str]]:
-    """(the record to arm or None, the report lines). Pure — the self-test drives it."""
+    """(the record to arm or None, the report lines). Pure — the self-test drives it.
+    `ladders` maps a record's run number to its ladder job's conclusion (None = not finished/unread)."""
     lines: list[str] = []
     if override:
         n = run_number_of(override)
@@ -366,15 +543,15 @@ def select(records: list[dict], verdicts: dict[str, tuple[object | None, str]], 
         if hit is None:
             raise ValueError(f"--override names {override}, which has no promotion record among the newest "
                              f"{RUNS_EXAMINED} main-cd runs — an override is an instruction; refusing to substitute")
-        lines.append(f"OVERRIDE: arming {hit['v_portal']} ({hit['key']}) WITHOUT a dependent-suites verdict, as instructed")
+        lines.append(f"OVERRIDE: arming {hit['v_portal']} WITHOUT the platform verdict, as instructed")
         return hit, lines
     for rec in records:
         n = int(rec["run_number"])
         if n <= armed_max:
-            lines.append(f"{rec['v_portal']} ({rec['key']}): not newer than the armed ci.{armed_max} — never backwards")
+            lines.append(f"{rec['v_portal']}: not newer than the armed ci.{armed_max} — never backwards")
             continue
-        state, text = judge(rec, *verdicts.get(rec["key"], (None, "not read")))
-        lines.append(f"{rec['v_portal']} ({rec['key']}): {state} — {text}")
+        state, text = judge(rec, ladders.get(n), control)
+        lines.append(f"{rec['v_portal']} ({rec['core_sha'][:9]}): {state} — {text}")
         if state == "green":
             return rec, lines
     if resume:
@@ -383,30 +560,80 @@ def select(records: list[dict], verdicts: dict[str, tuple[object | None, str]], 
         # armed; the resume re-runs the idempotent tag writes and the event, and decides nothing new.
         hit = next((r for r in records if r["v_portal"] == resume), None)
         if hit is None:
-            # No promotion record to resume from: a set armed by the pre-gate `promote` (which wrote
-            # the pointers and the event itself, in the same job, before any marker existed), or one
-            # whose record aged out of the window. Said out loud — never red, because a red here
-            # would hold EVERY later arming run on a set that cannot be resumed at all.
             lines.append(f"RESUME NOT POSSIBLE: {resume} carries no `arm-complete` marker and has no promotion record "
                          f"among the newest {RUNS_EXAMINED} main-cd runs (armed before the marker existed, or aged out) "
                          "— the next newer green set completes the line")
             return None, lines
-        lines.append(f"RESUME: {resume} ({hit['key']}) was armed but its sequence never completed — re-arming it")
+        lines.append(f"RESUME: {resume} was armed but its sequence never completed — re-arming it")
         return hit, lines
     return None, lines
 
 
-def pending(records: list[dict], verdicts: dict[str, tuple[object | None, str]], armed_max: int) -> dict | None:
-    """The newest promoted, unarmed pair with NO verdict at all — what the Plugins poller runs. Pure.
-    Only the NEWEST unarmed record is ever a candidate: an older one is superseded by construction."""
-    newer = [r for r in records if int(r["run_number"]) > armed_max]
-    if not newer:
-        return None
-    top = newer[0]
-    if top.get("base_kind") == "unresolved":
-        return None
-    v, why = verdicts.get(top["key"], (None, "not read"))
-    return top if v is None and why == "no verdict yet" else None
+def control_lag(given: list[dict] | dict | None, control: dict, now: float, bound_minutes: int) -> tuple[str, str]:
+    """Policy `control-always-latest`, the PLATFORM half: is the control instance on the newest
+    platform build it was given? Pure. Returns (state, sentence): `ok`, `converging` or `lag`.
+
+    `given` is every promoted set whose `Deploy control first` job SUCCEEDED, NEWEST FIRST, each
+    carrying `core_sha`, `v_portal` and `given_at` (epoch seconds the control image was tagged with
+    it) — read back to the first one control contains (or to the end of the examined runs). A single
+    dict is read as a one-element list. `control` is the same reading `judge` uses; its `contains`
+    must answer for each entry walked. RED (`lag`) when control does not contain the newest build
+    and has been BEHIND for more than `bound_minutes` — or when control's running build cannot be
+    read at all (an instance that cannot say what it runs cannot be shown to be latest; silence is
+    never a pass). Within the bound it is `converging`, said out loud. Control ON the newest build
+    but with `/health` not 200 is `lag` too: `judge` offers the fleet nothing from an unhealthy
+    control, so that state blocks every later arming and must be red, never an `ok` that closes the
+    issue (review on MeshWeaver#6143).
+
+    🚨 THE CLOCK STARTS AT THE FIRST BUILD CONTROL MISSED, never at the newest one. Measured
+    2026-10-06: control sat on 060afe8 (ci.9939) for 22 hours while ~30 builds were given to it, and
+    this alarm read `converging — ci.10052 was given 29 min ago` on almost every tick, because a
+    platform build every 30-60 minutes reset a clock measured from the NEWEST build. A lag bound
+    that every new build resets is not a bound: the lag it exists to catch — control taking no
+    build at all — is exactly the state in which builds keep arriving."""
+    if isinstance(given, dict):
+        given = [given]
+    if not given:
+        return "lag", ("no promoted set among the examined runs has a successful `Deploy control first` job — "
+                       "nothing proves control was given a build")
+    newest = given[0]
+    commit = control.get("commit") or ""
+    if not commit:
+        return "lag", (f"control's running build cannot be read ({control.get('why') or 'no answer'}) — "
+                       f"it cannot be shown to be on {newest['v_portal']}")
+    contains = control.get("contains") or {}
+    first = contains.get(newest["core_sha"])
+    if first is True and not control.get("healthy"):
+        return "lag", (f"control runs {commit[:9]}, which contains the newest platform build {newest['v_portal']}, "
+                       f"but /health is not 200 ({control.get('why') or 'unhealthy'}) — the fleet is offered nothing "
+                       "until control is healthy (policy platform-deploy-control-first)")
+    if first is True:
+        return "ok", (f"control runs {commit[:9]}, which contains the newest platform build "
+                      f"{newest['v_portal']} ({newest['core_sha'][:9]})")
+    if first is None:
+        return "lag", (f"could not establish whether control's {commit[:9]} contains {newest['v_portal']} "
+                       f"({newest['core_sha'][:9]}) — not shown to be latest")
+    # Behind. Walk back to the OLDEST given build control does not contain: that is when it fell
+    # behind. Reaching a build it contains ends the walk; an unreadable answer or the end of the
+    # examined runs leaves a FLOOR, said as one ("at least").
+    missed, floor = newest, True
+    for entry in given[1:]:
+        verdict = contains.get(entry["core_sha"])
+        if verdict is True:
+            floor = False
+            break
+        if verdict is None:
+            break
+        missed = entry
+    behind_min = int(max(0.0, now - float(missed["given_at"])) // 60)
+    since = (f"since {missed['v_portal']} ({missed['core_sha'][:9]}), the first build it was given and did not take, "
+             f"{'at least ' if floor else ''}{behind_min} min ago")
+    if behind_min <= bound_minutes:
+        return "converging", (f"control runs {commit[:9]}; it has been behind the newest build {newest['v_portal']} "
+                              f"{since} — inside the {bound_minutes} min bound")
+    return "lag", (f"control runs {commit[:9]}, which does NOT contain the newest platform build {newest['v_portal']} "
+                   f"({newest['core_sha'][:9]}); it has been behind {since} — over the {bound_minutes} min bound "
+                   "(policy control-always-latest)")
 
 
 def write_outputs(rec: dict | None, lines: list[str]) -> None:
@@ -429,6 +656,14 @@ def write_outputs(rec: dict | None, lines: list[str]) -> None:
 
 # ───────────────────────────────── self-test ──────────────────────────────────────────────
 
+def _raises(f: Callable[[], object]) -> bool:
+    try:
+        f()
+    except ValueError:
+        return True
+    return False
+
+
 def self_test() -> int:
     failures = 0
 
@@ -443,15 +678,6 @@ def self_test() -> int:
                 "staging": f"staging-{c[:7]}-{n}", "v_portal": f"3.0.0-ci.{n}", "v_migration": f"3.0.0-ci.{n}",
                 "v_plugin": f"3.0.0-ci.{n}", "key": verdict_key(c[:10], p[:10]), "base": "b" * 40}
 
-    counts = {"selected": 5, "universe": 83, "legs": 1, "drift": 0, "preExisting": 0, "missingEvidence": 0}
-
-    def green(r: dict, **kw) -> tuple[object, str]:
-        v = {"schema": 1, "key": r["key"], "candidate": r["core_sha"], "base": r["base"], "conclusion": "success",
-             "summary": "5 of 83", "run": f"https://github.com/{PLUGINS}/actions/runs/1", "counts": counts,
-             "pluginsSha": r["plugins_sha"]}
-        v.update(kw)
-        return v, "found"
-
     a, b, c = rec(9459, "a", "1"), rec(9460, "c", "2"), rec(9461, "d", "3")
     records = [c, b, a]
     check("a well-formed record is accepted", check_record(a) is None, str(check_record(a)))
@@ -462,56 +688,207 @@ def self_test() -> int:
     check("a record without its base is refused (the verdict is pinned to a base)",
           check_record({k: v for k, v in a.items() if k != "base"}) is not None)
 
-    # latest green wins; a newer WAITING set is not armed, and does not hold back an older green one
-    chosen, lines = select(records, {b["key"]: green(b), c["key"]: (None, "no verdict yet")}, armed_max=9458)
-    check("the newest set with a green verdict is armed; a newer waiting one is not", chosen is b, "\n".join(lines))
-    # red is refused, and the next older green is taken
-    chosen, _ = select(records, {c["key"]: green(c, conclusion="failure"), b["key"]: green(b)}, armed_max=9458)
-    check("a red verdict is refused and the next older green set is armed", chosen is b)
-    # never backwards
-    chosen, lines = select(records, {a["key"]: green(a)}, armed_max=9460)
-    check("a green set OLDER than the armed one is never armed (never backwards)", chosen is None, "\n".join(lines))
-    # silence is not a pass
-    chosen, _ = select(records, {}, armed_max=0)
-    check("no verdict anywhere arms nothing (silence is not a pass)", chosen is None)
-    # a verdict about a different Plugins commit is refused
-    chosen, lines = select([b], {b["key"]: green(b, pluginsSha="9" * 40)}, armed_max=0)
-    check("a verdict that tested a different Plugins commit is refused", chosen is None, "\n".join(lines))
-    chosen, _ = select([b], {b["key"]: green(b, candidate="e" * 40)}, armed_max=0)
-    check("a verdict about a different core commit is refused", chosen is None)
+    # ── the PLATFORM verdict (policies platform-module-deploy-separate + platform-deploy-control-first) ──
+    def ctl(*on: dict, healthy: bool = True, commit: str = "f" * 40, unknown: tuple = ()) -> dict:
+        contains = {r["core_sha"]: True for r in on}
+        contains.update({r["core_sha"]: None for r in unknown})
+        for r in (a, b, c):
+            contains.setdefault(r["core_sha"], False)
+        return {"commit": commit, "healthy": healthy, "contains": contains, "why": "" if healthy else "503"}
+
+    ok = {9459: "success", 9460: "success", 9461: "success"}
+    chosen, lines = select(records, ok, ctl(a, b, c), armed_max=9458)
+    check("the newest set whose ladder passed and that control runs is armed", chosen is c, "\n".join(lines))
+    chosen, lines = select(records, ok, ctl(a, b), armed_max=9458)
+    check("control first: a newer set control does NOT run yet is waiting; the newest one control runs is armed",
+          chosen is b and "control first" in lines[0], "\n".join(lines))
+    chosen, lines = select(records, ok, ctl(), armed_max=9458)
+    check("control first: nothing control runs is ever offered to the fleet", chosen is None, "\n".join(lines))
+    chosen, lines = select(records, ok, ctl(a, b, c, healthy=False), armed_max=9458)
+    check("control first: an UNHEALTHY control offers nothing, even on the set", chosen is None and "/health" in lines[0],
+          "\n".join(lines))
+    chosen, lines = select(records, ok, {"commit": "", "healthy": False, "contains": {}, "why": "timeout"}, armed_max=9458)
+    check("an unreadable control is waiting, never a pass", chosen is None and "unknown" in lines[0], "\n".join(lines))
+    chosen, lines = select(records, ok, ctl(b, unknown=(c,)), armed_max=9458)
+    check("an UNKNOWN containment is waiting, never read as contained", chosen is b and "could not establish" in lines[0],
+          "\n".join(lines))
+    chosen, lines = select(records, {**ok, 9461: "failure"}, ctl(a, b, c), armed_max=9458)
+    check("a RED ladder is refused and the next older green set is armed", chosen is b and "refused" in lines[0],
+          "\n".join(lines))
+    chosen, lines = select(records, {9460: "success", 9459: "success"}, ctl(a, b, c), armed_max=9458)
+    check("a ladder still running (absent from the map) is waiting, never a pass", chosen is b and "waiting" in lines[0],
+          "\n".join(lines))
+    chosen, lines = select(records, {**ok, 9461: "missing"}, ctl(a, b, c), armed_max=9458)
+    check("a run with NO ladder job is refused (nobody linked the modules against it)", chosen is b and "NO compatibility-ladder job" in lines[0],
+          "\n".join(lines))
+    chosen, lines = select(records, ok, ctl(a, b), armed_max=9460)
+    check("a green set OLDER than the armed one is never armed (never backwards)",
+          chosen is None and len(lines) == 3 and "never backwards" in lines[1], "\n".join(lines))
+    chosen, _ = select(records, {}, ctl(), armed_max=0)
+    check("no ladder and no control arms nothing (silence is not a pass)", chosen is None)
+    # 🚨 NEGATIVE CONTROL for the separation: a red MeshWeaver.Plugins dependent-suites verdict and an
+    # UNRESOLVED bundle base — the two things that used to hold the fleet for module reasons — are
+    # inert: the platform verdict reads neither, so the set is armed on the platform's own evidence.
+    u = {**c, "base_kind": "unresolved"}
+    chosen, lines = select([u, b, a], ok, ctl(a, b, u), armed_max=9458)
+    check("separation: a set is armed WITHOUT any Plugins verdict (none is even passed in)", chosen is u, "\n".join(lines))
+    import inspect
+    check("separation: `select` and `judge` take no Plugins verdict parameter at all",
+          not any("verdict" in p for p in inspect.signature(select).parameters)
+          and not any("verdict" in p for p in inspect.signature(judge).parameters))
     # override
-    chosen, lines = select(records, {}, armed_max=9460, override="3.0.0-ci.9459")
+    chosen, lines = select(records, {}, ctl(), armed_max=9460, override="3.0.0-ci.9459")
     check("an override arms exactly the named set, verdict or not", chosen is a and "OVERRIDE" in lines[0])
     try:
-        select(records, {}, armed_max=0, override="3.0.0-ci.1")
+        select(records, {}, ctl(), armed_max=0, override="3.0.0-ci.1")
         check("an override naming no promoted set is RED", False)
     except ValueError:
         check("an override naming no promoted set is RED, never a substitution", True)
     try:
-        select(records, {}, armed_max=0, override="3.0.1-ci.9459")
+        select(records, {}, ctl(), armed_max=0, override="3.0.1-ci.9459")
         check("an override naming the right RUN on another version line is RED", False)
     except ValueError:
         check("an override naming the right RUN on another version line is RED (exact version, never the run number)", True)
     # resume — the cursor moved at phase C but the sequence never finished
-    chosen, lines = select(records, {}, armed_max=9460, resume="3.0.0-ci.9460")
+    chosen, lines = select(records, {}, ctl(), armed_max=9460, resume="3.0.0-ci.9460")
     check("resume: nothing newer green → the incomplete newest armed set is re-armed", chosen is b and "RESUME" in lines[-1],
           "\n".join(lines))
-    chosen, _ = select(records, {c["key"]: green(c)}, armed_max=9460, resume="3.0.0-ci.9460")
+    chosen, _ = select(records, ok, ctl(c), armed_max=9460, resume="3.0.0-ci.9460")
     check("resume: a NEWER green set still wins (arming it completes the line past the incomplete one)", chosen is c)
-    chosen, lines = select(records, {}, armed_max=9460, resume="3.0.0-ci.9000")
+    chosen, lines = select(records, {}, ctl(), armed_max=9460, resume="3.0.0-ci.9000")
     check("resume: an incomplete set with NO record (armed before the marker existed) is SAID, not red — "
           "a red would hold every later arming", chosen is None and "RESUME NOT POSSIBLE" in lines[-1], "\n".join(lines))
-    # pending (the Plugins poller)
-    check("pending: the newest unarmed pair without a verdict is returned",
-          pending(records, {c["key"]: (None, "no verdict yet")}, armed_max=9458) is c)
-    check("pending: a verdict ref that could not be READ is not 'no verdict' — nothing is re-run on doubt",
-          pending(records, {c["key"]: (None, "verdict ref unreadable (HTTP 502)")}, armed_max=9458) is None)
-    check("pending: a newest pair that HAS a verdict is not re-run (red or green)",
-          pending(records, {c["key"]: green(c, conclusion="failure")}, armed_max=9458) is None)
-    check("pending: an older pair is superseded — only the newest is ever a candidate",
-          pending(records, {c["key"]: green(c)}, armed_max=9458) is None)
-    check("pending: nothing newer than the armed set means nothing to run",
-          pending(records, {}, armed_max=9461) is None)
+    # the readings `judge` is fed
+    check("ladder_of: a completed ladder job gives its conclusion",
+          ladder_of([{"name": "Compatibility: the published module set links against this platform (ladder)",
+                      "status": "completed", "conclusion": "success"}]) == "success")
+    check("ladder_of: a running ladder is None (waiting)",
+          ladder_of([{"name": "x (ladder)", "status": "in_progress", "conclusion": None}]) is None)
+    two = [{"name": "Compatibility: a (ladder)", "status": "completed", "conclusion": "success"},
+           {"name": "Compatibility: b (ladder)", "status": "completed", "conclusion": "failure"}]
+    check("ladder_of: SEVERAL ladder-named jobs are `ambiguous` — a green first one never masks a red later one",
+          ladder_of(two) == "ambiguous" and ladder_of(list(reversed(two))) == "ambiguous")
+    chosen, lines = select(records, {**ok, 9461: "ambiguous"}, ctl(a, b, c), armed_max=9458)
+    check("...and an ambiguous ladder is REFUSED, the next older green set armed", chosen is b and "refused" in lines[0],
+          "\n".join(lines))
+    st, text = judge(c, "missing", ctl(c))
+    check("judge: a MISSING ladder is refused with its OWN sentence, never 'does not link' advice",
+          st == "refused" and "NO compatibility-ladder job" in text and "does not link" not in text, text)
+    st, text = judge(c, "ambiguous", ctl(c))
+    check("judge: an AMBIGUOUS ladder is refused with its OWN sentence",
+          st == "refused" and "SEVERAL jobs" in text and "does not link" not in text, text)
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        decl = Path(tmp) / "ci.json"
+        for bad, why in (({"url": "https://c", "platformLagBoundMinutes": True}, "a boolean bound"),
+                         ({"url": "https://c", "platformLagBoundMinutes": 0}, "a zero bound"),
+                         ({"url": "http://c", "platformLagBoundMinutes": 5}, "a non-https url")):
+            decl.write_text(json.dumps(bad))
+            try:
+                load_control_instance(decl)
+                check(f"load_control_instance: {why} is RED", False)
+            except ValueError:
+                check(f"load_control_instance: {why} is RED", True)
+    shipped = Path(__file__).resolve().parents[1] / "control-instance.json"
+    try:
+        load_control_instance(shipped)
+        check("the shipped .github/control-instance.json validates", True)
+    except (OSError, ValueError) as e:
+        check("the shipped .github/control-instance.json validates", False, str(e))
+    check("ladder_of: a run with no ladder job is `missing` (refused), an unreadable run None",
+          ladder_of([{"name": "Promote: tag", "status": "completed", "conclusion": "success"}]) == "missing"
+          and ladder_of(None) is None)
+    check("control_given_at: only a SUCCEEDED `Deploy control first` job counts",
+          control_given_at([{"name": "Deploy control first: memex-control:<version>", "conclusion": "failure",
+                             "completed_at": "t1"}]) is None
+          and control_given_at([{"name": "Deploy control first: memex-control:<version>", "conclusion": "success",
+                                 "completed_at": "t2"}]) == "t2")
+    pub = {"https://ctl/api/version": (200, json.dumps({"commit": "f" * 40})), "https://ctl/health": (200, "Degraded")}
+    cmp = {f"repos/{CORE}/compare/{a['core_sha']}...{'f' * 40}": (200, {"status": "ahead"}),
+           f"repos/{CORE}/compare/{c['core_sha']}...{'f' * 40}": (200, {"status": "behind"}),
+           f"repos/{CORE}/compare/{b['core_sha']}...{'f' * 40}": (502, None)}
+    rc = read_control("https://ctl", lambda u, t, raw=False: cmp.get(u, (404, None)), "t",
+                      [a["core_sha"], b["core_sha"], c["core_sha"]], fetch=lambda u: pub.get(u, (404, "")))
+    check("read_control: ancestry decides containment (ahead = contained, behind = not, an error = UNKNOWN)",
+          rc["contains"] == {a["core_sha"]: True, b["core_sha"]: None, c["core_sha"]: False} and rc["healthy"], str(rc))
+    rc = read_control("https://ctl", lambda u, t, raw=False: (404, None), "t", [a["core_sha"]],
+                      fetch=lambda u: (200, json.dumps({"commit": "f" * 40})) if u.endswith("version") else (503, ""))
+    check("read_control: /health 503 is unhealthy and says so", rc["healthy"] is False and "503" in rc["why"], str(rc))
+    rc = read_control("https://ctl", lambda u, t, raw=False: (404, None), "t", [a["core_sha"]],
+                      fetch=lambda u: (200, json.dumps({"version": "3.0.0"})))
+    check("read_control: a version answer without a commit leaves control UNKNOWN", rc["commit"] == "" and rc["why"], str(rc))
+    # ── control-always-latest (the platform half) ──
+    newest = {"core_sha": c["core_sha"], "v_portal": c["v_portal"], "given_at": 1_000_000.0}
+    st, text = control_lag(newest, ctl(c), now=1_000_000.0 + 9 * 3600, bound_minutes=120)
+    check("control-always-latest: control on the newest build is ok, however long ago it was given", st == "ok", text)
+    st, text = control_lag(newest, ctl(c, healthy=False), now=1_000_000.0, bound_minutes=120)
+    check("control-always-latest: control ON the newest build but /health not 200 is RED — it blocks every arming",
+          st == "lag" and "/health" in text, text)
+    st, text = control_lag(newest, ctl(b), now=1_000_000.0 + 60 * 60, bound_minutes=120)
+    check("control-always-latest: behind INSIDE the bound is converging (said, not red)", st == "converging", text)
+    st, text = control_lag(newest, ctl(b), now=1_000_000.0 + 121 * 60, bound_minutes=120)
+    check("control-always-latest: behind PAST the bound is RED and names the lag",
+          st == "lag" and "121 min" in text and c["v_portal"] in text, text)
+    st, text = control_lag(newest, {"commit": "", "contains": {}, "why": "timeout"}, now=1_000_000.0, bound_minutes=120)
+    check("control-always-latest: an unreadable control is RED (cannot be shown latest), never a pass", st == "lag", text)
+    st, text = control_lag(newest, ctl(unknown=(c,)), now=1_000_000.0, bound_minutes=120)
+    check("control-always-latest: unknown containment is RED, never read as contained", st == "lag", text)
+    st, text = control_lag(None, ctl(c), now=1_000_000.0, bound_minutes=120)
+    check("control-always-latest: no build ever given to control is RED", st == "lag", text)
+    # 🚨 The clock starts at the FIRST build control missed. Negative control for the 2026-10-06
+    # reading: the newest build was given 29 min ago, but control has missed every build for 10 h —
+    # a clock on the newest build calls that `converging` for ever while builds keep arriving.
+    t0 = 1_000_000.0
+    given = [{"core_sha": c["core_sha"], "v_portal": c["v_portal"], "given_at": t0 + 10 * 3600 - 29 * 60},
+             {"core_sha": b["core_sha"], "v_portal": b["v_portal"], "given_at": t0},
+             {"core_sha": a["core_sha"], "v_portal": a["v_portal"], "given_at": t0 - 3600}]
+    st, text = control_lag(given, ctl(a), now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: behind for 10 h is RED although the NEWEST build was given 29 min ago",
+          st == "lag" and b["v_portal"] in text and "600 min" in text and "at least" not in text, text)
+    st_old, text_old = control_lag(given[0], ctl(a), now=t0 + 10 * 3600, bound_minutes=180)
+    check("...and the newest-build clock alone (the old reading) would have called it converging — the control",
+          st_old == "converging", text_old)
+    st, text = control_lag(given, ctl(a, b), now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: behind only the newest build, given 29 min ago, is converging",
+          st == "converging" and "29 min" in text, text)
+    st, text = control_lag(given[:2], ctl(), now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: behind every examined build is a FLOOR, said as one, and RED past the bound",
+          st == "lag" and "at least 600 min" in text, text)
+    st, text = control_lag(given, ctl(unknown=(b,)), now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: an unreadable older answer stops the walk at a floor, never reads as contained",
+          st == "converging" and "at least 29 min" in text, text)
+    # ── control first, the delivery half: CD hands the build to control's roll lane ──
+    cf = control_first([{"tags": ["3.0.0-ci.9590"]}], "3.0.0-ci.9598")
+    check("control-first: the newest accepted build is ANNOUNCED to control's roll lane", cf["announce"] is True, str(cf))
+    cf = control_first([{"tags": ["3.0.0-ci.9598"]}], "3.0.0-ci.9598")
+    check("control-first: a re-run of the newest build re-announces (the receiver dedupes; a lost POST is closed)",
+          cf["action"] == "done" and cf["announce"] is True, str(cf))
+    cf = control_first([{"tags": ["3.0.0-ci.9601"]}], "3.0.0-ci.9598")
+    check("control-first: an OLDER build than the newest control version is never announced", cf["announce"] is False, str(cf))
+    check("line_pattern: a set names its own line", line_pattern("3.0.0-ci.10052") == "3.0.0-ci*", line_pattern("3.0.0-ci.10052"))
+    check("line_pattern: a pre-release line keeps its prefix", line_pattern("3.0.0-rc9.ci.7231") == "3.0.0-rc9.ci*")
+    try:
+        line_pattern("main")
+        check("line_pattern: a non-set name is RED", False)
+    except ValueError:
+        check("line_pattern: a non-set name is RED, never a guess", True)
+    ann = control_announcement("control", "3.0.0-ci.10052", "meshweaver.azurecr.io/memex-control",
+                               "https://github.com/Systemorph/MeshWeaver/actions/runs/1", "2026-10-06T06:00:00Z")
+    check("control_announcement: the routing side's Roll shape — event first, tag, image on the record's repository, line pattern",
+          list(ann)[0] == "event" and ann["event"] == "self-update-available" and ann["deployment"] == "control"
+          and ann["newVersion"] == "3.0.0-ci.10052" and ann["newImage"] == "meshweaver.azurecr.io/memex-control:3.0.0-ci.10052"
+          and ann["pattern"] == "3.0.0-ci*" and ann["detectedAt"] == "2026-10-06T06:00:00Z", json.dumps(ann))
+    check("control_announcement: the pattern ADMITS the tag it announces (else the roll would park for an approval)",
+          re.fullmatch(re.escape(ann["pattern"][:-1]) + ".*", ann["newVersion"]) is not None, json.dumps(ann))
+    for bad_dep, bad_repo, why in (("", "meshweaver.azurecr.io/memex-control", "no deployment"),
+                                   ("control; rm", "meshweaver.azurecr.io/memex-control", "a deployment that is not a plain id"),
+                                   ("control", "meshweaver.azurecr.io/memex-control:3.0.0-ci.1", "a repository carrying a tag"),
+                                   ("control", "", "no repository")):
+        try:
+            control_announcement(bad_dep, "3.0.0-ci.10052", bad_repo, "u", "t")
+            check(f"control_announcement: {why} is RED", False)
+        except ValueError:
+            check(f"control_announcement: {why} is RED, never a guess", True)
     # read_records against a scripted API
     blob = io.BytesIO()
     with zipfile.ZipFile(blob, "w") as z:
@@ -549,6 +926,17 @@ def self_test() -> int:
                  {"tags": ["f0f9a7b", "f0f9a7b-pb7390a0"]}]
     check("armed-base: pair tag names the armed core after its bare sha tag moves to a newer pair",
           armed_commit(pair_only) == ("3.0.0-ci.9564", "f0f9a7b"))
+    # After the pair tag's retirement: `arm` writes the version FROM the staging tag, and a rebuild of
+    # the same core moves the bare sha tag away — the staging tag alone must still name the core.
+    staging_only = [{"tags": ["3.0.0-ci.9970", "staging-260b3c4-41000000001", "arm-complete-3.0.0-ci.9970"]},
+                    {"tags": ["260b3c4", "staging-260b3c4-41000000002", "main"]}]
+    check("armed-base: with NO pair tag, the staging tag names the armed core after its sha tag moved",
+          not _raises(lambda: armed_commit(staging_only))
+          and armed_commit(staging_only) == ("3.0.0-ci.9970", "260b3c4"))
+    check("armed-base: a version tag with neither a sha, a pair nor a staging tag is RED (negative control)",
+          _raises(lambda: armed_commit([{"tags": ["3.0.0-ci.9970", "arm-complete-3.0.0-ci.9970"]}])))
+    check("armed-base: a staging tag naming a DIFFERENT core than the sha tag is RED, never a guess",
+          _raises(lambda: armed_commit([{"tags": ["3.0.0-ci.9970", "260b3c4", "staging-1111111-4"]}])))
     check("armed-base: newest by RUN NUMBER, not by listing order",
           armed_commit(list(reversed(live))) == ("3.0.0-ci.9538", "b9fe5ed"))
     check("armed-base: no version tag anywhere means nothing was ever armed (None, not a guess)",
@@ -562,14 +950,9 @@ def self_test() -> int:
             check(f"armed-base: an uninterpretable manifest ({why}) is RED", False)
         except ValueError:
             check(f"armed-base: an uninterpretable manifest ({why}) is RED, never a guess", True)
-    u = {**c, "base_kind": "unresolved"}
     check("a record with an unknown base_kind is refused", check_record({**a, "base_kind": "nope"}) is not None)
     check("an `armed` and a legacy (no base_kind) record are both accepted",
           check_record({**a, "base_kind": "armed"}) is None and check_record(a) is None)
-    chosen, lines = select([u, b], {u["key"]: green(u), b["key"]: green(b)}, armed_max=9458)
-    check("an UNRESOLVED base is never armed, even green — the next older green set is taken", chosen is b, "\n".join(lines))
-    check("pending: an UNRESOLVED newest record is not measured (the next promotion retries)",
-          pending([u, b, a], {u["key"]: (None, "no verdict yet")}, armed_max=9458) is None)
     st = armed_state(live)
     check("armed-state: the newest armed set WITHOUT its marker is incomplete", st == (9538, "3.0.0-ci.9538", False), str(st))
     marked = [{"tags": live[0]["tags"] + ["arm-complete-3.0.0-ci.9538"]}] + live[1:]
@@ -580,42 +963,59 @@ def self_test() -> int:
     check("armed-state: the marker is never version-shaped (no self-updater can select it)",
           run_number_of("arm-complete-3.0.0-ci.9538") is None)
     check("armed-state: nothing ever armed is None", armed_state([{"tags": ["main"]}]) is None)
-    armed_p = [{"tags": ["3.0.0-ci.9598", "0d14493", "0d14493-pc791b44", "arm-complete-3.0.0-ci.9598"]},
-               {"tags": ["3.0.0-ci.9590", "5145540-pa5ef923"]}]
-    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-pc791b44", "main"]},
-                                  {"tags": ["3.0.0-ci.9590", "5145540", "3-latest"]}])
-    check("control-follow: the accepted control image of the ARMED pair is tagged with its version",
-          cf["action"] == "tag" and cf["version"] == "3.0.0-ci.9598" and cf["pair"] == "0d14493-pc791b44"
-          and cf["move_pointers"] is True, str(cf))
-    cf = control_follow(armed_p, [{"tags": ["3.0.0-ci.9598", "0d14493-pc791b44"]}])
-    check("control-follow: already carrying the armed version is DONE (idempotent)", cf["action"] == "done", str(cf))
-    cf = control_follow(armed_p, [{"tags": ["0d14493", "0d14493-p1111111"]}, {"tags": ["3.0.0-ci.9590"]}])
-    check("control-follow: a control image of ANOTHER pair of the same core is not the armed one (MISSING)",
-          cf["action"] == "missing" and cf["control_newest"] == "3.0.0-ci.9590", str(cf))
-    cf = control_follow(armed_p, [{"tags": ["0d14493-pc791b44"]}, {"tags": ["3.0.0-ci.9601"]}])
-    check("control-follow: never moves the line pointers backwards past a newer control version",
-          cf["action"] == "tag" and cf["move_pointers"] is False, str(cf))
-    check("control-follow: nothing armed is NONE", control_follow([{"tags": ["main"]}], [])["action"] == "none")
+    cf = control_first([{"tags": ["0d14493", "main", "staging-0d14493-1"]},
+                        {"tags": ["3.0.0-ci.9590", "5145540", "3-latest"]}], "3.0.0-ci.9598")
+    check("control-first: every accepted build is tagged with its version and moves the line pointers",
+          cf["action"] == "tag" and cf["version"] == "3.0.0-ci.9598" and cf["move_pointers"] is True, str(cf))
+    cf = control_first([{"tags": ["3.0.0-ci.9598", "0d14493"]}], "3.0.0-ci.9598")
+    check("control-first: already carrying the version is DONE (idempotent)", cf["action"] == "done", str(cf))
+    cf = control_first([{"tags": ["0d14493"]}, {"tags": ["3.0.0-ci.9601"]}], "3.0.0-ci.9598")
+    check("control-first: never moves the line pointers backwards past a newer control version",
+          cf["action"] == "tag" and cf["move_pointers"] is False and cf["control_newest"] == "3.0.0-ci.9601", str(cf))
+    check("control-first: a first-ever control version moves the pointers",
+          control_first([], "3.0.0-ci.9598")["move_pointers"] is True)
+    import inspect as _i
+    check("control-first: the decision takes NO arming input — control never waits for the fleet",
+          list(_i.signature(control_first).parameters) == ["control_manifests", "version"])
     try:
-        control_follow([{"tags": ["3.0.0-ci.9598", "0d14493"]}], [])
-        check("control-follow: an armed manifest with no pair tag is RED", False)
+        control_first([], "main")
+        check("control-first: a non-version is RED", False)
     except ValueError:
-        check("control-follow: an armed manifest with no pair tag is RED, never a guess", True)
+        check("control-first: a version that is not X.Y.Z-ci.N is RED, never a guess", True)
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
 
 # ───────────────────────────────── main ───────────────────────────────────────────────────
 
+def _write_rows(rows: dict) -> None:
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as f:
+            f.writelines(f"{k}={str(v).lower() if isinstance(v, bool) else v}\n" for k, v in rows.items())
+
+
+def _iso_epoch(ts: str) -> float:
+    from datetime import datetime
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("command", nargs="?", choices=("select", "pending", "armed-base", "armed-state", "control-follow"))
-    ap.add_argument("--manifests", type=Path, help="armed-base: memex-portal-ai manifest metadata (JSON list)")
-    ap.add_argument("--control-manifests", type=Path, help="control-follow: memex-control manifest metadata (JSON list)")
+    ap.add_argument("command", nargs="?",
+                    choices=("select", "armed-base", "armed-state", "control-first", "control-announcement", "control-lag"))
+    ap.add_argument("--manifests", type=Path, help="armed-base/armed-state: memex-portal-ai manifest metadata (JSON list)")
+    ap.add_argument("--control-manifests", type=Path, help="control-first: memex-control manifest metadata (JSON list)")
+    ap.add_argument("--version", default="", help="control-first/control-announcement: THIS run's accepted platform version")
+    ap.add_argument("--image-repository", default="",
+                    help="control-announcement: the registry/repository the control image was tagged on (no tag)")
+    ap.add_argument("--instance", default="", help="control-announcement: the announcer, for the audit trail (the run URL)")
+    ap.add_argument("--control-instance", type=Path, default=Path(".github/control-instance.json"),
+                    help="select/control-lag: the declaration of which instance is control")
     ap.add_argument("--armed-max", type=int, default=0,
                     help="run number of the newest ARMED set (memex-portal-ai's newest version tag)")
-    ap.add_argument("--override", default="", help="arm exactly this set name, verdict or not")
+    ap.add_argument("--override", default="", help="arm exactly this set name, platform verdict or not")
     ap.add_argument("--resume", default="",
                     help="the newest armed set whose arming never completed; re-armed when nothing newer is green")
     a = ap.parse_args()
@@ -624,78 +1024,115 @@ def main() -> int:
     if not a.command:
         ap.error("a command is required")
     if a.command == "armed-state":
+        if a.manifests is None:
+            ap.error("armed-state needs --manifests")
         try:
-            st = armed_state(json.loads(a.manifests.read_text())) if a.manifests else None
+            st = armed_state(json.loads(a.manifests.read_text()))
         except (OSError, ValueError) as e:
             print(f"::error::the arming cursor cannot be read: {e}")
             return 1
-        if a.manifests is None:
-            ap.error("armed-state needs --manifests")
         if st is None:
             print("::error::memex-portal-ai carries no version tag at all — refusing to treat that as 'nothing armed' (it would arm anything)")
             return 1
         rows = {"max": str(st[0]), "version": st[1], "complete": "true" if st[2] else "false"}
-        out = os.environ.get("GITHUB_OUTPUT")
-        if out:
-            with open(out, "a") as f:
-                f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        _write_rows(rows)
         print(json.dumps(rows))
         return 0
-    if a.command == "control-follow":
-        if a.manifests is None or a.control_manifests is None:
-            ap.error("control-follow needs --manifests and --control-manifests")
+    if a.command == "control-first":
+        if a.control_manifests is None or not a.version:
+            ap.error("control-first needs --control-manifests and --version")
         try:
-            rows = control_follow(json.loads(a.manifests.read_text()), json.loads(a.control_manifests.read_text()))
+            rows = control_first(json.loads(a.control_manifests.read_text()), a.version)
         except (OSError, ValueError) as e:
-            print(f"::error::the control image's arming cannot be decided: {e}")
+            print(f"::error::the control image's next version cannot be decided: {e}")
             return 1
-        out = os.environ.get("GITHUB_OUTPUT")
-        if out:
-            with open(out, "a") as f:
-                f.writelines(f"{k}={str(v).lower() if isinstance(v, bool) else v}\n" for k, v in rows.items())
+        _write_rows(rows)
         print(json.dumps(rows))
+        return 0
+    if a.command == "control-announcement":
+        # Offline and pure: prints the ONE body the workflow signs and POSTs — compact, so the bytes
+        # signed are the bytes sent. The deployment is the one `.github/control-instance.json` names.
+        if not a.version or not a.image_repository:
+            ap.error("control-announcement needs --version and --image-repository")
+        from datetime import datetime, timezone
+        try:
+            ci = load_control_instance(a.control_instance)
+            body = control_announcement(str(ci.get("deployment") or ""), a.version, a.image_repository,
+                                        a.instance, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        except (OSError, ValueError) as e:
+            print(f"::error::the control announcement cannot be composed: {e}", file=sys.stderr)
+            return 1
+        print(json.dumps(body, separators=(",", ":")))
         return 0
     if a.command == "armed-base":
         # Offline and pure: the caller reads the registry; this only interprets. Exit 1 = cannot say.
+        if a.manifests is None:
+            ap.error("armed-base needs --manifests")
         try:
-            got = armed_commit(json.loads(a.manifests.read_text())) if a.manifests else None
+            got = armed_commit(json.loads(a.manifests.read_text()))
         except (OSError, ValueError) as e:
             print(f"::error::the newest armed set cannot be named: {e}")
             return 1
-        if a.manifests is None:
-            ap.error("armed-base needs --manifests")
         rows = {"armed_version": got[0], "armed_short": got[1]} if got else {"armed_version": "", "armed_short": ""}
-        out = os.environ.get("GITHUB_OUTPUT")
-        if out:
-            with open(out, "a") as f:
-                f.writelines(f"{k}={v}\n" for k, v in rows.items())
+        _write_rows(rows)
         print(json.dumps(rows))
         return 0
     core_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
-    plugins_token = os.environ.get("PLUGINS_TOKEN") or core_token
     if not core_token:
         print("::error::GH_TOKEN is empty — the promotion records cannot be read; refusing to decide on nothing")
         return 1
+    try:
+        ci = load_control_instance(a.control_instance)
+    except (OSError, ValueError) as e:
+        print(f"::error::which instance is control cannot be read: {e}")
+        return 1
+    if a.command == "control-lag":
+        try:
+            records = read_records(http_get, core_token, above=0)
+        except RuntimeError as e:
+            print(f"::error::{e}")
+            return 1
+        # Every build given to control, newest first, back to the first one control CONTAINS — the
+        # lag clock starts at the oldest one it does not (see `control_lag`). Ancestry is monotone
+        # along main, so the walk stops at the first contained build: one jobs read and one compare
+        # per build control is behind, never the whole history.
+        given: list[dict] = []
+        control = read_control(ci["url"], http_get, core_token, [])
+        for r in records:
+            at = control_given_at(read_run_jobs(http_get, core_token, r.get("run_id")))
+            if not at:
+                continue
+            given.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+            if not control.get("commit"):
+                break
+            verdict = contains_commit(http_get, core_token, control["commit"], r["core_sha"])
+            control["contains"][r["core_sha"]] = verdict
+            if verdict is not False:
+                break
+        newest = given[0] if given else None
+        import time
+        state, text = control_lag(given, control, time.time(), int(ci["platformLagBoundMinutes"]))
+        rows = {"state": state, "sentence": text, "control": ci["url"], "running": control.get("commit", ""),
+                "newest": newest["v_portal"] if newest else ""}
+        _write_rows(rows)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a") as f:
+                f.write(f"### control-always-latest — platform: **{state}**\n\n{text}\n")
+        print(f"control-always-latest (platform): {state} — {text}")
+        return 0
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
         records = read_records(http_get, core_token, above=above)
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
-    verdicts = {r["key"]: read_verdict(http_get, plugins_token, r["key"]) for r in records[:10]}
-    if a.command == "pending":
-        rec = pending(records, verdicts, a.armed_max)
-        out = os.environ.get("GITHUB_OUTPUT")
-        rows = {"due": "true" if rec else "false"}
-        if rec:
-            rows.update({k: str(rec[k]) for k in RECORD_KEYS})
-        if out:
-            with open(out, "a") as f:
-                f.writelines(f"{k}={v}\n" for k, v in rows.items())
-        print(json.dumps(rows, indent=1))
-        return 0
+    ladders = {int(r["run_number"]): ladder_of(read_run_jobs(http_get, core_token, r.get("run_id"))) for r in records[:10]}
+    control = read_control(ci["url"], http_get, core_token, [r["core_sha"] for r in records[:10]])
+    print(f"control {ci['url']}: running {control.get('commit') or 'UNKNOWN'}; "
+          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}")
     try:
-        rec, lines = select(records, verdicts, a.armed_max, a.override, a.resume)
+        rec, lines = select(records, ladders, control, a.armed_max, a.override, a.resume)
     except ValueError as e:
         print(f"::error::{e}")
         return 1

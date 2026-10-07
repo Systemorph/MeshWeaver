@@ -140,6 +140,11 @@ drive the real entry points — `run()` and `check()` — against **real git rep
 "already in the merge base" is a fact about history and cannot be expressed as a fixture of file
 contents. Ten cases each, in both directions:
 
+The temporary repositories disable Git's automatic maintenance and garbage collection. A
+background writer under `.git` can otherwise outlive a commit and race temporary-directory
+cleanup: CI once passed every assertion and then failed with `Directory not empty: '.git'`.
+Disabling maintenance keeps the real-history test while leaving cleanup errors visible.
+
 ```
 ok   a break with no allow entry FAILS                       ← the control arm
 ok   …with an entry naming an OPEN pull request it PASSES

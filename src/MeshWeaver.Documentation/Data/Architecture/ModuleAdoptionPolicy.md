@@ -113,10 +113,21 @@ the pack-time lint's parity oracle.
 | Compiled module (`ModuleUpdateDecision`, via `PluginBundleClient.AdoptModule`) | `SkipPlatformBelowFloor`. The bundle is not even downloaded, and the landed generation keeps running. The floor applies to a `Land` answer only, so it never hides a more specific skip. |
 | Source content: an update (`PackageUpdateReconciler`, `CatalogLayoutAreas.InstallOrUpdate`) | Held before any file is fetched. The installed version keeps running. The install record carries `heldUpdate` (*"held: 1.16.0 needs platform ≥ 3.0.0-ci.9494, running 3.0.0-ci.9412 — updates when the platform rolls"*), and the update applies on the first reconcile after the platform rolls. A record already at the candidate's hash is not held: re-landing what is already there replaces nothing. |
 | Source content: a fresh install (`InstallOrUpdate`, `PackageInstaller.Install`) | Refused with `PackagePlatformFloorException`, which names both versions. Nothing is fetched or written. |
+| Source content: any other caller of the installer over an EXISTING record (a maintenance `RefreshModules`) | Refused the same way unless it re-installs the content already recorded (`AllowedOverExistingRecord`, 2026-10-04). Before, an existing record waved any version through. |
 | GitSync (`ModuleSyncDecision`) | That one module is declined through the same `PlatformFloor` decision. Its siblings still sync. |
 | Prebuilt adoption (`PrebuiltAdoptionPolicy`) | Declined through the same decision, and the content compiles instead. This path used to hold a private SemVer copy, which kept the 2026-09-07 trap live. |
 
 The self-update roll gate (`ReleaseAvailability`) is unchanged, and no roll waits on a floor.
+
+**A hold ends by itself (2026-10-04).** "Updates when the platform rolls" is kept: every roll is a
+boot, the boot reconcile re-decides each held candidate, and the safety-net timer and every
+module-published broadcast do the same. The first pass on which the floor is met CLEARS the record's
+`heldUpdate`/`heldSince` and decides the update again. Tonight's AI hold did not apply after the
+roll for a SECOND reason the sentence never named: its partition is sync-owned, so the decision then
+degraded to the reminder, and no lane ever landed a sync-owned package's module — see
+[One Partition, One Bookkeeping](../OnePartitionOneBookkeeping), gate 1e, for how that now converges.
+The target such a hold converges to is defined once in [One Promotion Gate](../OnePromotionGate) →
+*The target set*.
 
 ### Blocking tickets
 
@@ -233,7 +244,7 @@ it.
 |---|---|---|
 | Identity **unrecorded** on either side | Unchanged — the store copy wins | R2: an unrecorded identity is absence of evidence, not evidence of difference, exactly as an unrecorded version is to the landing service. Reading it as a difference would decline every module landed before identities were recorded at all. Deliberately *not* `PrebuiltAssemblySeeder.DeclineReason`, which declines an absent identity — declining is the safe answer there and the damaging one here. |
 | **Store-only** module (the image ships none) | Unchanged — the store copy wins | There is nothing to prefer it to. A declined module is an **absent** module, which is strictly worse than one whose identity does not match; this is the same trade "an unusable one must not override" already makes. |
-| Identity **matches** | Unchanged — the store copy wins | The ordinary upgrade path (#2548) and the whole point of installing a module. The discriminator decides on a *difference*, never on being a store copy. |
+| Identity **matches** | The store copy wins **if it is a newer release than the image's copy** — see the next section | The ordinary upgrade path (#2548) and the whole point of installing a module. The discriminator decides on a *difference*, never on being a store copy. |
 
 **This is not the declared floor.** The floor is a string a module's author *wrote*. Since policy
 `package-min-mesh-version` it holds a version only when it is comparable with the running platform
@@ -264,6 +275,47 @@ and not a binary one, so a discriminator that silently read the process's own id
 what those hosts do at their next boot with nothing in their diff. `ModuleIdentityDiscriminatorTest`
 (`test/MeshWeaver.Compiler.Pipeline.Test`) lands every copy through the real landing service and
 carries all three bounds as negative controls.
+
+## When the identity cannot decide: the image copy's VERSION does (#6044)
+
+Under the compatibility key (policy `platform-backwards-compatibility`) every build of one platform
+epoch states the **same** framework identity, so the rule above stopped discriminating: a store copy
+built from *older* sources than the image stated the image's own identity and overrode it. Measured on
+memex.meshweaver.cloud, 2026-09-28: the image `3.0.0-ci.9554` was built from Plugins `8931656f`, and
+the module store held `MeshWeaver.AI` 1.16.3 and `MeshWeaver.Hosting.Instance` 1.0.6 built from the
+older `6d21172e` / `84f5e5f1`. Both stated identity `c003e001`, both overrode the image's own copies,
+and a correct image rendered the pre-`8931656f` admin page. The image's locks were not yet settled,
+so its copies carried the **same** version numbers as the store copies over newer sources.
+
+**The record.** A module DLL carries no package version of its own (its informational version is the
+platform's, #3732), so the image build writes it down: the closure lane
+(`memex/MeshModulesPublish.targets`, `WriteMeshModuleSeedStamps`) finds the package that declares
+each closure module (`<package>/index.json` → `content.module`) and writes
+`modules/<Name>/module.seed.json` beside the DLL — `version` and `moduleVersion` from that package's
+`manifest.lock` at the commit the image is built from. `ImageModuleSeed` reads it.
+
+**The rule.** A store copy of an image-shipped module overrides the image's copy only when its
+recorded version is a **strictly newer** release than the stamp's (`ImageModuleSeed.DeclineReason`).
+Otherwise it is declined exactly as an identity mismatch is: named on the `[ModuleActivation] SKIPPED`
+line, the baseline emitted with `PreferImageCopy`, and reported by `PendingModuleActivations` as
+**declined**, never as "a restart activates it".
+
+**Why EQUAL loses.** An equal version is the case that happened. Publication follows a settled lock,
+and settling bumps the version, so a store copy at the image's own version carries the same sources or
+older ones — never newer. The image's copy was also compiled against this very platform. Preferring it
+is right in every equal case there is.
+
+| Case | Verdict |
+|---|---|
+| Store version **newer** than the image stamp | Store copy wins — the upgrade path |
+| Store version **equal or older** | Image copy runs; store copy declined, named |
+| **No stamp** (image from before it, module no package declares), stamp without a version, or store entry without one | Unchanged — decided by the identity rule alone (R2) |
+| **Store-only** module | Unchanged — nothing to prefer it to |
+
+It is self-healing in the same way: the next published release of the package is newer than the
+image's stamp, lands, and wins. The pure rule is pinned by `ImageCopyVersionDiscriminatorTest`
+(`test/MeshWeaver.Compiler.Pipeline.Test`), whose control first proves the store copy wins without the
+stamp.
 
 ## A declined bundle risks stale TYPES, not just a slower boot
 

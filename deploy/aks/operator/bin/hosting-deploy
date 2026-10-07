@@ -133,6 +133,29 @@ values_block_image() { # <block> <file> → prints <block>.image when set and no
   return 1
 }
 values_carry_portal_image() { values_block_image portal "$1" >/dev/null; }
+
+# migration_image_for <portal image> — the memex-migration image paired with a portal image: the SAME
+# tag, on the values' own migration repository when the record rendered one, else `memex-migration`
+# beside the portal's repository in the same registry path.
+# 🚨 It used to be `${image/memex-portal-ai/memex-migration}`, which is right for exactly ONE portal
+# repository and a silent no-op for every other: on `meshweaver.azurecr.io/memex-control` it yielded
+# the PORTAL image, helm rendered the migration Job to run the portal (control, revision 4,
+# 2026-10-06 06:05Z: Job memex-migration-4 Failed), and every later Roll then refused in
+# hosting-migrate — "runs no memex-migration image — nothing to retarget". The record knows the
+# repository (HelmValues.MigrationImage reads MigrationImageRepository), but it renders it only with
+# a tag, so a Reconcile/Roll file names none and the derivation here is what decides.
+# Prints nothing and returns 1 when the result would not be a plain memex-migration reference — a
+# digest-pinned portal image has no tag to carry — so a caller refuses instead of deploying a guess.
+migration_image_for() {
+  local portal="$1" repo tag mig
+  [[ "$portal" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  tag="${portal##*:}"
+  repo="$(values_block_image migration "$values" || true)"
+  if [[ "$repo" =~ /memex-migration:[^/]*$ ]]; then repo="${repo%:*}"; else repo="${portal%:*}"; repo="${repo%/*}/memex-migration"; fi
+  mig="${repo}:${tag}"
+  [[ "$mig" =~ ^[A-Za-z0-9][A-Za-z0-9./_-]*/memex-migration:[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ "$mig" != "$portal" ] || return 1
+  printf '%s' "$mig"
+}
 if [ -z "$image" ] && ! values_carry_portal_image "$values"; then
   # 🚨 THREE ANSWERS, not two (MeshWeaver#4722) — and this one is the most expensive to get wrong
   # in the whole file. The read used to be `2>/dev/null || true`, so a Forbidden on `deployments`
@@ -154,7 +177,9 @@ if [ -z "$image" ] && ! values_carry_portal_image "$values"; then
   fi
 fi
 if [ -n "$image" ]; then
-  sets+=( --set "portal.image=${image}" --set "migration.image=${image/memex-portal-ai/memex-migration}" )
+  migration_image="$(migration_image_for "$image")" \
+    || hosting::die "cannot pair a memex-migration image with the portal image '${image}' (it is not a plain registry/…/repository:tag reference) — refusing to render a migration Job that would run something else"
+  sets+=( --set "portal.image=${image}" --set "migration.image=${migration_image}" )
 fi
 if [ -n "$pg_host" ]; then
   sets+=(
@@ -162,6 +187,46 @@ if [ -n "$pg_host" ]; then
     --set "config.memex_migration.MEMEX_HOST=${pg_host}"
     --set "config.memex_migration.MEMEX_JDBCCONNECTIONSTRING=jdbc:postgresql://${pg_host}:5432/${database}"
   )
+fi
+
+# ── the portal's Azure workload identity — the client id of the identity hosting-federate binds ──
+# 🚨 Federation is HALF of workload identity (Systemorph/MeshWeaver.Plugins#2994). hosting-federate
+# binds `system:serviceaccount:<ns>:memex-portal-sa` to $AZ_PORTAL_IDENTITY on every Provision, but
+# the chart turns that into a usable credential only when `selfUpdate.azureClientId` is set: it is
+# what renders the ServiceAccount's `azure.workload.identity/client-id` annotation, the pod's
+# `azure.workload.identity/use` label and AZURE_CLIENT_ID. Nothing rendered it on the record-driven
+# path — HelmValues has no client id to render, because the record carries the identity's NAME
+# (operator.environment AZ_PORTAL_IDENTITY), never its id — so every instance provisioned from a
+# record on an ACR imageRepository booted with no token exchange, and its self-updater failed EVERY
+# check with `CredentialUnavailableException … WorkloadIdentityCredential authentication
+# unavailable` (control.systemorph.com Admin/UpdatePolicy, measured 2026-10-06 and 2026-10-07).
+# memex and memex-cloud only worked because a pre-record values file had set the key; the vault
+# half now refuses structure (Memex#295), so their next Reconcile would have lost it as well.
+#
+# So the id is READ here, from the identity the same step federates to, with the identity the
+# operator already holds over it (Managed Identity Contributor, backups.bicep) — never written into
+# the record, the vault half or the repository. No identity named → no workload identity, said by
+# name: a local or non-Azure install legitimately has none, and an instance on a non-ACR registry
+# authenticates with its instance key instead.
+if [ -n "${AZ_PORTAL_IDENTITY:-}" ]; then
+  hosting::need_env AZ_RESOURCE_GROUP "the resource group holding the portal's managed identity (the one hosting-federate binds this namespace to)"
+  hosting::safe_name portal-identity "$AZ_PORTAL_IDENTITY"
+  hosting::safe_name resource-group "$AZ_RESOURCE_GROUP"
+  hosting::probe output az identity show -g "$AZ_RESOURCE_GROUP" -n "$AZ_PORTAL_IDENTITY" --query clientId -o tsv
+  case $? in
+    0) ;;
+    2) hosting::die "REFUSED, not absent: this operator's Azure identity may not read managed identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — so its client id is UNKNOWN and the pods would come up with no workload identity. It needs read on that identity (backups.bicep grants Managed Identity Contributor). Refused: ${HOSTING_PROBE_ERR}" ;;
+    *) hosting::die "could not read the client id of the portal identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — without it the pods get no workload identity and the self-updater cannot list the registry. az said: ${HOSTING_PROBE_ERR:-nothing}" ;;
+  esac
+  portal_client_id="${HOSTING_PROBE_OUT//[[:space:]]/}"
+  [[ "$portal_client_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+    || hosting::die "managed identity ${AZ_PORTAL_IDENTITY} answered a client id that is not a GUID ('${portal_client_id}') — refusing to interpolate it into the release"
+  sets+=( --set "selfUpdate.azureClientId=${portal_client_id}" )
+  hosting::log "identity  pods federate as ${AZ_PORTAL_IDENTITY} (client ${portal_client_id})"
+  hosting::say portal_identity "$portal_client_id"
+else
+  hosting::log "identity  AZ_PORTAL_IDENTITY is not set — the pods get NO Azure workload identity (selfUpdate.azureClientId stays empty); a self-updater listing an Azure Container Registry cannot authenticate. Name the identity in the record's operator.environment if this instance needs one."
+  hosting::say portal_identity none
 fi
 
 # ── the Key Vault values half, layered FIRST ────────────────────────────────────────────────────
@@ -392,7 +457,7 @@ esac
 target_portal="$image"
 target_migration=""
 if [ -n "$image" ]; then
-  target_migration="${image/memex-portal-ai/memex-migration}"
+  target_migration="$migration_image"
 else
   target_portal="$(values_block_image portal "$values" || true)"
   target_migration="$(values_block_image migration "$values" || true)"

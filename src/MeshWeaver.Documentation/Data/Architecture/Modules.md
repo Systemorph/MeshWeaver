@@ -114,7 +114,11 @@ container builds) and fed to `MeshBuilder.InstallAssemblies` as one list:
    > the whole answer to the empty list.
 
 The union dedupes by module name (a store install of an already-baseline module contributes
-nothing). **Activation is restart-based**: landing a module writes its assemblies into
+nothing). 🚨 **Superseded in progress — see [Live Module Update](../LiveModuleUpdate)** (policy
+`module-live-update-default`): every module the image does not bind now loads into its OWN
+collectible load context, and the self-update check swaps a landed generation in LIVE first; the
+restart path below is now the FALLBACK, taken only for a module that declares
+`[ModuleRestartRequired]`, measures as not re-appliable, or whose live swap fails. **Activation was restart-based**: landing a module writes its assemblies into
 `modules/<name>/` and its activation entry, flags `PendingRestart` in the sidecar, and the module
 loads on the NEXT restart — nothing is loaded into the running process (a genuinely dynamic
 loader collides with the kernel snapshot). Boot consumes the `PendingRestart` flag: applying the
@@ -1017,6 +1021,48 @@ transport end to end — there is deliberately no second distribution channel:
    lane's gate: a module binds by simple name, so a bundle built against an older platform
    installs ex post on any deployment satisfying its floor. Restart-as-activation as above:
    `PendingRestart` is the signal, the next restart loads it.
+
+### 🚨 A module's bytes carry ONE version label — their own (#6067)
+
+**Measured 2026-10-04 on the control instance.** Its activation entry for `MeshWeaver.AI` read
+`1.20.1`, and the generation it named was byte-identical to the one landed hours earlier as
+`1.19.4` (the generation leaf is a content address, so the two landings resolved the same
+directory). The DLL in it lacked a method the 1.20 sources define. The origin was the REGISTRY:
+its install record `Plugins/AI` had advanced to 1.20.1 through the node-content path while its
+shelf still held the module bytes published at 1.19.4 (the publish lane had posted nothing since).
+The index lists an install record's version, and the module section it offered under that entry
+was resolved with NO version — i.e. the shelf's head, whatever version that head was shelved at
+(`PluginBundleEndpoints.ServableModules` / `ModuleFiles` passing the record entry's null
+`ShelfVersion` to `ModuleBundleSource.CollectVersion`). So `AI 1.20.1` was advertised and served
+with the 1.19.4 bytes, every consumer landed them stamped `1.20.1`, Hosting (`requires
+AI@^1.20.0`) passed every version check, and its sources threw `MissingMethodException` at run
+time — every PR review in the fleet failed to start. Worse, the update decision then read the
+lying entry as "already landed", so the genuine 1.20.1 could not displace it.
+
+The rule, enforced at every hop:
+
+- **Serve** — an index entry's module section is resolved AT THAT ENTRY'S VERSION
+  (`ModuleBundleSource.GenerationVersionFor`): the published-module contributor's own shelf
+  version, else — when the deployment holds an activation entry for the module — the generation
+  shelved at the advertised version (head or retained previous), else nothing. A record ahead of
+  its shelf is therefore advertised WITHOUT a module section, and the shelved bytes stay advertised
+  under the version they were shelved at. Only a module with no activation entry at all (the
+  image's copy, which no landing labelled) keeps the unversioned lookup. The served archive states
+  the version of the module bytes it carries (`module.version` in the manifest,
+  `BundleReader.ModuleRef.Version`).
+- **Land** — `PluginBundleClient.LandFromBundle` stamps the generation with the version the BUNDLE
+  declares for its module bytes (`module.version`, else the manifest's `version`), never the
+  advertised one, and REFUSES — `Module bundle for {Plugin} REFUSED — nothing landed`, at Error,
+  naming both versions — when the two disagree.
+- **Publish** — `ModulePublish.Validate` shelves at the bundle's own declared version and refuses
+  an upload whose `?version=` disagrees with it (400, naming both). The query used to win outright.
+
+🚨 **A deployment that already holds a mislabelled entry is NOT healed by this change.** Its entry
+still names the wrong version, and the update decision compares `(version, framework identity)`:
+when the genuine 1.20.1 is published under the same framework identity, that decision reads the
+lying entry as "already landed" and never downloads it. What releases it is a NEWER version (1.20.2
+outranks the label), a different framework identity, or uninstalling and re-installing the module.
+Name the affected deployments when this ships; do not expect them to converge on their own.
 
 ### Auto-update
 

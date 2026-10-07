@@ -395,6 +395,27 @@ public sealed class PluginBundleClient
     /// the two are separate since 2026-09-14. Ignored when <paramref name="unattended"/> is false.</param>
     public IObservable<int> AdoptModule(
         string pluginId, string moduleName, string? packagePath = null, bool unattended = false,
+        string? policyDecline = null) =>
+        AdoptModuleOutcome(pluginId, moduleName, packagePath, unattended, policyDecline)
+            .Select(outcome => outcome.FilesLanded);
+
+    /// <summary>
+    /// <see cref="AdoptModule"/> with its WHOLE answer rather than a file count — what the registry
+    /// served (version and declared floor), what was landed before, the decision's own sentence,
+    /// how many files landed and, when nothing landed although the decision said land, the named
+    /// refusal. The module reload (<c>Doc/Architecture/ModuleReload</c>) reports every one of these
+    /// on its request node; the count-only form stays for every caller that needs no more. ONE
+    /// implementation: <see cref="AdoptModule"/> is this, projected. Never faults — every failure
+    /// is absorbed into <see cref="ModuleAdoptOutcome.Failure"/>, exactly as the count form absorbs
+    /// it into zero.
+    /// </summary>
+    /// <param name="pluginId">The package id whose bundle carries the module.</param>
+    /// <param name="moduleName">The module's entry-assembly name.</param>
+    /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
+    /// <param name="unattended">True on the reconciler's background lane; false for an explicit request.</param>
+    /// <param name="policyDecline">On the unattended lane, why the package's own policy declines.</param>
+    public IObservable<ModuleAdoptOutcome> AdoptModuleOutcome(
+        string pluginId, string moduleName, string? packagePath = null, bool unattended = false,
         string? policyDecline = null)
     {
         var landing = _hub.ServiceProvider.GetService<ModuleLandingService>();
@@ -403,7 +424,11 @@ public sealed class PluginBundleClient
             _logger?.LogWarning(
                 "Module bundle for {Plugin}: no ModuleLandingService on this host — nothing landed",
                 pluginId);
-            return Observable.Return(0);
+            return Observable.Return(new ModuleAdoptOutcome
+            {
+                Registry = _registryUrl,
+                Failure = "this host registers no module landing service — nothing can land here",
+            });
         }
 
         var declineOnLane = Observable.Return<string?>(unattended ? policyDecline : null);
@@ -441,12 +466,20 @@ public sealed class PluginBundleClient
                             // running and the bundle lands once the platform rolls to it.
                             floorHold: PackagePlatformFloorGate.HoldFor(_hub));
 
+                        var decided = new ModuleAdoptOutcome
+                        {
+                            Registry = _registryUrl,
+                            Verdict = verdict,
+                            ServedVersion = bundle?.Version,
+                            ServedFloor = bundle?.MinMeshVersion,
+                            LandedBefore = entry?.Version,
+                        };
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
                             _logger?.LogInformation(
                                 "Module '{Module}' of {Plugin}: {Action} — {Reason}",
                                 moduleName, pluginId, verdict.Action, verdict.Reason);
-                            return Observable.Return(0);
+                            return Observable.Return(decided);
                         }
 
                         _logger?.LogInformation(
@@ -456,9 +489,23 @@ public sealed class PluginBundleClient
                         return Download(pluginId, advertised)
                             .SelectMany(result => result.Bytes is null
                                 ? Miss(pluginId, result.Kind, result.Reason)
-                                : LandFromBundle(
-                                    pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
-                                    advertised.FrameworkMvid));
+                                    .Select(_ => decided with
+                                    {
+                                        Failure = $"the bundle {advertised.Version} could not be fetched ({result.Kind})"
+                                                  + (string.IsNullOrWhiteSpace(result.Reason) ? "" : $": {result.Reason}"),
+                                        // A 503/429/timeout is a fault that clears on its own (Faulted,
+                                        // retried); a 404/403 or a refused artifact is decided (Failed).
+                                        Transient = result.Transient,
+                                    })
+                                : LandFromBundleOutcome(
+                                        pluginId, moduleName, packagePath, advertised.Version, result.Bytes,
+                                        advertised.FrameworkMvid)
+                                    .Select(landed => decided with
+                                    {
+                                        FilesLanded = landed.Count,
+                                        LandedVersion = landed.Count > 0 ? landed.Version : null,
+                                        Failure = landed.Refusal,
+                                    }));
                     })))
             .Catch((Exception ex) =>
             {
@@ -472,9 +519,25 @@ public sealed class PluginBundleClient
                     "Module '{Module}' of {Plugin}: landing failed — the module is unchanged. "
                     + "Cause: {Cause}",
                     moduleName, pluginId, ex.Message);
-                return Observable.Return(0);
+                return Observable.Return(LandingFaultOutcome(_registryUrl, ex));
             });
     }
+
+    /// <summary>
+    /// The outcome of an HTTP-route adoption that FAULTED (anything thrown on the way — the feed
+    /// read, the download, the landing). Whether it is retried is the shared classifier's call
+    /// (<see cref="TransientRegistryFailure"/>): a registry refusal (a
+    /// <see cref="RegistryRefusedException"/>, a 404/403 answer, a digest mismatch) is decided —
+    /// <c>Failed</c>, never re-armed — and everything else (a 503/429, a timeout, a reset, an
+    /// unexpected crash) is <c>Faulted</c> and retried. This route used to mark every fault
+    /// transient by itself, so a deliberate refusal on it was retried forever (MeshWeaver#6172).
+    /// </summary>
+    internal static ModuleAdoptOutcome LandingFaultOutcome(string? registryUrl, Exception fault) => new()
+    {
+        Registry = registryUrl,
+        Failure = $"landing failed — the module is unchanged: {fault.Message}",
+        Transient = TransientRegistryFailure.IsTransient(fault),
+    };
 
     /// <summary>
     /// Reads the downloaded bundle's module section and lands it. The declared platform FLOOR in
@@ -507,6 +570,18 @@ public sealed class PluginBundleClient
     internal IObservable<int> LandFromBundle(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
         string? advertisedFrameworkMvid = null) =>
+        LandFromBundleOutcome(pluginId, moduleName, packagePath, version, bundleBytes, advertisedFrameworkMvid)
+            .Select(landed => landed.Count);
+
+    /// <summary>
+    /// <see cref="LandFromBundle"/> with the refusal it absorbed NAMED: the count landed, the
+    /// version the bundle declares for its module bytes, and — when nothing landed — why (a version
+    /// mislabel, a module-name drift, an empty payload). A landing-service refusal (the link probe)
+    /// still faults, exactly as before, and the caller's catch names it.
+    /// </summary>
+    internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
+        string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
+        string? advertisedFrameworkMvid = null) =>
         _httpPool.InvokeBlocking(_ => BundleReader.ReadModule(bundleBytes))
             .SelectMany(payload =>
             {
@@ -528,8 +603,25 @@ public sealed class PluginBundleClient
                     _logger?.LogInformation(
                         "Module bundle for {Plugin} carries no (complete) module payload — nothing landed",
                         pluginId);
-                    return Observable.Return(0);
+                    return Observable.Return<(int, string?, string?)>(
+                        (0, null, "the bundle carries no (complete) module payload — nothing landed"));
                 }
+
+                // 🚨 MeshWeaver#6067 — the generation is stamped with the version the BUNDLE
+                // declares for these module bytes, never with the version it was ADVERTISED at, and
+                // the two must agree. A registry once served the 1.19.4 bytes under an index entry
+                // reading 1.20.1; every consumer landed them stamped "1.20.1", a dependent requiring
+                // AI@^1.20.0 passed every check and threw MissingMethodException at run time, and
+                // the mislabelled entry then read as "already landed" to the update decision, so
+                // the real 1.20.1 could not displace it. Refused, loudly, naming both.
+                if (VersionMislabel(version, manifest) is { } mislabel)
+                {
+                    _logger?.LogError(
+                        "Module bundle for {Plugin} REFUSED — nothing landed: {Mislabel}",
+                        pluginId, mislabel);
+                    return Observable.Return<(int, string?, string?)>((0, null, $"the bundle was refused — {mislabel}"));
+                }
+                var declaredVersion = DeclaredModuleVersion(manifest) ?? version;
 
                 // The bundle must be the module the PACKAGE declared — a producer/catalog drift
                 // here would land bytes under an identity the boot union never asks for.
@@ -539,7 +631,8 @@ public sealed class PluginBundleClient
                     _logger?.LogWarning(
                         "Module bundle for {Plugin} declares module '{Declared}' but the package "
                         + "declares '{Expected}' — nothing landed", pluginId, declared, moduleName);
-                    return Observable.Return(0);
+                    return Observable.Return<(int, string?, string?)>((0, null,
+                        $"the bundle declares module '{declared}' but the package declares '{moduleName}' — nothing landed"));
                 }
 
                 var landing = _hub.ServiceProvider.GetRequiredService<ModuleLandingService>();
@@ -554,7 +647,7 @@ public sealed class PluginBundleClient
                         // rebuild from a no-op (Plugins#931).
                         advertisedFrameworkMvid ?? manifest!.FrameworkMvid,
                         packagePath,
-                        version,
+                        declaredVersion,
                         manifest!.Module?.MinMeshVersion,
                         // A view pack's wwwroot rides the bundle (#1724's provider serves it from
                         // the module folder); without this the pack lands unstyled and its
@@ -578,11 +671,50 @@ public sealed class PluginBundleClient
                         BundleReader.ReadModuleNativeAssets(bundleBytes) is { Count: > 0 } natives
                             ? [.. natives.Select(n => (n.RelativePath, n.Bytes))]
                             : null)
-                    .Select(_ => files.Count)
-                    .Do(count => _logger?.LogInformation(
+                    .Select(_ => (Count: files.Count, Version: (string?)declaredVersion, Refusal: (string?)null))
+                    .Do(landed => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "
-                        + "— RESTART REQUIRED to load it", moduleName, pluginId, count, version));
+                        + "— RESTART REQUIRED to load it", moduleName, pluginId, landed.Count, declaredVersion));
             });
+
+    /// <summary>
+    /// The version a downloaded bundle declares for its MODULE bytes: the module section's own
+    /// <see cref="BundleReader.ModuleRef.Version"/> (stated by a registry since MeshWeaver#6067),
+    /// else the manifest-level <see cref="BundleReader.Manifest.Version"/> (what every producer
+    /// packs), else null. Pure.
+    /// </summary>
+    /// <param name="manifest">The bundle's manifest, or null.</param>
+    internal static string? DeclaredModuleVersion(BundleReader.Manifest? manifest) =>
+        manifest?.Module?.Version is { Length: > 0 } moduleVersion && !string.IsNullOrWhiteSpace(moduleVersion)
+            ? moduleVersion.Trim()
+            : manifest?.Version is { Length: > 0 } version && !string.IsNullOrWhiteSpace(version)
+                ? version.Trim()
+                : null;
+
+    /// <summary>
+    /// 🚨 Why a bundle's module bytes must NOT be landed under <paramref name="advertisedVersion"/>
+    /// (MeshWeaver#6067), or null when they may: the bundle declares a version for them
+    /// (<see cref="DeclaredModuleVersion"/>) and it is not the advertised one. Exact TEXT,
+    /// case-insensitive — the rule the index and the download route match versions by; a SemVer
+    /// comparison reads unparseable parts as 0 and would call two different labels equal. A bundle
+    /// that declares nothing cannot disagree, and lands under the advertised version as before.
+    /// Pure, so the refusal is pinnable without HTTP.
+    /// </summary>
+    /// <param name="advertisedVersion">The version the registry's index advertised.</param>
+    /// <param name="manifest">The downloaded bundle's manifest.</param>
+    internal static string? VersionMislabel(string? advertisedVersion, BundleReader.Manifest? manifest)
+    {
+        var declared = DeclaredModuleVersion(manifest);
+        if (declared is null || string.IsNullOrWhiteSpace(advertisedVersion)
+            || string.Equals(declared, advertisedVersion.Trim(), StringComparison.OrdinalIgnoreCase))
+            return null;
+        return $"the registry advertised version {advertisedVersion.Trim()}, but the bundle's "
+               + $"module '{manifest?.Module?.AssemblyName ?? "(unnamed)"}' declares its bytes are "
+               + $"version {declared}. Landing them would stamp a generation with a version its "
+               + "bytes are not, so every dependency floor and every update decision downstream "
+               + "would read a lie. The registry must advertise these bytes at the version they "
+               + "were published at, or publish the advertised version's bytes.";
+    }
 
     /// <summary>
     /// Downloads the bundle, or emits null when the registry has none for this plugin/version.
@@ -592,7 +724,13 @@ public sealed class PluginBundleClient
     /// collapsed "404 for this lane" and "the registry is down" into the same null, and the caller
     /// then collapsed that into the same 0 as a successful adoption.
     /// </summary>
-    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
+    /// <param name="Bytes">The bundle, or null when there is none.</param>
+    /// <param name="Kind">Why there are none (or <see cref="BundleAdoptionKind.Adopted"/>).</param>
+    /// <param name="Reason">The registry's or the transport's own words.</param>
+    /// <param name="Transient">The miss may clear on its own — a 503, 429, timeout or reset
+    /// (<see cref="TransientRegistryFailure"/>) — so a reload that met it is <c>Faulted</c> and
+    /// retried, never a final <c>Failed</c> (MeshWeaver#6172).</param>
+    internal sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null, bool Transient = false);
 
     /// <summary>
     /// The bytes of <paramref name="bundle"/>: from the fleet's OCI registry by digest when the
@@ -644,7 +782,7 @@ public sealed class PluginBundleClient
                     var layer = manifest.Layers.FirstOrDefault(l => string.Equals(
                         l.MediaType, OciRegistryClient.BundleLayerMediaType, StringComparison.OrdinalIgnoreCase));
                     if (layer is null)
-                        return Observable.Throw<FetchResult>(new InvalidOperationException(
+                        return Observable.Throw<FetchResult>(new RegistryRefusedException(
                             $"the manifest {reference.Digest} at {reference.Registry}/{reference.Repository} "
                             + $"carries no {OciRegistryClient.BundleLayerMediaType} layer"));
                     return client.GetBlob(reference.Repository, layer.Digest, () => buffer)
@@ -673,7 +811,8 @@ public sealed class PluginBundleClient
                 "Bundle fetch for {Plugin}@{Version} from {Artifact} failed — {Consequence}. Cause: {Cause}",
                 pluginId, version, artifact, MissConsequence("will compile"), ex.Message);
             return Observable.Return(new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                $"artifact fetch from {artifact} failed: {ex.Message}"));
+                $"artifact fetch from {artifact} failed: {ex.Message}",
+                Transient: TransientRegistryFailure.IsTransient(ex)));
         });
     }
 
@@ -719,7 +858,8 @@ public sealed class PluginBundleClient
                     "Bundle fetch for {Plugin}@{Version} failed ({Status}) — {Consequence}",
                     pluginId, version, (int)receipt.Status, MissConsequence("will compile"));
                 return new FetchResult(null, BundleAdoptionKind.FetchFailed,
-                    $"HTTP {(int)receipt.Status} from {_registryUrl}");
+                    $"HTTP {(int)receipt.Status} from {_registryUrl}",
+                    Transient: TransientRegistryFailure.IsTransient(receipt.Status));
             }
 
             // 🚨 WHAT THIS TRANSFER MOVED, AND HOW FAST — the measurement whose absence made #4528

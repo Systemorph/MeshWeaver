@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using MeshWeaver.Hosting;
 using Xunit;
@@ -60,5 +61,62 @@ public class ContentDegradationRegistryTest
         var registry = new ContentDegradationRegistry();
         registry.Record(null, "x", "seam");
         registry.Snapshot().Single().NodeType.Should().Be("(no node type)");
+    }
+
+    /// <summary>
+    /// Plugins#2812: the sentence printed <c>Store/Tier ×377</c> with no time, so a count run up in
+    /// the two minutes after boot read exactly like reads failing now. Each entry now carries its
+    /// window, and a boot-window entry is recognisable from ONE probe.
+    /// </summary>
+    [Fact]
+    public void TheSentence_CarriesEachEntrysWindow_SoABootWindowCountReadsAsHistory()
+    {
+        var boot = new DateTimeOffset(2026, 9, 21, 7, 45, 14, TimeSpan.Zero);
+        var bootWindow = new ContentDegradation(
+                "Store/Tier", "MeshNodeStreamCache.GetStream", 377, "Admin/Tiers/free", boot.AddSeconds(110))
+            { FirstAt = boot.AddSeconds(2) };
+        var live = new ContentDegradation(
+                "Hosting/InstanceAction", "MeshNodeStreamCache.GetStream", 5, "Ops/Actions/a", boot.AddHours(3))
+            { FirstAt = boot.AddHours(2) };
+
+        var sentence = ContentDegradationRegistry.Describe([live, bootWindow]);
+
+        sentence.Should().Contain(
+            "Store/Tier ×377 between 2026-09-21T07:45:16Z and 2026-09-21T07:47:04Z (last Admin/Tiers/free)",
+            "a window that closed two minutes after boot must be visible as such in one probe");
+        sentence.Should().Contain(
+            "Hosting/InstanceAction ×5 between 2026-09-21T09:45:14Z and 2026-09-21T10:45:14Z (last Ops/Actions/a)");
+        sentence.Should().Contain("its ×count is cumulative",
+            "the sentence must say which half is current and which is history");
+    }
+
+    [Fact]
+    public void AnEntryBuiltWithoutAFirstInstant_FallsBackToItsLastOne()
+    {
+        var at = new DateTimeOffset(2026, 9, 21, 7, 47, 4, TimeSpan.Zero);
+        var legacy = new ContentDegradation("Crm/Client", "seam", 3, "Globex", at);
+        legacy.WindowStart.Should().Be(at);
+        ContentDegradationRegistry.Describe([legacy])
+            .Should().Contain("Crm/Client ×3 between 2026-09-21T07:47:04Z and 2026-09-21T07:47:04Z");
+    }
+
+    [Fact]
+    public void RecordKeepsTheFirstInstant_AndAClearReopensTheWindow()
+    {
+        var registry = new ContentDegradationRegistry();
+        registry.Record("Crm/Client", "Globex", "seam");
+        var first = registry.Snapshot().Single();
+        first.FirstAt.Should().Be(first.LastAt, "the first read opens the window");
+
+        registry.Record("Crm/Client", "AcmeRe", "seam");
+        var second = registry.Snapshot().Single();
+        second.FirstAt.Should().Be(first.FirstAt, "later reads move LastAt, never the window's start");
+        second.LastAt.Should().BeOnOrAfter(first.LastAt);
+
+        registry.Clear("Crm/Client");
+        registry.Record("Crm/Client", "Initech", "seam");
+        var reopened = registry.Snapshot().Single();
+        reopened.Count.Should().Be(1, "a cleared entry's count starts again");
+        reopened.FirstAt.Should().Be(reopened.LastAt, "and so does its window");
     }
 }
