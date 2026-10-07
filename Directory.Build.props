@@ -38,7 +38,8 @@
          clean ones, and with TieredPGO off 0 of 14 processes poisoned (Doc/Architecture/NodeTypeCompilation,
          "The defect, in one listing"). This is a runtime defect worked around at the narrowest supported
          switch; remove it only with a measurement on the runtime that fixes it. The test tree sets the
-         same property in test/Directory.Build.props, which does not import this file. -->
+         same property in test/Directory.Build.props, which does not import this file;
+         BakeHostRunsWithTieredPgoOffTest pins that this one reaches mw-plugin-test. -->
     <TieredPGO>false</TieredPGO>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <!-- `dotnet pack` over the solution warns NU5128-style once per non-packable project; with the

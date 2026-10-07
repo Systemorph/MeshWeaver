@@ -2193,8 +2193,11 @@ dropped cast and the surviving one differ only in which PGO data fed them.
 `tools/` and `memex/`, including the bake host `mw-plugin-test`) and in `test/Directory.Build.props`
 (which does not import the root). It reaches the runtime as `System.Runtime.TieredPGO: false` in each
 host's runtimeconfig — the file a `dotnet <name>.dll` launch reads, which is how CI's shards start
-hosts. `TieredPgoIsOffInEveryCompilingHostTest` pins that it arrives (negative control: a build with
-`-p:TieredPGO=true` fails both of its assertions). This is a workaround for a runtime defect, stated as
+hosts. Two guards pin that it arrives, one per props file: `TieredPgoIsOffInEveryCompilingHostTest`
+(a test host, `test/Directory.Build.props`; negative control: a build with `-p:TieredPGO=true` fails
+both of its assertions) and `BakeHostRunsWithTieredPgoOffTest` (the runtimeconfigs of `mw-plugin-test`
+and `mw-combo-verify`, which inherit the root; negative control: deleting the root property alone turns
+both cases red while the test tree's copy stays). This is a workaround for a runtime defect, stated as
 one: the defect is in the .NET 10 JIT, not in this repository, and the switch is removed only with a
 measurement on a runtime that fixes it — the arm above, re-run. The portal hosts live in
 MeshWeaver.Plugins and need the same property there.
