@@ -305,23 +305,24 @@ and "the lane is broken" become the same page. Instead the job runs, a `::warnin
 summary name the base, and one idempotent comment says so on the pull request itself. Draft and fork
 stay on the job condition, because for those there is genuinely nothing to say.
 
-**The other lanes were checked and are clean structurally, not by luck** — which is why none is
-exempted by name in the guard: `arm-credential.yml` mints and inspects a token and arms nothing;
-this steward acts only on a `dequeued` event, which cannot occur for a pull request never admitted
-to a queue, and a queue exists only on a branch configured to have one; `release.yml` and
-`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`, explicitly) without arming them.
-
-`ArmedMergeMustTriggerMainsPushLanesGuard` holds all three properties: the arming step is governed
-by an `if:` consuming a step output whose producer reads `default_branch` (a condition moved into
-`env:`, or one that consults only the token mint, breaks the chain and fails); no workflow in the
-directory arms without that chain; and the non-default path still warns and still comments.
+**This section is the HISTORY of the retired arm lane, kept for the lesson it taught.** `auto-arm.yml`
+no longer arms anything, so the base-chain guard it once carried is gone with the arming step: the
+control plane (Plugins `PrArming`) is the only armer and applies the arm gate, which includes the
+base-is-the-default-branch condition. What still holds the property in core is
+`ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge`: no workflow in the directory arms
+auto-merge at all, so a stacked pull request can no longer be armed by a workflow here. The other
+lanes were checked structurally, not by luck: `arm-credential.yml` mints and inspects a token and arms
+nothing; the steward acts only on a `dequeued` event; `release.yml` and
+`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`) without arming them.
 
 ## Working with the queue
 
 - **`gh pr merge <n> --auto` enqueues — but only onto the default branch.** With a queue enabled,
-  "auto-merge" means *enqueue when the PR's own required checks are green*. `auto-arm.yml` does this
-  for every non-draft PR **whose base is the default branch**; see the section above for why a
-  stacked PR is deliberately left unarmed. Marking a PR **draft** is the opt-out.
+  "auto-merge" means *enqueue when the PR's own required checks are green*. Arming is the control
+  plane's (Plugins `PrArming`), on a head that has been reviewed, whose findings are answered and
+  whose required checks are green, and only for a pull request whose base is the default branch; see
+  the section above for why a stacked PR is deliberately left unarmed. `auto-arm.yml` only
+  DISARMS, on every push. Marking a PR **draft** still holds it.
 - 🚨 **DISARMING auto-merge does NOT hold a pull request. Converting it to DRAFT does.** This is the
   single most likely way to believe you have stopped a merge and be wrong — see the section below.
 - **A push to a queued branch ejects it.** GitHub removes the entry (reason `MANUAL`-shaped from the
@@ -341,34 +342,33 @@ directory arms without that chain; and the non-default path still warns and stil
 ## 🚨 Disarming auto-merge is not a hold — DRAFT is the only durable one
 
 **Measured: `MeshWeaver.Plugins#1683` was deliberately disarmed during a merge window and merged
-anyway.** Nothing malfunctioned. `auto-arm.yml` fires on `synchronize` among other events, so **the
-next push re-armed it** — and a pull request being held is exactly a pull request someone is still
-pushing to. A push is what happened to re-arm *that* one; it is not the only thing that would have.
+anyway.** Nothing malfunctioned: at that time `auto-arm.yml` armed on `synchronize`, so the next push
+re-armed it. That lane has since been retired, and the shape of the lesson changed with it.
 
-The asymmetry is the whole point, and it is structural rather than a bug to fix:
+Today `auto-arm.yml` runs on `synchronize` only and **disarms**; it never arms. The control plane arms
+a head once it is reviewed, every finding is answered and the required checks are green, so a
+disarmed pull request stays disarmed until the control plane judges a new head ready. That is still
+not a hold: any such head is armed again without anyone asking, and a pull request someone is still
+pushing to is exactly one that will be. Draft remains the durable hold, because the control plane
+never arms a draft.
 
 | act | what it is | how long it lasts |
 |---|---|---|
-| `gh pr merge --disable-auto` | a **state** GitHub owns | until the next event this lane fires on: `synchronize` (a push), `reopened`, or `ready_for_review`. **A push is the common one, not the only one** — reopening a closed PR, or marking a draft ready, re-arms with no push at all. (`opened` cannot apply: a pull request has to exist before it can be disarmed.) |
-| convert to **draft** | a **property of the pull request** the lane reads | until *you* mark it ready; `ready_for_review` is what re-arms |
+| `gh pr merge --disable-auto` | a **state** GitHub owns | until the control plane next judges the head ready and arms it |
+| convert to **draft** | a **property of the pull request** the control plane reads | until *you* mark it ready |
 
-Read off the merged lane: `types: [opened, reopened, ready_for_review, synchronize]` and a job
-condition of `github.event.pull_request.draft == false`. A draft is never armed no matter how many
-times it is pushed to, and marking it ready arms it immediately — so draft is a **two-sided** hold
-the lane honours on both edges, while a disarm is a one-shot the next event overwrites. (GitHub also
-disables auto-merge when a pull request is converted to draft, so the conversion does both halves in
-one act. That last clause is GitHub's documented behaviour rather than something measured here.)
+(GitHub also disables auto-merge when a pull request is converted to draft, so the conversion does
+both halves in one act. That clause is GitHub's documented behaviour rather than something measured here.)
 
-**So: to hold a pull request, convert it to draft. Never rely on `--disable-auto`** — and if you
-find a PR merged that you thought you had stopped, look for one of this lane's trigger events after
-the disarm before looking for anything else. A push is the first thing to check because it is the
-most frequent, but a reopen or a ready-for-review re-arms just as completely and leaves no new
-commit to notice, which makes those the harder two to spot afterwards.
+**So: to hold a pull request, convert it to draft. Never rely on `--disable-auto`** — and if you find
+a PR merged that you thought you had stopped, look for the control plane's arm after the disarm.
 
-**#4057 does not change this.** That fix stops the lane arming a pull request whose base is not the
-default branch; for an ordinary pull request onto `main`, re-arming after a disarm is unchanged.
+**#4057 does not change this.** That fix stopped the retired lane arming a pull request whose base is
+not the default branch; the control plane's arm gate carries the same condition now.
 
 ### The option considered and NOT taken
+
+*(Written when the lane still armed; kept as the design record. The re-arming agent is now the control plane, and the same two options would apply to it.)*
 
 Making the lane refuse to re-arm a pull request a human explicitly disarmed is attractive and is
 **not small**, so it was left alone rather than half-built:

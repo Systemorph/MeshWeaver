@@ -17,7 +17,7 @@ satellite that re-implements a piece drifts, and the next incident is measured t
 | **Generated-lock conflicts** — a PR that conflicts only on `*/manifest.lock` lands anyway | `node-repo-resolve-locks.yml` + `.github/scripts/resolve-generated-conflicts.py` | a 12-line workflow on `push: main`, hourly, dispatch; the App secrets |
 | **Verdict adoption** — a merge from main (the resolver, `update-branch`, a hand merge) or a lock-only commit never costs the run | `.github/scripts/adopt-verdict.py`, decided by `node-repo-gate.yml` (`adopted-verdict: auto`) | nothing (Plugins decides itself in its change-set classifier and passes the URL) |
 | **Cancellation** — nothing on main cancels; a person's PR push supersedes; the bot's push never | `.github/scripts/check-main-runs-not-cancelled.py`, run by the validate lane | `cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.sender.type != 'Bot' }}` |
-| Auto-merge armed on every non-draft PR to main; draft is the only hold | `auto-arm.yml` | the call |
+| Auto-merge DISARMED on every push; arming is the control plane's (Plugins `PrArming`, on a reviewed, answered, green head) | `auto-arm.yml` (disarm-only, `synchronize`) | the call |
 | Build queue front door (admission through the build instance) | Plugins `admission` job today; a `node-repo-admission.yml` lane next | — |
 
 ## Why adoption is sound

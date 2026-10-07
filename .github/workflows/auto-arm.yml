@@ -88,10 +88,10 @@ jobs:
       cancel-in-progress: true
     timeout-minutes: 10
     # Only a PUSH invalidates a review, so only `synchronize` has anything to do; the other forwarded
-    # actions skip. A fork's head is never armed by the control plane, so there is nothing to take off.
-    if: >-
-      github.event.action == 'synchronize' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # actions skip. Forks are NOT skipped: a maintainer can arm a reviewed fork PR by hand, and
+    # GitHub keeps that arm across the contributor's next push. This `pull_request_target` job runs
+    # only the trusted base workflow and checks out no fork code, so disarming a fork PR is safe.
+    if: github.event.action == 'synchronize'
     steps:
       - name: The App credential, or a red run naming what to provision
         env:
