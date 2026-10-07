@@ -156,6 +156,8 @@ jobs:
     outputs:
       evaluated-at: ${{ steps.verdict-time.outputs.at }}
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       # The self-hosted scale set a private caller lands on does not promise a Python; every other
       # lane that runs a central guard pins one the same way.
       - uses: actions/setup-python@v7
@@ -169,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review-answered predicate has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-review-answered.py" > "$RUNNER_TEMP/check-review-answered.py" \
             || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
             || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
@@ -221,6 +223,7 @@ jobs:
       pull-requests: read
       actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun-failed-jobs
     steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -232,7 +235,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review-answered predicate has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-review-answered.py" > "$RUNNER_TEMP/check-review-answered.py" \
             || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
             || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }

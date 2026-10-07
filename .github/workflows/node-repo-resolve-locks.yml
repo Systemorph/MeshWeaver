@@ -68,6 +68,8 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: The App credential, or a red run naming what to provision
         env:
           MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -116,7 +118,7 @@ jobs:
         run: |
           set -euo pipefail
           for s in resolve-generated-conflicts.py gen-manifests.py; do
-            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/${s}?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/${s}" \
+            "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/${s}" > "$RUNNER_TEMP/${s}" \
               || { echo "::error::could not fetch .github/scripts/${s} at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
             head -c 400 "$RUNNER_TEMP/${s}" | grep -q "manifest" || { echo "::error::the fetched ${s} at ${SCRIPTS_REF} does not look like itself"; exit 1; }
           done
