@@ -144,7 +144,9 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         await using var _ = app;
 
         var started = DateTimeOffset.UtcNow;
-        using var response = await Index(app, key, TimeSpan.FromSeconds(30), ct);
+        // The client's patience is the fixture's, not a guess: the refusal must arrive at the 2 s
+        // budget, long before it (asserted below), so its exact value only bounds a broken run.
+        using var response = await Index(app, key, TestTimeouts.Quick, ct);
         var elapsed = DateTimeOffset.UtcNow - started;
 
         Assert.NotNull(response);
@@ -168,9 +170,22 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         var app = await StartBundleHost(budgetSeconds: 3600, ct);
         await using var _ = app;
 
-        using var response = await Index(app, key, TimeSpan.FromSeconds(5), ct);
+        var patience = TimeSpan.FromSeconds(5);
+        var started = DateTimeOffset.UtcNow;
+        using var response = await Index(app, key, patience, ct);
+        var elapsed = DateTimeOffset.UtcNow - started;
 
-        Assert.Null(response); // the client gave up first: no status line in 5 s
+        // The client gave up first: the route wrote no status line in 5 s. On the TestServer the
+        // client's cancellation IS the request's RequestAborted, so the abandoned request may still
+        // complete AFTER the cut — the route's wait faults with the aborted token, the host records
+        // that as 499 Client Closed Request, and the TestServer can hand it back to a client that
+        // has already cancelled (it raced the abort on CI: run 37652733264). A 499 is therefore
+        // the same reading as no response — nothing the ROUTE answered, only the hang-up recorded —
+        // and both may only come once the client's patience has run out.
+        Assert.True(response is null || response.StatusCode == (HttpStatusCode)StatusCodes.Status499ClientClosedRequest,
+            $"the held request must not be answered by the route; got {(int?)response?.StatusCode}");
+        Assert.True(elapsed >= patience,
+            $"nothing may come back before the client's own cut at {patience.TotalSeconds:F0} s (took {elapsed.TotalSeconds:F1} s)");
     }
 
     private Task<string> RegisterInstance(CancellationToken ct) =>
