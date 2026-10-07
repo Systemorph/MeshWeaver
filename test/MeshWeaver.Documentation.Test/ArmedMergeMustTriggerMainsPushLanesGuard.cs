@@ -553,9 +553,10 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
         var text = File.ReadAllText(path);
         var lines = ExecutableLines(text);
 
-        var jobCondition = Regex.Match(text, @"\n    if: >-\n((?:      .*\n)+)");
-        Assert.True(jobCondition.Success, "auto-arm.yml's job-level `if:` is no longer in the expected block form.");
-        Assert.Contains("synchronize", jobCondition.Groups[1].Value, StringComparison.Ordinal);
+        var jobCondition = Regex.Match(text, @"\n    if: (github\.event\.action == 'synchronize')[ \t]*\n");
+        Assert.True(jobCondition.Success,
+            "auto-arm.yml's job-level `if:` is no longer exactly `github.event.action == 'synchronize'`. "
+            + "Only a push invalidates a review, so the disarm must run on that event and nothing else.");
 
         var disarm = Assert.Single(StepBlocks(text).Where(b =>
             ExecutableLines(b).Any(l => l.Contains("gh pr merge", StringComparison.Ordinal)

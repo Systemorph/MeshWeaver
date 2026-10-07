@@ -1,7 +1,7 @@
 # Hold a pull request while the automatic review is missing or any of its findings is unanswered.
 #
 # 🚨 WHY (MeshWeaver#4299, option B — the maintainer's decision of 2026-09-17). The ruleset reviews
-# every pull request into main and auto-arm.yml arms every pull request the moment it opens, and
+# every pull request into main and the control plane (PrArming) arms pull requests, while auto-arm.yml only disarms on a push, and
 # nothing joined the two: a review was ADVISORY. #4310 merged with 14 findings and 0 replies and
 # stopped the fleet's publication for six hours; 9 of the 31 merges on 2026-09-14/15 carried
 # unanswered findings; #4383 lost the fix push for its findings to the merge by a minute. In every

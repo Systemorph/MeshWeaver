@@ -61,8 +61,8 @@ is still BLOCKED"**.
 ## Why: a review was advisory
 
 The ruleset `main pr protection` (2128472) carries a `copilot_code_review` rule, so every pull
-request into `main` is reviewed. `auto-arm.yml` arms every pull request for the merge queue the
-moment it opens. Nothing joined the two, so a merge waited for the required checks and never for
+request into `main` is reviewed. The control plane (`PrArming`) arms a pull request once its review
+lane is satisfied; `auto-arm.yml` only DISARMS on a push. Nothing joined the two, so a merge waited for the required checks and never for
 the review — and on the pull requests whose checks are fast, the checks usually won.
 
 | Instance | What merged past the review | Cost |
