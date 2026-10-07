@@ -1374,6 +1374,54 @@ def module_pack_permission_problems(workflow_text: str) -> list[str]:
     return problems
 
 
+def run_control_webhook_cases(root, case) -> None:
+    """EXECUTE the preflight's control-webhook guard and prove the workflow still wires it."""
+    import yaml
+
+    script = root / ".github/scripts/check-control-webhook-url.py"
+    declared = json.loads((root / ".github/control-instance.json").read_text())["url"].rstrip("/")
+    good = declared + "/api/hooks/Hosting/PlatformBuilds"
+
+    def check(declaration, url):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "control-instance.json"
+            if declaration is not None:
+                path.write_text(declaration)
+            res = subprocess.run([sys.executable, str(script), str(path), url],
+                                 capture_output=True, text=True)
+            return res.returncode, res.stdout + res.stderr
+
+    decl = json.dumps({"url": declared})
+    rc, log = check(decl, good)
+    case("the declared control inbox URL is accepted", rc == 0, f"rc={rc} log={log}")
+    rc, log = check(decl, "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds")
+    case("the old/wrong portal is refused", rc == 1 and "different inbox" in log, f"rc={rc} log={log}")
+    rc, log = check(decl, good + "/")
+    case("a near-miss URL (trailing slash) is refused", rc == 1, f"rc={rc} log={log}")
+    rc, log = check(json.dumps({"url": "http://control.example"}), good)
+    case("a non-HTTPS declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check(json.dumps({"deployment": "control"}), good)
+    case("a declaration without a url is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check("{not json", good)
+    case("a malformed declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+    rc, log = check(None, good)
+    case("a missing declaration is refused", rc == 1 and "cannot read" in log, f"rc={rc} log={log}")
+
+    # Wiring: the preflight must still sparse-checkout both files and invoke the checker.
+    wf = yaml.safe_load((root / WORKFLOW).read_text())
+    pre = wf["jobs"].get("preflight", {})
+    steps = pre.get("steps", [])
+    checkout = next((st for st in steps if str(st.get("uses", "")).startswith("actions/checkout")), {})
+    sparse = checkout.get("with", {}).get("sparse-checkout", "")
+    run_text = "\n".join(str(st.get("run", "")) for st in steps)
+    case("preflight sparse-checks-out the declaration and the checker",
+         ".github/control-instance.json" in sparse and ".github/scripts/check-control-webhook-url.py" in sparse,
+         f"sparse-checkout={sparse!r}")
+    case("preflight invokes the checker against the declaration and CONTROL_WEBHOOK_URL",
+         re.search(r'check-control-webhook-url\.py\s*\\?\s*\.github/control-instance\.json\s+"\$CONTROL_WEBHOOK_URL"', run_text) is not None,
+         "the preflight run script no longer calls the checker")
+
+
 def main() -> int:
     root = Path(os.environ.get("GITHUB_WORKSPACE", ".")).resolve()
     try:
@@ -1408,26 +1456,8 @@ def main() -> int:
             failures.append(name)
 
     workflow_text = (root / WORKFLOW).read_text()
-    # The control-first handoff is production-only. Exercise the actual checker and assert the
-    # workflow still checks out, invokes, and supplies the URL to it before publishing.
-    checker = root / ".github/scripts/check-control-webhook-url.py"
-    declaration = root / ".github/control-instance.json"
-    expected = json.loads(declaration.read_text())["url"].rstrip("/") + "/api/hooks/Hosting/PlatformBuilds"
-
-    def check_url(source: Path, url: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, str(checker), str(source), url],
-                              capture_output=True, text=True)
-
-    case("the declared control inbox is accepted", check_url(declaration, expected).returncode == 0)
-    case("the former portal inbox is refused", check_url(
-        declaration, "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds").returncode != 0)
-    with tempfile.TemporaryDirectory() as tmp:
-        malformed = Path(tmp) / "control.json"
-        for label, content in (("invalid JSON", "{"), ("missing URL", "{}"),
-                               ("non-HTTPS URL", '{"url":"http://control.example"}')):
-            malformed.write_text(content)
-            case(f"a declaration with {label} is refused", check_url(malformed, expected).returncode != 0)
-
+    # The URL behavior is executed by run_control_webhook_cases below. These mutation cases
+    # prove that dropping its production wiring or changing the reporter's host goes red.
     def webhook_wiring_problems(source: str) -> list[str]:
         doc = yaml.safe_load(source)
         steps = (doc.get("jobs") or {}).get("preflight", {}).get("steps") or []
@@ -1457,7 +1487,8 @@ def main() -> int:
     def reporter_host_matches(source: str) -> bool:
         doc = yaml.safe_load(source)
         inputs = (doc.get("on") or doc.get(True))["workflow_call"]["inputs"]
-        return inputs["control-webhook-host"]["default"] == urlsplit(expected).hostname
+        declared = json.loads((root / ".github/control-instance.json").read_text())["url"]
+        return inputs["control-webhook-host"]["default"] == urlsplit(declared).hostname
 
     case("the CI failure reporter accepts the declared control host", reporter_host_matches(reporter_text))
     old_host = reporter_text.replace("default: control.systemorph.com", "default: memex.systemorph.com", 1)
@@ -1662,6 +1693,10 @@ def main() -> int:
     print()
     print(f"── step `{HEAL_STEP_ID}` ──")
     run_heal_cases(root, case)
+
+    print()
+    print("── control webhook preflight guard ──")
+    run_control_webhook_cases(root, case)
 
     print()
     if failures:
