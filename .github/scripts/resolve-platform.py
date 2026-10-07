@@ -460,6 +460,11 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
     is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
     main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
     if not main_runs:
+        # An EMPTY page is proven stale by a ceiling exactly as a short one is: the caller's own
+        # `main` passed on core CD #ceiling, so that run exists and page 1 omits it.
+        if passed_ceiling is not None:
+            return (f"it holds no main-cd run at all, but this repository's `main` has already "
+                    f"passed on core CD #{passed_ceiling}, which the page does not contain")
         return None
     newest = _newest_main_run(runs)
     if passed_ceiling is not None and newest < passed_ceiling:
@@ -490,7 +495,11 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
     if passed_ceiling is None:
         return None
     newest = _newest_main_run(runs)
-    return newest if newest is not None and newest < passed_ceiling else None
+    if newest is None:
+        # An EMPTY page (no main run) under a ceiling is the same proven shortfall, reported as 0:
+        # the witnessed run exists and the page holds nothing up to it.
+        return 0
+    return newest if newest < passed_ceiling else None
 
 
 def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float) -> tuple[dict | None, str]:
@@ -3253,6 +3262,27 @@ def self_test() -> int:
          and "came back EMPTY" in message and "newest 0" not in message
          and still_empty["page1"] == 1 + STALE_REREADS
          and still_empty["slept"] == [20.0, 40.0, 60.0])
+    # An EMPTY page under a ceiling is CEILING-proven stale on its own: the caller's main passed
+    # on that run, so it exists. It must take the keyed bounded re-read, not the unverified-
+    # listing error, even when the recent-run query is empty too (automatic review, #6278).
+    fetch_ceiling_empty, ceiling_empty = _flipping_page_one([[], settled])
+    case("an initially EMPTY page 1 under a passed ceiling is re-read and resolves", True,
+         lambda: choose(fetch_ceiling_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_empty["slept"].append),
+         lambda c: c.set_name == "3.0.0-ci.8676" and ceiling_empty["page1"] == 2
+         and ceiling_empty["slept"] == [20.0])
+    fetch_ceiling_stuck, ceiling_stuck = _flipping_page_one([[]])
+    case("an EMPTY page 1 under a passed ceiling still EMPTY after re-reads is a keyed refusal",
+         False,
+         lambda: choose(fetch_ceiling_stuck, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_stuck["slept"].append),
+         lambda message: "STALE run listing" in message and KEYED_4433 in message
+         and "#8676" in message and "came back EMPTY" in message
+         and "no main-CD witness" not in message
+         and ceiling_stuck["page1"] == 1 + STALE_REREADS
+         and ceiling_stuck["slept"] == [20.0, 40.0, 60.0])
     fetch_unwitnessed_empty, unwitnessed_empty = _flipping_page_one([[]])
     case("an EMPTY page without a witness names missing evidence, not an absent release", False,
          lambda: choose(fetch_unwitnessed_empty, _registry(full3), tester, portal,

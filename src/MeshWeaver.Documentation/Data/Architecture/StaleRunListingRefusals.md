@@ -69,6 +69,9 @@ bounded 20/40/60-second re-read. A re-read that finds the witnessed run may reso
 empty pages get the keyed stale-listing refusal, which the transient steward recognizes. If the
 independent query finds no witness, the resolver stays red and says that no platform set was
 examined. It does not turn an empty listing into evidence that no release exists.
+When the caller passes `--passed-ceiling`, an empty page needs no second witness: the caller's
+own `main` passed on that core CD run, so it exists, and the empty page is ceiling-proven stale.
+It takes the same bounded re-read and keyed refusal, whatever the recent-run query returns.
 
 The 2026-09-17 page was not garbage: run `31741597338` is a genuine `success` `push` run of `ci.yml`
 on `main`, created exactly when the page said. The rows are strictly descending and contiguous — an
