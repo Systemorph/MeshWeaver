@@ -115,7 +115,7 @@ uses:
 | `pulls/{n}/comments` | `Copilot` | Bot | 175728472 |
 | `pulls/{n}/reviews` and `pulls/{n}/comments` | `systemorph-com[bot]` — the **internal GLM-5.3 reviewer** | Bot | 328286035 |
 
-**Two reviewers are accepted** (policy [`internal-code-review`](../PolicyNotProse)): Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App on every head (COMMENTED or CHANGES_REQUESTED, never APPROVED). A review by either lands the review; the threads both opened need a person's reply. Copilot leaves the set once its `copilot_code_review` rule is gone from every repository and no open pull request carries an unanswered Copilot thread.
+**Historical — superseded by the next section.** Under the retired policy [`internal-code-review`](../PolicyNotProse) two reviewers were accepted: Copilot, and the internal GLM-5.3 reviewer of MeshWeaver.Plugins' PR steward, which posts through the `systemorph-com` App (COMMENTED or CHANGES_REQUESTED, never APPROVED). That policy planned for Copilot to leave the set; the next section reverses it.
 
 ### Copilot is the reviewer again
 

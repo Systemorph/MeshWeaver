@@ -1281,9 +1281,11 @@ def run_arm_gate(repo: str, number: int, carry: bool = True) -> int:
         print(f"::warning::{verdict.missing}")
     for n in verdict.notes:
         print(f"  {n}")
-    carried = next((n for n in verdict.notes if n.startswith("review CARRIED")), "")
-    line = ((f"Ready to arm #{number}: {carried}; every reviewer thread is answered, and every required check is green." if carried else
-             f"Ready to arm #{number}: internal review completed on the current head, every reviewer thread is answered, and every required check is green.")
+    # Name the review that released the gate from the verdict's own notes — Copilot, carried or
+    # internal — so the line never claims a reviewer that did not run.
+    released_by = next((n for n in verdict.notes if n.startswith(("review CARRIED", "Copilot reviewed head"))),
+                       "internal review completed on the current head")
+    line = (f"Ready to arm #{number}: {released_by}; every reviewer thread is answered, and every required check is green."
             if verdict.ready else f"Not armed #{number}: {verdict.missing}")
     print(line)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
