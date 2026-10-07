@@ -278,6 +278,68 @@ public sealed class ScanPinSupersessionTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 THE SAME MVID IS NOT THE SAME LOADABLE BUILD WHEN THE BYTES ARE GONE (#5555). The
+    /// assembly store names a build <c>v{node version}-{tag}-{hash}.dll</c>, and re-adopting
+    /// identical bytes lands them under a NEW version, so one generation gathers many store names
+    /// over time while the retention sweep deletes the old ones. A context created over an old name
+    /// that never loaded its assembly still reports that name's MVID (read once, from the header),
+    /// so the same-build alias handed it to a read of the NEW, present name — and every load then
+    /// answered "No file at" the deleted path. Measured on memex.systemorph.com 2026-10-07:
+    /// <c>Store/Plugin</c> instances failed 604 times in 25 minutes on one pod with "Failed to load
+    /// assembly at …/v18979-c003e001-1db01ff9e178.dll — No file at …/v14766-c003e001-1db01ff9e178.dll",
+    /// each failure re-driving a recompile whose identical bytes were aliased to the same dead context.
+    /// </summary>
+    [Fact]
+    public void AReadIsNeverAliasedToASameBuildContextThatCanNoLongerLoadIt()
+    {
+        var emitted = EmitAssembly("emit");
+        var evicted = CopyToStore(emitted, "v14766-tag-hash.dll");
+        var current = CopyToStore(emitted, "v18979-tag-hash.dll");
+
+        // An instance read the old store name and never loaded it; its identity was read from the
+        // header while the file existed.
+        var stale = _service.GetOrCreateLoadContextForPath(NodeName, evicted);
+        stale.BuildMvid.Should().NotBeNull("premise: the old context knows the build's identity");
+        stale.LoadedAssembly.Should().BeNull("premise: the old context never loaded its assembly");
+
+        // The retention sweep deletes the old name.
+        File.Delete(evicted);
+
+        var read = _service.GetOrCreateLoadContextForPath(NodeName, current);
+
+        read.Should().NotBeSameAs(stale,
+            "a context whose bytes are neither loaded nor on disk cannot serve the build, so a read "
+            + "of a present copy must not be aliased to it");
+        read.LoadNodeAssembly().Should().NotBeNull(
+            $"the file at the requested path exists; the load failed with: {read.LastLoadFailure}");
+    }
+
+    /// <summary>
+    /// The control for the test above: when the old context HAS loaded its assembly, the bytes are
+    /// in memory and the alias is the correct reuse — dropping it would mint a second collectible
+    /// context over identical bytes (the duplicate <c>AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext</c>
+    /// forbids), even after the old file is gone.
+    /// </summary>
+    [Fact]
+    public void ASameBuildContextThatHasLoadedItsAssemblyIsStillReusedAfterItsFileIsGone()
+    {
+        var emitted = EmitAssembly("emit");
+        var evicted = CopyToStore(emitted, "v14766-tag-hash.dll");
+        var current = CopyToStore(emitted, "v18979-tag-hash.dll");
+
+        var live = _service.GetOrCreateLoadContextForPath(NodeName, evicted);
+        var assembly = live.LoadNodeAssembly();
+        assembly.Should().NotBeNull();
+        File.Delete(evicted);
+
+        var read = _service.GetOrCreateLoadContextForPath(NodeName, current);
+
+        read.Should().BeSameAs(live, "the loaded generation serves its build from memory");
+        read.LoadNodeAssembly().Should().BeSameAs(assembly);
+        GC.KeepAlive(assembly);
+    }
+
+    /// <summary>
     /// The reuse must be a REUSE and nothing else: once a publish has superseded the build, a read of
     /// its store copy must NOT be handed the retired context (that would resurrect a generation the
     /// publish already let go of, and hand a new caller a context closed to new scans), and it must

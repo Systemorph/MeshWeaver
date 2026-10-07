@@ -2598,6 +2598,23 @@ safe:
   alias and creates a fresh context, exactly as a first read of that path always did.
 - **One lease per context.** `LeaseNodeContexts` leases each context once however many keys name it,
   so releasing the hub's one lease performs the deferred unload.
+- **A context that can no longer LOAD its build is never aliased (#5555).** The MVID is read once,
+  from the header, and outlives the file. Re-adopting identical bytes lands them under a new store
+  name (`v{node version}-{tag}-{hash}.dll`) and the retention sweep deletes the old name, so a context
+  over the old name that never loaded its assembly still reports the build's MVID while it can load
+  nothing. Aliasing a read of the present copy to it made every load answer *"No file at"* the deleted
+  path, and every recompile's identical bytes were aliased back to the same dead context — a
+  permanent loop. Measured on memex.systemorph.com 2026-10-07: `Store/Plugin` instances failed 604
+  times in 25 minutes on one pod (*"Failed to load assembly at …/v18979-c003e001-1db01ff9e178.dll —
+  No file at …/v14766-c003e001-1db01ff9e178.dll"*), the type node was written ~6,900 times in 15 hours
+  (v12083 → v18986), the recycle-on-new-build rule read each re-adoption as a new build (2,126
+  recycle jobs for that type alone), and the replica held an 11+ GiB heap with GC taking more than
+  half of wall time. The resolver now makes the candidate's bytes RESIDENT before aliasing to it
+  (`NodeAssemblyLoadContext.TryMakeResident` — load the assembly; a load that loses the deletion race
+  skips the candidate). An existence check would not do: the sweep can delete the file between the
+  check and the caller's load, so loading is the only durable guarantee. Pinned by
+  `ScanPinSupersessionTest.AReadIsNeverAliasedToASameBuildContextThatCanNoLongerLoadIt` (red on the
+  old resolver) and its control `ASameBuildContextThatHasLoadedItsAssemblyIsStillReusedAfterItsFileIsGone`.
 
 No identity ⇒ no alias: an unreadable file, or an in-memory context, resolves a fresh context as
 before. Pinned in core by `ScanPinSupersessionTest.AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext`,
