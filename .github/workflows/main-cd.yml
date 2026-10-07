@@ -3453,7 +3453,14 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
           newest=$(printf '%s' "$st" | jq -r '.version')
-          n_newest="${newest##*ci.}"; n_self="${V_SELF##*ci.}"
+          # Both notations, ONE lineage (policy `platform-semver-versioning`): the run number is read
+          # by the one reader, never `${v##*ci.}` — which leaves `3.1.10001` whole, makes `-gt` an
+          # "integer expression expected" and took the not-superseded branch for an OLDER set.
+          # FAIL-CLOSED: this run just armed V_SELF, so either reading being absent is a broken read.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
+            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — cannot decide whether a newer set superseded it; refusing to announce on no evidence"; exit 1; }
+          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+            || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy; refusing to announce on no evidence"; exit 1; }
           if [ "$n_newest" -gt "$n_self" ]; then
             echo "superseded=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$V_SELF was superseded by $newest before its release event — sending nothing (the newer set's arming announces the line)"

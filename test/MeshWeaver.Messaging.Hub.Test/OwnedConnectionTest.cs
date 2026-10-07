@@ -282,13 +282,28 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             upstream.OnNext(7);
         owner.Dispose();
 
-        // The refusal is delivered on the release lane, never on the subscribing thread (see
-        // ARefusalAndAReleaseMeetingInOneConsumer_NeverDeadlock for why), so it is awaited — and the
-        // thread it arrived on is recorded against this one.
-        var subscribingThread = Environment.CurrentManagedThreadId;
-        var deliveredOnThread = -1;
-        var terminal = await shared.Materialize()
-            .Do(_ => Volatile.Write(ref deliveredOnThread, Environment.CurrentManagedThreadId))
+        // The refusal is delivered on the release lane, never INSIDE the subscribe call on the
+        // subscribing thread (see ARefusalAndAReleaseMeetingInOneConsumer_NeverDeadlock for why), so
+        // it is awaited. 🚨 "Never inline" is NOT "never the same thread id": the lane drains on
+        // pooled ThreadPool work items, and a post made from a pool thread lands in THAT thread's
+        // local queue — so once the subscribing thread yields at the await below, it may well be
+        // the one that picks the delivery up (CI shard run 37594520503 measured exactly that: the
+        // refusal arrived on the subscribing thread's id, after the subscribe had returned). The one
+        // observation that separates inline from deferred is whether the subscribe had RETURNED
+        // when the terminal arrived on its thread.
+        var deliveredInline = -1;
+        var terminal = await Observable.Create<Notification<int>>(observer =>
+            {
+                var subscribingThread = Environment.CurrentManagedThreadId;
+                var subscribeReturned = 0;
+                var subscription = shared.Materialize()
+                    .Do(_ => Volatile.Write(ref deliveredInline,
+                        Environment.CurrentManagedThreadId == subscribingThread
+                        && Volatile.Read(ref subscribeReturned) == 0 ? 1 : 0))
+                    .Subscribe(observer);
+                Volatile.Write(ref subscribeReturned, 1);
+                return subscription;
+            })
             .Should().Within(TestTimeouts.Convergence).Emit(
                 "a subscriber arriving after the release must be TOLD — never parked",
                 TestContext.Current.CancellationToken);
@@ -298,7 +313,7 @@ public class OwnedConnectionTest(ITestOutputHelper output) : HubTestBase(output)
             + "buffered 7 and then go silent forever, the burst-then-silence hang");
         terminal.Exception.Should().BeOfType<ObjectDisposedException>()
             .Which.ObjectName.Should().Be("test-owner", "the refusal names the owner so the straggler is attributable");
-        Volatile.Read(ref deliveredOnThread).Should().NotBe(subscribingThread,
+        Volatile.Read(ref deliveredInline).Should().Be(0,
             "a refusal is a release terminal and goes on the lane — thrown on the subscriber's thread it "
             + "races the lane's releases into whatever gates the consumer composes");
         upstream.HasObservers.Should().BeFalse("a refused subscription opens no upstream");

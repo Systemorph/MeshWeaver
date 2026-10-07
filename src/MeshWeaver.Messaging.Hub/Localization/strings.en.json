@@ -1751,6 +1751,8 @@
   "notification.delivery.compiled.title": "'{typeName}' compiled from the current source",
   "notification.delivery.compiled.body": "'{nodeTypePath}' was compiled from the current source (fingerprint {fingerprint}); the build it was serving from is retired.",
   "notification.delivery.heldIncompatible.title": "'{typeName}' is awaiting a bundle (incompatible build)",
+  "notification.delivery.heldTooFarBehind.title": "'{typeName}' is not run: its build is too far behind its source",
+  "notification.delivery.heldTooFarBehind.body": "'{nodeTypePath}' is not run: its build (module version {adopted}) is {behind} minor version(s) behind the current source (module version {current}, fingerprint {fingerprint}), past the stale-adoption bound of {bound} ({configKey}). A build of the current source (a successful compile, or a bundle for framework {framework}) lifts it.",
   "notification.delivery.heldStale.title": "'{typeName}' is serving its last build; source moved ahead",
   "layout.areaNotFound.title": "This section could not be displayed.",
   "layout.areaNotFound.pageUnaffected": "The rest of this page is unaffected.",
