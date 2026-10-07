@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 using MeshWeaver.Mesh;
@@ -75,7 +76,10 @@ namespace MeshWeaver.Graph.Security;
 /// own <c>$type</c> names a DIFFERENT record than the declared one ⇒ Valid, the same
 /// <see cref="ContentDiscriminator.Admits(JsonElement, Type)"/> rule the recovery path applies —
 /// judging such content by the declared
-/// type would be reshaping it, and the discriminator guard owns that case. An Update whose content
+/// type would be reshaping it, and the discriminator guard owns that case — EXCEPT when that
+/// <c>$type</c> resolves to no type at all, which the discriminator guard cannot judge for a
+/// runtime-compiled NodeType and this guard therefore refuses (see
+/// <c>JudgeForeignDiscriminator</c>; Systemorph/MeshWeaver.Plugins#3042). An Update whose content
 /// is byte-identical to what is stored ⇒ Valid: re-asserting a row already on disk is not a new
 /// write of bad content, and refusing it would make an existing broken node impossible to move.</para>
 /// </summary>
@@ -113,8 +117,10 @@ public sealed class ContentSchemaValidator : INodeValidator
         var node = context.Node;
 
         // Typed (in-process) content has already bound; null content and non-object JSON carry no
-        // members to judge.
-        if (node.Content is not JsonElement content || content.ValueKind != JsonValueKind.Object)
+        // members to judge. The as-written JsonObject DOM is the SAME raw JSON in another shape and
+        // is judged exactly like a JsonElement — otherwise a direct Create/Update carrying
+        // `{"$type":"Feedback"}` as a JsonObject would skip every rule here (review on #6231).
+        if (AsObjectElement(node.Content) is not { } content)
             return NodeValidationResult.Valid();
 
         if (string.IsNullOrEmpty(node.NodeType))
@@ -126,7 +132,7 @@ public sealed class ContentSchemaValidator : INodeValidator
             return NodeValidationResult.Valid();
 
         if (!ContentDiscriminator.Admits(content, declared))
-            return NodeValidationResult.Valid();
+            return JudgeForeignDiscriminator(context, content, declared, contentTypes);
 
         // Re-asserting bytes already on disk is not a new write of bad content.
         if (context.Operation == NodeOperation.Update && IsUnchanged(context.ExistingNode, content))
@@ -205,6 +211,103 @@ public sealed class ContentSchemaValidator : INodeValidator
                 string.Join("', '", names.Order(StringComparer.Ordinal))),
             $"no member of the content is declared by '{declared.Name}'");
     }
+
+    /// <summary>
+    /// Content whose own <c>$type</c> names a DIFFERENT record than the declared one. Judging it by
+    /// the declared type would be reshaping it, so a discriminator that resolves to a real type
+    /// stays Valid (the class doc's exemption). But a discriminator that resolves to NO type at all
+    /// is not "a different record" — it is a record that does not exist, and
+    /// <see cref="ContentDiscriminatorValidator"/> deliberately exempts every runtime-compiled
+    /// NodeType, so nothing else refuses it there. Stored, it is a node that every reader's
+    /// <c>ContentAs&lt;T&gt;</c> answers <c>null</c> for and every watcher skips without a word
+    /// (Systemorph/MeshWeaver.Plugins#3042: three <c>Feedback/Feedback</c> filings created as
+    /// <c>"$type":"Feedback"</c> — no such type exists; the bound type is <c>FeedbackContent</c> —
+    /// were never handed over and nothing said so).
+    ///
+    /// <para>"Resolves nowhere" is asked of every instrument that can know the name: this hub's
+    /// <c>$type</c> registry (full name, then short name), the mesh-wide content-type map, and the
+    /// declared type's OWN assembly — the last is what keeps a polymorphic subtype compiled
+    /// alongside an in-mesh content type admitted even though no hub here has registered it. An
+    /// Update that keeps the discriminator the stored node already carries is preserving what is on
+    /// disk, not writing new garbage, and stays Valid so such a node can still be repaired.</para>
+    /// </summary>
+    private NodeValidationResult JudgeForeignDiscriminator(
+        NodeValidationContext context, JsonElement content, Type declared, IMeshContentTypeRegistry contentTypes)
+    {
+        if (!content.TryGetProperty("$type", out var typeProp) || typeProp.ValueKind != JsonValueKind.String
+            || typeProp.GetString() is not { Length: > 0 } discriminator)
+            return NodeValidationResult.Valid();
+
+        if (context.Operation == NodeOperation.Update
+            && ExistingDiscriminator(context.ExistingNode) is { } existing
+            && string.Equals(existing, discriminator, StringComparison.Ordinal))
+            return NodeValidationResult.Valid();
+
+        if (DiscriminatorResolves(discriminator, declared, contentTypes))
+            return NodeValidationResult.Valid();
+
+        var node = context.Node;
+        var names = DeclaredMemberNames(declared, _hub.JsonSerializerOptions);
+        return Refuse(
+            context,
+            LocalizationCatalog.Get(
+                "content.schema.unknownDiscriminator", context.AccessContext?.Locale,
+                node.Path, discriminator, declared.Name, node.NodeType!,
+                names is null ? "" : string.Join("', '", names.Order(StringComparer.Ordinal))),
+            $"content '$type' '{discriminator}' names no type (the declared content type is '{declared.Name}')");
+    }
+
+    /// <summary>Whether <paramref name="discriminator"/> names a type ANY instrument here knows.</summary>
+    private bool DiscriminatorResolves(string discriminator, Type declared, IMeshContentTypeRegistry contentTypes)
+    {
+        var shortName = discriminator.Contains('.')
+            ? discriminator[(discriminator.LastIndexOf('.') + 1)..]
+            : discriminator;
+
+        var registry = _hub.TypeRegistry;
+        if ((registry.TryGetType(discriminator, out var def) && def?.Type is not null)
+            || (registry.TryGetType(shortName, out def) && def?.Type is not null))
+            return true;
+
+        if (contentTypes.TryResolveByDiscriminator(discriminator, out _)
+            || contentTypes.TryResolveByDiscriminator(shortName, out _))
+            return true;
+
+        try
+        {
+            return declared.Assembly.GetTypes()
+                .Any(t => string.Equals(t.Name, shortName, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (ex is System.Reflection.ReflectionTypeLoadException or NotSupportedException)
+        {
+            // The declared type's assembly cannot be enumerated here — a fact about THIS process,
+            // not about the content. Say nothing rather than refuse on it.
+            _logger.LogDebug(ex,
+                "ContentSchemaGuard: could not enumerate the assembly of {ContentType} to resolve "
+                + "'$type' '{Discriminator}' — not judged.", declared.Name, discriminator);
+            return true;
+        }
+    }
+
+    /// <summary>The <c>$type</c> the stored node's raw content carries, or null.</summary>
+    private static string? ExistingDiscriminator(MeshNode? existing)
+        => AsObjectElement(existing?.Content) is { } je
+           && je.TryGetProperty("$type", out var t)
+           && t.ValueKind == JsonValueKind.String
+            ? t.GetString()
+            : null;
+
+    /// <summary>
+    /// The content as a JSON-object <see cref="JsonElement"/> when it is RAW JSON in either shape —
+    /// a <see cref="JsonElement"/> or the as-written <see cref="JsonObject"/> DOM — else null
+    /// (typed content, null, or non-object JSON).
+    /// </summary>
+    private static JsonElement? AsObjectElement(object? content) => content switch
+    {
+        JsonElement { ValueKind: JsonValueKind.Object } je => je,
+        JsonObject jo => JsonSerializer.SerializeToElement<JsonNode>(jo),
+        _ => null,
+    };
 
     /// <summary>Logs the refusal (with the reason a reader of the portal log needs) and returns it.</summary>
     private NodeValidationResult Refuse(NodeValidationContext context, string message, string summary)
