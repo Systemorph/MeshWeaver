@@ -131,8 +131,11 @@ no fix of its own, because the roll no longer depends on control's watcher (belo
 - **The repository comes from the record.** `DeploymentPortalConfig.SelfUpdatePortalRepository`
   and `SelfUpdateMigrationRepository` render `SelfUpdate__PortalRepository` and
   `SelfUpdate__MigrationRepository`. The values are the repository path of the record's
-  `imageRepository` / `migrationImageRepository`. They render only where they differ from the image
-  default (`memex-portal-ai` / `memex-migration`), so every other record renders byte-identically.
+  `imageRepository` / `migrationImageRepository`; a blank `migrationImageRepository` is derived
+  the way the operator pairs it — `memex-migration` in the portal repository's directory
+  (`ghcr.io/systemorph/memex-portal-ai` → `systemorph/memex-migration`), never the bare default.
+  They render only where they differ from the image default (`memex-portal-ai` /
+  `memex-migration`), so every other record renders byte-identically.
   The chart writes each key only when it is non-blank: both have real defaults, and an empty
   repository would roll to `<registry>/:<tag>`.
 - **The workload identity is wired where the federation is.** `hosting-deploy` reads the client id
@@ -140,7 +143,9 @@ no fix of its own, because the roll no longer depends on control's watcher (belo
   binds the namespace's `memex-portal-sa` to, and passes `--set selfUpdate.azureClientId=<id>`.
   That one value renders the ServiceAccount annotation, the pod's `azure.workload.identity/use`
   label and `AZURE_CLIENT_ID`. The record carries only the identity's NAME
-  (`operator.environment`), so the id is read at deploy time and never stored. An unreadable
+  (`operator.environment`), so the id is read at deploy time and is not stored in the record,
+  its vault half or the repository (the step does report it as `portal_identity=<id>`, which the
+  operator keeps with the action's output). An unreadable
   identity, absent or refused, stops the deploy before helm. No identity named means none is set,
   and the step says `portal_identity=none`.
 - **Recycle:** neither change reaches a running pod by itself. The keys arrive with the next

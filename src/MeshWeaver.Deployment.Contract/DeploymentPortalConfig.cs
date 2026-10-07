@@ -235,16 +235,32 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
-    /// <c>SelfUpdate__MigrationRepository</c> for a record: the explicit
-    /// <see cref="DeploymentContent.MigrationImageRepository"/>'s path, or null when the record
-    /// names none or names the image's default. Never derived from the PORTAL repository: the
-    /// operator pairs <c>memex-migration</c> beside the portal (hosting-deploy), which is exactly
-    /// the default. Pure.
+    /// <c>SelfUpdate__MigrationRepository</c> for a record: the path of the migration repository the
+    /// instance actually deploys, or null when that IS the image's default. The explicit
+    /// <see cref="DeploymentContent.MigrationImageRepository"/> wins; a blank one is DERIVED the way
+    /// the operator pairs it (<c>hosting-deploy</c>'s <c>migration_image_for</c>): <c>memex-migration</c>
+    /// in the portal repository's own directory. So <c>ghcr.io/systemorph/memex-portal-ai</c> deploys
+    /// <c>ghcr.io/systemorph/memex-migration</c> and renders <c>systemorph/memex-migration</c> here —
+    /// falling back to the bare default instead would make the updater roll to
+    /// <c>ghcr.io/memex-migration:&lt;tag&gt;</c>, a repository the instance never deployed. Pure.
     /// </summary>
     public static string? SelfUpdateMigrationRepository(DeploymentContent d)
     {
-        var path = RepositoryPath(d.MigrationImageRepository);
+        var path = RepositoryPath(d.MigrationImageRepository) ?? PairedMigrationPath(RepositoryPath(d.ImageRepository));
         return path is null || string.Equals(path, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal) ? null : path;
+    }
+
+    /// <summary>
+    /// <c>memex-migration</c> beside a portal repository path (<c>systemorph/memex-portal-ai</c> →
+    /// <c>systemorph/memex-migration</c>, <c>memex-control</c> → <c>memex-migration</c>) — the
+    /// operator's pairing rule, never a substring replace (which leaves <c>memex-control</c> naming
+    /// the portal itself). Null for no portal path.
+    /// </summary>
+    private static string? PairedMigrationPath(string? portalPath)
+    {
+        if (portalPath is null) return null;
+        var slash = portalPath.LastIndexOf('/');
+        return slash < 0 ? DefaultSelfUpdateMigrationRepository : $"{portalPath[..slash]}/{DefaultSelfUpdateMigrationRepository}";
     }
 
     // ───────────────────────────────── modules ─────────────────────────────────────────────────

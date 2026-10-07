@@ -276,6 +276,15 @@ public class FluentBuilderTest
             Assert.Equal("estate/memex-control", m["SelfUpdate__PortalRepository"]);
             Assert.Equal("estate/memex-migration-ctl", m["SelfUpdate__MigrationRepository"]);
 
+            // A BLANK migration repository is derived the way the operator pairs it — memex-migration
+            // in the portal repository's directory — never the bare default, which on a registry
+            // with an owner segment names a repository the instance never deployed.
+            var ghcr = DeploymentPortalConfig.PortalConfig(new DeploymentContent { ImageRepository = "ghcr.io/systemorph/memex-portal-ai" }, options);
+            Assert.Equal("systemorph/memex-portal-ai", ghcr["SelfUpdate__PortalRepository"]);
+            Assert.Equal("systemorph/memex-migration", ghcr["SelfUpdate__MigrationRepository"]);
+            var blankControl = DeploymentPortalConfig.PortalConfig(new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-control" }, options);
+            Assert.False(blankControl.ContainsKey("SelfUpdate__MigrationRepository"), "memex-migration beside a host-level repository IS the default");
+
             // Negative control: the default repositories, and no repository at all, render nothing.
             foreach (var quiet in new[] { fleet, new DeploymentContent() })
             {
