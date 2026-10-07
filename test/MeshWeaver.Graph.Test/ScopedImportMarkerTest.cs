@@ -152,7 +152,7 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         afterDiscard.WrittenPaths.Should().Contain(path,
             "the preserved pass must not have recorded repo-v2's token in the manifest; the node "
             + "still differs from what the manifest last saw land, so it must be re-evaluated");
-        (await Body(path)).Should().Contain("repo-v2",
+        (await BodyContaining(path, "repo-v2")).Should().Contain("repo-v2",
             "once the server copy no longer wins, the source must converge the node");
     }
 
@@ -190,6 +190,15 @@ public class ScopedImportMarkerTest(ITestOutputHelper output) : MonolithMeshTest
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
             .FirstAsync().Timeout(30.Seconds()).Await();
+        return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
+    }
+
+    /// <summary>Waits for the write's content change to reach the live node stream.</summary>
+    private async Task<string> BodyContaining(string path, string expected)
+    {
+        var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content?.Contains(expected) == true)
+            .FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 

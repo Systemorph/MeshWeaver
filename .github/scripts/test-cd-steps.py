@@ -36,6 +36,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 from pathlib import Path
 
 WORKFLOW = ".github/workflows/main-cd.yml"
@@ -1407,6 +1408,61 @@ def main() -> int:
             failures.append(name)
 
     workflow_text = (root / WORKFLOW).read_text()
+    # The control-first handoff is production-only. Exercise the actual checker and assert the
+    # workflow still checks out, invokes, and supplies the URL to it before publishing.
+    checker = root / ".github/scripts/check-control-webhook-url.py"
+    declaration = root / ".github/control-instance.json"
+    expected = json.loads(declaration.read_text())["url"].rstrip("/") + "/api/hooks/Hosting/PlatformBuilds"
+
+    def check_url(source: Path, url: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, str(checker), str(source), url],
+                              capture_output=True, text=True)
+
+    case("the declared control inbox is accepted", check_url(declaration, expected).returncode == 0)
+    case("the former portal inbox is refused", check_url(
+        declaration, "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds").returncode != 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        malformed = Path(tmp) / "control.json"
+        for label, content in (("invalid JSON", "{"), ("missing URL", "{}"),
+                               ("non-HTTPS URL", '{"url":"http://control.example"}')):
+            malformed.write_text(content)
+            case(f"a declaration with {label} is refused", check_url(malformed, expected).returncode != 0)
+
+    def webhook_wiring_problems(source: str) -> list[str]:
+        doc = yaml.safe_load(source)
+        steps = (doc.get("jobs") or {}).get("preflight", {}).get("steps") or []
+        checkout = next((s for s in steps if str(s.get("uses", "")).startswith("actions/checkout")), {})
+        sparse = str((checkout.get("with") or {}).get("sparse-checkout", ""))
+        actions = [s for s in steps if "check-control-webhook-url.py" in str(s.get("run", ""))]
+        problems = []
+        for path in (".github/control-instance.json", ".github/scripts/check-control-webhook-url.py"):
+            if path not in sparse:
+                problems.append(f"preflight sparse checkout omits {path}")
+        if len(actions) != 1 or "CONTROL_WEBHOOK_URL" not in str(actions[0].get("run", "")) \
+                or "vars.CONTROL_WEBHOOK_URL" not in str((actions[0].get("env") or {}).get("CONTROL_WEBHOOK_URL", "")):
+            problems.append("preflight does not invoke the checker with vars.CONTROL_WEBHOOK_URL")
+        return problems
+
+    case("preflight wires the control webhook checker", not webhook_wiring_problems(workflow_text),
+         "; ".join(webhook_wiring_problems(workflow_text)))
+    no_check = workflow_text.replace("python3 .github/scripts/check-control-webhook-url.py", "true", 1)
+    case("the wiring guard detects a removed checker",
+         no_check != workflow_text and bool(webhook_wiring_problems(no_check)))
+    no_checker_file = workflow_text.replace("            .github/scripts/check-control-webhook-url.py\n", "", 1)
+    case("the wiring guard detects a missing checker file",
+         no_checker_file != workflow_text and bool(webhook_wiring_problems(no_checker_file)))
+    reporter = root / ".github/workflows/node-repo-ci-failure.yml"
+    reporter_text = reporter.read_text()
+
+    def reporter_host_matches(source: str) -> bool:
+        doc = yaml.safe_load(source)
+        inputs = (doc.get("on") or doc.get(True))["workflow_call"]["inputs"]
+        return inputs["control-webhook-host"]["default"] == urlsplit(expected).hostname
+
+    case("the CI failure reporter accepts the declared control host", reporter_host_matches(reporter_text))
+    old_host = reporter_text.replace("default: control.systemorph.com", "default: memex.systemorph.com", 1)
+    case("the reporter guard detects its former host default",
+         old_host != reporter_text and not reporter_host_matches(old_host))
     # 🚨 Policy `platform-module-deploy-separate`: the platform deploy packs, bakes and seals no
     # module, reads no Plugins verdict, and deploys control first. Each detector has a mutation
     # control that re-introduces one coupling and must be caught — a guard that cannot fail is not one.

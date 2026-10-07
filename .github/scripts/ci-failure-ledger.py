@@ -28,7 +28,7 @@ appended to, reopened, commented on or closed — it is logged and left alone, a
 filed beside it if one is needed.
 
 The control-portal URL is validated BEFORE anything is signed (`--check-url`): https, the expected
-host (`control-webhook-host`, default memex.systemorph.com), a path under /api/hooks/. A signed
+host (`control-webhook-host`, default control.systemorph.com), a path under /api/hooks/. A signed
 HMAC must never travel to whatever non-empty string a caller put in a variable.
 
 THE FIVE RULES, each covered by --self-test
@@ -299,7 +299,7 @@ def new_body(repo: str, reopen_window_days: int) -> str:
         f"of the close REOPENS this issue rather than filing a second one, so one outage is one story.",
         "",
         "Each entry is also POSTed, signed, to the control portal's triage inbox "
-        "(`Hosting/PlatformBuilds` on memex.systemorph.com), whose triage agent opens a thread on it. "
+        "(`Hosting/PlatformBuilds` on control.systemorph.com), whose triage agent opens a thread on it. "
         "Read the newest entry first — the failed jobs link straight to their logs.",
         "",
         LEDGER_MARK,
@@ -586,7 +586,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--event-out", default=env("LEDGER_EVENT_OUT"), help="file the exact event body is written to")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--check-url", help="validate this control-webhook-url and exit; nothing else runs")
-    ap.add_argument("--expected-host", default=env("LEDGER_CONTROL_HOST") or "memex.systemorph.com")
+    ap.add_argument("--expected-host", default=env("LEDGER_CONTROL_HOST") or "control.systemorph.com")
     a = ap.parse_args(argv)
 
     if a.self_test:
@@ -839,16 +839,16 @@ def self_test() -> int:
           not owns(Issue(12, title, "open", new_body("o/r", 7), "u", (label,), None, "meshweaver-cloud[bot]", "Bot"), label, title))
 
     # 11. the inbox URL: nothing is signed for anything but the control portal's /api/hooks/
-    host = "memex.systemorph.com"
-    good = "https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds"
+    host = "control.systemorph.com"
+    good = "https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds"
     check("the control portal's inbox URL is accepted", validate_control_url(good, host) is None)
-    check("host comparison is case-insensitive", validate_control_url("https://MEMEX.systemorph.com/api/hooks/x", host) is None)
-    for bad, why in [("http://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds", "http"),
+    check("host comparison is case-insensitive", validate_control_url("https://CONTROL.systemorph.com/api/hooks/x", host) is None)
+    for bad, why in [("http://control.systemorph.com/api/hooks/Hosting/PlatformBuilds", "http"),
                      ("https://evil.example/api/hooks/Hosting/PlatformBuilds", "other host"),
-                     ("https://memex.systemorph.com.evil.example/api/hooks/x", "host suffix trick"),
-                     ("https://memex.systemorph.com/hooks/Hosting/PlatformBuilds", "path outside /api/hooks/"),
-                     ("https://memex.systemorph.com:8443/api/hooks/x", "odd port"),
-                     ("https://user:pw@memex.systemorph.com/api/hooks/x", "userinfo"),
+                     ("https://control.systemorph.com.evil.example/api/hooks/x", "host suffix trick"),
+                     ("https://control.systemorph.com/hooks/Hosting/PlatformBuilds", "path outside /api/hooks/"),
+                     ("https://control.systemorph.com:8443/api/hooks/x", "odd port"),
+                     ("https://user:pw@control.systemorph.com/api/hooks/x", "userinfo"),
                      ("", "empty"), ("not a url", "garbage")]:
         p = validate_control_url(bad, host)
         check(f"refused: {why}", p is not None and (bad in p or bad == ""), p or "")
