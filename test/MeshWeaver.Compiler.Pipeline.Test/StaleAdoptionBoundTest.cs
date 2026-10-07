@@ -212,4 +212,54 @@ public class StaleAdoptionBoundTest
         };
         BuildDeliveryHold.EventOf(before, major, 5).Should().Be(BuildDeliveryHold.DeliveryEvent.HeldIncompatible);
     }
+    [Fact]
+    public void AServingBuildThatTheSourceOutrunsPastTheBound_IsAnnounced_EvenThoughBothStatesAreHolds()
+    {
+        // 5 minors behind: within the bound, serving (held: StaleAdopted).
+        var serving = Adopted("1.50.0", "1.55") with
+        {
+            CompilationStatus = CompilationStatus.Pending,
+            BuildProvenance = BuildProvenance.StaleAdopted,
+        };
+        BuildDeliveryHold.Settle(serving, hasUsableBuild: true, "no bundle", 5)!
+            .BuildProvenance.Should().Be(BuildProvenance.StaleAdopted, "the precondition: within the bound");
+
+        // The source advances to 6 behind: the next judgement refuses — the type STOPS running.
+        var outrun = serving with { CurrentModuleVersion = "1.56" };
+        var refused = BuildDeliveryHold.Settle(outrun, hasUsableBuild: true, "no bundle", 5)!;
+        refused.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused);
+        BuildDeliveryHold.EventOf(outrun, refused, 5).Should().Be(
+            BuildDeliveryHold.DeliveryEvent.HeldTooFarBehind,
+            "a serving type stopping is news, though StaleAdopted and AdoptionRefused are both holds");
+
+        // Control: re-settling the same hold is no transition and says nothing.
+        BuildDeliveryHold.EventOf(refused, refused, 5).Should().BeNull();
+    }
+
+    [Fact]
+    public void ARefusalOnTheBound_Recovers_WhenTheBoundIsLifted_AndIsNeverRelabelledAMajorBump()
+    {
+        var refused = BuildDeliveryHold.Settle(
+            Adopted("1.29.7", "1.56") with { CompilationStatus = CompilationStatus.Pending },
+            hasUsableBuild: true, "no bundle", 5)!;
+        refused.BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused, "the precondition");
+
+        var pending = refused with { CompilationStatus = CompilationStatus.Pending };
+        foreach (var bound in new[] { -1, 30 })
+        {
+            var lifted = BuildDeliveryHold.Settle(pending, hasUsableBuild: true, "no bundle", bound)!;
+            lifted.BuildProvenance.Should().Be(BuildProvenance.StaleAdopted,
+                $"bound {bound} no longer refuses a same-MAJOR build — the usable build serves again");
+            lifted.CompilationStatus.Should().Be(CompilationStatus.Ok);
+            BuildDeliveryHold.EventOf(pending, lifted, bound).Should().Be(BuildDeliveryHold.DeliveryEvent.HeldStale);
+        }
+
+        // Controls: a real MAJOR bump stays refused under a lifted bound, and so does a refusal
+        // with no usable build to fall back to.
+        var major = pending with { CurrentModuleVersion = "2.0" };
+        BuildDeliveryHold.Settle(major, hasUsableBuild: true, "no bundle", -1)!
+            .CompilationError.Should().StartWith("Incompatible build, awaiting bundle");
+        BuildDeliveryHold.Settle(pending, hasUsableBuild: false, "no bundle", -1)!
+            .BuildProvenance.Should().Be(BuildProvenance.AdoptionRefused);
+    }
 }

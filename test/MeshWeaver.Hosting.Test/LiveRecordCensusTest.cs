@@ -324,6 +324,23 @@ public class LiveRecordCensusTest
     }
 
     [Fact]
+    public void AStaleRecordWithAPathButNoCollection_IsNotServing_AndStaysClean()
+    {
+        // HasUsableBuild requires BOTH coordinates; a path alone loads nothing, so it must not be
+        // counted as a build serving past the bound.
+        var census = NodeTypeLiveRecordCensus.Of(
+            [("Hosting/InstanceAction", StaleServing("1.29.7", "1.56") with { LatestAssemblyCollection = null })],
+            Live, BootedAt, At, maxMinorVersionsBehind: 5);
+        census.StaleServing.Should().Be(0, "a record with no collection names no loadable build");
+        census.StalePastBound.Should().Be(0);
+
+        // Control: both coordinates present ⇒ serving, and past the bound it degrades.
+        NodeTypeLiveRecordCensus.Of(
+                [("Hosting/InstanceAction", StaleServing("1.29.7", "1.56"))], Live, BootedAt, At, maxMinorVersionsBehind: 5)
+            .StalePastBound.Should().Be(1);
+    }
+
+    [Fact]
     public void AStaleBuildWithinTheBound_IsPrinted_ButClean_AndNoneIsSaidAsNone()
     {
         var census = NodeTypeLiveRecordCensus.Of(

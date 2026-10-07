@@ -161,7 +161,9 @@ public sealed record NodeTypeLiveRecordCensus(
             // but only if THIS replica may load it. A record keyed to another framework serves
             // nothing here (it is counted as Foreign below), so a pre-boot record from the previous
             // image must never degrade the entry as stale-past-bound.
+            // Both coordinates, as HasUsableBuild requires: a path with no collection loads nothing.
             if (definition.BuildProvenance is BuildProvenance.StaleAdopted
+                && !string.IsNullOrEmpty(definition.LatestAssemblyCollection)
                 && !string.IsNullOrEmpty(definition.LatestAssemblyPath)
                 && NodeTypeBuildIdentity.RefusalReason(definition, liveFrameworkVersion) is null)
                 stale.Add((
@@ -204,7 +206,7 @@ public sealed record NodeTypeLiveRecordCensus(
             .OrderByDescending(g => g.PastBound)
             .ThenByDescending(g => g.Count)
             .ThenBy(g => g.Partition, StringComparer.Ordinal)
-            .ToList();
+            .ToImmutableList();
         var staleDetail = string.Join("; ", staleGroups
             .Take(MaxNamedGroups)
             .Select(g => $"{g.Partition}/… ×{g.Count} (max "

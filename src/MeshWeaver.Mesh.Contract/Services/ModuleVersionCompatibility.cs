@@ -8,8 +8,10 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public enum ModuleVersionVerdict
 {
-    /// <summary>Both versions are known and share the same MAJOR: the build is compatible with
-    /// the source and keeps serving (<see cref="BuildProvenance.StaleAdopted"/>).</summary>
+    /// <summary>Both versions are known and share the same MAJOR: the build passes the FIRST gate
+    /// and keeps serving (<see cref="BuildProvenance.StaleAdopted"/>) — provided it is also within
+    /// the stale-adoption bound (<see cref="StaleAdoptionBound"/>, Systemorph/Memex#668), the second
+    /// gate, which refuses a same-MAJOR build too many MINOR versions behind.</summary>
     Compatible = 1,
 
     /// <summary>Both versions are known and the MAJOR differs — a declared incompatibility. The
@@ -25,15 +27,18 @@ public enum ModuleVersionVerdict
 }
 
 /// <summary>
-/// The ONE rule for "may the build that is serving keep serving after the source moved" —
-/// MODULE VERSION COMPATIBILITY, as the platform owner stated it on 2026-09-09
-/// (MeshWeaver#3583):
+/// The FIRST of two gates for "may the build that is serving keep serving after the source
+/// moved" — MODULE VERSION COMPATIBILITY, as the platform owner stated it on 2026-09-09
+/// (MeshWeaver#3583); the second is the stale-adoption bound (<see cref="StaleAdoptionBound"/>,
+/// Systemorph/Memex#668):
 ///
 /// <list type="bullet">
 ///   <item>the adopted build's module version and the current source's module version share the
-///     same MAJOR ⇒ compatible ⇒ the build keeps serving, marked stale-but-serving;</item>
-///   <item>only a MAJOR bump — a declared incompatibility — may refuse the build, and even then
-///     the type reports "incompatible, awaiting bundle" rather than erroring;</item>
+///     same MAJOR ⇒ compatible ⇒ the build keeps serving, marked stale-but-serving — but only
+///     while it is within <see cref="StaleAdoptionBound"/> MINOR versions of the source;</item>
+///   <item>a MAJOR bump — a declared incompatibility — refuses the build, as does a same-MAJOR
+///     build past the bound; either way the type reports a named refusal (awaiting a build)
+///     rather than erroring;</item>
 ///   <item>the source fingerprint stays the signal that the source MOVED (it drives the "pending"
 ///     status and the readiness notification); it no longer drives refusal.</item>
 /// </list>

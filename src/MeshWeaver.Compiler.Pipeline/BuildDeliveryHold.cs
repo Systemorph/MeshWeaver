@@ -43,10 +43,16 @@ public static class BuildDeliveryHold
     /// record still names a build usable on this framework.
     ///
     /// <list type="table">
-    ///   <item><term>usable build, not refused</term><description><c>Ok</c> +
+    ///   <item><term>usable build, within the stale-adoption bound, not refused</term><description><c>Ok</c> +
     ///     <see cref="BuildProvenance.StaleAdopted"/>: the last build keeps serving; the page names
     ///     both versions and fingerprints and says a bundle is awaited; the error text is
-    ///     cleared — an Ok record carries none.</description></item>
+    ///     cleared — an Ok record carries none. A record previously refused only on the bound
+    ///     (versions measurably same-MAJOR) returns here once the bound no longer refuses it (disabled
+    ///     or raised).</description></item>
+    ///   <item><term>usable same-MAJOR build PAST the stale-adoption bound</term><description>
+    ///     <c>Unavailable</c> + <see cref="BuildProvenance.AdoptionRefused"/>, named by
+    ///     <see cref="TooFarBehindNotice"/> (Systemorph/Memex#668): same MAJOR is only the first
+    ///     gate, the distance in MINOR versions is the second.</description></item>
     ///   <item><term>refused (a MAJOR bump)</term><description><c>Unavailable</c> +
     ///     <see cref="BuildProvenance.AdoptionRefused"/>: the bytes are not run (the execute-time
     ///     gate refuses them), nothing is known to be wrong with the source, a bundle is awaited.
@@ -82,10 +88,11 @@ public static class BuildDeliveryHold
         int maxMinorVersionsBehind)
     {
         ArgumentNullException.ThrowIfNull(pending);
+        var pastBound = StaleAdoptionBound.Exceeds(
+            pending.AdoptedModuleVersion, pending.CurrentModuleVersion, maxMinorVersionsBehind);
         if (hasUsableBuild
             && pending.BuildProvenance is not BuildProvenance.AdoptionRefused
-            && StaleAdoptionBound.Exceeds(
-                pending.AdoptedModuleVersion, pending.CurrentModuleVersion, maxMinorVersionsBehind))
+            && pastBound)
             // Memex#668 — the last build is too far behind its source to keep serving: refused,
             // named, not run (the execute-time gate refuses AdoptionRefused), never an Error.
             return pending with
@@ -99,14 +106,22 @@ public static class BuildDeliveryHold
                 BuildProvenance = BuildProvenance.AdoptionRefused,
                 RequestedReleaseForce = false,
             };
-        if (pending.BuildProvenance is BuildProvenance.AdoptionRefused)
+        // A refusal stands unless the versions are MEASURABLY same-MAJOR, within the bound, and a
+        // usable build is there to serve: a refusal made ONLY on the bound recovers to StaleAdopted
+        // (below) once the operator disables or raises the bound, and is never re-written as a
+        // MAJOR incompatibility the versions do not have (Memex#668, Copilot review). A refusal
+        // whose versions cannot be compared keeps its pre-#668 behaviour.
+        if (pending.BuildProvenance is BuildProvenance.AdoptionRefused
+            && (!hasUsableBuild
+                || pastBound
+                || ModuleVersionCompatibility.Classify(pending.AdoptedModuleVersion, pending.CurrentModuleVersion)
+                    is not ModuleVersionVerdict.Compatible))
             return pending with
             {
                 DispatchedBuildInputs = null,
                 CompilationStatus = CompilationStatus.Unavailable,
                 // The refusal keeps naming the rule that made it: the bound (Memex#668) or a MAJOR bump.
-                CompilationError = StaleAdoptionBound.Exceeds(
-                        pending.AdoptedModuleVersion, pending.CurrentModuleVersion, maxMinorVersionsBehind)
+                CompilationError = pastBound
                     ? TooFarBehindNotice(pending, maxMinorVersionsBehind, reason)
                     : IncompatibleNotice(pending, reason),
                 CompiledSources = null,
@@ -203,7 +218,11 @@ public static class BuildDeliveryHold
         ArgumentNullException.ThrowIfNull(after);
         var wasHeld = IsHeld(before);
         var isHeld = IsHeld(after);
-        if (!wasHeld && isHeld)
+        // Entering a hold, OR moving between the two hold kinds: a serving StaleAdopted build that
+        // the source outruns past the bound becomes AdoptionRefused and STOPS running — both are
+        // "held", but a person must hear that the type stopped serving (and, the other way, that a
+        // lifted bound let it serve again) (Memex#668, Copilot review).
+        if (isHeld && (!wasHeld || before!.BuildProvenance != after.BuildProvenance))
             return after.BuildProvenance is not BuildProvenance.AdoptionRefused
                 ? DeliveryEvent.HeldStale
                 : StaleAdoptionBound.Exceeds(
