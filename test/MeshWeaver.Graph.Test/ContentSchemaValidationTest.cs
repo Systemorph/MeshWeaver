@@ -2,6 +2,7 @@ using System;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary contract (#2370)
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -41,6 +42,7 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
     private const string GuardedType = "SchemaGuarded";
     private const string RequiredType = "SchemaRequired";
     private const string BufferedType = "SchemaBuffered";
+    private const string CompiledType = "SchemaCompiled";
 
     /// <summary>The declared content shape of the NodeType under test.</summary>
     public record SchemaGuardedContent
@@ -103,6 +105,20 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
                 Name = "Schema Buffered",
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<BufferedRequiredContent>())
+            },
+            // The in-mesh shape of Plugins#3042's `Feedback/Feedback`: a NodeType whose definition
+            // carries a runtime-compile SOURCE, which is what makes ContentDiscriminatorValidator
+            // exempt it (its content types live on its own hub only). The delegate stands in for
+            // the compiled configuration so the test needs no compiler.
+            new MeshNode(CompiledType)
+            {
+                Name = "Schema Compiled",
+                Content = new Configuration.NodeTypeDefinition
+                {
+                    Configuration = "// stands in for in-mesh source — the delegate below is what runs",
+                },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<SchemaGuardedContent>())
             });
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -349,4 +365,112 @@ public class ContentSchemaValidationTest(ITestOutputHelper output) : MonolithMes
             .Await(TestContext.Current.CancellationToken);
         stored.Content.Should().NotBeNull("the write must have landed with its content");
     }
+
+    // ── Systemorph/MeshWeaver.Plugins#3042: a `$type` that names NO type, and the Create verb's
+    //    silent member drop ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 THE DEAD LETTER (Systemorph/MeshWeaver.Plugins#3042). An agent created
+    /// <c>Feedback/Feedback</c> nodes as <c>{"$type":"Feedback","status":…,"description":…}</c> —
+    /// no type named <c>Feedback</c> exists anywhere; the NodeType binds <c>FeedbackContent</c>.
+    /// The discriminator guard exempts every runtime-compiled NodeType and this guard admitted any
+    /// <c>$type</c> naming a different record, so the write was stored and every reader's
+    /// <c>ContentAs</c> answered null. The production shape is reproduced member for member: a
+    /// foreign, nonexistent <c>$type</c> beside a DECLARED member (so the all-unknown rule cannot be
+    /// what refuses it) and an undeclared one.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Create_WhoseTypeDiscriminatorNamesNoType_IsRefused_NamingItAndTheDeclaredType()
+    {
+        var id = NewId();
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(Of(CompiledType, id, """{"$type":"Feedback","label":"Bug","description":"what broke"}"""))
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+
+        failure.Should().NotBeNull(
+            "a `$type` that resolves to no type is not 'a different record' — it is a record that "
+            + "does not exist; stored, it reads as empty everywhere and every watcher of the NodeType "
+            + "skips it without a word (Plugins#3042)");
+        failure!.Message.Should().Contain("'Feedback'", "the refusal must name the discriminator it could not resolve");
+        failure.Message.Should().Contain(nameof(SchemaGuardedContent), "…and the content type the NodeType declares");
+    }
+
+    /// <summary>
+    /// The CONTROL for the rule above: a <c>$type</c> naming a DIFFERENT record that EXISTS (here a
+    /// type compiled alongside the declared one — the polymorphic-subtype shape) is still admitted,
+    /// exactly as before. Without it the test above would pass for a guard that refused every
+    /// foreign discriminator, which is the reshaping this guard deliberately does not do.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Create_WhoseTypeDiscriminatorNamesAnExistingOtherType_StillLands()
+    {
+        var id = NewId();
+
+        await MeshService.CreateNode(Of(CompiledType, id, $$"""{"$type":"{{nameof(RequiredMemberContent)}}","body":"b"}"""))
+            .Take(1).Should().Within(60.Seconds()).Emit(
+                "a discriminator that resolves to a real type is the discriminator guard's case, not "
+                + "this one's — judging it by the declared type would be reshaping it",
+                cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// The MCP <c>create</c> verb on the same shape. Its own schema check deserialised into the
+    /// bound type — which ignores a foreign <c>$type</c> and skips unmapped members — so it answered
+    /// <c>Created:</c>. The verb now judges the RAW content on the probe hub, the one place an
+    /// in-mesh content type is known (on this facade's hub the content is a JsonElement).
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task McpCreate_WhoseTypeDiscriminatorNamesNoType_IsRefusedBeforeTheWrite()
+    {
+        var id = NewId();
+
+        var answer = await new MeshOperations(Mesh)
+            .Create(NodeJson(id, """{"$type":"Feedback","label":"Bug"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"create answered: {answer}");
+        answer.Should().StartWith("Error: refused create",
+            "the verb must refuse on its OWN check, before the write boundary — that is what names "
+            + "the remedy in the tool's answer");
+        answer.Should().Contain("'Feedback'").And.Contain(nameof(SchemaGuardedContent))
+            .And.Contain("Nothing was written");
+    }
+
+    /// <summary>
+    /// The reverse direction from the same incident: the RIGHT shape plus a member the bound type
+    /// does not declare (<c>description</c>) was created and the member silently dropped. Patch and
+    /// Update already refuse that; Create now does too, naming the member.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task McpCreate_WithAnUndeclaredContentMember_IsRefusedNamingIt()
+    {
+        var id = NewId();
+
+        var answer = await new MeshOperations(Mesh)
+            .Create(NodeJson(id, """{"label":"Bug","description":"what broke"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"create answered: {answer}");
+        answer.Should().StartWith("Error: refused create");
+        answer.Should().Contain("'description'").And.Contain(nameof(SchemaGuardedContent));
+        answer.Should().NotContain("'label'", "label IS declared and must not be named");
+    }
+
+    /// <summary>The CONTROL for both MCP cases: the declared shape is created as before.</summary>
+    [Fact(Timeout = 180_000)]
+    public async Task McpCreate_WithTheDeclaredShape_IsCreated()
+    {
+        var id = NewId();
+
+        var answer = await new MeshOperations(Mesh)
+            .Create(NodeJson(id, $$"""{"$type":"{{nameof(SchemaGuardedContent)}}","label":"Bug","country":"Crm/Country/CH"}"""))
+            .FirstAsync().Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"create answered: {answer}");
+        answer.Should().StartWith("Created:");
+    }
+
+    private static string NodeJson(string id, string contentJson)
+        => $$"""{"id":"{{id}}","namespace":"{{TestPartition}}","name":"Guarded","nodeType":"{{CompiledType}}","content":{{contentJson}}}""";
 }
