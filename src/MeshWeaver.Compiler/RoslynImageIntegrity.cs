@@ -64,7 +64,7 @@ namespace MeshWeaver.Compiler;
 ///
 /// <para><b>Cost and reach.</b> The baseline is ONE reading per process, taken at the first
 /// <see cref="EmitPipeline.EmitCompilationToDirectory(CSharpCompilation,string,string,string,CancellationToken)"/>
-/// — two file hashes and a few thousand IL reads, a few tens of milliseconds — and the comparison
+/// — two file hashes and ~11 000 IL reads, ≈0.1 s measured — and the comparison
 /// runs only on the already-failing canary path. It is process-lifetime state by nature (the
 /// mapping belongs to the PROCESS, not to a mesh, and outlives every mesh a test host builds), so
 /// it is one immutable record published once with <see cref="Interlocked.CompareExchange{T}"/>,

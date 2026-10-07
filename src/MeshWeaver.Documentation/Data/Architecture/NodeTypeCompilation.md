@@ -1570,7 +1570,7 @@ appends a fresh reading compared with it:
 | `image=NOT-COMPARED(…)` | a baseline exists but no image could be compared with it (its entries, or the current reading, were unavailable) — it says nothing either way, and is never reported as `INTACT` |
 | `image=UNAVAILABLE(…)` | the leg could not read the images (single-file host, no raw metadata, or the probe itself faulted) — it says nothing either way |
 
-It also appends `host=(runtime, RID, CPU model, ISA flags, any DOTNET_ tiering knobs)` — the
+It also appends `host=(runtime, RID, CPU model, ISA flags, and whichever of the five tiering knobs `DOTNET_TieredCompilation`, `DOTNET_TieredPGO`, `DOTNET_ReadyToRun`, `DOTNET_TC_QuickJitForLoops`, `DOTNET_OSR_HitLimit` are set — no other variable is read, so an absent knob outside these five says nothing)` — the
 variables a native-code fault depends on, which no earlier occurrence recorded, so occurrences can
 be compared by CPU and instruction set instead of by guess.
 

@@ -186,6 +186,9 @@ public class RoslynImageIntegrityTest(ITestOutputHelper output)
         RoslynImageIntegrity.Classify(first, Reading(Image("d2", "m1", "i1"))).Should().StartWith("image=FILE-REPLACED");
         RoslynImageIntegrity.Classify(null, Reading(Image("d1", "m1", "i1"))).Should().StartWith("image=NO-BASELINE(",
             "a reading with nothing to compare to must say so rather than read as intact");
+        RoslynImageIntegrity.Classify(null, Reading(Image("d1", "m1", "i1") with { MappedMetadataMatchesDisk = false }))
+            .Should().StartWith("image=NO-BASELINE-MAPPED-DIFFERS(",
+                "with no baseline, mapped metadata that differs from the file is the one thing the leg can still see");
         RoslynImageIntegrity.Classify(first, Reading(RoslynImageIntegrity.ImageFingerprint.Missing("x", "why")))
             .Should().StartWith("image=UNAVAILABLE", "a leg that could not read must never become a verdict");
         RoslynImageIntegrity.Classify(
