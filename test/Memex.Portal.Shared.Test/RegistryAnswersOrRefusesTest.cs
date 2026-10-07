@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -143,12 +144,14 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         var app = await StartBundleHost(budgetSeconds: 2, ct);
         await using var _ = app;
 
-        var started = DateTimeOffset.UtcNow;
+        var clock = Stopwatch.StartNew();
         // The client's patience is the fixture's, not a guess: the refusal must arrive at the 2 s
         // budget, long before it (asserted below), so its exact value only bounds a broken run.
-        using var response = await Index(app, key, TestTimeouts.Quick, ct);
-        var elapsed = DateTimeOffset.UtcNow - started;
+        var result = await Index(app, key, TestTimeouts.Quick, ct);
+        using var response = result.Response;
+        var elapsed = clock.Elapsed;
 
+        Assert.False(result.ClientCut, "the registry must answer before the client's patience ends");
         Assert.NotNull(response);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response!.StatusCode);
         Assert.Equal(TimeSpan.FromSeconds(PluginBundleEndpoints.TransientRetryAfterSeconds), response.Headers.RetryAfter?.Delta);
@@ -171,9 +174,8 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         await using var _ = app;
 
         var patience = TimeSpan.FromSeconds(5);
-        var started = DateTimeOffset.UtcNow;
-        using var response = await Index(app, key, patience, ct);
-        var elapsed = DateTimeOffset.UtcNow - started;
+        var result = await Index(app, key, patience, ct);
+        using var response = result.Response;
 
         // The client gave up first: the route wrote no status line in 5 s. On the TestServer the
         // client's cancellation IS the request's RequestAborted, so the abandoned request may still
@@ -184,8 +186,8 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         // and both may only come once the client's patience has run out.
         Assert.True(response is null || response.StatusCode == (HttpStatusCode)StatusCodes.Status499ClientClosedRequest,
             $"the held request must not be answered by the route; got {(int?)response?.StatusCode}");
-        Assert.True(elapsed >= patience,
-            $"nothing may come back before the client's own cut at {patience.TotalSeconds:F0} s (took {elapsed.TotalSeconds:F1} s)");
+        Assert.True(result.ClientCut,
+            "nothing may come back before the client's own cancellation fires");
     }
 
     private Task<string> RegisterInstance(CancellationToken ct) =>
@@ -241,8 +243,9 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
     }
 
     /// <summary>The index response, or null when the client's own <paramref name="patience"/> ran out
-    /// with no status line received.</summary>
-    private static async Task<HttpResponseMessage?> Index(WebApplication app, string key, TimeSpan patience, CancellationToken ct)
+    /// with no status line received, together with whether that actual cancellation fired.</summary>
+    private static async Task<(HttpResponseMessage? Response, bool ClientCut)> Index(
+        WebApplication app, string key, TimeSpan patience, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, PluginBundleEndpoints.RoutePrefix + "/index.json");
         request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
@@ -250,11 +253,12 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         cut.CancelAfter(patience);
         try
         {
-            return await app.GetTestClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cut.Token);
+            var response = await app.GetTestClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cut.Token);
+            return (response, cut.IsCancellationRequested);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return null;
+            return (null, cut.IsCancellationRequested);
         }
     }
 

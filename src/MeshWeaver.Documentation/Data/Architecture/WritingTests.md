@@ -120,6 +120,14 @@ Before writing a test, review the invariants every test must respect:
 > **Rule 6 — Let failures propagate.**
 > Timeouts, cancellations, and delivery failures are real test failures — the reactive assertion surface exposes them for you. Never wrap a read in `try { … } catch { return null; }`; that silently turns a flaky bug into a green-but-lying test. To assert an *expected* error, use `.Materialize()` (see below) rather than a swallowing `catch`.
 
+> **A client-cancellation negative control checks the cancellation signal.** When a test
+> deliberately cuts an HTTP request with `CancelAfter`, assert that its own token had actually
+> cancelled before accepting a null response or a host-recorded 499. Comparing
+> `DateTimeOffset.UtcNow - started` with the exact `CancelAfter` duration tests two different
+> clocks at their boundary; `RegistryAnswersOrRefusesTest` failed at a reported 5.0 s despite the
+> intended client cut firing. Use `Stopwatch` for coarse elapsed-time bounds on a successful
+> response, and the cancellation token for the negative control's ordering claim.
+
 ---
 
 ## In-mesh tests and the build process (node repos)
