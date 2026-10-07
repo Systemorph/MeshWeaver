@@ -55,7 +55,9 @@ if printf '%s' "$ref" | grep -Eq '^[0-9a-fA-F]{7,39}$'; then
   echo "mw-core-file: '$ref' looks like an ABBREVIATED sha — pass the full 40-hex sha (or refs/heads/… / refs/tags/… for a hash-like name)" >&2
   exit 2
 fi
-root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mw-core/$(printf '%s' "$ref" | tr -c 'A-Za-z0-9._-' '_')"
+# Keyed by a HASH of the exact ref — injective, unlike a character substitution (`feature/a` and
+# `feature_a` must never share a fetched commit).
+root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mw-core/$(printf '%s' "$ref" | git hash-object --stdin)"
 if [ ! -f "$root/.fetched" ]; then
   rm -rf "$root"
   git init -q "$root"
