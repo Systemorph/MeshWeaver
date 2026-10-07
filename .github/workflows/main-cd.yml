@@ -342,6 +342,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/control-instance.json
+            .github/scripts/check-control-webhook-url.py
+          sparse-checkout-cone-mode: false
       - name: Every external input, or a red build naming what to provision
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -365,9 +371,9 @@ jobs:
           # `control-first` hands every accepted build to control's roll lane with these two: the
           # control PLANE's inbox (the instance holding the Deployments records and Ops/Actions) and
           # the HMAC it verifies. Without them control is tagged a build nothing ever rolls it to.
-          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (org variable, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
+          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (repo or org variable, declared by .github/control-instance.json) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
           [ -n "$CONTROL_WEBHOOK_SECRET" ] || missing+=("secrets.CONTROL_WEBHOOK_SECRET    the HMAC that inbox verifies (org secret, byte-identical to that instance's Hosting:PlatformWebhookSecret)")
-          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and `published-modules` READS the sealed module publications from there (<account>/<share>…)")
+          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and published-modules READS the sealed module publications from there (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
           # not the fleet — asserted here, RED, never discovered as `unauthorized` three jobs later.
@@ -387,6 +393,8 @@ jobs:
             for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
+          python3 .github/scripts/check-control-webhook-url.py \
+            .github/control-instance.json "$CONTROL_WEBHOOK_URL"
           echo "All external inputs are present."
 
   # Every downstream job takes its commit from here, so a push run and a heal run are literally
