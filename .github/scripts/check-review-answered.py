@@ -565,8 +565,8 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      the SAME predicate as the merge gate), read from a provably complete listing;
 #   4. (policy `suites-parallel-with-review`) every REQUIRED status check of the base branch has COMPLETED
 #      with `success` on the current head — the suites ran (on a fresh merge with the current main,
-#      policy `suites-test-fresh-merge`) and are green. Review first, then the suites, then the arm:
-#      nothing is armed while a required check is pending, missing or red. The review's own
+#      policy `suites-test-fresh-merge`) and are green. The review and the suites may finish in either order and the arm waits for
+#      BOTH: nothing is armed while a required check is pending, missing or red. The review's own
 #      contexts are conditions (2)/(3), never (4). `required_checks_green` is the predicate;
 #      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #

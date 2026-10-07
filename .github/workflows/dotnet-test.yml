@@ -604,10 +604,11 @@ jobs:
   # 🔀 Policy suites-parallel-with-review: the suites run beside the review (this gate lets them start after stage 0), on a fresh merge with the
   # current main (policy suites-test-fresh-merge), then the arm once the review is answered and every
   # required check is green.
-  # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
-  # must pass before we start test. and we arm only at end of test". On a pull request the build and
-  # the shards wait for (a) the cheap static controls below — stage 0, which fail fast — and (b) the
-  # head's automatic review having landed with every reviewer thread answered. A HOLD is this job
+  # This caller omits `review-before-suites`, so on a pull request the build and the shards wait only
+  # for (a) the cheap static controls below — stage 0, which fail fast. (Review-first — the build and
+  # shards also waiting for (b) the head's automatic review having landed with every reviewer thread
+  # answered — is the opt-in `review-before-suites: true`; the hold/re-run wording below applies to it.)
+  # The arm still needs the answered review. A HOLD is this job
   # FAILING (never skipping): `build` requires its success explicitly, `collect-results` reads red
   # with the hold as its first line, and stage-advance.yml re-runs the failed jobs the moment the
   # review lands / a finding is answered / the bounded fallback elapses. push, merge_group and
@@ -3832,7 +3833,7 @@ jobs:
 
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
-    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for stage 1 too.
+    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too.
     needs: [preflight, stage-gate]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
@@ -4096,7 +4097,7 @@ jobs:
         if [ "$MODE" = "stage0-red" ]; then
           echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
-          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
+          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the stage gate held the suites (with the opt-in review hold: the head's automatic review has not landed or a reviewer thread is unanswered) — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
         fi
         echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
         exit 1

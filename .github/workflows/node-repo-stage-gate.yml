@@ -9,9 +9,14 @@
 # the suites until the head's review landed and every finding is answered; a caller that opts in
 # MUST carry its stage-advance.yml listener: a gate without its listener holds forever.
 #
-# Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc. must
-# pass before we start test. and we arm only at end of test". Design of record, with the measured
-# saving: Doc/Architecture/StagedPullRequestPipeline.
+# History: the 2026-10-04 decision ("code review must pass ... before we start test. and we arm only at
+# end of test") was the review-first design (policy `review-then-suites`); it was later released and
+# the review-first order survives only as the `review-before-suites: true` opt-in. The arm-only-at-the-end
+# half still holds for every caller. Decision register and measured saving:
+# Doc/Architecture/PolicyNotProse and Doc/Architecture/StagedPullRequestPipeline.
+#
+# The stage diagram below describes the opt-in (`review-before-suites: true`); on the default, stage 1
+# is not a gate on stage 2 — the review runs beside the suites and is enforced at the arm and merge gates.
 #
 #   STAGE 0  cheap static controls (validate, confidential terms, shared rules, locks, policy gates) —
 #            the caller makes its heavy-leg front door NEED them, so they fail fast.
@@ -112,7 +117,7 @@ jobs:
       mode: ${{ steps.judge.outputs.mode }}
     steps:
       - name: Fetch the platform's review predicate at the lane's scripts ref
-        # Only the review hold (the default) reads the predicate; the opt-out judges stage 0 alone.
+        # Only the review hold (the opt-in) reads the predicate; the opt-out judges stage 0 alone.
         if: ${{ inputs.review-before-suites }}
         env:
           GH_TOKEN: ${{ github.token }}

@@ -2,9 +2,10 @@
 Name: Staged Pull Request Pipeline
 Category: Architecture
 Description: >-
-  Every pull request head moves through four stages in order — cheap static controls, the automatic
-  review landed and answered, the expensive suites on a FRESH merge with the current main, and arming
-  only once the review is answered AND every required check is green (policy suites-parallel-with-review: the suites run beside the review by default). What
+  Every pull request head moves through four stages — cheap static controls, the automatic review
+  landed and answered, the expensive suites on a FRESH merge with the current main, and arming only
+  once the review is answered AND every required check is green. By default (policy
+  suites-parallel-with-review) the suites run beside the review; review-first is an opt-in. What
   each stage runs, what moves a head on (events, not polling), the three loud releases that keep a
   reviewer outage from freezing the fleet, why a hold is red and never skipped, a day of running the
   suites in parallel and why it was reverted, and the measured saving.
@@ -22,12 +23,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > stage descriptions below read for that opt-in, and the history is in
 > [A day in parallel](#a-day-in-parallel-and-why-it-was-reverted).
 
-**Decision (maintainer, 2026-10-04, verbatim):** *"should we maybe say that code review must pass and
+**Historical decision, review-first (maintainer, 2026-10-04, verbatim; since released — default is above):** *"should we maybe say that code review must pass and
 also other controls such as no client etc. must pass before we start test. and we arm only at end of
 test"*.
 
-So every pull request HEAD now moves through four stages, in order, and a stage starts only when the
-one before it is green **for that head**:
+A pull request HEAD moves through four stages. With the opt-in `review-before-suites: true` they run
+in order, each starting only when the one before it is green **for that head**; on the default, stage 2
+starts after stage 0 and stage 1 runs beside it, with the arm waiting for both:
 
 | Stage | What runs | Cost | What moves the head on |
 |---|---|---|---|
@@ -36,7 +38,7 @@ one before it is green **for that head**:
 | **2 — expensive suites** | core: build + test shards, doc gate, platform-compat, the dependent-suites request · Plugins: module bundles, compile-check, gate shards, portal hosts (every leg behind `admission`) | the run's runner-minutes, almost all of them | the suites finish |
 | **3 — arming** | the control plane's babysitter arms auto-merge (Plugins `PrArming`, #2828) | none | the arm gate (`check-review-answered.py` → `arm_readiness`): the review answered (conditions 1–3) AND every required status check of the base `success` on the head (condition 4, `required_checks_green`) |
 
-The order is the point. Stage 1 is the stage most likely to send the author back to the keyboard, so
+On the opt-in, the order is the point. Stage 1 is the stage most likely to send the author back to the keyboard, so
 it runs before the stage that costs the most. A finding answered with a fix push makes a NEW head,
 and a new head restarts at stage 0 — the suites never ran on the head the review changed.
 
@@ -342,7 +344,7 @@ whose review was already required to merge.
 
 Arming moves to the control plane (Plugins #2828, `PrArming`), and core #6063 makes `auto-arm.yml`
 disarm-only. The arm predicate gains **"every required check is green on the head"** in front of
-`arm_readiness`, so the order is enforced at both ends: nothing heavy starts before the review, and
+`arm_readiness`, so the order is enforced at both ends: nothing heavy starts before the review (opt-in only), and
 nothing arms before the tests. A head released by any of the three loud releases is never armed by
 that release.
 
@@ -357,8 +359,8 @@ control plane yet.
 
 | Repository | Stage gate | Event half | State |
 |---|---|---|---|
-| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | review first (default) |
-| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | review first (default) |
+| Systemorph/MeshWeaver | `dotnet-test.yml` → `stage-gate` (local lane, `scripts-ref: github.sha`) | `stage-advance.yml` | default: suites beside the review |
+| Systemorph/MeshWeaver.Plugins | `ci.yml` → `stage-gate` → `admission` | `stage-advance.yml` | default: suites beside the review (unless its caller opts in) |
 | the satellites | not yet — they run as before | — | adopt with the same two edits: a `stage-gate` job (`node-repo-stage-gate.yml@main`) that their heavy jobs need with `result == 'success'`, and the thin `stage-advance.yml`; plus their rows in `.github/lane-caller-grants.yml` |
 
 A repository that has the gate but not the listener would hold forever, which is why the two are
