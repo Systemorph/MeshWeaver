@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -100,5 +101,57 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
                 "present-but-unreadable content means the stamp is UNKNOWN — a reference set that drops it "
                 + "lets retention delete a bundle someone adopted")
             .WithMessage("NodeType adoption record Unreadable could not be read*String*");
+    }
+    /// <summary>
+    /// The retention side, at the pass level: an unreadable adoption record makes the reference
+    /// fold THROW (it is never dropped), that error ends the pass before the sweep is invoked — so
+    /// nothing is deleted against an incomplete reference set — and the pass guard records the
+    /// fault and completes, so the schedule survives to plan again on the next tick.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableRecord_AbortsTheRetentionPass_BeforeTheSweep_AndTheScheduleSurvives()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var records = new[]
+        {
+            new MeshNode(ControlLaneExtensions.RecordNodeType) { NodeType = MeshNode.NodeTypePath },
+            new MeshNode("Stamped") { NodeType = MeshNode.NodeTypePath, Content = new NodeTypeDefinition { CompiledFrameworkVersion = "fw-1" } },
+        };
+        PrebuiltBundleRetentionHostedService.StampedIdentitiesOf(records, options, null)
+            .Should().ContainSingle("a declaration-less record contributes nothing, a stamped one its stamp")
+            .Which.Should().Be("fw-1");
+
+        var withUnreadable = records.Append(new MeshNode("Unreadable")
+        {
+            NodeType = MeshNode.NodeTypePath,
+            Content = "not a NodeTypeDefinition",
+        }).ToArray();
+        var stamps = Observable.Defer(() => Observable.Return(
+            PrebuiltBundleRetentionHostedService.StampedIdentitiesOf(withUnreadable, options, null)));
+
+        var swept = 0;
+        var recorded = 0;
+        Exception? faulted = null;
+        var passes = 0;
+        Exception? scheduleDied = null;
+        PrebuiltBundleRetentionHostedService.GuardedPass(
+                PrebuiltBundleRetentionHostedService.PassOver(
+                    stamps,
+                    Observable.Return(System.Collections.Immutable.ImmutableList<PinnedPlatformReference>.Empty),
+                    (_, _) =>
+                    {
+                        swept++;
+                        return Observable.Return(1);
+                    }),
+                _ => recorded++,
+                ex => faulted = ex)
+            .Subscribe(_ => passes++, ex => scheduleDied = ex);
+
+        swept.Should().Be(0, "a reference set that could not be read must never reach the sweep");
+        recorded.Should().Be(0);
+        faulted.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().StartWith("NodeType adoption record Unreadable could not be read");
+        passes.Should().Be(1, "the faulted pass completes as one pass, so the schedule's next tick runs");
+        scheduleDied.Should().BeNull("a pass's fault is bounded to that pass, never the schedule");
     }
 }

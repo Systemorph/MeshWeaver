@@ -102,19 +102,13 @@ public sealed class PrebuiltBundleRetentionHostedService(
         var ticks = bake.Take(1).Concat(Observable.Timer(retention.Interval, retention.Interval).Select(_ => Unit.Default));
 
         schedule = ticks
-            .Select(_ => RunPass(root, pool)
-                .Do(status.Record)
-                .Select(_ => Unit.Default)
-                .Catch<Unit, Exception>(ex =>
-                {
-                    // Surfaced (log + status), never swallowed — and the schedule survives it: the
-                    // next tick re-reads everything from scratch.
-                    status.RecordFault(ex);
-                    logger.LogWarning(ex,
-                        "PrebuiltBundleRetention: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
-                        root);
-                    return Observable.Return(Unit.Default);
-                }))
+            .Select(_ => GuardedPass(RunPass(root, pool), status.Record, ex =>
+            {
+                status.RecordFault(ex);
+                logger.LogWarning(ex,
+                    "PrebuiltBundleRetention: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
+                    root);
+            }))
             .Concat()
             .Subscribe(
                 _ => { },
@@ -122,17 +116,54 @@ public sealed class PrebuiltBundleRetentionHostedService(
     }
 
     private IObservable<PrebuiltBundleSweepResult> RunPass(string root, IIoPool pool) =>
-        StampedIdentities().Zip(PinnedReferences(), (stamps, pinned) => (stamps, pinned))
-            .SelectMany(refs =>
-                PrebuiltBundleStore.Sweep(
-                    root,
-                    PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                    PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                    refs.stamps,
-                    refs.pinned,
-                    retention,
-                    pool,
-                    logger));
+        PassOver(StampedIdentities(), PinnedReferences(), (stamps, pinned) =>
+            PrebuiltBundleStore.Sweep(
+                root,
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                PrebuiltAdoptionPolicy.RunningPlatformVersion,
+                stamps,
+                pinned,
+                retention,
+                pool,
+                logger));
+
+    /// <summary>
+    /// One pass: the sweep runs only once BOTH reference sets were read. A reference read that
+    /// errors (an unreadable adoption record among them — <see cref="NodeTypeAdoptionStamp"/>)
+    /// terminates the pass with that error before <paramref name="sweep"/> is ever invoked, so
+    /// nothing is deleted against an incomplete reference set.
+    /// </summary>
+    /// <typeparam name="TResult">The sweep's result.</typeparam>
+    /// <param name="stamps">The framework identities the mesh's NodeType records adopted.</param>
+    /// <param name="pinned">The platform builds something outside this process pins.</param>
+    /// <param name="sweep">The sweep, given both complete reference sets.</param>
+    /// <returns>The sweep's result, or the reference read's error.</returns>
+    internal static IObservable<TResult> PassOver<TResult>(
+        IObservable<ImmutableHashSet<string>> stamps,
+        IObservable<ImmutableList<PinnedPlatformReference>> pinned,
+        Func<ImmutableHashSet<string>, ImmutableList<PinnedPlatformReference>, IObservable<TResult>> sweep) =>
+        stamps.Zip(pinned, (s, p) => (s, p)).SelectMany(refs => sweep(refs.s, refs.p));
+
+    /// <summary>
+    /// Bounds a pass's failure to THAT pass: a faulted pass is reported to <paramref name="fault"/>
+    /// (surfaced — log + status — never swallowed) and completes, so the schedule's next tick
+    /// re-reads everything from scratch instead of the subscription dying on the error.
+    /// </summary>
+    /// <typeparam name="TResult">The pass's result.</typeparam>
+    /// <param name="pass">One pass.</param>
+    /// <param name="record">Receives a completed pass's result.</param>
+    /// <param name="fault">Receives a faulted pass's error.</param>
+    /// <returns>One <see cref="Unit"/> per pass, faulted or not.</returns>
+    internal static IObservable<Unit> GuardedPass<TResult>(
+        IObservable<TResult> pass, Action<TResult> record, Action<Exception> fault) =>
+        pass
+            .Do(record)
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                fault(ex);
+                return Observable.Return(Unit.Default);
+            });
 
     /// <summary>
     /// Every platform build something outside this process pins — the union of every registered
@@ -172,12 +203,25 @@ public sealed class PrebuiltBundleRetentionHostedService(
             // 🚨 An unreadable record THROWS here (NodeTypeAdoptionStamp) and aborts the pass, as the
             // summary above promises — it used to read as "no stamp" and silently left the
             // reference set, so its bundle was eligible for deletion.
-            .Select(change => change.Items
-                .Select(n => NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(n, mesh.JsonSerializerOptions, logger))
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Select(v => v!)
-                .ToImmutableHashSet(StringComparer.Ordinal)));
+            .Select(change => StampedIdentitiesOf(change.Items, mesh.JsonSerializerOptions, logger)));
     }
+
+    /// <summary>
+    /// The reference set the NodeType records name. Throws on a record whose content is present
+    /// but unreadable (its stamp is unknown) — never drops it; a declaration-less static NodeType
+    /// (no content) adopts nothing and contributes nothing.
+    /// </summary>
+    /// <param name="records">NodeType records.</param>
+    /// <param name="options">The reading hub's serializer options.</param>
+    /// <param name="logger">Diagnostics for the content read.</param>
+    /// <returns>Every adopted framework identity.</returns>
+    internal static ImmutableHashSet<string> StampedIdentitiesOf(
+        IEnumerable<MeshNode> records, System.Text.Json.JsonSerializerOptions options, ILogger? logger) =>
+        records
+            .Select(n => NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(n, options, logger))
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!)
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)
