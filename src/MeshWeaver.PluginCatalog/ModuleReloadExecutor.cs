@@ -607,7 +607,10 @@ public sealed class ModuleReloadAgent
         var access = meshHub.ServiceProvider.GetService<AccessService>();
         return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path)
                 .Where(node => node is not null && node.Version >= committed)
-                .Take(1)
+                // FirstAsync, never Take(1): a stream that COMPLETES before reaching the floor (a
+                // disposed synchronization stream forwards OnCompleted) must surface as an error on
+                // the agent's warning path, never as a silent empty that reports nothing.
+                .FirstAsync()
                 .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(node =>
             {
