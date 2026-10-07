@@ -702,6 +702,9 @@ public static class DynamicTypePreWarmer
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         var liveFramework = NodeTypeCompilationHelpers.FrameworkVersion;
         var options = mesh.JsonSerializerOptions;
+        // Memex#668 — the census also counts stale-but-serving builds against the mesh's bound.
+        var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
+            mesh.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
         // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
         // WarmDynamicTypes (#1444/#1790) for why the scope must be sealed inside the one Subscribe.
         return accessService.RunAsSystem(() => mesh
@@ -713,7 +716,8 @@ public static class DynamicTypePreWarmer
             // every unrelated NodeType write — a log wave during a bake. The boot-time DynamicTypesOf
             // already names each untyped path once; here it is COUNTED (Untyped) and printed.
             .Select(nodes => NodeTypeLiveRecordCensus.Of(
-                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow));
+                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow,
+                staleBound));
     }
 
     /// <summary>

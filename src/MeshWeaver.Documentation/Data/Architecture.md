@@ -168,6 +168,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Partitioned Persistence](PartitionedPersistence)
 - [Storage Adapter Implementation](StorageAdapterImplementation)
 - [Change-Feed Isolation](ChangeFeedIsolation) — one throwing subscriber must never starve the others
+- [Change-Feed Gaps](ChangeFeedGaps) — a reconnected LISTEN session has lost every commit in between; the backend declares the gap and each cache re-reads its authoritative state (Plugins#3000)
 - [In-Memory Child Index Consistency](InMemoryChildIndexConsistency) — a listing taken while the in-memory store re-indexed came back short, a synced query cached it for good, and one NodeType's compile then failed on files that were there; the three rules that keep a reader from ever seeing a half-built index, and how it composes with the mid-install judgement race (#4280)
 - [A Container Registry in Memex](ContainerRegistryInMemex) — the fleet's own registry at cr.meshweaver.cloud (a separate distribution + docker_auth service), the bootstrap circularity that keeps the hosting instance's boot image off it, and the in-portal mirror that was built, never wired, and deleted (#4066)
 - [Static Repo Import](StaticRepoImport)
@@ -484,6 +485,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Release Channels](ReleaseChannels) — a channel is a named, moving pointer to an immutable release; `latest` is derived and only `stable` is promoted, and a channel names what to SELECT while the selection always resolves to an immutable id that is what gets pinned, recorded and run
 - [Release Support Policy](/Doc/Architecture/SupportPolicy)
 - [Released Artifact Retention](ReleasedArtifactRetention) — retain artifacts for at least 30 days, supported releases for their support lifetime, and every artifact still needed by a published set or consumer
+- [Platform Versioning (SemVer)](PlatformVersioning) — continuous builds move from `3.0.0-ci.<run>` to plain `3.<minor>.<run>`, where the patch is the same CD run number, so both notations share one lineage; `3-latest` is a seed pointer and never a record value; the inventory of every producer and parser across core, Plugins and Memex; and the readers → records → minter migration order
 - [Self-Update Target Selection](SelfUpdateTargetSelection) — candidates are ranked by the CD run number, not the version string; a mislabelled line outranked every sealed set for ever, and an install on a withdrawn tag could never see anything newer
 - [The Self-Update Registry Credential](SelfUpdateRegistryCredential) — which plugin-registry key may be presented to a container registry: a DECLARED pairing, never host equality or name resemblance; an absent declaration refuses
 - [Package Uninstall](PackageUninstall) — one request in two phases: retire the module, close the hubs, remove the install record, block re-install and preview what would be destroyed; drop the partition storage and its registry record only on the requester's exact confirmation; refuse a shared partition or one holding user data

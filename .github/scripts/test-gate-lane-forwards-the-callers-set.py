@@ -105,7 +105,14 @@ def main() -> int:
         rc, rows, said = execute(script, {**pins, "PINNED_SET": bad})
         check(f"16 EXECUTED: '{bad}' is refused by shape (the resolver's SET_NAME would refuse it)",
               rc != 0 and "is not a set name" in said)
-    for good in ("3.0.0-ci.8687", "3.0.0.ci.8687", "3.0.0-rc.1-ci.12", "3.1.0-preview-2-ci.9"):
+    # The SemVer notation (policy `platform-semver-versioning`): a zero patch, or a line below 3.1,
+    # is a floor or a promotion — never a set.
+    for bad in ("3.0.0", "3.0.8687", "3.1.0", "2.9.8687"):
+        rc, rows, said = execute(script, {**pins, "PINNED_SET": bad})
+        check(f"16 EXECUTED: '{bad}' is refused by shape (no run number in either notation)",
+              rc != 0 and "is not a set name" in said)
+    for good in ("3.0.0-ci.8687", "3.0.0.ci.8687", "3.0.0-rc.1-ci.12", "3.1.0-preview-2-ci.9",
+                 "3.1.10050", "3.2.10400", "4.0.20000"):
         rc, rows, said = execute(script, {**pins, "PINNED_SET": good})
         check(f"17 EXECUTED: '{good}' is accepted (the resolver's SET_NAME accepts it)",
               rc == 0 and rows.get("platform-set") == good)

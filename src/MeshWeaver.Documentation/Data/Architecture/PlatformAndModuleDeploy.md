@@ -125,6 +125,37 @@ stood behind that, measured 2026-10-06 on control.systemorph.com and memex.syste
    open nothing. `Ops/Actions` on the control plane held `selfupdate-roll-*` actions for memex,
    build and memex-cloud, and none for control.
 
+Defects 1 and 2 are now fixed at the source (Systemorph/MeshWeaver.Plugins#2994). Defect 3 needs
+no fix of its own, because the roll no longer depends on control's watcher (below).
+
+- **The repository comes from the record.** `DeploymentPortalConfig.SelfUpdatePortalRepository`
+  and `SelfUpdateMigrationRepository` render `SelfUpdate__PortalRepository` and
+  `SelfUpdate__MigrationRepository`. The values are the repository path of the record's
+  `imageRepository` / `migrationImageRepository`; a blank `migrationImageRepository` is derived
+  the way the operator pairs it — `memex-migration` in the portal repository's directory
+  (`ghcr.io/systemorph/memex-portal-ai` → `systemorph/memex-migration`), never the bare default.
+  They render only where they differ from the image default (`memex-portal-ai` /
+  `memex-migration`), so every other record renders byte-identically.
+  An explicit `migrationImageRepository` is REFUSED (`EffectiveMigrationRepository` throws) when
+  it is not named `memex-migration` (the only name the operator rolls) or when it is on a
+  different registry host from `imageRepository`: the updater lists both repositories on ONE
+  registry, derived from the portal image.
+  The chart writes each key only when it is non-blank: both have real defaults, and an empty
+  repository would roll to `<registry>/:<tag>`.
+- **The workload identity is wired where the federation is.** `hosting-deploy` reads the client id
+  of `$AZ_PORTAL_IDENTITY` (`az identity show … --query clientId`), the identity `hosting-federate`
+  binds the namespace's `memex-portal-sa` to, and passes `--set selfUpdate.azureClientId=<id>`.
+  That one value renders the ServiceAccount annotation, the pod's `azure.workload.identity/use`
+  label and `AZURE_CLIENT_ID`. The record carries only the identity's NAME
+  (`operator.environment`), so the id is read at deploy time and is not stored in the record,
+  its vault half or the repository (the step does report it as `portal_identity=<id>`, which the
+  operator keeps with the action's output). An unreadable
+  identity, absent or refused, stops the deploy before helm. No identity named means none is set,
+  and the step says `portal_identity=none`.
+- **Recycle:** neither change reaches a running pod by itself. The keys arrive with the next
+  Provision or Reconcile of the instance (a helm upgrade with the new chart and render). The pods
+  that upgrade replaces then boot with the identity and the repository.
+
 The job that tags the control image is the one place that knows, deterministically, that control
 has a new build. So that job hands the build over. The record still decides everything that matters:
 which record is named, whether the instance takes rolls, the image repository, the line, the gate,
@@ -244,12 +275,31 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
    loud, not unguarded.
 3. **MeshWeaver.Plugins: the module half of the alarm** (`FleetTarget.ControlBreaches`, the
    carried `BehindSince` clock, and `FleetTargetIntake.AllBreaches`).
-4. **Owed — removing the non-boot seeds from the image**, guarded by a boot-time declaration and a
-   shrink-only ratchet test ("the image contains no non-boot module"), neither of which is built yet. This follows the live module update
-   (`packages-auto-update`, core #6124 and #6121/#6123, Plugins #2893). An instance whose
-   `Modules:Required` names a module must be able to land it from the registry before readiness.
-   Until #6124's reload lands that, a seed is the bootstrap copy. The ratchet shrinks one entry
-   per module as each is proven to land on a fresh instance.
+4. **In flight — removing the non-boot seeds from the image** (MeshWeaver.Plugins#2970, a
+   draft). Until it merges, the published image still seeds all seven non-boot modules. Plugins
+   #2893 (the `reload_module`/`uninstall_package` tools and the `ModuleReload` intake) has merged.
+   Two decisions still hold the pull request: how a memex-local self-registry install, which has
+   no registry to land the seven from, gets them; and confirming that the registry instance
+   (memex.meshweaver.cloud) lands its own required modules from its catalog. That pull request
+   makes `Memex.Portal.Distributed` carry only the modules declared in
+   `src/Memex.Portal.Distributed/image-boot-modules.txt`, each with its reason:
+   - both images: `Hosting.Instance`, `Hosting.Cosmos` and `Hosting.Snowflake`;
+   - control only: `Fleet.Control` and `SelfUpdate.Aks`.
+
+   Its guard, `ImageBootModulesTest`, holds the host's `<MeshModuleClosure>` rows equal to that
+   declaration for both images, with a negative control for each of these mutations:
+   - a registry module seeded back into the image;
+   - a declared module with no row;
+   - a control module leaking into the portal image;
+   - a row under an unknown condition.
+
+   The seven modules that leave become **store-delivered**: no baseline `Modules:Assemblies`
+   entry, and all seven under `Modules:Required`. A baseline entry for bytes the image does not
+   carry would make `required_modules` read *"the image is supposed to ship it"* (Unhealthy) and
+   hold readiness on the registry. Without one, a module that has not landed is named as
+   Degraded, the shape Radzen, Analysis and GoogleMaps already have. The DEV portal
+   (`Memex.Portal.Monolith`) keeps its seeds. The manual, MeshWeaver.Plugins
+   `Hosting/ImageSeededModules.md`, gains the boot-only section in the same pull request.
 5. **Done — the pair tag `<core7>-p<plugins7>` is retired.** main-cd no longer mints it on
    `memex-portal-ai` (`promote` phase A) or `memex-control` (`control-promote`). See
    "The pair tag, retired" below.
@@ -325,6 +375,13 @@ No Hosting/Deployment record pins an image tag of either shape, and none may.
   for `c003e001` when `plugins-bake` sealed it inside core CD. After this change only
   MeshWeaver.Plugins' own `publish-bake` reseals it. If that lane does not publish for a new epoch,
   `published-modules` is red and the fleet is not armed, which is loud but is a stall.
+- That a fresh pod of a boot-only image (step 4) lands every required module from the registry
+  and activates it. The rule is in the code: `required_modules` reports a store-delivered module as
+  Degraded, and `packages-auto-update` lands and activates it. Neither a fresh pod nor
+  control-acceptance has been observed on a boot-only image.
+- That the in-mesh compile reference order holds once the seven arrive only through the landed
+  sidecar (step 4). While they are seeded, the baseline list fixes their order (Collaboration,
+  then AI, then Chat and Mcp). Radzen, Analysis and GoogleMaps have always arrived through the sidecar.
 - `platformLagBoundMinutes` (180) is a starting bound, not a measured one. No unattended control
   roll had been timed when it was set.
 

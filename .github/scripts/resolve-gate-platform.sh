@@ -300,7 +300,26 @@ number written here goes stale the first time it moves (got: $o)"
   grep -q 'either older than those three or has never been sealed' <<<"$o" \
     && fail "the old FALSE DICHOTOMY is back — it excluded the case that actually occurs (got: $o)"
 
-  echo "resolve-gate-platform.sh self-test: OK (2 container cases, 2 volume cases, 9 refusals, 3 usage refusals, 7 wait cases)"
+  # 5h. THE SEMVER NOTATION (policy `platform-semver-versioning`). A caller on `3.1.<run>` newer
+  #     than everything installed is AHEAD — never "gone" — and a SemVer set on the volume counts
+  #     toward its newest/oldest. Without the SemVer branch of run_number_of the caller has no
+  #     ordinal and the volume reads as holding no set, so both assertions go red.
+  semahead="$tmp/semver-ahead"; make_set "$semahead" "$D2" "$P1" "3.1.10000" > /dev/null
+  o="$("$self" --volume-root "$semahead" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.1.10050 --wait-seconds 0 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] || fail "a SemVer set AHEAD of the volume must be refused (got: $o)"
+  grep -q 'had not reached the platform volume' <<<"$o" \
+    || fail "a SemVer caller newer than the volume must be classified AHEAD (got: $o)"
+  grep -q 'still core CD #10000' <<<"$o" \
+    || fail "a SemVer set on the volume must count as its newest (got: $o)"
+  # 5i. Both notations are ONE lineage: the first SemVer set ranks AHEAD of the last ci set.
+  mixed="$tmp/semver-mixed"; make_set "$mixed" "$D2" "$P1" "3.0.0-ci.9999" > /dev/null
+  o="$("$self" --volume-root "$mixed" --tester-digest "$D1" --portal-digest "$P1" \
+       --set 3.1.10001 --wait-seconds 0 2>&1)"
+  grep -q 'had not reached the platform volume' <<<"$o" \
+    || fail "the first SemVer set must rank AHEAD of the last ci set (got: $o)"
+
+  echo "resolve-gate-platform.sh self-test: OK (2 container cases, 2 volume cases, 9 refusals, 3 usage refusals, 7 wait cases, 2 notation cases)"
   exit 0
 fi
 
@@ -382,8 +401,27 @@ listing() {  # every set directory, in-flight ones NAMED as such rather than lis
   printf '%s' "${out:- none}"
 }
 
-run_number_of() {  # `3.0.0-ci.8547` → `8547`; empty when the name does not carry one
-  printf '%s' "${1:-}" | sed -n 's/.*[.-][cC][iI]\.\([0-9][0-9]*\).*/\1/p'
+# The core-CD run number a set name carries, in BOTH notations (policy `platform-semver-versioning`,
+# core Doc/Architecture/PlatformVersioning): `3.0.0-ci.8547` → `8547` (and the withdrawn
+# `3.1.0-ci.7841` → `7841`); from line 3.1 on, `3.1.10050` → `10050` — the PATCH is the same
+# monotonic run number. Empty when the name carries none: a clean `3.0.0` / `3.1.0`, a pointer, a sha.
+# 🚨 The SemVer era start (3, 1) is the twin of `PlatformReleaseOrder.SemVerEraStart` and of
+# `platform-version.py`'s SEMVER_ERA_START. A `ci.`-only reader classified a SemVer caller as
+# "gone" and dropped SemVer sets from the volume's oldest/newest.
+SEMVER_ERA_MAJOR=3
+SEMVER_ERA_MINOR=1
+run_number_of() {
+  local name="${1:-}" n
+  n="$(printf '%s' "$name" | sed -n 's/.*[.-][cC][iI]\.\([0-9][0-9]*\).*/\1/p')"
+  if [ -z "$n" ] && [[ "$name" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    local major=$((10#${BASH_REMATCH[1]})) minor=$((10#${BASH_REMATCH[2]})) patch=$((10#${BASH_REMATCH[3]}))
+    # A zero patch is a floor or a release (`3.1.0`), never a CD run.
+    if [ "$patch" -gt 0 ] && { [ "$major" -gt "$SEMVER_ERA_MAJOR" ] \
+        || { [ "$major" -eq "$SEMVER_ERA_MAJOR" ] && [ "$minor" -ge "$SEMVER_ERA_MINOR" ]; }; }; then
+      n="$patch"
+    fi
+  fi
+  printf '%s' "$n"
 }
 
 installed_run_numbers() {  # one core-CD run number per COMPLETE set on the volume

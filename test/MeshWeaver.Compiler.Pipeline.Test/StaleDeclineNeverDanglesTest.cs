@@ -262,4 +262,48 @@ public class StaleDeclineNeverDanglesTest(ITestOutputHelper output) : MonolithMe
                         && !string.Equals(e.LatestAssemblyMvid, DeadMvid, StringComparison.Ordinal)),
                 "the record no longer names the dead build — it is Pending, or a fresh compile has replaced it");
     }
+
+    /// <summary>
+    /// Systemorph/Memex#668 — the seeder's half of the stale-adoption bound: a same-MAJOR bundle
+    /// further behind the live source than the bound is NOT adopted as the last build (the
+    /// <c>adoptAnyway</c> continuation is withheld, exactly as for a MAJOR bump) — the dead build is
+    /// cleared and a compile of the live source is dispatched.
+    /// </summary>
+    [Fact]
+    public async Task ASameMajorDeclinedBundle_PastTheStaleAdoptionBound_IsNotAdopted_ACompileIsDispatched()
+    {
+        var (typePath, liveFingerprint) =
+            await PersistDanglingRecord("DanglingTooFarBehindType", currentModuleVersion: "1.56");
+
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
+                SweepHub("sweep-too-far-behind"), typePath, BundleBytes(), pdbBytes: null,
+                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
+                dependencies: null, sourceFingerprint: liveFingerprint + "-stale",
+                moduleVersion: "1.29.7")
+            .Should().Within(20.Seconds()).Emit("a decline completes like any other");
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesCompileDispatched,
+            "27 minors behind is past the default bound of "
+            + $"{StaleAdoptionBound.DefaultMaxMinorVersionsBehind}: same MAJOR is not a licence to serve "
+            + "an arbitrarily old program, so the bundle is not adopted and the live source is compiled");
+    }
+
+    /// <summary>
+    /// The control for the arm above: the SAME shape within the bound is adopted as the last build
+    /// the mesh holds — so the arm above cannot pass on a seeder that never consults the bound.
+    /// </summary>
+    [Fact]
+    public async Task ASameMajorDeclinedBundle_WithinTheStaleAdoptionBound_IsAdoptedStale()
+    {
+        var (typePath, liveFingerprint) =
+            await PersistDanglingRecord("DanglingWithinBoundType", currentModuleVersion: "1.59");
+
+        var outcome = await PrebuiltAssemblySeeder.SeedDetailed(
+                SweepHub("sweep-within-bound"), typePath, BundleBytes(), pdbBytes: null,
+                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid, logger: null,
+                dependencies: null, sourceFingerprint: liveFingerprint + "-stale",
+                moduleVersion: "1.57.0")
+            .Should().Within(20.Seconds()).Emit("a decline completes like any other");
+        outcome.Should().Be(PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale,
+            "2 minors behind is within the bound: the version-compatible bundle serves as the last build");
+    }
 }

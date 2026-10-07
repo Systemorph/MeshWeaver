@@ -859,12 +859,15 @@ jobs:
             exit 0
           fi
           digest=$(printf '%s' "$row" | jq -r '.digest')
-          version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | .[0] // empty')
-          run_number="${version##*-ci.}"
+          # Both notations (policy `platform-semver-versioning`): `3.0.0-ci.<run>` and `3.<minor>.<run>`.
+          # The run number is read by the ONE shell-facing reader, never a `${v##*-ci.}` strip — which
+          # hands the WHOLE version back for the SemVer notation.
+          version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | map(select(test("^[0-9]+\\.[0-9]+\\.0$") | not)) | .[0] // empty')
+          run_number=$(python3 .github/scripts/platform-version.py ordinal "$version" || true)
           case "$digest" in sha256:*) ;; *) echo "reason=the main manifest's digest is not a sha256 (got '$digest')" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established: main's digest is '$digest'"; exit 0 ;; esac
           if [ -z "$version" ] || ! [ "$run_number" -eq "$run_number" ] 2>/dev/null; then
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
-            echo "reason=mw-plugin-test:main ($digest) carries no 3.0.0-ci.<run> version tag, so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
+            echo "reason=mw-plugin-test:main ($digest) carries no set version tag (3.0.0-ci.<run> or 3.<minor>.<run>), so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
             echo "::warning::satellite-compat baseline NOT established: main ($digest) carries no ci version tag (tags: $(printf '%s' "$row" | jq -c .tags))"
             exit 0
           fi
@@ -2075,7 +2078,9 @@ jobs:
           # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as `arm`'s phase D
           # moves them for memex-portal-ai: a NEW control instance seeds from the line pointer, never
           # a specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # Spelled by the one reader (policy `platform-semver-versioning`): `3-latest 3.1-latest` for
+          # the SemVer notation, the three pointers for the old one — exactly as phase D spells them.
+          line_tags() { python3 .github/scripts/platform-version.py line-pointers "$1"; }
           tags=("$V_CONTROL")
           if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V_CONTROL")"; tags+=("${pointers[@]}"); fi
           [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V_CONTROL only, the line pointers stay"
@@ -2432,13 +2437,15 @@ jobs:
           # run, the moving pointers stay where that set put them (ACR, cr and GHCR alike).
           # FAIL-CLOSED on both reads: a tag list that cannot be read, or a version without a run
           # ordinal, is RED — never "no newer set", which would move the pointers on no evidence.
-          [[ "$V_PLUGIN" =~ [.-]ci\.([0-9]+)$ ]] || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no ci.<n> run ordinal — cannot decide whether a newer set already holds main/latest"; exit 1; }
-          n_self="${BASH_REMATCH[1]}"
+          # Both notations share ONE lineage (policy `platform-semver-versioning`): the run number is
+          # read by `platform-version.py`, never a `ci.` regex that cannot see `3.<minor>.<run>`.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_PLUGIN") \
+            || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no run ordinal (neither <line>-ci.<n> nor <major>.<minor>.<n>) — cannot decide whether a newer set already holds main/latest"; exit 1; }
           tags=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv) \
             || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds main/latest; refusing to move them blind"; exit 1; }
           # Phase A just wrote this run's own version tag, so an EMPTY reading is itself a broken read.
-          n_max=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no <line>-ci.<n> tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
+          n_max=$(printf '%s\n' "$tags" | python3 .github/scripts/platform-version.py max-ordinal)
+          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no set tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
           if [ "$n_max" -gt "$n_self" ]; then
             echo "::notice title=Moving pointers left in place::a newer set (ci.$n_max) was promoted while this run (ci.$n_self) built — main/latest stay on it; this set keeps its own version and identity tags"
             echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self (never backwards)" >> "$GITHUB_STEP_SUMMARY"
@@ -2741,14 +2748,22 @@ jobs:
           # anyway self-updating => should point to latest image to start"; "1, 2 or 3 digits").
           # 🚨 NEVER BACKWARDS, re-checked at the write: a concurrent main-cd run (the reconcile lane
           # and the main lane can overlap) may have armed a NEWER set since `select` read the tags.
-          n_self="${V_PORTAL##*ci.}"
-          n_max=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv \
-                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          if [ -n "$n_max" ] && [ "$n_max" -gt "$n_self" ]; then
-            echo "::notice::a newer set (ci.$n_max) was armed while this job ran — leaving the line pointers where it put them"
+          # Both notations, ONE lineage (policy `platform-semver-versioning`) — read by the one reader.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_PORTAL") \
+            || { echo "::error::V_PORTAL '$V_PORTAL' carries no run ordinal — refusing to move the line pointers on no evidence"; exit 1; }
+          # FAIL CLOSED: a failed listing, or one with no run ordinal at all (phase C has just written
+          # $V_PORTAL, so even this run's own tag would be missing), is no evidence this set is newest.
+          portal_tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv) \
+            || { echo "::error::could not list memex-portal-ai tags — refusing to move the line pointers on no evidence"; exit 1; }
+          n_max=$(printf '%s\n' "$portal_tags" | python3 .github/scripts/platform-version.py max-ordinal)
+          [ -n "$n_max" ] || { echo "::error::memex-portal-ai lists no run-numbered tag, not even this run's $V_PORTAL written by phase C — the listing is not trustworthy"; exit 1; }
+          if [ "$n_max" -gt "$n_self" ]; then
+            echo "::notice::a newer set (run $n_max) was armed while this job ran — leaving the line pointers where it put them"
             exit 0
           fi
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # `3-latest 3.0-latest 3.0.0-latest` for the old notation; `3-latest 3.1-latest` for the
+          # SemVer one, where a three-part pointer would name ONE build and point nowhere useful.
+          line_tags() { python3 .github/scripts/platform-version.py line-pointers "$1"; }
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           for pair in "memex-migration:$V_MIGRATION:$V_MIGRATION" "memex-portal-ai:$V_PORTAL:$SRC_PORTAL_TAG"; do
             repo="${pair%%:*}"; rest="${pair#*:}"; ver="${rest%%:*}"; src="${rest#*:}"
@@ -3442,7 +3457,14 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
           newest=$(printf '%s' "$st" | jq -r '.version')
-          n_newest="${newest##*ci.}"; n_self="${V_SELF##*ci.}"
+          # Both notations, ONE lineage (policy `platform-semver-versioning`): the run number is read
+          # by the one reader, never `${v##*ci.}` — which leaves `3.1.10001` whole, makes `-gt` an
+          # "integer expression expected" and took the not-superseded branch for an OLDER set.
+          # FAIL-CLOSED: this run just armed V_SELF, so either reading being absent is a broken read.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
+            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — cannot decide whether a newer set superseded it; refusing to announce on no evidence"; exit 1; }
+          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+            || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy; refusing to announce on no evidence"; exit 1; }
           if [ "$n_newest" -gt "$n_self" ]; then
             echo "superseded=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$V_SELF was superseded by $newest before its release event — sending nothing (the newer set's arming announces the line)"

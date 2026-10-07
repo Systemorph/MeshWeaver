@@ -171,6 +171,9 @@ internal class PathResolutionService : IPathResolver, IDisposable
     /// <summary>Change-feed invalidation subscription; disposed with the singleton.</summary>
     private readonly IDisposable? _changeFeedSubscription;
 
+    /// <summary>Change-feed GAP subscription (Plugins#3000); disposed with the singleton.</summary>
+    private readonly IDisposable? _changeFeedGapSubscription;
+
     public PathResolutionService(
         IMessageHub hub,
         IMeshQueryCore queryCore,
@@ -195,6 +198,13 @@ internal class PathResolutionService : IPathResolver, IDisposable
             _changeFeedSubscription = invalidationFeed is not null
                 ? invalidationFeed.Subscribe(OnMeshChange)
                 : legacyFeed!.Subscribe(OnMeshChange);
+            // 🚨 The cache is retracted ONLY by the feed, so a hole in the feed is a hole in the
+            // retraction: a Deleted/Created committed by another process while this replica's
+            // cross-process channel was down would otherwise keep routing to a node that is gone
+            // (or keep the stale shape of a moved one) for the life of the process. A gap names
+            // no path, so every entry is suspect — drop them all and let the next resolution
+            // re-ask the store (Plugins#3000).
+            _changeFeedGapSubscription = invalidationFeed?.Gaps.Subscribe(OnChangeFeedGap);
         }
         // Gates the partition-root MeshNode synthesis below — we only fall back
         // to a placeholder when at least one writable provider could plausibly
@@ -608,11 +618,45 @@ internal class PathResolutionService : IPathResolver, IDisposable
     }
 
     /// <summary>
-    /// Disposes the change-feed subscription. The service is a mesh singleton
+    /// A declared hole in the change feed (see <see cref="ChangeFeedGap"/>): every cached
+    /// resolution and every in-flight fill claim may now describe a store that has moved on, and
+    /// nothing will ever say which. Clears both — claims first, for the same reason
+    /// <see cref="OnMeshChange"/> sweeps claims first: a fill committing between the two sweeps
+    /// must not land an answer computed before the gap. Pure dictionary work on the publisher's
+    /// thread; never throws back into the feed.
+    /// </summary>
+    internal void OnChangeFeedGap(ChangeFeedGap gap)
+    {
+        if (_resolutionCache is null)
+            return;
+        try
+        {
+            _pendingFills?.Clear();
+            var dropped = _resolutionCache.Count;
+            _resolutionCache.Clear();
+            _logger?.LogInformation(
+                "Path resolution: dropped {Count} cached resolutions after change-feed gap on '{Source}' "
+                + "({LostAt:O} → {ResumedAt:O}); the next resolution of each path re-reads the store",
+                dropped, gap.Source, gap.LostAt, gap.ResumedAt);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex,
+                "Path resolution: clearing the cache after a change-feed gap on '{Source}' faulted",
+                gap.Source);
+        }
+    }
+
+    /// <summary>
+    /// Disposes the change-feed subscriptions. The service is a mesh singleton
     /// (see <c>PersistenceExtensions.AddMeshCatalog</c>), so the DI container
     /// disposes it with the mesh.
     /// </summary>
-    public void Dispose() => _changeFeedSubscription?.Dispose();
+    public void Dispose()
+    {
+        _changeFeedSubscription?.Dispose();
+        _changeFeedGapSubscription?.Dispose();
+    }
 
     /// <summary>
     /// The uncached resolution query (the body <see cref="ResolveSegments"/>

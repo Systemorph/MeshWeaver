@@ -85,6 +85,9 @@ public sealed class PersistenceService : IStorageAdapter
         // that subscribe to IStorageAdapter.Changes see writes from any
         // provider (per-node hub reconciliation in MeshDataSource etc.).
         _changes = Observable.Merge(_allOrdered.Select(p => p.Adapter.Changes));
+        // …and the union of their declared gaps: a gap in ANY provider's cross-process feed is a
+        // gap in this feed (Plugins#3000). A provider without one contributes Never.
+        _changeFeedGaps = Observable.Merge(_allOrdered.Select(p => p.Adapter.ChangeFeedGaps));
 
         // Probed once, replayed to every later consult (see LegacyPartitionExists).
         _legacyPartitionExists = Observable
@@ -131,6 +134,11 @@ public sealed class PersistenceService : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<DataChangeNotification> Changes => _changes;
+
+    private readonly IObservable<ChangeFeedGap> _changeFeedGaps;
+
+    /// <inheritdoc />
+    public IObservable<ChangeFeedGap> ChangeFeedGaps => _changeFeedGaps;
 
     /// <summary>
     /// Try each adapter's Read in order; emit the first non-null result, or

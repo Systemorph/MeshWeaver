@@ -189,6 +189,46 @@ if [ -n "$pg_host" ]; then
   )
 fi
 
+# ── the portal's Azure workload identity — the client id of the identity hosting-federate binds ──
+# 🚨 Federation is HALF of workload identity (Systemorph/MeshWeaver.Plugins#2994). hosting-federate
+# binds `system:serviceaccount:<ns>:memex-portal-sa` to $AZ_PORTAL_IDENTITY on every Provision, but
+# the chart turns that into a usable credential only when `selfUpdate.azureClientId` is set: it is
+# what renders the ServiceAccount's `azure.workload.identity/client-id` annotation, the pod's
+# `azure.workload.identity/use` label and AZURE_CLIENT_ID. Nothing rendered it on the record-driven
+# path — HelmValues has no client id to render, because the record carries the identity's NAME
+# (operator.environment AZ_PORTAL_IDENTITY), never its id — so every instance provisioned from a
+# record on an ACR imageRepository booted with no token exchange, and its self-updater failed EVERY
+# check with `CredentialUnavailableException … WorkloadIdentityCredential authentication
+# unavailable` (control.systemorph.com Admin/UpdatePolicy, measured 2026-10-06 and 2026-10-07).
+# memex and memex-cloud only worked because a pre-record values file had set the key; the vault
+# half now refuses structure (Memex#295), so their next Reconcile would have lost it as well.
+#
+# So the id is READ here, from the identity the same step federates to, with the identity the
+# operator already holds over it (Managed Identity Contributor, backups.bicep) — never written into
+# the record, the vault half or the repository. No identity named → no workload identity, said by
+# name: a local or non-Azure install legitimately has none, and an instance on a non-ACR registry
+# authenticates with its instance key instead.
+if [ -n "${AZ_PORTAL_IDENTITY:-}" ]; then
+  hosting::need_env AZ_RESOURCE_GROUP "the resource group holding the portal's managed identity (the one hosting-federate binds this namespace to)"
+  hosting::safe_name portal-identity "$AZ_PORTAL_IDENTITY"
+  hosting::safe_name resource-group "$AZ_RESOURCE_GROUP"
+  hosting::probe output az identity show -g "$AZ_RESOURCE_GROUP" -n "$AZ_PORTAL_IDENTITY" --query clientId -o tsv
+  case $? in
+    0) ;;
+    2) hosting::die "REFUSED, not absent: this operator's Azure identity may not read managed identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — so its client id is UNKNOWN and the pods would come up with no workload identity. It needs read on that identity (backups.bicep grants Managed Identity Contributor). Refused: ${HOSTING_PROBE_ERR}" ;;
+    *) hosting::die "could not read the client id of the portal identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — without it the pods get no workload identity and the self-updater cannot list the registry. az said: ${HOSTING_PROBE_ERR:-nothing}" ;;
+  esac
+  portal_client_id="${HOSTING_PROBE_OUT//[[:space:]]/}"
+  [[ "$portal_client_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+    || hosting::die "managed identity ${AZ_PORTAL_IDENTITY} answered a client id that is not a GUID ('${portal_client_id}') — refusing to interpolate it into the release"
+  sets+=( --set "selfUpdate.azureClientId=${portal_client_id}" )
+  hosting::log "identity  pods federate as ${AZ_PORTAL_IDENTITY} (client ${portal_client_id})"
+  hosting::say portal_identity "$portal_client_id"
+else
+  hosting::log "identity  AZ_PORTAL_IDENTITY is not set — the pods get NO Azure workload identity (selfUpdate.azureClientId stays empty); a self-updater listing an Azure Container Registry cannot authenticate. Name the identity in the record's operator.environment if this instance needs one."
+  hosting::say portal_identity none
+fi
+
 # ── the Key Vault values half, layered FIRST ────────────────────────────────────────────────────
 # 🚨 Read only when the record asked for it (--vault), and then REQUIRED: a record that declares
 # `vaultValuesKeys` is stating that the chart's own Secret carries keys nothing in the record
@@ -329,12 +369,24 @@ fi
 # release (nothing to do), UNOWNED live (adopted). A live object owned by ANOTHER release is a
 # refusal, never a takeover — two releases claiming one object is how a teardown deletes the wrong
 # instance's Secret.
-rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>&1)" \
-  || { if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${rendered}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${rendered}"; fi; }
+#
+# 🚨 The rendered manifest is DATA, never log text (Memex#626). It carries every value the record and
+# the Key Vault half render — Secret payloads, connection strings — and this script's stdout/stderr is
+# the job log the mesh copies onto the action node. So stdout and stderr are captured APART, and a
+# failure names ONE line of the tool's stderr; the old `2>&1` folded whatever helm or kubectl had
+# already written to stdout into the die/log line. test/run-tests.sh "the rendered manifest never
+# reaches the log" pins it.
+render_err="$(mktemp)"
+rendered="$(hosting::read helm template "$release" "$CHART" --namespace "$namespace" "${files[@]}" "${sets[@]}" 2>"$render_err")" \
+  || { why="$(grep -m1 . "$render_err" | cut -c1-400)"; rm -f "$render_err"
+       if hosting::dry; then hosting::log "DRY-RUN: could not template the chart here (${why}); adoption is skipped in the rehearsal only"; rendered=""; else hosting::die "could not render the chart for adoption: ${why}"; fi; }
 adopted=0; owned=0; absent=0
 if [ -n "$rendered" ]; then
-  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>&1)" \
-    || hosting::die "could not list the rendered resources for adoption: ${names}"
+  names="$(printf '%s\n' "$rendered" | hosting::read kubectl -n "$namespace" create --dry-run=client -o name -f - 2>"$render_err")" \
+    || { why="$(grep -m1 . "$render_err" | cut -c1-400)"; rm -f "$render_err"; hosting::die "could not list the rendered resources for adoption: ${why}"; }
+fi
+rm -f "$render_err"
+if [ -n "$rendered" ]; then
   while IFS= read -r res; do
     [ -n "$res" ] || continue
     # 🚨 THREE ANSWERS, not two (MeshWeaver#4722). This read used to be `2>/dev/null` with any

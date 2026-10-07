@@ -131,7 +131,8 @@ internal static class NodeTypeRebindWatcher
                             var leases = meshHub.ServiceProvider
                                 .GetService<PackageRootInstallLeases>();
                             instanceHub.RegisterForDisposal(
-                                Arm(feed, instanceHub, path, boundNodeType, logger, leases));
+                                Arm(feed, instanceHub, path, boundNodeType, logger, leases,
+                                    meshHub.ServiceProvider.GetService<IStorageAdapter>()));
                         }
                         catch (Exception ex)
                         {
@@ -167,14 +168,21 @@ internal static class NodeTypeRebindWatcher
     /// <param name="logger">Optional logger.</param>
     /// <param name="leases">The mesh's install-lease registry, or null on a host that registers
     /// none — in which case no lease can exist and the recycle posts as it always did.</param>
+    /// <param name="storage">The store of record, read once per change-feed GAP (see
+    /// <see cref="ChangeFeedGap"/>): a retype committed by another process while the cross-process
+    /// channel was down never arrives on <paramref name="feed"/>, so on a gap the watcher asks the
+    /// store what the node is typed NOW and runs that answer through the same
+    /// <see cref="RequiresRebind"/> (Plugins#3000). Null: gaps are not observed.</param>
     public static IDisposable Arm(
         IMeshInvalidationFeed feed,
         IMessageHub instanceHub,
         string path,
         string? boundNodeType,
         ILogger? logger,
-        PackageRootInstallLeases? leases = null)
+        PackageRootInstallLeases? leases = null,
+        IStorageAdapter? storage = null)
         => Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Merge(ReadAfterEachGap(feed, storage, instanceHub, path, logger))
             .Where(change => RequiresRebind(change, path, boundNodeType))
             .Take(1)
             .SelectMany(change => WaitWhileAnInstallHoldsIt(leases, path, logger)
@@ -250,6 +258,31 @@ internal static class NodeTypeRebindWatcher
                     "NodeType rebind: the install released '{Path}' — proceeding with the deferred "
                     + "recycle", path));
         });
+
+    /// <summary>
+    /// One authoritative read of <paramref name="path"/> per declared gap, as the change event
+    /// the gap swallowed would have looked. A read that finds no row says nothing (a delete
+    /// retires the hub through its own lifecycle path, never through this watcher); a read that
+    /// faults is logged and says nothing — it must never terminate the watcher's feed.
+    /// </summary>
+    private static IObservable<MeshChangeEvent> ReadAfterEachGap(
+        IMeshInvalidationFeed feed, IStorageAdapter? storage, IMessageHub instanceHub,
+        string path, ILogger? logger)
+        => storage is null
+            ? Observable.Never<MeshChangeEvent>()
+            : feed.Gaps.SelectMany(gap => Observable.Defer(() =>
+                    storage.Read(path, instanceHub.JsonSerializerOptions))
+                .Take(1)
+                .Where(node => node is not null)
+                .Select(node => MeshChangeEvent.Updated(node!) with { Path = path })
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "NodeType rebind: re-reading '{Path}' after change-feed gap on '{Source}' failed — "
+                        + "a retype committed during the gap stays unobserved until the next change",
+                        path, gap.Source);
+                    return Observable.Empty<MeshChangeEvent>();
+                }));
 
     /// <summary>
     /// The firing predicate: a post-commit Created/Updated event for THIS node whose NodeType is

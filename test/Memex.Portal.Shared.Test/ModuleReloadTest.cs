@@ -985,6 +985,68 @@ public class ModuleReloadFaultedBesideActivationTest(ITestOutputHelper output) :
 }
 
 /// <summary>
+/// 🚨 <b>The per-process agent reads the commit the feed ANNOUNCED, never whatever its mirror holds.</b>
+/// The invalidation feed fires post-commit; this process's mirror receives the owner's echo on its
+/// own path and, under load, after the feed. A handler that read the mirror unfloored then saw the
+/// state BEFORE the announced commit — <c>Landing</c> for the event that announced <c>Activating</c> —
+/// swapped nothing, reported nothing, and no later write ever came to wake it: the request sat in
+/// <c>Activating</c> until <see cref="ModuleReloadFaultedBesideActivationTest"/> timed out in CI.
+///
+/// <para>Here the "mirror behind the announcement" moment is made deterministic: the handler is
+/// subscribed BEFORE the commit is written, so its mirror can only hold the earlier state. With the
+/// announced version as its floor it waits for the commit and reports; the negative control — the
+/// same handler with no floor, i.e. the old read — answers from the earlier state and reports nothing.</para>
+/// </summary>
+public class ModuleReloadAgentReadsTheAnnouncedCommitTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private readonly SwappableModuleLoader loader = new();
+
+    protected override IModuleLiveActivation? LiveActivation => loader;
+
+    [Fact(Timeout = 240_000)]
+    public async Task AHandlerAheadOfItsMirror_WaitsForTheAnnouncedCommit_AndReports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // A request the executor has already decided, so the only writer below is this test.
+        var ticket = await ModuleReload.Request(Mesh, new ModuleReloadRequest { Module = "MeshWeaver.NotHere", Reason = "test" })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var path = ticket.Path ?? throw new InvalidOperationException("an accepted request carries its path");
+        var decided = await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Where(n => n.ContentAs<ModuleReloadRequest>(Mesh.JsonSerializerOptions) is { } r && ModuleReloadStatus.IsTerminal(r.Status))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var announced = decided.Version + 1;
+
+        ModuleReloadAgent Process() => new()
+        {
+            LoadedGenerations = () => ImmutableDictionary<string, string>.Empty.Add(Module, "gen-1.2.0"),
+            LoadedNames = () => new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Module },
+        };
+
+        // Both handlers are subscribed before the commit exists — the moment a feed event can reach a
+        // process whose mirror has not yet received the owner's echo.
+        var floored = Process().Handle(Mesh, path, logger: null, committed: announced).ToList().Replay(1);
+        var unfloored = Process().Handle(Mesh, path, logger: null).ToList().Replay(1);
+        using var flooredConnection = floored.Connect();
+        using var unflooredConnection = unfloored.Connect();
+
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<ModuleReloadRequest>(r => r with
+            {
+                Status = ModuleReloadStatus.Activating,
+                Activation = ModuleReloadActivation.Live,
+                LiveSwapRequestedAt = DateTimeOffset.UtcNow,
+                Items = [new ModuleReloadItem { Module = Module, TargetVersion = "1.2.0" }],
+            }))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        (await floored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().ContainSingle("the handler floored at the announced version reads the Activating commit, swaps and reports");
+        (await unfloored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the control: the unfloored read answers from the state before the commit and acts on nothing");
+    }
+}
+
+/// <summary>
 /// 🚨 <b>A transient DOWNLOAD answer is Faulted, never Failed</b> (MeshWeaver#6172). The index
 /// advertises N+1 and the bundle download itself answers: a 503, 429, 502, 504 or a timeout may
 /// clear on its own, so the reload records <see cref="ModuleReloadStatus.Faulted"/> and the next

@@ -1709,6 +1709,42 @@ else
 fi
 rm -rf "$_dp_dir"
 
+# ── the rendered manifest never reaches the log (Memex#626) ────────────────────────────────────
+# The render carries every value the record and the Key Vault half produce, and this script's output
+# IS the job log the mesh copies onto the action node. The render and parse captures used to be `2>&1`,
+# so a failure folded whatever the tool had already written to stdout into the die line. The rendered
+# manifest here carries a FAKE SAS (made up for this test, never issued); a failing render and a failing
+# parse must each name the tool's stderr line, in a real run and in a rehearsal, and never the SAS.
+echo
+echo "── hosting-deploy: the rendered manifest never reaches the log ──"
+_lk_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_lk_dir/"; _lk_log="$_lk_dir/calls.log"; : > "$_lk_log"
+_lk_vals="$_lk_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 1\n' > "$_lk_vals"
+_lk_sig='FAKEsig0123456789FAKEsig%2Bxyz%3D'
+printf -- '---\napiVersion: apps/v1\nkind: Deployment\nmetadata: { name: memex-portal-deployment }\nspec:\n  template:\n    spec:\n      initContainers:\n        - name: fetch\n          env:\n            - name: MODEL_URL\n              value: "https://acct.blob.core.windows.net/m/m.bin?sv=2026-04-06&sp=r&sig=%s"\n' \
+  "$_lk_sig" > "$_lk_dir/rendered.yaml"
+_lk_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_lk_dir" HOSTING_DEPLOY_STUB_LOG="$_lk_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_lk_vals" --image cr.example.test/memex-portal-ai:1 2>&1; }
+# NEGATIVE CONTROL: the stubbed render really does put the fake SAS on stdout, and a successful run
+# still reads it (adoption lists the three fixture resources) — so its absence below is the fix's doing.
+_lk_raw="$(env HOSTING_DEPLOY_FIXTURE="$_lk_dir" HOSTING_DEPLOY_STUB_LOG="$_lk_log" HOSTING_DEPLOY_STUB_TEMPLATE_FAILS=true "$DP_STUBS/helm" template x 2>/dev/null)"
+case "$_lk_raw" in *"$_lk_sig"*) ok "control: the failing render writes the fake SAS to stdout before it fails" ;;
+  *) bad "control: the failing render writes the fake SAS to stdout" "stdout: ${_lk_raw}" ;; esac
+for _lk_case in "real:HOSTING_DEPLOY_STUB_TEMPLATE_FAILS=true:stubbed render failure:could not render the chart" \
+                "rehearsal:HOSTING_DEPLOY_STUB_TEMPLATE_FAILS=true HOSTING_DRY_RUN=true:stubbed render failure:could not template the chart here" \
+                "parse:HOSTING_DEPLOY_STUB_PARSE_FAILS=true:stubbed parse failure:could not list the rendered resources"; do
+  IFS=: read -r _lk_name _lk_env _lk_err _lk_said <<<"$_lk_case"
+  : > "$_lk_log"
+  # shellcheck disable=SC2086  # _lk_env is a list of NAME=value words for env
+  _lk_out="$(_lk_run env $_lk_env)"
+  if printf '%s' "$_lk_out" | grep -q "$_lk_said" && printf '%s' "$_lk_out" | grep -q "$_lk_err" \
+     && ! printf '%s' "$_lk_out" | grep -qF "$_lk_sig" && ! printf '%s' "$_lk_out" | grep -q 'MODEL_URL'; then
+    ok "${_lk_name}: a failure names the tool's stderr line, never the manifest it printed"
+  else
+    bad "${_lk_name}: a failure names stderr, never the manifest" "out: ${_lk_out}"
+  fi
+done
+rm -rf "$_lk_dir"
+
 # ── hosting-deploy APPLIES; it never waits, and never rolls back a good upgrade ─────────────────
 # 🚨 Measured 2026-09-09 02:35-02:51Z on memex (#3782). `--atomic --wait --timeout 15m` DESTROYED a
 # correct upgrade: revision 44 had landed with the record's full render and was inside its own
@@ -1989,6 +2025,61 @@ else
   bad "a digest-pinned running image is refused before helm" "rc=${_ki_rc} out: ${_ki_out} log: $(cat "$_ki_log")"
 fi
 rm -rf "$_ki_dir"
+
+# ── hosting-deploy wires the portal's workload identity from the identity it federates to ───────
+# 🚨 Systemorph/MeshWeaver.Plugins#2994, measured on control.systemorph.com 2026-10-06/07: every
+# self-update check failed `CredentialUnavailableException … WorkloadIdentityCredential
+# authentication unavailable`. hosting-federate had bound the namespace's ServiceAccount to
+# $AZ_PORTAL_IDENTITY, but nothing set selfUpdate.azureClientId — the ONE value the chart turns into
+# the SA annotation, the pod label and AZURE_CLIENT_ID — because the record carries the identity's
+# name, never its client id. These cases pin: the id is READ from that identity and --set on BOTH the
+# adoption render and the upgrade; no identity named → none set, said by name; an unreadable
+# identity (absent OR refused) is a refusal before helm, never a release without the credential.
+echo
+echo "── hosting-deploy: wires the portal's workload identity (Plugins#2994) ──"
+_wi_dir="$(mktemp -d)"; cp -R "$DP_FIXTURES/." "$_wi_dir/"; _wi_log="$_wi_dir/calls.log"; : > "$_wi_log"
+mkdir -p "$_wi_dir/identity"; printf '11111111-2222-3333-4444-555555555555\n' > "$_wi_dir/identity/memexaks-portal-mi"
+_wi_vals="$_wi_dir/values.yaml"; printf '# GENERATED from the Hosting/Deployment record by HelmValues\nreplicas:\n  portal: 2\n' > "$_wi_vals"
+_wi_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_wi_dir" HOSTING_DEPLOY_STUB_LOG="$_wi_log" "$@" \
+  hosting-deploy --namespace memex --release memex --database memex --values "$_wi_vals" --image cr.example.test/memex-control:1 2>&1; }
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"; _wi_tp="$(grep '^helm template' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && grep -q '^az identity show -g memex-aks-rg -n memexaks-portal-mi --query clientId -o tsv$' "$_wi_log" \
+   && printf '%s' "$_wi_up" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_tp" | grep -q -- '--set selfUpdate.azureClientId=11111111-2222-3333-4444-555555555555' \
+   && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=11111111-2222-3333-4444-555555555555'; then
+  ok "the client id is read from \$AZ_PORTAL_IDENTITY and --set as selfUpdate.azureClientId on the render AND the upgrade"
+else
+  bad "the portal identity's client id reaches selfUpdate.azureClientId" "rc=${_wi_rc} upgrade: '${_wi_up}' log: $(cat "$_wi_log") out: ${_wi_out}"
+fi
+# NEGATIVE CONTROL: no identity named → nothing set, nothing read, and the absence is SAID.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY= )"; _wi_rc=$?
+_wi_up="$(grep '^helm upgrade' "$_wi_log" | head -1)"
+if [ "$_wi_rc" -eq 0 ] && [ -n "$_wi_up" ] && ! printf '%s' "$_wi_up" | grep -q -- 'selfUpdate.azureClientId' \
+   && ! grep -q '^az identity' "$_wi_log" && printf '%s' "$_wi_out" | grep -q '::hosting:: portal_identity=none'; then
+  ok "no AZ_PORTAL_IDENTITY → no azureClientId set, no identity read, and portal_identity=none is said"
+else
+  bad "no identity named sets nothing and says so" "rc=${_wi_rc} upgrade: '${_wi_up}' out: ${_wi_out}"
+fi
+# An identity that does not exist is a refusal BEFORE helm — never a release with no credential.
+: > "$_wi_log"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=no-such-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'could not read the client id of the portal identity no-such-mi' \
+   && ! grep -q '^helm ' "$_wi_log"; then
+  ok "an unreadable portal identity is refused before helm, naming it"
+else
+  bad "an unreadable portal identity is refused before helm" "rc=${_wi_rc} out: ${_wi_out} log: $(cat "$_wi_log")"
+fi
+# A REFUSED read says refused — it ruled nothing out.
+: > "$_wi_log"; : > "$_wi_dir/identity/memexaks-portal-mi.forbidden"
+_wi_out="$(_wi_run AZ_PORTAL_IDENTITY=memexaks-portal-mi AZ_RESOURCE_GROUP=memex-aks-rg)"; _wi_rc=$?
+if [ "$_wi_rc" -ne 0 ] && printf '%s' "$_wi_out" | grep -q 'REFUSED, not absent' && ! grep -q '^helm ' "$_wi_log"; then
+  ok "a refused identity read is reported as REFUSED, not absent, before helm"
+else
+  bad "a refused identity read is reported as refused" "rc=${_wi_rc} out: ${_wi_out}"
+fi
+rm -rf "$_wi_dir"
 
 # ── hosting-deploy refuses BEFORE helm when the identity cannot write a rendered kind ───────────
 # Measured 2026-09-09 01:59Z on memex: helm died on `poddisruptionbudgets.policy is forbidden`

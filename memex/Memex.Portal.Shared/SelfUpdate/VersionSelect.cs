@@ -11,8 +11,10 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// target is newer than the running version.
 ///
 /// <para>🚨 <b>The key is the SEALED-PUBLICATION LINEAGE, never the version string (#3542).</b> Every
-/// continuous image is tagged <c>&lt;line&gt;[-.]ci.&lt;run&gt;</c>, where <c>&lt;run&gt;</c> is the
-/// GitHub Actions run number of the delivery workflow that published it —
+/// continuous image carries a run number, in one of two notations of ONE lineage (policy
+/// <c>platform-semver-versioning</c>): <c>&lt;line&gt;[-.]ci.&lt;run&gt;</c> (e.g. <c>3.0.0-ci.8059</c>) or
+/// the SemVer form <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c> (e.g. <c>3.1.10050</c>), where
+/// <c>&lt;run&gt;</c> is the GitHub Actions run number of the delivery workflow that published it —
 /// <c>Directory.Build.props</c> calls that number MONOTONIC and load-bearing, and
 /// <c>MissedBuildFact</c> already orders publications by the same value. The version LINE in front of
 /// it is a label an author maintains by hand, and a hand-maintained label can be wrong: on
@@ -100,8 +102,9 @@ public static class VersionSelect
     /// <summary>
     /// The best tag to roll to under <paramref name="policy"/>, or <c>null</c> when nothing qualifies.
     /// <see cref="UpdatePolicyKind.Continuous"/> considers every parseable tag (incl. build-numbered
-    /// pre-releases); <see cref="UpdatePolicyKind.Stable"/> considers only clean releases
-    /// (<c>!IsPrerelease</c>); <see cref="UpdatePolicyKind.None"/> always returns <c>null</c>.
+    /// pre-releases); <see cref="UpdatePolicyKind.Stable"/> considers only DELIBERATELY CUT releases —
+    /// no pre-release label AND no run number, so a SemVer-notation continuous build such as
+    /// <c>3.1.10050</c> is not Stable although it is not a pre-release; <see cref="UpdatePolicyKind.None"/> always returns <c>null</c>.
     /// A <paramref name="pattern"/>, when given, narrows either to the tags it admits.
     /// Returns the ORIGINAL tag string (so the image patch uses the exact registry tag).
     ///
@@ -132,7 +135,8 @@ public static class VersionSelect
     ///
     /// <list type="bullet">
     /// <item><see cref="UpdatePolicyKind.None"/> — nothing; the pattern is ignored.</item>
-    /// <item><see cref="UpdatePolicyKind.Stable"/> — clean releases only; a pattern narrows them.</item>
+    /// <item><see cref="UpdatePolicyKind.Stable"/> — deliberately cut releases only (no pre-release
+    /// label, no run number); a pattern narrows them.</item>
     /// <item><see cref="UpdatePolicyKind.Continuous"/> WITH a pattern — the tags the pattern admits,
     /// continuous builds included, newest run first.</item>
     /// <item><see cref="UpdatePolicyKind.Continuous"/> WITHOUT a pattern — <b>is <c>Stable</c></b>:
@@ -157,8 +161,8 @@ public static class VersionSelect
                 $"{UpdatePolicyNodeType.NodePath} declares policy Continuous with no version pattern, "
                 + "so it follows CLEAN releases only (the same as Stable): a continuous build is "
                 + "eligible only when a pattern admits it. To follow the current line's continuous "
-                + "builds set `pattern` on the record, e.g. \"3.0.0-ci*\" — it stops matching the "
-                + "day the next clean release is tagged, which is when following the line should end."),
+                + "builds set `pattern` on the record, e.g. \"3.*\" — every continuous build of major 3, "
+                + "in both the 3.0.0-ci.<run> and the 3.<minor>.<run> notation (Doc/Architecture/PlatformVersioning)."),
             _ => new(policy, normalized, null),
         };
     }
@@ -202,8 +206,13 @@ public static class VersionSelect
 
         var parsed = Parse(tags);
 
+        // 🚨 Stable = DELIBERATELY CUT releases. Under the SemVer notation (policy
+        // `platform-semver-versioning`) a continuous build carries no pre-release label either —
+        // `3.1.10050` is as "clean" to NuGet as a release — so `!IsPrerelease` alone would hand
+        // every Stable install every main build the day the notation flips. A tag that carries a
+        // run number is a continuous publication whatever its shape, and stays out of Stable.
         if (policy == UpdatePolicyKind.Stable)
-            parsed = parsed.Where(x => !x.ver.IsPrerelease);
+            parsed = parsed.Where(x => !x.ver.IsPrerelease && PlatformReleaseOrder.BuildOrdinal(x.tag) is null);
 
         // Compiled once per listing, not once per tag (Copilot review on #3723).
         if (UpdateChannelPattern.Compile(pattern) is { } glob)

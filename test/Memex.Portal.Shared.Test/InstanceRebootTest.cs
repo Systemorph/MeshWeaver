@@ -340,7 +340,7 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
         cannot.Attempts.Should().Be(1, "still asked exactly once");
     }
 
-    private sealed class CannotRestart : IDeploymentUpdater
+    internal sealed class CannotRestart : IDeploymentUpdater
     {
         private int attempts;
         public int Attempts => Volatile.Read(ref attempts);
@@ -356,6 +356,58 @@ public class InstanceRebootFailedStepTest(ITestOutputHelper output) : InstanceRe
 
         public Task<RolloutStrategyReading?> ReadRolloutStrategyAsync(CancellationToken ct) =>
             Task.FromResult<RolloutStrategyReading?>(new("RollingUpdate", "1", "0", 2));
+    }
+}
+
+/// <summary>
+/// 🚨 <b>The reboot agent reads the commit the feed ANNOUNCED, never whatever its mirror holds</b> —
+/// the reboot twin of <see cref="ModuleReloadAgentReadsTheAnnouncedCommitTest"/>. The handler is
+/// subscribed BEFORE the <c>AwaitingRestart</c> commit is written, so its mirror can only hold the
+/// earlier state. Floored at the announced version it waits for the commit and reports; the negative
+/// control — the same process with no floor, i.e. the old read — answers from the earlier state and
+/// reports nothing.
+/// </summary>
+public class InstanceRebootAgentReadsTheAnnouncedCommitTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    // The restart cannot be taken, so the reboot is DECIDED (Failed) and the executor writes nothing
+    // more on its own: the only writer below is this test.
+    protected override IDeploymentUpdater RebootUpdater => new InstanceRebootFailedStepTest.CannotRestart();
+
+    [Fact(Timeout = 240_000)]
+    public async Task AHandlerAheadOfItsMirror_WaitsForTheAnnouncedCommit_AndReports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+
+        var path = await Reboot(ct);
+        var decided = await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Where(n => n.ContentAs<InstanceRebootRequest>(Mesh.JsonSerializerOptions) is { } r && InstanceRebootStatus.IsTerminal(r.Status))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var announced = decided.Version + 1;
+        var restart = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        // Both processes booted AFTER the restart stamp, and both are subscribed before the commit exists.
+        var floored = new InstanceRebootAgent { StartedAt = restart.AddSeconds(30), ProcessOf = _ => "floored-pod" }
+            .Handle(Mesh, path, committed: announced).ToList().Replay(1);
+        var unfloored = new InstanceRebootAgent { StartedAt = restart.AddSeconds(30), ProcessOf = _ => "unfloored-pod" }
+            .Handle(Mesh, path).ToList().Replay(1);
+        using var flooredConnection = floored.Connect();
+        using var unflooredConnection = unfloored.Connect();
+
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<InstanceRebootRequest>(r => r with
+            {
+                Status = InstanceRebootStatus.AwaitingRestart,
+                RestartRequestedAt = restart,
+            }))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        (await floored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().ContainSingle("the handler floored at the announced version reads the AwaitingRestart commit and reports");
+        (await unfloored.Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the control: the unfloored read answers from the state before the commit and reports nothing");
+        var reported = await AwaitReboot(path, r => r.Replicas.ContainsKey("floored-pod"), ct);
+        reported.Replicas.Should().NotContainKey("unfloored-pod");
     }
 }
 

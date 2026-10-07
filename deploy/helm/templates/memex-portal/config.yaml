@@ -639,6 +639,19 @@ data:
   {{- if (.Values.selfUpdate).registry }}
   SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
   {{- end }}
+  # The REPOSITORIES the self-updater lists and rolls to, on that registry (Systemorph/
+  # MeshWeaver.Plugins#2994). Rendered from the Deployment record (DeploymentPortalConfig
+  # .SelfUpdatePortalRepository / .SelfUpdateMigrationRepository) ONLY where the record's image
+  # repository differs from the image default (memex-portal-ai / memex-migration) — control runs
+  # memex-control, and a self-updater listing memex-portal-ai there would roll it onto the working
+  # instances' image. Same rule as the line above: both are strings WITH a real default, so an
+  # empty value must render NOTHING (an empty repository rolls to "<registry>/:<tag>").
+  {{- if (.Values.config.memex_portal.SelfUpdate__PortalRepository | default "" | trim) }}
+  SelfUpdate__PortalRepository: "{{ .Values.config.memex_portal.SelfUpdate__PortalRepository | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.SelfUpdate__MigrationRepository | default "" | trim) }}
+  SelfUpdate__MigrationRepository: "{{ .Values.config.memex_portal.SelfUpdate__MigrationRepository | trim }}"
+  {{- end }}
   # 🚨 The portal that VALIDATES this installation's instance key at that registry — the registry
   # record's own `validationUrl` (MeshWeaver#4093). The fleet registry cr.meshweaver.cloud decides a
   # pull by forwarding the caller's key to memex.meshweaver.cloud, so the image registry and the
@@ -726,10 +739,11 @@ data:
   # ---- The PR steward's heal/observe half (MeshWeaver.Plugins Hosting/PrBabysitter) -------------
   # ONE instance of a fleet: Enabled arms the babysitter (opt-in), AgentHandoff arms the agent that
   # VALIDATES each proposed heal before it runs, Heal=false keeps it observe-only, Interval is the
-  # fallback cadence. Rendered whenever the key is PRESENT (hasKey), so an explicit `false` reaches
+  # fallback cadence. Rendered whenever the key is PRESENT (hasKey) and not null, so an explicit `false` reaches
   # the container and switches it off; absent on every other portal (config-key-coverage).
-  {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Enabled" }}
-  Hosting__PrBabysitter__Enabled: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}"
+  {{- $prBabysitterOn := .Values.config.memex_portal.Hosting__PrBabysitter__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__PrBabysitter__Enabled") (not (kindIs "invalid" $prBabysitterOn)) (ne ($prBabysitterOn | toString | trim) "") }}
+  Hosting__PrBabysitter__Enabled: "{{ $prBabysitterOn | toString | trim }}"
   {{- end }}
   {{- if hasKey .Values.config.memex_portal "Hosting__PrBabysitter__AgentHandoff" }}
   Hosting__PrBabysitter__AgentHandoff: "{{ .Values.config.memex_portal.Hosting__PrBabysitter__AgentHandoff }}"
@@ -761,8 +775,43 @@ data:
   # Enabled=false stops an instance's pool entirely (no re-drive sweep, no new bug thread; bugs wait
   # QUEUED with that reason — Plugins #2635). It moves to the control instance: memex sets false,
   # control true. Rendered whenever PRESENT (hasKey), so an explicit `false` reaches the container.
-  {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
-  Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
+  {{- $bugFixOn := .Values.config.memex_portal.Hosting__BugFix__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled") (not (kindIs "invalid" $bugFixOn)) (ne ($bugFixOn | toString | trim) "") }}
+  Hosting__BugFix__Enabled: "{{ $bugFixOn | toString | trim }}"
+  {{- end }}
+  # ---- The control plane's model-spending automation: one opt-OUT switch each -----------------
+  # (MeshWeaver.Plugins Hosting/AutomationSwitches.md). Every one defaults ON in code, so the only
+  # value worth carrying is an explicit "false" — and until these lines existed a record's
+  # extraPortalConfig setting one reached NO container (this ConfigMap names every key; there is no
+  # catch-all): measured 2026-10-07 on memex, Hosting__Coordinator__Enabled=false and
+  # Hosting__StuckDetector__Enabled=false sat on the record while both kept running model rounds.
+  #   Coordinator__Enabled                    the fleet coordinator's rounds (Hosting/Coordinator/_Thread/fleet-coordinator)
+  #   StuckDetector__Enabled                  the stuck detector's pass, its coordinator wakes and heavy escalations
+  #   Triage__PullRequestReview__Enabled      every internal pr-reviewer round (review-* threads, sweep kicks, post-merge)
+  #   Triage__Agent__Enabled                  the triage agent's rounds (triage-* threads)
+  #   TriageAssignments__Enabled              the PR-event fan-out to assigned threads (pr-<repo>-<n> threads) and its pass
+  # Rendered whenever the key is PRESENT, not null and non-empty; tested with `ne … ""` over toString,
+  # never `default ""`, so an unquoted YAML `false` is not dropped as empty — and a YAML null is
+  # rejected by kind first, because toString turns it into "<nil>", which is not empty.
+  {{- $coordinatorOn := .Values.config.memex_portal.Hosting__Coordinator__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Coordinator__Enabled") (not (kindIs "invalid" $coordinatorOn)) (ne ($coordinatorOn | toString | trim) "") }}
+  Hosting__Coordinator__Enabled: "{{ $coordinatorOn | toString | trim }}"
+  {{- end }}
+  {{- $stuckDetectorOn := .Values.config.memex_portal.Hosting__StuckDetector__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__StuckDetector__Enabled") (not (kindIs "invalid" $stuckDetectorOn)) (ne ($stuckDetectorOn | toString | trim) "") }}
+  Hosting__StuckDetector__Enabled: "{{ $stuckDetectorOn | toString | trim }}"
+  {{- end }}
+  {{- $prReviewOn := .Values.config.memex_portal.Hosting__Triage__PullRequestReview__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestReview__Enabled") (not (kindIs "invalid" $prReviewOn)) (ne ($prReviewOn | toString | trim) "") }}
+  Hosting__Triage__PullRequestReview__Enabled: "{{ $prReviewOn | toString | trim }}"
+  {{- end }}
+  {{- $triageAgentOn := .Values.config.memex_portal.Hosting__Triage__Agent__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__Agent__Enabled") (not (kindIs "invalid" $triageAgentOn)) (ne ($triageAgentOn | toString | trim) "") }}
+  Hosting__Triage__Agent__Enabled: "{{ $triageAgentOn | toString | trim }}"
+  {{- end }}
+  {{- $triageAssignmentsOn := .Values.config.memex_portal.Hosting__TriageAssignments__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__TriageAssignments__Enabled") (not (kindIs "invalid" $triageAssignmentsOn)) (ne ($triageAssignmentsOn | toString | trim) "") }}
+  Hosting__TriageAssignments__Enabled: "{{ $triageAssignmentsOn | toString | trim }}"
   {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
@@ -776,8 +825,9 @@ data:
   # 🚨 Tested with `ne … ""` over toString, never `default ""`: an UNQUOTED `false` in an overlay is a
   # YAML boolean, `default` treats false as empty, and the one value this key exists to carry would
   # be dropped.
-  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__IssueSweep__Enabled") (ne (.Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim) "") }}
-  Hosting__Triage__IssueSweep__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled | toString | trim }}"
+  {{- $issueSweepOn := .Values.config.memex_portal.Hosting__Triage__IssueSweep__Enabled }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__IssueSweep__Enabled") (not (kindIs "invalid" $issueSweepOn)) (ne ($issueSweepOn | toString | trim) "") }}
+  Hosting__Triage__IssueSweep__Enabled: "{{ $issueSweepOn | toString | trim }}"
   {{- end }}
   # Where the triage scope comes from (MeshWeaver.Plugins Hosting TriageIntake.ScopeSourceKey). Absent
   # = the CRM. "Configuration" DECLARES an instance with no CRM by design (the operations instance,

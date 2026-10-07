@@ -80,6 +80,31 @@ Tests: `InFlightLastGoodBuildBindsTest` (predicates, virtual-time wait), `Foreig
 
 Tracking issue: [#4071 — Rolling-update compile storm: per-identity build records and no runtime compile for CI-built plugins](https://github.com/Systemorph/MeshWeaver/issues/4071).
 
+## The messaging side: a new generation never speaks a dialect the old one cannot read (#6189)
+
+The overlap is also an Orleans cluster with two generations in it, so the rule above has a wire twin: **a silo never sends a request the previous generation's silos cannot decode.**
+
+**The incident.** The memex roll of 2026-10-06 (06:42–07:42Z) was the first to cross Orleans 10.3.1 → 10.4.0 (the grouped NuGet bump of 2026-10-05). For one hour, 11 receiving pods of the two older ReplicaSets logged 121 errors from `Orleans.Runtime.Messaging.Connection`:
+
+```
+Exception reading message Request [... sys.client/hosted-...]->[... sys.svc.manifest/...]
+System.TypeLoadException: Unable to resolve type alias "("inv",[Orleans.Runtime.GrainReference],[Orleans.Runtime.IClusterManifestSystemTarget,Orleans.Core],"3D9B7FE6")".
+```
+
+**The mechanism, measured by diffing the generated invokables of both versions.** Orleans 10.4.0 adds exactly three RPCs to `IClusterManifestSystemTarget`, and no other wire surface changes: `GetSiloManifestHash` (`3D9B7FE6`), `GetSiloManifestByHash` (`93B8854F`) and `GetClusterManifestHashSummary` (`25AE6E4A`). They back *content-addressed manifest retrieval* (`ClusterManifestOptions.EnableContentAddressedRetrieval`), which 10.4.0 turns **on by default with no capability negotiation**. A 10.4 silo refreshing the cluster manifest asked each 10.3 silo for its manifest hash; the 10.3 silo has no invokable for the alias, so `Connection.HandleReceiveMessageFailure` logged the error and answered with an error response; the 10.4 caller then fell back to the legacy `ISiloManifestSystemTarget.GetSiloManifest` (`1857A4C8`), which both versions decode. So the manifest — the list of grain types each silo hosts, which every placement decision reads — still arrived. What broke was the protocol rule, once per manifest refresh per old silo, for the whole drain, on every instance the bump reaches.
+
+**The fix.** `ConfigureMeshWeaverServer` sets `EnableContentAddressedRetrieval = false`, so a silo retrieves each manifest through the path every 10.x silo understands. The hash path only saves refetching identical manifests, which a cluster of a handful of silos never notices. Re-enable it only when no instance can contain a silo older than the version that introduced the RPCs — the general rule for any new RPC: ship the receiver first, enable the sender in a later release.
+
+**The test.** `CrossGenerationManifestExchangeTest` runs a two-silo `TestCluster` whose secondary silo is the *previous generation* modelled the way it differs on the wire: the three aliases and their invokables are stripped from its serializer, and it retrieves manifests directly. The primary is built by the production `ConfigureMeshWeaverServer`.
+
+| case | switch | asserts |
+|---|---|---|
+| clean | production config | both silos learn each other's hosted types; zero rejections on the previous generation |
+| Orleans default (negative control for the fix) | `EnableContentAddressedRetrieval = true` on the current silo | the incident's exact `Unable to resolve type alias` rejection, while the manifest still arrives through the fallback |
+| no common protocol (negative control for the assertion) | the legacy `1857A4C8` stripped too | the current silo never learns the previous one's hosted types |
+
+Removing the production line makes the clean case fail with one rejection; restoring it makes it pass.
+
 ## Operator notes
 
 - A type that compiles every 15–30 s with alternating `-s…-` tags in its `Release/` artifacts is a **generation overlap**, not a source problem. Read `kubectl get rs` and the pods' `framework identity` log line before touching the type.

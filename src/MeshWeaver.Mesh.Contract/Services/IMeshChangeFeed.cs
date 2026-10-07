@@ -42,6 +42,17 @@ public interface IMeshInvalidationFeed
     /// Subscribes a process-local invalidation handler, optionally filtered by change kind.
     /// </summary>
     IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null);
+
+    /// <summary>
+    /// Declared holes in this feed: the storage backend's cross-process channel lost delivery and
+    /// resumed, so commits made by OTHER processes in between never reached this one (see
+    /// <see cref="ChangeFeedGap"/>). A cache retracted only by <see cref="Subscribe"/> cannot know
+    /// which of its entries went stale, so on each gap it drops what it derived and lets the next
+    /// read re-ask the store.
+    ///
+    /// <para>Default: never emits — a feed with no cross-process source cannot have a gap.</para>
+    /// </summary>
+    IObservable<ChangeFeedGap> Gaps => System.Reactive.Linq.Observable.Never<ChangeFeedGap>();
 }
 
 /// <summary>
