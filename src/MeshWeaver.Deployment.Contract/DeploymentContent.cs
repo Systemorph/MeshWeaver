@@ -375,7 +375,7 @@ public record DeploymentContent
     [Description("The instance's own database release (in-cluster, CloudNativePG)")]
     public InClusterDatabaseSpec? InClusterDatabase { get; init; }
 
-    /// <summary>The migration image repository. Blank → the portal repository with <c>memex-portal-ai</c> replaced by <c>memex-migration</c> (the fleet's pairing).</summary>
+    /// <summary>The migration image repository; its last segment must be <c>memex-migration</c> (the only name the operator rolls — <c>DeploymentPortalConfig.EffectiveMigrationRepository</c> refuses another). Blank → <c>memex-migration</c> beside the portal repository (the fleet's pairing).</summary>
     [Description("Migration image repository — blank derives it from the portal's")]
     public string? MigrationImageRepository { get; init; }
 
