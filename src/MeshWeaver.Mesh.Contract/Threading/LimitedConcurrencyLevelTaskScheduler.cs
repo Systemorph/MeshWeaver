@@ -66,6 +66,11 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     // instead of parking. Protected by lock(_tasks).
     private bool _completed;
 
+    // Set by Complete(); invoked exactly once, OUTSIDE the lock, by whichever thread takes the live
+    // drain-loop count to zero after completion (or by Complete() itself when none is alive).
+    // Protected by lock(_tasks).
+    private Action? _onDrained;
+
     // Non-null: each drain loop runs on a thread started here, under this name, never a ThreadPool
     // worker. Null: the drain loops borrow ThreadPool workers (kept for the contrast tests only).
     private readonly string? _dedicatedThreadName;
@@ -132,15 +137,32 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     /// disposal path, including from a lane thread itself. Idempotent. A task queued AFTER this still
     /// runs (a drain loop is started for it, and exits when the queue drains), so nothing queued is
     /// ever stranded.
+    ///
+    /// <para><paramref name="onDrained"/> is the non-blocking completion signal: it runs once, on the
+    /// last lane thread right after it has taken the live count to zero (or inline here when no lane
+    /// thread is alive), so a caller can publish "no lane thread remains" without joining anything.
+    /// That thread is then only returning from its loop.</para>
     /// </summary>
-    public void Complete()
+    public void Complete(Action? onDrained = null)
     {
+        Action? fire;
         lock (_tasks)
         {
             _completed = true;
             _parked = 0;
+            _onDrained ??= onDrained;
             Monitor.PulseAll(_tasks);
+            fire = TakeDrainedLocked();
         }
+        fire?.Invoke();
+    }
+
+    private Action? TakeDrainedLocked()
+    {
+        if (!_completed || _delegatesQueuedOrRunning != 0 || _onDrained is not { } action)
+            return null;
+        _onDrained = null;
+        return action;
     }
 
     /// <summary>
@@ -195,7 +217,9 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     {
         while (true)
         {
-            Task item;
+            Task? item = null;
+            Action? drained = null;
+            var exit = false;
             lock (_tasks)
             {
                 while (_tasks.Count == 0)
@@ -203,17 +227,28 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
                     if (_completed)
                     {
                         --_delegatesQueuedOrRunning;
-                        return;
+                        drained = TakeDrainedLocked();
+                        exit = true;
+                        break;
                     }
                     ++_parked;
                     Monitor.Wait(_tasks);
                 }
 
-                item = _tasks.First!.Value;
-                _tasks.RemoveFirst();
+                if (!exit)
+                {
+                    item = _tasks.First!.Value;
+                    _tasks.RemoveFirst();
+                }
             }
 
-            TryExecuteTask(item);
+            if (exit)
+            {
+                drained?.Invoke();
+                return;
+            }
+
+            TryExecuteTask(item!);
         }
     }
 
@@ -226,16 +261,27 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
         while (true)
         {
             Task item;
+            Action? drained;
             lock (_tasks)
             {
                 if (_tasks.Count == 0)
                 {
                     --_delegatesQueuedOrRunning;
-                    break;
+                    drained = TakeDrainedLocked();
+                    item = null!;
                 }
+                else
+                {
+                    drained = null;
+                    item = _tasks.First!.Value;
+                    _tasks.RemoveFirst();
+                }
+            }
 
-                item = _tasks.First!.Value;
-                _tasks.RemoveFirst();
+            if (item is null)
+            {
+                drained?.Invoke();
+                return;
             }
 
             TryExecuteTask(item);

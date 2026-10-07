@@ -82,7 +82,7 @@ public class BlockingLaneThreadsAreKeptTest
     [Fact(Timeout = 60_000)]
     public async Task Disposal_ReleasesTheKeptThreads()
     {
-        var pool = new IoPool(2);
+        using var pool = new IoPool(2);
         var ct = TestContext.Current.CancellationToken;
         var threads = new ConcurrentDictionary<int, Thread>();
         var release = new Probe();

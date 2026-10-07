@@ -1718,10 +1718,15 @@ public sealed class IoPool : IIoPool, IDisposable
         _cancelCompleted.Dispose();
         // The lane threads were kept parked between bursts; no blocking leaf can run any more
         // (_gateUsers, _inFlight and _blockingInFlight are all zero), so let them exit. Non-blocking:
-        // it pulses and returns, and is safe even when this runs ON a lane thread.
-        _blockingScheduler.Complete();
-        _disposedSubject.OnNext(0);
-        _disposedSubject.OnCompleted();
+        // it pulses and returns, and is safe even when this runs ON a lane thread. Disposed is
+        // published from the scheduler's drained callback — after the LAST lane thread has left its
+        // loop's accounting (or at once when none is alive) — so the signal keeps meaning "no pool
+        // thread remains" without anything here waiting for it.
+        _blockingScheduler.Complete(() =>
+        {
+            _disposedSubject.OnNext(0);
+            _disposedSubject.OnCompleted();
+        });
     }
 
     /// <summary>

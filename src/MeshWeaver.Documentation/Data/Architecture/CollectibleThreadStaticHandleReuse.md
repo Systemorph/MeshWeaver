@@ -242,16 +242,16 @@ The trigger is a **thread exit**. This process has two steady sources of them:
 
 - **ThreadPool workers retire** after about 20 s idle. Those are the threads hub turns and
   deserialisation run on, so they touch NodeType-typed `ArrayPool<T>` constantly.
-- **Until #4654, every blocking lane of the pools `IoPoolRegistry` registers started a fresh thread per burst (it now keeps them — see Remedies), and
-  that thread exits when its queue drains.** This covers the bounded production pools: the
-  `mw-cpu-lane` compile lane and the `mw-io-lane` IO lanes. It does not cover `IoPool.Unbounded`,
-  whose `InvokeBlocking` runs on the ThreadPool through `Task.Run` and is covered by the ThreadPool
-  bullet above. `LimitedConcurrencyLevelTaskScheduler.NotifyThreadPoolOfPendingWork` runs
-  `new Thread(_ => DrainQueue())`, and `DrainQueue` returns when `_tasks` is empty. The CPU lane has
-  worked this way since the dedicated-thread compile lane, and every IO lane since #5678 (blocking
-  leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
-  the control and public instances on 2026-09-26, core `4c8530d7dd`, contain it). Each
-  blocking-leaf burst is therefore one thread exit, and one more chance to free a handle belonging to
+- **Until #4654, every blocking lane of the pools `IoPoolRegistry` registers started a fresh thread per
+  burst, and that thread exited when its queue drained** (it now keeps them parked — see Remedies). This
+  covered the bounded production pools: the `mw-cpu-lane` compile lane and the `mw-io-lane` IO lanes. It
+  never covered `IoPool.Unbounded`, whose `InvokeBlocking` runs on the ThreadPool through `Task.Run` and
+  is covered by the ThreadPool bullet above. `LimitedConcurrencyLevelTaskScheduler` then ran
+  `new Thread(_ => DrainQueue())` from `NotifyThreadPoolOfPendingWork`, and `DrainQueue` returned when
+  `_tasks` was empty. The CPU lane worked this way since the dedicated-thread compile lane, and every IO
+  lane since #5678 (blocking leaves off the ThreadPool, merged 2026-09-25 06:43Z; the images running on
+  the control and public instances on 2026-09-26, core `4c8530d7dd`, contained it). Each
+  blocking-leaf burst was therefore one thread exit, and one more chance to free a handle belonging to
   a context unloaded since that thread first ran.
 
 Combined with the recompile cadence measured on the control instance (one new compiled assembly every ~8 s for
