@@ -344,9 +344,10 @@ The lane **promotes**; it compiles nothing. In order:
 1. **Refuses** a version that is not `v<major>.<minor>.<patch>`, a lightweight tag, a commit not on
    `main`, a commit whose `PlatformVersion` differs from the tag, and a version with no committed
    notes page at `Doc/ReleaseNotes/<x_y_z>`.
-2. **Resolves the continuous set** for the commit from the tags on `memex-portal-ai:<short-sha>`
-   (`3.0.0-ci.<n>` and the `<core>-p<plugins>` pair tag), and refuses a commit `main-cd` never
-   promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
+2. **Resolves the continuous set** for the commit from the `3.0.0-ci.<n>` tag on the manifest
+   that carries its identity (`<short-sha>`, or the build's `staging-<short-sha>-<run id>` when a
+   rebuild moved the bare tag; the retired `<core>-p<plugins>` pair tag is no longer required), and
+   refuses a commit `main-cd` never promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
 3. **Asserts the set is complete** (`check-image-set.sh`) **and sealed** for both the platform
    content and the Plugins modules (`check-release-availability.sh`).
 4. **Records the release marker** `_releases/3.0.0` on every artifact store, holding the same

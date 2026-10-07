@@ -91,7 +91,13 @@ public static class ModuleRestartKinds
     /// opens the unattended Restart.</summary>
     public const string HandedOver = "HandedOver";
 
-    /// <summary>No restart could be requested — the detail names why (no updater, no control inbox,
-    /// a failed hand-over).</summary>
+    /// <summary>No restart CAN be requested on this install — a decided answer; the detail names why
+    /// (no updater that can roll, no control inbox configured). A module reload records it as a
+    /// final <c>Failed</c>: retrying would get the same answer.</summary>
     public const string Unavailable = "Unavailable";
+
+    /// <summary>The restart path exists but THIS attempt failed — the hand-over to the control lane
+    /// was refused or unreachable, or the restart call threw. Transient: a module reload records it
+    /// as <c>Faulted</c> and the reconcile pass retries it (MeshWeaver#6172).</summary>
+    public const string Faulted = "Faulted";
 }

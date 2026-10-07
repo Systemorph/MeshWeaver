@@ -47,7 +47,13 @@ A partial set is worse than no set: the self-updater sees a new `memex-portal-ai
 the portal onto it, while the migration image or the bake certification for that commit does not
 exist. That is how a portal increment the bake gate never certified reached production.
 
-### The set is keyed on a PAIR of commits, not on core's alone
+### The set was keyed on a PAIR of commits — retired
+
+> **Retired.** main-cd no longer mints the pair tag and `check-image-set.sh` no longer takes a
+> plugins sha. A host change reaches the image through MeshWeaver.Plugins' relevance-classified
+> `rebuild: true` dispatch, and `arm` arms from the build's staging tag. See
+> [Platform and Module Deploy → The pair tag, retired](../PlatformAndModuleDeploy).
+> The section below is kept as the record of why the tag existed.
 
 🚨 **The portal HOSTS live in `MeshWeaver.Plugins`**, so core's HEAD does not, by itself, say what is
 in a portal image. A merge in that repo which edits a file shipping *in* the image — an
@@ -121,7 +127,7 @@ plus the release event, in whichever later run finds the set's MeshWeaver.Plugin
 
 | Phase | Job | What it writes | If it fails here |
 |---|---|---|---|
-| **A** | `promote` | identity tags (`<version>`, `<sha>`, the pair tag `<core7>-p<plugins7>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
+| **A** | `promote` | identity tags (`<version>`, `<sha>`) on every repo **except** `memex-portal-ai:<version>` | no consumer-visible release; the residue is inert tags nothing resolves |
 | **B** | `promote` | CI pointers — `main` everywhere, `latest` on `mw-plugin-test`, the GHCR mirror | still nothing an INSTALL selects; CI resolves the set from here on |
 | **C** | `arm` | **`memex-portal-ai:<version>`** — one manifest PUT | a single PUT either happened or did not; there is no half-armed image |
 | **D** | `arm` | the line pointers `<major>-latest` / `<major.minor>-latest` / `<patch>-latest` | the set is armed but the pointers lag — the arming is INCOMPLETE and is resumed (below) |
@@ -604,7 +610,6 @@ But the rule underneath is unchanged and applies to every "did it deploy?" quest
 ```bash
 # 1. Does the image exist, for the commit you care about?
 .github/scripts/check-image-set.sh <short-sha>      # the exact assertion CD itself makes
-.github/scripts/check-image-set.sh <short-sha> <plugins-short>   # ...including the pair tag (#2622)
 
 # 2. What is actually in the registry, newest first?
 az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 5 -o tsv

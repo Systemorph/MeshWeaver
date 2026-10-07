@@ -28,9 +28,12 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// frontier scope, a joined change feed — is RELEVANT, so the worst case is the re-query that
 /// already happens today, never a missed change.</para>
 ///
-/// <para>🚨 Only for the RAW surface (<c>IMeshQueryCore</c>). A row-level-security filtered query's
-/// result also depends on grants: an <c>AccessAssignment</c> written under the scope can make
-/// OTHER rows visible, so its type says nothing about whether the filtered result moved.</para>
+/// <para>🚨 Only for a read that is filtered by nothing: the RAW surface (<c>IMeshQueryCore</c>), and a
+/// SECURED read answered as System in a mesh whose every Read validator admits System unconditionally
+/// (<see cref="ISystemReadTransparentNodeValidator"/>), which is the raw read by construction. Any
+/// other row-level-security filtered query's result also depends on grants: an
+/// <c>AccessAssignment</c> written under the scope can make OTHER rows visible, so its type says
+/// nothing about whether the filtered result moved.</para>
 /// </summary>
 public static class NodeTypeChangeRelevance
 {

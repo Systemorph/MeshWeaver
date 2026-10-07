@@ -176,13 +176,25 @@ jobs:
           VERSION: ${{ steps.rel.outputs.version }}
         run: |
           set -euo pipefail
-          tags=$(az acr manifest list-metadata --registry meshweaver --name memex-portal-ai \
-                   --query "[?tags && contains(tags, '${SHORT}')].tags[]" -o tsv)
+          # The manifest that carries this commit's identity: its bare `<short>` tag, or — when a
+          # rebuild of the same core commit moved that tag on — the build's own staging tag
+          # `staging-<short>-<run id>`, which `arm` writes the version tag FROM.
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai -o json --only-show-errors \
+            > "$RUNNER_TEMP/portal-manifests.json"
+          tags=$(jq -r --arg s "$SHORT" '
+                   [ .[] | select(.tags != null)
+                     | select(any(.tags[]; . == $s or test("^staging-" + $s + "-[0-9]+$")))
+                     | select(any(.tags[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+[-.]ci\\.[0-9]+$"))) ]
+                   | .[].tags[]' "$RUNNER_TEMP/portal-manifests.json")
+          if [ -z "$tags" ]; then
+            tags=$(jq -r --arg s "$SHORT" '.[] | select(.tags != null) | select(any(.tags[]; . == $s)) | .tags[]' \
+                     "$RUNNER_TEMP/portal-manifests.json")
+          fi
           if [ -z "$tags" ]; then
             echo "::error::memex-portal-ai carries no image tagged $SHORT — main-cd has not promoted this commit. Wait for its run (or \`gh workflow run main-cd.yml --ref main\` when the commit is main's HEAD), confirm \`Plugins: bake + seal\` succeeded, then push the tag again."
             exit 1
           fi
-          CI_VERSION=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+[-.]ci\.[0-9]+$' <<<"$tags" | head -1 || true)
+          CI_VERSION=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+[-.]ci\.[0-9]+$' <<<"$tags" | sort -V | tail -1 || true)
           if [ -z "$CI_VERSION" ]; then
             echo "::error::memex-portal-ai:$SHORT carries no continuous version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this commit. Nothing sealed can be promoted from it."
             exit 1
@@ -191,16 +203,12 @@ jobs:
             "$VERSION-ci."*) ;;
             *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a $VERSION-ci.<n> build. Either it was built under a different PlatformVersion than the tag claims, or it predates the two-shape scheme (a retired '<line>-<label>.ci.<n>' set — see Doc/Architecture/ReleaseProcess §1), which cannot be promoted under a clean tag. Tag a commit built on the $VERSION line."; exit 1 ;;
           esac
+          # The `<core>-p<plugins>` pair tag is RETIRED (policy `platform-module-deploy-separate`): a
+          # set promoted after the retirement carries none, and the host commit lives in the run's
+          # promotion record instead. A legacy pair tag is still READ for the log line, never required.
           PAIR=$(grep -E "^${SHORT}-p[0-9a-f]{7}$" <<<"$tags" | head -1 || true)
-          if [ -z "$PAIR" ]; then
-            echo "::error::memex-portal-ai:$SHORT carries no pair tag (<core>-p<plugins>), so the image cannot be shown to carry a known plugin host (#2622)."
-            exit 1
-          fi
-          {
-            echo "ci_version=$CI_VERSION"
-            echo "plugins_short=${PAIR#*-p}"
-          } >> "$GITHUB_OUTPUT"
-          echo "continuous set: $CI_VERSION (core $SHORT, plugins ${PAIR#*-p})"
+          echo "ci_version=$CI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "continuous set: $CI_VERSION (core $SHORT${PAIR:+, legacy pair tag $PAIR})"
 
       # 🚨 `--pointers` (#3670): a release PROMOTES an already-promoted continuous set, so phase C is
       # long past and the whole pointer set must be there — `main` on all three repositories, the
@@ -212,7 +220,6 @@ jobs:
         run: >
           .github/scripts/check-image-set.sh
           "${{ steps.rel.outputs.short }}"
-          "${{ steps.set.outputs.plugins_short }}"
           --pointers "${{ steps.set.outputs.ci_version }}"
 
       - name: "The set is sealed — platform content and the Plugins modules"

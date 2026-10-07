@@ -47,6 +47,16 @@ public abstract class MeshNodeProviderAttribute : Attribute
     public virtual IEnumerable<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations => [];
 
     /// <summary>
+    /// The module's VIEW registrations (control → view mappings) — the form a view pack contributes
+    /// that a live swap can replace (policy <c>module-live-update-default</c>): a module held in its own
+    /// load context has them re-read by the layout client from its CURRENT generation
+    /// (<see cref="MeshWeaver.Layout.Client.IViewContributionSource"/>), where an <c>AddViews</c> inside
+    /// <see cref="HubConfigurations"/> is folded into the mesh hub's configuration once, for the life of
+    /// the process. Empty by default.
+    /// </summary>
+    public virtual IEnumerable<Func<MeshWeaver.Layout.Client.LayoutClientConfiguration, MeshWeaver.Layout.Client.LayoutClientConfiguration>> Views => [];
+
+    /// <summary>
     /// Creates a mesh node from a hub configuration using a string prefix.
     /// </summary>
     protected MeshNode CreateFromHubConfiguration(string prefix, string name,

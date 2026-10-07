@@ -1729,10 +1729,20 @@ class PromotionIdentity(NamedTuple):
     core_sha: str
     plugins_sha: str
     version: str
+    staging: str = ""
 
     @property
     def pair_tag(self) -> str:
+        """LEGACY — the retired `<core7>-p<plugins7>` tag (policy `platform-module-deploy-separate`).
+        main-cd no longer mints it; sets promoted before the retirement carry it, so it is still READ."""
         return f"{self.core_sha[:7]}-p{self.plugins_sha[:7]}"
+
+    @property
+    def portal_identity_tags(self) -> list[str]:
+        """The tags that name THIS build of the portal, never the moving bare core tag: the build's
+        own staging tag `staging-<core7>-<run id>` (unique per run, the arming source since the pair
+        tag's retirement), then the legacy pair tag for a set promoted before it."""
+        return ([self.staging] if self.staging else []) + [self.pair_tag]
 
 
 def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionIdentity | None:
@@ -1770,6 +1780,7 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
         record = json.loads(raw)
         core, plugins = record["core_sha"], record["plugins_sha"]
         version = record["v_portal"]
+        staging = str(record.get("staging") or "")
         if (record["run_number"] != run_number or not SHA.fullmatch(core)
                 or not SHA.fullmatch(plugins) or not SET_NAME.fullmatch(version)
                 or int(SET_NAME.fullmatch(version).group(2)) != run_number
@@ -1777,14 +1788,18 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
                 or record["short"] != core[:7] or record["plugins_short"] != plugins[:7]
                 or record["key"] != f"pair-{core[:7]}-p{plugins[:7]}"):
             raise ValueError("source pair or release version is inconsistent")
-        return PromotionIdentity(core, plugins, version)
+        # Only after `core` is proven 40-hex, and escaped anyway: a corrupt record must stay a
+        # clean ResolutionError (skip this run), never an `re.error` that fails the whole resolve.
+        if staging and not re.fullmatch(rf"staging-{re.escape(core[:7])}-[0-9]+", staging):
+            raise ValueError(f"staging tag {staging!r} does not name core {core[:7]}")
+        return PromotionIdentity(core, plugins, version, staging)
     except (ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
         raise ResolutionError(f"run #{run_number} promotion-record is invalid: {error}") from error
 
 
 def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | None,
                    short_sha: str, run_number: int, migration: str | None = None,
-                   pair_tag: str | None = None, armed: bool = False) -> tuple[dict[str, str], str] | str:
+                   portal_tags: list[str] | None = None, armed: bool = False) -> tuple[dict[str, str], str] | str:
     """Required digests of one promoted set, or the reason they could not be had. The version tag is
     tried in both historical shapes, then the exact identity tags promote writes in phase A.
 
@@ -1800,9 +1815,10 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
         images.append((migration, "migration-image-digest"))
     for image, key in images:
         found = None
-        # A promotion receipt makes the pair exact. The portal's bare core tag is moving across
-        # Plugins-only builds, so it cannot substitute if the recorded pair is absent.
-        identity_tags = [pair_tag] if image == portal and pair_tag else [short_sha]
+        # A promotion receipt makes the build exact: its staging tag (or, for a set promoted before
+        # the pair tag's retirement, its pair tag). The portal's bare core tag moves across rebuilds
+        # of the same core commit, so it cannot substitute if the recorded identity is absent.
+        identity_tags = list(portal_tags) if image == portal and portal_tags else [short_sha]
         if armed and image == portal:
             identity_tags = []
         for tag in tags + identity_tags:
@@ -1814,7 +1830,7 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
             if armed and image == portal:
                 return (f"{image} carries no version tag for this set — NOT ARMED (main-cd `arm` writes "
                         "it once MeshWeaver.Plugins' dependent suites passed); the fleet cannot roll to it")
-            identity = pair_tag if image == portal and pair_tag else short_sha
+            identity = " / ".join(portal_tags) if image == portal and portal_tags else short_sha
             return (f"{image} carries neither a version tag nor the identity tag `{identity}` "
                     "for this set — purged by retention (MeshWeaver#3438) or never promoted")
         out[key] = found
@@ -2122,7 +2138,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     if freeze_kind:
                         raise ResolutionError(f"the freeze names {label}: {error}") from error
                     continue
-                pair_tag = None
+                portal_tags = None
                 if identity is not None:
                     if (version is not None and identity.version != f"{version}-ci.{number}") \
                             or (verify_source and identity.core_sha != sha):
@@ -2135,14 +2151,14 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     sha = identity.core_sha
                     version = SET_NAME.fullmatch(identity.version).group(1)
                     set_name = identity.version
-                    pair_tag = identity.pair_tag
+                    portal_tags = identity.portal_identity_tags
                     label = f"main-cd #{number} (promoted core {sha[:9]}, Plugins {identity.plugins_sha[:9]})"
                     if freeze_kind == "sha" and sha != freeze_value:
                         # The run head matched the freeze, but gate built an older core commit.
                         # A freeze can never silently resolve to a different source.
                         continue
                 images = resolve_images(resolve, tester, portal, version, sha[:7], number,
-                                        migration, pair_tag, armed=armed)
+                                        migration, portal_tags, armed=armed)
                 if isinstance(images, str):
                     skipped.append(f"{label} = {set_name}: sealed, but {images}")
                     log(f"  skip {skipped[-1]}")
@@ -2543,7 +2559,7 @@ def self_test() -> int:
     record = {"run_number": 8207, "core_sha": actual_core, "plugins_sha": actual_plugins,
               "short": actual_core[:7], "plugins_short": actual_plugins[:7],
               "v_portal": "3.0.0-ci.8207", "v_plugin": "3.0.0-ci.8207",
-              "v_migration": "3.0.0-ci.8207",
+              "v_migration": "3.0.0-ci.8207", "staging": f"staging-{actual_core[:7]}-777",
               "key": f"pair-{actual_core[:7]}-p{actual_plugins[:7]}"}
     archive_buffer = io.BytesIO()
     with zipfile.ZipFile(archive_buffer, "w") as zipped:
@@ -2565,11 +2581,32 @@ def self_test() -> int:
          lambda: choose(pair_fetch, _registry(paired), tester, portal, log=logs.append),
          lambda c: c.sha == actual_core and c.digests["portal-image-digest"] == D2
          and c.set_name == "3.0.0-ci.8207")
+    # After the pair tag's retirement (policy `platform-module-deploy-separate`) a set carries NO pair
+    # tag — the recorded STAGING tag names the build, and the moving bare tag is still never used.
+    staged = dict(paired)
+    staged.pop(("memex-portal-ai", f"{actual_core[:7]}-p{actual_plugins[:7]}"))
+    staged[("memex-portal-ai", f"staging-{actual_core[:7]}-777")] = D2
+    case("unarmed set with NO pair tag resolves the recorded staging tag, not the moving bare tag", True,
+         lambda: choose(pair_fetch, _registry(staged), tester, portal, log=logs.append),
+         lambda c: c.sha == actual_core and c.digests["portal-image-digest"] == D2
+         and c.set_name == "3.0.0-ci.8207")
     missing_pair = dict(paired)
     missing_pair.pop(("memex-portal-ai", f"{actual_core[:7]}-p{actual_plugins[:7]}"))
-    case("recorded pair absent refuses the moving bare core tag", True,
+    case("recorded staging AND pair absent refuses the moving bare core tag (negative control)", True,
          lambda: choose(pair_fetch, _registry(missing_pair), tester, portal, log=logs.append),
          lambda c: c.sha == B and any("#8207" in line and "purged" in line for line in logs))
+    # A CORRUPT record (a core that is not 40-hex, with regex metacharacters in it, and a staging
+    # tag set) is a clean ResolutionError for that run — never an `re.error` that kills the resolve.
+    corrupt_buffer = io.BytesIO()
+    with zipfile.ZipFile(corrupt_buffer, "w") as zipped:
+        zipped.writestr("promotion-record.json", json.dumps({**record, "core_sha": "((([" + "e" * 36}))
+    def corrupt_fetch(path: str) -> dict | bytes:
+        if path.endswith("/artifacts/42/zip"):
+            return corrupt_buffer.getvalue()
+        return pair_fetch(path)
+    case("a corrupt record with regex metacharacters in its core is a clean ResolutionError", False,
+         lambda: promotion_identity(corrupt_fetch, 9207, 8207),
+         lambda message: "promotion-record is invalid" in message)
     case("SHA freeze never substitutes the run head for its promoted source", False,
          lambda: choose(pair_fetch, _registry(paired), tester, portal, freeze=A, log=logs.append),
          lambda message: "freeze" in message and "matched no" in message)

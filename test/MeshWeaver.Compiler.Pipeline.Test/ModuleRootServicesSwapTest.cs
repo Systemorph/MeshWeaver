@@ -88,7 +88,9 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             "the module's root services must be served from a scope of its own — the conversion under test");
         HeldGeneration(Module).RootServiceBlockers.Should().BeEmpty();
         consumer.Ask().Should().Be("hello v1 (options v1)");
-        journal.Entries.Should().Equal(["start v1"], "the host started the module's hosted service once, through its forwarder");
+        var keyed = Mesh.ServiceProvider.GetRequiredKeyedService<ILiveGreeter>("keyed-greeter");
+        keyed.Greet().Should().Be("hello v1 (options v1)");
+        journal.Entries.Should().Equal(["start v1"], "the host started the module's hosted service once, through the single ModuleHostedServicesHost");
         var weakN = WeakContextOf(Module);
 
         var outcome = await Updater.Swap(Write("g2", ModuleSource(2)), "test: root services").Timeout(Budget).Await(ct);
@@ -96,12 +98,30 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
         consumer.Ask().Should().Be("hello v2 (options v2)",
             "a platform singleton that CACHED the module's service must follow the swap — the root holds a forwarding proxy");
+        keyed.Greet().Should().Be("hello v2 (options v2)",
+            "a KEYED root service is forwarded under the module's own key and follows the swap too");
+        OwnKeyedGreeting().Should().Be("own v2",
+            "a KEYED registration of a type the module DECLARES is answered by the registration source, which "
+            + "must read the CURRENT generation's scope on every resolve — never one cached at boot");
         journal.Entries.Should().Equal(["start v1", "stop v1", "start v2"],
             "the old generation's hosted service is stopped and the new one's started, in that order");
 
         var drained = await CollectibleUnloadDrain.WaitUntilCollectedAsync(Mesh.ServiceProvider.GetRequiredService<CollectibleContextUnloads>());
         drained.Collected.Should().BeTrue($"no root registration may pin generation N ({drained})");
         weakN.IsAlive.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The keyed stand-in path of <see cref="ModuleOwnedRootSource"/>: a KEYED registration of a type the
+    /// module itself DECLARES is never forwarded into the root (route ModuleOwned), so the root answers it
+    /// only through the registration source, which must find the declaring generation for a type whose
+    /// ONLY registration is keyed. Asked by its key on the root, it resolves from the module's container.
+    /// </summary>
+    [Fact]
+    public void AKeyedServiceOfATypeTheModuleDeclares_ResolvesOnTheRootByItsKey()
+    {
+        OwnKeyedGreeting().Should().Be("own v1",
+            "the root holds no descriptor for a module-declared keyed type; the source must answer it by key");
     }
 
     /// <summary>
@@ -136,10 +156,43 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             .And.Contain("class-typed root service");
     }
 
+    /// <summary>
+    /// Resolves the module-declared <c>IOwnGreeter</c> by its key on the root, through the HELD
+    /// generation's type, and asks it — in its own frame so no reference to that generation's type
+    /// or instance outlives the call.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private string? OwnKeyedGreeting()
+    {
+        var type = HeldGeneration(Module).Assembly.GetType("MeshWeaver.Test.LiveServices.IOwnGreeter")
+                   ?? throw new Xunit.Sdk.XunitException("IOwnGreeter is not in the held module");
+        var greeter = Mesh.ServiceProvider.GetRequiredKeyedService(type, "own-keyed");
+        return (string?)type.GetMethod("Greet")!.Invoke(greeter, null);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private WeakReference WeakContextOf(string module) => new(HeldGeneration(module).Context);
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false) => $$"""
+    /// <summary>
+    /// A new generation that ADDS a background service still swaps live: the root holds no
+    /// per-registration forwarder for hosted services, so the shape is unchanged — the shape of the
+    /// real MeshWeaver.AI update behind the 2026-10-05 incident, which added exactly one.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateThatAddsAHostedService_SwapsLive_AndStartsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var journal = Mesh.ServiceProvider.GetRequiredService<HostedServiceJournal>();
+        journal.Entries.Should().Equal(["start v1"]);
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, extraHosted: true)), "test: added hosted service")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        journal.Entries.Should().Equal(["start v1", "stop v1", "start v2", "start extra v2"]);
+    }
+
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
@@ -154,7 +207,14 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken ct) { journal.Write("start v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
             public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken ct) { journal.Write("stop v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
         }
+        public interface IOwnGreeter { string Greet(); }
+        public sealed class OwnGreeter : IOwnGreeter { public string Greet() => "own v{{version}}"; }
         public class Journal2 : MeshWeaver.Graph.Test.HostedServiceJournalBase { }
+        public sealed class ExtraJournaling(MeshWeaver.Graph.Test.HostedServiceJournal journal) : Microsoft.Extensions.Hosting.IHostedService
+        {
+            public System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken ct) { journal.Write("start extra v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
+            public System.Threading.Tasks.Task StopAsync(System.Threading.CancellationToken ct) { journal.Write("stop extra v{{version}}"); return System.Threading.Tasks.Task.CompletedTask; }
+        }
         public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute
         {
             public override System.Collections.Generic.IEnumerable<MeshWeaver.Mesh.MeshNode> Nodes =>
@@ -163,9 +223,12 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                     {
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
                         services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();
+                        services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>("keyed-greeter");
+                        services.AddKeyedSingleton<IOwnGreeter, OwnGreeter>("own-keyed");
                         {{(extraGreeter ? "services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();" : "")}}
                         {{(classService ? "services.AddSingleton<MeshWeaver.Graph.Test.HostedServiceJournalBase, Journal2>();" : "")}}
                         services.AddHostedService<Journaling>();
+                        {{(extraHosted ? "services.AddHostedService<ExtraJournaling>();" : "")}}
                         return services;
                     })];
         }

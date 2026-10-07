@@ -3,6 +3,10 @@
   <PropertyGroup>
     <Description>The MeshWeaver NodeType compile toolchain: skeleton generation, source-query resolution, @@-include and #r shaping, Roslyn compilation/emit, and the framework build identity. Everything that shapes a dynamic NodeType compile's input lives here, so the full-MVID framework-identity rule pins THIS small assembly instead of MeshWeaver.Graph (issue #1707).</Description>
     <RootNamespace>MeshWeaver.Compiler</RootNamespace>
+    <!-- #5212 leg 6 (RoslynImageIntegrity): reads the metadata block the runtime EXECUTES from
+         through Assembly.TryGetRawMetadata's pointer — the only way to see the mapping rather than
+         the file. That one read-only copy is the sole unsafe code in this assembly. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +41,10 @@
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- #5212 / #890: the stand-in compiles of Memex.Portal.Shared.Test run the shared-emit canary
+         (EmitPipeline.ProbeSharedEmitState) when they fail, so a red names the process defect
+         instead of reading as a test defect. Diagnostic only. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
   <ItemGroup>

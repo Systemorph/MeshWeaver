@@ -55,11 +55,7 @@ public class LinkVerdictPerPlatformTest : IDisposable
         var compilation = CSharpCompilation.Create(
             assemblyName, [CSharpSyntaxTree.ParseText(source)], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using var buffer = new MemoryStream();
-        var result = compilation.Emit(buffer);
-        Assert.True(result.Success, string.Join(Environment.NewLine,
-            result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        return buffer.ToArray();
+        return StandInCompile.Emit(compilation);
     }
 
     /// <summary>A module using a type this platform really has — loadable on the old image.</summary>

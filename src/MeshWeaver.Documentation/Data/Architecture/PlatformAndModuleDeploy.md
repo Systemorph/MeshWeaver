@@ -29,7 +29,8 @@ core merge ─► gate ─► images ─► promote               module merge �
                                                     ▼             registry: newest version + floor
                               control-first: memex-control:<version>        │
                                                     │                       │  every instance, on its
-                          control self-update rolls to it (no approval)     │  own schedule:
+         control-first POSTs self-update-available                          │  own schedule:
+            → routed Roll for control (no approval)                         │
                                                     │                       │  newer version published
                                    control runs it, /health 200             │  AND floor ≤ running
                                                     │                       │  ⇒ lands + activates
@@ -84,11 +85,81 @@ On the module side, two things still guard what an instance runs:
   does this for every build that passed `control-acceptance` (empty database, a broken NodeType
   row, and N−1 on the migrated database), in the same run, and never moves the pointers backwards.
   It needs `control-promote` and does not need `arm`.
+- **`control-first` also delivers the build.** Its last step signs a `self-update-available`
+  announcement for the control record (`arm-promoted-set.py control-announcement`: the tag, the
+  image on `memex-control`, and the build's own line `3.0.0-ci*` as the admitting pattern) and POSTs
+  it to the control plane's inbox (`vars.CONTROL_WEBHOOK_URL`, signed with
+  `secrets.CONTROL_WEBHOOK_SECRET`). MeshWeaver.Plugins `SelfUpdateRouting` resolves the record and
+  opens `Ops/Actions/selfupdate-roll-control-<version>-…`. A re-run re-announces the same build,
+  which the router dedupes. A build older than control's newest tag is never announced, and the
+  router refuses a backwards roll anyway. Any answer other than a stored **and verified** delivery
+  turns the job red.
 - The control record (Systemorph/Memex `mesh/Deployments/control.json`) is Continuous on
-  `3.0.0-ci*` and carries **no `rollGate`**. Its self-update therefore hands the roll to the
-  control lane, and the routed `Roll` runs unattended: `ActionsExecutor.AdmittedUnattended`
-  requires a Continuous policy, a matching pattern and `rollGate == null`, and the Memex
-  classifier's `is_continuous_ci_roll` applies the same rule.
+  `3.0.0-ci*` and carries **no `rollGate`**, so that routed `Roll` runs unattended.
+  `ActionsExecutor.AdmittedUnattended` requires a routed roll written by the system, a Continuous
+  policy, a pattern that admits the tag on both the announcement and the record, and
+  `rollGate == null`. The Memex classifier's `is_continuous_ci_roll` applies the same rule. A
+  hand-filed `Roll` is a person's request: it carries no `admittedBy` and always waits for an
+  approval. **Unattended means the routed lane, never a hand-filed action.** A hand-filed `Roll`
+  that is parked at `AwaitingApproval` also counts as a rollout in flight, so the router opens
+  nothing for that deployment until the parked roll is approved or rejected.
+
+### Who rolls control (and why it is CD, not control's own self-updater)
+
+The first version of this design said "control's self-update rolls to it". It never did, and no
+build after ci.9939 reached control without a hand-filed, approved `Roll`. Because the fleet is
+armed only once control runs a build, nothing reached the fleet either. Three independent defects
+stood behind that, measured 2026-10-06 on control.systemorph.com and memex.systemorph.com:
+
+1. **The watcher looked at the wrong repository.** The in-pod self-updater lists
+   `SelfUpdate:PortalRepository`, which defaults to `memex-portal-ai`, and nothing renders it for
+   control. `memex-portal-ai:<version>` is written only by `arm`, and `arm` waits for control to
+   run the build. That is a circular wait: control could only ever follow the fleet.
+2. **It could not list tags at all.** Control's `Admin/UpdatePolicy` read
+   `check FAILED: CredentialUnavailableException` on every hourly check. A record-provisioned
+   instance gets the federated credential (`hosting-control` on the portal identity), but the
+   rendered values never carry `selfUpdate.azureClientId`, so the pod has no workload identity.
+3. **Its hand-over went to its own inbox.** Control lists `Hosting/PlatformBuilds` with a secret
+   and declares no `Hosting:ControlInbox:Url`, so its route is local. Its own mesh holds no
+   `Deployments` record (a `namespace:Deployments` search answers 0), so a hand-over there could
+   open nothing. `Ops/Actions` on the control plane held `selfupdate-roll-*` actions for memex,
+   build and memex-cloud, and none for control.
+
+Defects 1 and 2 are now fixed at the source (Systemorph/MeshWeaver.Plugins#2994). Defect 3 needs
+no fix of its own, because the roll no longer depends on control's watcher (below).
+
+- **The repository comes from the record.** `DeploymentPortalConfig.SelfUpdatePortalRepository`
+  and `SelfUpdateMigrationRepository` render `SelfUpdate__PortalRepository` and
+  `SelfUpdate__MigrationRepository`. The values are the repository path of the record's
+  `imageRepository` / `migrationImageRepository`; a blank `migrationImageRepository` is derived
+  the way the operator pairs it — `memex-migration` in the portal repository's directory
+  (`ghcr.io/systemorph/memex-portal-ai` → `systemorph/memex-migration`), never the bare default.
+  They render only where they differ from the image default (`memex-portal-ai` /
+  `memex-migration`), so every other record renders byte-identically.
+  An explicit `migrationImageRepository` is REFUSED (`EffectiveMigrationRepository` throws) when
+  it is not named `memex-migration` (the only name the operator rolls) or when it is on a
+  different registry host from `imageRepository`: the updater lists both repositories on ONE
+  registry, derived from the portal image.
+  The chart writes each key only when it is non-blank: both have real defaults, and an empty
+  repository would roll to `<registry>/:<tag>`.
+- **The workload identity is wired where the federation is.** `hosting-deploy` reads the client id
+  of `$AZ_PORTAL_IDENTITY` (`az identity show … --query clientId`), the identity `hosting-federate`
+  binds the namespace's `memex-portal-sa` to, and passes `--set selfUpdate.azureClientId=<id>`.
+  That one value renders the ServiceAccount annotation, the pod's `azure.workload.identity/use`
+  label and `AZURE_CLIENT_ID`. The record carries only the identity's NAME
+  (`operator.environment`), so the id is read at deploy time and is not stored in the record,
+  its vault half or the repository (the step does report it as `portal_identity=<id>`, which the
+  operator keeps with the action's output). An unreadable
+  identity, absent or refused, stops the deploy before helm. No identity named means none is set,
+  and the step says `portal_identity=none`.
+- **Recycle:** neither change reaches a running pod by itself. The keys arrive with the next
+  Provision or Reconcile of the instance (a helm upgrade with the new chart and render). The pods
+  that upgrade replaces then boot with the identity and the repository.
+
+The job that tags the control image is the one place that knows, deterministically, that control
+has a new build. So that job hands the build over. The record still decides everything that matters:
+which record is named, whether the instance takes rolls, the image repository, the line, the gate,
+and never-backwards.
 - **The minimum governance that remains:** a roll **along the record's own Continuous line** is
   unattended. That is the exception that already existed for every working instance. Any other
   roll of control still needs a mesh approval: a different tag, a rollback, or a `RollBack` or
@@ -100,12 +171,21 @@ On the module side, two things still guard what an instance runs:
 
 **Platform half.** The core workflow `.github/workflows/control-always-latest.yml` runs every 30
 minutes and calls `arm-promoted-set.py control-lag`. It finds the newest promoted set whose
-`Deploy control first` job succeeded, and when that job ran, then checks whether control's running
-commit contains that set. The results:
+`Deploy control first` job succeeded, and checks whether control's running commit contains that
+set. When it does not, it walks back through the earlier builds given to control until it reaches
+one control contains. The **first build control was given and did not take** starts the clock. The
+results:
 
-- **ok**: control contains the set, however long ago it was given.
-- **converging**: control does not contain it yet, and the build was given inside
+- **ok**: control contains the newest set, however long ago it was given.
+- **converging**: control does not contain it yet, and it has been behind for less than
   `platformLagBoundMinutes`. This is reported, not red.
+
+🚨 The clock used to start at the newest build. With a platform build every 30–60 minutes that
+clock was reset on almost every tick. On 2026-10-06 control had been on ci.9939 for 22 hours
+while the alarm read *"converging — 3.0.0-ci.10052 was given 29 min ago"*. A bound that every new
+build resets cannot catch the one state it exists for: control taking no build while builds keep
+arriving. When the walk reaches the end of the examined runs, or a containment it cannot read,
+the reading is a floor and says *"at least"*.
 - **lag**: control does not contain it past the bound, control's state cannot be read, or control
   runs it but `/health` is not 200 (the arming offers the fleet nothing from an unhealthy control,
   so that state blocks every roll). The
@@ -195,36 +275,73 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
    loud, not unguarded.
 3. **MeshWeaver.Plugins: the module half of the alarm** (`FleetTarget.ControlBreaches`, the
    carried `BehindSince` clock, and `FleetTargetIntake.AllBreaches`).
-4. **Removing the non-boot seeds from the image** (MeshWeaver.Plugins, held until Plugins #2893
-   merges). `Memex.Portal.Distributed` carries only the modules declared in
+4. **In flight — removing the non-boot seeds from the image** (MeshWeaver.Plugins#2970, a
+   draft). Until it merges, the published image still seeds all seven non-boot modules. Plugins
+   #2893 (the `reload_module`/`uninstall_package` tools and the `ModuleReload` intake) has merged.
+   Two decisions still hold the pull request: how a memex-local self-registry install, which has
+   no registry to land the seven from, gets them; and confirming that the registry instance
+   (memex.meshweaver.cloud) lands its own required modules from its catalog. That pull request
+   makes `Memex.Portal.Distributed` carry only the modules declared in
    `src/Memex.Portal.Distributed/image-boot-modules.txt`, each with its reason:
    - both images: `Hosting.Instance`, `Hosting.Cosmos` and `Hosting.Snowflake`;
    - control only: `Fleet.Control` and `SelfUpdate.Aks`.
 
-   `ImageBootModulesTest` holds the host's `<MeshModuleClosure>` rows equal to that declaration
-   for both images. It has a negative control for each of these mutations:
+   Its guard, `ImageBootModulesTest`, holds the host's `<MeshModuleClosure>` rows equal to that
+   declaration for both images, with a negative control for each of these mutations:
    - a registry module seeded back into the image;
    - a declared module with no row;
    - a control module leaking into the portal image;
    - a row under an unknown condition.
 
-   The seven modules that leave are now **store-delivered**: no baseline `Modules:Assemblies`
-   entry, and all seven are under `Modules:Required`. A baseline entry for bytes the image does
-   not carry would make `required_modules` read *"the image is supposed to ship it"* (Unhealthy)
-   and hold readiness on the registry. Without one, a module that has not landed is named as
+   The seven modules that leave become **store-delivered**: no baseline `Modules:Assemblies`
+   entry, and all seven under `Modules:Required`. A baseline entry for bytes the image does not
+   carry would make `required_modules` read *"the image is supposed to ship it"* (Unhealthy) and
+   hold readiness on the registry. Without one, a module that has not landed is named as
    Degraded, the shape Radzen, Analysis and GoogleMaps already have. The DEV portal
-   (`Memex.Portal.Monolith`) keeps its seeds. A memex-local self-registry install built from the
-   published host loses them and should consume a registry. Manual: MeshWeaver.Plugins
-   `Hosting/ImageSeededModules.md`.
-5. **Owed — the pair tag `<core7>-p<plugins7>`.** The portal HOST still lives in
-   MeshWeaver.Plugins, so the tag now names the host commit: platform provenance, which no
-   delivery decision joins on any more. The `gate` hosts-stale probe still rebuilds the image when
-   *any* Plugins commit moves. Narrowing that to host-relevant changes, then retiring the tag
-   (Memex `image-contains.py` and Plugins `portal-image-rebuild.yml` read it), is the next step.
-6. **Owed — Plugins' `promotion-candidate.yml` / `core-candidate.yml`.** They still run the
-   dependent suites against each promoted pair, and `arm-promoted-set.py pending` still answers
-   them, but no verdict they write decides anything. They report only, and they can be retired by
-   Plugins.
+   (`Memex.Portal.Monolith`) keeps its seeds. The manual, MeshWeaver.Plugins
+   `Hosting/ImageSeededModules.md`, gains the boot-only section in the same pull request.
+5. **Done — the pair tag `<core7>-p<plugins7>` is retired.** main-cd no longer mints it on
+   `memex-portal-ai` (`promote` phase A) or `memex-control` (`control-promote`). See
+   "The pair tag, retired" below.
+6. **Done — the promotion poller is retired.** MeshWeaver.Plugins deleted `promotion-candidate.yml`
+   (the 10-minute poll that measured every promoted pair), the green-pair nudge of core's CD and
+   the held-pair ledger (`core-release-attribution.py`, the `core-release-held` issue). Core then
+   deleted the `pending` command of `arm-promoted-set.py` that answered the poller, and the two
+   `core-candidate.yml` rows in `.github/lane-caller-grants.yml`. Plugins went first, because a
+   satellite asserts its roster row against core's `main`, and a `pending:` row excuses an absent
+   caller but not an unrecorded one. `core-candidate.yml` stays for the advisory measurements a core
+   pull request asks for (`dependent-suites` label or `Pairs-with:`) and for `paired-core.yml`.
+   None of them gates a merge or an arming.
+
+## The pair tag, retired
+
+`<core7>-p<plugins7>` named the MeshWeaver.Plugins commit a portal image's HOST was built from. After
+the separation it answered no delivery question, but three mechanisms still leaned on it. Each now
+reads something else:
+
+| What leaned on it | What it reads now |
+|---|---|
+| `gate`'s completeness probe: a set was "stale" when Plugins `main` had moved at all, so the portal was rebuilt on every Plugins merge (MeshWeaver#4688) | Core's sha only. A host change reaches the image through MeshWeaver.Plugins' `portal-image-rebuild.yml`, which classifies each push (`scripts/portal-image-relevance.py`) and dispatches main-cd with `rebuild: true` only when a changed path can enter the image |
+| `arm`'s source for `memex-portal-ai:<version>`: the one tag that names THIS build after a rebuild of the same core commit moves the bare `<core7>` tag | The build's staging tag `staging-<core7>-<run id>`, recorded as `staging` in the promotion record. It is unique per run, and `arm` refuses a staging tag that does not name the selected core |
+| Recovering the core commit of the newest ARMED manifest (`arm-promoted-set.py armed-base`), resolving an unarmed set (`resolve-platform.py`), and a tagged release (`release.yml`) | The bare `<core7>` tag or the staging tag on the same manifest. A legacy pair tag is still read, so sets promoted before the retirement resolve unchanged |
+
+The host commit is still recorded: the promotion record keeps `plugins_sha`, and the release event
+carries `pluginsSha`. Readers outside core (Memex `scripts/image-contains.py`) answer from the
+promotion record first and treat a pair tag as a legacy fallback.
+
+**Consumer sweep before the retirement** (repositories at `origin/main`, the live mesh read through
+the control instance):
+
+| Where | Readers of a pair tag |
+|---|---|
+| core `main-cd.yml` | 4 writers/readers: `promote` phase A, `control-promote`, `arm`'s source tag, `gate`'s probe (via `check-image-set.sh`) |
+| core scripts | `check-image-set.sh`, `arm-promoted-set.py` (`armed_commit`), `resolve-platform.py` (portal identity), `release.yml`, `lock-pinned-digests.py` (protects `<core7>-p*` as part of a commit's closure; kept for legacy manifests) |
+| MeshWeaver.Plugins | 0 code readers. `portal-image-rebuild.yml` and `portal-image-relevance.py` mention it in comments; `promotion-candidate.yml`, `core-candidate.yml` and `core-release-attribution.py` use the record's verdict KEY `pair-<core7>-p<plugins7>`, which is a record field, not a registry tag |
+| Memex | 1 code reader: `scripts/image-contains.py`. Comments and historical notes in `helm-release.yml`, two `values.*.public.yaml` files and `mesh/Deployments/memex.json` |
+| Education, Reinsurance, SocialMedia, Manufacturing, Crm | 0 |
+| live `Deployments/*` on the control instance (5 `Hosting/Deployment` records) | 0 pins; 1 prose mention in `Deployments/memex` |
+
+No Hosting/Deployment record pins an image tag of either shape, and none may.
 
 ## Tests and self-tests
 
@@ -258,13 +375,13 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
   for `c003e001` when `plugins-bake` sealed it inside core CD. After this change only
   MeshWeaver.Plugins' own `publish-bake` reseals it. If that lane does not publish for a new epoch,
   `published-modules` is red and the fleet is not armed, which is loud but is a stall.
-- That a fresh pod of a boot-only image lands every required module from the registry and
-  activates it. The rule is in the code: `required_modules` reports a store-delivered module as
+- That a fresh pod of a boot-only image (step 4) lands every required module from the registry
+  and activates it. The rule is in the code: `required_modules` reports a store-delivered module as
   Degraded, and `packages-auto-update` lands and activates it. Neither a fresh pod nor
   control-acceptance has been observed on a boot-only image.
-- That the in-mesh compile reference order holds for modules that now arrive only through the
-  landed sidecar. Before, the baseline list fixed their order (Collaboration, then AI, then Chat
-  and Mcp). Radzen, Analysis and GoogleMaps have always arrived through the sidecar.
+- That the in-mesh compile reference order holds once the seven arrive only through the landed
+  sidecar (step 4). While they are seeded, the baseline list fixes their order (Collaboration,
+  then AI, then Chat and Mcp). Radzen, Analysis and GoogleMaps have always arrived through the sidecar.
 - `platformLagBoundMinutes` (180) is a starting bound, not a measured one. No unattended control
   roll had been timed when it was set.
 

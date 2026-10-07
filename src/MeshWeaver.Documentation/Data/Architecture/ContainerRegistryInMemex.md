@@ -106,7 +106,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 >   source, which copies the index descriptor as-is (the operation `promote` has always used for
 >   GHCR), so a digest-pinned consumer resolves the **identical** object on either host. `promote`
 >   then writes every consumer-visible tag on cr in the same phase it writes it on ACR: the
->   identity tags (`<version>`, `<short sha>`, `<core>-p<plugins>`), the pointers (`main`,
+>   identity tags (`<version>`, `<short sha>`), the pointers (`main`,
 >   `latest`), the arming write `memex-portal-ai:<version>` (ACR first, cr immediately after,
 >   inside phase C — an installation consuming cr lists cr's tags, so that is its arming write),
 >   and the line pointers (`3-latest`, `3.0-latest`, `3.0.0-latest`).

@@ -33,9 +33,35 @@ public static class MeshModuleEndpointExtensions
             .CreateLogger(typeof(MeshModuleEndpointExtensions));
 
         var contributed = 0;
+        // 🚨 A module held in its own load context maps its endpoints through ONE dynamic data source
+        // that re-maps them from the current generation on a live swap (policy
+        // module-live-update-default) — never onto the app directly, where they would be fixed for the
+        // life of the process. Image-bound modules map as before.
+        //
+        // Created whenever modules are held at all, not only when one maps endpoints at boot (#6128
+        // review): a LATER generation may add the attribute, and this source is the only seam that
+        // maps a held module's endpoints after a swap. It maps zero endpoints until one contributes.
+        var held = app.Services.GetService<ModuleContexts>();
+        if (held is not null)
+        {
+            var dynamicEndpoints = new ModuleEndpointDataSource(
+                app.Services, held, ((IEndpointRouteBuilder)app).CreateApplicationBuilder, logger);
+            ((IEndpointRouteBuilder)app).DataSources.Add(dynamicEndpoints);
+            contributed += dynamicEndpoints.Count;
+            if (dynamicEndpoints.Count > 0)
+                logger.LogInformation(
+                    "Mapped {Count} endpoint(s) from modules held in their own load contexts, re-mapped on every live swap",
+                    dynamicEndpoints.Count);
+        }
         foreach (var module in app.Services.GetServices<InstalledModuleAssembly>())
         foreach (var attribute in module.Assembly.GetCustomAttributes<MeshEndpointProviderAttribute>())
         {
+            // Keyed on the module being HELD, never on this assembly being its current generation:
+            // the dynamic source maps every held module's current generation, so a held module is
+            // its alone. An identity check would fail if a live swap committed between the source's
+            // snapshot and this line, and map the old generation onto the app for good.
+            if (held?.Current(module.Assembly.GetName().Name ?? "") is not null)
+                continue;
             // Authenticated-by-default: the group policy applies to every route the module maps
             // unless the route itself declares AllowAnonymous — a module cannot accidentally
             // publish an open route. The marker metadata scopes the collision refusal to groups

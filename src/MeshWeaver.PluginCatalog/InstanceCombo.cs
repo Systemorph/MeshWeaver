@@ -222,6 +222,11 @@ public sealed record PackageCoordinate
     /// <summary>The package's display name, as the manifest recorded it.</summary>
     public string? Name { get; init; }
 
+    /// <summary>The compiled module the package carries — its DLL name without extension
+    /// (<see cref="PackageManifest.Module"/>), the identity the activation record and a module
+    /// reload key on. Null for a content-only package.</summary>
+    public string? CompiledModule { get; init; }
+
     /// <summary>The module's content version from its <c>manifest.lock</c> — a hash over the
     /// module's own files, so it is exact AND does not move when a sibling module changes.</summary>
     public string? ModuleVersion { get; init; }
