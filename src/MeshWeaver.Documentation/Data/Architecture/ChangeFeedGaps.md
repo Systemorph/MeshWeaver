@@ -96,6 +96,24 @@ notification was lost; the relay comes back.
 Mutating the fix away (the `ChangeFeedGaps` merge in the live-query pipeline) turns the first case
 red, so the case measures the gap signal and nothing else.
 
+`test/MeshWeaver.FaultInjection.Test/ChangeFeedGapConsumerTests.cs` pins the other four consumers on
+the same harness and the same two arms (gap declared, and `announceGap: false`):
+
+| Consumer | Stale state before the gap | Commit lost during the gap | Fixed arm converges on |
+|---|---|---|---|
+| Path resolution | silo 1 resolves `ns/Item` (cached) | silo 0 deletes it | a resolution that no longer routes to it |
+| Stream cache | an open storm-breaker window on the path (a grown 256 s history, so it cannot expire mid-case) | silo 0 creates the node | window closed, and a read answers the node |
+| Own-node mirror | the node's hub is live on one silo | the OTHER silo writes the node | the hub's mirror carries the write |
+| Rebind watcher | the node's hub bound type `Markdown` | the OTHER silo retypes it | the hub disposes (recycled) |
+
+For the two per-node cases the commit goes through the store of the silo that does **not** host the
+hub. A commit through the host's own store reaches the hub as a local notification that the relay
+never carries, and the control arm would converge without any gap.
+
+Each consumer was mutated in turn (its gap subscription removed: `PathResolutionService`,
+`MeshNodeStreamCache`, `MeshDataSource`, `NodeTypeRebindWatcher`). Each mutation turned exactly its
+own case red and left the other three green.
+
 ## See also
 
 - [Live Mirrors and the Change Feed](../LiveMirrorsAndTheChangeFeed)
