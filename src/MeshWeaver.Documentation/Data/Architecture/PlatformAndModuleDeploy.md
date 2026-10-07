@@ -136,6 +136,10 @@ no fix of its own, because the roll no longer depends on control's watcher (belo
   (`ghcr.io/systemorph/memex-portal-ai` → `systemorph/memex-migration`), never the bare default.
   They render only where they differ from the image default (`memex-portal-ai` /
   `memex-migration`), so every other record renders byte-identically.
+  An explicit `migrationImageRepository` is REFUSED (`EffectiveMigrationRepository` throws) when
+  it is not named `memex-migration` (the only name the operator rolls) or when it is on a
+  different registry host from `imageRepository`: the updater lists both repositories on ONE
+  registry, derived from the portal image.
   The chart writes each key only when it is non-blank: both have real defaults, and an empty
   repository would roll to `<registry>/:<tag>`.
 - **The workload identity is wired where the federation is.** `hosting-deploy` reads the client id

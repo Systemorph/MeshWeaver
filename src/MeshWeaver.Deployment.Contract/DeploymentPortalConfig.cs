@@ -199,7 +199,9 @@ public static class DeploymentPortalConfig
     /// <summary>
     /// The migration repository a record deploys: the explicit
     /// <see cref="DeploymentContent.MigrationImageRepository"/> when its last path segment is
-    /// <c>memex-migration</c>, else (blank) <see cref="PairedMigrationRepository"/>. An explicit
+    /// <c>memex-migration</c> AND it is on the portal repository's registry host, else (blank)
+    /// <see cref="PairedMigrationRepository"/>. An explicit repository on ANOTHER host also THROWS:
+    /// the self-updater has one registry, derived from the portal image. An explicit
     /// repository with ANY other name THROWS: the AKS operator rolls only a <c>memex-migration</c>
     /// repository (<c>hosting-deploy</c>'s <c>migration_image_for</c> ignores another name and
     /// <c>hosting-migrate</c> refuses it), so accepting one would tell the self-updater one
@@ -212,13 +214,26 @@ public static class DeploymentPortalConfig
             return PairedMigrationRepository(d.ImageRepository);
         var repository = d.MigrationImageRepository!.Trim();
         var name = repository[(repository.LastIndexOf('/') + 1)..];
-        return string.Equals(name, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal)
-            ? repository
-            : throw new InvalidOperationException(
+        if (!string.Equals(name, DefaultSelfUpdateMigrationRepository, StringComparison.Ordinal))
+            throw new InvalidOperationException(
                 $"migrationImageRepository '{repository}' does not name a {DefaultSelfUpdateMigrationRepository} repository. "
                 + "The operator rolls only <registry>/<path>/memex-migration (hosting-deploy migration_image_for, hosting-migrate), "
                 + "so the self-updater would list one repository while the release runs another. Leave it blank to pair it "
                 + "with the portal repository, or name a memex-migration repository.");
+        // The self-updater has ONE registry (SelfUpdate__Registry / selfUpdate.registry), derived from
+        // the PORTAL repository's host, and lists both repositories there. A migration repository on
+        // another host would be deployed from that host and polled on the portal's, so the next roll
+        // targets an image that does not exist. Hosts compare as RepositoryHost reads them: equal
+        // ignoring case, and a hostless reference matches only another hostless one.
+        var portalHost = RepositoryHost(d.ImageRepository);
+        var migrationHost = RepositoryHost(repository);
+        return string.Equals(portalHost, migrationHost, StringComparison.OrdinalIgnoreCase)
+            ? repository
+            : throw new InvalidOperationException(
+                $"migrationImageRepository '{repository}' is on registry '{migrationHost ?? "(none)"}' but imageRepository "
+                + $"'{d.ImageRepository?.Trim()}' is on '{portalHost ?? "(none)"}'. The self-updater lists both repositories on "
+                + "the ONE registry derived from the portal image, so it would poll a migration repository the instance never "
+                + "deployed. Put the migration repository on the portal's registry, or leave it blank to pair it.");
     }
 
     /// <summary>The self-updater's portal repository when the image names none (<c>SelfUpdateOptions.PortalRepository</c>).</summary>
@@ -886,11 +901,13 @@ public static class DeploymentPortalConfig
 }
 
 /// <summary>
-/// The two places the two renderers legitimately differ, stated as options so the difference is
+/// The places the two renderers legitimately differ, stated as options so the difference is
 /// declared rather than discovered: in Kubernetes the database is a server the record names and
 /// the portal is reached through its Service; under Aspire the database is an Aspire resource
 /// whose connection string Aspire injects (<c>ConnectionStrings__memex</c>) and the portal's URL
-/// is the endpoint Aspire allocates.
+/// is the endpoint Aspire allocates. The plugin-catalog boot wiring and the self-update registry
+/// (<see cref="SelfUpdateRegistryKey"/>) are emitted as keys only under Aspire, because Helm
+/// carries each through a second file of its own (the catalog config file, <c>selfUpdate.registry</c>).
 /// </summary>
 /// <param name="DatabaseKeys">Emit the <c>MEMEX_*</c> database keys (Helm: yes; Aspire: no — the Postgres resource supplies them).</param>
 /// <param name="McpBaseUrl">The MCP back-connection URL to emit, when the caller knows it as text.</param>

@@ -220,7 +220,9 @@ public class FluentBuilderTest
         // MEMEX_* database keys from the record (Aspire's Postgres resource injects its own) and
         // the in-cluster Mcp__BaseUrl (the adapter sets that key to the endpoint Aspire allocates,
         // so the derivation emits nothing for it — never a blank); Aspire emits the plugin-catalog
-        // boot wiring as env (Helm hands the same entries to the operator's catalog config file).
+        // boot wiring as env (Helm hands the same entries to the operator's catalog config file),
+        // and SelfUpdate__Registry when the image host is not the default (the chart renders it from
+        // selfUpdate.registry; the memex fixture is on the default host, so it renders neither).
         // Everything else is one derivation, key for key.
         var record = DeploymentRecordJson.ReadFile(Path.Combine(AppContext.BaseDirectory, "Fixtures", "memex.json"));
         var helm = DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm);
@@ -232,8 +234,8 @@ public class FluentBuilderTest
         Assert.False(aspire.ContainsKey("Mcp__BaseUrl"), "the Aspire view must not emit a blank Mcp__BaseUrl — the adapter owns that key");
         Assert.True(helmOnly.All(k => k.StartsWith("MEMEX_", StringComparison.Ordinal) || k == "Mcp__BaseUrl"),
             "keys Helm renders and Aspire does not, beyond the database keys and the in-cluster MCP URL: " + string.Join(", ", helmOnly));
-        Assert.True(aspireOnly.All(k => k.StartsWith("PluginCatalog__", StringComparison.Ordinal)),
-            "keys Aspire renders and Helm does not, beyond the catalog boot wiring: " + string.Join(", ", aspireOnly));
+        Assert.True(aspireOnly.All(k => k.StartsWith("PluginCatalog__", StringComparison.Ordinal) || k == "SelfUpdate__Registry"),
+            "keys Aspire renders and Helm does not, beyond the catalog boot wiring and the self-update registry: " + string.Join(", ", aspireOnly));
         Assert.True(helmOnly.Count > 0 && aspireOnly.Count > 0, "the memex record should exercise both documented differences");
 
         var shared = helm.Keys.Intersect(aspire.Keys).ToList();
@@ -275,6 +277,21 @@ public class FluentBuilderTest
         };
         Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.SelfUpdateMigrationRepository(unrollable));
         Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.MigrationImage(unrollable, "t"));
+        // A memex-migration repository on ANOTHER registry is refused too: the updater has ONE
+        // registry, derived from the portal image, so it would poll ghcr.io for ops/memex-migration
+        // while the release deployed it from cr.example. Hostless vs hosted is a different host.
+        foreach (var crossRegistry in new[]
+        {
+            new DeploymentContent { ImageRepository = "ghcr.io/acme/memex-control", MigrationImageRepository = "cr.example/ops/memex-migration" },
+            new DeploymentContent { ImageRepository = "memex-control", MigrationImageRepository = "meshweaver.azurecr.io/memex-migration" },
+        })
+        {
+            Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.SelfUpdateMigrationRepository(crossRegistry));
+            Assert.Throws<InvalidOperationException>(() => DeploymentPortalConfig.MigrationImage(crossRegistry, "t"));
+        }
+        // Host comparison ignores case (registry hosts are DNS names).
+        Assert.Equal("MeshWeaver.AzureCR.io/memex-migration", DeploymentPortalConfig.EffectiveMigrationRepository(
+            new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-control", MigrationImageRepository = "MeshWeaver.AzureCR.io/memex-migration" }));
         var fleet = new DeploymentContent { ImageRepository = "meshweaver.azurecr.io/memex-portal-ai" };
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
         {
