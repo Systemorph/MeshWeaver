@@ -189,6 +189,46 @@ if [ -n "$pg_host" ]; then
   )
 fi
 
+# ── the portal's Azure workload identity — the client id of the identity hosting-federate binds ──
+# 🚨 Federation is HALF of workload identity (Systemorph/MeshWeaver.Plugins#2994). hosting-federate
+# binds `system:serviceaccount:<ns>:memex-portal-sa` to $AZ_PORTAL_IDENTITY on every Provision, but
+# the chart turns that into a usable credential only when `selfUpdate.azureClientId` is set: it is
+# what renders the ServiceAccount's `azure.workload.identity/client-id` annotation, the pod's
+# `azure.workload.identity/use` label and AZURE_CLIENT_ID. Nothing rendered it on the record-driven
+# path — HelmValues has no client id to render, because the record carries the identity's NAME
+# (operator.environment AZ_PORTAL_IDENTITY), never its id — so every instance provisioned from a
+# record on an ACR imageRepository booted with no token exchange, and its self-updater failed EVERY
+# check with `CredentialUnavailableException … WorkloadIdentityCredential authentication
+# unavailable` (control.systemorph.com Admin/UpdatePolicy, measured 2026-10-06 and 2026-10-07).
+# memex and memex-cloud only worked because a pre-record values file had set the key; the vault
+# half now refuses structure (Memex#295), so their next Reconcile would have lost it as well.
+#
+# So the id is READ here, from the identity the same step federates to, with the identity the
+# operator already holds over it (Managed Identity Contributor, backups.bicep) — never written into
+# the record, the vault half or the repository. No identity named → no workload identity, said by
+# name: a local or non-Azure install legitimately has none, and an instance on a non-ACR registry
+# authenticates with its instance key instead.
+if [ -n "${AZ_PORTAL_IDENTITY:-}" ]; then
+  hosting::need_env AZ_RESOURCE_GROUP "the resource group holding the portal's managed identity (the one hosting-federate binds this namespace to)"
+  hosting::safe_name portal-identity "$AZ_PORTAL_IDENTITY"
+  hosting::safe_name resource-group "$AZ_RESOURCE_GROUP"
+  hosting::probe output az identity show -g "$AZ_RESOURCE_GROUP" -n "$AZ_PORTAL_IDENTITY" --query clientId -o tsv
+  case $? in
+    0) ;;
+    2) hosting::die "REFUSED, not absent: this operator's Azure identity may not read managed identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — so its client id is UNKNOWN and the pods would come up with no workload identity. It needs read on that identity (backups.bicep grants Managed Identity Contributor). Refused: ${HOSTING_PROBE_ERR}" ;;
+    *) hosting::die "could not read the client id of the portal identity ${AZ_PORTAL_IDENTITY} in ${AZ_RESOURCE_GROUP} — without it the pods get no workload identity and the self-updater cannot list the registry. az said: ${HOSTING_PROBE_ERR:-nothing}" ;;
+  esac
+  portal_client_id="${HOSTING_PROBE_OUT//[[:space:]]/}"
+  [[ "$portal_client_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+    || hosting::die "managed identity ${AZ_PORTAL_IDENTITY} answered a client id that is not a GUID ('${portal_client_id}') — refusing to interpolate it into the release"
+  sets+=( --set "selfUpdate.azureClientId=${portal_client_id}" )
+  hosting::log "identity  pods federate as ${AZ_PORTAL_IDENTITY} (client ${portal_client_id})"
+  hosting::say portal_identity "$portal_client_id"
+else
+  hosting::log "identity  AZ_PORTAL_IDENTITY is not set — the pods get NO Azure workload identity (selfUpdate.azureClientId stays empty); a self-updater listing an Azure Container Registry cannot authenticate. Name the identity in the record's operator.environment if this instance needs one."
+  hosting::say portal_identity none
+fi
+
 # ── the Key Vault values half, layered FIRST ────────────────────────────────────────────────────
 # 🚨 Read only when the record asked for it (--vault), and then REQUIRED: a record that declares
 # `vaultValuesKeys` is stating that the chart's own Secret carries keys nothing in the record
