@@ -28,12 +28,20 @@ For the subject job (`dotnet-test.yml` → `collect-results`):
      fails, because a guard whose subject moved and that answers green has checked nothing;
   2. a marker's `if:` carries no status function that drops the implicit `success()` (`always()`,
      `cancelled()`, `failure()`, `success() ||` …) — any of them lets it run after a red verdict;
-  3. no step AFTER the first marker can turn the job red: each carries `continue-on-error: true`.
-     A step that can still fail after the marker was written is a verdict the marker did not wait
-     for — which is exactly the #5988 shape;
-  4. every job in the collector's `needs:` has its result READ (`needs.<job>.result`) by a step
-     before the first marker, or by the marker's own `if:`. A gate job whose verdict no step
-     translates can be red while the job, and therefore the marker, is green.
+  3. no step AFTER the first marker can turn the job red: each carries `continue-on-error: true`
+     — later MARKERS included, because a later marker's push failing turns the collector red over
+     a tree the first marker already recorded green. A step that can still fail after the marker
+     was written is a verdict the marker did not wait for — the #5988 shape;
+  4. every job in the collector's `needs:` is ENFORCED for EACH marker, by one of:
+       a. a VERDICT step before the first marker — one that can fail the job (no
+          `continue-on-error`), whose `if:` fires on `needs.<job>.result != 'success'` and whose
+          `run:` exits non-zero. A step that merely MENTIONS the result
+          (`echo ${{ needs.x.result }}`) or cannot fail the job translates nothing;
+       b. or that marker's OWN `if:` requiring `needs.<job>.result == 'success'`. Another marker's
+          condition never counts: a later marker skipped on a red gate does not un-write the first.
+     A gate job whose verdict nothing enforces can be red while the job, and therefore the marker,
+     is green. Event/reuse exemptions on a verdict's `if:` (`github.event_name == …`,
+     `needs.precheck.outputs.skip != 'true'`) are legitimate and preserved.
 
 USAGE
 -----
@@ -76,6 +84,18 @@ def _truthy(value) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() == "true")
 
 
+VERDICT_EXIT = re.compile(r"\bexit\s+[1-9]")
+
+
+def _is_verdict_for(step: dict, need: str) -> bool:
+    """A step that turns a red `need` into a red job: it can fail the job, it RUNS when the need is not a
+    success, and its body exits non-zero. Merely mentioning `needs.<need>.result` translates nothing."""
+    if _truthy(step.get("continue-on-error")):
+        return False
+    fires_on_red = re.search(rf"needs\.{re.escape(need)}\.result\s*!=\s*'success'", str(step.get("if", "")))
+    return bool(fires_on_red) and bool(VERDICT_EXIT.search(str(step.get("run", ""))))
+
+
 def check_job(job: dict, label: str) -> list[str]:
     """Return one message per violation for a collector job."""
     errors: list[str] = []
@@ -100,9 +120,9 @@ def check_job(job: dict, label: str) -> list[str]:
             errors.append(f"{label}: marker '{names[i]}' has `{hit.group(0)}` in its if: — that drops the "
                           f"implicit success(), so the marker can be written after a red gate verdict (#5988).")
 
+    # EVERY step after the first marker — later markers included: a later marker's push failing turns
+    # the collector red after the first marker already published the tree as green.
     for i in range(first + 1, len(steps)):
-        if i in marker_idx:
-            continue
         if not _truthy(steps[i].get("continue-on-error")):
             errors.append(f"{label}: step '{names[i] or f'#{i}'}' comes AFTER marker '{names[first]}' and can "
                           f"still fail the job — move the marker below it, or the tree is recorded green "
@@ -111,14 +131,17 @@ def check_job(job: dict, label: str) -> list[str]:
     needs = job.get("needs") or []
     if isinstance(needs, str):
         needs = [needs]
-    read_before = "\n".join(
-        yaml.safe_dump(s, sort_keys=False) for s in steps[:first]
-    ) + "\n" + "\n".join(str(steps[i].get("if", "")) for i in marker_idx)
     for need in needs:
-        if not re.search(rf"needs\.{re.escape(need)}\.result\b", read_before):
-            errors.append(f"{label}: needed job '{need}' has no verdict step before the marker "
-                          f"(nothing reads needs.{need}.result) — it can be red while the tree is "
-                          f"recorded green (#5988).")
+        if any(_is_verdict_for(steps[i], need) for i in range(first)):
+            continue
+        required = re.compile(rf"needs\.{re.escape(need)}\.result\s*==\s*'success'")
+        for i in sorted(marker_idx):
+            if not required.search(str(steps[i].get("if", ""))):
+                errors.append(f"{label}: needed job '{need}' is not enforced for marker '{names[i]}' — no "
+                              f"failable verdict step before the first marker fires on "
+                              f"needs.{need}.result != 'success' and exits non-zero, and the marker's own "
+                              f"if: does not require needs.{need}.result == 'success'. It can be red while "
+                              f"the tree is recorded green (#5988).")
     return errors
 
 
@@ -146,7 +169,9 @@ def _fixture() -> dict:
              "if": "needs.build.result == 'success' && needs.test.result == 'success'",
              "continue-on-error": True, "run": "git push"},
             {"name": "Record executed-and-green main commit",
-             "if": "github.ref == 'refs/heads/main'", "continue-on-error": True, "run": "git push"},
+             "if": "github.ref == 'refs/heads/main' && needs.build.result == 'success'"
+                   " && needs.test.result == 'success'",
+             "continue-on-error": True, "run": "git push"},
             {"name": "State the bisect window", "if": "failure()", "continue-on-error": True, "run": "echo"},
         ],
     }
@@ -195,6 +220,32 @@ def self_test(root: Path) -> int:
     j = copy.deepcopy(good)
     del j["steps"][4]["continue-on-error"]
     expect("a failable diagnostic after the marker fires", j, True, "State the bisect window")
+    j = copy.deepcopy(good)
+    del j["steps"][3]["continue-on-error"]
+    expect("a failable LATER marker after the first marker fires", j, True,
+           "'Record executed-and-green main commit' comes AFTER marker")
+    j = copy.deepcopy(good)
+    del j["steps"][1]
+    j["steps"][2]["if"] += " && needs.doc-gate.result == 'success'"  # only the SECOND marker guards it
+    expect("a gate guarded only by a later marker's if: fires", j, True,
+           "'doc-gate' is not enforced for marker 'Record green tree'")
+    j = copy.deepcopy(good)
+    j["steps"][1] = {"name": "Fail if the doc gate failed", "run": 'echo "${{ needs.doc-gate.result }}"'}
+    expect("a verdict that only MENTIONS the result fires", j, True, "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    j["steps"][1]["continue-on-error"] = True
+    expect("a verdict that cannot fail the job fires", j, True, "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    j["steps"][1]["run"] = "echo doc gate red"
+    expect("a verdict whose body never exits non-zero fires", j, True, "'doc-gate' is not enforced")
+    j = copy.deepcopy(good)
+    del j["steps"][1]
+    for m in (1, 2):  # EVERY marker's own if: guards the gate — a legitimate alternative to a verdict
+        j["steps"][m]["if"] += " && needs.doc-gate.result == 'success'"
+    expect("a gate guarded by every marker's own if: is silent", j, False)
+    j = copy.deepcopy(good)
+    j["steps"][1]["if"] = "github.event_name == 'pull_request' && " + j["steps"][1]["if"]
+    expect("an event exemption on a verdict's if: stays silent", j, False)
 
     # NEGATIVE CONTROL ON THE REAL WORKFLOW: the tree must pass as it stands, and must FAIL once the
     # marker is moved back to where #5988 found it (in front of the last gate verdict).
