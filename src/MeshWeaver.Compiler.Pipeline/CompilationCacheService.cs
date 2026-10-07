@@ -453,6 +453,15 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     private readonly Lazy<string?> _buildMvidFromFile;
 
     /// <summary>
+    /// Whether this context can still serve its build: the assembly is loaded (the bytes are in
+    /// memory), or the file it would load from still exists. <see cref="BuildMvid"/> alone cannot
+    /// say so — it is read once from the header and outlives the file (#5555).
+    /// </summary>
+    public bool CanLoadItsBuild
+        => LoadedAssembly is not null
+           || (!string.IsNullOrEmpty(_dllPath) && File.Exists(_dllPath));
+
+    /// <summary>
     /// Pins the context for the duration of a SCAN of its loaded assembly (GetTypes + attribute
     /// reflection + Activator). While any pin is held, <see cref="Dispose"/> waits before
     /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/> so it cannot tear down the
@@ -1468,7 +1477,15 @@ internal class CompilationCacheService(
         foreach (var context in _loadContexts.Values)
         {
             if (!string.Equals(context.NodeName, nodeName, StringComparison.Ordinal)
-                || context.IsRetired)
+                || context.IsRetired
+                // 🚨 The same MVID is the same build only while the context can still LOAD it
+                // (#5555). Re-adopting identical bytes lands them under a new store name
+                // (v{version}-…), the retention sweep deletes the old one, and a context over the
+                // old name that never loaded its assembly keeps reporting the MVID it read from
+                // the header. Aliasing a read of the present copy to it made every load answer
+                // "No file at" the deleted path — permanently, since each recompile's identical
+                // bytes were aliased back to the same dead context.
+                || !context.CanLoadItsBuild)
                 continue;
             if (string.Equals(context.BuildMvid, mvid, StringComparison.OrdinalIgnoreCase))
                 return context;
