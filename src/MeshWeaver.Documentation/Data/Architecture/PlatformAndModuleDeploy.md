@@ -275,12 +275,31 @@ Every step below keeps the platform roll guarded, and the steps run in this orde
    loud, not unguarded.
 3. **MeshWeaver.Plugins: the module half of the alarm** (`FleetTarget.ControlBreaches`, the
    carried `BehindSince` clock, and `FleetTargetIntake.AllBreaches`).
-4. **Owed — removing the non-boot seeds from the image**, guarded by a boot-time declaration and a
-   shrink-only ratchet test ("the image contains no non-boot module"), neither of which is built yet. This follows the live module update
-   (`packages-auto-update`, core #6124 and #6121/#6123, Plugins #2893). An instance whose
-   `Modules:Required` names a module must be able to land it from the registry before readiness.
-   Until #6124's reload lands that, a seed is the bootstrap copy. The ratchet shrinks one entry
-   per module as each is proven to land on a fresh instance.
+4. **In flight — removing the non-boot seeds from the image** (MeshWeaver.Plugins#2970, a
+   draft). Until it merges, the published image still seeds all seven non-boot modules. Plugins
+   #2893 (the `reload_module`/`uninstall_package` tools and the `ModuleReload` intake) has merged.
+   Two decisions still hold the pull request: how a memex-local self-registry install, which has
+   no registry to land the seven from, gets them; and confirming that the registry instance
+   (memex.meshweaver.cloud) lands its own required modules from its catalog. That pull request
+   makes `Memex.Portal.Distributed` carry only the modules declared in
+   `src/Memex.Portal.Distributed/image-boot-modules.txt`, each with its reason:
+   - both images: `Hosting.Instance`, `Hosting.Cosmos` and `Hosting.Snowflake`;
+   - control only: `Fleet.Control` and `SelfUpdate.Aks`.
+
+   Its guard, `ImageBootModulesTest`, holds the host's `<MeshModuleClosure>` rows equal to that
+   declaration for both images, with a negative control for each of these mutations:
+   - a registry module seeded back into the image;
+   - a declared module with no row;
+   - a control module leaking into the portal image;
+   - a row under an unknown condition.
+
+   The seven modules that leave become **store-delivered**: no baseline `Modules:Assemblies`
+   entry, and all seven under `Modules:Required`. A baseline entry for bytes the image does not
+   carry would make `required_modules` read *"the image is supposed to ship it"* (Unhealthy) and
+   hold readiness on the registry. Without one, a module that has not landed is named as
+   Degraded, the shape Radzen, Analysis and GoogleMaps already have. The DEV portal
+   (`Memex.Portal.Monolith`) keeps its seeds. The manual, MeshWeaver.Plugins
+   `Hosting/ImageSeededModules.md`, gains the boot-only section in the same pull request.
 5. **Done — the pair tag `<core7>-p<plugins7>` is retired.** main-cd no longer mints it on
    `memex-portal-ai` (`promote` phase A) or `memex-control` (`control-promote`). See
    "The pair tag, retired" below.
@@ -356,6 +375,13 @@ No Hosting/Deployment record pins an image tag of either shape, and none may.
   for `c003e001` when `plugins-bake` sealed it inside core CD. After this change only
   MeshWeaver.Plugins' own `publish-bake` reseals it. If that lane does not publish for a new epoch,
   `published-modules` is red and the fleet is not armed, which is loud but is a stall.
+- That a fresh pod of a boot-only image (step 4) lands every required module from the registry
+  and activates it. The rule is in the code: `required_modules` reports a store-delivered module as
+  Degraded, and `packages-auto-update` lands and activates it. Neither a fresh pod nor
+  control-acceptance has been observed on a boot-only image.
+- That the in-mesh compile reference order holds once the seven arrive only through the landed
+  sidecar (step 4). While they are seeded, the baseline list fixes their order (Collaboration,
+  then AI, then Chat and Mcp). Radzen, Analysis and GoogleMaps have always arrived through the sidecar.
 - `platformLagBoundMinutes` (180) is a starting bound, not a measured one. No unattended control
   roll had been timed when it was set.
 
