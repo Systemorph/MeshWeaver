@@ -219,8 +219,8 @@ public sealed class PrebuiltBundleRetentionHostedService(
         IEnumerable<MeshNode> records, System.Text.Json.JsonSerializerOptions options, ILogger? logger) =>
         records
             .Select(n => NodeTypeAdoptionStamp.CompiledFrameworkVersionOf(n, options, logger))
-            .Where(v => !string.IsNullOrWhiteSpace(v))
-            .Select(v => v!)
+            // CompiledFrameworkVersionOf already answers null for a blank stamp.
+            .OfType<string>()
             .ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <inheritdoc />

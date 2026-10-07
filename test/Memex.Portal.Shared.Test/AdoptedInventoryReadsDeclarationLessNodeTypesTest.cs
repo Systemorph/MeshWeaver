@@ -102,6 +102,7 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
                 + "lets retention delete a bundle someone adopted")
             .WithMessage("NodeType adoption record Unreadable could not be read*String*");
     }
+
     /// <summary>
     /// The retention side, at the pass level: an unreadable adoption record makes the reference
     /// fold THROW (it is never dropped), that error ends the pass before the sweep is invoked — so
