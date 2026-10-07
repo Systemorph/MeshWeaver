@@ -17,6 +17,10 @@ public sealed class IoPool : IIoPool, IDisposable
 {
     private readonly SemaphoreSlim _gate;
     private readonly TaskFactory _blockingFactory;
+    // The scheduler behind _blockingFactory. Its lane threads are KEPT between bursts (#4654 — a
+    // thread exit is the trigger of a CoreCLR collectible-thread-static defect), so disposal must
+    // tell it to let them go: TryFinishDisposal calls Complete() once no blocking leaf can still run.
+    private readonly LimitedConcurrencyLevelTaskScheduler _blockingScheduler;
     private readonly int _maxConcurrency;
     // Pool-wide cancellation, linked into every leaf's token. Drain()/Dispose() cancel it so all
     // in-flight leaves unwind promptly — the join then knows they will release their gate permits.
@@ -210,11 +214,12 @@ public sealed class IoPool : IIoPool, IDisposable
         _drainGrace = drainGrace;
         _maxConcurrency = maxConcurrency;
         _gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        _blockingScheduler = new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, blockingThreadName);
         _blockingFactory = new TaskFactory(
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             TaskContinuationOptions.None,
-            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, blockingThreadName));
+            _blockingScheduler);
         // 🚨 STARTED HERE, NOT AT TEARDOWN — see StartCanceller. Every field the thread touches is
         // assigned above; it parks on _cancelRequestedLatch and does nothing until Drain()/Dispose()
         // raises it.
@@ -1609,6 +1614,15 @@ public sealed class IoPool : IIoPool, IDisposable
     internal bool CancellerIsAlive => _canceller.IsAlive;
 
     /// <summary>
+    /// The blocking lane's live threads, parked ones included (dedicated mode). Kept between bursts
+    /// and released by disposal (#4654); pinned by <c>BlockingLaneThreadsAreKeptTest</c>.
+    /// </summary>
+    internal int LiveBlockingThreads => _blockingScheduler.LiveDrainLoops;
+
+    /// <summary>The blocking lane's threads currently parked waiting for work.</summary>
+    internal int ParkedBlockingThreads => _blockingScheduler.ParkedLaneThreads;
+
+    /// <summary>
     /// Drains in-flight work (see <see cref="Drain"/>) then disposes the gate and cancellation
     /// source. Synchronous by design: when it returns, no pool thread is running, so the caller may
     /// safely unload the node ALCs whose types that work referenced. Called when the mesh is torn
@@ -1702,6 +1716,10 @@ public sealed class IoPool : IIoPool, IDisposable
         // the canceller is never still parked here.
         _cancelRequestedLatch.Dispose();
         _cancelCompleted.Dispose();
+        // The lane threads were kept parked between bursts; no blocking leaf can run any more
+        // (_gateUsers, _inFlight and _blockingInFlight are all zero), so let them exit. Non-blocking:
+        // it pulses and returns, and is safe even when this runs ON a lane thread.
+        _blockingScheduler.Complete();
         _disposedSubject.OnNext(0);
         _disposedSubject.OnCompleted();
     }

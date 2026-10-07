@@ -301,6 +301,16 @@ spec:
               value: "/data/dumps/coredump.%p.%t"
             - name: "DOTNET_CreateDumpDiagnostics"
               value: "1"
+            # 🧵 ThreadPool workers are KEPT instead of retiring after ~20 s idle (#4654). A thread
+            # EXIT is the trigger of a CoreCLR defect: a thread that touched a collectible
+            # [ThreadStatic] (ArrayPool<T>.Shared over a NodeType-compiled T) frees, on exit, a loader
+            # handle in an unrelated LIVE collectible context, and that context's static then dangles
+            # (Doc/Architecture/CollectibleThreadStaticHandleReuse). The runtime fix is upstream;
+            # until it ships, this removes the exits of the threads hub turns run on. Cost: the
+            # pool's peak thread count stays allocated (parked, no CPU). IoPool's blocking lanes keep
+            # their own threads for the same reason (LimitedConcurrencyLevelTaskScheduler).
+            - name: "DOTNET_ThreadPool_ThreadsToKeepAlive"
+              value: "-1"
           {{- with .Values.selfUpdate }}
           {{- if .azureClientId }}
             # Explicit AZURE_CLIENT_ID for the self-updater's ACR credential (the workload-identity
