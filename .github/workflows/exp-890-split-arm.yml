@@ -1,0 +1,82 @@
+# EXPERIMENT (#890 / #5212) — never merged. Runs Memex.Portal.Shared.Test part 1/2 exactly as the
+# CI shard does, on the build-output-3 artifact of run 37637952561 (which poisoned), in two arms:
+#   default   — no tiering knob; DOTNET_JitDisasm captures the native code of the guard's call path
+#   pgo-off   — DOTNET_TieredPGO=0
+# Each job reports POISONED (a PROCESS CANNOT EMIT / canary=BELOW-ROSLYN line) or CLEAN.
+name: exp-890-split-arm
+on:
+  push:
+    branches: [exp/890-tieredpgo-split-arm]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  arm:
+    name: "${{ matrix.arm }} #${{ matrix.i }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [default, pgo-off]
+        i: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: cac0664de9bf03f0b51e8c3ddd159b54e240308d
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: build-output-3
+          run-id: 37637952561
+          github-token: ${{ github.token }}
+          repository: Systemorph/MeshWeaver
+      - name: Extract
+        run: |
+          set -euo pipefail
+          tar -I 'zstd --long=27' -xf build-output-3.tar.zst
+          test -f test/Memex.Portal.Shared.Test/bin/Release/net10.0/Memex.Portal.Shared.Test.dll
+      - name: Run part 1/2
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: true
+          DOTNET_ENVIRONMENT: Development
+          Logging__LogLevel__Default: Warning
+          ARM: ${{ matrix.arm }}
+        run: |
+          set -uo pipefail
+          dir=test/Memex.Portal.Shared.Test/bin/Release/net10.0
+          mkdir -p "$dir/TestResults" "$dir/test-logs"
+          if [ "$ARM" = "pgo-off" ]; then
+            export DOTNET_TieredPGO=0
+          else
+            export DOTNET_JitStdOutFile="$PWD/$dir/test-logs/jit-890-listing.log"
+            export DOTNET_JitDisasm='AsNestedTypeDefinitionImpl *getConsolidatedTypeParameters* Microsoft.Cci.MetadataWriter:PopulateNestedClassTableRows Microsoft.Cci.FullMetadataWriter:CreateIndicesForNonTypeMembers Microsoft.CodeAnalysis.CSharp.Symbols.NamedTypeSymbol:*ContainingTypeDefinition Microsoft.CodeAnalysis.CSharp.Symbols.SourceMemberContainerTypeSymbol:get_ContainingType Microsoft.CodeAnalysis.CSharp.Symbol:get_ContainingType'
+          fi
+          dotnet --list-runtimes
+          mapfile -t allclasses < <( cd "$dir" && dotnet Memex.Portal.Shared.Test.dll -list classes 2>/dev/null | grep -E "^[A-Za-z_][A-Za-z0-9_.]*$" | sort )
+          classargs=()
+          for ((ci=0; ci<${#allclasses[@]}; ci+=2)); do classargs+=(-class "${allclasses[$ci]}"); done
+          echo "part 1: ${#classargs[@]} args of ${#allclasses[@]} classes"
+          ( cd "$dir" && timeout --signal=TERM --kill-after=30s 15m \
+              dotnet Memex.Portal.Shared.Test.dll -trx TestResults/part1.trx -showLiveOutput -longRunning 60 "${classargs[@]}" ) > run.log 2>&1
+          rc=$?
+          poisoned=$(grep -c "canary=BELOW-ROSLYN\|PROCESS CANNOT EMIT" run.log || true)
+          cpu=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)
+          avx512=$(grep -c avx512f /proc/cpuinfo || true)
+          verdict=CLEAN; [ "$poisoned" -gt 0 ] && verdict=POISONED
+          echo "RESULT arm=$ARM i=${{ matrix.i }} verdict=$verdict poisonLines=$poisoned rc=$rc cpu='$cpu' avx512cores=$avx512"
+          grep -E "\[FAIL\]" run.log | head -40 || true
+          echo "RESULT arm=$ARM i=${{ matrix.i }} verdict=$verdict poisonLines=$poisoned rc=$rc cpu='$cpu' avx512cores=$avx512" > result.txt
+          cp run.log "$dir/test-logs/run.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: exp-${{ matrix.arm }}-${{ matrix.i }}
+          path: |
+            result.txt
+            test/Memex.Portal.Shared.Test/bin/Release/net10.0/test-logs/
+            test/Memex.Portal.Shared.Test/bin/Release/net10.0/TestResults/
+          retention-days: 7
