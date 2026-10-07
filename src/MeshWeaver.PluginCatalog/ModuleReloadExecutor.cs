@@ -539,20 +539,24 @@ public sealed class ModuleReloadAgent
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
             .Where(level => level == MessageHubRunLevel.Started);
+        // 🚨 The feed announces a COMMIT, and its version travels with it: the read in Handle waits
+        // for this process's mirror to reach that version (see Handle).
         var heard = feed is null
-            ? Observable.Empty<string>()
+            ? Observable.Empty<(string Path, long Committed)>()
             : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
                 .Where(IsRequest)
-                .Select(change => change.Path);
+                .Select(change => (change.Path, Committed: change.Version));
         // 🚨 At boot, every OPEN request is asked about — a process that booted after a restart is
         // exactly the evidence the request is waiting for. A LISTING of the request namespace (the
-        // CQRS-sanctioned shape), never a point read.
-        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths);
+        // CQRS-sanctioned shape), never a point read. No commit is announced, so no version floor.
+        var open = started.SelectMany(_ => OpenRequests(meshHub)).SelectMany(paths => paths)
+            .Select(path => (Path: path, Committed: 0L));
         meshHub.RegisterForDisposal(started.SelectMany(_ => heard).Merge(open)
-            .Select(path => Handle(meshHub, path, logger)
+            .Select(heardOf => Handle(meshHub, heardOf.Path, logger, heardOf.Committed)
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogWarning(ex, "[ModuleReload] {Path}: this process could not report on the request", path);
+                    logger?.LogWarning(ex, "[ModuleReload] {Path}: this process could not report on the request (announced v{Committed})",
+                        heardOf.Path, heardOf.Committed);
                     return Observable.Empty<Unit>();
                 }))
             .Concat()
@@ -583,11 +587,28 @@ public sealed class ModuleReloadAgent
     /// <summary>
     /// Reads the request (which also activates its executor — the resume after a restart) and, when
     /// this process has something to report for the phase the request is in, swaps and/or reports.
+    /// <para>🚨 <b>The read is of the commit the feed ANNOUNCED, never of whatever the mirror holds.</b>
+    /// The invalidation feed fires post-commit, and this process's mirror of the node receives the
+    /// owner's echo on its own path — under load AFTER the feed. A bare <c>Take(1)</c> then read the
+    /// previous state (<c>Landing</c>) for the event that announced <c>Activating</c>, acted on
+    /// nothing, and — because the executor writes nothing more until a replica reports — no later
+    /// event ever came: the request sat in <c>Activating</c> forever with nothing logged
+    /// (<c>ModuleReloadFaultedBesideActivationTest</c>, CI shard 4, 2026-10-07). So the read waits for
+    /// a state at or past <paramref name="committed"/> — the same floor
+    /// <c>MeshNodeStreamExtensions.RebaseSource</c> applies to an announced version (#1174).</para>
     /// </summary>
-    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, ILogger? logger)
+    /// <param name="meshHub">The mesh hub of this process.</param>
+    /// <param name="path">The request's path.</param>
+    /// <param name="logger">The agent's logger.</param>
+    /// <param name="committed">The version the feed announced for this path, or <c>0</c> when the
+    /// path came from the boot listing (no commit announced — the mirror's state is the answer).</param>
+    internal IObservable<Unit> Handle(IMessageHub meshHub, string path, ILogger? logger, long committed = 0)
     {
         var access = meshHub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+        return access.RunAsSystem(() => meshHub.GetMeshNodeStream(path)
+                .Where(node => node is not null && node.Version >= committed)
+                .Take(1)
+                .Timeout(ActivationRecycle.ReadBudget))
             .SelectMany(node =>
             {
                 var request = node.ContentAs<ModuleReloadRequest>(meshHub.JsonSerializerOptions);
