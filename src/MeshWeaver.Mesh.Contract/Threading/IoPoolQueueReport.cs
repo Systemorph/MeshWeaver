@@ -26,12 +26,48 @@ public readonly record struct IoPoolReading(
     IoPoolWaitStats QueueWait)
 {
     /// <summary>
+    /// What the queue is waiting FOR — the cap or a thread (#5057). <c>null</c> when the reading was
+    /// not taken from a live pool, so "not read" can never print as "nothing free".
+    /// </summary>
+    public IoPoolAdmission? Admission { get; init; }
+
+    /// <summary>
     /// A one-line reading: the cap, what is running, what is queued, and the wait distribution.
     /// </summary>
     public override string ToString() =>
         $"{Name}(cap {MaxConcurrency.ToString(CultureInfo.InvariantCulture)}): "
         + $"{InFlight.ToString(CultureInfo.InvariantCulture)} in flight, "
         + $"{Waiting.ToString(CultureInfo.InvariantCulture)} waiting — {QueueWait}";
+}
+
+/// <summary>
+/// 🚨 The split of a pool's queue that says whether the CAP is the constraint (#5057).
+///
+/// <para>A depth alone cannot say it. Async leaves are counted as waiting from the moment they are
+/// accepted, which covers a ThreadPool hop before they reach the gate and a ThreadPool hop after a
+/// permit is handed to them; blocking leaves wait on the limited-concurrency scheduler and never
+/// touch the gate. So the cap is exhausted only when the async queue sits behind a gate with NO free
+/// permit. Waiting with permits free, or permits granted to waiters that have not resumed, is a wait
+/// for a THREAD — and the remedy for that is never a larger cap.</para>
+/// </summary>
+/// <param name="AsyncWaiting">Async leaves accepted and not yet running (before or at the gate).</param>
+/// <param name="BlockingWaiting">Blocking leaves queued on the limited-concurrency scheduler.</param>
+/// <param name="PermitsFree">The gate's free permits at the reading.</param>
+/// <param name="GrantedNotRunning">
+/// Permits that are neither free nor held by a running async leaf: handed to a waiter whose
+/// continuation has not yet been given a thread (or in the instant between grant and count).
+/// </param>
+public readonly record struct IoPoolAdmission(
+    int AsyncWaiting,
+    int BlockingWaiting,
+    int PermitsFree,
+    int GrantedNotRunning)
+{
+    /// <summary>
+    /// The async queue is behind permits that are FREE or GRANTED-but-not-running: what it waits
+    /// for is a thread to run or resume the leaf, not a slot under the cap.
+    /// </summary>
+    public bool AsyncQueueWaitsForAThread => AsyncWaiting > 0 && (PermitsFree > 0 || GrantedNotRunning > 0);
 }
 
 /// <summary>
@@ -162,6 +198,8 @@ public static class IoPoolQueueReport
                 .Append(" waiting, ")
                 .Append(reading.InFlight.ToString(CultureInfo.InvariantCulture))
                 .Append(" in flight");
+            if (reading.Admission is { } admission)
+                AppendAdmission(text, admission);
             if (before is not null)
                 text.Append(", ")
                     .Append(slow.ToString(CultureInfo.InvariantCulture))
@@ -176,8 +214,59 @@ public static class IoPoolQueueReport
                 .Append((implicated.Length - MaxNamed).ToString(CultureInfo.InvariantCulture))
                 .Append(" more pool(s))");
 
+        AppendThreadPool(text);
         return text.ToString();
     }
+
+    /// <summary>
+    /// The phrase that marks an async queue as waiting for a THREAD rather than for the cap. Named
+    /// so a test (and an operator's grep) matches the verdict, not a paraphrase of it.
+    /// </summary>
+    public const string WaitsForAThread = "the wait is for a THREAD, not for this cap";
+
+    /// <summary>The phrase that marks an async queue as genuinely behind an exhausted cap.</summary>
+    public const string WaitsForTheCap = "the cap is exhausted";
+
+    /// <summary>
+    /// Says, for one pool, whether its async queue is behind the cap or behind a thread (#5057). The
+    /// blocking half is named separately because it never passes through the gate the permits
+    /// describe.
+    /// </summary>
+    private static void AppendAdmission(StringBuilder text, IoPoolAdmission a)
+    {
+        if (a.AsyncWaiting > 0)
+        {
+            text.Append(" (")
+                .Append(a.AsyncWaiting.ToString(CultureInfo.InvariantCulture))
+                .Append(" async at ")
+                .Append(a.PermitsFree.ToString(CultureInfo.InvariantCulture))
+                .Append(" free permit(s)");
+            if (a.GrantedNotRunning > 0)
+                text.Append(", ")
+                    .Append(a.GrantedNotRunning.ToString(CultureInfo.InvariantCulture))
+                    .Append(" granted but not yet running");
+            text.Append(": ")
+                .Append(a.AsyncQueueWaitsForAThread ? WaitsForAThread : WaitsForTheCap)
+                .Append(')');
+        }
+        if (a.BlockingWaiting > 0)
+            text.Append(" (")
+                .Append(a.BlockingWaiting.ToString(CultureInfo.InvariantCulture))
+                .Append(" blocking leaf/leaves queued on the lane scheduler)");
+    }
+
+    /// <summary>
+    /// The ThreadPool's own depth beside the pools (#5057). The pools' async queues need a ThreadPool
+    /// thread at both ends of the gate, so "permits free and work waiting" is only half an
+    /// explanation without the pool that would have run it. Runtime counters, read lock-free;
+    /// nothing here can throw.
+    /// </summary>
+    private static void AppendThreadPool(StringBuilder text) =>
+        text.Append(". ThreadPool at that moment: ")
+            .Append(ThreadPool.ThreadCount.ToString(CultureInfo.InvariantCulture))
+            .Append(" thread(s), ")
+            .Append(ThreadPool.PendingWorkItemCount.ToString(CultureInfo.InvariantCulture))
+            .Append(" work item(s) queued");
 
     /// <summary>
     /// How many admissions on this pool waited a second or more SINCE the baseline — the two tail

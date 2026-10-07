@@ -716,6 +716,49 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <inheritdoc />
     public int CurrentlyWaiting => Volatile.Read(ref _waiting);
 
+    // How many of `_waiting` are BLOCKING leaves (queued on the limited-concurrency scheduler, which
+    // never touches `_gate`). Kept apart so the async half of the queue can be read against the
+    // gate's own free-permit count — see AdmissionReading (#5057).
+    private int _blockingWaiting;
+
+    /// <summary>
+    /// 🚨 WHAT THE QUEUE IS WAITING FOR — the cap, or a thread (#5057).
+    ///
+    /// <para><see cref="CurrentlyWaiting"/> counts work from ACCEPTED to RUNNING (#1198), and for
+    /// the three async entry points that interval has TWO halves: the ThreadPool hop before the leaf
+    /// reaches the gate (its prologue runs under <c>SubscribeOn(TaskPoolScheduler)</c>), and the gate
+    /// wait itself — which, once a permit is released, also needs a ThreadPool thread to RESUME the
+    /// waiter, because <see cref="SemaphoreSlim"/> completes its async waiters asynchronously. So a
+    /// deep queue is "the cap is exhausted" only when the gate has NO free permit; with permits free,
+    /// or permits granted to waiters that have not yet resumed, the queue is waiting for a THREAD, and
+    /// raising the cap would change nothing. The release create that missed its 10 s bound on
+    /// memex-cloud read <c>pg-read:Postgres(cap 16) 94 waiting, 10 in flight</c> — six permits that
+    /// were neither running nor demonstrably free — and the census could not say which.</para>
+    ///
+    /// <para>Lock-free reads of independently moving counters: individually exact, not a
+    /// transaction, so the derived numbers are clamped at zero. A diagnostic, never an input to how
+    /// much work to issue.</para>
+    /// </summary>
+    internal IoPoolAdmission AdmissionReading
+    {
+        get
+        {
+            var waiting = Volatile.Read(ref _waiting);
+            var blockingWaiting = Volatile.Read(ref _blockingWaiting);
+            var inFlight = Volatile.Read(ref _inFlight);
+            var blockingInFlight = Volatile.Read(ref _blockingInFlight);
+            // CurrentCount never throws, not even on a disposed SemaphoreSlim — which matters
+            // because this is read from failure paths whose own message it would otherwise replace.
+            var free = _gate.CurrentCount;
+            var asyncInFlight = Math.Max(0, inFlight - blockingInFlight);
+            return new IoPoolAdmission(
+                AsyncWaiting: Math.Max(0, waiting - blockingWaiting),
+                BlockingWaiting: blockingWaiting,
+                PermitsFree: free,
+                GrantedNotRunning: Math.Max(0, _maxConcurrency - free - asyncInFlight));
+        }
+    }
+
     /// <inheritdoc />
     public IoPoolWaitStats QueueWait => new(
         StopwatchElapsed(Volatile.Read(ref _waitTicks)),
@@ -874,6 +917,7 @@ public sealed class IoPool : IIoPool, IDisposable
             // the continuation, and the scheduling-threw path.
             var queuedAt = Stopwatch.GetTimestamp();
             Interlocked.Increment(ref _waiting);
+            Interlocked.Increment(ref _blockingWaiting);
 
             // 🚨 EXACTLY-ONCE EXIT FROM THE WAITING GAUGE, and it cannot live only in the
                 // delegate. The task below is created WITH cts.Token, so a subscription disposed
@@ -895,8 +939,10 @@ public sealed class IoPool : IIoPool, IDisposable
             var waitLeft = 0;
             void LeaveWaitOnce()
             {
-                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
-                    Interlocked.Decrement(ref _waiting);
+                if (Interlocked.Exchange(ref waitLeft, 1) != 0)
+                    return;
+                Interlocked.Decrement(ref _blockingWaiting);
+                Interlocked.Decrement(ref _waiting);
             }
 
             try

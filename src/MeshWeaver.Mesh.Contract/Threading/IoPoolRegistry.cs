@@ -155,7 +155,10 @@ public sealed class IoPoolRegistry : IDisposable
                 kv.Value.MaxConcurrency,
                 kv.Value.CurrentInFlight,
                 kv.Value.CurrentlyWaiting,
-                kv.Value.QueueWait))
+                kv.Value.QueueWait)
+            {
+                Admission = kv.Value.AdmissionReading
+            })
             .OrderBy(r => r.Name, StringComparer.Ordinal)
             .ToArray();
 

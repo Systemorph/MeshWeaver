@@ -656,6 +656,67 @@ All three cases are red with the reading removed.
 - **The 10-04 shape's gate.** Its delay was before the write, so this instrument does not cover it.
 - **The mix across the 743 occurrences.** Only six releases were measured.
 
+### The first reading: a deep queue with permits free
+
+The instrument's first live reading came on 2026-10-07 at 03:45:14Z. It was taken on memex-cloud pod
+`7f5b549d98-c2nb2`, three minutes into a boot compile wave, for `Hosting/Coordination`. Incident
+`9d4918ad33b7b88b` printed:
+
+- `pg-read:Postgres(cap 16) 94 waiting, 10 in flight`
+- `CompileCpu(cap 6) 25 waiting, 6 in flight`
+- `pg:Postgres(cap 1) 2 waiting, 0 in flight`
+
+**The queues were deep while the caps were not full.** The write pool queued 2 with its only permit
+free. The read pool queued 94 with 10 of its 16 permits held by running leaves. The other six were
+neither running nor shown free. A governed `Logs` read of the same pod
+(`Ops/Actions/logs-5057-tp-starvation-memexcloud-0340-0347-20261007`) puts two lines inside those eleven
+seconds:
+
+- **03:45:03Z** — the routing saturation report: `waiting for a pool slot 60, routing pool subscribing 0`.
+  Its own text says that reading is a **thread** shortage.
+- **03:45:08Z** — Orleans: `.NET Thread Pool execution stalled for 1.14 s`.
+
+**Why the counts mislead.** An async leaf counts as waiting from the moment it is accepted (#1198). That
+interval contains two ThreadPool hops:
+
+1. **Before the gate.** The leaf's prologue runs under `SubscribeOn(TaskPoolScheduler)`.
+2. **After a permit is released.** `SemaphoreSlim` completes its async waiters asynchronously, so the
+   waiter needs a thread to resume.
+
+So "94 waiting" is "the cap is exhausted" only when the gate has **no** free permit. With permits
+free, or granted to waiters that have not resumed, the queue is waiting for a thread. In that case a
+larger cap changes nothing, and so does a longer bound.
+
+**What the census prints now.** The census splits each pool's queue (`IoPool.AdmissionReading`, carried
+on `IoPoolReading.Admission`):
+
+- **Async leaves.** How many are waiting, against how many free permits.
+- **Granted but not yet running.** Permits that are neither free nor held by a running async leaf.
+- **Blocking leaves.** These queue on the lane scheduler and never touch the gate. They are counted
+  apart, so they cannot be misread as a thread wait.
+
+The verdict is one of two phrases:
+- *"the wait is for a THREAD, not for this cap"*;
+- *"the cap is exhausted"*.
+
+The sentence then ends with the ThreadPool's own depth: thread count and queued work items. The
+control is `IoPoolQueueReportSaysCapOrThreadTest`:
+
+- **Thread wait.** A leaf is held in its prologue through `OnLeafPrologueStarting`, so it is accepted
+  with every permit free. The census must print the thread-wait phrase.
+- **Cap wait (the negative control).** A cap-1 pool holds one running leaf and queues a second. The
+  census must print the cap phrase.
+- **Blocking leaves.** A blocking leaf queued on the lane must not be read against the gate.
+
+Both deliberate breaks were run red:
+- reading every waiter as async fails the blocking case;
+- dropping the verdict fails both the thread-wait and cap-wait cases.
+
+**Not established.** What held the ThreadPool on that boot. The census did not read the ThreadPool
+then, and no dump was taken. The next expiry's line says whether the wait was for a thread or for the
+cap, and how deep the ThreadPool's queue was. A cap change, or a widened bound, is unjustified until a
+line says *"the cap is exhausted"*.
+
 ## What this does not claim
 
 - **It does not establish WHY the re-cut's create does not land.** That is the point: the reason was
