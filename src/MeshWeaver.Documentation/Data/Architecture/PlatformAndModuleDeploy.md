@@ -89,7 +89,9 @@ On the module side, two things still guard what an instance runs:
   announcement for the control record (`arm-promoted-set.py control-announcement`: the tag, the
   image on `memex-control`, and the build's own line `3.0.0-ci*` as the admitting pattern) and POSTs
   it to the control plane's inbox (`vars.CONTROL_WEBHOOK_URL`, signed with
-  `secrets.CONTROL_WEBHOOK_SECRET`). MeshWeaver.Plugins `SelfUpdateRouting` resolves the record and
+  `secrets.CONTROL_WEBHOOK_SECRET`). CD preflight requires that URL to equal the `url` in
+  `.github/control-instance.json` plus `/api/hooks/Hosting/PlatformBuilds`; a URL for another
+  portal fails before image publication. MeshWeaver.Plugins `SelfUpdateRouting` resolves the record and
   opens `Ops/Actions/selfupdate-roll-control-<version>-…`. A re-run re-announces the same build,
   which the router dedupes. A build older than control's newest tag is never announced, and the
   router refuses a backwards roll anyway. Any answer other than a stored **and verified** delivery
