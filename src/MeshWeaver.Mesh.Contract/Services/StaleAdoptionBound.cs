@@ -33,8 +33,8 @@ public static class StaleAdoptionBound
     /// <summary>The configuration key.</summary>
     public const string ConfigKey = "Modules:StaleAdoptionMaxMinorVersionsBehind";
     /// <summary>
-    /// The default bound, in MINOR versions — a <c>proposed</c> value in the policy register
-    /// (<c>stale-adoption-bound</c>) until ratified; a deployment overrides it with
+    /// The default bound, in MINOR versions — the value policy <c>stale-adoption-bound</c> sets in
+    /// the policy register; a deployment overrides it with
     /// <see cref="ConfigKey"/>.
     /// </summary>
     public const int DefaultMaxMinorVersionsBehind = 5;

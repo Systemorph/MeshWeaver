@@ -1064,8 +1064,8 @@ The rule (`StaleAdoptionBound`, policy `stale-adoption-bound` in
   (per partition, the furthest distance, how many are past the bound) — `none` is printed as such.
   A stale record past the bound **degrades** `bake-report`: the judgement refuses those, so one on
   the record has not been re-judged since (a release request re-runs it).
-- **Configured, never hard-coded**: `Modules:StaleAdoptionMaxMinorVersionsBehind` (default 5, a
-  `proposed` register value). A negative value disables the bound — and every judgement prints that
+- **Configured, never hard-coded**: `Modules:StaleAdoptionMaxMinorVersionsBehind` (default 5, the
+  value policy `stale-adoption-bound` sets). A negative value disables the bound — and every judgement prints that
   it is disabled. When either version cannot be read nothing is measured and nothing is refused on
   this rule (the INCONCLUSIVE rule the MAJOR check follows).
 
