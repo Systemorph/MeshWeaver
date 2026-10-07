@@ -234,6 +234,7 @@ the module records on the share, the catalog's shared source listing, and a host
 The registry side of that window:
 - No line from `PluginBundleEndpoints`, `PluginRegistryEndpoints` or `InstanceRegistryAuthenticator`. So no 503 branch fired.
 - `ProcessLivenessHeartbeatService` ticked every 10 s on time on all three replicas. So no process was thread-starved.
+- The public ingress delivered GitHub webhooks to registry pods inside the window (13:53:14Z on dzn5q, 13:56:40Z on f2fz5). The ingress was serving EXTERNAL requests, though not necessarily the in-cluster path the consumers take.
 - One `Routing back-pressure` episode on f2fz5 at 13:52:28: 64 dispatches in flight, 18 waiting for a pool slot.
 - GitSync imports on all three replicas, 13:53:50–13:57:06.
 - `ReleaseAvailability` scans of `/data/prebuilt-bundles` on all three replicas within two seconds, 13:56:05–07.
