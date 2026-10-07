@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.Core;
@@ -39,7 +41,7 @@ public class AutomationSwitchesReachTheConfigMapGuard
     /// Opt-out switches that exist only on deployment records: rendered when the key is present,
     /// absent from the ConfigMap when it is not (so the code default — ON — applies).
     /// </summary>
-    private static readonly string[] RecordOnlySwitches =
+    private static readonly ImmutableArray<string> RecordOnlySwitches =
     [
         "Hosting__Coordinator__Enabled",
         "Hosting__StuckDetector__Enabled",
@@ -57,7 +59,7 @@ public class AutomationSwitchesReachTheConfigMapGuard
     /// <c>Hosting__Operator__Enabled</c> is <c>hostingOperator.enabled | default "false"</c>, a
     /// security property, not a record-only opt-out.
     /// </summary>
-    private static readonly string[] AlwaysRendered = ["Hosting__Operator__Enabled"];
+    private static readonly ImmutableArray<string> AlwaysRendered = ["Hosting__Operator__Enabled"];
 
     [Fact]
     public void EveryEnabledSwitchInTheTemplate_IsClassifiedHere()
@@ -114,6 +116,27 @@ public class AutomationSwitchesReachTheConfigMapGuard
                 + "default must apply — rendering it as \"\" or a default would override that");
     }
 
+    [Fact(Timeout = 120000)]
+    public void AnExplicitNullOnTheRecord_IsOmittedFromTheConfigMap()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        // `Key: ~` / `Key:` is a PRESENT key with a YAML null: hasKey is true, and `toString` turns
+        // the value into "<nil>" — which is not empty, so a template testing only `ne … ""` would
+        // render the string "<nil>" and the pod's boolean binding would fail on it.
+        var overlay = "config:\n  memex_portal:\n"
+            + string.Concat(RecordOnlySwitches.Select(k => $"    {k}: null\n"));
+
+        var data = RenderConfigMapData(overlay);
+
+        data.Should().ContainKey("Hosting__Operator__Enabled",
+            "the render must produce the portal ConfigMap, or the omission check below would pass "
+            + "over an empty render");
+        foreach (var key in RecordOnlySwitches)
+            data.Should().NotContainKey(key,
+                $"{key}: null carries no value, so it must be omitted and the code default must "
+                + "apply — rendering \"<nil>\" or \"\" would break the boolean binding");
+    }
+
     private static Dictionary<string, YamlScalarNode> RenderConfigMapData(string? overlay)
     {
         var chart = ChartRoot();
@@ -153,9 +176,27 @@ public class AutomationSwitchesReachTheConfigMapGuard
 
             using (process)
             {
-                var stdout = process.StandardOutput.ReadToEnd();
-                var stderr = process.StandardError.ReadToEnd();
+                // Drain BOTH pipes concurrently (event readers), never ReadToEnd one after the
+                // other: a child that fills the undrained pipe blocks writing it while the test
+                // blocks reading the other, and xUnit's timeout cannot reach the child.
+                var outBuffer = new StringBuilder();
+                var errBuffer = new StringBuilder();
+                process.OutputDataReceived += (_, e) => { if (e.Data is not null) outBuffer.AppendLine(e.Data); };
+                process.ErrorDataReceived += (_, e) => { if (e.Data is not null) errBuffer.AppendLine(e.Data); };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                // `helm template --show-only` of one file renders in well under a second; a minute
+                // means helm is wedged, and the guard says so instead of hanging.
+                if (!process.WaitForExit(60_000))
+                {
+                    try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+                    Assert.Fail("`helm template` did not finish within 60s — helm is wedged, not slow.");
+                }
+                // The timed overload waits for the process only; this one waits for the async
+                // readers to flush, so stdout is not read truncated.
                 process.WaitForExit();
+                var stdout = outBuffer.ToString();
+                var stderr = errBuffer.ToString();
                 process.ExitCode.Should().Be(0, $"helm template must render the chart. stderr: {stderr}");
 
                 var yaml = new YamlStream();
