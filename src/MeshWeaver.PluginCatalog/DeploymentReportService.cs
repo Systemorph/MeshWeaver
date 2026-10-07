@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -433,14 +434,12 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
                 .Timeout(ReadBudget)
                 .Select(change =>
                 {
-                    var identities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-                    foreach (var node in change.Items)
-                    {
-                        var definition = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
-                            ?? throw new InvalidOperationException($"NodeType adoption record {node.Path} could not be read");
-                        if (!string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion))
-                            identities.Add(definition.CompiledFrameworkVersion);
-                    }
+                    // The SAME reading as the retention pass: a declaration-less static NodeType
+                    // (no content) adopts nothing; content that cannot be read throws, and so does
+                    // an EMPTY read — both land in the Catch below as an INCOMPLETE inventory, never
+                    // a complete adopts-nothing one. See NodeTypeAdoptionStamp.AdoptedIdentitiesOf.
+                    var identities = NodeTypeAdoptionStamp.AdoptedIdentitiesOf(
+                        change.Items, hub.JsonSerializerOptions, logger);
                     return (Identities: identities.OrderBy(id => id, StringComparer.Ordinal).ToImmutableList(), Complete: true);
                 }))
             .Catch<(ImmutableList<string> Identities, bool Complete), Exception>(ex =>
