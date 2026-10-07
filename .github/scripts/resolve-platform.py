@@ -460,6 +460,11 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
     is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
     main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
     if not main_runs:
+        # An EMPTY page is proven stale by a ceiling exactly as a short one is: the caller's own
+        # `main` passed on core CD #ceiling, so that run exists and page 1 omits it.
+        if passed_ceiling is not None:
+            return (f"it holds no main-cd run at all, but this repository's `main` has already "
+                    f"passed on core CD #{passed_ceiling}, which the page does not contain")
         return None
     newest = _newest_main_run(runs)
     if passed_ceiling is not None and newest < passed_ceiling:
@@ -490,7 +495,11 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
     if passed_ceiling is None:
         return None
     newest = _newest_main_run(runs)
-    return newest if newest is not None and newest < passed_ceiling else None
+    if newest is None:
+        # An EMPTY page (no main run) under a ceiling is the same proven shortfall, reported as 0:
+        # the witnessed run exists and the page holds nothing up to it.
+        return 0
+    return newest if newest < passed_ceiling else None
 
 
 def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float) -> tuple[dict | None, str]:
@@ -546,8 +555,9 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
     how many of those re-reads came back EMPTY.
 
     🚨 THE EMPTY COUNT IS RETURNED SEPARATELY because an attempt has THREE outcomes, not two:
-    settled, still stale, and empty — and an empty page is not a staleness finding at all, it is a
-    page that was not adopted. Collapsing the last two let the refusal claim page 1 "was still
+    settled, still stale, and empty — and an empty re-read is not a NEW staleness finding, it is a
+    page that was not adopted. An independent recent-run witness can still prove the initial empty
+    page incomplete. Collapsing the last two let the refusal claim page 1 "was still
     stale every time" over evidence that said `came back EMPTY`, which is the same class of defect
     as the refusal this function exists to soften: a summary stronger than what was measured.
 
@@ -586,9 +596,8 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
         fresh = cd_runs(fetch, 1)
         rereads = attempt
         if not fresh:
-            # 🚨 An EMPTY page says NOTHING about staleness — `stale_listing` has no main rows to
-            # judge, so adopting it would turn a refusal into a resolution off a page holding no
-            # candidates at all. Keep the page that at least had rows, and the refusal it earned.
+            # 🚨 An EMPTY re-read says NOTHING new about staleness. Keep the previous page and
+            # the finding supported by its independent witness or ceiling.
             empties += 1
             log(f"  re-read {attempt} of {STALE_REREADS}: page 1 came back EMPTY — not adopted; "
                 "the previous page and its refusal stand")
@@ -640,10 +649,10 @@ def reread_note(rereads: int, empties: int = 0) -> str:
         saw = "and was still stale every time"
     elif stale <= 0:
         saw = (f"and every one of the {empties} came back EMPTY — an empty page is never adopted, "
-               "so the refusal stands on the page that had rows")
+               "so the previous page and its refusal stand")
     else:
         saw = (f"— {stale} came back still stale and {empties} came back EMPTY (an empty page is "
-               "never adopted, so the refusal stands on the page that had rows)")
+               "never adopted, so the previous page and its refusal stand)")
     return (f" [MeshWeaver#4750: page 1 WAS re-read {rereads} time(s) over ~{seconds:.0f}s before "
             f"this refusal {saw}; what each re-read held is logged line by line above. The "
             "sentence before this one predates the re-reads and is kept verbatim because a "
@@ -1995,8 +2004,6 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
         if chosen is not None and (publication is not None or lookback >= PLUGINS_LOOKBACK):
             break
         runs = cd_runs(fetch, page)
-        if not runs:
-            break
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
         # one set and must keep working in an incident, so it is neither re-read nor refused here.
         why_stale, rereads, empties = None, 0, 0
@@ -2012,6 +2019,14 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 "Re-run this job; the resolver refuses rather than re-reading, because this red is "
                 "the harmless answer and a silently old platform is not."
                 + reread_note(rereads, empties))
+        if not runs:
+            if page == 1 and not freeze_kind:
+                raise ResolutionError(
+                    f"page 1 of {CORE_CD_WORKFLOW} runs on {CORE_REPO} {CORE_BRANCH} returned "
+                    "EMPTY and the independent recent-run query found no main-CD witness. "
+                    "No platform set was examined; check the GitHub run listing before treating "
+                    "this as an absent release.")
+            break
         for run in runs:
             if run.get("head_branch") not in (None, CORE_BRANCH):
                 continue
@@ -3226,6 +3241,56 @@ def self_test() -> int:
                         log=logs.append, now=lambda: recent_at),
          lambda message: "page 1 freshness is unverified" in message
                          and "synthetic recent-query read failure" in message)
+
+    # The first read can be EMPTY too. Previously choose() broke out before asking for the
+    # independent witness, reported "newest 0 runs", and the named transient steward could not
+    # recognise the GitHub listing fault (Plugins main run 37695330204, 2026-10-07).
+    fetch_initial_empty, initial_empty = _flipping_page_one([[], recent_settled])
+    fetch_initial_empty = _with_recent_witness(fetch_initial_empty, initial_empty, recent_witness)
+    case("an initially EMPTY page 1 with a recent witness is re-read and resolves", True,
+         lambda: choose(fetch_initial_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: recent_at, sleep=initial_empty["slept"].append),
+         lambda c: c.sha == C and initial_empty["page1"] == 2
+         and initial_empty["witness_reads"] == 1 and initial_empty["slept"] == [20.0]
+         and any("page 1's newest (none)" in line for line in logs))
+    fetch_still_empty, still_empty = _flipping_page_one([[]])
+    fetch_still_empty = _with_recent_witness(fetch_still_empty, still_empty, recent_witness)
+    case("an initially EMPTY page still EMPTY after bounded re-reads is a keyed refusal", False,
+         lambda: choose(fetch_still_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: recent_at, sleep=still_empty["slept"].append),
+         lambda message: "STALE run listing" in message and KEYED_4433 in message
+         and "came back EMPTY" in message and "newest 0" not in message
+         and still_empty["page1"] == 1 + STALE_REREADS
+         and still_empty["slept"] == [20.0, 40.0, 60.0])
+    # An EMPTY page under a ceiling is CEILING-proven stale on its own: the caller's main passed
+    # on that run, so it exists. It must take the keyed bounded re-read, not the unverified-
+    # listing error, even when the recent-run query is empty too (automatic review, #6278).
+    fetch_ceiling_empty, ceiling_empty = _flipping_page_one([[], settled])
+    case("an initially EMPTY page 1 under a passed ceiling is re-read and resolves", True,
+         lambda: choose(fetch_ceiling_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_empty["slept"].append),
+         lambda c: c.set_name == "3.0.0-ci.8676" and ceiling_empty["page1"] == 2
+         and ceiling_empty["slept"] == [20.0])
+    fetch_ceiling_stuck, ceiling_stuck = _flipping_page_one([[]])
+    case("an EMPTY page 1 under a passed ceiling still EMPTY after re-reads is a keyed refusal",
+         False,
+         lambda: choose(fetch_ceiling_stuck, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_stuck["slept"].append),
+         lambda message: "STALE run listing" in message and KEYED_4433 in message
+         and "#8676" in message and "came back EMPTY" in message
+         and "no main-CD witness" not in message
+         and ceiling_stuck["page1"] == 1 + STALE_REREADS
+         and ceiling_stuck["slept"] == [20.0, 40.0, 60.0])
+    fetch_unwitnessed_empty, unwitnessed_empty = _flipping_page_one([[]])
+    case("an EMPTY page without a witness names missing evidence, not an absent release", False,
+         lambda: choose(fetch_unwitnessed_empty, _registry(full3), tester, portal,
+                        log=logs.append, now=lambda: recent_at,
+                        sleep=unwitnessed_empty["slept"].append),
+         lambda message: "returned EMPTY" in message and "no main-CD witness" in message
+         and "No platform set was examined" in message and unwitnessed_empty["page1"] == 1
+         and unwitnessed_empty["slept"] == [])
 
     fetch_settles, settles = _flipping_page_one([aged, settled])
     case("#4750: a page 1 stale by the CEILING is RE-READ, and a settled re-read resolves", True,
