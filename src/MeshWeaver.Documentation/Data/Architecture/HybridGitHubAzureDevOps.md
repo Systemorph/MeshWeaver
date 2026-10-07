@@ -84,7 +84,7 @@ that the fleet's GitHub-only shape does not.
 
 | Piece | Exists | The hybrid scenario adds |
 |---|---|---|
-| Merge to `main` through the GitHub App | `auto-arm.yml` arms every non-draft PR into the merge queue with a token minted from `meshweaver-cloud`; the steward re-queues on evidence — [The Merge Queue](../MergeQueue), [GitHub App Credentials](../GitHubAppCredentials) | nothing |
+| Merge to `main` through the GitHub App | the control plane's PR steward arms a reviewed, answered, green PR (`auto-arm.yml` disarms on a push, with a token minted from `meshweaver-cloud`); the steward re-queues on evidence — [The Merge Queue](../MergeQueue), [GitHub App Credentials](../GitHubAppCredentials) | nothing |
 | CD publishes an all-or-nothing set and registers it | `main-cd.yml` promotes and ends with one signed `platform-build` POST; the control instance registers `Hosting/PlatformBuilds/<version>` — [Continuous Delivery Contract](../ContinuousDeliveryContract) | nothing |
 | The App's webhook reaches the control instance | `POST /webhooks/github`, HMAC-verified, dispatched by `GitHubWebhookProcessor` on `push`, `workflow_run`, … — [Webhook Inbox](../WebhookInbox) | a `push`-to-default-branch branch that files a `HelmRelease` action on every record whose `repository` is the pushed repository |
 | The deploy is an action on the record | `Hosting/InstanceAction` kind `HelmRelease`, `helmAction: capture \| adopt \| deploy`, dispatches the config repo's `helm-release.yml` and follows the run onto the node's log — [Operating from the portal](../OperatingFromThePortal) | a second **executor**: `azure-devops`, selected by the record (below) |

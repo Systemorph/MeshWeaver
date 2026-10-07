@@ -1068,8 +1068,9 @@ comment-only and nothing required waits for it, so #2549 (6 of 6 findings unansw
 (reviewer unavailable) and Memex#641 merged unreviewed or unanswered, and agents disarmed by hand
 after every push (#2791 twice in an hour).
 
-**Arming is a decision, so it moved to the control plane** (2026-10-04). The control instance's PR
-steward (App `systemorph-com`) already reads every fleet pull request's review state and
+**Arming is a decision, so it moved to the control plane** (policy
+[`review-then-suites`](../PolicyNotProse)). The control instance's PR steward (MeshWeaver.Plugins
+`PrArming`, App `systemorph-com`) already reads every fleet pull request's review state and
 answered-findings verdict; it is the one place that arms. **No workflow arms auto-merge any more** —
 `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails the build if one does.
 
@@ -1081,22 +1082,33 @@ It arms a pull request only when **all** of these hold, read on its **current he
 2. its base is the repository's **default branch**, read from `repos/{o}/{r}` and never assumed. An
    unprotected base has an empty required set, so an arm there is an immediate merge
    (MeshWeaver.Plugins#1685 merged 61 seconds after it opened, before its own CI started);
-3. the `systemorph-com` App's (id 4918443) `internal-review` check run on the head has completed, no
-   run of it is still in progress, and the newest one is **not** the neutral `Reviewer unavailable …`
-   degradation. The degradation releases the *merge* gate's review condition (a down reviewer must
-   not hold every pull request), but it is not a review — arming on it would land an unreviewed
-   change nobody decided to merge, so a person merges it by hand;
+3. the head has **its own review**: a Copilot review submitted against the current head (policy
+   [`copilot-code-review`](../PolicyNotProse); `commit_id` equal to the head, not `PENDING`, not a
+   refusal — `copilot_review_on`, see *Copilot is the reviewer again* above), or, while one is still
+   posted, a completed `internal-review` check run of the `systemorph-com` App (id 4918443) on the
+   head whose newest run is **not** the neutral `Reviewer unavailable …` degradation. The degradation
+   releases the *merge* gate's review condition (a down reviewer must not hold every pull request),
+   but it is not a review — arming on it would land an unreviewed change nobody decided to merge, so
+   a person merges it by hand;
 4. every thread the automatic reviewer opened has a reply from a person, following `in_reply_to_id`
    to the root, read from a provably complete listing — the **same** `reviewer_threads` /
-   `listing_incomplete` predicate this gate uses, so the two can never disagree.
+   `listing_incomplete` predicate this gate uses, so the two can never disagree;
+5. every required status check of the base is `success` on the head (`required_checks_green`,
+   policy `review-then-suites` — see [Staged Pull Request Pipeline](../StagedPullRequestPipeline)).
 
-The reference implementation of 1, 3 and 4 is `check-review-answered.py --arm-gate`
+The reference implementation of 1 and 3–5 is `check-review-answered.py --arm-gate`
 (`arm_readiness`), and its `--self-test` cases are the test vectors the control plane's port must
 pass. The arm is the GraphQL `enablePullRequestAutoMerge` mutation (or `enqueuePullRequest` on a
 base with a merge queue) carrying `expectedHeadOid` = the head it judged, so an arm that races a push
 is refused by GitHub instead of landing on the new, unreviewed head. It is attempted **once per
 head** and read back (`autoMergeRequest` / `mergeQueueEntry`); a head a person disarmed is not
 re-armed.
+
+🚨 **The port has to keep up with the reference.** `PrArming` is a one-for-one port of
+`arm_readiness`, so a condition widened here is not live until the port carries it. Copilot's
+acceptance in condition 3 is exactly such a widening (the register lists the port as owed under
+`copilot-code-review`): until `PrArming` accepts a Copilot review of the head, a head reviewed only
+by Copilot is never armed by the control plane and needs a person's arm.
 
 ### What stays in the workflow: the disarm
 

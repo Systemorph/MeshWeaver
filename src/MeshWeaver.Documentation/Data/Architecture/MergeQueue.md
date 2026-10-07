@@ -325,8 +325,8 @@ directory arms without that chain; and the non-default path still warns and stil
 - 🚨 **DISARMING auto-merge does NOT hold a pull request. Converting it to DRAFT does.** This is the
   single most likely way to believe you have stopped a merge and be wrong — see the section below.
 - **A push to a queued branch ejects it.** GitHub removes the entry (reason `MANUAL`-shaped from the
-  steward's point of view: it comments once and takes no action); auto-arm re-arms on the
-  `synchronize` event, so the new head re-enters the queue once its own run is green. Do not push to
+  steward's point of view: it comments once and takes no action); the push disarms it
+  (`auto-arm.yml`), and the control plane re-arms the new head once it is reviewed, answered and green. Do not push to
   a queued branch expecting the queue to pick up the new commit in place.
 - **Dequeue via GraphQL, never by re-ordering.**
   `gh api graphql -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}' -f id=<PR node id>`.

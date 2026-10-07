@@ -494,14 +494,14 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             || l.Contains("enablePullRequestAutoMerge", StringComparison.Ordinal));
 
     /// <summary>
-    /// 🚨🚨 NO WORKFLOW ARMS AUTO-MERGE — arming is the control plane's decision (2026-10-04).
+    /// 🚨🚨 NO WORKFLOW ARMS AUTO-MERGE — arming is the control plane's decision (policy review-then-suites).
     ///
     /// <para>Arming says "this head was reviewed and every finding answered, so let it land when
     /// green". <c>auto-arm.yml</c> used to make that call on every open, push and undraft — BEFORE
-    /// the internal review had run on the new head — and on MeshWeaver.Plugins, where the review is
+    /// the automatic review had landed on the new head — and on MeshWeaver.Plugins, where the review is
     /// comment-only, #2549, #2643/#2647 and Memex#641 merged with unanswered findings or no review
-    /// at all. The decision now lives with the control instance's PR steward (App
-    /// <c>systemorph-com</c>), which already reads the review state and the answered-findings
+    /// at all. The decision now lives with the control instance's PR steward (MeshWeaver.Plugins
+    /// <c>PrArming</c>, App <c>systemorph-com</c>), which already reads the review state and the answered-findings
     /// verdict, and applies <c>check-review-answered.py --arm-gate</c>'s predicate, the default-branch
     /// base check (an unprotected base has an empty required set, so an arm there is an immediate
     /// merge — MeshWeaver.Plugins#1685, merged 61 seconds after it opened) and an
@@ -526,9 +526,10 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             $"These workflows arm auto-merge: {string.Join(", ", offenders)}.\n"
             + "Arming is the control plane's decision (the control instance's PR steward, App "
             + "systemorph-com): it arms only a non-draft, same-repository pull request onto the "
-            + "default branch whose CURRENT head has a completed internal review (not the "
-            + "'Reviewer unavailable' degradation) and every automatic-review thread answered by a "
-            + "person. A workflow that arms decides without the review — measured: #2549, "
+            + "default branch whose CURRENT head has its own review (a Copilot review against that "
+            + "head, or a completed internal-review run that is not the 'Reviewer unavailable' "
+            + "degradation), every automatic-review thread answered by a person, and every required "
+            + "check green. A workflow that arms decides without the review — measured: #2549, "
             + "#2643/#2647 and Memex#641 merged unreviewed that way. See "
             + "Doc/Architecture/ReviewFindingsAnswered, 'The arm gate'.");
     }

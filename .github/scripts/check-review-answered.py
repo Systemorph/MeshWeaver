@@ -548,16 +548,18 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 
 # ─────────────────────────────── the ARM gate (pure) ───────────────────────────────
 #
-# The ARM decision (the control plane's PR steward since 2026-10-04; this is its reference
-# implementation and these self-test cases its test vectors) asks a DIFFERENT, stricter question than the merge gate above: not "may this merge"
-# but "may auto-merge be armed NOW". Measured 2026-10-03/04 on MeshWeaver.Plugins, where the review
+# The ARM decision (made by the control plane's PR steward, MeshWeaver.Plugins `PrArming`; this is
+# its reference implementation and these self-test cases its test vectors — `auto-arm.yml` only
+# disarms on a push) asks a DIFFERENT, stricter question than the merge gate above: not "may this
+# merge" but "may auto-merge be armed NOW". Measured 2026-10-03/04 on MeshWeaver.Plugins, where the review
 # is comment-only and nothing required waits for it: the lane re-armed on every push and on undraft,
 # BEFORE the internal review had run on the new head, so #2549, #2643, #2647 and Memex#641 merged
 # with findings nobody had answered or with no review at all, and agents disarmed by hand after
-# every push (#2791 twice in an hour). So the lane arms only when ALL of these hold:
+# every push (#2791 twice in an hour). So auto-merge is armed only when ALL of these hold:
 #
 #   1. not a draft;
-#   2. the internal reviewer's `internal-review` check run on the CURRENT head has COMPLETED, and it
+#   2. the CURRENT head has its review — a Copilot review against it (see below), or the internal
+#      reviewer's `internal-review` check run on it has COMPLETED, and that run
 #      is not the neutral "Reviewer unavailable" degradation. That degradation releases the MERGE
 #      gate's review condition (so a down reviewer cannot hold every pull request), but it is not a
 #      review, and arming on it would land an unreviewed change with nobody having decided to —
@@ -1944,7 +1946,7 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
 
-    # ── the ARM gate (control-plane reference): arms only on a completed internal review of the CURRENT head,
+    # ── the ARM gate (control-plane reference): arms only on a review of the CURRENT head (Copilot's, or a completed internal-review run),
     # with every reviewer thread answered by a person, and never a draft. Each NO case names the
     # condition it must fail ON, so a fixture cannot pass by failing for another reason.
     HEAD = "a" * 40

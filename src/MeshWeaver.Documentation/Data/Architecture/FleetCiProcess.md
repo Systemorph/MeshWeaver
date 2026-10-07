@@ -154,7 +154,7 @@ follow whatever `main` last passed.
 
 ## Draft is the hold — until the PR is IN the merge queue
 
-`auto-arm.yml` arms auto-merge on every non-draft PR whose base is `main`, so **draft is the opt-out**
+The control plane's PR steward arms auto-merge on a non-draft PR whose base is `main` once its current head is reviewed and answered ([Review Findings Answered](../ReviewFindingsAnswered) → *The arm gate*; `auto-arm.yml` only disarms on a push), so **draft is the opt-out**
 and the way any session holds a PR after a late finding. It stops being a hold the moment the entry
 is admitted to the merge queue, and that is not obvious from either UI.
 

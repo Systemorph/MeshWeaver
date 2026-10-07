@@ -1,11 +1,11 @@
-# Auto-merge lane — it no longer ARMS anything; it DISARMS on a push (2026-10-04).
+# Auto-merge lane — it no longer ARMS anything; it DISARMS on a push (policy review-then-suites).
 #
 # 🚨🚨 ARMING MOVED TO THE CONTROL PLANE. Arming auto-merge is a DECISION — "this head was reviewed
-# and every finding answered" — and the decision belongs to the control instance's PR steward
-# (Hosting/Babysitter, App `systemorph-com`), which already reads the review state and the
-# answered-findings verdict for every pull request in the fleet. Until 2026-10-04 this lane armed
-# every non-draft pull request on open, push and undraft — BEFORE the internal review had run on
-# the new head. Where that review is comment-only and nothing required waits for it
+# and every finding answered, and the required checks are green" — and the decision belongs to the
+# control instance's PR steward (MeshWeaver.Plugins `PrBabysitter` / `PrArming`, App `systemorph-com`),
+# which already reads the review state and the answered-findings verdict for every pull request in the
+# fleet. Before the move this lane armed every non-draft pull request on open, push and undraft —
+# BEFORE the automatic review had landed on the new head. Where that review is comment-only and nothing required waits for it
 # (MeshWeaver.Plugins), #2549, #2643/#2647 and Memex#641 merged with unanswered findings or no
 # review at all, and agents disarmed by hand after every push (Plugins #2791, twice in an hour).
 # The predicate the control plane applies is `check-review-answered.py --arm-gate` (the reference

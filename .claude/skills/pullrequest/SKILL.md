@@ -413,12 +413,15 @@ that was tested — the fix for two independently-green PRs being red together (
 changes about this procedure:
 
 - **`gh pr merge <n> --auto` means "enqueue when this PR's own required checks are green".**
-  The control plane's PR steward arms it on a non-draft PR once its CURRENT head has a completed
-  internal review and every reviewer thread is answered (`auto-arm.yml` only DISARMS, on every push —
-  Doc/Architecture/ReviewFindingsAnswered → "The arm gate"). Convert to **draft** to opt out. `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it
-  enters the queue, it does not merge on the spot.
+  The control plane's PR steward arms it on a non-draft PR once its CURRENT head has its review (a
+  Copilot review against that head, policy `copilot-code-review`), every reviewer thread is answered
+  and the required checks are green (`auto-arm.yml` only DISARMS, on every push —
+  Doc/Architecture/ReviewFindingsAnswered → "The arm gate"). Convert to **draft** to opt out.
+  `gh pr merge <n> --merge` on a green PR is the same thing done by hand: it enters the queue, it
+  does not merge on the spot.
 - **A push to a queued branch ejects it.** The queue does not pick up the new commit in place; the
-  arm lane re-arms on `synchronize` and the new head re-enters once its own run is green.
+  push disarms it (`auto-arm.yml`), and the control plane re-arms the new head once it is reviewed,
+  answered and green.
 - **Dequeue via GraphQL** (`dequeuePullRequest(input:{id:<PR node id>})`), never by re-ordering or
   by `jump`. The queue's order is its correctness argument.
 - **Never re-queue an ejected PR by hand, and never re-run the failed queue build.** The
