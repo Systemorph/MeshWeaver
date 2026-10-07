@@ -925,7 +925,8 @@ all three writers that can fulfil the request, so turning assert into check fixe
 |---|---|---|
 | yes | yes | adopt; `BuildProvenance = AdoptedVerified` |
 | yes | **no**, and NOT ONE declared source query has matched a node here (#4208) | 🚨 **DEFER** — the record is returned untouched, so the one-shot stamp request is left **standing**; the sources watcher's next publication judges it |
-| yes | **no**, same module MAJOR (or versions nobody recorded) | the build keeps serving as `StaleAdopted` (#3583); a mesh that compiles module content also flips `Pending` |
+| yes | **no**, same module MAJOR (or versions nobody recorded), **within the stale-adoption bound** | the build keeps serving as `StaleAdopted` (#3583); a mesh that compiles module content also flips `Pending` |
+| yes | **no**, same module MAJOR but **more MINOR versions behind than the stale-adoption bound** (Memex#668) | 🚨 **refuse** exactly as a MAJOR bump — `AdoptionRefused`, the notice *"Build too far behind its source …"* names both versions, the distance and the bound |
 | yes | **no**, module **MAJOR** bump | 🚨 **refuse** — no stamp, `AdoptionRefused` |
 | no (legacy), or the owner's own not published yet | — | adopt, **keep the stamp**; `AdoptedUnverified` |
 
@@ -994,6 +995,40 @@ all three writers that can fulfil the request, so turning assert into check fixe
 `BuildProvenance` is operational (stripped on export, preserved from the live node on import), and a
 control plane reads it off the NodeType node through `GetMeshNodeStream(path)`. The compile-state
 satellite that used to mirror it is [retired](../CompileStateSatelliteRetired) and no longer updated.
+
+#### The stale-adoption bound (Memex#668)
+
+"Same MAJOR keeps serving" said nothing about **how far** behind. Measured on memex.systemorph.com:
+`Hosting/InstanceAction` served an adopted build at module version 1.29.7 over source at 1.56 —
+twenty-seven MINOR versions, across a change to how operations are signed — and every dispatch the
+old build signed failed verification downstream. `Hosting/Deployment` on the control instance sat
+the same way (adopted 1.57.0 over 1.59, a build of a different source set) while its compile failed.
+Nothing on the node or on `/health` said how old the serving build was.
+
+The rule (`StaleAdoptionBound`, policy `stale-adoption-bound` in
+[Policy Not Prose](../PolicyNotProse)):
+
+- **Past the bound the build is refused**, in all three places a stale build can be kept serving:
+  the owner's judgement (`ApplyAdoptedSourceStamp`), the compile watcher's delivery gates
+  (`BuildDeliveryHold.Settle`) and the bundle seeder's stale-decline adoption
+  (`PrebuiltAssemblySeeder`). On a mesh that compiles, the coordinates are cleared and the live
+  source is compiled — **if that compile fails the type has no build, by design**: an arbitrarily
+  old program must not keep running behind a red compile. On a mesh that cannot compile the
+  coordinates are kept, the execute-time gate refuses them, and the type reads `Unavailable`
+  with the notice. Each refusal logs at **Error** with both versions, the distance and the bound.
+- **Within the bound it keeps serving, loudly**: the judgement's warning carries the distance and
+  the bound, and `bake-report`'s live record census prints `STALE-BUT-SERVING: …` on every reading
+  (per partition, the furthest distance, how many are past the bound) — `none` is printed as such.
+  A stale record past the bound **degrades** `bake-report`: the judgement refuses those, so one on
+  the record has not been re-judged since (a release request re-runs it).
+- **Configured, never hard-coded**: `Modules:StaleAdoptionMaxMinorVersionsBehind` (default 5, a
+  `proposed` register value). A negative value disables the bound — and every judgement prints that
+  it is disabled. When either version cannot be read nothing is measured and nothing is refused on
+  this rule (the INCONCLUSIVE rule the MAJOR check follows).
+
+What it does **not** cover: the bound is a version distance, not a wall-clock age (neither side
+records when its build was made); and a type that **compiled** here (`Compiled`, not adopted) whose
+next compile fails keeps its last compiled build as before.
 
 #### "The write did not converge" means a CONFIRMED stamp is still standing, and nothing less
 
