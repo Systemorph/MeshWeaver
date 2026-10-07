@@ -2206,6 +2206,12 @@ GitHub assigned (EPYC 7763 without AVX-512, EPYC 9V74/9V45 and Xeon with it):
 |---|---|---|
 | defaults + `DOTNET_JitDisasm` capture | **4** | 10 |
 | `DOTNET_TieredPGO=0` | **0** | 14 |
+| the FIX build (#6254's own `build-output`, Tiered PGO off from its runtimeconfig, no env knob; run [`37652533236`](https://github.com/Systemorph/MeshWeaver/actions/runs/37652533236)) | **0** | 14 |
+
+Off against on is therefore 0 of 28 against 4 of 14 (one-sided Fisher *p* ≈ 0.009). In the fix build's
+listing, Tier-1 `AsNestedTypeDefinitionImpl` carries no profile data and does not inline
+`ContainingType` at all: it makes the virtual call, whose standalone body casts. With no guarded inline,
+the cast has nothing to be dropped from.
 
 **And the mechanism, 14 of 14.** The Tier-1 listing of
 `NamedTypeSymbol:AsNestedTypeDefinitionImpl` inlines `SourceMemberContainerTypeSymbol.ContainingType`
