@@ -111,7 +111,7 @@ The editor view resolves the pointer through `MeshNodeBindingExtensions.Bind` (`
 | You need to show | Declare | Resolved |
 |---|---|---|
 | A field of a node (title, description, a content property) | Any form/display control with a `JsonPointerReference` and `DataContext = LayoutAreaReference.GetMeshNodeDataContext(path[, bindContent: false])` | GUI, `MeshNodeBindingExtensions.Bind` |
-| A node's markdown body | `MarkdownEditorControl { Value = pointer, DataContext = nodeCtx }` (edit) · `CollaborativeMarkdownControl { NodePath }` (read) | GUI |
+| A node's markdown body | `MarkdownEditorControl { Value = pointer, DataContext = nodeCtx }` (edit) · `CollaborativeMarkdownControl { NodePath }` (read) — the node's default Overview additionally carries `Html`, the same Markdig output `POST /api/mesh/render-markdown` answers, rendered off the hub; **`Html` is authoritative when non-null** (remote clients show it directly), **`null` means not pre-rendered and the client falls back to the endpoint**; the Blazor view renders in-process from the node stream and ignores it | GUI |
 | A node as a card | `MeshNodeThumbnailControl.ForPath(path)` / `MeshNodeCardControl` with the PATH — never `FromNode(loadedNode)` | GUI, per-node cache |
 | A list of nodes | `Controls.MeshSearch.WithHiddenQuery(…)` · `MeshNodeCollectionControl.WithQueries(…)` — the GUI runs the query | GUI |
 | A grid of rows only the hub can compute (a query projected to rows) | `rowsFeed.BindGrid(id, emptyText, failedText)` (`MeshWeaver.Layout.DataGrid.DataGridBinding`) — the `DataGridControl` is returned AT ONCE, bound to `/data/{id}`; `Loading` is bound until the first row set, `EmptyContent` carries the empty or failure text | hub → `/data`, bound by pointer |

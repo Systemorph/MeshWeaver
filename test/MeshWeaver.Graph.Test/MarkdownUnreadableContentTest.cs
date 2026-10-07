@@ -95,7 +95,9 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
                 NodeType = MeshWeaver.Graph.Configuration.MarkdownNodeType.NodeType,
                 Content = Json("""{"$type":"MarkdownContent","content":"# Readable\n\nBody."}"""),
             }),
-            canComment: false, canEdit: true, hideAnnotations: false);
+            canComment: false, canEdit: true, hideAnnotations: false,
+            // Overview renders this off the hub (pooled leaf) and hands the result in.
+            renderedHtml: MarkdownViewLogic.Render("# Readable\n\nBody.", "test/present/Page", "test/present/Page").Html);
 
     private async Task<UiControl> RenderAsync(string area)
     {
@@ -144,6 +146,24 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
 
         control.Should().BeOfType<CollaborativeMarkdownControl>(
             "the body control is what consumers locate by type — it must not move behind a wrapper");
+    }
+
+    /// <summary>
+    /// A doc page's body arrives RENDERED: remote clients (React web, the React Native app) show
+    /// <see cref="CollaborativeMarkdownControl.Html"/> directly instead of a second, separately
+    /// authenticated render-markdown request. It must be the ONE parser's output — the same bytes
+    /// the endpoint answers — and survive the layout stream's serialization.
+    /// </summary>
+    [HubFact]
+    public async Task ReadableContent_ArrivesServerRendered()
+    {
+        var control = await RenderAsync(PresentView);
+
+        var body = control.Should().BeOfType<CollaborativeMarkdownControl>().Subject;
+        body.Html.Should().Be(
+            MarkdownViewLogic.Render("# Readable\n\nBody.", "test/present/Page", "test/present/Page").Html,
+            "the control carries exactly what POST /api/mesh/render-markdown would answer");
+        body.Html.Should().Contain("<h1", "…which is HTML, not the markdown source");
     }
 
     /// <summary>
