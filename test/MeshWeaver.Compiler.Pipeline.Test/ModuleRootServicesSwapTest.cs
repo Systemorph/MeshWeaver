@@ -100,6 +100,9 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             "a platform singleton that CACHED the module's service must follow the swap — the root holds a forwarding proxy");
         keyed.Greet().Should().Be("hello v2 (options v2)",
             "a KEYED root service is forwarded under the module's own key and follows the swap too");
+        OwnKeyedGreeting().Should().Be("own v2",
+            "a KEYED registration of a type the module DECLARES is answered by the registration source, which "
+            + "must read the CURRENT generation's scope on every resolve — never one cached at boot");
         journal.Entries.Should().Equal(["start v1", "stop v1", "start v2"],
             "the old generation's hosted service is stopped and the new one's started, in that order");
 
@@ -117,10 +120,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     [Fact]
     public void AKeyedServiceOfATypeTheModuleDeclares_ResolvesOnTheRootByItsKey()
     {
-        var type = HeldGeneration(Module).Assembly.GetType("MeshWeaver.Test.LiveServices.IOwnGreeter")
-                   ?? throw new Xunit.Sdk.XunitException("IOwnGreeter is not in the held module");
-        var greeter = Mesh.ServiceProvider.GetRequiredKeyedService(type, "own-keyed");
-        ((string?)type.GetMethod("Greet")!.Invoke(greeter, null)).Should().Be("own v1",
+        OwnKeyedGreeting().Should().Be("own v1",
             "the root holds no descriptor for a module-declared keyed type; the source must answer it by key");
     }
 
@@ -154,6 +154,20 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         contributions.MeasuredLiveUpdateBlockers().Should().Contain(b => b.Contains("class-typed root service"));
         ModuleLiveUpdateGuard.Violation(Module, contributions).Should().NotBeNull()
             .And.Contain("class-typed root service");
+    }
+
+    /// <summary>
+    /// Resolves the module-declared <c>IOwnGreeter</c> by its key on the root, through the HELD
+    /// generation's type, and asks it — in its own frame so no reference to that generation's type
+    /// or instance outlives the call.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private string? OwnKeyedGreeting()
+    {
+        var type = HeldGeneration(Module).Assembly.GetType("MeshWeaver.Test.LiveServices.IOwnGreeter")
+                   ?? throw new Xunit.Sdk.XunitException("IOwnGreeter is not in the held module");
+        var greeter = Mesh.ServiceProvider.GetRequiredKeyedService(type, "own-keyed");
+        return (string?)type.GetMethod("Greet")!.Invoke(greeter, null);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
