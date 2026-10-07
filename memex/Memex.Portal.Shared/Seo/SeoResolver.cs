@@ -604,16 +604,16 @@ public static class SeoResolver
     /// fetch. So a root-relative authored image falls back to the DRAWN card, which
     /// <see cref="ResolveShareableNode"/> does serve under the same flag.</para>
     ///
-    /// <para>An ABSOLUTE authored image is kept: it is some other host's business, fetchable or not on
-    /// its own terms, and nothing here can make it worse. A PUBLIC page is untouched by this and keeps
-    /// declaring exactly what it declares today — its authored image is fetchable precisely because
+    /// <para>An ABSOLUTE authored image is re-served through <see cref="AuthoredCard"/>, exactly as on
+    /// a public page: the route serves it under this same flag, and the picture is some other host's
+    /// bytes, so redrawing them discloses nothing the URL in the head did not already point at. A
+    /// PUBLIC page is untouched by this method — its authored image is fetchable precisely because
     /// the gate admits the node.</para>
     /// </summary>
     /// <param name="node">The withheld node, on a scope that opted in.</param>
     private static string PreviewImage(MeshNode node) =>
-        ExtractImage(node) is { } authored
-        && authored.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-            ? authored
+        ExtractImage(node) is { } authored && IsExternal(authored)
+            ? AuthoredCard(node.Path)
             : GeneratedCard(node.Path);
 
     /// <summary>
@@ -745,9 +745,54 @@ public static class SeoResolver
     /// <summary>
     /// The image a public page shares with: whatever it authored, else the card the portal draws
     /// for it. Never null — "this page has an Open Graph card" is the default, not an opt-in.
+    ///
+    /// <para>🚨 An authored image on ANOTHER HOST is never declared as-is: it is re-served from this
+    /// origin as <see cref="AuthoredCard"/> — normalised to a declared 1200×630 baseline JPEG within
+    /// the unfurlers' byte budget (<see cref="OgCardRenderer.NormaliseAuthored"/>). Declared raw, a
+    /// Social post's Supabase picture unfurled in WhatsApp as an EMPTY large card (2026-10-07): the
+    /// head named a picture with no type and no size, on a host whose encoding and headers the
+    /// portal does not control, while <c>twitter:card=summary_large_image</c> had already committed
+    /// the unfurler to the large layout. A ROOT-RELATIVE authored image is this origin's own and is
+    /// declared unchanged.</para>
     /// </summary>
     public static string ShareImage(MeshNode node) =>
-        ExtractImage(node) ?? GeneratedCard(node.Path);
+        ExtractImage(node) is { } authored
+            ? IsExternal(authored) ? AuthoredCard(node.Path) : authored
+            : GeneratedCard(node.Path);
+
+    /// <summary>
+    /// The URL of a node's AUTHORED share picture re-served from this origin —
+    /// <c>/api/og/{node}.jpg</c>, always a 1200×630 baseline JPEG (the drawn card, as JPEG, when the
+    /// authored picture cannot be fetched). The <c>.jpg</c> suffix is the contract the head reads the
+    /// declared type from, beside the drawn card's <c>.png</c>.
+    /// </summary>
+    public static string AuthoredCard(string nodePath) => $"/api/og/{nodePath.Trim('/')}{AuthoredCardSuffix}";
+
+    /// <summary>The suffix that marks <see cref="AuthoredCard"/> apart from <see cref="GeneratedCard"/>.</summary>
+    public const string AuthoredCardSuffix = ".jpg";
+
+    /// <summary>
+    /// The media type of a portal-served card (<see cref="IsGeneratedCard"/>): <c>image/jpeg</c> for
+    /// the re-served authored picture, <c>image/png</c> for the drawn one. Null for anything else —
+    /// an image this portal does not serve has no type it could truthfully declare.
+    /// </summary>
+    public static string? CardMediaType(string? image) =>
+        image is null || !IsGeneratedCard(image) ? null
+        : image.EndsWith(AuthoredCardSuffix, StringComparison.OrdinalIgnoreCase) ? OgCardRenderer.AuthoredMediaType
+        : "image/png";
+
+    /// <summary>A picture on some other host: an absolute http(s) URL, or a scheme-relative
+    /// (<c>//host/…</c>) network-path reference, which every consumer resolves to another host
+    /// although it starts with <c>/</c>.</summary>
+    internal static bool IsExternal(string image) =>
+        image.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+        || image.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        || image.StartsWith("//", StringComparison.Ordinal);
+
+    /// <summary>The absolute URL to FETCH an external picture from — a scheme-relative reference is
+    /// resolved as https, the scheme the share page itself is served on.</summary>
+    internal static string AbsoluteSource(string image) =>
+        image.StartsWith("//", StringComparison.Ordinal) ? "https:" + image : image;
 
     /// <summary>
     /// The generated card's URL for one node path. The <c>.png</c> suffix is deliberate: some
@@ -760,9 +805,11 @@ public static class SeoResolver
     /// instance's own card, saying only its name and host.</summary>
     public const string SiteCard = "/api/og.png";
 
-    /// <summary>Whether a share image is one the portal DRAWS — those are always
-    /// <see cref="OgCardRenderer.Width"/>×<see cref="OgCardRenderer.Height"/> PNGs, so the head
-    /// can declare the size; an authored image's dimensions are unknown here.
+    /// <summary>Whether a share image is one the portal SERVES as a card — the drawn PNG and the
+    /// re-served authored JPEG (<see cref="AuthoredCard"/>) are both exactly
+    /// <see cref="OgCardRenderer.Width"/>×<see cref="OgCardRenderer.Height"/>, so the head can declare
+    /// the size, and <see cref="CardMediaType"/> the type; an image on this origin's content route
+    /// has dimensions unknown here.
     ///
     /// <para>Takes the image as <see cref="ShareImage"/> returns it, BEFORE the head prefixes the
     /// host: the drawn cards are the two ROOT-RELATIVE shapes this route serves and nothing else.
