@@ -6,54 +6,34 @@ using Xunit;
 namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
-/// 🚨 <b>The version scheme has exactly TWO shapes, and this is what makes that true rather than
-/// merely written down.</b>
-///
-/// <para>Maintainer, 2026-09-07: <i>"we will then not introduce the rc line anymore"</i> ·
-/// <i>"let's just use version numbers -ci for temp then without -ci for final version"</i>. So:</para>
+/// 🚨 <b>The version the minter composes has exactly the shapes of the SemVer notation, and this is
+/// what makes that true rather than merely written down</b> — policy
+/// <c>platform-semver-versioning</c> (<c>Doc/Architecture/PlatformVersioning</c>).
 ///
 /// <list type="bullet">
-/// <item><c>X.Y.Z-ci.&lt;n&gt;</c> — every continuous / temporary build.</item>
-/// <item><c>X.Y.Z</c> — the release, with no pre-release label at all.</item>
+/// <item><c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c> — every continuous build under CI. NO
+/// pre-release label; the patch is the CD run number, the same monotonic counter the retired
+/// <c>-ci.&lt;run&gt;</c> suffix carried, so both notations share one lineage.</item>
+/// <item><c>&lt;major&gt;.&lt;minor&gt;.0-ci.0</c> — a LOCAL source build (run ordinal 0: never ordered
+/// against a publication).</item>
+/// <item><c>X.Y.Z</c> — <c>-p:PublicRelease=true</c>, kept for local experiments only.</item>
 /// </list>
 ///
-/// <para>No <c>rc</c>, no <c>preview</c>, no <c>beta</c>, no labelled line, no <c>.ci.</c> separator
-/// variant. Ever. The rule is stated in <c>Doc/Architecture/ReleaseProcess</c> §1 and in
-/// <c>Directory.Build.props</c> itself — and AGENTS.md is explicit that a rule living only in prose
-/// is not a rule: <i>"Prose asserts guards that do not exist"</i>. This is the guard.</para>
-///
-/// <para><b>What a violation costs.</b> A label is not cosmetic, because SemVer §11.4 compares
-/// pre-release identifiers as TEXT: <c>"ci" &lt; "rc"</c>, so <c>3.0.0-ci.&lt;n&gt;</c> ranks below
-/// <c>3.0.0-rc8</c> for EVERY n. Measured 2026-09-07 (Systemorph/MeshWeaver#3554): 42 packages
-/// declared rc-line or clean-<c>3.0.0</c> floors that no shipping platform could satisfy, every
-/// self-update candidate was held on both AKS portals, and every open pull request in
-/// MeshWeaver.Plugins went red — while the registry held 1268 tags of which 48 were
-/// <c>3.0.0-ci.*</c> and ZERO were <c>rc*</c>. Both failures are silent: the portal logs a hold and
-/// carries on, and nothing in the release process asks whether the label it minted is orderable.</para>
+/// <para><b>What a violation costs.</b> SemVer §11.4 compares pre-release identifiers as TEXT, so a
+/// label on <c>PlatformVersion</c> made <c>3.0.0-ci.&lt;n&gt;</c> rank below <c>3.0.0-rc8</c> for
+/// every n (#3554), and a mislabelled line outranked every later sealed set (#3542). The run number
+/// is the one key the pipeline never gets wrong; this guard keeps it where every reader expects it.</para>
 ///
 /// <para><b>Why MSBuild and not a text match on the props file.</b> The thing that must hold is the
 /// COMPOSED string — what reaches an image tag, a package version and
-/// <c>MESHWEAVER_PLATFORM_VERSION</c> — and that is the product of five conditioned properties. A
-/// regex over the XML would pass a props file whose <c>PlatformVersion</c> is clean but whose
-/// composition reintroduces a label somewhere downstream. So this evaluates the real project through
-/// the real evaluator, exactly as CD does, via <see cref="MsBuildPropertyProbe"/>.</para>
+/// <c>MESHWEAVER_PLATFORM_VERSION</c> — so this evaluates the real project through the real
+/// evaluator, exactly as CD does (<c>-getProperty:Version -p:CIRun=true</c>), via
+/// <see cref="MsBuildPropertyProbe"/>.</para>
 ///
-/// <para>🚨 <b><c>edge</c> is not a third shape, and widening the pattern to admit it would be a
-/// mistake.</b> <c>edge-images.yml</c> computes <c>$(Version)</c> from this tree FIRST — so it starts
-/// from <c>X.Y.Z-ci.&lt;n&gt;</c> — then rewrites the <c>ci</c> label to <c>edge</c> and keeps the same
-/// run number. What this guard measures is <c>$(Version)</c> itself, before any lane renames it, and
-/// that is exactly the surface the rule is about. A new delivery channel is added by extending
-/// <c>PlatformReleaseOrder.ChannelLabels</c> and the re-label, never by putting a pre-release label on
-/// <c>PlatformVersion</c>.</para>
-///
-/// <para>🚨 <b>MINTING one shape is not READING one.</b> This guard binds the MINTER only. The
-/// rc-line images minted with the <c>.ci.</c> separator are still addressable, an install can be
-/// running one, and every consumer that parses the run number back out of a version must keep
-/// accepting both separators — <c>PlatformReleaseOrder.BuildOrdinal</c>, <c>VersionSelect</c>,
-/// <c>edge-images.yml</c>, MeshWeaver.Plugins' <c>check-platform-pins.py</c>. That side is pinned by
-/// <c>PlatformReleaseOrderTest</c> (<c>3.0.0-rc9.ci.7824</c> → <c>7824</c>); do not "simplify" it to
-/// agree with this one, or a retired tag reads as carrying no run number and is promoted into the
-/// promotion-ranked half of the self-updater's order — issue #3542's freeze, rebuilt by a tidy-up.</para>
+/// <para>🚨 <b>MINTING one notation is not READING one.</b> This guard binds the MINTER only. Every
+/// <c>3.0.0-ci.&lt;n&gt;</c> and <c>3.0.0-rc9.ci.&lt;n&gt;</c> image is still addressable, an install
+/// can be running one, and every reader of a run number keeps accepting both notations —
+/// <c>PlatformReleaseOrderTest</c> pins that side.</para>
 /// </summary>
 public class PlatformVersionSchemeGuard
 {
@@ -64,153 +44,116 @@ public class PlatformVersionSchemeGuard
     /// </summary>
     private const string ProbeProject = "src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj";
 
+    /// <summary>The run number the CI evaluation is handed, standing in for GITHUB_RUN_NUMBER.</summary>
+    private const string RunNumber = "10050";
+
     /// <summary>The maintained line: three numeric parts and NOTHING else.</summary>
     private static readonly Regex CleanLine = new(@"^\d+\.\d+\.\d+$", RegexOptions.Compiled);
 
-    /// <summary>
-    /// The whole scheme: <c>X.Y.Z</c> (the release) or <c>X.Y.Z-ci.&lt;n&gt;</c> (every continuous
-    /// build). Deliberately anchored, deliberately case-sensitive, and deliberately without an
-    /// alternative separator — <c>X.Y.Z-&lt;label&gt;.ci.&lt;n&gt;</c> is the retired shape.
-    /// </summary>
-    private static readonly Regex TwoShapes = new(@"^\d+\.\d+\.\d+(-ci\.\d+)?$", RegexOptions.Compiled);
+    /// <summary>A continuous build: <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>, run never 0.</summary>
+    private static readonly Regex ContinuousShape = new(@"^\d+\.\d+\.[1-9]\d*$", RegexOptions.Compiled);
 
-    private static readonly string[] Probed = ["PlatformVersion", "Version"];
+    /// <summary>A local source build: <c>&lt;major&gt;.&lt;minor&gt;.0-ci.0</c>.</summary>
+    private static readonly Regex LocalShape = new(@"^\d+\.\d+\.0-ci\.0$", RegexOptions.Compiled);
+
+    private static readonly string[] Probed = ["PlatformVersion", "Version", "AssemblyVersion"];
 
     /// <summary>
-    /// <c>PlatformVersion</c> — the one maintained number — carries no pre-release label. Everything
-    /// else in the scheme is derived from it, so a label here is the single edit that can put the
-    /// whole fleet back into #3554.
+    /// <c>PlatformVersion</c> — the one maintained number — carries no pre-release label, and its
+    /// line is at or above the first line of the SemVer notation (3.1).
     /// </summary>
     [Fact]
-    public void TheMaintainedPlatformVersionCarriesNoPreReleaseLabel()
+    public void TheMaintainedPlatformVersionIsACleanLineOfTheSemVerNotation()
     {
         var platformVersion = Evaluate()["PlatformVersion"];
 
         Assert.False(string.IsNullOrWhiteSpace(platformVersion),
             "$(PlatformVersion) evaluated empty — the root Directory.Build.props no longer sets the "
             + "one maintained number, so every derived version is an SDK default.");
-
         Assert.True(CleanLine.IsMatch(platformVersion),
-            $"PlatformVersion is '{platformVersion}', which carries a pre-release label. The scheme "
-            + "has exactly two shapes — X.Y.Z-ci.<n> for every continuous build and clean X.Y.Z for "
-            + "the release (maintainer, 2026-09-07) — and this property is the clean line, always. "
-            + "SemVer §11.4 compares pre-release identifiers as TEXT, so any label you add here "
-            + "outranks or is outranked by 'ci' as a WORD: that is how 42 module packages came to "
-            + "declare floors no 3.0.0-ci.<n> platform can ever satisfy, holding every self-update "
-            + "candidate on both AKS portals (#3554). See Doc/Architecture/ReleaseProcess §1.");
+            $"PlatformVersion is '{platformVersion}', which carries a pre-release label. It is the clean "
+            + "line, always (policy platform-semver-versioning; #3554).");
+
+        var parts = platformVersion.Split('.');
+        var major = int.Parse(parts[0]);
+        var minor = int.Parse(parts[1]);
+        Assert.True(major > 3 || (major == 3 && minor >= 1),
+            $"PlatformVersion is '{platformVersion}', below line 3.1 — the readers "
+            + "(PlatformReleaseOrder.SemVerEraStart) read a plain <major>.<minor>.<run> as a build only "
+            + "from 3.1 on, so a 3.0.<run> image would land in the promotion band and never be selected.");
     }
 
     /// <summary>
-    /// The composed <c>$(Version)</c> — the image tag, the package version and
-    /// <c>MESHWEAVER_PLATFORM_VERSION</c> — is one of the two shapes on BOTH channels: the
-    /// continuous default and <c>-p:PublicRelease=true</c>.
+    /// The composed <c>$(Version)</c> on each channel: CI mints <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>
+    /// with the run as the patch, a local build mints the ordinal-0 stamp, and the release channel is
+    /// clean.
     /// </summary>
     [Fact]
-    public void TheComposedVersionIsOneOfTheTwoShapes()
+    public void TheComposedVersionIsTheSemVerNotation_OnEveryChannel()
     {
-        var continuous = Evaluate()["Version"];
+        var ci = Evaluate("-p:CIRun=true", $"-p:GITHUB_RUN_NUMBER={RunNumber}");
+        var local = Evaluate("-p:CIRun=false")["Version"];
         var released = Evaluate("-p:PublicRelease=true")["Version"];
+        var line = ci["PlatformVersion"][..ci["PlatformVersion"].LastIndexOf('.')];
 
-        AssertIsOneOfTheTwoShapes(continuous, "the continuous channel (the default)");
-        AssertIsOneOfTheTwoShapes(released, "the released channel (-p:PublicRelease=true)");
-
-        // 🚨 Shape-conformance alone is not enough: `X.Y.Z` satisfies TwoShapes, so a composition
-        // that dropped the suffix entirely would pass the assertion above while making every
-        // continuous build indistinguishable from the release it has not been promoted to.
-        Assert.True(continuous.Contains("-ci.", StringComparison.Ordinal),
-            $"the continuous channel composed '{continuous}', which carries no -ci.<n> suffix. "
-            + "Every continuous and temporary build must be distinguishable from the release: the "
-            + "release is a PROMOTION of a sealed continuous set (release.yml retags it), so a "
-            + "continuous build wearing the clean version would collide with the very tag the "
-            + "promotion writes.");
-
-        // …and the release channel must be clean, for the same reason read the other way.
-        Assert.True(CleanLine.IsMatch(released),
-            $"the released channel composed '{released}', which is not a clean X.Y.Z. A Stable "
-            + "install selects !IsPrerelease, so a labelled release is invisible to every install "
-            + "waiting for it.");
+        Assert.Equal($"{line}.{RunNumber}", ci["Version"]);
+        Assert.Matches(ContinuousShape, ci["Version"]);
+        Assert.Equal($"{line}.0-ci.0", local);
+        Assert.Matches(LocalShape, local);
+        Assert.Matches(CleanLine, released);
     }
 
     /// <summary>
-    /// 🚨 <b>The control arm — proof this guard can FAIL.</b> Reintroduce the retired label through
-    /// the real evaluator and require the composed version to be REJECTED. Without this the two
-    /// assertions above pass in every world where the regex is wrong, the probe silently returned a
-    /// constant, or the override never reached MSBuild — a guard measuring nothing, dressed as a
-    /// green tick (AGENTS.md: <i>"a verification step that cannot fail is not a verification step"</i>).
-    ///
-    /// <para>It doubles as the executable statement of what a labelled line DOES to the composition
-    /// now that <c>_CiSep</c> is retired: there is no branch left to make <c>3.0.0-rc8</c> compose a
-    /// well-formed <c>.ci.</c> pre-release, so the minter cannot emit the retired shape even under
-    /// an override — it emits something outside the scheme, and this says so.</para>
+    /// 🚨 The runtime binding identity follows the MAJOR only: a deliberate minor bump must not move
+    /// <c>AssemblyVersion</c>, or every compiled module and NodeType bound to the previous minor would
+    /// reference an assembly version the platform no longer carries (policy
+    /// <c>platform-backwards-compatibility</c>: same major is compatible).
     /// </summary>
     [Fact]
-    public void ReintroducingALabelLeavesTheTwoShapes_MeasuredThroughRealMSBuild()
+    public void TheBindingIdentityFollowsTheMajorOnly()
     {
-        const string RetiredLine = "3.0.0-rc8";
-
-        var probed = Evaluate($"-p:PlatformVersion={RetiredLine}");
-        var platformVersion = probed["PlatformVersion"];
-        var composed = probed["Version"];
-
-        // The override actually reached the evaluation — otherwise the rejection below would be a
-        // rejection of nothing, and this whole test would be measuring the bare build twice.
-        Assert.Equal(RetiredLine, platformVersion);
-
-        Assert.False(CleanLine.IsMatch(platformVersion),
-            "the clean-line predicate accepted a labelled PlatformVersion, so "
-            + $"{nameof(TheMaintainedPlatformVersionCarriesNoPreReleaseLabel)} cannot fail and is "
-            + "guarding nothing. Fix the predicate, not this assertion.");
-
-        Assert.False(TwoShapes.IsMatch(composed),
-            $"$(Version) composed '{composed}' from the retired line '{RetiredLine}' and the "
-            + "two-shape predicate ACCEPTED it, so "
-            + $"{nameof(TheComposedVersionIsOneOfTheTwoShapes)} cannot fail and is guarding nothing. "
-            + "Fix the predicate, not this assertion.");
+        var probed = Evaluate("-p:PlatformVersion=3.7.0");
+        Assert.Equal("3.7.0", probed["PlatformVersion"]);
+        Assert.Equal("3.0.0.0", probed["AssemblyVersion"]);
+        Assert.Equal("4.0.0.0", Evaluate("-p:PlatformVersion=4.2.0")["AssemblyVersion"]);
     }
 
     /// <summary>
-    /// The predicate itself, against every shape the platform has actually minted or been asked to
-    /// mint. Pure — no MSBuild — so it stays a readable statement of the scheme, and so the retired
-    /// shapes are written down somewhere that fails when someone widens the pattern to admit them.
+    /// 🚨 <b>The control arm — proof the predicates can FAIL.</b> Through the real evaluator, a
+    /// labelled line is rejected by the line predicate, and a run number of 0 under CI (what an
+    /// off-Actions CI build without a run number would mint at midnight) is rejected by the continuous
+    /// shape — so neither guard above passes in a world where its regex is wrong or the override never
+    /// reached MSBuild.
     /// </summary>
-    [Theory]
-    // The scheme.
-    [InlineData("3.0.0", true)]
-    [InlineData("3.0.0-ci.0", true)]
-    [InlineData("3.0.0-ci.7989", true)]
-    [InlineData("4.12.7-ci.1", true)]
-    // The retired rc line — both the label alone and the `.ci.` separator it minted.
-    [InlineData("3.0.0-rc8", false)]
-    [InlineData("3.0.0-rc13", false)]
-    [InlineData("3.0.0-rc9.ci.7818", false)]
-    // Labels that were never minted here and never may be.
-    [InlineData("3.0.0-preview1", false)]
-    [InlineData("3.0.0-beta.1", false)]
-    [InlineData("3.0.0-alpha", false)]
-    // Near-misses: the suffix must be exactly `-ci.<digits>`, case included.
-    [InlineData("3.0.0-CI.7989", false)]
-    [InlineData("3.0.0-ci", false)]
-    [InlineData("3.0.0-ci.", false)]
-    [InlineData("3.0.0-ci.abc", false)]
-    [InlineData("3.0.0.7989", false)]
-    [InlineData("3.0-ci.7989", false)]
-    public void ThePredicateAdmitsTheSchemeAndNothingElse(string version, bool admitted)
-        => Assert.Equal(admitted, TwoShapes.IsMatch(version));
-
-    private static void AssertIsOneOfTheTwoShapes(string version, string channel)
+    [Fact]
+    public void TheShapesRejectWhatTheyMustReject_MeasuredThroughRealMSBuild()
     {
-        Assert.False(string.IsNullOrWhiteSpace(version),
-            $"$(Version) evaluated empty on {channel} — the composition in Directory.Build.props no "
-            + "longer produces a version, so the SDK's default is what would tag the image.");
+        const string RetiredLine = "3.1.0-rc8";
+        var labelled = Evaluate($"-p:PlatformVersion={RetiredLine}");
+        Assert.Equal(RetiredLine, labelled["PlatformVersion"]);
+        Assert.DoesNotMatch(CleanLine, labelled["PlatformVersion"]);
 
-        Assert.True(TwoShapes.IsMatch(version),
-            $"$(Version) composed '{version}' on {channel}, which is not one of the two shapes "
-            + "(X.Y.Z-ci.<n> or X.Y.Z). This string becomes the ACR/GHCR image tag, the package "
-            + "version and MESHWEAVER_PLATFORM_VERSION, and it is ordered against every other tag "
-            + "in the registry — a third shape is either unorderable or orders by TEXT against 'ci' "
-            + "(SemVer §11.4), which is #3554 and #3542. See Doc/Architecture/ReleaseProcess §1, and "
-            + "note the separator is a literal '-': the '.ci.' form is READ for history and never "
-            + "minted again.");
+        var zero = Evaluate("-p:CIRun=true", "-p:GITHUB_RUN_NUMBER=0")["Version"];
+        Assert.DoesNotMatch(ContinuousShape, zero);
+    }
+
+    /// <summary>The predicates themselves, against every shape the platform has minted or been
+    /// asked to mint.</summary>
+    [Theory]
+    [InlineData("3.1.10050", true, false)]
+    [InlineData("4.0.1", true, false)]
+    [InlineData("3.1.0-ci.0", false, true)]
+    [InlineData("3.1.0", false, false)]
+    [InlineData("3.0.0-ci.7989", false, false)]   // the retired notation — read, never minted again
+    [InlineData("3.0.0-rc9.ci.7818", false, false)]
+    [InlineData("3.1.10050-rc1", false, false)]
+    [InlineData("3.1.10050-ci.1", false, false)]
+    [InlineData("3.1.0-CI.0", false, false)]
+    [InlineData("3.1-10050", false, false)]
+    public void ThePredicatesAdmitTheNotationAndNothingElse(string version, bool continuous, bool local)
+    {
+        Assert.Equal(continuous, ContinuousShape.IsMatch(version));
+        Assert.Equal(local, LocalShape.IsMatch(version));
     }
 
     private static IReadOnlyDictionary<string, string> Evaluate(params string[] extraArguments)

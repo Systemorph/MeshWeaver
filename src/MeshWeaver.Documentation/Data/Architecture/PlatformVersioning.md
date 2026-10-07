@@ -73,8 +73,8 @@ this change teaches the place both notations. "Owed" means a later step of the m
 
 | place | role | status |
 |---|---|---|
-| `Directory.Build.props:122` `PlatformVersion` = `3.0.0`; `:319` `Version = $(PlatformVersion)-ci.$(_CiBuildNumber)` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here (`main-cd.yml` reads it with `-getProperty:Version`) | owed: minter step (§4 step 4) |
-| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the "two shapes" guard (`X.Y.Z-ci.<n>` / `X.Y.Z`) | owed, together with the minter |
+| `Directory.Build.props:122` `PlatformVersion` = `3.0.0`; `:319` `Version = $(PlatformVersion)-ci.$(_CiBuildNumber)` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here (`main-cd.yml` reads it with `-getProperty:Version`) | **handled in the minter change** (§4 step 4): `PlatformVersion` = `3.1.0`; CI `Version` = `<major>.<minor>.<run>`, local `<major>.<minor>.0-ci.0`; `AssemblyVersion` pinned to `<major>.0.0.0` so a minor bump never moves the binding identity |
+| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the "two shapes" guard (`X.Y.Z-ci.<n>` / `X.Y.Z`) | **handled in the minter change**: guards the SemVer shapes through real MSBuild, with a control arm |
 | `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs:68,92,122` | **R**: `BuildOrdinal`, `Compare`, `Newest`, the ONE order every C# caller uses (`VersionSelect`, `PlatformFloor`, `PlatformCompatibility.ProducerIsNewer`, `TargetSet`, `SealedPublicationIndex`, `ShippedPrebuiltBundles`, `PrebuiltBundleRetention`) | **handled**: `SemVerEraStart`, `IsSemVerBuild` |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs:211` | **R**: Stable must not admit a run-numbered clean tag | **handled** |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` `ResolveChannel` advisory | **R/P**: tells the operator which pattern to set | **handled**: names `3.*` |
@@ -91,7 +91,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `.github/workflows/node-repo-gate.yml:844-847` | **R**: `platform-set` input shape | **handled**, executed by `test-gate-lane-forwards-the-callers-set.py` |
 | `.github/workflows/node-repo-publish-bake.yml:2106` | **R**: released-version shape | already accepts `X.Y.Z` |
 | `.github/workflows/edge-images.yml:74-76` | **P**: edge tag; for the new notation it falls through to `<v>-edge.<run>` | already correct |
-| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | owed, together with the minter: decision 2 in §6 |
+| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | **handled in the minter change** (decision 2 in §6): `v3.0.0` promotes `3.0.0-ci.<run>`, `v<major>.<minor>.0` promotes `<major>.<minor>.<run>`, a non-zero patch on the new line is refused, and no `-latest` pointer moves in the new notation; executed by `test-release-promotes-both-notations.py` |
 | `.github/acr-retention/*`, comments across `main-cd.yml` | prose and fixtures | history; no change |
 
 ### MeshWeaver.Plugins

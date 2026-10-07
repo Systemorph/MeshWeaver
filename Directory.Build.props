@@ -119,7 +119,22 @@
          rc9, and "rc13" sorts below "rc2", so nuget.org listed rc9 as the newest for the whole
          run. NuGet publication is retired: in-mesh source compiles against the IMAGE, never against
          a feed (Doc/Architecture/PluginPackaging); the packages on nuget.org stay as history. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
+    <!-- 🚨 THE SEMVER NOTATION — policy `platform-semver-versioning` (Doc/Architecture/PlatformVersioning,
+         register in Doc/Architecture/PolicyNotProse). This SUPERSEDES the two-shape note above for
+         everything minted from line 3.1 on:
+
+             <major>.<minor>.<run>      every continuous build (CI): 3.1.10050 — NO pre-release label;
+                                        the PATCH is $(GITHUB_RUN_NUMBER), the same monotonic counter
+                                        the old `-ci.<run>` suffix carried, so the old and the new
+                                        notation share ONE lineage (3.0.0-ci.9999 < 3.1.10000)
+             <major>.<minor>.0-ci.0     a LOCAL source build (ordinal 0: never ordered against a
+                                        publication, exactly as 3.0.0-ci.0 was)
+
+         The minor is bumped deliberately (a pull request editing this number); the major only on a
+         declared break. Every reader of the run number understands both notations
+         (PlatformReleaseOrder.SemVerEraStart, .github/scripts/platform-version.py, resolve-platform.py,
+         arm-promoted-set.py) — that reader change had to reach every portal BEFORE this line moved. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
     <!-- 🚨 THE COMPATIBILITY EPOCH — policy `platform-backwards-compatibility`
          (Doc/Architecture/PolicyNotProse). Compiled NodeType and module bytes are keyed on
          c<major:D3>e<epoch:D3> (MeshWeaver.Compiler.PlatformCompatibility.KeyOf), NOT on a per-build
@@ -276,6 +291,10 @@
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
     <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
+    <!-- `<major>.<minor>` and `<major>` of the line — the SemVer notation's prefix
+         (policy `platform-semver-versioning`), and the binding identity's major (below). -->
+    <_PlatformLine>$([System.Text.RegularExpressions.Regex]::Match($(_VersionNumeric), '^\d+\.\d+').Value)</_PlatformLine>
+    <_PlatformMajor>$([System.Text.RegularExpressions.Regex]::Match($(_VersionNumeric), '^\d+').Value)</_PlatformMajor>
     <!-- 🚨 THE ci SEPARATOR IS A LITERAL '-', UNCONDITIONALLY, and there is no property for it.
          This used to be a `_CiSep` that chose '.' when $(PlatformVersion) carried a label, so a
          labelled line composed `3.0.0-rc9.ci.<n>` instead of the invalid `3.0.0-rc9-ci.<n>`. That
@@ -316,7 +335,10 @@
     <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
     <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
-    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)-ci.$(_CiBuildNumber)</Version>
+    <!-- The SemVer notation (policy `platform-semver-versioning`): the run number IS the patch
+         under CI; a local build is `<major>.<minor>.0-ci.0`, which every reader ranks as ordinal 0. -->
+    <Version Condition="'$(PublicRelease)' != 'true' and '$(CIRun)' == 'true'">$(_PlatformLine).$(_CiBuildNumber)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true' and '$(CIRun)' != 'true'">$(_PlatformLine).0-ci.0</Version>
   </PropertyGroup>
   <!-- 🚨 THE COMPILED VERSION ATTRIBUTES — UNCONDITIONAL, and deliberately so (#3022). These end
        up inside every emitted assembly (and therefore inside its REFERENCE assembly, which is what
@@ -375,7 +397,10 @@
          actually relied on it.) NodeType ABI identity is FrameworkVersion (commit under CIRun,
          Graph MVID locally) and the self-updater keys on the image tag (ci.N) — neither uses
          AssemblyVersion or FileVersion. -->
-    <AssemblyVersion>$(_VersionNumeric).0</AssemblyVersion>
+    <!-- 🚨 Pinned to the MAJOR (3.0.0.0), never the minor: same-major is compatible (policy
+         `platform-backwards-compatibility`), so a deliberate minor bump under the SemVer notation
+         must not move the runtime binding identity every compiled module and NodeType references. -->
+    <AssemblyVersion>$(_PlatformMajor).0.0.0</AssemblyVersion>
     <FileVersion>$(_VersionNumeric).0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
