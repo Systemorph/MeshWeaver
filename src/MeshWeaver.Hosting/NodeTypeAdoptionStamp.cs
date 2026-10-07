@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -58,6 +59,37 @@ public static class NodeTypeAdoptionStamp
         return string.IsNullOrWhiteSpace(definition.CompiledFrameworkVersion)
             ? null
             : definition.CompiledFrameworkVersion;
+    }
+
+    /// <summary>
+    /// The ONE reading of the mesh-wide NodeType read as a reference set — every framework identity
+    /// <paramref name="records"/> adopted, for BOTH readers (the retention pass and the deployment
+    /// report's adopted-artifact inventory), so the two cannot disagree about what a read means.
+    /// Throws on a record whose content is present but unreadable (see
+    /// <see cref="CompiledFrameworkVersionOf"/>).
+    ///
+    /// <para>An EMPTY read throws too. A prebuilt bundle exists only because a NodeType was
+    /// compiled, and every portal registers declaration-less static NodeTypes besides, so a mesh
+    /// answering ZERO NodeType records is an incomplete read (a catalog not yet hydrated, a
+    /// partition not yet reachable), never "nothing is adopted". Accepting it would leave every
+    /// unpinned bundle deletable; refusing costs one pass or one report, and the next one reads again.</para>
+    /// </summary>
+    /// <param name="records">The NodeType records of one mesh-wide read.</param>
+    /// <param name="options">The reading hub's serializer options.</param>
+    /// <param name="logger">Diagnostics for the content read.</param>
+    /// <returns>Every adopted framework identity.</returns>
+    public static ImmutableHashSet<string> AdoptedIdentitiesOf(
+        IReadOnlyCollection<MeshNode> records, JsonSerializerOptions options, ILogger? logger = null)
+    {
+        if (records.Count == 0)
+            throw new InvalidOperationException(
+                "the mesh-wide NodeType read returned no records at all — an incomplete read, never "
+                + "\"nothing is adopted\"; the reference set cannot be built");
+        return records
+            .Select(n => CompiledFrameworkVersionOf(n, options, logger))
+            // CompiledFrameworkVersionOf already answers null for a blank stamp.
+            .OfType<string>()
+            .ToImmutableHashSet(StringComparer.Ordinal);
     }
 
     private static string DescribeContent(object content) =>
