@@ -100,6 +100,16 @@ runs the step again when the node is next read.
    (monolith, no cluster) the counted reports are all there is. A running member that never reports
    leaves the request open — visible on the node, never silently `Done`.
    A failed live swap leaves the previous generation serving and falls back to the one restart.
+   🚨 **The agent reads the commit the feed ANNOUNCED, never whatever its mirror holds.** It hears a
+   request on the invalidation feed, which fires post-commit, while this process's mirror of the node
+   receives the owner's echo on its own path — under load AFTER the feed. An unfloored `Take(1)` then
+   read `Landing` for the event that announced `Activating`, swapped nothing, reported nothing, and
+   nothing later woke it (the executor writes nothing until a replica reports): the request sat in
+   `Activating` with nothing logged. So the read waits for a state at or past the event's `Version`
+   — the floor `RebaseSource` applies to an announced version (#1174) — and a mirror that never gets
+   there times out loudly. A path from the boot listing announces no commit and reads unfloored. The
+   instance reboot's agent ([Instance Reboot](../InstanceReboot)) reads the same way. Pinned by
+   `ModuleReloadAgentReadsTheAnnouncedCommitTest`, whose unfloored control reports nothing.
 
 ## A crash is never final
 
