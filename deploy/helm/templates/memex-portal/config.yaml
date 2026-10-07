@@ -777,6 +777,34 @@ data:
   {{- if hasKey .Values.config.memex_portal "Hosting__BugFix__Enabled" }}
   Hosting__BugFix__Enabled: "{{ .Values.config.memex_portal.Hosting__BugFix__Enabled }}"
   {{- end }}
+  # ---- The control plane's model-spending automation: one opt-OUT switch each -----------------
+  # (MeshWeaver.Plugins Hosting/AutomationSwitches.md). Every one defaults ON in code, so the only
+  # value worth carrying is an explicit "false" — and until these lines existed a record's
+  # extraPortalConfig setting one reached NO container (this ConfigMap names every key; there is no
+  # catch-all): measured 2026-10-07 on memex, Hosting__Coordinator__Enabled=false and
+  # Hosting__StuckDetector__Enabled=false sat on the record while both kept running model rounds.
+  #   Coordinator__Enabled                    the fleet coordinator's rounds (Hosting/Coordinator/_Thread/fleet-coordinator)
+  #   StuckDetector__Enabled                  the stuck detector's pass, its coordinator wakes and heavy escalations
+  #   Triage__PullRequestReview__Enabled      every internal pr-reviewer round (review-* threads, sweep kicks, post-merge)
+  #   Triage__Agent__Enabled                  the triage agent's rounds (triage-* threads)
+  #   TriageAssignments__Enabled              the PR-event fan-out to assigned threads (pr-<repo>-<n> threads) and its pass
+  # Rendered whenever the key is PRESENT and non-empty; tested with `ne … ""` over toString, never
+  # `default ""`, so an unquoted YAML `false` is not dropped as empty.
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Coordinator__Enabled") (ne (.Values.config.memex_portal.Hosting__Coordinator__Enabled | toString | trim) "") }}
+  Hosting__Coordinator__Enabled: "{{ .Values.config.memex_portal.Hosting__Coordinator__Enabled | toString | trim }}"
+  {{- end }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__StuckDetector__Enabled") (ne (.Values.config.memex_portal.Hosting__StuckDetector__Enabled | toString | trim) "") }}
+  Hosting__StuckDetector__Enabled: "{{ .Values.config.memex_portal.Hosting__StuckDetector__Enabled | toString | trim }}"
+  {{- end }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__PullRequestReview__Enabled") (ne (.Values.config.memex_portal.Hosting__Triage__PullRequestReview__Enabled | toString | trim) "") }}
+  Hosting__Triage__PullRequestReview__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__PullRequestReview__Enabled | toString | trim }}"
+  {{- end }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__Triage__Agent__Enabled") (ne (.Values.config.memex_portal.Hosting__Triage__Agent__Enabled | toString | trim) "") }}
+  Hosting__Triage__Agent__Enabled: "{{ .Values.config.memex_portal.Hosting__Triage__Agent__Enabled | toString | trim }}"
+  {{- end }}
+  {{- if and (hasKey .Values.config.memex_portal "Hosting__TriageAssignments__Enabled") (ne (.Values.config.memex_portal.Hosting__TriageAssignments__Enabled | toString | trim) "") }}
+  Hosting__TriageAssignments__Enabled: "{{ .Values.config.memex_portal.Hosting__TriageAssignments__Enabled | toString | trim }}"
+  {{- end }}
   # Control instance only: the deployments the ONE org webhook's pull-request and check events are
   # forwarded to over the control lane (comma-separated ids; Hosting:PrEvents:ForwardTo).
   {{- if .Values.config.memex_portal.Hosting__PrEvents__ForwardTo }}
