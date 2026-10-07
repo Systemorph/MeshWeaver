@@ -595,6 +595,8 @@ jobs:
       contents: read
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Resolve and bind the artifact store
         id: store
         uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
@@ -821,7 +823,7 @@ jobs:
           [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image-digest and platform-image-digest are both empty, so this lane resolves the newest sealed platform set itself — and that needs acr-username + acr-password (secrets, the BASIC registry credential) to prove the set's images are in the registry. Pass them, or pin both digests (an OIDC-only caller pins)."; exit 1; }
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-platform.py has no ref to be fetched at"; exit 1; }
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           python3 "$SCRIPT" --self-test

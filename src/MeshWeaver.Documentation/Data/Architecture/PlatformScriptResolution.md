@@ -16,11 +16,12 @@ that bites afterwards — **which ref, and who resolves it.**
 ## What the lane actually does
 
 `node-repo-compile-check.yml` fetches the script at the caller's `platform-ref` input and runs it
-with the caller's tree and allow-file:
+with the caller's tree and allow-file. The read goes over git, not the REST contents API — a REST
+read spends the caller's per-repository token budget once per job
+([The CI REST Budget](../CiRestBudget)):
 
 ```bash
-gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/compile-check.py?ref=${PLATFORM_REF}" \
-  --jq .content | base64 -d > "$RUNNER_TEMP/compile-check.py"
+"$RUNNER_TEMP/mw-core-file" "${PLATFORM_REF}" ".github/scripts/compile-check.py" > "$RUNNER_TEMP/compile-check.py"
 python3 "$RUNNER_TEMP/compile-check.py" --refs ../refs
   # MW_REPO_ROOT:  ${{ github.workspace }}/repo
   # MW_ALLOW_FILE: ${{ github.workspace }}/repo/scripts/compile-check.allow

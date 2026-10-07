@@ -363,7 +363,9 @@ def check_script_needs_tree(root: Path) -> list[Finding]:
     pull the platform's copy of a script into `$RUNNER_TEMP` — on that runner the tree is the
     SATELLITE's and never contains the file, so a checkout would satisfy this rule while
     proving nothing. The excluded occurrence is exactly the one preceded by `contents/`; any
-    other `.github/scripts/` reference in the same job still fires (self-tested below).
+    other `.github/scripts/` reference in the same job still fires (self-tested below). The lanes
+    now read those files over git instead (`"$RUNNER_TEMP/mw-core-file" "$REF" ".github/scripts/x.py"`,
+    Doc/Architecture/CiRestBudget), and the reader's path argument is excluded for the same reason.
     """
     import yaml
 
@@ -396,13 +398,20 @@ def check_script_needs_tree(root: Path) -> list[Finding]:
     return findings
 
 
+# The platform-file reader's path argument (`"$RUNNER_TEMP/mw-core-file" "$REF" ".github/scripts/x.py"`,
+# .github/actions/core-file): a path INSIDE core at a ref, read over git — never the runner's tree.
+_READER_ARG = re.compile(r'mw-core-file"?\s+"[^"\n]*"\s+"$')
+
+
 def _references_tree_script(run_block: str) -> bool:
     """True when the run block names `.github/scripts/` as a path on the runner's tree — i.e. any
-    occurrence NOT immediately preceded by `contents/` (a contents-API fetch of the file's bytes)."""
+    occurrence that is neither immediately preceded by `contents/` (a contents-API fetch of the
+    file's bytes) nor the path argument of the platform-file reader (`mw-core-file <ref> <path>`)."""
     needle = ".github/scripts/"
     start = 0
     while (i := run_block.find(needle, start)) != -1:
-        if not run_block[:i].endswith("contents/"):
+        before = run_block[:i]
+        if not before.endswith("contents/") and not _READER_ARG.search(before):
             return True
         start = i + len(needle)
     return False
@@ -597,6 +606,30 @@ def self_test(root: Path) -> int:
         )
         got = check_script_needs_tree(tmp)
         case("script-needs-tree still FIRES when a tree run sits beside a fetch",
+             len(got) == 1 and "lane" in got[0].code, f"got {[f.code for f in got]}")
+
+        # The lanes' shape since Doc/Architecture/CiRestBudget: the platform-file reader over git.
+        # Its path argument names a file INSIDE core at a ref, never the runner's tree.
+        reader = ('        run: |\n          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/x.py" '
+                  '> "$RUNNER_TEMP/x.py"\n'
+                  '          python3 "$RUNNER_TEMP/x.py"\n')
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  lane:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main\n"
+            "      - name: read and run the platform's script\n" + reader
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree is SILENT on the git reader's path argument",
+             len(got) == 0, f"got {[f.code for f in got]}")
+
+        # …and the reader exemption cannot mask a real tree run sitting beside it.
+        wf.write_text(
+            "name: f\non: [push]\njobs:\n  lane:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - name: read and run the platform's script\n" + reader +
+            "      - name: ACR login\n        run: bash .github/scripts/acr-login.sh\n"
+        )
+        got = check_script_needs_tree(tmp)
+        case("script-needs-tree still FIRES when a tree run sits beside a reader call",
              len(got) == 1 and "lane" in got[0].code, f"got {[f.code for f in got]}")
 
         # ── jmespath: THE fixture — a manifest list with an untagged row ────────────────

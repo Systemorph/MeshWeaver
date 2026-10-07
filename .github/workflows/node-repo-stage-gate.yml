@@ -111,6 +111,8 @@ jobs:
       ready: ${{ steps.judge.outputs.ready }}
       mode: ${{ steps.judge.outputs.mode }}
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Fetch the platform's review predicate at the lane's scripts ref
         # Only the review hold (the default) reads the predicate; the opt-out judges stage 0 alone.
         if: ${{ inputs.review-before-suites }}
@@ -120,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the stage predicate has no ref to be fetched at"; exit 1; }
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/check-review-answered.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/check-review-answered.py" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-review-answered.py" > "$RUNNER_TEMP/check-review-answered.py" \
             || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
             || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
