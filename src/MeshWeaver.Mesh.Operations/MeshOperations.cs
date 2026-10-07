@@ -1750,10 +1750,23 @@ public partial class MeshOperations
         return Observable.Defer(() =>
         {
             MeshNode? meshNode;
+            // The caller's RAW content too: the typed deserialisation drops every content member
+            // the bound type does not declare, and only the raw JSON still names what was dropped
+            // — or what `$type` the caller claimed (see ValidateCreatedContent).
+            JsonObject? rawContent;
             try
             {
                 var sanitized = RepairJson(node);
                 meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
+                // The same JSON syntax the typed read above accepted (comments, trailing commas): adding
+                // validation must not narrow what the verb takes.
+                rawContent = (JsonNode.Parse(
+                    sanitized,
+                    documentOptions: new JsonDocumentOptions
+                    {
+                        CommentHandling = hub.JsonSerializerOptions.ReadCommentHandling,
+                        AllowTrailingCommas = hub.JsonSerializerOptions.AllowTrailingCommas,
+                    }) as JsonObject)?["content"] as JsonObject;
             }
             catch (JsonException ex)
             {
@@ -1772,9 +1785,21 @@ public partial class MeshOperations
             if (identityError != null)
                 return Observable.Return(identityError);
 
+            // 🚨 Same silent drop Patch and Update refuse: a content member the bound type does
+            // not declare is lost by the typed deserialisation above, and Create answered
+            // "Created:" over it (Systemorph/MeshWeaver.Plugins#3042 — `description` and an
+            // unknown `status` on a Feedback filing vanished without a word). Refuse it here when
+            // this hub has typed the content; the probe below judges the in-mesh case, where the
+            // content is still a JsonElement on this hub.
+            if (meshNode.Content is { } typedContent
+                && UnknownContentMembers(rawContent, typedContent, hub.JsonSerializerOptions)
+                    is { Count: > 0 } unknownMembers)
+                return Observable.Return(UnknownContentMembersMessage(
+                    "create", meshNode.Path, meshNode.NodeType, typedContent.GetType(), unknownMembers));
+
             // Validate content against schema when content is provided.
             var validationObs = meshNode.Content != null
-                ? ValidateContentWithSchema(meshNode)
+                ? ValidateContentWithSchema(meshNode, rawContent)
                 : Observable.Return<string?>(null);
 
             return validationObs.SelectMany(validationError =>
@@ -3085,6 +3110,15 @@ public partial class MeshOperations
     /// down — two full hubs for one failed agent write.
     /// </remarks>
     internal IObservable<string?> ValidateContentWithSchema(MeshNode meshNode)
+        => ValidateContentWithSchema(meshNode, createdContent: null);
+
+    /// <summary>
+    /// <see cref="ValidateContentWithSchema(MeshNode)"/>, plus — when
+    /// <paramref name="createdContent"/> is given, i.e. on CREATE — the two checks that need the
+    /// bound content type, which only the probe hub knows for an in-mesh NodeType (see
+    /// <see cref="ValidateCreatedContent"/>).
+    /// </summary>
+    private IObservable<string?> ValidateContentWithSchema(MeshNode meshNode, JsonObject? createdContent)
     {
         if (string.IsNullOrEmpty(meshNode.NodeType))
             return Observable.Return<string?>(null);
@@ -3092,9 +3126,17 @@ public partial class MeshOperations
         return ReadFromContentType(
             meshNode.NodeType!,
             TransientProbeAddresses.SchemaValidationProbePrefix,
-            (probeHub, typeDefinition) =>
+            (probeHub, contentType, exact) =>
             {
-                var validationError = ValidateAgainst(meshNode, typeDefinition.Type);
+                // ValidateAgainst keeps its historical reach — only a type registered under the
+                // NodeType's own name (see ReadFromContentType) — so this change does not start
+                // refusing, on Update and Patch, the partial-content shapes the write boundary
+                // deliberately admits (#4648). The create-only checks use the bound type however
+                // it was resolved.
+                var validationError = (createdContent is null
+                        ? null
+                        : ValidateCreatedContent(meshNode, createdContent, contentType, probeHub))
+                    ?? (exact ? ValidateAgainst(meshNode, contentType) : null);
                 if (validationError == null)
                     return null;
                 // A schema is a NICE-TO-HAVE on top of the error the agent must see: never let a
@@ -3103,7 +3145,7 @@ public partial class MeshOperations
                 {
                     return validationError
                         + $" Expected content schema for NodeType '{meshNode.NodeType}': "
-                        + GenerateSchema(probeHub, typeDefinition.Type);
+                        + GenerateSchema(probeHub, contentType);
                 }
                 catch (Exception ex)
                 {
@@ -3210,7 +3252,7 @@ public partial class MeshOperations
     /// production log volume came from (~22 error lines per probe, none actionable).</para>
     ///
     /// <para>This is also the ONE place a probe hub is built, so a caller that needs both the
-    /// validation result and the schema (see <see cref="ValidateContentWithSchema"/>) pays for one
+    /// validation result and the schema (see <see cref="ValidateContentWithSchema(MeshNode)"/>) pays for one
     /// probe, not two.</para>
     /// </summary>
     /// <param name="nodeType">NodeType path whose content type is being resolved.</param>
@@ -3220,12 +3262,14 @@ public partial class MeshOperations
     /// the shared constants so <see cref="TransientProbeAddresses.IsProbeAddress"/> stays
     /// exhaustive: a probe minted under a prefix the predicate does not know is a probe whose
     /// own-address reads are gated and routed like a real node's (#2894).</param>
-    /// <param name="read">Reads the answer off the probe hub. Runs before the probe is disposed.</param>
+    /// <param name="read">Reads the answer off the probe hub, given the content type and whether it
+    /// was resolved by the historical NodeType-name lookup (<c>true</c>) or only by the mesh-wide
+    /// NodeType → content-type map (<c>false</c>). Runs before the probe is disposed.</param>
     /// <param name="skipLogContext">What is being skipped, for the debug log on failure.</param>
     private IObservable<string?> ReadFromContentType(
         string nodeType,
         string addressPrefix,
-        Func<IMessageHub, ITypeDefinition, string?> read,
+        Func<IMessageHub, Type, bool, string?> read,
         string skipLogContext)
     {
         return ResolveHubConfigForSchema(nodeType)
@@ -3248,10 +3292,24 @@ public partial class MeshOperations
                     if (probeHub == null) return null;
                     try
                     {
+                        // 🚨 TWO resolutions, and `read` is told which one answered. The historical
+                        // one looks the NodeType PATH up as a `$type` name, which hits only when the
+                        // content record happens to be named like the NodeType (`Story` → `Story`):
+                        // `WithContentType` registers the CLR NAME, never the path. For every other
+                        // NodeType — `Feedback/Feedback` binds `FeedbackContent` — it missed, the
+                        // probe answered null, and Create's schema check passed content it never
+                        // looked at (Systemorph/MeshWeaver.Plugins#3042). The exact answer is the
+                        // mesh-wide NodeType → content-type map, which `WithContentType` fills on
+                        // THIS probe under the path stamped above.
                         var typeRegistry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
-                        if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
-                            return null;
-                        return read(probeHub, typeDefinition!);
+                        if (typeRegistry != null
+                            && typeRegistry.TryGetType(nodeType, out var typeDefinition)
+                            && typeDefinition?.Type is { } byName)
+                            return read(probeHub, byName, true);
+                        return probeHub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } contentTypes
+                               && contentTypes.TryResolveByNodeType(nodeType, out var byNodeType)
+                            ? read(probeHub, byNodeType, false)
+                            : null;
                     }
                     finally
                     {
@@ -3283,6 +3341,96 @@ public partial class MeshOperations
         => ToolAnswerJson.Write(probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType));
 
     /// <summary>
+    /// The CREATE-only checks against the BOUND content type, run on the probe hub — the one place
+    /// an in-mesh NodeType's content type is known to this facade (on the facade's own hub such
+    /// content is an untyped <see cref="JsonElement"/>, so judging typed content can say nothing
+    /// about it).
+    ///
+    /// <para>🚨 <b>The defect</b> (Systemorph/MeshWeaver.Plugins#3042). An agent created
+    /// <c>Feedback/Feedback</c> nodes with content <c>{"$type":"Feedback","status":…,"category":…,"description":…}</c>.
+    /// No type named <c>Feedback</c> exists — the NodeType binds <c>FeedbackContent</c> — and
+    /// <see cref="ValidateAgainst"/> could not see it: deserialising into the concrete bound type
+    /// ignores a foreign <c>$type</c> and skips unmapped members, so it bound to a record with an
+    /// empty message and the create answered <c>Created:</c>. The owning hub's handover watcher then
+    /// found nothing to hand over and returned; the filings were dead letters. The reverse shape —
+    /// the right <c>$type</c> plus a member the type lacks — dropped that member silently, which
+    /// Patch and Update already refuse.</para>
+    ///
+    /// <list type="number">
+    ///   <item>A <c>$type</c> that names a different record than the bound one AND resolves to no
+    ///     type on the NodeType's own registry (full name, then short name) nor in the bound type's
+    ///     own assembly (where a polymorphic subtype would live) is refused. A <c>$type</c> that
+    ///     resolves to a real type is left alone — judging it would be reshaping it.</item>
+    ///   <item>A top-level member the bound type does not declare is refused, naming it — the
+    ///     same rule and message as <see cref="Patch"/> and <see cref="Update"/>. Not asked of
+    ///     content whose <c>$type</c> resolves to a DIFFERENT record: its members are that
+    ///     record's, and the write boundary admits it.</item>
+    /// </list>
+    /// </summary>
+    private string? ValidateCreatedContent(
+        MeshNode meshNode, JsonObject createdContent, Type contentType, IMessageHub probeHub)
+    {
+        if (createdContent["$type"] is JsonValue typeValue
+            && typeValue.TryGetValue<string>(out var discriminator)
+            && !string.IsNullOrEmpty(discriminator)
+            && !ContentDiscriminator.Admits(createdContent, contentType))
+            // A foreign discriminator that RESOLVES is a different record: its members are that
+            // record's, so judging them against the declared type would refuse here what the write
+            // boundary (ContentSchemaValidator) admits — the verb and the boundary must agree
+            // (review on #6231).
+            return DiscriminatorResolves(discriminator, contentType, probeHub)
+                ? null
+                : $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}', "
+                + $"but no type of that name exists for NodeType '{meshNode.NodeType}' — its content type is "
+                + $"{contentType.Name}. Stored, the node would read as empty to every consumer and anything "
+                + "that reacts to this NodeType would skip it without a word. Send the content as "
+                + $"\"$type\": \"{contentType.Name}\" with its declared members (get @<path>/schema/). "
+                + "Nothing was written.";
+
+        // The PROBE's options: the bound type and its serialization configuration (NodeType-specific
+        // converters, naming, extension data) belong to the probe hub, not to this facade.
+        return UnknownContentMembersOfType(createdContent, contentType, probeHub.JsonSerializerOptions) is { Count: > 0 } unknown
+            ? UnknownContentMembersMessage("create", meshNode.Path, meshNode.NodeType, contentType, unknown)
+            : null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="discriminator"/> names a type the NodeType's own hub, the mesh-wide
+    /// content-type map, or the bound type's own assembly knows. The full-name → short-name fallback is the load path's
+    /// (<c>MeshNodeTypeSource.ResolveJsonElementContent</c>).
+    /// </summary>
+    private bool DiscriminatorResolves(string discriminator, Type contentType, IMessageHub probeHub)
+    {
+        var shortName = discriminator.Contains('.')
+            ? discriminator[(discriminator.LastIndexOf('.') + 1)..]
+            : discriminator;
+        var registry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
+        if (registry is not null
+            && ((registry.TryGetType(discriminator, out var def) && def?.Type is not null)
+                || (registry.TryGetType(shortName, out def) && def?.Type is not null)))
+            return true;
+        // The mesh-wide content-type map too — the same instruments, in the same order, as the
+        // write-boundary validator (ContentSchemaValidator): a discriminator belonging to another
+        // activated runtime NodeType may be known ONLY there, and the verb must not refuse what
+        // the write boundary admits.
+        if (probeHub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } contentTypes
+            && (contentTypes.TryResolveByDiscriminator(discriminator, out _)
+                || contentTypes.TryResolveByDiscriminator(shortName, out _)))
+            return true;
+        try
+        {
+            return contentType.Assembly.GetTypes()
+                .Any(t => string.Equals(t.Name, shortName, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (ex is System.Reflection.ReflectionTypeLoadException or NotSupportedException)
+        {
+            // Cannot enumerate here — a fact about this process, not the content: do not refuse on it.
+            logger.LogDebug(ex, "Create: could not enumerate the assembly of {ContentType}", contentType.Name);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Deserializes <paramref name="meshNode"/>'s content into <paramref name="contentType"/> and
     /// reports the mismatch, or null when the content is valid.
     /// </summary>
@@ -3310,7 +3458,7 @@ public partial class MeshOperations
         => ReadFromContentType(
             nodeType,
             TransientProbeAddresses.SchemaLookupProbePrefix,
-            (probeHub, typeDefinition) => GenerateSchema(probeHub, typeDefinition.Type),
+            (probeHub, contentType, exact) => exact ? GenerateSchema(probeHub, contentType) : null,
             "Schema retrieval");
 
     /// <summary>
@@ -3327,7 +3475,7 @@ public partial class MeshOperations
         return ReadFromContentType(
             meshNode.NodeType!,
             TransientProbeAddresses.SchemaValidationProbePrefix,
-            (_, typeDefinition) => ValidateAgainst(meshNode, typeDefinition.Type),
+            (_, contentType, exact) => exact ? ValidateAgainst(meshNode, contentType) : null,
             "Schema validation");
     }
 
@@ -5319,12 +5467,28 @@ public partial class MeshOperations
     internal static IReadOnlyList<string> UnknownContentMembers(
         JsonObject? callerContent, object? typedContent, JsonSerializerOptions options)
     {
-        if (callerContent is null or { Count: 0 } || typedContent is null or JsonElement or JsonNode)
+        if (typedContent is null or JsonElement or JsonNode)
+            return [];
+        return UnknownContentMembersOfType(callerContent, typedContent.GetType(), options);
+    }
+
+    /// <summary>
+    /// The same rule judged against the bound content TYPE rather than an instance of it — the
+    /// shape the create path has on the probe hub, where the content itself is still untyped JSON.
+    /// </summary>
+    /// <param name="callerContent">The content keys the caller SENT.</param>
+    /// <param name="contentType">The content type the NodeType binds.</param>
+    /// <param name="options">The hub's serializer options — they define the member names.</param>
+    /// <returns>The undeclared keys, in the caller's order.</returns>
+    internal static IReadOnlyList<string> UnknownContentMembersOfType(
+        JsonObject? callerContent, Type contentType, JsonSerializerOptions options)
+    {
+        if (callerContent is null or { Count: 0 })
             return [];
         System.Text.Json.Serialization.Metadata.JsonTypeInfo typeInfo;
         try
         {
-            typeInfo = options.GetTypeInfo(typedContent.GetType());
+            typeInfo = options.GetTypeInfo(contentType);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {

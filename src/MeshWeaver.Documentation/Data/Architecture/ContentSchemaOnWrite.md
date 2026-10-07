@@ -127,9 +127,11 @@ Each of these answers Valid, and each is a decision rather than an omission:
    definitions are covered from boot by `ContentTypeRegistrationSweep`; a compiled one registers at
    its first instance activation.
 2. **Typed (in-process) CLR content.** It already bound. See the blind spot below.
-3. **Content whose own `$type` names a different record than the declared one** — the same
-   `DiscriminatorAdmits` short-name rule the recovery path applies. Judging such content by the
-   declared type would be reshaping it; the discriminator guard owns that case.
+3. **Content whose own `$type` names a different record than the declared one, when that record
+   EXISTS** — the same `DiscriminatorAdmits` short-name rule the recovery path applies. Judging such
+   content by the declared type would be reshaping it; the discriminator guard owns that case. A
+   `$type` that resolves to **no type at all** is not this case and IS refused — see
+   "A `$type` that names nothing" below.
 4. **An Update whose content is byte-identical to what is stored.** Re-asserting a row already on
    disk is not a new write of bad content, and refusing it would make an existing broken node
    impossible to move or repair.
@@ -175,6 +177,41 @@ This is narrower than the write boundary on purpose, and consistent with the "ex
 real ones" rule above: that rule protects a WRITER round-tripping a whole record it did not author;
 these verbs refuse a key a caller typed and asked to be stored, which is the one case where dropping
 it is always a lie. Pinned by `PatchUnknownContentMembersTest`.
+
+## A `$type` that names nothing
+
+Measured on memex.systemorph.com (Systemorph/MeshWeaver.Plugins#3042): an agent created
+`Feedback/Feedback` nodes with content `{"$type":"Feedback","status":…,"category":…,"description":…}`.
+No type named `Feedback` exists — the NodeType binds `FeedbackContent`. Every layer said yes:
+
+- `ContentDiscriminatorValidator` exempts every runtime-compiled NodeType (its content types live on
+  its own hub, so an unresolvable name there proves nothing);
+- this guard answered Valid on rule 3 above, because the `$type` named "a different record";
+- the MCP `create` verb's schema probe looked the content type up by the NodeType PATH as a `$type`
+  name (`typeRegistry.TryGetType(nodeType)`), which hits only when the record is named like the
+  NodeType (`Story` → `Story`) — `WithContentType` registers the CLR name, never the path — so for
+  `Feedback/Feedback` the probe answered nothing and the verb checked nothing.
+
+The node was stored, every reader's `ContentAs<FeedbackContent>` answered null, and the owning hub's
+hand-over watcher skipped it without a word: three filings were dead letters for 1.5 h. The reverse
+shape — the right `$type` plus `description` — had its extra member silently dropped by `create`,
+which `patch` and `update` already refuse.
+
+What now refuses, and where:
+
+| Layer | Refuses | Instrument |
+|---|---|---|
+| `ContentSchemaValidator` (every Create/Update) | a `$type` that contradicts the declared type AND resolves on none of: this hub's `$type` registry (full, then short name), the mesh-wide content-type map, the declared type's own assembly | `content.schema.unknownDiscriminator`, naming the discriminator, the declared type and its members |
+| MCP `create` (`MeshOperations.ValidateCreatedContent`) | the same unresolvable `$type`, judged on the NodeType's own probe hub; and any top-level content key the bound type does not declare (the `patch`/`update` rule) — except when the `$type` resolves to a DIFFERENT real type, whose members are that type's and which the write boundary admits | the probe now resolves the bound type through `IMeshContentTypeRegistry.TryResolveByNodeType` when the name lookup misses |
+
+Deliberately unchanged: a `$type` that resolves to a REAL type is still admitted (the declared
+type's assembly is searched so a polymorphic subtype compiled beside an in-mesh content type stays
+legal); an Update keeping the discriminator the stored node already carries is Valid, so an existing
+dead letter can still be repaired; and the historical `ValidateAgainst` bind check keeps its old
+reach (only a type registered under the NodeType's name), so Update and Patch do not start refusing
+the partial-content shapes rule 1 admits. Pinned by `ContentSchemaValidationTest`
+(`*TypeDiscriminatorNamesNoType*`, `McpCreate_*`, `Update_*TypeDiscriminator*`), with the existing-type and declared-shape cases
+as controls.
 
 ## Related
 
