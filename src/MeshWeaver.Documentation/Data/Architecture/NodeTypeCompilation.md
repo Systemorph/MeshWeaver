@@ -1538,6 +1538,69 @@ unchanged and is now the only followable step: a `PRIVATE-COPY-EMITS` does not s
 from fresh native code, and the follow-up is to tier ONE private copy — not to call the leg again,
 which unloads its context per invocation and so only ever measures cold code.
 
+#### Leg 6 — the IMAGE leg (`RoslynImageIntegrity`, #5212), and the second shape it covers
+
+Leg 5 left three candidates: the shared copy's **image**, its **mapping**, or the **native code**
+produced for it — and this page said only the third "can get worse while a process runs". 🚨 **That
+was wrong, and it is now measured.** The runtime executes an IL-only assembly loaded from a path out
+of a live file mapping: an IN-PLACE write to that file (truncate + write — what `File.WriteAllBytes`
+and `File.Copy(…, overwrite: true)` do to an existing path, or any writer through a hard link to
+the same inode) changes the metadata and IL the runtime reads for every method it has not compiled
+yet, and for every method it re-compiles at tier 1, inlinees included.
+`RoslynImageIntegrityTest.AnAssemblyRewrittenInPlace_IsReadFromTheNewBytes_InTheSameProcess` is the
+deterministic repro: an assembly loaded by path, its file rewritten in place with a same-layout
+build, reads the NEW metadata and IL inside the same process. That shape — acquired mid-process,
+deepening as more code tiers up, and immune in a private copy loaded from fresh bytes — is #890's,
+so "the mapping did not change" has to be READ at the failure, not assumed.
+
+Leg 6 reads it. `RoslynImageIntegrity.EnsureBaseline` takes one reading per process at the first
+`EmitCompilationToDirectory` (≈0.1 s, measured: the mapped metadata block via
+`Assembly.TryGetRawMetadata`, the IL of the ~11 000 methods in `Microsoft.Cci` and the C# symbol and
+emit namespaces read through the runtime, and the file's SHA-256), and every non-`OK` canary
+appends a fresh reading compared with it:
+
+| reading | means |
+|---|---|
+| `image=INTACT(…)` | image and mapping read exactly as at the first compile and match the file (a change made BEFORE the first compile of this process, rewriting file and mapping alike, cannot be seen — the baseline is that moment) ⇒ with `compiler=PRIVATE-COPY-EMITS` the only shared-copy state left is the **native code** (JIT output or the code heap). Go to the `DOTNET_TieredPGO=0` split arm and the JIT listing — never the file |
+| `image=REWRITTEN-IN-PLACE(…)` | file AND mapped bytes changed: something wrote into a loaded compiler image. Find the writer; no runtime report |
+| `image=MAPPED-CHANGED(…)` | mapped bytes changed, file did not: the image's pages were altered in memory |
+| `image=FILE-REPLACED(…)` | the path names new bytes but the mapping reads the original (a rename) — not the cause |
+| `image=NO-BASELINE(…)` | no first-compile reading in this process (a caller that emits through Roslyn directly); only mapped-vs-disk was compared, and they agree |
+| `image=NO-BASELINE-MAPPED-DIFFERS(…)` | no baseline, AND the metadata the runtime executes from is not the metadata of the file at that path now — the image was rewritten or corrupted at some point before |
+| `image=NOT-COMPARED(…)` | a baseline exists but no image could be compared with it (its entries, or the current reading, were unavailable) — it says nothing either way, and is never reported as `INTACT` |
+| `image=UNAVAILABLE(…)` | the leg could not read the images (single-file host, no raw metadata, or the probe itself faulted) — it says nothing either way |
+
+It also appends `host=(runtime, RID, CPU model, ISA flags, and whichever of the five tiering knobs `DOTNET_TieredCompilation`, `DOTNET_TieredPGO`, `DOTNET_ReadyToRun`, `DOTNET_TC_QuickJitForLoops`, `DOTNET_OSR_HitLimit` are set — no other variable is read, so an absent knob outside these five says nothing)` — the
+variables a native-code fault depends on, which no earlier occurrence recorded, so occurrences can
+be compared by CPU and instruction set instead of by guess.
+
+**The second shape (#5212 shape b), which no leg saw.** On Plugins run 37535577344 the emit did NOT
+throw: the image was published (the digest check proved the file is the image Roslyn returned), and
+the first `GetTypes()` failed with *"Could not load type 'X' … because the format is invalid"* — for
+every type, and for every compile after it in the process (96 lines). The failing test set was
+identical to an occurrence one run earlier that DID throw `canary=BELOW-ROSLYN`. Since
+`ProbeSharedEmitState` only runs on a throw, it never ran, and nine NodeTypes read as broken content.
+`EmitPipeline.ProbeEmittedImageLoads` now runs on that load failure (the
+`Failed to extract NodeTypeConfigurations … format is invalid` warning — keyed on a
+`BadImageFormatException`, directly or among the loader exceptions, and otherwise on the loader's
+*"format is invalid"* text, because the `TypeLoadException` shape carries no distinguishing type or
+HResult; .NET ships CoreLib's messages in English only, so the text is stable across hosts but can
+change between runtime versions, and a reworded message would leave shape b unprobed): it emits the nested canary
+through the shared compiler, loads it from bytes and realises its types.
+`loadcanary=INVALID-IMAGE(…)` (a type that cannot be realised, or a `BadImageFormatException` from
+the load itself) ⇒ the process writes invalid metadata for a known-good source — the
+loader-side exit of the same fault; `loadcanary=LOADS(…)` ⇒ the invalid image is specific to that
+compilation; `loadcanary=DIAGNOSTICS(<ids>)`, `loadcanary=THREW <Type> at <frame>` (the probe
+threw outside the loader's own refusals — building the reference set, compiling, emitting, or a
+load failure that is neither a type-load nor a bad-image one; the type and frame say which) and `loadcanary=UNAVAILABLE(…)` (no CoreLib to reference) mean the
+control could not answer. The load verdict is taken once per process (INVALID-IMAGE already
+attributes every later load failure to itself); the image and host legs ride along fresh on every
+line.
+
+**What this does NOT do:** it does not fix #890/#5212 and does not change any verdict or status
+(`IsProcessEmitFailure` still keys on the unchanged `canary=` prefix). It decides which of the three
+open candidates the next occurrence belongs to.
+
 #### The first `dissect=` readings, 2026-09-06 — and what they do and do not settle
 
 Leg 3 landed 2026-09-04 and its first readings arrived immediately. Two occurrences, both in

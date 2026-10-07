@@ -126,9 +126,12 @@ discovered:
 | Database keys (`MEMEX_*`) | from the record (`DatabaseServer`, `DatabaseHost`, …) | not emitted — the Aspire Postgres resource injects `ConnectionStrings__memex` / `__orleans` |
 | `Mcp__BaseUrl` | the in-cluster portal Service | not emitted by the derivation (never a blank) — the adapter sets the key to the endpoint Aspire allocates, substituted at publish |
 | Plugin-catalog boot wiring (`PluginCatalog__*`) | the operator's catalog config file, not the ConfigMap | emitted as environment — Aspire has no second file |
+| `SelfUpdate__Registry` (`PortalConfigOptions.SelfUpdateRegistryKey`) | not emitted — the chart renders it from `selfUpdate.registry` | the record's image host, when it is not the default `meshweaver.azurecr.io` — nothing else would tell the updater which registry its repositories are on |
 
 `FluentBuilderTest.TheSameRecordRendersTheSameKeysForHelmAndForAspire` renders a real fleet
-record both ways and asserts the difference is exactly these three.
+record both ways and asserts the difference stays within these four (that record is on the
+default registry, so it exercises the first three; `ARecordOnANonDefaultRepository_TellsTheSelfUpdaterWhichRepositoryToList`
+covers the fourth).
 
 ## The parity table
 

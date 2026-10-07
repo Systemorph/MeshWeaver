@@ -129,6 +129,20 @@ public static class OrleansServerRegistryExtensions
             // a grain directory resolver exists only where placement does.
             services.AddSingleton<global::Orleans.Runtime.GrainDirectory.IGrainDirectoryResolver,
                 StatelessWorkerGrainDirectoryResolver>();
+            // 🚨 Issue #6189. A silo must never SEND a request the silos of the previous platform
+            // generation cannot DECODE: during a rolling update both generations share one cluster
+            // for the whole drain window. Orleans 10.4 added content-addressed manifest retrieval
+            // (IClusterManifestSystemTarget.GetSiloManifestHash / GetSiloManifestByHash /
+            // GetClusterManifestHashSummary — aliases 3D9B7FE6, 93B8854F, 25AE6E4A) ON by default,
+            // with no capability negotiation. A 10.3 silo has no invokable for those aliases, so
+            // every manifest refresh a 10.4 silo made against it failed in Connection.ProcessIncoming
+            // with "Unable to resolve type alias" (121 errors over one roll on memex, 2026-10-06).
+            // The direct path — ISiloManifestSystemTarget.GetSiloManifest, alias 1857A4C8 — is
+            // understood by every 10.x silo, and it is the one this setting selects. The hash path
+            // only saves refetching identical manifests, which a cluster of a handful of silos never
+            // notices. Pinned by CrossGenerationManifestExchangeTest; see RollingUpdateBuildTolerance.
+            services.Configure<global::Orleans.Configuration.ClusterManifestOptions>(
+                options => options.EnableContentAddressedRetrieval = false);
         });
 
         silo.AddMemoryStreams(StreamProviders.Memory);

@@ -639,6 +639,19 @@ data:
   {{- if (.Values.selfUpdate).registry }}
   SelfUpdate__Registry: "{{ .Values.selfUpdate.registry }}"
   {{- end }}
+  # The REPOSITORIES the self-updater lists and rolls to, on that registry (Systemorph/
+  # MeshWeaver.Plugins#2994). Rendered from the Deployment record (DeploymentPortalConfig
+  # .SelfUpdatePortalRepository / .SelfUpdateMigrationRepository) ONLY where the record's image
+  # repository differs from the image default (memex-portal-ai / memex-migration) — control runs
+  # memex-control, and a self-updater listing memex-portal-ai there would roll it onto the working
+  # instances' image. Same rule as the line above: both are strings WITH a real default, so an
+  # empty value must render NOTHING (an empty repository rolls to "<registry>/:<tag>").
+  {{- if (.Values.config.memex_portal.SelfUpdate__PortalRepository | default "" | trim) }}
+  SelfUpdate__PortalRepository: "{{ .Values.config.memex_portal.SelfUpdate__PortalRepository | trim }}"
+  {{- end }}
+  {{- if (.Values.config.memex_portal.SelfUpdate__MigrationRepository | default "" | trim) }}
+  SelfUpdate__MigrationRepository: "{{ .Values.config.memex_portal.SelfUpdate__MigrationRepository | trim }}"
+  {{- end }}
   # 🚨 The portal that VALIDATES this installation's instance key at that registry — the registry
   # record's own `validationUrl` (MeshWeaver#4093). The fleet registry cr.meshweaver.cloud decides a
   # pull by forwarding the caller's key to memex.meshweaver.cloud, so the image registry and the

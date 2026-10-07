@@ -348,6 +348,35 @@
         "Manufacturing#125) were closed with a pointer. The hub copy stays for the one case CI cannot see: a",
         "DIRTY pull request gets no run at all, and merging main before a push is how its author resolves it."
       ]
+    },
+    {
+      "id": "declared-not-derived",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [],
+      "why": [
+        "Policy declared-not-derived (register: Doc/Architecture/PolicyNotProse; manual:",
+        "Doc/Architecture/DeclaredNotDerived). The occasion: the control instance lost every model of",
+        "Provider/OpenRouterEU because those nodes existed only as nodes DERIVED at boot from a module's",
+        "catalogue registration; after core#6127 gave each module its own service container the",
+        "contribution became invisible and the Provider import PRUNED the nodes, although the deployment",
+        "record declared them in config. Code review runs on that provider only and fails closed, so the",
+        "fleet had no reviewer model for about twelve hours. The maintainer asked for the rule in every",
+        "repository's AGENTS.md.",
+        "",
+        "A FLEET rule, not a core one: the catalogues it protects are contributed by modules the",
+        "satellites author (MeshWeaver.Plugins hosts the AI engine and its providers), and the",
+        "declarations live in Memex's deployment records. A satellite author wiring a catalogue to a",
+        "module registration alone is exactly the change the rule calls a defect.",
+        "",
+        "No slots: the text cites the policy id and links nothing repo-relative, so it reads identically",
+        "everywhere and Memex's 'Documentation links resolve' gate has nothing to resolve.",
+        "",
+        "Landing in the three change sets this register's header describes: step 1 (this entry) names",
+        "the hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
+      ]
     }
   ]
 }

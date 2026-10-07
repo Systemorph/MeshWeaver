@@ -90,14 +90,20 @@ public static class ContentTypeRegistration
     /// <summary>
     /// Builds (and immediately disposes) the registration probe for <paramref name="nodeTypePath"/>:
     /// the config build runs <c>WithContentType</c>, which records the content type in the
-    /// mesh-wide registry under the stamped NodeType path. Failures are logged at Debug and
-    /// swallowed — an unregistrable type is exactly as readable as it was before this existed.
+    /// mesh-wide registry under the stamped NodeType path.
+    ///
+    /// <para>🚨 A failed probe is RETURNED, never swallowed. It used to be caught and logged at Debug —
+    /// a level production never ships — and the caller then asked the registry, found nothing, and
+    /// reported the type as one that <i>declares no content type</i>: a wrong verdict, filed in the
+    /// one bucket the registration summary does not name, while every node of that type read as
+    /// untyped. The caller owns the verdict, so the caller gets the fault.</para>
     /// </summary>
+    /// <returns>Null when the probe was built; otherwise the exception that stopped it.</returns>
     /// <param name="meshHub">Hub used to host the transient probe.</param>
     /// <param name="nodeTypePath">The NodeType path being registered.</param>
     /// <param name="hubConfig">The type's hub configuration.</param>
     /// <param name="logger">Debug-level diagnostics.</param>
-    public static void ProbeRegister(
+    public static Exception? ProbeRegister(
         IMessageHub meshHub,
         string nodeTypePath,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig,
@@ -111,18 +117,32 @@ public static class ContentTypeRegistration
             // predicate is a producer those guards silently skip (#2894 → #2990).
             var probeAddress = new Address(
                 $"{TransientProbeAddresses.ContentTypeRegistrationProbePrefix}{Guid.NewGuid():N}");
-            var probeHub = meshHub.GetHostedHub(
+            // TryGetHostedHub, never GetHostedHub: a configuration that THROWS is caught inside the
+            // hosted-hub collection and answered as a null hub, so the plain overload hands this
+            // method a null and no exception — which is how a faulted probe used to read as success.
+            var probe = meshHub.TryGetHostedHub(
                 probeAddress,
                 c => hubConfig(c.WithNodeTypePath(nodeTypePath))
-                    .AsTransientNodeProbe(startDataSources: false));
-            probeHub?.Dispose();
+                    .AsTransientNodeProbe(startDataSources: false),
+                HostedHubCreation.Always);
+            probe.Hub?.Dispose();
+            // The ERROR decides, before the hub does: a result that carried both would otherwise
+            // read as success with its fault dropped. HostedHubsCollection never pairs the two
+            // today (every faulted outcome is built with a null hub), but this verdict must not
+            // hang on that.
+            if (probe.Error is { } error)
+                return error;
+            return probe.Hub is not null
+                ? null
+                : new InvalidOperationException(
+                    $"the registration probe for NodeType '{nodeTypePath}' produced no hub ({probe.Outcome})");
         }
         catch (Exception ex)
         {
             logger?.LogDebug(ex,
-                "Content-type registration probe failed for NodeType {NodeType} — content of this "
-                + "type stays untyped on hubs that have not registered it themselves",
-                nodeTypePath);
+                "Content-type registration probe failed for NodeType {NodeType} — returned to the caller, "
+                + "which reports it", nodeTypePath);
+            return ex;
         }
     }
 
@@ -146,19 +166,41 @@ public sealed class ContentTypeRegistrationSweep(IServiceProvider services) : IH
             return Task.CompletedTask;
         var logger = services.GetService<ILogger<ContentTypeRegistrationSweep>>();
         var swept = 0;
+        var failed = 0;
         foreach (var node in services.EnumerateStaticNodes())
         {
             if (node.HubConfiguration is not { } cfg
                 || registry.TryResolveByNodeType(node.Path, out _))
                 continue;
-            ContentTypeRegistration.ProbeRegister(hub, node.Path, cfg, logger);
+            if (ContentTypeRegistration.ProbeRegister(hub, node.Path, cfg, logger) is { } fault)
+            {
+                // One Error line PER faulted definition, the type a structured property and the
+                // cause attached: its content reads as untyped on every hub that has not built it
+                // itself, and nothing else says so. Never one joined line — a mass failure would
+                // make it long enough for a sink to truncate or drop, losing the very names it
+                // exists to carry. A faulted definition is not counted as probed.
+                failed++;
+                logger?.LogError(fault,
+                    "Content-type registration sweep: the probe for static NodeType {NodeType} faulted — "
+                    + "its content stays untyped on hubs that have not registered it themselves",
+                    node.Path);
+                continue;
+            }
             swept++;
         }
+        // Two lines, never one phrase stretched over both cases: a failures-only pass probed
+        // nothing, and must not say that some content types now resolve.
         if (swept > 0)
             logger?.LogInformation(
                 "Content-type registration sweep: {Count} static NodeType definition(s) probed — "
-                + "their content types resolve without any instance existing.",
-                swept);
+                + "their content types resolve without any instance existing; {Failed} faulted "
+                + "(each named at Error).",
+                swept, failed);
+        else if (failed > 0)
+            logger?.LogInformation(
+                "Content-type registration sweep: no static NodeType definition probed cleanly; "
+                + "{Failed} faulted (each named at Error).",
+                failed);
         return Task.CompletedTask;
     }
 
