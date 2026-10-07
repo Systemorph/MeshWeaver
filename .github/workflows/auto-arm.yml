@@ -1,45 +1,35 @@
-# Arm auto-merge on every non-draft PR, so a PR that goes green LANDS.
+# Auto-merge lane — it no longer ARMS anything; it DISARMS on a push (policy review-then-suites).
 #
-# 🚨 This does not weaken a single gate. Auto-merge waits for exactly the required contexts
-# branch protection already demands; it removes only the human round-trip between "green" and
-# "merged". The failure it fixes is the one measured on 2026-09-01: core had SIX PRs sitting
-# CLEAN and unarmed with an empty merge queue — nothing was failing, nothing was blocked, and
-# nothing was landing either. A green PR nobody arms is indistinguishable from a red one.
+# 🚨🚨 ARMING MOVED TO THE CONTROL PLANE. Arming auto-merge is a DECISION — "this head was reviewed
+# and every finding answered, and the required checks are green" — and the decision belongs to the
+# control instance's PR steward (MeshWeaver.Plugins `PrBabysitter` / `PrArming`, App `systemorph-com`),
+# which already reads the review state and the answered-findings verdict for every pull request in the
+# fleet. Before the move this lane armed every non-draft pull request on open, push and undraft —
+# BEFORE the automatic review had landed on the new head. Where that review is comment-only and nothing required waits for it
+# (MeshWeaver.Plugins), #2549, #2643/#2647 and Memex#641 merged with unanswered findings or no
+# review at all, and agents disarmed by hand after every push (Plugins #2791, twice in an hour).
+# The predicate the control plane applies is `check-review-answered.py --arm-gate` (the reference
+# implementation, with its self-test); see Doc/Architecture/ReviewFindingsAnswered → "The arm gate".
 #
-# 🚨 THIS FILE IS THE FLEET'S ONLY COPY OF THE ARM LANE. It runs directly here on
+# 🚨 WHAT IS LEFT HERE, AND WHY IT STAYS A WORKFLOW: a push invalidates the review, but GitHub keeps
+# auto-merge armed across a push by anyone with write access. A pull request the control plane armed
+# on a reviewed head would otherwise merge the NEXT, unreviewed head the moment the required
+# contexts pass. The disarm must be immediate — a reaction to the `synchronize` event itself, not a
+# control-plane cadence that a fast CI can outrun — so it stays on the event, here. The control
+# plane re-arms once the new head is reviewed and answered (and arms with `expectedHeadOid`, so an
+# arm racing a push is refused by GitHub rather than landing on the wrong head).
+#
+# 🚨 THIS FILE IS THE FLEET'S ONLY COPY OF THE LANE. It runs directly here on
 # `pull_request_target`, and every OTHER repo in the fleet reaches it through `workflow_call` with
-# a caller that forwards the App credential and nothing else. (Deliberately no list of repo names
-# here: an enumeration in a comment is a copy of the fleet roster and would drift exactly the way
-# the copies below did. `gh search code --owner Systemorph "auto-arm.yml@"` answers who calls it.)
-# The repos are NOT identical — core runs a merge queue and the others do not — so the arm step
-# handles both shapes rather than the file forking per repo.
-#
-# It used to be hand-copied into every one of them, and the copies DRIFTED exactly as AGENTS.md
-# warns a copy-pasted lane does. Measured 2026-09-02 — the numbers below are a record of that
-# measurement, not a live count: core had already been moved to a minted App token (below) while
-# every satellite copy was still arming with `secrets.GITHUB_TOKEN`, so every satellite was living
-# the #2916 outage this file's header documents, silently. MeshWeaver.Reinsurance's `main` had not
-# seen a `push`-event run since 09:11Z despite PRs merging all afternoon. On top of that, only
-# .Crm carried the "landed:" read-back fix below, and several copies had no `timeout-minutes` at
-# all — four distinct variants of a file whose header claimed all copies were identical. One lane,
-# called from everywhere, cannot drift.
+# a caller that forwards the App credential and nothing else. The callers did not change when the
+# arming moved: they still forward `[opened, reopened, ready_for_review, synchronize]`, and the job
+# below simply runs on `synchronize` only. (Deliberately no list of repo names here:
+# `gh search code --owner Systemorph "auto-arm.yml@"` answers who calls it.)
 #
 # 🚨 The `workflow_call` secrets are named `MESHWEAVER_APP_ID` / `MESHWEAVER_APP_PRIVATE_KEY` — the
-# SAME names as the repository secrets the direct `pull_request_target` trigger reads. That is
-# deliberate: `secrets.MESHWEAVER_APP_ID` then resolves correctly in BOTH modes (the repo secret
-# when this workflow is triggered here, the forwarded value when it is called), so the body needs
-# no `||` fallback and there is no second name to get wrong. A caller passes them explicitly —
+# SAME names as the repository secrets the direct `pull_request_target` trigger reads, so
+# `secrets.MESHWEAVER_APP_ID` resolves correctly in BOTH modes. A caller passes them explicitly —
 # never `secrets: inherit`, which would hand this lane every secret the calling repo owns.
-#
-# Deliberately NOT here:
-#   * no `if: ${{ vars.X != '' }}` — invariant #3; a skipped job renders like a passed one.
-#   * drafts are skipped, which is the ONE opt-out. Mark a PR draft and it will not be armed;
-#     that is the intended way to say "not ready", rather than withholding the arm.
-#   * forks are skipped: arming a PR from a fork would let an outside branch merge itself the
-#     moment the required set passes.
-#   * a PR whose BASE is not the default branch is NOT armed, and is told so. Auto-merge waits for
-#     the base's required contexts, and an unprotected base has none — so an arm there is an
-#     immediate merge, not a deferred one. See the base step for the measured instance.
 #
 # 🚨🚨 THE ARM CREDENTIAL IS LEAD, NOT TRIM — it decides whether main's push lanes run at all.
 # This lane armed with `secrets.GITHUB_TOKEN` for six hours on 2026-09-01, and the consequence was
@@ -60,26 +50,22 @@
 # NEVER run" — both read `absent/none`. That is the AGENTS.md skip-trapdoor one level down: a
 # SUPPRESSED TRIGGER renders exactly like a slow one.
 #
-# So the arm runs on a minted GitHub App installation token, whose merges are ordinary pushes that
-# trigger everything. Never put `secrets.GITHUB_TOKEN` back here — see
+# That is why every token this lane uses is a minted GitHub App installation token — and why the
+# control plane arms with its App (`systemorph-com`), never a default token. Never put `secrets.GITHUB_TOKEN` back here — see
 # `ArmedMergeMustTriggerMainsPushLanesGuard`, which fails the build if anyone does.
-name: Arm auto-merge
+name: Disarm auto-merge on push
 
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
   # The satellites' entry point. A caller keeps the SAME `pull_request_target` trigger and one job
   # that `uses:` this file — so `github.event` inside is the caller's pull-request event, and
-  # `github.repository` / `github.event.repository.name` are the CALLING repository, which is what
-  # the mint scopes to and what `gh pr merge` is pointed at. Nothing below needs to know whether it
-  # is running here or there.
+  # `github.repository` / `github.event.repository.name` are the CALLING repository.
   workflow_call:
     secrets:
       MESHWEAVER_APP_ID:
         description: >-
           App id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet.
-          Required: an arm performed with secrets.GITHUB_TOKEN merges as github-actions[bot], whose
-          push triggers no workflows at all (#2916).
         required: true
       MESHWEAVER_APP_PRIVATE_KEY:
         description: >-
@@ -92,39 +78,21 @@ permissions:
 
 jobs:
   arm:
-    name: Arm auto-merge on this PR
+    name: Disarm auto-merge on an unreviewed push
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    # 🚨 Job-level, not workflow-level, and that is load-bearing now that this file is also called.
-    # A concurrency group is per-repository, and a CALLER run and the job it dispatches into this
-    # workflow are two separate holders of it: if both named `auto-arm-<n>` the inner job would
-    # queue behind the caller run that is waiting for it, and the lane would deadlock until the
-    # cap fired. Declared on the job, the group is held once per run in either mode. Callers must
-    # therefore NOT add a `concurrency:` block of their own — this one already covers them.
+    # Job-level, not workflow-level: a CALLER run and the job it dispatches into this workflow are
+    # two holders of a per-repository group, and a workflow-level group would deadlock the inner
+    # job behind its own caller. Callers must NOT add a `concurrency:` block of their own.
     concurrency:
       group: auto-arm-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    # Four API calls and a mint — the same shape as arm-credential.yml, capped the same way. The
-    # fleet ceiling is 45 (check-workflow-timeouts.py); a lane whose whole job is to call gh three
-    # times has no business sitting on a billed runner for three quarters of an hour because a
-    # socket hung. This cap now applies to every repo that calls this lane.
     timeout-minutes: 10
-    # A draft is the opt-out, and a fork must never arm itself. Both are properties of the
-    # event, not configuration — there is no variable here to forget to set.
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # Only a PUSH invalidates a review, so only `synchronize` has anything to do; the other forwarded
+    # actions skip. Forks are NOT skipped: a maintainer can arm a reviewed fork PR by hand, and
+    # GitHub keeps that arm across the contributor's next push. This `pull_request_target` job runs
+    # only the trusted base workflow and checks out no fork code, so disarming a fork PR is safe.
+    if: github.event.action == 'synchronize'
     steps:
-      # No `if:` on any step that ASSERTS anything. The credential assert, the base read and the
-      # mint run unconditionally: they assert and fail, they do not choose whether to run. Every
-      # exemption in this file is a property of the EVENT (draft, fork, base branch), never a
-      # question about whether a credential happens to be set — invariant #3.
-      #
-      # The `if:`s further down govern ACTIONS and DIAGNOSTICS, not gates: one prints because a
-      # failure already happened, one comments because the base already disqualified the arm, and
-      # the arm itself runs only when there is a token to arm with and a protected base to arm
-      # onto. None of them can make a verification not run, which is the distinction that matters —
-      # and the job itself is never skipped by any of them, so "not armed" and "the lane never ran"
-      # stay two different things a reader can tell apart.
       - name: The App credential, or a red run naming what to provision
         env:
           MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -134,107 +102,18 @@ jobs:
           [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
           [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::auto-arm cannot run — provision the following, then re-run:"
+            echo "::error::the disarm lane cannot run — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
           echo "App credential present."
 
-      # 🚨🚨 ARM ONLY ONTO THE DEFAULT BRANCH. On any other base, `--auto` does not mean
-      # "merge when green" — it means "merge NOW".
-      #
-      # Auto-merge waits for exactly the contexts BRANCH PROTECTION requires of the pull request's
-      # BASE. In this fleet protection is configured on the default branch and nowhere else (core:
-      # ruleset `main pr protection`; the satellites: classic protection on `main`). A STACKED pull
-      # request — one opened against another pull request's feature branch, which is how a change
-      # set gets split for review — therefore has a base that is protected by nothing, an EMPTY
-      # required set, and a condition that is satisfied the instant GitHub first reads it.
-      #
-      # Measured 2026-09-11: MeshWeaver.Plugins#1685 was opened against the feature branch of
-      # #1681, this lane armed it, and GitHub merged it at 21:03:23Z — 61 seconds after it was
-      # opened, BEFORE its own CI had started a single job. Nothing failed and nothing was
-      # bypassed: the stack simply collapsed unreviewed, exactly as configured. This lane is the
-      # fleet's only copy, so the same hole was open in all eight repositories at once.
-      #
-      # 🚨 The default branch is READ, never assumed. Every repo in the fleet uses `main` today —
-      # which is precisely why a literal `main` here would be indistinguishable from a correct
-      # check while quietly being a copy of a fact, the drift this file's header exists to stop.
-      # `github.event.repository.default_branch` is on the pull-request payload in BOTH modes (a
-      # caller forwards its own event), so there is one reading and no fallback to get wrong.
-      #
-      # 🚨 This is NOT a skip-trapdoor. It asks a property of the EVENT, exactly as the job's
-      # draft/fork exemption does, never whether a credential happens to be set — and the job still
-      # RUNS and still reports on a non-default base rather than vanishing, so "not armed" and
-      # "lane never ran" stay distinguishable. This lane publishes no required context.
-      - name: The base branch decides whether arming means "when green" or "now"
-        id: base
-        env:
-          BASE: ${{ github.event.pull_request.base.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          # Assert the readings rather than defaulting them. An empty default branch would make
-          # every base look non-default and silently stop arming the entire fleet — the mirror
-          # image of the failure above — so it gets a red that names itself instead.
-          if [ -z "$DEFAULT_BRANCH" ]; then
-            echo "::error::the pull-request payload carried no repository.default_branch, so this lane cannot tell a protected base from an unprotected one. Refusing to arm."
-            exit 1
-          fi
-          if [ -z "$BASE" ]; then
-            echo "::error::the pull-request payload carried no base.ref, so this lane cannot tell what this pull request would merge into. Refusing to arm."
-            exit 1
-          fi
-          if [ "$BASE" = "$DEFAULT_BRANCH" ]; then
-            echo "onto-default=true" >> "$GITHUB_OUTPUT"
-            echo "base '$BASE' is the default branch: arming means 'merge when the required contexts pass'."
-            exit 0
-          fi
-          echo "onto-default=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::auto-merge was NOT armed on this pull request — it targets '$BASE', not the default branch '$DEFAULT_BRANCH'. A non-default base carries no branch protection and therefore no required contexts, so arming would merge this pull request immediately, before its own CI has run."
-          {
-            echo "### Auto-merge not armed — the base is not the default branch"
-            echo
-            echo "| | |"
-            echo "|---|---|"
-            echo "| base | \`$BASE\` |"
-            echo "| default branch | \`$DEFAULT_BRANCH\` |"
-            echo
-            echo "Auto-merge waits for the required contexts of the **base**. \`$BASE\` is not the"
-            echo "default branch, so branch protection does not cover it, the required set is empty,"
-            echo "and the condition is satisfied the moment GitHub reads it — the pull request would"
-            echo "merge before any check started (measured: MeshWeaver.Plugins#1685, merged 61"
-            echo "seconds after it was opened)."
-            echo
-            echo "Merge this pull request by hand once you are satisfied with it, or retarget it at"
-            echo "\`$DEFAULT_BRANCH\` and the next event on it will arm it normally."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # 🚨 `gh pr merge --auto` either enables ordinary auto-merge or enqueues the PR, depending on
-      # the repository. Both mutations need `Pull requests: write`; the merge they later perform
-      # needs `Contents: write`. Both are requested explicitly, so an installation that is missing
-      # either fails HERE — loudly, on a step whose name says what it wanted — rather than degrading
-      # to a token that arms fine and then merges in a way that starts no CI. There is deliberately
-      # no fallback: falling back to `secrets.GITHUB_TOKEN` is precisely the outage this file's
-      # header documents.
-      # 🚨 `continue-on-error` — the ONE in this file, and the reason is that arming is an
-      # ACTION, not a GATE. AGENTS.md forbids this on a step that fetches a gate's input, because
-      # a verification that silently does not run is indistinguishable from one that passed. That
-      # hazard does not exist here: this job asserts NOTHING about the pull request. Every required
-      # context still runs, `Consolidate test results` still decides, and a PR that cannot be armed
-      # is merged by a human — the outcome is a lost convenience, not a lost check.
-      #
-      # What it buys is signal. A missing grant is a property of the REPOSITORY, identical on every
-      # PR at once, so failing here painted a red that was the same on all of them — a check whose
-      # value never varies carries no information about any PR, and a wall of permanent red is how
-      # a real red stops being read. The assertion still exists and is still RED; it moved to
-      # `arm-credential.yml`, which asks the repo-scoped question in the one place it is actionable.
-      #
-      # 🚨 That split is load-bearing: the tolerance below is only safe while that lane exists.
-      # `ArmedMergeMustTriggerMainsPushLanesGuard.ToleratingAFailedMintRequiresARepoScopedAssertion`
-      # fails the build if this `continue-on-error` outlives it.
-      - name: Mint an installation token whose merges actually trigger workflows
+      # 🚨 NO `continue-on-error`. Disarming is a SAFETY action: a disarm that silently does not
+      # happen lets an unreviewed head merge on a reviewed head's arm. So a mint that cannot get
+      # `Pull requests: write` is a RED run on the push that needed it, never a warning.
+      # (`arm-credential.yml` still asserts the same credential on a schedule, against the repository.)
+      - name: Mint an installation token that may take the arm off
         id: arm-token
-        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MESHWEAVER_APP_ID }}
@@ -244,139 +123,26 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # PRESENT is not GRANTED. The mint fails with a bare "not permitted" when the App is
-      # installed but lacks one of the two permissions, and that message names neither the App nor
-      # the grant — so say it here, where a reader lands.
-      #
-      # 🚨 This is a WARNING, not an error, and the distinction is the point. The honest per-PR
-      # outcome of a missing grant is "this PR was not armed" — degraded automation, not a fault in
-      # the branch. Reporting it as a failure of the pull request is a false statement about the
-      # pull request, and it was being made on every one of them simultaneously.
-      - name: Say why nothing was armed, if the mint could not get the grant
-        if: steps.arm-token.outcome == 'failure'
-        run: |
-          echo "::warning::auto-merge was NOT armed on this PR — the meshweaver-cloud App could not"
-          echo "::warning::mint a token with Contents:write + PullRequests:write. Merge this PR by hand."
-          {
-            echo "### Auto-merge not armed"
-            echo
-            echo "The \`meshweaver-cloud\` App must carry **both** \`Contents: write\` and"
-            echo "\`Pull requests: write\`. It currently cannot mint one with both, so this PR was"
-            echo "left unarmed and needs a human merge once it is green."
-            echo
-            echo '```'
-            echo "gh api orgs/${{ github.repository_owner }}/installations \\"
-            echo "  --jq '.installations[] | \"\(.app_slug) \(.permissions|tojson)\"'"
-            echo '```'
-            echo
-            echo "Grant *Pull requests: Read and write* in the App's settings, then **accept** the"
-            echo "new permission on the org installation — a requested-but-unaccepted permission is"
-            echo "not granted. \`arm-credential.yml\` is the lane that stays red until that is done."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Silence is the thing to avoid. The warning above lands in a run log nobody opens for a
-      # lane whose entire normal output is the word "armed" — so an author whose stacked pull
-      # request is sitting there unarmed cannot tell this from a lane that is simply broken, and
-      # waits for an arm that is never coming. Say it once on the pull request itself, where the
-      # author already is.
-      #
-      # ONCE, not once per event: `synchronize` fires on every push, and a lane that repeats itself
-      # is a lane people mute. The marker is read back before anything is written.
-      - name: Say on the pull request that a non-default base was not armed
-        if: steps.base.outputs.onto-default == 'false' && steps.arm-token.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ steps.arm-token.outputs.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          BASE: ${{ github.event.pull_request.base.ref }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          MARKER: '<!-- auto-arm:non-default-base -->'
-        run: |
-          set -euo pipefail
-          # Not swallowed: a read that fails says so and leaves the run-log warning standing. It
-          # must not fail the job — the honest per-PR outcome of a comment that could not be
-          # written is still "this pull request was not armed", which is already reported above.
-          if ! existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body'); then
-            echo "::warning::could not read the existing comments on #$PR, so nothing was posted; the run-log warning above stands."
-            exit 0
-          fi
-          if printf '%s' "$existing" | grep -qF -- "$MARKER"; then
-            echo "already said so on #$PR — nothing to do"
-            exit 0
-          fi
-          body=$(printf '%s\n%s\n' \
-            "$MARKER" \
-            "**Auto-merge was not armed.** This pull request targets \`$BASE\`, not the default branch \`$DEFAULT_BRANCH\` — a non-default base has no branch protection and therefore no required contexts, so arming it would merge it immediately, before its own CI runs. Merge it by hand when you are ready, or retarget it at \`$DEFAULT_BRANCH\` to have it armed normally.")
-          gh pr comment "$PR" --repo "$REPO" --body "$body"
-          echo "commented on #$PR"
-
-      # Conditioned on the MINT's outcome and on the BASE, never on whether a secret "looks set" —
-      # the shape AGENTS.md forbids. Without a token there is nothing to arm with; running gh
-      # anyway would fall back to the runner's default credential, which is the #2916 outage
-      # exactly. And without a default-branch base there is nothing to WAIT for, so an arm here is
-      # an immediate merge rather than a deferred one (see the base step above).
-      - name: Arm it
-        if: steps.arm-token.outcome == 'success' && steps.base.outputs.onto-default == 'true'
+      # 🚨 A PUSH INVALIDATES THE REVIEW. Read with REST; `--disable-auto` is the GraphQL mutation,
+      # which has no REST form. Read back afterwards: an exit code is the command's opinion, the
+      # pull request's `auto_merge` field is the evidence.
+      - name: Disarm on a push the review has not seen yet
         env:
           GH_TOKEN: ${{ steps.arm-token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          owner="${REPO%%/*}"
-          repository="${REPO#*/}"
-          # `autoMergeRequest` is populated on ordinary repositories, but it is NULL after a
-          # merge-queue repository accepts the PR. The queue has its own `mergeQueueEntry` field.
-          # Read both in one bounded GraphQL lookup so the read-back cannot report a successful
-          # queue admission as an unarmed PR (#3950, run 34555063094).
-          arm_state() {
-            gh api graphql \
-              -f query='query($owner:String!,$repository:String!,$pr:Int!){repository(owner:$owner,name:$repository){pullRequest(number:$pr){state merged autoMergeRequest{enabledAt} mergeQueueEntry{id}}}}' \
-              -f owner="$owner" -f repository="$repository" -F pr="$PR" \
-              --jq '.data.repository.pullRequest | if . == null then "missing" elif .merged then "landed" elif .state == "CLOSED" then "closed" elif .mergeQueueEntry != null then "queued" elif .autoMergeRequest != null then "armed" else "open" end'
-          }
-          # Already armed/queued is the common case on `synchronize` and is NOT a failure. A
-          # merged/closed PR can also race this run; treat it as done, not as an error.
-          state=$(arm_state)
-          case "$state" in
-            armed) echo "already armed — nothing to do"; exit 0 ;;
-            queued) echo "already queued — nothing to do"; exit 0 ;;
-            landed) echo "PR already landed — nothing to do"; exit 0 ;;
-            closed) echo "::warning::pull request #$PR was closed without merging before it could be armed"; exit 0 ;;
-            missing) echo "::warning::pull request #$PR disappeared before it could be armed"; exit 0 ;;
-          esac
-          # Two repo shapes, one file. A merge QUEUE owns the merge strategy (core's is
-          # SQUASH), so `--merge` is redundant there and some gh versions REJECT the
-          # combination outright; on a repo with no queue, gh refuses to arm at all unless a
-          # method is named. So name the method, then fall back to letting the queue decide.
-          arm_error=""
-          if out=$(gh pr merge "$PR" --repo "$REPO" --merge --auto 2>&1); then
-            echo "arm requested (--merge): ${out:-ok}"
-          elif out=$(gh pr merge "$PR" --repo "$REPO" --auto 2>&1); then
-            echo "arm requested (strategy left to the merge queue): ${out:-ok}"
-          else
-            # Do not warn yet: another run or a human may have queued, armed or merged the PR
-            # between our first read and this command. The authoritative read-back below decides.
-            arm_error="$out"
+          armed=$(gh api "repos/$REPO/pulls/$PR" --jq '.auto_merge != null')
+          if [ "$armed" != "true" ]; then
+            echo "not armed — nothing to take off"
+            exit 0
           fi
-          # Read it back. An exit code of 0 is the command's opinion; this is the evidence. There
-          # are THREE successful states: ordinary auto-merge armed, merge-queue entry present, or
-          # the PR already landed because nothing remained to wait for.
-          state=$(arm_state)
-          case "$state" in
-            armed) echo "armed: #$PR will merge when the required contexts pass" ;;
-            queued) echo "queued: #$PR is in the merge queue" ;;
-            landed) echo "landed: #$PR had nothing left to wait for and merged immediately" ;;
-            closed) echo "::warning::pull request #$PR was closed without merging during the arm attempt" ;;
-            open)
-              # 🚨 Failing to arm must be VISIBLE. It is not fatal to the PR — a human can still
-              # merge it — but a silent failure here recreates exactly the state this exists to
-              # fix: a green PR that never lands, with nothing saying why.
-              if [ -n "$arm_error" ]; then
-                echo "::warning::could not arm auto-merge on #$PR — $arm_error"
-              else
-                echo "::warning::auto-merge still not set on #$PR after a clean arm — is 'Allow auto-merge' enabled on $REPO?"
-              fi
-              ;;
-            missing) echo "::warning::pull request #$PR disappeared after the arm command" ;;
-          esac
+          gh pr merge "$PR" --repo "$REPO" --disable-auto
+          still=$(gh api "repos/$REPO/pulls/$PR" --jq '.auto_merge != null')
+          if [ "$still" = "true" ]; then
+            echo "::error::auto-merge is still armed on #$PR after --disable-auto — an unreviewed head may merge; take it off by hand"
+            exit 1
+          fi
+          echo "Disarmed #$PR: the new head has not been reviewed yet; the control plane re-arms it once it is reviewed and every finding is answered." >> "$GITHUB_STEP_SUMMARY"
+          echo "disarmed #$PR"
