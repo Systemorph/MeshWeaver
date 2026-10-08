@@ -11,7 +11,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 [ROUTE] Routing back-pressure [9d926d64#1 started …]: 64 route dispatches in flight
 (reporting threshold 64); ordered channels queued 64 over 12 stream destination(s),
 deepest per-channel queue 0, routing pool subscribing 0, waiting for a pool slot 0;
-oldest leg in flight 3 ms — stream-routed → cache/… (delivery …).
+oldest leg dispatched 3 ms — stream-routed → cache/… (delivery …);
+oldest leg queued behind its own channel, not yet dispatched none queued.
 Latest dispatch target … — the address that happened to cross the threshold, NOT a diagnosis.
 ```
 
@@ -47,7 +48,8 @@ outage"*, when routing is the instrument that noticed it.
 | `deepest per-channel queue` | ≥ 1 ⇒ frames of **one stream** are stacking behind one another — the only genuinely routing-structural reading | why the head is slow |
 | `routing pool subscribing` | how many legs are inside their **subscribe prologue** right now | anything about legs before or after that prologue — see below |
 | `waiting for a pool slot` | legs the pool has ACCEPTED and not yet started | which of them will start |
-| `oldest leg in flight` | **load vs. leaked slot, in one sample**, and it names the leg | why that leg is old |
+| `oldest leg dispatched` | **load vs. leaked slot, in one sample**, and it names the leg | why that leg is old |
+| `oldest leg queued behind its own channel` | how long a frame has waited behind earlier frames of its OWN stream before being dispatched — a wait, never a leak | anything about a leak: it decides no level |
 | the episode stamp | `activation#episode` — a higher episode on the same activation proves the previous episode **drained** | anything, from a single sample, about an episode that never drained |
 
 ## The gauge that could not see the cause it named
@@ -171,7 +173,20 @@ a ticket for each.
 the longest composition). A leg older than that cannot be a slow destination — its timeouts would have
 ended it. It is either **not terminating** (a leaked slot; the label names it) or **never started its
 timeouts** because the silo had no thread (ThreadPool starvation). Both are real defects, both stay
-`Critical`. Everything younger is `Warning`. The bound is derived, not chosen: raising it to make the
+`Critical`. Everything younger is `Warning`.
+
+**Measured from when the leg was DISPATCHED, never from when it was accepted (#5703).** A stream-routed
+leg is accepted at enqueue and then waits behind every earlier leg of its own channel before it is
+dispatched, so its age since acceptance is the sum of the legs ahead of it plus its own — bounded by nothing
+of its own. Production on 2026-10-05 filed `Critical` on an oldest leg of 124 863 ms with 61 legs
+queued on one stream channel: about two healthy seconds per leg, read as a leaked slot. The ordered
+dispatcher now stamps a leg's DISPATCH when it hands the leg to the routing pool; `oldest leg
+dispatched` is measured from that stamp, and the wait before it is printed separately as `oldest leg
+queued behind its own channel`. Dispatch is deliberately not the moment the pool subscribes the leg: a
+wait for a pool thread stays inside the age, because it is the "starved silo" half of the `Critical`
+verdict. A head leg that really is stuck is still the oldest dispatched leg, its age still grows, and it
+is still the one `Critical`. The shutdown residual (`RoutingQuiescence: … Stuck leg(s)`) carries the
+same split per leg: `in flight Xs (dispatched Ys ago)` or `in flight Xs (queued, not dispatched)`. The bound is derived, not chosen: raising it to make the
 report quieter would change what a leg is allowed to do, which is exactly the band-aid this page
 refuses.
 
@@ -179,7 +194,7 @@ refuses.
 except about an episode it is still holding. While an episode is latched, the report re-reads its
 oldest leg on the dispatches the grain makes anyway (rate-limited to once per 10 s, no timer) and, if a
 leg has outlived its bounds, emits ONE `Critical` — `[ROUTE] Routing back-pressure [<activation>#<n>]
-has not drained after N ms: oldest leg in flight …`. Without it, an episode that crossed on young legs
+has not drained after N ms: oldest leg dispatched …`. Without it, an episode that crossed on young legs
 and then leaked under them would never produce a second line.
 
 **The deep channel is now named.** `deepest per-channel queue 63 on cache/x [sync/…]` — a recurring
@@ -194,7 +209,7 @@ The drained report stays `Warning`: a `Critical` "cleared" line would file a tic
 
 1. **Rule the process out.** OOM, a `LocalSiloHealthMonitor` stall, or a placement timeout on the
    same pod in the same window ⇒ this line is a symptom; go there.
-2. **`oldest leg in flight`.** Past the printed bound ⇒ a slot is leaked or the silo is starved, and
+2. **`oldest leg dispatched`.** Past the printed bound ⇒ a slot is leaked or the silo is starved, and
    the label names the leg — this is the only reading that makes the line `Critical`. Inside it ⇒ load.
 3. **`deepest per-channel queue … on <channel>`.** ≥ 1 ⇒ one stream's frames are stacking, and the
    channel names the stream; a channel that recurs across episodes is a producer to fix. `0` ⇒ breadth.
