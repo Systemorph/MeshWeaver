@@ -103,6 +103,13 @@ predicate discriminated while the in-memory relevance filter for the *same* quer
 `sort:` on a content field (`sort:CreatedAt-desc`, the notification bell) was a silent no-op in the
 merge step. Both converge now.
 
+The in-memory evaluator also reads content in all three forms a node can carry: a typed CLR
+object, a deserialized `JsonElement`, or an as-written `JsonObject`. The last form previously
+fell through to CLR reflection, which cannot see JSON keys; a `content.hostedIn:…` filter then
+silently rejected that node during live-query relevance checks. JSON object keys now resolve
+exactly first and case-insensitively second, including nested fields, and free-text extraction
+reads the same JSON strings from either DOM form (MeshWeaver#6049).
+
 ### The fallback made the sort comparator's partiality reachable
 
 `sort:` resolves through the same `GetPropertyValue`, so the fallback widened it from *node fields
