@@ -1115,13 +1115,27 @@ def advance_action(pr: dict, run: dict | None, gate_job: dict | None, verdict: S
     return "rerun", f"stage 1 is green for {head[:10]} ({verdict.mode}) — re-running the failed jobs of run {run.get('id')}"
 
 
-def post_rerun(gh, run_id) -> bool:
-    """POST rerun-failed-jobs. True when this call re-ran the run; False when it lost a race (the sweep
-    and a listener) and another invocation already re-ran it. Any other failure is RAISED: `Gh.post`
-    and `Gh.api` both raise ReadError on a failed call, so a refused POST whose run is still
-    `completed`, or an unreadable read-back, is never masked. Self-tested with a stub `gh`."""
+#: The two re-run endpoints, and which caller needs which. `rerun-failed-jobs` re-runs only the jobs
+#: that failed or were cancelled, keeping every green job of an expensive CI run — right for the
+#: stage advance, whose held run is a full test run. It is REFUSED (403 "This workflow run cannot be
+#: retried") for a run that has no failed job to re-run, and the commonest such run is one CANCELLED
+#: BEFORE ANY JOB STARTED: a concurrency group replaced it while pending, so it carries ZERO jobs
+#: (measured on #6315, run 37807892371 — `rerun-failed-jobs` 403, `rerun` accepted). `rerun` re-runs
+#: the WHOLE run and is accepted for every completed run, zero jobs included.
+RERUN_FAILED_JOBS = "rerun-failed-jobs"
+RERUN_WHOLE_RUN = "rerun"
+
+
+def post_rerun(gh, run_id, endpoint: str = RERUN_FAILED_JOBS) -> bool:
+    """POST a re-run (`endpoint`: RERUN_FAILED_JOBS by default, RERUN_WHOLE_RUN for the refresh).
+    True when this call re-ran the run; False when it lost a race (the sweep and a listener) and
+    another invocation already re-ran it. Any other failure is RAISED: `Gh.post` and `Gh.api` both
+    raise ReadError on a failed call, so a refused POST whose run is still `completed`, or an
+    unreadable read-back, is never masked. Self-tested with a stub `gh`."""
+    if endpoint not in (RERUN_FAILED_JOBS, RERUN_WHOLE_RUN):
+        raise ValueError(f"not a re-run endpoint: {endpoint!r}")
     try:
-        gh.post(f"actions/runs/{run_id}/rerun-failed-jobs")
+        gh.post(f"actions/runs/{run_id}/{endpoint}")
         return True
     except ReadError:
         if lost_rerun_race(gh.api(f"actions/runs/{run_id}")):
@@ -1149,7 +1163,14 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
     head. It is re-run only when it can still carry a stale red that this green verdict supersedes —
     completed, not successful, and started BEFORE this verdict was taken. Everything else is a no-op
     that says why, which is what makes the refresh idempotent per (head sha, answered state): once
-    re-run, the candidate is in flight (skip), then green (skip) or red on a NEWER read (skip)."""
+    re-run, the candidate is in flight (skip), then green (skip) or red on a NEWER read (skip).
+
+    🚨 The re-run is of the WHOLE run (RERUN_WHOLE_RUN), never its failed jobs. What the refresh must
+    achieve is a fresh `pull_request` evaluation of live state, and every job of this lane reads live
+    state, so re-running the whole run loses nothing. The newest `pull_request` run is very often one
+    a newer arrival REPLACED while it was pending — cancelled with ZERO jobs — and GitHub refuses
+    `rerun-failed-jobs` for that run (#6315, run 37807892371). Such a run published no check-run, so
+    the pull request has no `pull_request` verdict on this head at all until it runs."""
     head = str((pr.get("head") or {}).get("sha") or "")
     if event == PROTECTION_READ_EVENT:
         return "none", f"this run IS a `{PROTECTION_READ_EVENT}` run — its own verdict is the one branch protection reads"
@@ -1180,7 +1201,7 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
                         f"{candidate.get('run_started_at')}, not before this verdict ({evaluated_at}) — it judged a state no older "
                         "than this one, so it is not re-run")
     return "rerun", (f"this `{event}` verdict is GREEN but branch protection reads `{PROTECTION_READ_EVENT}` run "
-                     f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running its failed jobs")
+                     f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running the whole run")
 
 
 def pr_from_queue_ref(ref: str) -> int:
@@ -1610,7 +1631,7 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
             raise ReadError(f"actions/workflows/{workflow_id}/runs?head_sha={head[:10]} did not return a run listing")
         candidate = max(runs, key=lambda r: (r.get("created_at") or "", r.get("id") or 0)) if runs else None
         action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
-        if action == "rerun" and not post_rerun(gh, candidate["id"]):
+        if action == "rerun" and not post_rerun(gh, candidate["id"], RERUN_WHOLE_RUN):
             action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
     except (ReadError, KeyError, TypeError) as e:
         print(f"::error::the protection-read run of #{number} was NOT refreshed: {e}")
@@ -2526,11 +2547,12 @@ def self_test() -> int:
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect}")
     class _StubGh:
-        def __init__(self, post_fails, readback):
-            self.post_fails, self.readback = post_fails, readback
+        def __init__(self, post_fails, readback, refuse_suffix=None):
+            self.post_fails, self.readback, self.refuse_suffix, self.posted = post_fails, readback, refuse_suffix, []
         def post(self, path):
-            if self.post_fails:
-                raise ReadError(f"POST {path} failed (409)")
+            self.posted.append(path)
+            if self.post_fails or (self.refuse_suffix and path.endswith(self.refuse_suffix)):
+                raise ReadError(f"POST {path} failed (403)")
         def api(self, path):
             if isinstance(self.readback, Exception):
                 raise self.readback
@@ -2548,6 +2570,38 @@ def self_test() -> int:
         ok = got == expect
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
+    # The ENDPOINT each caller posts. A zero-job run (cancelled while pending) refuses
+    # `rerun-failed-jobs` with 403 and accepts `rerun` (#6315, run 37807892371): the stub refuses
+    # exactly what GitHub refused, and the read-back says the run is still completed — so the wrong
+    # endpoint RAISES, as it did in production, and the right one re-runs.
+    zero_job = {"status": "completed", "conclusion": "cancelled"}
+    for name, endpoint, expect_path, expect in [
+        ("endpoint: default is rerun-failed-jobs (the stage advance)", None, "actions/runs/7/rerun-failed-jobs", True),
+        ("endpoint: the refresh re-runs the WHOLE run", RERUN_WHOLE_RUN, "actions/runs/7/rerun", True),
+    ]:
+        stub = _StubGh(False, None)
+        got = post_rerun(stub, 7) if endpoint is None else post_rerun(stub, 7, endpoint)
+        ok = got == expect and stub.posted == [expect_path]
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} posted={stub.posted}")
+    for name, endpoint, expect in [
+        ("zero-job run: rerun-failed-jobs is refused -> RAISES (the #6315 red)", RERUN_FAILED_JOBS, "raise"),
+        ("zero-job run: the whole-run rerun is accepted -> True", RERUN_WHOLE_RUN, True),
+    ]:
+        try:
+            got = post_rerun(_StubGh(False, zero_job, refuse_suffix="/rerun-failed-jobs"), 7, endpoint)
+        except ReadError:
+            got = "raise"
+        ok = got == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect} got={got}")
+    try:
+        post_rerun(_StubGh(False, None), 7, "rerun-everything")
+        got = "accepted"
+    except ValueError:
+        got = "refused"
+    failures += 0 if got == "refused" else 1
+    print(f"self-test {'ok' if got == 'refused' else 'FAIL':4} {'endpoint: an unknown endpoint is refused':60} got={got}")
     adv_case("closed PR -> none", "none", dict(open_pr, state="closed"), done_run, failed_gate, GREEN_S, "closed")
 
     # ── the SELF-REFRESH: a green verdict branch protection does not read re-runs the one it does.
@@ -2566,6 +2620,9 @@ def self_test() -> int:
     ref_case("review-run GREEN, pull_request run RED -> rerun", "rerun", "pull_request_review", red_read, says="re-running")
     ref_case("a cancelled (evicted) read run -> rerun", "rerun", "pull_request_review_comment",
              dict(red_read, conclusion="cancelled"), says="cancelled")
+    ref_case("#6315: read run cancelled while pending (zero jobs) -> rerun the WHOLE run", "rerun",
+             "pull_request_review", dict(red_read, conclusion="cancelled", run_started_at="2026-10-07T09:59:59Z"),
+             says="whole run")
     ref_case("this run IS the pull_request run -> none (no loop)", "none", "pull_request", red_read, says="IS a `pull_request`")
     ref_case("merge_group entry -> none", "none", "merge_group", red_read, says="merge-queue")
     ref_case("read run already re-run, in flight -> none (idempotent)", "none", "pull_request_review_comment",
