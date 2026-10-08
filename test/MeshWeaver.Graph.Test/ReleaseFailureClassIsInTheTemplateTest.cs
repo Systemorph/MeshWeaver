@@ -128,6 +128,43 @@ public class ReleaseFailureClassIsInTheTemplateTest
     }
 
     /// <summary>
+    /// 🚨 The ids are deployed incident SITES, so they are pinned exactly — never derived from the enum
+    /// ordinal (review on #6326). A class inserted mid-enum must not take a historical class's id, and
+    /// a new class must be given its own code: this test fails on a missing entry, a moved code, or a
+    /// reused one. Append a row when adding a class; never edit an existing row.
+    /// </summary>
+    [Fact]
+    public void TheEventIdOfEveryClass_IsPinned()
+    {
+        var pinned = new Dictionary<NodeTypeReleaseFailure, int>
+        {
+            [NodeTypeReleaseFailure.Unclassified] = 7400,
+            [NodeTypeReleaseFailure.NoNodeTypePath] = 7401,
+            [NodeTypeReleaseFailure.CompileDenied] = 7402,
+            [NodeTypeReleaseFailure.PermissionCheckFailed] = 7403,
+            [NodeTypeReleaseFailure.PermissionCheckNoVerdict] = 7404,
+            [NodeTypeReleaseFailure.NodeMissing] = 7405,
+            [NodeTypeReleaseFailure.OwnerUnreachable] = 7406,
+            [NodeTypeReleaseFailure.OwnerRecycling] = 7407,
+            [NodeTypeReleaseFailure.WriteDenied] = 7408,
+            [NodeTypeReleaseFailure.WriteRejected] = 7409,
+            [NodeTypeReleaseFailure.BaseStateNeverArrived] = 7410,
+            [NodeTypeReleaseFailure.HostTearingDown] = 7411,
+            [NodeTypeReleaseFailure.StorageUnavailable] = 7412,
+            [NodeTypeReleaseFailure.TransientHubFailure] = 7413,
+            [NodeTypeReleaseFailure.NoAnswerWithinBound] = 7414,
+            [NodeTypeReleaseFailure.HostLeaving] = 7415,
+        };
+
+        Enum.GetValues<NodeTypeReleaseFailure>().Should().OnlyContain(f => pinned.ContainsKey(f),
+            "every class needs a pinned code here — a class without one would log under the "
+            + "Unclassified site and fold into it");
+        foreach (var (failure, id) in pinned)
+            Log(failure, "reason").EventId.Id.Should().Be(id,
+                $"{failure}'s event id is a deployed incident site and must never move");
+    }
+
+    /// <summary>
     /// The fallback is NAMED and reached only by <see cref="NodeTypeReleaseFailure.Unclassified"/>.
     /// A fallback that some other class can also reach is a class that silently means "and
     /// everything else" — and then the bucket is back, just wearing a specific name.

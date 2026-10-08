@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -52,21 +53,46 @@ public static class NodeTypeRecompileExtensions
     /// arrived on #1549 as "a different fingerprint of the same log site", 459 occurrences of causes
     /// that issue was never about. One id per class makes one site per class.
     ///
-    /// <para>Derived from the enum value (<see cref="ReleaseFailureEventIdBase"/> + value) so a new
-    /// class gets a distinct id by construction and cannot silently inherit another's; the name is
-    /// the class, so the id reads in a log line. An undeclared value (a cast) gets the
-    /// <see cref="NodeTypeReleaseFailure.Unclassified"/> id, exactly as it gets that template.</para>
+    /// <para>🚨 <b>The ids are PERMANENT and EXPLICIT, never the enum ordinal</b> (review on #6326): an
+    /// id is the identity of a deployed incident site, so a class inserted mid-enum must not take a
+    /// historical class's id and renumber the rest. Each class is listed in
+    /// <see cref="ReleaseFailureEventIds"/> with its code; a new class gets the next unused code and
+    /// <c>ReleaseFailureClassIsInTheTemplateTest</c> pins the whole mapping, so a missing entry or a
+    /// reused or moved code fails there. An unlisted or undeclared value logs under the
+    /// <see cref="NodeTypeReleaseFailure.Unclassified"/> id, exactly as it takes that template.</para>
     /// </summary>
     /// <param name="failure">The classified failure.</param>
     /// <returns>The event id that failure is logged under.</returns>
     internal static EventId ReleaseFailureEventId(NodeTypeReleaseFailure failure) =>
-        Enum.IsDefined(failure)
-            ? new EventId(ReleaseFailureEventIdBase + (int)failure, $"NodeTypeRelease{failure}")
-            : new EventId(ReleaseFailureEventIdBase + (int)NodeTypeReleaseFailure.Unclassified,
+        ReleaseFailureEventIds.TryGetValue(failure, out var id)
+            ? new EventId(id, $"NodeTypeRelease{failure}")
+            : new EventId(ReleaseFailureEventIds[NodeTypeReleaseFailure.Unclassified],
                 $"NodeTypeRelease{NodeTypeReleaseFailure.Unclassified}");
 
-    /// <summary>First event id of the release-failure range (7400–7499; the disposal verdicts use 73xx).</summary>
-    internal const int ReleaseFailureEventIdBase = 7400;
+    /// <summary>
+    /// The permanent class → event-id codes (range 7400–7499; the disposal verdicts use 73xx). Append
+    /// only: never renumber, never reuse a retired code.
+    /// </summary>
+    internal static readonly ImmutableDictionary<NodeTypeReleaseFailure, int> ReleaseFailureEventIds =
+        new Dictionary<NodeTypeReleaseFailure, int>
+        {
+            [NodeTypeReleaseFailure.Unclassified] = 7400,
+            [NodeTypeReleaseFailure.NoNodeTypePath] = 7401,
+            [NodeTypeReleaseFailure.CompileDenied] = 7402,
+            [NodeTypeReleaseFailure.PermissionCheckFailed] = 7403,
+            [NodeTypeReleaseFailure.PermissionCheckNoVerdict] = 7404,
+            [NodeTypeReleaseFailure.NodeMissing] = 7405,
+            [NodeTypeReleaseFailure.OwnerUnreachable] = 7406,
+            [NodeTypeReleaseFailure.OwnerRecycling] = 7407,
+            [NodeTypeReleaseFailure.WriteDenied] = 7408,
+            [NodeTypeReleaseFailure.WriteRejected] = 7409,
+            [NodeTypeReleaseFailure.BaseStateNeverArrived] = 7410,
+            [NodeTypeReleaseFailure.HostTearingDown] = 7411,
+            [NodeTypeReleaseFailure.StorageUnavailable] = 7412,
+            [NodeTypeReleaseFailure.TransientHubFailure] = 7413,
+            [NodeTypeReleaseFailure.NoAnswerWithinBound] = 7414,
+            [NodeTypeReleaseFailure.HostLeaving] = 7415,
+        }.ToImmutableDictionary();
 
     /// <summary>
     /// 🚨 The release-refusal log line, ONE TEMPLATE PER FAILURE CLASS — issue #1549.
