@@ -22,6 +22,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -3850,6 +3851,62 @@ public partial class MeshOperations
             {
                 logger.LogWarning(ex, "WhoAmI could not evaluate access at {Path}", resolvedPath);
                 return Observable.Return($"Error: could not evaluate access at '{resolvedPath}': {ex.Message}");
+            });
+    }
+
+    /// <summary>The node types a visit is never recorded for — identity and access records, the same
+    /// set the Blazor navigation tracker skips.</summary>
+    private static readonly HashSet<string> UntrackedVisitTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "User", "Role", "Group", "AccessAssignment",
+    };
+
+    /// <summary>
+    /// Records that the CALLER opened <paramref name="path"/> — the access log
+    /// (<c>{user}/_UserActivity</c>) that "last used" orders by: the home Apps grid
+    /// (<c>SortByAccess</c>), "recently viewed", the search box's recent pages. The Blazor portal
+    /// records a visit inside its own navigation; a client that navigates on its own (the native
+    /// app) had no way to, so on a phone every app stayed "never opened" (2026-10-08).
+    ///
+    /// <para>The same request and the same skips as that tracker: never for an anonymous, system
+    /// or email-shaped caller (an unprovisioned partition), never for a satellite or an
+    /// identity/access node. The path is recorded AS GIVEN — an app tile's target can be a route
+    /// (<c>{user}/Chat</c>), and the grid looks its tile up by exactly that path — with the node's
+    /// name and type when a node answers there.</para>
+    /// </summary>
+    /// <returns>A cold observable emitting <c>{"recorded":true|false,"path":…}</c>.</returns>
+    public IObservable<string> Visit(string path)
+    {
+        var resolvedPath = string.IsNullOrWhiteSpace(path) ? "" : ResolvePath(path).Trim('/');
+        if (resolvedPath.Length == 0)
+            return Observable.Return("Error: path is required.");
+        var userId = ResolveCallerUserId();
+        string Answer(bool recorded) => ToolAnswerJson.Serialize(new { recorded, path = resolvedPath }, JsonSerializerOptions.Web);
+        if (userId == WellKnownUsers.Anonymous
+            || string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+            || userId.Contains('@')
+            || resolvedPath.Contains('@')
+            || resolvedPath.StartsWith('_')
+            || resolvedPath.Contains("/_", StringComparison.Ordinal))
+            return Observable.Return(Answer(false));
+
+        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .DefaultIfEmpty(null)
+            .Select(node =>
+            {
+                if (node?.NodeType is { } type && UntrackedVisitTypes.Contains(type))
+                    return Answer(false);
+                var slash = resolvedPath.LastIndexOf('/');
+                hub.GetMeshHub().Post(new TrackActivityRequest(
+                    resolvedPath,
+                    userId,
+                    node?.Name ?? resolvedPath[(slash + 1)..],
+                    node?.NodeType,
+                    node?.Namespace ?? (slash < 0 ? "" : resolvedPath[..slash])));
+                return Answer(true);
             });
     }
 
