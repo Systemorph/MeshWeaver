@@ -25,6 +25,12 @@ case "${1:-} ${2:-} ${3:-}" in
     while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --query) query="${2:-}"; shift 2 ;; *) shift ;; esac; done
     if [ "$query" = "value" ]; then
       if [ "$name" = "${HOSTING_KVE_PASSWORD_OBJECT:-}" ]; then printf '%s\n' "${HOSTING_KVE_PASSWORD-fake-server-password-NEVER-PRINTED}"; exit 0; fi
+      # Memex#648: an object this run wrote reads back as what was written; an EXISTING
+      # db-connection answers HOSTING_KVE_DBCONN (a fake string the test greps for).
+      if [ -f "$state/set.$name" ]; then cat "$state/set.$name"; printf '\n'; exit 0; fi
+      if [ -n "${HOSTING_KVE_DBCONN_OBJECT:-}" ] && [ "$name" = "$HOSTING_KVE_DBCONN_OBJECT" ]; then
+        printf '%s\n' "${HOSTING_KVE_DBCONN-Host=hand.example.invalid;Password=fake-hand-written-NEVER-PRINTED}"; exit 0
+      fi
       echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3
     fi
     for existing in ${HOSTING_KVE_EXISTING:-}; do
