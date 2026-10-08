@@ -92,6 +92,10 @@ public static class WorkingTreeTab
         host.UpdateData(RefreshId, "0");
         host.UpdateData(FilterId, "");
         host.UpdateData(SelectedFileId, "");
+        // 🚨 The Save button reads this id ONCE and returns the read to the click. An id that was
+        // never written emits nothing, so that read would never complete and the button would stay
+        // pending (Doc/GUI/ButtonPendingState; ClickReadIdIsSeededGuard). Opening a file overwrites it.
+        host.UpdateData(EditorContentId, "");
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.codeWorkspace")).WithStyle("margin:0 0 8px 0;"));
         stack = stack.WithView(Controls.Html(Hint(

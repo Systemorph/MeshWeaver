@@ -221,6 +221,48 @@ demanding `X-Hub-Signature-256` from Stripe would 401 every payment delivery.
    decide the verdict), and it makes core's CD verdict depend on other repositories' state, which is
    the CI-to-CI coupling `main-cd.yml` has already deleted twice.
 
+## 🚨 A stalled read answers 503, never a bare 500 (#6125)
+
+Before storing, the endpoint confirms the allowlisted target exists with a `path:{target}` query.
+When a query provider never delivers its Initial, the fan-in ends that read with
+`QueryProviderStalledException` (policy `query-fanin-stall-terminal`). That exception used to
+escape the handler, so ASP.NET answered a **bare 500** and logged it as an unhandled exception of
+`WebhookInboxEndpoints.Deliver`. Production saw this on memex on 2026-10-04 and 2026-10-05, with the
+query `path:Hosting/PlatformBuilds`.
+
+The route now maps it the way the plugin-bundle routes do (#5345), through
+`InstanceAuthResponses.UnavailableOnAStalledRead`. Only what
+`AreaErrorClassifier.IsStorageUnavailable` classifies becomes **503 + `Retry-After`**, and the
+body's `error` says nothing was stored. Every other fault still escapes, so a real defect stays
+visible. Delivering again is safe: nothing was written on that path.
+
+Pinned by `test/Memex.Portal.Shared.Test/WebhookInboxStalledReadTest.cs`. It has three cases: the
+stall answers 503, an answered read answers 200, and an ordinary fault still escapes. Without the
+mapping, the stall case fails with the production exception.
+
+## What a slow answer after "Node created" is — and is not (#6039)
+
+One GitHub delivery was logged `Node created at Hosting/PlatformBuilds/_Inbox/…` about 200 ms after
+GitHub sent it. GitHub still recorded no response within its 10 s limit. Investigated, without a
+code change:
+
+- **Not post-creation handlers.** No `INodePostCreationHandler` in core or MeshWeaver.Plugins
+  matches a `WebhookEvent`. So `RunPostCreationHandlersObs` is empty for an inbox node, and
+  `CreateNodeResponse.Ok` is posted synchronously right after the "Node created" line.
+- **What is left is the reply's dispatch.** It needs the `portal/nodeops-{meshId}` action block, and
+  it needs it however the create was issued. The endpoint holds the root hub, so its create runs on
+  that hub. A reply that hub posts is first RECEIVED and ENQUEUED on the hub's *own* block before it
+  is routed (request-fate trail: `RESPONSE_POSTED target=portal/reads-… ↩ reply#1: RECEIVED
+  @portal/nodeops-… → ENQUEUED → QUEUED queue=main`). Issuing the create from
+  `portal/reads-{meshId}` therefore does **not** separate the answer from that block. This was
+  tried and measured: with the block held after the commit, the delivery was still not answered,
+  because the reply sat on the node-CRUD block on its way out. It is unlike the content route's read
+  (#2901), whose responder is a per-node hub.
+- **Not established:** which turn held the node-CRUD block at 18:10:31Z on 2026-09-26. That is the
+  open question of #2543. Cutting the answer's dependence on that block would need one of two
+  changes. Either the commit itself becomes the signal the endpoint waits on, or a responder's
+  outgoing reply stops queueing on its own block. Both are framework changes outside this endpoint.
+
 ## Where the code lives
 
 - `memex/Memex.Portal.Shared/Api/WebhookInboxEndpoints.cs` — the anonymous `POST /api/hooks/{target}`
