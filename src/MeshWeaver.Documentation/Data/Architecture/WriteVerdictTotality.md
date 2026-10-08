@@ -717,6 +717,16 @@ RequestTimeout").
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
 
+**The deadline must release the hub after a prompt create.** Rx's absolute `Timeout` schedules a
+`LocalScheduler.WorkItem` that can remain in its priority queue until the deadline even after the
+subscription completes and disposes. Its fallback observable therefore captures only a small
+create-stage tracker (path, budget, current stage), never the create handler's closure containing
+the hub. The separate post-creation `Timer` likewise routes through a signal that clears its
+callbacks when the post-creation chain ends. A CI `MeshHubDisposalLeakTest` root trace exposed the
+former path as `LocalScheduler.WorkItem → Timeout.Absolute → Defer → create handler → mesh hub`.
+Moving or widening the deadline would only shorten or hide the retention window; the callback
+references themselves must be released.
+
 **Two defects the bound exposed, fixed with it:**
 
 - **The copy subscribed a LONG-LIVED permission fold without `Take(1)`.** `CopyNodeRequest.
