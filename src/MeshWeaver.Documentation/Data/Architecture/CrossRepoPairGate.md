@@ -158,11 +158,11 @@ nothing**. The whole board, so that "uncovered" is written down rather than infe
 |---|---|---|---|
 | 1 | a public **type** leaves `src/` | `Cross-repo pair (public surface)` | **gated** |
 | 2 | an **added overload** makes a dependent's `<see cref>` ambiguous | — | **UNCOVERED** |
-| 3 | a **JSON envelope's field names** change | `Dependent suites (MeshWeaver.Plugins)` | **run** where a Plugins suite exercises the envelope; otherwise uncovered |
+| 3 | a **JSON envelope's field names** change | `Dependent suites (MeshWeaver.Plugins)` | **gated** where a reachable Plugins suite exercises the envelope (required, per realm); otherwise uncovered |
 | 4 | a **comment** another repo's regex parses as data | — | **UNCOVERED** |
 | 5 | an i18n **value** change | — | **UNCOVERED** (the mirror guard compares against a *pinned* core commit) |
 | 6 | a public **member** leaves a type that stays | `Cross-repo pair (public surface)` | **gated** |
-| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | `Dependent suites (MeshWeaver.Plugins)` | **run** — Plugins' reachable suites against the candidate, in the merge queue (below); still undetectable by any SURFACE detector, and uncovered for the other satellites |
+| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | `Dependent suites (MeshWeaver.Plugins)` | **gated** for every Plugins suite the diff can reach — REQUIRED on every pull request, a measured break merges only when declared (`Breaks-plugins:`, below); still undetectable by any SURFACE detector, unmeasured for in-mesh Tests areas, and uncovered for the other satellites |
 | 8 | a `PackageVersion` a satellite consumes VERSIONLESS is removed | `Satellite package pins (removal declared)` | **gated** (#3349) |
 | 9 | a RENDERED-UI change a satellite's e2e asserts on | — | **UNCOVERED**; the honest instrument is the release note |
 | 10 | a member **ADDED** to a public interface breaks external IMPLEMENTERS | `Interface additions (implementers declared)` | **gated** (#3465) |
@@ -793,56 +793,156 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
-## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins, advisory)`)
+## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)` — REQUIRED)
 
-> 🚨 **ADVISORY since policy `core-merge-never-blocked`** ([Policy Not Prose](../PolicyNotProse)).
-> The run below no longer blocks a core merge: `Consolidate test results` does not need it, and the
-> merge queue on `main` is off. It is requested on a pull request by the `dependent-suites` label or
-> a declared `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>` (then against that pull request's head —
-> [Paired Change Sets](../PairedChangeSets)). The verdict that DECIDES something is the promotion
-> one — the same machinery, run against each promoted core+Plugins pair, gating only the fleet's
-> arming ([One Promotion Gate](../OnePromotionGate)). The rest of this section is the mechanism's
-> account and its history; where it says "blocks" or "merge-queue entry", read "reports".
+**Policy `dependent-suites-affected-gate` ([Policy Not Prose](../PolicyNotProse)), which superseded
+`core-merge-never-blocked`: a core pull request PROVES it does not break MeshWeaver.Plugins before it
+merges.** Every non-fork, non-Dependabot pull request asks Plugins to build and run, against the
+CANDIDATE (the pull request's fresh merge with `main`), exactly the Plugins suites and in-mesh Tests
+areas the diff can reach — and `Consolidate test results` fails unless that verdict is green, or the
+break it measured is DECLARED (below).
 
-**Was policy `dependent-suites-gate` (retired): a core change reached `main` only after
-MeshWeaver.Plugins' suites that can reach it passed against the CANDIDATE commit.**
+That makes "compatible" — the standing assumption of policy `platform-semver-versioning` that the
+platform stays backwards compatible within a major — a MEASUREMENT with an explicit escape, instead of
+an assumption. It is also what finally covers shape 7 (a behaviour change behind an unchanged
+signature) for every Plugins suite the diff can reach: no surface detector can see shape 7, but a
+suite that exercises the behaviour can.
 
-### Why it exists
+### Why it is required now — the 2026-10-08 incident
 
-Three core merges in two days — #5635 (`bf5ac85526`), #5647 and #5655 (`777e84819a`) — each turned
-MeshWeaver.Plugins' `main` red: `StaleLiveBoundAreaTest`, the `LayoutAreaIdentityTest` dispose wedge,
-`NodeTypeBatchBakeDiscoveryInvariantTest`, and a `MeshWeaver.AI` test host dying on exit 134. That
-blocked the sealed plugins publication and every satellite's CI for hours. Every one was shape 7 —
-a behaviour change behind an unchanged signature — so every one was green here, and the pair,
-interface and pin gates above were right to be silent.
+Core #6297 (merged 08:23Z) made a one-way-synced partition refuse every non-system write, behind
+unchanged signatures. Every core check was green, and the advisory run this section used to describe
+did not run at all: it ran only on a pull request labelled `dependent-suites`, and nobody labelled it.
+Plugins `main` resolves the newest sealed same-major platform set, picked the change up within hours,
+and went red on its GitSync suite (*"Access denied … synced one-way from its repository"*). Nothing had
+declared the break, because nothing had measured it.
+
+Earlier, three core merges in two days — #5635 (`bf5ac85526`), #5647 and #5655 (`777e84819a`) — each
+turned Plugins' `main` red the same way (`StaleLiveBoundAreaTest`, the `LayoutAreaIdentityTest`
+dispose wedge, `NodeTypeBatchBakeDiscoveryInvariantTest`, a `MeshWeaver.AI` host dying on exit 134).
+
+### Only what is affected — never everything
+
+The policy it supersedes existed because a required wait on another repository once held a green
+core pull request four hours (#5807, a merge-queue entry waiting on an unbounded run). The answer here
+is SIZE, not silence:
+
+- **Selection is affected-only, and per REALM.** MeshWeaver.Plugins is a monorepo of independent
+  plugin realms — one package per top-level folder, declared in its `.github/ci-tests.json`, plus the
+  portal hosts (`hosts`). `scripts/core-candidate-scope.py` there follows the core diff through core's
+  own `ProjectReference` graph, core's MSBuild IMPORT graph (a `Directory.Build.*`,
+  `Directory.Packages.props` or `.editorconfig` applies to every project beneath it; an explicit
+  `Import Project=` / `$(MSBuildThisFileDirectory)…` include carries a file to whatever includes it),
+  the `$(MeshWeaverRoot)/…` paths Plugins' projects name, and — for a `Directory.Packages.props`
+  change — the moved `PackageVersion` pins to exactly the projects referencing those packages. Each
+  selected suite and Tests area is printed with the EDGE that pulled it in
+  (`<suite> → $(MeshWeaverRoot)/<core project> — affected: <chain> (<the changed path>)`), and every
+  realm no edge reaches is listed as **not selected**.
+- **It never falls back to the full set.** A path it cannot attribute, an empty or unreadable diff, a
+  central-pin change whose base cannot be read: the selection is REFUSED, nothing runs, and the
+  verdict is RED naming the path. The fix is to classify the path in the selector. The once-a-day run
+  stays the only full run.
+- **A zero selection is an answer, with its count.** A `.github/`- or `AGENTS.md`-only diff selects 0
+  suites and passes once Plugins has said so — the count is the evidence, not the absence of a run.
+- **The verdict is per realm.** Each selected realm gets its own conclusion and counts, so the
+  realms a change breaks can be named. The realm names (package ids, already public in the plugin
+  registry) are the only Plugins names that reach this public repository; suites, tests and
+  assertions stay in Plugins' private run.
+
+### The declared break — the one escape
+
+A measured break merges only when the pull-request body says so, on one line:
+
+```text
+Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>
+```
+
+`.github/scripts/check-plugins-break-declaration.py` accepts it only when ALL of these hold:
+
+| condition | why |
+|---|---|
+| the verdict is red on a MEASURED break (drift in named realms), with NO missing evidence anywhere (per realm or top level) and not a refused selection; a green, too, must carry its summary, its Plugins run link and its integer counts | a declaration excuses a break, never an absent measurement |
+| the declared realms cover every realm the verdict names as broken | a break in an undeclared realm is an undeclared break |
+| the counterpart is OPEN in Systemorph/MeshWeaver.Plugins (never a fork), and it is the one this run's request job measured | once it merges, the default branch carries it and the main verdict itself must be green; a declaration added after the request was never measured |
+| the counterpart's OWN run — the same candidate and base, Plugins at the counterpart's head — is green | the adaptation is proven against the change it adapts to |
+| the semver consequence is IN the diff: `major` → `PlatformVersion`'s major increases; `minor` → its minor increases; `ceiling` → the compatibility epoch in `src/MeshWeaver.Compiler/platform-compatibility.json` increases | policy `platform-semver-versioning`: the major moves only on a declared break; a ceiling is how the [compatibility ladder](../PlatformCompatibilityLadder) declares one |
+
+The request job dispatches the counterpart's run beside the main one (key `<run>-<attempt>-c`, its own
+concurrency group) whenever the body names a counterpart — `Breaks-plugins:` first, otherwise a
+`Pairs-with:` pair ([Paired Change Sets](../PairedChangeSets)), where it stays informative. The body
+is read again at decision time and held to what the request MEASURED: add the line, then push (or
+"Re-run all jobs") so the request job dispatches the counterpart's run — re-running only the decision
+job refuses, by name, a counterpart nobody measured. A malformed `Breaks-plugins:` line is refused by
+the request job before anything is dispatched. There is no label and no `none` form.
 
 ### How it works
 
 | step | where | what |
 |---|---|---|
-| request | `dotnet-test.yml` → `Dependent suites (request)` | proves the receiver exists on Plugins' default branch, then sends ONE `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base, and a key unique to the run attempt |
-| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | selects the Plugins suites whose compiled closure (Plugins' project graph + its `$(MeshWeaverRoot)` references + core's own reverse closure) can reach `base..candidate`; the **full** universe of 83 on any uncertainty (an unowned build input, an empty diff, core's `test/xunit.runner.json`); legs cut by the portal-host lane's measured weights |
+| preflight | `dotnet-test.yml` → `Required CI inputs` | asserts the App credential RED by name |
+| request | `dotnet-test.yml` → `Dependent suites (request)` | proves the receiver exists on Plugins' default branch, then sends `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base and a key unique to the run attempt — once for Plugins' default branch, once more at a declared counterpart's head |
+| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | the per-realm, affected-only selection above, printed as an audit table (selected realms with edges, then not-selected realms); `refused` when it cannot compute one; legs cut by the portal-host lane's measured weights |
 | candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
 | control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
-| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base) or on ANY missing evidence; written as a root commit at `refs/core-candidate/<key>` in Plugins |
-| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; green only for `success` about exactly this key, candidate and base; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), which the merge-queue steward re-queues as `infra`, capped per head — a red verdict fails the wait step and is rejected |
-
-It WAS a `needs:` of `Consolidate test results` with an explicit fail step, so it blocked — until MeshWeaver#5807 sat four hours green in the queue and was ejected on a 42-minute silence (2026-09-27). It is neither now.
-
-**Where it runs.** Every merge-queue entry — the only road to `main`, and the entry's commit is the
-combination that actually lands — plus a pull request labelled `dependent-suites` (read live, so
-label and re-run). Not every pull-request push, and that is a cost decision measured before it was
-made: over core's last 200 merges the selector reaches nothing for 9, the 5 doc-reading suites for 59
-(documentation pages only), 11–22 suites for ~40, and **70–80 of 83 for ~100** — Plugins' test bases
-reference core's foundations. A candidate is therefore roughly two runner-hours of suite time on the
-self-hosted `aks-silos-dind` pool, and pull-request pushes outnumber queue entries several times over.
+| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base), on ANY missing evidence, or on a refused selection; a conclusion per realm; written as a root commit at `refs/core-candidate/<key>` in Plugins |
+| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)") |
+| decide | the same job → `.github/scripts/check-plugins-break-declaration.py` | green, or a declared break that holds (table above), or red naming the realms and the line to write |
+| require | `Consolidate test results` | NEEDS `preflight`, `dependent-suites-dispatch` and `dependent-suites`, and fails unless all three succeeded; a fork or Dependabot pull request prints **NOT MEASURED** by name |
 
 **What core prints.** This repository is public and MeshWeaver.Plugins is private, so the verdict
-carries counts, one sentence and the link to the Plugins run — never a test name, a suite name or an
-assertion. That is also why the suites cannot run in core's own workflow: its logs and artifacts are
-public.
+carries counts, one sentence, the per-realm conclusions and the link to the Plugins run — never a
+test name, a suite name or an assertion. That is also why the suites cannot run in core's own
+workflow: its logs and artifacts are public.
 
-### Proven live, both directions
+### What it costs, measured
+
+The new selector, replayed over core's last 120 first-parent merges (`origin/main` at
+`3031ff5ae2`, each diff against its own first parent; the core and Plugins trees at their current
+tips, so this is an estimate of the graph, not of each historical tree):
+
+| suites selected (of 84) | merges | share | suite time per candidate (measured weights) |
+|---|---|---|---|
+| 0 | 9 | 8 % | none — the scope job alone (~30 s) |
+| 1–10 | 43 | 36 % | ~22 min of suite time in ~2 legs |
+| 11–40 | 11 | 9 % | ~1.7 runner-hours in ~6 legs |
+| 41–70 | 3 | 3 % | ~2.2 runner-hours in ~8 legs |
+| 71+ | 54 | 45 % | ~3.4 runner-hours in 12 legs |
+
+No merge was REFUSED once the import graph and the build-file census were in (the first pass refused
+one — `MeshWeaverModulePackageVersion.targets`, which no build file names — and that is how the census
+rule came to exist). Plugins' test bases reference core's foundations (`MeshWeaver.Mesh.Contract`,
+`test/MeshWeaver.Fixture`, `Memex.Portal.Shared`), so almost half of all core changes genuinely reach
+almost every suite: that is the true affected set, not an over-selection, and Tests areas (144 in 41
+realms) follow the same shape. Wall clock: the legs run in parallel, ~5–6 min from-source build plus
+≤18 min of measured suite time each, so a full-size candidate answers in ~26–30 min after dispatch
+when the `aks-silos` pool has runners — inside the 45-minute cap; the core waiter starts after core's
+own tests and holds a 42-minute deadline.
+
+### Proven on the incident (2026-10-08)
+
+Replayed through Plugins' `core-candidate.yml` (`workflow_dispatch`, the per-realm selector of
+MeshWeaver.Plugins#3168). The decision was then run with
+`.github/scripts/check-plugins-break-declaration.py` over the verdicts those runs wrote:
+
+| measurement | Plugins at | result |
+|---|---|---|
+| core #6297: candidate `da827571e3` (its merge) against base `c26b9401d9` | #3168's head (without the GitSync fix) — run 37787136202 | **`failure` — 8 drifts, realm `hosts`**: all 8 in `MeshWeaver.GitSync.Test`, which exits 2 at the candidate and passes at the base in the control arm. 81 of 84 suites and 144 Tests areas in 66 of 77 realms were selected; 11 realms were named as not selected; 3 more failures already exist at the base and do not block. GitSync.Test was pulled in by `memex/Memex.Portal.Shared → src/MeshWeaver.GitSync`. Dispatch to verdict: 47 min, with the control arm queued behind the full-size legs |
+| the same candidate, with the counterpart | #3168 + MeshWeaver.Plugins#3164 (the GitSync adaptation) — run 37787175604 | **`success`** — drift 0; realm `hosts` 46 of 46 suites green; the same 3 base failures |
+| a docs-only change: core #6234 (`0e6cdd2a17`, `AGENTS.md` only) | #3168's head — run 37789249026 | **`success` — 0 of 84 suites, 0 of 77 realms selected, 77 named as not selected**; 6.5 min from dispatch to verdict |
+
+The decision, over those real verdicts:
+
+| PR body | `PlatformVersion` in the diff | decision |
+|---|---|---|
+| no `Breaks-plugins:` line (what #6297 had) | 3.0.0 → 3.0.0 | **RED**: "this change BREAKS MeshWeaver.Plugins realm(s) hosts, and the PR body declares no break", with the line to write |
+| `Breaks-plugins: hosts — one-way-synced partitions refuse every non-system write … — counterpart Systemorph/MeshWeaver.Plugins#3164; semver: minor` | 3.0.0 → 3.1.0 | **GREEN**: a declared break, with the counterpart green against this candidate and the minor bump in the diff |
+| the same declaration | 3.0.0 → 3.0.0 | **RED**: "the declared MINOR bump is not in the diff" |
+| the same declaration, after #3164 merged | — | **RED**: asks for a re-measure ("Re-run all jobs"); the default branch now carries the fix, so the main measurement must be green on its own |
+
+So the gate would have stopped #6297 with a red check naming the realm. Two ways through were left
+open: fix the behaviour, or land it as a declared, minor-versioned break together with #3164.
+
+### Proven live, both directions (the first build, 2026-09)
 
 Run against branch `ci/dependent-suites-controls` through Plugins' `workflow_dispatch` before this
 gate was required:
@@ -879,9 +979,14 @@ passes against both behaviours, landed first — the expand-then-contract order.
 - **A flaky Plugins test** that fails at the candidate and passes at the base reads as drift; the
   merge-queue steward's flake catalogue is where that is handled.
 - **In-mesh NodeType source** is not compiled by these suites; that stays the compile gates' job.
-- **A fork's queue entry is refused, not run.** The candidate's code executes on Plugins' runners
-  beside that private repository's checkout, so the request job reads the entry's pull request and
-  fails RED when its head is a fork — re-land it from a branch here. On the Plugins side the registry
+- **In-mesh Tests areas are SELECTED, not yet RUN.** They need a portal host built from the
+  candidate, and an unpublished candidate has no image; the verdict counts them per realm as
+  `meshTestsUnmeasured` and never as a pass. The realm's own Tests-area gate measures them once the
+  change is in a sealed set — closing that is the next step of #2689.
+- **Fork and Dependabot pull requests are NOT MEASURED** — an event exemption, printed by name in
+  `Consolidate test results`. GitHub withholds the Actions secrets from both, and the Dependabot
+  store does not hold `DEPENDENT_DISPATCH_APP_*`; provisioning it there removes the Dependabot half.
+  A fork is re-landed from a branch here. A counterpart whose head is a fork is refused, red. On the Plugins side the registry
   credential exists only for the step that pre-pulls the test image, and is logged out before any
   candidate code runs.
 

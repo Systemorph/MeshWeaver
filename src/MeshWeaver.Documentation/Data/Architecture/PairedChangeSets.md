@@ -8,8 +8,13 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # Paired Change Sets
 
 **A change that spans core and MeshWeaver.Plugins is tested as ONE change set before either half
-merges.** Merging stays per repository, core first, and core never waits for Plugins (policy
-`core-merge-never-blocked`, [One Promotion Gate](../OnePromotionGate)).
+merges.** Merging stays per repository, core first. Core waits for Plugins in exactly one way: its
+required `Dependent suites (MeshWeaver.Plugins)` verdict on the suites the diff can reach (policy
+`dependent-suites-affected-gate`). A core half that breaks those suites against Plugins' default
+branch merges only by declaring `Breaks-plugins: … — counterpart Systemorph/MeshWeaver.Plugins#<n>;
+semver: …` with the counterpart green against the same candidate
+([Cross-Repo Pair Gate](../CrossRepoPairGate)); a `Pairs-with:` pair is ALSO measured at the
+counterpart's head, as before.
 
 ## How to pair two pull requests
 

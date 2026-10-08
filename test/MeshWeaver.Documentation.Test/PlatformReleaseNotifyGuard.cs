@@ -203,7 +203,7 @@ public class PlatformReleaseNotifyGuard
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
     /// <para>ONE ledgered exception, and it is not a release event (policy
-    /// <c>dependent-suites-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
+    /// <c>dependent-suites-affected-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
     /// Core's pull-request/merge-queue gate asks MeshWeaver.Plugins to run its suites against the
     /// CANDIDATE commit (<c>core-candidate-suites</c>) and waits for the verdict — a TEST REQUEST
     /// about an unmerged commit, which memex cannot carry because nothing has been published. The
@@ -261,7 +261,7 @@ public class PlatformReleaseNotifyGuard
 
     /// <summary>
     /// The ONE permitted sender: <c>dotnet-test.yml</c> asks MeshWeaver.Plugins to test a core
-    /// CANDIDATE — advisory under policy <c>core-merge-never-blocked</c>. The promotion
+    /// CANDIDATE — REQUIRED under policy <c>dependent-suites-affected-gate</c> (one POST line, at most two requests: Plugins' default branch, and a declared counterpart's head). The promotion
     /// gate's verdict (main-cd <c>arm</c>) is requested by MeshWeaver.Plugins' own poller, so
     /// main-cd sends nothing and stays off this ledger. Keyed by file, and every sending line in that
     /// file is held to the one event type and the one target by
