@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -387,7 +388,11 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
-    /// Whether <paramref name="outcome"/> leaves the type served by prebuilt bytes — the one
+    /// Whether <paramref name="outcome"/> leaves the type with a usable build on this process, so
+    /// NO replacement compile is owed — the bundle's bytes were adopted (<see cref="SeedOutcome.Adopted"/>,
+    /// <see cref="SeedOutcome.AdoptedStale"/>), or the standing build was kept
+    /// (<see cref="SeedOutcome.AlreadyServed"/>), which may be a LOCAL compile rather than prebuilt
+    /// bytes. It does not say the bundle was adopted; read the outcome itself for that. The one
     /// reading every caller of <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/>
     /// that only needs "covered or not" applies, so a new covered outcome cannot be counted as a
     /// miss (and compiled over) by a caller that enumerated the old ones.
@@ -539,7 +544,9 @@ public static class PrebuiltAssemblySeeder
     /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>,
     /// carrying the producer's source fingerprint so the OWNER can check the adoption (#2813).
     ///
-    /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and
+    /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when no compile is owed — the
+    /// assembly was adopted, or the standing build was kept because the bundle could not improve on
+    /// it (<see cref="SeedOutcome.AlreadyServed"/>, MeshWeaver#6038, which writes nothing) — and
     /// <c>false</c> when it was declined — a decline is not an error, it is the caller's signal to
     /// compile normally. <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/> is the same call answering WHICH decline.</para>
     /// </summary>
@@ -568,7 +575,9 @@ public static class PrebuiltAssemblySeeder
     /// carrying the bundle's MODULE VERSION as well (MeshWeaver#3583) — the manifest's released
     /// SemVer, stamped as <see cref="NodeTypeDefinition.AdoptedModuleVersion"/> so the owner can
     /// judge a later source move by version compatibility rather than by fingerprint equality.
-    /// <c>true</c> for an adoption of either kind (verified-later or stale-but-serving).
+    /// <c>true</c> for an adoption of either kind (verified-later or stale-but-serving) and for a
+    /// kept standing build (<see cref="SeedOutcome.AlreadyServed"/>) — i.e. whenever no compile is
+    /// owed (<see cref="IsCovered"/>).
     /// </summary>
     public static IObservable<bool> Seed(
         IMessageHub hub,
@@ -1236,7 +1245,7 @@ public static class PrebuiltAssemblySeeder
         // never node.Version. A store that cannot answer reads as "no bytes", so the record is
         // replaced exactly as before — an unreadable store must never keep a type on bytes nobody
         // can load.
-        return StandingBytesResolve(store, observed, nodeTypePath, logger)
+        return StandingBytesResolve(hub, store, observed, nodeTypePath, logger)
             .SelectMany(storeHasBytes =>
             {
                 var kept = StandingBuildKept(
@@ -1457,15 +1466,26 @@ public static class PrebuiltAssemblySeeder
         }
     }
 
-    /// <summary>Whether the store resolves the standing build's bytes on this process, at the
-    /// record's <see cref="NodeTypeDefinition.LastCompiledVersion"/>. No recorded version, or a store
-    /// that throws, answers <c>false</c> — "replace", the direction that ends with bytes in place.</summary>
+    /// <summary>Whether the store resolves the standing build's OWN bytes on this process: the build
+    /// the record names (<see cref="NodeTypeDefinition.LastCompiledVersion"/>, its content path and
+    /// MVID, through <see cref="IAssemblyStore.TryGetBuildPath"/>), and — when the record names an
+    /// MVID — a file whose MVID IS that one. A version-only hit is not enough: a version key can hold
+    /// a sibling build, and keeping the record over bytes that are not its own would skip the upload
+    /// the record needs. No recorded version, a miss, a different MVID, or a store that throws answers
+    /// <c>false</c> — "replace", the direction that ends with bytes in place.</summary>
     private static IObservable<bool> StandingBytesResolve(
-        IAssemblyStore store, NodeTypeDefinition observed, string nodeTypePath, ILogger? logger)
+        IMessageHub hub, IAssemblyStore store, NodeTypeDefinition observed, string nodeTypePath, ILogger? logger)
         => observed.LastCompiledVersion is { } claimed && claimed >= 0
-            ? store.TryGetAssemblyPath(nodeTypePath, claimed)
+            ? store.TryGetBuildPath(nodeTypePath, claimed, observed.LatestAssemblyPath, observed.LatestAssemblyMvid)
                 .Take(1)
-                .Select(path => !string.IsNullOrEmpty(path))
+                .SelectMany(path => string.IsNullOrEmpty(path)
+                    ? Observable.Return(false)
+                    : observed.LatestAssemblyMvid is not { Length: > 0 } named
+                        ? Observable.Return(true)
+                        // The MVID read is a blocking file/PE leaf — the shared Compile pool, as every
+                        // other assembly-file read in the pipeline.
+                        : (hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile) ?? IoPool.Unbounded)
+                            .InvokeBlocking(_ => string.Equals(ServedBuildIdentity.OfFile(path), named, StringComparison.Ordinal)))
                 .DefaultIfEmpty(false)
                 .Catch<bool, Exception>(ex =>
                 {
