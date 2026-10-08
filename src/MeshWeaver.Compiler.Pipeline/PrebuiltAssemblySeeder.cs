@@ -716,6 +716,45 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyList<string>? sourceIncludes,
         string? producerPlatformVersion,
         string? platformCeiling)
+        // 🚨 #6060 — DEFERRED, and the LEAVING check first. The gates below resolve from the hub's
+        // service provider, and a hub whose teardown has finished has disposed it: resolved at CALL
+        // time, ahead of the #3129 leaving check, the closed-type-set gate threw
+        // ObjectDisposedException synchronously out of Seed — a sweep pass faulted instead of being
+        // told "not adopted". IsLeaving reads IsShuttingDown before it touches the provider, so
+        // asking it first means no gate below ever resolves from a provider the hub no longer owns;
+        // Defer makes every check describe the hub at SUBSCRIBE time, the per-node boundary at
+        // which a pass in flight runs it (see SeedAdmitted).
+        => Observable.Defer(() => hub.IsLeaving()
+            ? NotSeededLeaving(nodeTypePath, logger)
+            : SeedGated(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+                sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes, producerPlatformVersion,
+                platformCeiling));
+
+    private static IObservable<SeedOutcome> NotSeededLeaving(string nodeTypePath, ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is LEAVING (#3129: "
+            + "shutting down, or hosted by a process that has begun stopping) — a leaving hub "
+            + "writes nothing on a NodeType every generation shares; the next generation seeds "
+            + "its own bundles",
+            nodeTypePath);
+        return Observable.Return(SeedOutcome.NotSeeded);
+    }
+
+    private static IObservable<SeedOutcome> SeedGated(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes,
+        string? producerPlatformVersion,
+        string? platformCeiling)
     {
         // A CLOSED type set (ClosedTypeSet) adopts nothing onto a database NodeType: every
         // adoption — the boot seeders, the published root, an on-demand seed — writes through here,
@@ -827,15 +866,7 @@ public static class PrebuiltAssemblySeeder
             // only IsShuttingDown: the mesh is disposed at the very END of host shutdown, so the
             // hub signal alone is false for the whole grace period (see HubLeavingExtensions).
             if (hub.IsLeaving())
-            {
-                logger?.LogInformation(
-                    "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is LEAVING (#3129: "
-                    + "shutting down, or hosted by a process that has begun stopping) — a leaving hub "
-                    + "writes nothing on a NodeType every generation shares; the next generation seeds "
-                    + "its own bundles",
-                    nodeTypePath);
-                return Observable.Return(SeedOutcome.NotSeeded);
-            }
+                return NotSeededLeaving(nodeTypePath, logger);
 
             var workspace = hub.GetWorkspace();
 
