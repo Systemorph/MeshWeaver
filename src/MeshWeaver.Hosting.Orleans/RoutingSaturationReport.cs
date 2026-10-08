@@ -70,6 +70,7 @@ internal sealed class RoutingSaturationReport
     private readonly Func<(int Channels, int Destinations, int Deepest, string? DeepestChannel)> queueSnapshot;
     private readonly Func<(string Label, TimeSpan Age)?>? oldestLeg;
     private readonly Func<(int Subscribing, int Waiting)> poolGauges;
+    private readonly Func<(string Label, TimeSpan Age)?>? oldestQueued;
     private readonly TimeProvider time;
 
     private int saturationReported;
@@ -85,19 +86,23 @@ internal sealed class RoutingSaturationReport
     /// <param name="oldestLeg">The oldest in-flight leg, or <c>null</c> when the host tracks none.</param>
     /// <param name="poolGauges">The routing pool's subscribing / waiting gauges.</param>
     /// <param name="time">Clock for the episode's age; <see cref="TimeProvider.System"/> in production.</param>
+    /// <param name="oldestQueued">The leg queued longest without starting (#5703), or <c>null</c> when
+    /// the host tracks none. Printed, never a level input.</param>
     public RoutingSaturationReport(
         string activationId,
         ILogger logger,
         Func<(int Channels, int Destinations, int Deepest, string? DeepestChannel)> queueSnapshot,
         Func<(string Label, TimeSpan Age)?>? oldestLeg,
         Func<(int Subscribing, int Waiting)> poolGauges,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        Func<(string Label, TimeSpan Age)?>? oldestQueued = null)
     {
         this.activationId = activationId;
         this.logger = logger;
         this.queueSnapshot = queueSnapshot;
         this.oldestLeg = oldestLeg;
         this.poolGauges = poolGauges;
+        this.oldestQueued = oldestQueued;
         this.time = time ?? TimeProvider.System;
     }
 
@@ -121,13 +126,23 @@ internal sealed class RoutingSaturationReport
     /// logged with every discriminator, now including WHICH channel is deepest, and still paired with
     /// the drained line — but it no longer files a ticket for a burst the silo absorbed.</para>
     ///
+    /// <para>🚨 <b>The age runs from the leg's DISPATCH, never from its acceptance (#5703).</b> A
+    /// stream-routed leg can wait behind every earlier leg of its own channel before it is dispatched,
+    /// and that wait is bounded by nothing of its own — it is the sum of the legs ahead of it.
+    /// Production 2026-10-05 filed Critical on an "oldest leg" of 124 863 ms with 61 legs queued on one
+    /// stream channel: two healthy seconds per leg, read as a leak. The queue wait is printed as its
+    /// own figure and decides nothing; a head leg that really is stuck is still the oldest DISPATCHED
+    /// leg and still Critical. Dispatch is when the channel hands the leg to the routing pool, NOT when
+    /// the pool subscribes it: a wait for a pool thread stays inside the age on purpose, because it is
+    /// the "starved silo" half of this verdict.</para>
+    ///
     /// <para>An unknown age (the host registered no <c>RoutingQuiescence</c>) is Warning: the report
     /// cannot claim what it cannot see, and the latched review below is what would name the leak.</para>
     ///
     /// <para>🚨 A permanent level decision with a cost/value argument, NOT a debugging tweak (AGENTS.md
     /// → log levels). Nothing is hidden: every crossing keeps its line.</para>
     /// </summary>
-    /// <param name="oldestLegAge">Age of the oldest in-flight leg, or <c>null</c> when unknown.</param>
+    /// <param name="oldestLegAge">How long ago the oldest DISPATCHED leg was dispatched, or <c>null</c> when unknown.</param>
     /// <returns><see cref="LogLevel.Critical"/> only for a leg past its own bounds.</returns>
     internal static LogLevel SaturationLevel(TimeSpan? oldestLegAge) =>
         oldestLegAge is { } age && age >= LegSelfBound ? LogLevel.Critical : LogLevel.Warning;
@@ -161,8 +176,11 @@ internal sealed class RoutingSaturationReport
         logger.Log(level,
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
             + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
-            + "oldest leg in flight {OldestLeg} (a leg's own bounds end it within {LegSelfBoundMs} ms — "
-            + "older is a leaked slot or a starved silo and is reported Critical; younger is load and is reported Warning); "
+            + "oldest leg dispatched {OldestLeg} (handed to the routing pool by its channel; its own bounds end it within "
+            + "{LegSelfBoundMs} ms of that, so older is a leaked slot or a starved silo — a wait for a pool thread counts — "
+            + "and is reported Critical; younger is load and is reported Warning); "
+            + "oldest leg queued behind its own channel, not yet dispatched {OldestQueued} (a wait, never a leak — it ends "
+            + "when the legs ahead of it do); "
             + "ordered channels queued {Channels} over {Destinations} stream destination(s), "
             + "deepest per-channel queue {Deepest} on {DeepestChannel}, routing pool subscribing {PoolInFlight}, "
             + "waiting for a pool slot {PoolWaiting}. "
@@ -173,7 +191,7 @@ internal sealed class RoutingSaturationReport
             + "downstream I/O. A later line with a HIGHER episode on this activation means this episode drained; the "
             + "drained line says how long it took. See Doc/Architecture/ReadingARoutingSaturationReport.",
             activationId, episode, startedUtc, inFlight, SaturationThreshold,
-            DescribeOldestLeg(oldest), (long)LegSelfBound.TotalMilliseconds,
+            DescribeOldestLeg(oldest), (long)LegSelfBound.TotalMilliseconds, DescribeOldestQueued(),
             channels, destinations, deepest, deepestChannel ?? "no channel", subscribing, waiting, addressPath);
     }
 
@@ -233,7 +251,7 @@ internal sealed class RoutingSaturationReport
         var (subscribing, waiting) = poolGauges();
         logger.LogCritical(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode}] has not drained after {EpisodeMs} ms: "
-            + "oldest leg in flight {OldestLeg}, past every bound its own composition carries ({LegSelfBoundMs} ms). "
+            + "oldest leg dispatched {OldestLeg}, past every bound its own composition carries ({LegSelfBoundMs} ms). "
             + "That leg is either not terminating (a leaked slot — the label names it) or never started its timeouts "
             + "because the silo had no thread for it (routing pool subscribing {PoolInFlight}, waiting for a pool slot {PoolWaiting}).",
             activationId, episode, (long)(now - new DateTime(since, DateTimeKind.Utc)).TotalMilliseconds,
@@ -244,12 +262,22 @@ internal sealed class RoutingSaturationReport
     /// The oldest leg as ONE phrase. The "no reading" cases are words, never a sentinel number: an age
     /// of <c>0</c> reads as "brand new", which is the opposite of "not tracked".
     /// </summary>
+    private string DescribeOldestQueued()
+    {
+        if (oldestQueued is null)
+            return "not tracked on this host";
+        var queued = oldestQueued();
+        return queued is null
+            ? "none queued"
+            : $"{(long)queued.Value.Age.TotalMilliseconds} ms — {queued.Value.Label}";
+    }
+
     private string DescribeOldestLeg((string Label, TimeSpan Age)? oldest)
     {
         if (oldestLeg is null)
             return "not tracked on this host";
         return oldest is null
-            ? "none in flight"
+            ? "none dispatched"
             : $"{(long)oldest.Value.Age.TotalMilliseconds} ms — {oldest.Value.Label}";
     }
 }
