@@ -252,9 +252,14 @@ Meanwhile:
    The bound and the clock (the first build control missed) are the same as the alarm's, through
    the one `control_lag` rule, so the two can never disagree about when waiting stopped being a
    wait. `alert-on-failure` then files the run, with an `arm` line saying the fleet is frozen on
-   control. An unreadable or unhealthy control, or a run whose own `Deploy control first` is still
-   running, is a single reading with no clock behind it. Those stay the alarm's job, so a single
-   `503` never turns CD red. The remedy is control's roll. An arm override stays the maintainer's
+   control. The walk goes back through the whole examined history to the first build control
+   contains, never a fixed window: a window of the newest ten would lose the first miss as soon as
+   control missed more than ten. Behind past the bound freezes whatever `/health` says in the same
+   reading, because the lag is what is clocked. Three readings have no clock behind them, so they
+   stay the alarm's job and a single `503` never turns CD red:
+   - an unreadable control;
+   - a control that runs the newest build but answered one non-200;
+   - a run whose own `Deploy control first` is still running. The remedy is control's roll. An arm override stays the maintainer's
    call, and nothing suggests one.
 2. **Every sentence names control's own verdict.** The arming's `waiting` line, its RED error and
    the `control-lag` issue body each quote control's `self_update` line off its public `/health`.

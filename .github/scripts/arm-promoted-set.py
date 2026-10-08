@@ -692,14 +692,26 @@ def control_lag(given: list[dict] | dict | None, control: dict, now: float, boun
                    f"(policy control-always-latest). {describe_self_update(control)}")
 
 
-def given_builds(records: list[dict], jobs_by_run: dict[int, list[dict] | None]) -> list[dict]:
+def given_builds(records: list[dict], jobs_of: Callable[[dict], list[dict] | None],
+                 contains_of: Callable[[str], bool | None]) -> list[dict]:
     """Every examined promoted set whose `Deploy control first` job SUCCEEDED, newest first, in the
-    shape `control_lag` reads ({core_sha, v_portal, given_at epoch seconds}). Pure."""
+    shape `control_lag` reads ({core_sha, v_portal, given_at epoch seconds}) — walked back to the
+    FIRST one control contains (inclusive) or to the end of the examined records. Pure over its two
+    readers, which the caller backs with REST (and caches), so the walk costs one jobs read and one
+    compare per build control is behind, exactly as the `control-lag` command's walk does.
+
+    🚨 It walks the WHOLE examined history, never a fixed prefix (review on MeshWeaver#6289): a
+    window of the newest ten sets drops the first build control missed as soon as it misses more
+    than ten, and when those ten span less than the bound `control_lag` reads `converging` for ever
+    — the very reset-by-new-builds blindness the alarm's clock was moved to avoid."""
     out = []
     for r in records:
-        at = control_given_at(jobs_by_run.get(int(r["run_number"])))
-        if at:
-            out.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+        at = control_given_at(jobs_of(r))
+        if not at:
+            continue
+        out.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+        if contains_of(r["core_sha"]) is not False:
+            break
     return out
 
 
@@ -718,10 +730,13 @@ def arming_frozen(chosen: dict | None, override: str, given: list[dict], control
     never frozen; an override stays the maintainer's call and is never suggested as the remedy.
 
     Only the BOUNDED state freezes: control's running build is read and does NOT contain the newest
-    build it was given, past the bound. An unreadable or unhealthy control, or no build given at all
-    (this run's own `Deploy control first` may still be running), is a single reading with no clock
-    behind it — `control-always-latest` alarms on those on its own schedule; turning one 503 into a
-    red CD run would make the red mean nothing."""
+    build it was given, past the bound. That fact is clocked, so it freezes whatever `/health`
+    answers in the same reading — a control that has taken no build for hours is frozen whether or
+    not its last probe also failed (review on MeshWeaver#6289; the self-test pins
+    behind-and-unhealthy). What never freezes is a reading with NO clock behind it: an unreadable
+    control, a control that RUNS the newest build but answered one non-200, or no build given at all
+    (this run's own `Deploy control first` may still be running). `control-always-latest` alarms on
+    those on its own schedule; turning one 503 into a red CD run would make the red mean nothing."""
     if chosen is not None or override or not given:
         return None
     if not control.get("commit") or (control.get("contains") or {}).get(given[0]["core_sha"]) is not False:
@@ -998,9 +1013,33 @@ def self_test() -> int:
           and arming_frozen(None, "", given, ctl(a, b, c, healthy=False), now=t0 + 10 * 3600, bound_minutes=180) is None)
     job = lambda ok_, at: [{"name": "Deploy control first: memex-control:<version>",
                             "conclusion": "success" if ok_ else "failure", "completed_at": at}]
-    gb = given_builds([c, b, a], {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None})
+    jm = {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None}
+    gb = given_builds([c, b, a], lambda r: jm.get(r["run_number"]), lambda sha: False)
     check("given_builds: only sets whose control-first SUCCEEDED, newest first, with the epoch it was given",
           [g["v_portal"] for g in gb] == [c["v_portal"]] and gb[0]["given_at"] == _iso_epoch("2026-10-07T19:02:20Z"), str(gb))
+    gb = given_builds([c, b, a], lambda r: job(True, "2026-10-07T19:02:20Z"), lambda sha: sha == b["core_sha"])
+    check("given_builds: the walk stops AT the first build control contains (inclusive), reading nothing older",
+          [g["v_portal"] for g in gb] == [c["v_portal"], b["v_portal"]], str(gb))
+    # 🚨 Review on #6289: a fixed window of the newest ten sets loses the first build control missed.
+    # Fifteen sets given 20 min apart, control on none of them: the newest ten span 3 h — inside a 240
+    # min bound — while the first miss was 4 h 40 min ago.
+    many = [rec(9600 - i, "%x" % (i % 16), "9") for i in range(15)]
+    for i, r in enumerate(many):
+        r["core_sha"] = f"{i:040x}"
+    t_new = _iso_epoch("2026-10-08T05:00:00Z")
+    stamp = lambda r: job(True, __import__("datetime").datetime.fromtimestamp(
+        t_new - (9600 - int(r["run_number"])) * 20 * 60, __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    behind_all = {"commit": "f" * 40, "healthy": True, "contains": {r["core_sha"]: False for r in many}, "why": ""}
+    full = given_builds(many, stamp, lambda sha: False)
+    now_ = t_new + 1
+    check("arming_frozen: control behind 15 builds is RED from the FIRST miss (the whole walk)",
+          len(full) == 15 and arming_frozen(None, "", full, behind_all, now_, 240) is not None
+          and many[-1]["v_portal"] in (arming_frozen(None, "", full, behind_all, now_, 240) or ""))
+    check("...and a newest-ten window would have read the same state as a wait — the negative control",
+          arming_frozen(None, "", full[:10], behind_all, now_, 240) is None)
+    check("arming_frozen: BEHIND past the bound AND unhealthy is still RED — the lag is clocked, the 503 is not the reason",
+          arming_frozen(None, "", given, {**ctl(a, healthy=False), "self_update": su}, now=t0 + 10 * 3600,
+                        bound_minutes=180) is not None)
     # ── control first, the delivery half: CD hands the build to control's roll lane ──
     cf = control_first([{"tags": ["3.0.0-ci.9590"]}], "3.0.0-ci.9598")
     check("control-first: the newest accepted build is ANNOUNCED to control's roll lane", cf["announce"] is True, str(cf))
@@ -1298,8 +1337,23 @@ def main() -> int:
     import time
     # 🚨 Policy `control-first-never-silent`: `nothing to arm` because control has been behind past
     # the bound is a RED, never a green wait (see `arming_frozen`). Read off the SAME runs' jobs.
-    frozen = arming_frozen(rec, a.override, given_builds(records[:10], jobs), control, time.time(),
-                           int(ci["platformLagBoundMinutes"]))
+    def jobs_of(r: dict) -> list[dict] | None:
+        n = int(r["run_number"])
+        if n not in jobs:
+            jobs[n] = read_run_jobs(http_get, core_token, r.get("run_id"))
+        return jobs[n]
+
+    def contains_of(sha: str) -> bool | None:
+        if not control.get("commit"):
+            return None
+        if sha not in control["contains"]:
+            control["contains"][sha] = contains_commit(http_get, core_token, control["commit"], sha)
+        return control["contains"][sha]
+
+    # Only when nothing was selected: the walk then reads jobs and compares beyond the ten sets
+    # `select` judged, back to the first build control contains — the clock's true start.
+    given = [] if rec is not None or a.override else given_builds(records, jobs_of, contains_of)
+    frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]))
     if frozen:
         lines.append(frozen)
     for line in lines:
