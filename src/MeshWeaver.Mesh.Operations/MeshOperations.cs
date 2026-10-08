@@ -3856,10 +3856,10 @@ public partial class MeshOperations
 
     /// <summary>The node types a visit is never recorded for — identity and access records, the same
     /// set the Blazor navigation tracker skips.</summary>
-    private static readonly HashSet<string> UntrackedVisitTypes = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly FrozenSet<string> UntrackedVisitTypes = new[]
     {
         "User", "Role", "Group", "AccessAssignment",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Records that the CALLER opened <paramref name="path"/> — the access log
