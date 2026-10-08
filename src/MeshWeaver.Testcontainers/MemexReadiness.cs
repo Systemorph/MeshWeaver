@@ -77,7 +77,7 @@ public static class MemexReadiness
     /// <param name="baseAddress">The instance's HTTP root as seen from the caller.</param>
     /// <param name="ct">Cancels the probe.</param>
     /// <returns>The verdict; a refused connection is <see cref="MemexReadinessState.NotYet"/>.</returns>
-    public static async Task<MemexReadinessVerdict> ProbeAsync(Uri baseAddress, CancellationToken ct = default)
+    internal static async Task<MemexReadinessVerdict> ProbeAsync(Uri baseAddress, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(baseAddress);
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
@@ -92,7 +92,7 @@ public static class MemexReadiness
     /// <param name="http">A client whose <c>BaseAddress</c> is the instance's HTTP root.</param>
     /// <param name="ct">Cancels the probe.</param>
     /// <returns>The verdict; a refused connection is <see cref="MemexReadinessState.NotYet"/>.</returns>
-    public static async Task<MemexReadinessVerdict> ProbeAsync(HttpClient http, CancellationToken ct = default)
+    internal static async Task<MemexReadinessVerdict> ProbeAsync(HttpClient http, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(http);
         try
@@ -147,29 +147,37 @@ public sealed record MemexReadinessVerdict(MemexReadinessState State, string Rea
 /// <summary>
 /// The wait strategy <see cref="MemexBuilder"/> installs: satisfied only by a started mesh, and
 /// FAILING at once — never polling to the timeout — when the container is the setup wizard.
+///
+/// <para>🚨 <b>Why throwing here ends the wait</b> (Testcontainers 4.15): <c>DockerContainer
+/// .CheckReadinessAsync</c> catches only <c>DockerApiException</c> around this predicate, and
+/// <c>WaitStrategy.WaitUntilAsync</c> rethrows a faulted predicate rather than retrying it, so
+/// <see cref="Decide"/>'s exception leaves <c>StartAsync</c> on the first poll that reads the
+/// wizard. <c>MemexReadinessTest</c> drives exactly that loop. A container that EXITS before its
+/// mesh starts (<c>DbVersionGate</c> over an unmigrated schema) needs nothing from this class: the
+/// same <c>CheckReadinessAsync</c> throws <c>ContainerNotRunningException</c> from its
+/// <c>finally</c> for the default <c>Running</c> mode.</para>
+///
+/// <para>The <see cref="Task"/> shape is the <see cref="IWaitUntil"/> contract, not a choice: this
+/// is Testcontainers' callback, in a test-support library with no hub and no mesh, and it is the
+/// ONLY task-shaped seam the library exposes — the probe behind it is internal.</para>
 /// </summary>
 internal sealed class UntilMeshStarted : IWaitUntil
 {
     public async Task<bool> UntilAsync(IContainer container)
     {
-        // A startup gate that refuses (DbVersionGate over an unmigrated schema, an unwritable data
-        // root) EXITS the process; nothing will ever answer, so say so now rather than at the
-        // start budget. The container's own log, redirected to the test output, names the gate.
-        if (container.State is TestcontainersStates.Exited or TestcontainersStates.Dead)
-            throw new InvalidOperationException(
-                $"the memex container {container.State} before its mesh started (exit code "
-                + $"{await container.GetExitCodeAsync().ConfigureAwait(false)}). Read its log above: a "
-                + "'DbVersionGate' line means the database was not migrated (run the memex-migration "
-                + "image of the same build first).");
-
         var baseAddress = new UriBuilder(Uri.UriSchemeHttp, container.Hostname,
             container.GetMappedPublicPort(MemexBuilder.HttpPort)).Uri;
-        var verdict = await MemexReadiness.ProbeAsync(baseAddress).ConfigureAwait(false);
-        return verdict.State switch
-        {
-            MemexReadinessState.MeshStarted => true,
-            MemexReadinessState.SetupWizard => throw new InvalidOperationException(verdict.Reason),
-            _ => false,
-        };
+        return Decide(await MemexReadiness.ProbeAsync(baseAddress).ConfigureAwait(false));
     }
+
+    /// <summary>
+    /// The predicate's answer for one verdict: true when the mesh started, false to poll again,
+    /// and an exception — which ends the wait — for the setup wizard.
+    /// </summary>
+    internal static bool Decide(MemexReadinessVerdict verdict) => verdict.State switch
+    {
+        MemexReadinessState.MeshStarted => true,
+        MemexReadinessState.SetupWizard => throw new InvalidOperationException(verdict.Reason),
+        _ => false,
+    };
 }

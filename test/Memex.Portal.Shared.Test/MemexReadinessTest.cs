@@ -57,6 +57,39 @@ public class MemexReadinessTest
     }
 
     /// <summary>
+    /// The INSTALLED predicate inside Testcontainers' OWN retry loop
+    /// (<see cref="DotNet.Testcontainers.Configurations.WaitStrategy.WaitUntilAsync"/>, the loop
+    /// <c>DockerContainer.CheckReadinessAsync</c> runs) against the real wizard: the wait ends on the
+    /// FIRST poll with the wizard named — not a <see cref="System.TimeoutException"/> at the budget,
+    /// which is what a retry-and-swallow loop would produce.
+    /// </summary>
+    [Fact]
+    public async Task TheInstalledWait_EndsAtOnceOnTheWizard_InsideTestcontainersRetryLoop()
+    {
+        using var wizard = SetupSurfaceTest.BuildProbeApp();
+        using var client = wizard.GetTestClient();
+        var ct = TestContext.Current.CancellationToken;
+        var polls = 0;
+
+        var ex = await Record.ExceptionAsync(() => DotNet.Testcontainers.Configurations.WaitStrategy.WaitUntilAsync(
+            async () =>
+            {
+                polls++;
+                return UntilMeshStarted.Decide(await MemexReadiness.ProbeAsync(client, ct));
+            },
+            interval: System.TimeSpan.FromMilliseconds(50),
+            // A budget the assertion below never comes near: reaching it is the failure.
+            timeout: System.TimeSpan.FromMinutes(1),
+            retries: 0,
+            ct));
+
+        Assert.True(ex is System.InvalidOperationException && ex.Message.Contains("SETUP wizard"),
+            $"the wait over the wizard ended with {ex?.GetType().Name ?? "no exception"} "
+            + $"({ex?.Message}) after {polls} poll(s) — it must end on the first poll, naming the wizard.");
+        Assert.Equal(1, polls);
+    }
+
+    /// <summary>
     /// The positive control: the composed host's startup census satisfies the wait — so the
     /// negative case above is discriminating, not a wait that nothing can satisfy.
     /// </summary>
