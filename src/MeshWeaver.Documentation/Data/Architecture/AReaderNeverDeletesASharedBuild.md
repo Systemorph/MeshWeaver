@@ -1,7 +1,7 @@
 ---
 Name: A Reader Never Deletes A Shared Build
 Category: Architecture
-Description: The assembly loader deleted every build whose file was older than the running framework DLL. On the shared /data/assembly-cache that removed the current, compatible builds at the first boot of every new image, out from under the replicas still serving them. That one delete was the per-roll recompile wave, the Store/Plugin "stuck AGAIN" boot window (#6161) and the registry refetch that could never land (#6052).
+Description: The assembly loader deleted every build whose file was older than the running framework DLL. On the shared /data/assembly-cache that removed the current, compatible builds at the first boot of every new image, out from under the replicas still serving them. That one delete was the per-roll recompile wave, the Store/Plugin "stuck AGAIN" boot window seen while verifying the OOM fixes (#6161), and the "DIFFERENT build" refetch refusals on the shared volume (#6052). It is not established as a cause of the OOMs themselves.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M4 20 20 4"/></svg>
 ---
 
@@ -44,15 +44,16 @@ deleted the shared builds the old replicas were serving. Measured on memex.syste
 
 ## Why it produced three symptoms
 
-1. **The recompile wave and the version climb (#6161, #5555).** Each deleted build is a store miss.
+1. **The recompile wave and the version climb** (a residue found while verifying #6161 / #5555).
+   Each deleted build is a store miss.
    The miss triggers a recompile on the owner and a new record version. That is why the
    `Store/Plugin` version rose in clusters at pod boots, and why every roll paid a compile per
    locally built type.
-2. **"Stuck AGAIN" for about five minutes at boot (#6161).** While `Store/Plugin` recompiled, every
+2. **"Stuck AGAIN" for about five minutes at boot** (the same verification). While `Store/Plugin` recompiled, every
    installed package root overlaid. The overlay self-heal fired on the record's still-usable
    verdict, re-activated against bytes that were gone, and overlaid again until the new build landed.
    The heal budget then logged the non-convergence.
-3. **The refetch that could never land (#6052).** `Store/Plugin` is built locally on purpose. The
+3. **The refetch that could not land on the shared volume** (#6052). `Store/Plugin` is built locally on purpose. The
    bundle's source fingerprint (`3d0df09d…`, module 1.20.4) is not the live source's (`dbbc1754…`,
    1.21), so the owner declines the adoption (#2813). The record therefore names a local MVID, which
    no shipped bundle carries. When the delete made those bytes missing, the registry refetch (#6262)
@@ -76,6 +77,13 @@ deleted the shared builds the old replicas were serving. Measured on memex.syste
 while the control still loads.
 
 ## What this does not establish
+
+- That it is a cause of the `MessageService` OOMs (#6161, #5555). Those incidents close on their
+  own heap and delivery criteria; this page only removes a per-roll compile and version churn their
+  verification found.
+- That #6052 is resolved. This removes a self-inflicted missing-bytes mode on a SHARED volume; the
+  issue's own asks (recovery of a missing shipped build on a pod, and the bundle identity following
+  the running image) are separate, and the pod-local case below remains.
 
 - Whether every `bytesmissing` reading on memex was this delete. The public `/health` body does not
   name the type behind `bytesmissing=1 in Doc/…`.
