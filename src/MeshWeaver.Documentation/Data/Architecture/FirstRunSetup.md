@@ -186,10 +186,11 @@ but no keyed factory existed, so `Graph:Storage:Type=Sqlite` answered `Unknown s
 > Postgres's HNSW. It also only lights up when an embedder is wired: without one,
 > `SqliteStorageAdapter` writes `embedding = NULL`, the vector provider contributes nothing, and
 > SQLite's generic text query still matches substrings of stored text, including node content, but
-> cannot rank by meaning **with no error and no log line**. On a PostgreSQL install without a content
-> chunk store, text search is narrower: it matches node names, paths, descriptions and types, not
-> text inside pages. That is why the wizard asks for an embeddings endpoint and warns when it is
-> left blank.
+> cannot rank by meaning. On a PostgreSQL install without a content chunk store, text search is
+> narrower: it matches node names, paths, descriptions and types, not text inside pages.
+> `EmbeddingCapabilityReporter` logs an Information line at startup when semantic search is
+> disabled and names the missing configuration key. The wizard asks for an embeddings endpoint and
+> explains the consequence of leaving it blank.
 
 ## 🚨 What a real cluster found that no test could
 
