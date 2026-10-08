@@ -964,6 +964,21 @@ Four changes answer it, none of them a longer wait (the 42 minutes and every cap
    COMPLETED (`scripts/core-candidate-reap.py`, also MeshWeaver.Plugins#3187; an unreadable status is never a reap). Its first live
    pass, at 17:43Z, cancelled 5 of 12 live candidate runs.
 
+**Build-once, measured** (the same candidate as #6320, `cd3eb48d9e` against `3fc485cadf`, 8 legs and 46
+suites; before = run 37809289143, after = run 37818559621 on MeshWeaver.Plugins#3187's branch):
+
+| | before | after |
+|---|---|---|
+| verdict | success, 46/84, drift 0, 2 pre-existing | identical |
+| builds | 8 in-leg builds, 54.4 min in total | one build job: 10.1 min build + 1.3 min pack and ship |
+| shipped build | — | 16,137 MiB raw → 1,423 MiB stored (one copy per unique file) |
+| leg job times | 8.6–16.6 min | 2.6–12.8 min (setup: a 13–19 s restore instead of a build) |
+| dind runner-minutes, candidate arm | 101.4 | 66.2 (−35 %) |
+| critical path with free runners | 16.6 min (longest leg) | 24.9 min (build job + longest leg) |
+
+So build-once trades about 8 minutes of latency on an idle pool for a third fewer runner-minutes,
+and those runner-minutes are what a congested pool is short of.
+
 🚨 **The remedy for a timeout changed with (4).** "Re-run this job once that run has finished" reads a
 verdict only if the candidate was still measuring. A candidate whose core run has completed stands
 down, so after a timeout either re-run the waiter AT ONCE (the core run is live again and the
