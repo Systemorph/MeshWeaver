@@ -55,9 +55,10 @@ against the new member failed with `CS0117 'ThreadPreparation' does not contain 
 | Piece | What it does |
 |---|---|
 | `ModuleLoadContext` (`MeshWeaver.Mesh.Contract`) | Collectible context for ONE generation of ONE module, named `module:<Name>#<n>`. Resolves **platform first** (anything the default context can bind — one `MeshNodeProviderAttribute`, one `IMessageHub` in the process; a bundled platform copy is never used), then **another module** (the current generation of a module whose entry assembly is asked for, or an assembly a module it depends on already holds — each edge recorded as `DependsOn`), then the generation's **own directory**. Natives resolve through the same candidates as `ModuleNativeAssets`. Marked `IPlatformLoadContext`, so the impersonation guard classifies module code with the platform. Purges Autofac's and System.Text.Json's process-static caches on `Unloading`, as a NodeType context does. |
-| `ModuleContexts` | The mesh's registry (a mesh singleton, disposed with the mesh): `Load` a generation into a fresh context, `Commit` it as current (returning the one it replaces), `Retire` the old one — unloaded on a POSITIVE quiescence signal from its `AlcLeaseRegistry`, never on a timer, and recorded on `CollectibleContextUnloads` so "really collected" is observable. `Resolve(name)` is the explicit lookup NodeType builds and script sessions use; `DependentsOf(name)` is the set a swap has to take with it. |
+| `ModuleContexts` | The mesh's registry (a mesh singleton, disposed with the mesh): `Load` a generation into a fresh context, `Commit` it as current (returning the one it replaces), `Retire` the old one — unloaded on a POSITIVE quiescence signal from its `AlcLeaseRegistry`, never on a timer, and recorded on `CollectibleContextUnloads` so "really collected" is observable. `Resolve(name)` is the explicit lookup a NodeType build uses (a module's entry assembly); `ResolveDependency(assemblyName)` is the one a kernel script session uses — the entry assembly, or one of a module's private dependencies bound through that module's context (see *Kernel scripts and a module private closure* below); `DependentsOf(name)` is the set a swap has to take with it. |
 | `MeshBuilder.InstallModules` | Loads every module the image does not bind into its own context and commits it only after its contributions materialised. A generation whose contributions throw is unloaded and the serving one stays current. Because a failed generation never takes its name in the default context, the previous generation and the image copy stay reachable for the fallback (#3649, #3735). |
-| `NodeAssemblyLoadContext`, the kernel `ScriptSession` | Bind a module through `ModuleContexts.Resolve` — its CURRENT generation. |
+| `NodeAssemblyLoadContext` | Binds a module's entry assembly through `ModuleContexts.Resolve` — its CURRENT generation. |
+| The kernel `ScriptSession` (`ModuleScriptBindings`) | Binds a module's entry assembly or private dependency through `ModuleContexts.ResolveDependency`, and leases every module context it binds into until the session ends. |
 
 🚨 **Never a `Default.Resolving` handler that hands out a module assembly.** The default context
 caches a binding for the life of the process, so the first generation it saw would be pinned forever
@@ -69,6 +70,40 @@ closure (`TRUSTED_PLATFORM_ASSEMBLIES` — `ModuleContexts.IsImageBound`) is bou
 platform assembly that references it; a second copy in its own context would split its identity. It
 loads into the default context exactly as before, and it is what a live update cannot reach until the
 image stops shipping it in its closure.
+
+### Kernel scripts and a module private closure
+
+A module ships its private closure beside its entry DLL in its generation directory —
+`MeshWeaver.Mail.MicrosoftGraph` carries Microsoft.Graph and Kiota, which the image does not. A kernel
+script that uses a type from that closure is resolved twice, and both halves must give the same
+answer: **whatever compiles must load.**
+
+| Half | Where | How a module's private dependency resolves |
+|---|---|---|
+| Compile | `SharedScriptMetadataResolver` → `KernelScriptReferences.TryResolveByIdentity` | The module's entry DLL is a session reference (`InstalledModuleAssembly`). A dependency it references is found, in order, as a **non-collectible** loaded assembly of that name (the platform), else as the **file beside the referencing DLL** — the module's generation directory — else by Roslyn's own resolver. Collectible assemblies are never taken from the live list (a superseded generation would be indistinguishable from the current one). |
+| Run | `ScriptSession`'s load context → `ModuleScriptBindings.Bind` → `ModuleContexts.ResolveDependency` | After the session's own submissions and its declared cell-surface packs: (1) a current module's **entry assembly**; (2) an assembly a current module's context **already holds**; (3) a **file of that name in a current module's generation directory**, loaded through **that module's context** — whose own order puts the platform first, so a name the default context can bind comes back as the platform's copy and the session falls through to the default context for it. Modules are visited in name order; a candidate whose version is lower than the one requested is skipped. Anything else falls through to the default context. |
+
+Because the run half loads the dependency through the module's own context, the script and the
+module's code share ONE identity for its types: a value the script builds can be handed to the
+module, and back. The default context never sees the module's directory, and must not — no
+`Default.Resolving` hook hands out module code (see above).
+
+**The lease.** `ModuleScriptBindings` enters a lease on the registry's `AlcLeaseRegistry` for every
+module context the session binds into and holds it until the kernel session ends (the executor hub
+is disposed), because what a submission leaves behind — a subscription, a rendered control, a stored
+delegate — can call into the module after the submission returned. A live swap of that module
+retires the old generation only once the lease is released; the running session stays on the
+generation it bound, exactly as it stays on a cell-surface NodeType generation, and new sessions bind
+the current one. A session that outlives the swap's retire budget leaves the old generation loaded
+rather than unloaded under it (the leak-over-crash rule of `AlcLeaseRegistry`).
+
+**Tests:** `KernelScriptRunsAgainstAModulesPrivateDependencyTest` (`MeshWeaver.Compiler.Pipeline.Test`)
+installs a module whose generation directory ships a private dependency at version 6.2.0.0, runs a
+Code cell through `ExecuteScriptRequest`, and requires the Activity to succeed with the module's own
+code having received the script's value of the dependency's type. `ModulesRunInTheirOwnContextTest`
+pins `ResolveDependency` (entry assembly, private dependency through the module's context with the
+module's identity, nothing for the platform, an unknown name or a higher version) and the session
+lease (held while bound, released at the session's end, nothing bound after it).
 
 **Tests** (`MeshWeaver.Compiler.Pipeline.Test` → `ModulesRunInTheirOwnContextTest`, real Roslyn emits
 and real collections): an installed module runs in a collectible `ModuleLoadContext` and still binds

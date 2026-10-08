@@ -57,6 +57,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private ImmutableDictionary<string, Assembly>? cellSurfaceBindings;
     private readonly System.Reactive.Disposables.CompositeDisposable cellSurfaceLeases = new();
 
+    // The session's module bind (ModuleScriptBindings): a module's entry assembly or private
+    // dependency, through the module's own context, leased until the session ends. Created with the
+    // session, disposed with it.
+    private ModuleScriptBindings? moduleBindings;
+
     // REPL submissions run STRICTLY in arrival order on a 100%-reactive serial queue:
     // Concat subscribes the next submission only AFTER the previous Execute completes
     // (i.e. after scriptState is assigned), so block #2 always sees block #1's variables.
@@ -153,6 +158,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     // Release the cell-surface generation pins with the session — after this,
                     // a superseded NodeType generation this session was bound to can unload.
                     cellSurfaceLeases.Dispose();
+                    // …and the module generations it bound into, likewise.
+                    moduleBindings?.Dispose();
                 })))
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
@@ -447,13 +454,16 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // worker before its first await (Doc/Architecture/CompileOffTheThreadPool).
             scope => Observable.Defer(() =>
                 {
-                    // A module the script names binds its CURRENT generation from the mesh's
-                    // registry — modules run in their own collectible contexts (policy
+                    // A module the script names — its entry assembly or one of its PRIVATE
+                    // dependencies — binds its CURRENT generation through the module's own context
+                    // (ModuleScriptBindings): modules run in their own collectible contexts (policy
                     // module-live-update-default), which the default context cannot see.
-                    var modules = publicHub.ServiceProvider.GetService<ModuleContexts>();
+                    var bindings = moduleBindings ??= new ModuleScriptBindings(
+                        publicHub.ServiceProvider.GetService<ModuleContexts>());
                     var current = session ??= new ScriptSession(
                         scriptGlobals!,
-                        name => cellSurfaceBindings?.GetValueOrDefault(name) ?? modules?.Resolve(name));
+                        name => (name.Name is { } simple ? cellSurfaceBindings?.GetValueOrDefault(simple) : null)
+                                ?? bindings.Bind(name));
                     var options = scriptOptions;
                     return cpuLane
                         .InvokeBlocking(t =>

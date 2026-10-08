@@ -296,6 +296,88 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
             "a NodeType built against N+1 must bind N+1 once it is current — in the running process");
     }
 
+    // ───────────────────────────────────────────── a module's private dependency, for a context outside the modules
+
+    /// <summary>
+    /// A kernel script session is a context OUTSIDE the modules, and it compiles against a module's
+    /// private closure (the file beside the module DLL). <see cref="ModuleContexts.ResolveDependency"/>
+    /// is what it binds at run time: the entry assembly, or the private dependency loaded through the
+    /// module's OWN context — the identity the module's code uses — and nothing for a name the
+    /// platform answers, a name nobody ships, or a version higher than the one shipped.
+    /// </summary>
+    [Fact]
+    public void ResolveDependency_BindsAModulesPrivateDependency_ThroughTheModulesOwnContext()
+    {
+        using var contexts = new ModuleContexts();
+        var generation = InstallWithPrivateDependency(contexts);
+
+        var entry = contexts.ResolveDependency(new AssemblyName(PrivateModule));
+        entry.Should().NotBeNull();
+        entry!.Assembly.Should().BeSameAs(generation.Assembly);
+        entry.Context.Should().BeSameAs(generation.Context);
+
+        var dependency = contexts.ResolveDependency(new AssemblyName($"{PrivateDependency}, Version=6.2.0.0"));
+        dependency.Should().NotBeNull("the module ships it beside its DLL — what the script compiled against");
+        dependency!.Context.Should().BeSameAs(generation.Context, "it binds through the module's own context");
+        AssemblyLoadContext.GetLoadContext(dependency.Assembly).Should().BeSameAs(generation.Context);
+        generation.Assembly.GetType($"{PrivateModule}.Mailer")!.GetMethod("DependencyAssembly")!.Invoke(null, null)
+            .Should().BeSameAs(dependency.Assembly, "ONE identity: the module's own code binds the same assembly");
+        contexts.ResolveDependency(new AssemblyName(PrivateDependency))!.Assembly.Should().BeSameAs(dependency.Assembly,
+            "once loaded, the module context's copy is the answer");
+
+        contexts.ResolveDependency(new AssemblyName($"{PrivateDependency}, Version=7.0.0.0")).Should().BeNull(
+            "a context may never answer a request with a lower version than the one asked for");
+        contexts.ResolveDependency(typeof(MeshNode).Assembly.GetName()).Should().BeNull(
+            "the platform is the default context's to answer");
+        contexts.ResolveDependency(new AssemblyName("MeshWeaver.Test.NobodyShipsThis")).Should().BeNull();
+    }
+
+    /// <summary>
+    /// The session leases every module context it binds into until it ends — so a retiring
+    /// generation waits for it — and releases them all when it does.
+    /// </summary>
+    [Fact]
+    public void ModuleScriptBindings_LeaseTheBoundModuleUntilTheSessionEnds()
+    {
+        using var contexts = new ModuleContexts();
+        var generation = InstallWithPrivateDependency(contexts);
+        var bindings = new MeshWeaver.Kernel.Hub.ModuleScriptBindings(contexts);
+
+        bindings.Bind(new AssemblyName(PrivateDependency)).Should().NotBeNull();
+        bindings.Bind(new AssemblyName(PrivateModule)).Should().BeSameAs(generation.Assembly);
+        contexts.Leases.InFlight(generation.Context).Should().Be(1, "one lease per bound context, held for the session");
+
+        bindings.Dispose();
+        contexts.Leases.InFlight(generation.Context).Should().Be(0, "the session's end releases it");
+        bindings.Bind(new AssemblyName(PrivateModule)).Should().BeNull("an ended session binds nothing");
+        contexts.Leases.InFlight(generation.Context).Should().Be(0);
+    }
+
+    private const string PrivateModule = "MeshWeaver.Test.PrivateDepLib";
+    private const string PrivateDependency = "MeshWeaver.Test.PrivateDepOnly";
+
+    private ModuleGeneration InstallWithPrivateDependency(ModuleContexts contexts)
+    {
+        var dependencyBytes = Emit(PrivateDependency, $$"""
+            [assembly: System.Reflection.AssemblyVersion("6.2.0.0")]
+            namespace {{PrivateDependency}};
+            public sealed class Envelope { }
+            """);
+        var modulePath = Write(PrivateModule, "g1", Emit(PrivateModule, $$"""
+            [assembly: {{PrivateModule}}.Module]
+            namespace {{PrivateModule}};
+            public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute { }
+            public static class Mailer
+            {
+                public static System.Reflection.Assembly DependencyAssembly() => typeof({{PrivateDependency}}.Envelope).Assembly;
+            }
+            """, MetadataReference.CreateFromImage(dependencyBytes)));
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(modulePath)!, PrivateDependency + ".dll"), dependencyBytes);
+        var generation = contexts.Load(modulePath);
+        contexts.Commit(generation);
+        return generation;
+    }
+
     // ───────────────────────────────────────────── helpers
 
     [MethodImpl(MethodImplOptions.NoInlining)]

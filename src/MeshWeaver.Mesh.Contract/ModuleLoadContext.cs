@@ -37,7 +37,9 @@ namespace MeshWeaver.Mesh;
 /// default context caches a binding for the life of the process, so the first generation it saw
 /// would be pinned forever and no swap could ever take effect — and a non-collectible assembly
 /// binding a collectible one is refused by the runtime anyway. Contexts that need a module
-/// (NodeType builds, script sessions) ask <see cref="ModuleContexts.Resolve"/> explicitly.</para>
+/// (NodeType builds) ask <see cref="ModuleContexts.Resolve"/> explicitly; a kernel script session
+/// asks <see cref="ModuleContexts.ResolveDependency"/>, which also binds a module's PRIVATE
+/// dependencies through this context.</para>
 ///
 /// <para>Marked <see cref="IPlatformLoadContext"/>: a module is first-party compiled code that
 /// shipped through the module lane, not code the mesh compiled at runtime, so the in-mesh

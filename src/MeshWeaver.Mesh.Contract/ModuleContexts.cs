@@ -33,6 +33,15 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 }
 
 /// <summary>
+/// An assembly <see cref="ModuleContexts.ResolveDependency"/> bound for a context outside the
+/// modules, and the module context it lives in — the one the caller leases while it can still
+/// call into the assembly.
+/// </summary>
+/// <param name="Assembly">The bound assembly.</param>
+/// <param name="Context">The module context that holds it.</param>
+public sealed record ModuleBinding(Assembly Assembly, ModuleLoadContext Context);
+
+/// <summary>
 /// The mesh's modules, each in its OWN collectible load context — the registry a live module
 /// update swaps generations in (policy <c>module-live-update-default</c>,
 /// <c>Doc/Architecture/LiveModuleUpdate</c>).
@@ -428,6 +437,84 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         !string.IsNullOrEmpty(simpleName) && current.TryGetValue(simpleName, out var generation)
             ? generation.Assembly
             : null;
+
+    /// <summary>
+    /// <paramref name="assemblyName"/> as a context that is NOT a module asks for it at run time —
+    /// a kernel script session: a module's entry assembly, or one of a module's PRIVATE
+    /// dependencies, bound through that module's own context. Null when no current module holds or
+    /// ships it, and null when the module context answers it from the default context (the
+    /// platform), so the caller falls through to the default context for exactly the same answer.
+    ///
+    /// <para><b>Why the module's dependencies too.</b> A module ships its private closure beside its
+    /// entry DLL (Microsoft.Graph and Kiota beside <c>MeshWeaver.Mail.MicrosoftGraph</c>), and the
+    /// image does not. A script compiles against that closure — the shared metadata resolver finds
+    /// the file next to the module DLL that references it — so binding only the entry assembly made
+    /// the script compile and then throw <see cref="FileNotFoundException"/> the moment it touched a
+    /// type from the closure: the default context cannot see the module's directory. Loading the
+    /// dependency through the module's context also gives the script the SAME identity the module's
+    /// own code binds, so a value crosses between them with its type intact.</para>
+    ///
+    /// <para><b>Resolution order.</b> (1) a current module's entry assembly; (2) an assembly a
+    /// current module's context already holds; (3) a file of that name in a current module's
+    /// generation directory, loaded through that module's context — whose own order puts the
+    /// platform first. Modules are visited in name order, and a candidate whose version is lower
+    /// than the one requested is skipped. The returned context is what the caller must lease for
+    /// as long as it can call into the assembly (see <see cref="Leases"/>).</para>
+    /// </summary>
+    public ModuleBinding? ResolveDependency(AssemblyName assemblyName)
+    {
+        ArgumentNullException.ThrowIfNull(assemblyName);
+        if (assemblyName.Name is not { Length: > 0 } name)
+            return null;
+        if (current.TryGetValue(name, out var module))
+            return new ModuleBinding(module.Assembly, module.Context);
+
+        var generations = current.Values.OrderBy(g => g.Name, StringComparer.Ordinal).ToArray();
+        foreach (var generation in generations)
+            foreach (var assembly in generation.Context.Assemblies)
+                if (assembly.GetName() is { } held
+                    && string.Equals(held.Name, name, StringComparison.Ordinal)
+                    && Satisfies(held, assemblyName))
+                    return new ModuleBinding(assembly, generation.Context);
+
+        foreach (var generation in generations)
+        {
+            var candidate = Path.Combine(generation.Context.Directory, name + ".dll");
+            if (!File.Exists(candidate) || !Satisfies(NameOf(candidate), assemblyName))
+                continue;
+            Assembly loaded;
+            try
+            {
+                loaded = generation.Context.LoadFromAssemblyName(assemblyName);
+            }
+            catch (Exception e) when (e is FileNotFoundException or FileLoadException or BadImageFormatException)
+            {
+                continue;
+            }
+            // The platform's (or the image's) answer is the default context's to give.
+            return AssemblyLoadContext.GetLoadContext(loaded) is ModuleLoadContext owner
+                ? new ModuleBinding(loaded, owner)
+                : null;
+        }
+        return null;
+    }
+
+    private static AssemblyName? NameOf(string path)
+    {
+        try
+        {
+            return AssemblyName.GetAssemblyName(path);
+        }
+        catch (Exception e) when (e is BadImageFormatException or FileLoadException or FileNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    // A context may not answer a request with a LOWER version than the one asked for.
+    private static bool Satisfies(AssemblyName? candidate, AssemblyName requested) =>
+        candidate is not null
+        && (requested.Version is null || (candidate.Version is { } version && version >= requested.Version));
 
     /// <summary>
     /// The current generations that depend — directly or transitively — on
