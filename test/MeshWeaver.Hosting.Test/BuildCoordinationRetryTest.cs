@@ -158,6 +158,119 @@ public class BuildCoordinationRetryTest
     }
 
     /// <summary>
+    /// 🚨 #5716 — the transport's OWN 30 s timeout reaches the handshake as the ROUTER's NACK, not as
+    /// a <see cref="TimeoutException"/>: the exception object does not survive the grain boundary,
+    /// so it arrives as a <see cref="MeshWeaver.Messaging.DeliveryFailureException"/> carrying the
+    /// incident's exact text. It is "no answer in time" exactly like the in-process shape and must
+    /// be retried the same way — and, once the attempts are spent, be reported as an UNREACHABLE
+    /// node so the durable-witness door is asked. Before the fix it was neither: the first one
+    /// faulted the whole warm-up (memex-cloud <c>76cf776847-v4txp</c>, 2026-09-24 06:51:10Z).
+    /// </summary>
+    [Fact]
+    public async Task TheRoutersFlattenedTransportTimeout_IsRetried_LikeAnInProcessTimeout()
+    {
+        var attempts = new List<int>();
+        var result = await BuildProtocolDriver.RetryUnreachableCoordination(
+                Handshake(2, RoutedResponseTimeout, attempts),
+                BuildProtocolDriver.CoordinationAttempts,
+                NoBackoff,
+                Scheduler.Immediate,
+                logger: null)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        result.Should().Be("granted");
+        attempts.Should().Equal(new[] { 1, 2, 3 });
+    }
+
+    /// <summary>
+    /// The routed timeout, every attempt spent ⇒ the SAME fail-closed terminal as an in-process
+    /// timeout: a <see cref="BuildCoordinationUnreachableException"/>, which is what lets
+    /// <c>WhenTheSubscriptionDoorIsShut</c> consult the durable witness instead of the warm-up
+    /// faulting on a raw NACK.
+    /// </summary>
+    [Fact]
+    public async Task TheRoutersFlattenedTransportTimeout_Exhausted_IsReportedAsUnreachable()
+    {
+        var attempts = new List<int>();
+        var act = () => BuildProtocolDriver.RetryUnreachableCoordination(
+                Handshake(int.MaxValue, RoutedResponseTimeout, attempts),
+                BuildProtocolDriver.CoordinationAttempts,
+                NoBackoff,
+                Scheduler.Immediate,
+                logger: null)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        var thrown = await act.Should().ThrowAsync<BuildCoordinationUnreachableException>();
+        thrown.Which.InnerException.Should().BeOfType<MeshWeaver.Messaging.DeliveryFailureException>();
+        attempts.Should().HaveCount(BuildProtocolDriver.CoordinationAttempts);
+        BuildProtocolDriver.DescribesUnreachableCoordination(thrown.Which).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The control: a routed NACK that carries a VERDICT is not a timeout and is not retried — the
+    /// match is on the transport's own "no answer in time" text, never on the exception type.
+    /// </summary>
+    [Fact]
+    public async Task ARoutedNackCarryingAVerdict_IsNotRetried()
+    {
+        var attempts = new List<int>();
+        var act = () => BuildProtocolDriver.RetryUnreachableCoordination(
+                Handshake(int.MaxValue, () => new MeshWeaver.Messaging.DeliveryFailureException(
+                    new MeshWeaver.Messaging.DeliveryFailure(null!, "Delivery to 'Admin/Build' failed: Access denied")
+                    {
+                        ErrorType = MeshWeaver.Messaging.ErrorType.Forbidden,
+                    }), attempts),
+                BuildProtocolDriver.CoordinationAttempts,
+                NoBackoff,
+                Scheduler.Immediate,
+                logger: null)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<MeshWeaver.Messaging.DeliveryFailureException>();
+        attempts.Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// A VERDICT whose reason text happens to quote the transport phrase is still a verdict: the
+    /// router stamps a transport fault <c>ErrorType.Failed</c>, and only that stamp qualifies.
+    /// </summary>
+    [Fact]
+    public async Task AVerdictQuotingTheTimeoutPhrase_IsNotRetried()
+    {
+        var attempts = new List<int>();
+        var act = () => BuildProtocolDriver.RetryUnreachableCoordination(
+                Handshake(int.MaxValue, () => new MeshWeaver.Messaging.DeliveryFailureException(
+                    new MeshWeaver.Messaging.DeliveryFailure(null!,
+                        "Delivery to 'Admin/Build' failed: Response did not arrive on time in 00:00:30")
+                    {
+                        ErrorType = MeshWeaver.Messaging.ErrorType.Forbidden,
+                    }), attempts),
+                BuildProtocolDriver.CoordinationAttempts,
+                NoBackoff,
+                Scheduler.Immediate,
+                logger: null)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<MeshWeaver.Messaging.DeliveryFailureException>();
+        attempts.Should().ContainSingle();
+    }
+
+    /// <summary>The #5716 incident's exact NACK text, as the router posts it.</summary>
+    private static Exception RoutedResponseTimeout() => new MeshWeaver.Messaging.DeliveryFailureException(
+        new MeshWeaver.Messaging.DeliveryFailure(null!,
+            "Delivery to 'Admin/Build' failed: Response did not arrive on time in 00:00:30 for message: "
+            + "Request [S10.244.5.33:11111:149237088 sys.client/hosted-10.244.5.33:11111@149237088]->"
+            + "[ messagehub/Admin/Build] MeshWeaver.Connection.Orleans.IMessageHubGrain.DeliverMessage("
+            + "MeshWeaver.Messaging.IMessageDelivery) #60099C7B1E760D1F. ")
+        {
+            ErrorType = MeshWeaver.Messaging.ErrorType.Failed,
+        });
+
+    /// <summary>
     /// The readiness refusal must be able to tell "no verdict" from "a bad verdict". Both refuse,
     /// but only the first is worth restarting on, and only the first is a rollout stalled on a race.
     /// </summary>
