@@ -294,6 +294,14 @@ public static class MeshNodeBindingExtensions
         return hub.GetMeshNodeStream(nodePath)
             .Where(node => node is not null)
             .Select(node => (object?)EvaluateField(BindingRoot(node, bindContent, options), pointer))
+            // The cache ends its existing readers as soon as a delete invalidates their stream.
+            // That notification may beat the independent existence query's Removed frame. Emit the
+            // absent field value inside this content leg; the outer existence feed remains live and
+            // switches onto a fresh owner stream when the path is created again. An unrelated read
+            // failure must still terminate the binding and reach the view's error surface.
+            .Catch<object?, Exception>(error => IsDeletedBoundNode(error, nodePath)
+                ? Observable.Return<object?>(null)
+                : Observable.Throw<object?>(error))
             .DegradeIfNoFirstEmission(
                 fallback: null,
                 onDegraded: failure => ReadBudget.Logger(hub)?.LogWarning(
@@ -305,6 +313,24 @@ public static class MeshNodeBindingExtensions
                 what: $"field '{pointer}'",
                 budget: firstValueBudget,
                 scheduler: scheduler);
+    }
+
+    internal static bool IsDeletedBoundNode(Exception error, string nodePath)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            if (current is MeshNodeReadEndedWithDeleteException deleted
+                && string.Equals(deleted.NodePath, nodePath, StringComparison.Ordinal))
+                return true;
+
+            // The query can also report an existing row just before the owner is deleted. The
+            // subsequent point read then gets the router's typed NotFound instead of a cache
+            // invalidation. Match the exact requested path; another missing dependency is a fault.
+            if (current is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound } failure
+                && failure.Message.StartsWith($"No node found at '{nodePath}'", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

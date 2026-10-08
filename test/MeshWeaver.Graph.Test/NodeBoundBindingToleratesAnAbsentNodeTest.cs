@@ -140,6 +140,40 @@ public class NodeBoundBindingToleratesAnAbsentNodeTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// A binding already reading a node must survive the cache's delete notification. The
+    /// existence feed and the owner's content stream are independent, so the content stream can
+    /// end with the delete before the existence feed reports the removed row.
+    /// </summary>
+    [Fact]
+    public async Task ExistingBinding_DrawsEmptyOnDelete_AndReadsRecreatedNode()
+    {
+        var id = NewId("live-delete-");
+        var path = $"{TestPartition}/{id}";
+        await NodeFactory.CreateNode(Page(id, "Before the delete"))
+            .Should().Within(TestTimeouts.Convergence).Emit();
+
+        var bound = BindDescription(path).Replay();
+        using var connection = bound.Connect();
+        Text(await bound.Should().Within(TestTimeouts.Convergence).Emit()).Should().Be("Before the delete");
+
+        // Reproduce the production ordering explicitly: the cache ends existing readers before
+        // the independent query feed publishes its Removed row. A normal DeleteNode invocation
+        // often delivers the query update first on this in-memory test mesh.
+        Cache.Invalidate(path);
+        await NodeFactory.DeleteNode(path).Should().Within(TestTimeouts.Convergence).Emit();
+        (await bound.Should().Within(TestTimeouts.Convergence).Match(v => v is null,
+            "a cache read ended by deletion is an absent bound value, not a terminal view fault"))
+            .Should().BeNull();
+
+        await NodeFactory.CreateNode(Page(id, "After recreation"))
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        Text(await bound.Should().Within(TestTimeouts.Convergence).Match(
+            v => Text(v) == "After recreation",
+            "the existing binding must follow the live existence feed back onto the new owner stream"))
+            .Should().Be("After recreation");
+    }
+
+    /// <summary>
     /// 🚨 <b>THE ONE WAY THIS FIX COULD BE WORSE THAN THE BUG</b>, and it would be SILENT: an
     /// existence gate that answers "absent" for a node that is plainly there blanks the control for
     /// every viewer, with nothing logged and nothing to grep. So the gate is asserted against the

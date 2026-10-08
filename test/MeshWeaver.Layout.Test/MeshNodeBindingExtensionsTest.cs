@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -56,6 +57,33 @@ public class MeshNodeBindingExtensionsTest
         // An absolute pointer is a layout-area path even under a node-bound context.
         MeshNodeBindingExtensions.IsNodeBound(nodeCtx, new JsonPointerReference("/data/foo"))
             .Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteRecovery_OnlyAcceptsTheBoundPathsOwnDefinitiveMissingSignal()
+    {
+        const string path = "Document/_Comment/removed";
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new MeshNodeReadEndedWithDeleteException(path), path).Should().BeTrue();
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new MeshNodeReadEndedWithDeleteException("Document/_Comment/other"), path).Should().BeFalse();
+
+        var routingMiss = new DeliveryFailureException(new DeliveryFailure(null!,
+            $"No node found at '{path}'. Closest ancestor is 'Document'")
+        {
+            ErrorType = ErrorType.NotFound,
+        });
+        MeshNodeBindingExtensions.IsDeletedBoundNode(routingMiss, path).Should().BeTrue();
+        MeshNodeBindingExtensions.IsDeletedBoundNode(routingMiss, "Document/_Comment/remove")
+            .Should().BeFalse("a prefix of the missing path is a different node");
+
+        var unavailable = new DeliveryFailureException(new DeliveryFailure(null!,
+            $"No node found at '{path}'") { ErrorType = ErrorType.Failed });
+        MeshNodeBindingExtensions.IsDeletedBoundNode(unavailable, path).Should().BeFalse(
+            "a failed route carrying similar text is not an authoritative NotFound");
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new InvalidOperationException($"No node found at '{path}'"), path).Should().BeFalse(
+            "an unrelated exception with similar text must still reach the error surface");
     }
 
     [Fact]
