@@ -84,7 +84,7 @@ public class LastAdminInvariantExemptsSystemOwnedPartitionsTest(ITestOutputHelpe
                     // builders produce — so this exercises the same tolerance production does.
                     Content = new JsonObject
                     {
-                        ["repository"] = "Systemorph/Memex",
+                        ["repositoryUrl"] = "https://github.com/Systemorph/Memex",
                         ["twoWay"] = twoWay,
                     },
                 },

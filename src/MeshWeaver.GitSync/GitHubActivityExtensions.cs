@@ -203,10 +203,7 @@ public static class GitHubActivityExtensions
                 ? AsSystem()
                 : Observable.Throw<string>(new UnauthorizedAccessException(requiresCommitAuthority
                     && !string.Equals(operation, "commit", StringComparison.Ordinal)
-                    ? $"Access denied: GitHub {operation} of '{spacePath}' at a chosen commit needs Update " +
-                      "permission on the Space or a platform admin. A system-owned (one-way GitSynced) " +
-                      "Space grants nobody write, so on one this is a platform admin's operation; " +
-                      "an update to the branch head needs only Read."
+                    ? LocalizationCatalog.Get("gitsync.trigger.reimportNeedsCommitAuthority", locale, spacePath)
                     : requiresCommitAuthority
                     ? $"Access denied: committing '{spacePath}' to GitHub needs Update permission on " +
                       "the Space or a platform admin. The Space is system-owned (GitSynced), so " +

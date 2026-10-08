@@ -346,6 +346,20 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
     public static IObservable<string?> DescribeDeniedWrite(
         IMessageHub hub, string? nodePath, string? deniedUserId)
+        => DescribeDeniedWriteIn(hub, nodePath, deniedUserId, locale: null);
+
+    /// <summary>
+    /// <see cref="DescribeDeniedWrite(IMessageHub, string?, string?)"/>, with the refused caller's
+    /// language for the diagnoses that are catalog-backed (the repository-owned refusal, #5140).
+    /// </summary>
+    /// <param name="hub">The hub whose service provider resolves the storage adapter.</param>
+    /// <param name="nodePath">The path being written; its first segment is the partition.</param>
+    /// <param name="deniedUserId">The principal the write was refused for, or <c>null</c>.</param>
+    /// <param name="locale">The caller's language tag (<c>AccessContext.Locale</c>), or <c>null</c>
+    /// for the catalog's default.</param>
+    /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
+    public static IObservable<string?> DescribeDeniedWriteIn(
+        IMessageHub hub, string? nodePath, string? deniedUserId, string? locale)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (GetFirstSegment(nodePath) is not { } partition)
@@ -363,10 +377,8 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // leftover Admin's refusal was diagnosed below as a #4061 disagreement and told to
                 // report a bug. Satellites keep their own rules and fall through.
                 { Ownerless: false, SystemOwned: true } when IsContentPath(nodePath) =>
-                    $"'{partition}' is SYSTEM-OWNED: it has a one-way '{partition}/_GitSync', so its "
-                    + "content is its repository's projection and only the sync writes it — an edit "
-                    + "made here would be overwritten by the next sync, whatever grant you hold. "
-                    + "Change it through a pull request to that repository.",
+                    LocalizationCatalog.Get("access.systemOwned.writeRefused", locale,
+                        partition, AccessAssignmentGuard.SyncConfigPath(partition)),
                 // 🚨 A CONFIGURED (static) grant is a grant: the partition is owned, and its grant is
                 // not in the store, so the durable-vs-fold disagreement check has nothing to compare.
                 // Silent — exactly what the pre-#5904 early return answered.
