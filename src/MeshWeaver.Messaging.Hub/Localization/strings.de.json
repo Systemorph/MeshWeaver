@@ -1396,7 +1396,7 @@
   "setup.ai.apiKey": "API-Schlüssel",
   "setup.ai.endpoint": "Endpunkt",
   "setup.ai.embedding.heading": "Embeddings",
-  "setup.ai.embedding.help": "Ein OpenAI-kompatibler /v1/embeddings-Endpunkt. Ohne ihn sucht das Portal nach Wörtern statt nach Bedeutung — und zwar unbemerkt, weshalb es sich lohnt, ihn jetzt zu setzen.",
+  "setup.ai.embedding.help": "Ein OpenAI-kompatibler /v1/embeddings-Endpunkt ermöglicht die semantische Suche. Ohne ihn kann SQLite weiterhin Textteile in gespeicherten Inhalten finden. PostgreSQL durchsucht Knotennamen, Pfade, Beschreibungen und Typen; für Seitentext ist zusätzlich ein Inhaltsindex nötig.",
   "setup.ai.embedding.model": "Embedding-Modell",
   "setup.modules.heading": "Module",
   "setup.modules.help": "Welche der in diesem Image enthaltenen Module mit der Instanz starten.",
