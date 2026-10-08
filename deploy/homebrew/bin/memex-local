@@ -2176,7 +2176,8 @@ cmd_setup() {
   fi
   echo
   info "Ollama is already running for you — for Embeddings paste http://ollama:11434/v1"
-  info "so search matches MEANING rather than words. Left blank it degrades silently."
+  info "for semantic search. Without embeddings, SQLite can still find parts of stored text;"
+  info "PostgreSQL matches node names, paths, descriptions and types. Page text also needs a content index."
 
   if [ "$open_browser" = "yes" ] && command -v open >/dev/null 2>&1; then
     open "${url}?token=${token}" >/dev/null 2>&1 || true
