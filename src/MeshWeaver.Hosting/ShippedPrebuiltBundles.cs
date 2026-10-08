@@ -1464,8 +1464,7 @@ public static class ShippedPrebuiltBundles
                                 or PrebuiltAssemblySeeder.SeedOutcome.DeclinedStaleSourcesUnservable)
                                 context?.OnDeclined?.Invoke(a.NodePath);
                         })
-                        .Select(outcome => outcome is PrebuiltAssemblySeeder.SeedOutcome.Adopted
-                            or PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale);
+                        .Select(PrebuiltAssemblySeeder.IsCovered);
                 })
                 .Do(adopted =>
                 {

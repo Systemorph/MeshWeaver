@@ -1252,7 +1252,7 @@ public sealed class PluginBundleClient
                         // declined loudly outside floor..ceiling, never adopted.
                         manifest.ProducerPlatformVersion,
                         manifest.PlatformCeiling)
-                        .Select(outcome => outcome is PrebuiltAssemblySeeder.SeedOutcome.Adopted or PrebuiltAssemblySeeder.SeedOutcome.AdoptedStale))
+                        .Select(PrebuiltAssemblySeeder.IsCovered))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count =>
