@@ -91,7 +91,10 @@ I6  THE DENOMINATOR IS PRINTED — "N pin sites found, of which M classified, ov
     so a sweep keyed on the two common names reports it CLEAN while verifying none of its pins.
 
 I8  NO ORPHANED SOURCE REF — a literal `MW_PLATFORM_REF`-shaped core commit must be named by at
-    least one platform lane this repository actually calls. It is deliberately NOT "MW_PLATFORM_REF
+    least one platform lane that THE SAME WORKFLOW FILE calls (#4752). A workflow `env:` is
+    file-scoped, so a lane in another file can never read it, and a match there does not count. A ref
+    in a file that calls NO lane is not a lane's source ref at all (e.g. a deploy workflow's chart
+    pin): it is counted in the census and named, never judged here. It is deliberately NOT "MW_PLATFORM_REF
     equals a lane's sha": several lanes legitimately sit at older DEFINITION pins while the platform
     pin moves. What it refuses is the value being moved ALONE — the orphan that SocialMedia's own
     header records ("three different commits under a comment asserting they are one"). A BRANCH name
