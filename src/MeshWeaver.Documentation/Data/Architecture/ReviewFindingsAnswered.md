@@ -1010,8 +1010,16 @@ Two traps when sweeping a repo for stubs, both of which produce a confident unde
 **The check now refreshes itself.** After a GREEN verdict on any event other than `pull_request`
 (and never for a `merge_group` entry, which is its own commit), the `refresh` job of
 `node-repo-review-answered.yml` (`lane / Refresh the verdict branch protection reads` in core)
-re-runs the failed jobs of the newest `pull_request` run of the same workflow for the current head
-(`check-review-answered.py --refresh-read-run`). The decision is the pure function `refresh_action`,
+re-runs the newest `pull_request` run of the same workflow for the current head — the WHOLE run
+(`POST …/runs/<id>/rerun`), never only its failed jobs (`check-review-answered.py --refresh-read-run`).
+The whole run is the right call because what the refresh must produce is a fresh `pull_request`
+evaluation of live state, and every job of the lane reads live state. It is also the only call GitHub
+accepts for the commonest candidate: a `pull_request` run that a newer arrival REPLACED in the
+concurrency group while it was pending, so it was cancelled with ZERO jobs and published no check-run
+at all. For that run `rerun-failed-jobs` answers `403 This workflow run cannot be retried` and
+`rerun` is accepted (measured on #6315, run 37807892371); the refresh used `rerun-failed-jobs` until
+then and went red on exactly that. The stage advance below keeps `rerun-failed-jobs`, because its held
+run is a full test run whose green jobs must not be repeated, and it never revives a cancelled run. The decision is the pure function `refresh_action`,
 covered by the script's `--self-test`. It re-runs that run only if it has **completed**, is **not
 `success`**, and **started before** this GREEN verdict was taken. A run that is in flight, already
 green, or started after the verdict is left alone, and the job prints why. That makes it idempotent

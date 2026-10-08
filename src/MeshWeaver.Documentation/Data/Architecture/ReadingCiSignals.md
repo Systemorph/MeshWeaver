@@ -188,6 +188,24 @@ A **dynamic matrix cannot be a required context** — the shard names change. Re
 `Consolidate test results`). Requiring shard names by hand orphans a required context the moment the
 shard count changes, and it then waits forever.
 
+### A cancelled shard can be a bad assignment while every test still passes
+
+Core's full-suite shard assignment uses measured project seconds in
+`.github/scripts/shard-assign.sh`. Its printed loads describe that table, not the time a runner
+actually spent. On main run 37830774943, shard 4 printed a balanced 332 s but a previous green
+run's project markers measured 324 s for one Memex.Portal.Shared part, 428 s for Messaging.Hub,
+43 s for Layout, and 222 s for Compiler.Pipeline. The browser dependency install also stalled on
+the runner's apt mirror, so the 20-minute job cap cancelled the shard while Compiler.Pipeline was
+still passing tests. `Consolidate test results` correctly went red; no failed assertion caused it.
+
+Read the shard's `test/test-results.log` and `collected-logs/_meshweaver-test-trace.log` artifact
+before classifying that red. The completed `[CI] … elapsed=` markers identify which project costs
+drifted; a `TEST_START` without `TEST_END` identifies the test in flight, whose surrounding trace
+distinguishes a stalled edge from a job cut during steady progress. Re-measure the table from
+full, executed green runs, split a project whose part exceeds the per-project headroom rule, and
+check the six assignments again. A green-tree reuse run skips the shards and supplies no timing
+evidence. Keep the job and per-project caps in place: they make a real wedge observable and bounded.
+
 ## 🚨 A narrow instrument does not answer a wide question — and it is RIGHT while you misread it
 
 Most rules on this page are instances of one shape, and it is worth naming because the instances

@@ -79,8 +79,23 @@ public sealed class RoutingQuiescence : IDisposable
     /// <para><see cref="Stopwatch.GetTimestamp"/>, never a wall clock: this is an ELAPSED time on one
     /// process, so it must not move when the clock is stepped. Same choice, for the same reason, as
     /// <c>IoPool</c>'s own queue-wait measurement.</para>
+    ///
+    /// <para>🚨 <b>Accepted is not dispatched (#5703).</b> A stream-routed leg is accepted at ENQUEUE and
+    /// may then wait behind every earlier leg of its own stream before its own timeouts even start, so
+    /// its age since acceptance is the sum of its predecessors' running times plus its own — sixty
+    /// healthy two-second round trips make a 120 s leg that nothing is wrong with. Measuring a leak
+    /// on that age filed a Critical "leaked slot or starved silo" for ordinary head-of-line load
+    /// (prod 2026-10-05: oldest leg 124 863 ms with 61 legs queued on one stream channel).
+    /// <see cref="TrackedLeg.DispatchedTimestamp"/> is therefore stamped separately, when the ordered
+    /// channel hands the leg to the routing pool, and is <c>0</c> while it is still queued. It is
+    /// deliberately NOT the moment the pool subscribes it: a leg waiting for a pool thread has had its
+    /// turn and is not waiting on any other leg, so that wait stays inside the age — it is the
+    /// "starved silo" half of the Critical verdict, which must stay visible.</para>
     /// </summary>
-    private readonly record struct TrackedLeg(string Label, long StartedTimestamp);
+    private readonly record struct TrackedLeg(string Label, long StartedTimestamp, long DispatchedTimestamp)
+    {
+        public bool IsDispatched => DispatchedTimestamp != 0;
+    }
 
     /// <summary>Initializes a new instance of the <see cref="RoutingQuiescence"/> class.</summary>
     public RoutingQuiescence()
@@ -127,15 +142,49 @@ public sealed class RoutingQuiescence : IDisposable
     /// <returns>A handle whose disposal marks the work terminated.</returns>
     public IDisposable Track(string label)
     {
+        var now = Stopwatch.GetTimestamp();
+        return Release(Admit(new TrackedLeg(label, now, now)));
+    }
+
+    /// <summary>
+    /// Registers one piece of routing work that is ACCEPTED now but only DISPATCHED later — a leg
+    /// queued behind earlier legs of its own ordered channel. Call
+    /// <see cref="QueuedRoutingLeg.MarkDispatched"/> when the channel hands it to the pool, and dispose
+    /// the handle when it terminates, exactly as for <see cref="Track(string)"/>.
+    ///
+    /// <para>🚨 The distinction is what keeps a QUEUE WAIT from reading as a LEAK (#5703): until it
+    /// is dispatched, the leg counts as in flight (the silo stop still holds for it, #2638) but is excluded
+    /// from <see cref="OldestInFlight"/> and reported by <see cref="OldestQueued"/> instead.</para>
+    /// </summary>
+    /// <param name="label">Identity of the work — see <see cref="Track(string)"/>.</param>
+    /// <returns>A handle that marks the leg dispatched and, on disposal, terminated.</returns>
+    public QueuedRoutingLeg TrackQueued(string label)
+    {
+        var id = Admit(new TrackedLeg(label, Stopwatch.GetTimestamp(), 0));
+        return new QueuedRoutingLeg(() => MarkDispatched(id), Release(id));
+    }
+
+    // Stamps a queued leg's dispatch, once; a leg that already terminated stays terminated.
+    private void MarkDispatched(long id)
+    {
+        if (inFlightLegs.TryGetValue(id, out var leg) && !leg.IsDispatched)
+            inFlightLegs.TryUpdate(id, leg with { DispatchedTimestamp = Stopwatch.GetTimestamp() }, leg);
+    }
+
+    private long Admit(TrackedLeg leg)
+    {
         var id = Interlocked.Increment(ref ticket);
-        inFlightLegs[id] = new TrackedLeg(label, Stopwatch.GetTimestamp());
+        inFlightLegs[id] = leg;
         Push(1);
-        return Disposable.Create(() =>
+        return id;
+    }
+
+    private IDisposable Release(long id) =>
+        Disposable.Create(() =>
         {
             inFlightLegs.TryRemove(id, out _);
             Push(-1);
         });
-    }
 
     /// <summary>
     /// A snapshot of the work currently in flight — each entry the leg's label followed by how long
@@ -177,13 +226,22 @@ public sealed class RoutingQuiescence : IDisposable
             : (all.Take(max).ToArray(), all.Length - max);
     }
 
+    // In flight is measured from ACCEPTANCE (what the silo stop held for); the bracket says how long
+    // ago its channel dispatched it to the pool, or that it is still queued behind its channel (#5703).
     private static string FormatLeg(TrackedLeg leg, long nowTimestamp) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"{leg.Label}, in flight {Stopwatch.GetElapsedTime(leg.StartedTimestamp, nowTimestamp).TotalSeconds:F1}s");
+            $"{leg.Label}, in flight {Stopwatch.GetElapsedTime(leg.StartedTimestamp, nowTimestamp).TotalSeconds:F1}s")
+        + (leg.IsDispatched
+            ? string.Create(CultureInfo.InvariantCulture,
+                $" (dispatched {Stopwatch.GetElapsedTime(Math.Min(leg.DispatchedTimestamp, nowTimestamp), nowTimestamp).TotalSeconds:F1}s ago)")
+            : " (queued, not dispatched)");
 
     /// <summary>
-    /// The leg that has been in flight LONGEST, and for how long — or <c>null</c> when nothing is in
-    /// flight.
+    /// The DISPATCHED leg that was dispatched LONGEST ago, and how long ago — or <c>null</c> when no leg
+    /// is dispatched. A leg still queued behind its own channel is not counted here: it is waiting on
+    /// the legs ahead of it, so its wait cannot say anything about a leak (#5703 — see
+    /// <see cref="OldestQueued"/>, and <see cref="TrackedLeg.DispatchedTimestamp"/> for the
+    /// production reading that made a queue wait file a Critical).
     ///
     /// <para>🚨 <b>This is the discriminator a saturation report cannot otherwise have, and the whole
     /// reason it exists.</b> <c>RoutingGrain</c>'s in-flight COUNT cannot tell a busy silo from one
@@ -206,7 +264,20 @@ public sealed class RoutingQuiescence : IDisposable
     /// per route.</para>
     /// </summary>
     /// <returns>The oldest leg's label and age, or <c>null</c> when no leg is in flight.</returns>
-    public (string Label, TimeSpan Age)? OldestInFlight()
+    public (string Label, TimeSpan Age)? OldestInFlight() => Oldest(dispatched: true);
+
+    /// <summary>
+    /// The leg that has been QUEUED longest without starting — accepted, waiting behind an earlier leg
+    /// of its own ordered channel — and for how long; or <c>null</c> when no leg is queued (#5703).
+    ///
+    /// <para>A queue wait is not a leak: the leg's own timeouts have not started, and the wait ends
+    /// when the legs ahead of it do. It is printed so a deep same-stream backlog is visible — the
+    /// producer to look at — and it never decides a level; <see cref="OldestInFlight"/> does.</para>
+    /// </summary>
+    /// <returns>The oldest queued leg's label and wait, or <c>null</c> when none is queued.</returns>
+    public (string Label, TimeSpan Age)? OldestQueued() => Oldest(dispatched: false);
+
+    private (string Label, TimeSpan Age)? Oldest(bool dispatched)
     {
         var oldest = long.MaxValue;
         string? label = null;
@@ -217,8 +288,11 @@ public sealed class RoutingQuiescence : IDisposable
         // as ONE value out of the dictionary rather than looked up twice.
         foreach (var leg in inFlightLegs.Values)
         {
-            if (leg.StartedTimestamp >= oldest) continue;
-            oldest = leg.StartedTimestamp;
+            if (leg.IsDispatched != dispatched) continue;
+            // A DISPATCHED leg's age runs from its dispatch — never from its acceptance (#5703).
+            var since = dispatched ? leg.DispatchedTimestamp : leg.StartedTimestamp;
+            if (since >= oldest) continue;
+            oldest = since;
             label = leg.Label;
         }
         return label is null ? null : (label, Stopwatch.GetElapsedTime(oldest));
@@ -246,6 +320,31 @@ public sealed class RoutingQuiescence : IDisposable
         connections.Dispose();
         scheduler.Dispose();
     }
+}
+
+/// <summary>
+/// The handle of a routing leg tracked by <see cref="RoutingQuiescence.TrackQueued"/>: accepted when
+/// it was created, DISPATCHED once <see cref="MarkDispatched"/> is called, terminated when disposed (#5703).
+/// </summary>
+public sealed class QueuedRoutingLeg : IDisposable
+{
+    private readonly Action markRunning;
+    private readonly IDisposable release;
+
+    internal QueuedRoutingLeg(Action markRunning, IDisposable release)
+    {
+        this.markRunning = markRunning;
+        this.release = release;
+    }
+
+    /// <summary>
+    /// Marks the leg dispatched — call it when its ordered channel hands it to the routing pool, i.e.
+    /// when it stops waiting on any other leg. Idempotent; a no-op once the leg has terminated.
+    /// </summary>
+    public void MarkDispatched() => markRunning();
+
+    /// <summary>Marks the leg terminated. A double dispose does not double-decrement.</summary>
+    public void Dispose() => release.Dispose();
 }
 
 /// <summary>

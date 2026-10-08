@@ -864,8 +864,10 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     # HARD CAP on a shard. Each project already has its own `timeout 8m` below, but that
     # only bounds a project that is RUNNING — it cannot bound a shard that wedges between
-    # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
-    # weights, so a shard that hits this is stuck, not slow.
+    # projects. The measured full-suite assignment is ~8.4 min of tests per shard; the
+    # browser-provision step can cost ~9.5 min on a slow apt mirror. Run 37830774943
+    # hit this cap while tests still progressed because stale weights stacked >16 min
+    # of tests on shard 4. Re-measure/split units in shard-assign.sh, never widen the cap.
     timeout-minutes: 20
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
@@ -3873,7 +3875,14 @@ jobs:
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
     # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too.
-    needs: [preflight, stage-gate]
+    # 🚦 AND FOR CORE'S OWN SUITES (Doc/Architecture/CrossRepoPairGate § "Requested after core's own
+    # suites"). A candidate that fails its own build or tests cannot merge whatever Plugins says, so
+    # measuring it spends dind runners the waiting candidates need — on 2026-10-08 48 candidate legs
+    # of ten core PRs queued for them at once. So the request needs `build` and `test`, and when they
+    # are not green it is NOT sent and goes RED by name ("waiting for core's own suites"): never a
+    # skip, which would read as satisfied. A tree already tested green (precheck reuse) is core's
+    # own green and is requested as before.
+    needs: [preflight, stage-gate, precheck, build, test]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -3887,6 +3896,20 @@ jobs:
       counterpart: ${{ steps.want.outputs.counterpart }}
       plugins: ${{ steps.paired.outputs.plugins }}
     steps:
+    - name: "Core's own build and tests are green on this candidate (otherwise: not requested — waiting for core's own suites)"
+      env:
+        REUSED: ${{ needs.precheck.outputs.skip }}
+        BUILD: ${{ needs.build.result }}
+        TEST: ${{ needs.test.result }}
+      run: |
+        if [ "$REUSED" = "true" ]; then
+          echo "this tree was already tested green (precheck reuse) — core's own suites are green; requesting"
+        elif [ "$BUILD" = "success" ] && [ "$TEST" = "success" ]; then
+          echo "core's own build ($BUILD) and tests ($TEST) are green on this candidate — requesting the dependent's suites"
+        else
+          echo "::error title=Dependent suites NOT requested — waiting for core's own suites::core's own build is '$BUILD' and its tests '$TEST' on this candidate. MeshWeaver.Plugins' suites are requested only after core's own suites are green, so a candidate that fails them never takes Plugins runners. Fix core's own red; the next push (or re-running the failed jobs) requests them."
+          exit 1
+        fi
     - uses: actions/checkout@v7
       with:
         fetch-depth: 2
@@ -3984,8 +4007,8 @@ jobs:
     # fails unless it succeeded. Its red says "this change breaks MeshWeaver.Plugins realm(s) X and
     # declares nothing" — or that the measurement is missing, which is never a pass.
     name: "Dependent suites (MeshWeaver.Plugins)"
-    # After core's own tests: the dependent's run started at dispatch and needs the longer window,
-    # so the waiter's cap is spent AFTER core's own ~20 minutes rather than beside them.
+    # After the request, which itself waits for core's own build and tests: the 42-minute window is
+    # the whole budget of the dependent's run, from the moment it was requested.
     needs: [dependent-suites-dispatch, test]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.dependent-suites-dispatch.result == 'success' }}
     runs-on: ubuntu-latest
@@ -4011,6 +4034,9 @@ jobs:
         repositories: MeshWeaver.Plugins
         permission-contents: read
         permission-pull-requests: read
+        # The queue census (await-dependent-verdict.py): Actions METADATA of core-candidate.yml runs —
+        # where this candidate is and what is ahead of it. Never a log; never part of the verdict.
+        permission-actions: read
     - name: Wait for MeshWeaver.Plugins' verdict(s) on this candidate
       id: wait
       env:
@@ -4025,7 +4051,7 @@ jobs:
         wait_one() {  # $1 = key, $2 = out file
           left=$(( (end - $(date +%s)) / 60 )); [ "$left" -ge 1 ] || left=1
           python3 .github/scripts/await-dependent-verdict.py --key "$1" --candidate "$CANDIDATE" --base "$BASE" \
-            --deadline-minutes "$left" --out "$2"
+            --deadline-minutes "$left" --out "$2" --no-verdict-out "$RUNNER_TEMP/no-verdict-$1.txt"
         }
         wait_one "$KEY" "$RUNNER_TEMP/main-verdict.json"; rc=$?
         # Exit 3 = NO verdict by the deadline (EXIT_NO_VERDICT): handed to the step below so silence
@@ -4043,10 +4069,16 @@ jobs:
         exit 0
     # 🚨 STILL RED — silence is never a pass. The step name is also what merge-queue-steward.py
     # (DEPENDENT_NO_VERDICT_STEP) matches, dormant while the queue is off: rename one, rename both.
+    # The message names WHY, from the waiter's last queue census: "no runner within 42 min (queued
+    # behind N candidate runs: …)", "still running at the deadline", or "no run carries this key".
     - name: "No verdict in time: the dependent's suites did not report (infrastructure)"
       if: ${{ steps.wait.outputs.outcome == 'no-verdict' }}
+      env:
+        KEY: ${{ needs.dependent-suites-dispatch.outputs.key }}
       run: |
-        echo "::error::MeshWeaver.Plugins wrote no verdict for this candidate inside the deadline. The candidate is UNVERIFIED, so this required gate is red; its legs' WAIT times are on the candidate run in MeshWeaver.Plugins (core-candidate.yml). Re-run this job once that run has finished — the waiter reads the verdict it left."
+        why=$(cat "$RUNNER_TEMP/no-verdict-$KEY.txt" 2>/dev/null || echo "no verdict within 42 min (the waiter left no census)")
+        echo "::error title=No verdict in time — $why::MeshWeaver.Plugins wrote no verdict for this candidate inside the 42-minute window: $why. The candidate is UNVERIFIED, so this required gate is red. REMEDY: if that candidate run has since written its verdict, re-run THIS job — the waiter reads the verdict it left. A candidate whose core run has finished stands down (and is cancelled by the next candidate's sweep), so if it has not, re-run the 'Dependent suites (request)' job instead: it requests a fresh candidate under a new key, and this job waits for that one."
+        { echo "### ⏳ Dependent suites — no verdict in time"; echo; echo "$why"; } >> "$GITHUB_STEP_SUMMARY"
         exit 1
     - name: Compatible, or a declared break? (decide)
       if: ${{ steps.wait.outputs.outcome == 'verdict' }}
@@ -4527,7 +4559,11 @@ jobs:
     - name: "Fail if the dependent suites could not be requested"
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.dependent-suites-dispatch.result != 'success'
       run: |
-        echo "::error::Dependent suites (MeshWeaver.Plugins): the request ('Dependent suites (request)') concluded '${{ needs.dependent-suites-dispatch.result }}' — see that job."
+        if [ "${{ needs.precheck.outputs.skip }}" != "true" ] && { [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; }; then
+          echo "::error::Dependent suites (MeshWeaver.Plugins): NOT REQUESTED — waiting for core's own suites (build '${{ needs.build.result }}', tests '${{ needs.test.result }}'). The dependent's suites are requested only after core's own are green on this candidate."
+        else
+          echo "::error::Dependent suites (MeshWeaver.Plugins): the request ('Dependent suites (request)') concluded '${{ needs.dependent-suites-dispatch.result }}' — see that job."
+        fi
         echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then push (or 'Re-run all jobs'): the request job must read the line to measure the counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
     - name: "Fail unless MeshWeaver.Plugins' reachable suites pass (or the break is declared)"
