@@ -1553,7 +1553,7 @@ def advance_one(gh: Gh, number: int, workflow: str, fallback_minutes: int, wait_
                                   files, commits, carried, read_reviews(gh, number))
         action, why = advance_action(pr, run, job, verdict)
     if action == "rerun":
-        if not post_rerun(gh, run["id"]):
+        if not post_rerun(gh, run["id"], RERUN_FAILED_JOBS):
             print(f"  #{number}: run {run['id']} was already re-run by another invocation")
             return "none"
         if verdict.loud:
@@ -1610,11 +1610,13 @@ def run_stage_advance(repo: str, workflow: str, *, pr: int | None, head_sha: str
     return 1 if errors else 0
 
 
-def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str) -> int:
+def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: str, gh=None) -> int:
     """The self-refresh job: exit 0 when it re-ran the read run or had nothing to do (both printed),
-    1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself."""
+    1 (RED, named) when it could not read or could not re-run. It never changes a verdict itself.
+    `gh` is the REST adapter (`Gh(repo)` when omitted); the self-test injects a stub so the POST this
+    caller actually issues — the whole-run `rerun`, never `rerun-failed-jobs` — is asserted end to end."""
     try:
-        gh = Gh(repo)
+        gh = gh if gh is not None else Gh(repo)
         own = gh.api(f"actions/runs/{run_id}")
         workflow_id = own.get("workflow_id") if isinstance(own, dict) else None
         if not workflow_id:
@@ -2642,6 +2644,39 @@ def self_test() -> int:
     ref_case("fork pull request -> manual, never a silent skip", "manual", "pull_request_review_comment", red_read,
              pr=dict(ref_pr, head={"sha": HEAD, "repo": {"full_name": "someone/MeshWeaver"}}), says="fork")
     ref_case("unreadable verdict time -> fail", "fail", "pull_request_review_comment", red_read, evaluated_at="", says="unreadable")
+
+    # ── the refresh CALLER end to end (#6329 review): drive run_refresh itself through a stub adapter and
+    # assert the POST it issues. Asserting refresh_action's wording alone would stay green if the call
+    # site dropped RERUN_WHOLE_RUN and fell back to `rerun-failed-jobs` — the #6315 403. The stub refuses
+    # exactly that endpoint, as GitHub did for a zero-job run.
+    class _RefreshGh:
+        def __init__(self, candidate):
+            self.candidate, self.posted = candidate, []
+        def api(self, path):
+            if path == "actions/runs/99":
+                return {"id": 99, "workflow_id": 5}
+            if path == "pulls/4649":
+                return ref_pr
+            if path.startswith("actions/workflows/5/runs?"):
+                return {"workflow_runs": [self.candidate]}
+            if path == f"actions/runs/{self.candidate['id']}":
+                return self.candidate
+            raise ReadError(f"unexpected GET {path}")
+        def post(self, path):
+            self.posted.append(path)
+            if path.endswith("/rerun-failed-jobs"):
+                raise ReadError(f"POST {path} failed (403)")
+    for name, candidate, expect_rc, expect_posted in [
+        ("run_refresh posts the WHOLE-run rerun for a red read run", red_read, 0, ["actions/runs/7/rerun"]),
+        ("run_refresh: zero-job cancelled read run -> whole-run rerun",
+         dict(red_read, conclusion="cancelled"), 0, ["actions/runs/7/rerun"]),
+        ("run_refresh: read run already green -> posts nothing", dict(red_read, conclusion="success"), 0, []),
+    ]:
+        stub = _RefreshGh(candidate)
+        rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request_review_comment", "99", "2026-10-07T10:00:00Z", gh=stub)
+        ok = rc == expect_rc and stub.posted == expect_posted
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} posted={stub.posted}")
 
     # the merge-queue ref → pull request number
     sha = "0123456789abcdef0123456789abcdef01234567"
