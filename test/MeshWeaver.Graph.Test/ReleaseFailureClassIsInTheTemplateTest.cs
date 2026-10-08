@@ -102,6 +102,69 @@ public class ReleaseFailureClassIsInTheTemplateTest
     }
 
     /// <summary>
+    /// 🚨 Distinct templates were not enough (#1549, second half): the incident watcher folds every
+    /// fingerprint of one log SITE into one issue, and a site is category + event id + exception type.
+    /// Every class shared event id 0, so after the templates split, a missing node and an
+    /// owner that reached no verdict still landed on #1549 as recurrences. Every class must therefore
+    /// log under an event id of its own, and none under 0.
+    ///
+    /// <para>Negative control, watched red: with the ids removed from the calls every class reports
+    /// event id 0 and this fails with one distinct id for every class.</para>
+    /// </summary>
+    [Fact]
+    public void EveryFailureClass_LogsUnderAnEventIdOfItsOwn()
+    {
+        var classes = Enum.GetValues<NodeTypeReleaseFailure>();
+        var ids = classes.Select(failure => (Failure: failure, Id: Log(failure, "reason").EventId)).ToArray();
+
+        ids.Should().OnlyContain(x => x.Id.Id != 0,
+            "event id 0 is the shared site every class used to fold into");
+        ids.Select(x => x.Id.Id).Distinct().Should().HaveCount(classes.Length,
+            "one event id per class, so one incident site per class. Shared: "
+            + string.Join(", ", ids.GroupBy(x => x.Id.Id).Where(g => g.Count() > 1)
+                .Select(g => string.Join("+", g.Select(x => x.Failure)))));
+        ids.Should().OnlyContain(x => x.Id.Name == $"NodeTypeRelease{x.Failure}",
+            "the id's name is the class, so a log line names its cause even where the template is not shown");
+    }
+
+    /// <summary>
+    /// 🚨 The ids are deployed incident SITES, so they are pinned exactly — never derived from the enum
+    /// ordinal (review on #6326). A class inserted mid-enum must not take a historical class's id, and
+    /// a new class must be given its own code: this test fails on a missing entry, a moved code, or a
+    /// reused one. Append a row when adding a class; never edit an existing row.
+    /// </summary>
+    [Fact]
+    public void TheEventIdOfEveryClass_IsPinned()
+    {
+        var pinned = new Dictionary<NodeTypeReleaseFailure, int>
+        {
+            [NodeTypeReleaseFailure.Unclassified] = 7400,
+            [NodeTypeReleaseFailure.NoNodeTypePath] = 7401,
+            [NodeTypeReleaseFailure.CompileDenied] = 7402,
+            [NodeTypeReleaseFailure.PermissionCheckFailed] = 7403,
+            [NodeTypeReleaseFailure.PermissionCheckNoVerdict] = 7404,
+            [NodeTypeReleaseFailure.NodeMissing] = 7405,
+            [NodeTypeReleaseFailure.OwnerUnreachable] = 7406,
+            [NodeTypeReleaseFailure.OwnerRecycling] = 7407,
+            [NodeTypeReleaseFailure.WriteDenied] = 7408,
+            [NodeTypeReleaseFailure.WriteRejected] = 7409,
+            [NodeTypeReleaseFailure.BaseStateNeverArrived] = 7410,
+            [NodeTypeReleaseFailure.HostTearingDown] = 7411,
+            [NodeTypeReleaseFailure.StorageUnavailable] = 7412,
+            [NodeTypeReleaseFailure.TransientHubFailure] = 7413,
+            [NodeTypeReleaseFailure.NoAnswerWithinBound] = 7414,
+            [NodeTypeReleaseFailure.HostLeaving] = 7415,
+        };
+
+        Enum.GetValues<NodeTypeReleaseFailure>().Should().OnlyContain(f => pinned.ContainsKey(f),
+            "every class needs a pinned code here — a class without one would log under the "
+            + "Unclassified site and fold into it");
+        foreach (var (failure, id) in pinned)
+            Log(failure, "reason").EventId.Id.Should().Be(id,
+                $"{failure}'s event id is a deployed incident site and must never move");
+    }
+
+    /// <summary>
     /// The fallback is NAMED and reached only by <see cref="NodeTypeReleaseFailure.Unclassified"/>.
     /// A fallback that some other class can also reach is a class that silently means "and
     /// everything else" — and then the bucket is back, just wearing a specific name.
@@ -313,7 +376,7 @@ public class ReleaseFailureClassIsInTheTemplateTest
             + "that logs two doubles every count built on it").Which;
     }
 
-    private sealed record Captured(LogLevel Level, string Template, string? Path, string? Message);
+    private sealed record Captured(LogLevel Level, string Template, string? Path, string? Message, EventId EventId);
 
     /// <summary>
     /// Captures the TEMPLATE, from <c>{OriginalFormat}</c> — not the formatted string. The formatted
@@ -336,7 +399,8 @@ public class ReleaseFailureClassIsInTheTemplateTest
                 logLevel,
                 Value(values, "{OriginalFormat}") ?? string.Empty,
                 Value(values, "Path"),
-                Value(values, "Message")));
+                Value(values, "Message"),
+                eventId));
         }
 
         private static string? Value(IReadOnlyList<KeyValuePair<string, object?>> values, string key)
