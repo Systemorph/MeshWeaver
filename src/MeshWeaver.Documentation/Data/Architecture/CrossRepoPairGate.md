@@ -861,17 +861,19 @@ Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemor
 
 | condition | why |
 |---|---|
-| the verdict is red on a MEASURED break (drift in named realms), not on missing evidence or a refused selection | a declaration excuses a break, never an absent measurement |
+| the verdict is red on a MEASURED break (drift in named realms), with NO missing evidence anywhere (per realm or top level) and not a refused selection; a green, too, must carry its summary, its Plugins run link and its integer counts | a declaration excuses a break, never an absent measurement |
 | the declared realms cover every realm the verdict names as broken | a break in an undeclared realm is an undeclared break |
-| the counterpart is OPEN in Systemorph/MeshWeaver.Plugins (never a fork), or already merged into its default branch | the adaptation must exist where Plugins' CI builds it |
+| the counterpart is OPEN in Systemorph/MeshWeaver.Plugins (never a fork), and it is the one this run's request job measured | once it merges, the default branch carries it and the main verdict itself must be green; a declaration added after the request was never measured |
 | the counterpart's OWN run — the same candidate and base, Plugins at the counterpart's head — is green | the adaptation is proven against the change it adapts to |
 | the semver consequence is IN the diff: `major` → `PlatformVersion`'s major increases; `minor` → its minor increases; `ceiling` → the compatibility epoch in `src/MeshWeaver.Compiler/platform-compatibility.json` increases | policy `platform-semver-versioning`: the major moves only on a declared break; a ceiling is how the [compatibility ladder](../PlatformCompatibilityLadder) declares one |
 
 The request job dispatches the counterpart's run beside the main one (key `<run>-<attempt>-c`, its own
 concurrency group) whenever the body names a counterpart — `Breaks-plugins:` first, otherwise a
 `Pairs-with:` pair ([Paired Change Sets](../PairedChangeSets)), where it stays informative. The body
-is read LIVE: add the line and re-run `Dependent suites (MeshWeaver.Plugins)`, then
-`Consolidate test results`. There is no label and no `none` form.
+is read again at decision time and held to what the request MEASURED: add the line, then push (or
+"Re-run all jobs") so the request job dispatches the counterpart's run — re-running only the decision
+job refuses, by name, a counterpart nobody measured. A malformed `Breaks-plugins:` line is refused by
+the request job before anything is dispatched. There is no label and no `none` form.
 
 ### How it works
 

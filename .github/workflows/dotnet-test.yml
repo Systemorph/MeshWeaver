@@ -4031,9 +4031,13 @@ jobs:
         # Exit 3 = NO verdict by the deadline (EXIT_NO_VERDICT): handed to the step below so silence
         # fails under its OWN name. Exit 1 = a verdict that is not green — the decision step reads it.
         if [ "$rc" = 3 ]; then echo "outcome=no-verdict" >> "$GITHUB_OUTPUT"; exit 0; fi
+        # The counterpart's silence is NOT the gate's silence: the decision step rejects a missing
+        # counterpart verdict when a Breaks-plugins declaration needs it, and ignores it for an
+        # advisory Pairs-with pair. So it never sets no-verdict here.
         if [ -n "${PLUGINS:-}" ]; then
-          wait_one "$KEY-c" "$RUNNER_TEMP/counterpart-verdict.json"; crc=$?
-          if [ "$crc" = 3 ]; then echo "outcome=no-verdict" >> "$GITHUB_OUTPUT"; exit 0; fi
+          wait_one "$KEY-c" "$RUNNER_TEMP/counterpart-verdict.json"
+          crc=$?
+          [ "$crc" != 3 ] || echo "::warning::the counterpart's run wrote no verdict in time — a Breaks-plugins declaration cannot rest on it"
         fi
         echo "outcome=verdict" >> "$GITHUB_OUTPUT"
         exit 0
@@ -4053,9 +4057,10 @@ jobs:
         COUNTERPART: ${{ needs.dependent-suites-dispatch.outputs.counterpart }}
       run: |
         set -euo pipefail
-        # The body is read LIVE: adding a Breaks-plugins line and re-running this job is the escape.
+        # The body is read LIVE, and held to what the request job MEASURED: a Breaks-plugins line added
+        # after the request is refused by name — push, or 'Re-run all jobs', so it is measured.
         gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
-        args=(--main-verdict "$RUNNER_TEMP/main-verdict.json" --pr-body-file "$RUNNER_TEMP/pr-body.md")
+        args=(--main-verdict "$RUNNER_TEMP/main-verdict.json" --pr-body-file "$RUNNER_TEMP/pr-body.md" --dispatched-counterpart "${COUNTERPART:-}")
         [ ! -f "$RUNNER_TEMP/counterpart-verdict.json" ] || args+=(--counterpart-verdict "$RUNNER_TEMP/counterpart-verdict.json")
         if [ -n "${COUNTERPART:-}" ]; then
           GH_TOKEN="$PLUGINS_TOKEN" gh api "repos/Systemorph/MeshWeaver.Plugins/pulls/$COUNTERPART" > "$RUNNER_TEMP/counterpart-pr.json"
@@ -4515,7 +4520,7 @@ jobs:
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && (needs.preflight.result != 'success' || needs.dependent-suites-dispatch.result != 'success' || needs.dependent-suites.result != 'success')
       run: |
         echo "::error::Dependent suites (MeshWeaver.Plugins): preflight '${{ needs.preflight.result }}', request '${{ needs.dependent-suites-dispatch.result }}', verdict '${{ needs.dependent-suites.result }}' — see the first that is not 'success'. That job names the realms this change breaks, the edge that selected each, and what is missing."
-        echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then re-run 'Dependent suites (MeshWeaver.Plugins)' and this job. Rationale: Doc/Architecture/CrossRepoPairGate."
+        echo "::error::A change that breaks MeshWeaver.Plugins merges only by DECLARING it on one line of the PR body — 'Breaks-plugins: <realm>[, <realm>…] — <what breaks> — counterpart Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>' — with that counterpart green against this candidate and the semver consequence in the diff. Then push (or 'Re-run all jobs'): the request job must read the line to measure the counterpart. Rationale: Doc/Architecture/CrossRepoPairGate."
         exit 1
     # The exemption's OTHER face: `preflight` is skipped on a pull request ONLY for the exempt events
     # (it has no other condition), so this names them without restating the predicate.

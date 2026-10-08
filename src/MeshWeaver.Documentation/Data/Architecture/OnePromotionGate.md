@@ -1,7 +1,7 @@
 ---
 Name: One Promotion Gate
 Category: Architecture
-Description: Never block a core merge, always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set on its platform verdict (no longer on MeshWeaver.Plugins' dependent suites for that exact pair, see Platform and Module Deploy). What changed on 2026-09-27, why, and where each piece lives.
+Description: A core merge waits on one cross-repository verdict only — the affected-only Plugins suites on the pull request (policy dependent-suites-affected-gate); always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set on its platform verdict (no longer on MeshWeaver.Plugins' dependent suites for that exact pair, see Platform and Module Deploy). What changed on 2026-09-27, why, and where each piece lives.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h10"/><path d="M10 6l6 6-6 6"/><rect x="17" y="4" width="3" height="16" rx="1"/></svg>
 ---
 
@@ -22,7 +22,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 |---|---|
 | ~~`core-merge-never-blocked`~~ → `dependent-suites-affected-gate` | SUPERSEDED. A core pull request now waits on ONE cross-repository verdict: MeshWeaver.Plugins' suites that the diff can REACH, per realm, against the candidate — or a declared break with a green counterpart ([Cross-Repo Pair Gate](../CrossRepoPairGate) → "The dependent's suites run against the candidate"). Only what is affected runs; the four-hour wait below was a merge-queue entry waiting on an unbounded run, which the affected-only selection and the refusal rule bound. |
 | `build-latest-green` | Every CI consumer — Plugins pull requests, Plugins `main`, the image build — takes the NEWEST GREEN core `main` build. A red core `main` falls back to the last green one, never forward into red. No pin to move for ordinary changes; the freeze variable `MW_PLATFORM_REF` stays for incidents. |
-| `one-promotion-gate` | The fleet rolls only to an ARMED set, and a set is armed only when MeshWeaver.Plugins' dependent suites passed against exactly the pair it was built from. That is the one place a cross-repository verdict decides anything. |
+| `one-promotion-gate` | The fleet rolls only to an ARMED set. A set is armed on its PLATFORM verdict (see the superseding note above — no Plugins verdict decides arming any more); the one place a MeshWeaver.Plugins verdict decides anything is now the pull request, under `dependent-suites-affected-gate`. |
 
 ## Why — measured on 2026-09-27
 
