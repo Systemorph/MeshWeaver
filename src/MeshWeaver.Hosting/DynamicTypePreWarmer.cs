@@ -434,7 +434,13 @@ public static class DynamicTypePreWarmer
             logger?.LogInformation(
                 "DynamicTypePreWarmer: {Key}=true — the type set is closed, no database NodeType is warmed",
                 ClosedTypeSet.ConfigKey);
-            return Observable.Empty<PreWarmOutcome>();
+            return Observable.Defer(() =>
+            {
+                PublishReport(mesh,
+                    NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion),
+                    NodeTypeBakeReportRegistry.CompilingSweep);
+                return Observable.Empty<PreWarmOutcome>();
+            });
         }
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         var workspace = mesh.GetWorkspace();
@@ -634,7 +640,9 @@ public static class DynamicTypePreWarmer
         // so there is nothing to probe — the empty report is the true one, not a failure to read.
         if (mesh.ServiceProvider.IsClosedTypeSet())
             return Observable.Return(
-                NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion));
+                    NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion))
+                .Do(report => PublishReport(
+                    mesh, report, NodeTypeBakeReportRegistry.AdoptOnlyProbe));
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
 
         // System-scoped for the same reason the sweep is: enumerating NodeType definitions across
