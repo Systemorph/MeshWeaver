@@ -1297,6 +1297,30 @@ public partial class MeshOperations
         var reference = new UnifiedReference(remainder);
         var address = !string.IsNullOrEmpty(addressPart) ? new Address(addressPart) : hub.Address;
 
+        // 🚨 A UNIFIED PATH THAT NAMES NO NODE IS NEVER READ FROM THE ROUTER (#5937). With no address
+        // part — `content/x.md`, `schema/`, `layoutAreas/` from a chat with no context — the read
+        // falls back to THIS hub's own address, and for the agent/AI surface this facade's hub is
+        // the DI-injected root mesh hub. The read was then a self-read on the ROUTER: posted from
+        // `mesh/{id}` AND addressed at it, so HandleGetDataRequest ran on the routing action block
+        // and its GetDataResponse was posted from and to the router (production, memex, five pods
+        // 2026-10-01..06: `GetDataRequest … sender AND target` from this method, and
+        // `GetDataResponse … sender AND target` from DataExtensions.HandleGetDataRequest). The
+        // read seam cannot help: hopping only the sender would leave the router the TARGET, and
+        // portal/reads-{meshId} registers no handlers, so it could never answer in its place.
+        //
+        // The defect is the DEFAULT, not the hop: the router is not a node and owns nothing a
+        // unified path can name (it answered `content/…` with "collection not found", `data/` with
+        // null, `layoutAreas/` with [] and `schema/` with the bare MeshNode schema every node's own
+        // `{node}/schema/MeshNode` returns as well). So a target that is a mesh hub is answered here, without
+        // a delivery, with the documented shape the caller has to use. A per-node / session /
+        // portal facade keeps its own-hub meaning untouched — the check is on the TARGET's type,
+        // which also covers an explicit `mesh/{id}/schema/…`.
+        if (string.Equals(address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
+            return Observable.Return<string?>(
+                $"Error: '{resolvedPath}' names no node — a unified path is "
+                + $"'{{nodePath}}/{remainder}' (e.g. '@Org/Project/{remainder}'); the mesh root is not a "
+                + "node and is never the target of a read.");
+
         // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub — but ONLY when the read actually LEAVES
         // this hub, and that is decided by the resolved TARGET, never by whether an address part was
         // written. A UCR may address this very hub EXPLICITLY (`mesh/{id}/$area/…` parses an
@@ -1308,6 +1332,9 @@ public partial class MeshOperations
         // answer. Comparing the resolved address is the same structural exclusion the lifecycle
         // ratchet makes for a self-directed post — a rule whose remedy is nonsense at a site must
         // not be applied there. (Copilot on #4487; the emptiness test was the first spelling.)
+        // Since #5937 the self-directed branch is reached only by a NON-router hub (a per-node,
+        // session or portal facade reading itself): a mesh-typed target, explicit or defaulted, is
+        // answered above without any delivery, so the router never executes this read.
         //
         // Spelled as the seam CALL rather than through the cached `ReadHub` property deliberately:
         // the receiver of a post is what RouterAsRouterCapableReceiverRatchetGuard reads, and a

@@ -92,7 +92,7 @@ jobs:
                 --color B60205 --force || echo "::warning::could not ensure the control-lag label (continuing — the issue is the alarm, not the label)"
               body="🚨 [run ${GITHUB_RUN_ID}](${RUN_URL}) — policy \`control-always-latest\`: ${SENTENCE}.
 
-          Control is declared in \`.github/control-instance.json\`. Read, in order: did \`main-cd\`'s **Deploy control first** job tag \`memex-control:<version>\`; did that job's **Hand the build to control's roll lane** step store a VERIFIED \`self-update-available\` at the control plane; did the \`Roll\` run on the control instance (\`Hosting/InstanceAction\`, and whether it parked at an approval — the control record carries no \`rollGate\`); did the migration Job complete. This issue closes itself on the first reading that finds control on the newest build."
+          Control is declared in \`.github/control-instance.json\`. Read, in order: did \`main-cd\`'s **Deploy control first** job tag \`memex-control:<version>\`; did that job's **Hand the build to control's roll lane** step store a VERIFIED \`self-update-available\` at the control plane (a 200 is NOT a roll: the router drops an announcement whose \`deployment\` names no record that plane holds — does it hold \`Deployments/control\`?); did the \`Roll\` run on the control instance (\`Hosting/InstanceAction\`, and whether it parked at an approval — the control record carries no \`rollGate\`); did the migration Job complete. This issue closes itself on the first reading that finds control on the newest build."
               if [ -n "$existing" ]; then
                 gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
               else

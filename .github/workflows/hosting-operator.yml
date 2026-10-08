@@ -198,6 +198,11 @@ jobs:
           # hosting-operator:main, for the same reason as hosting-migrate above.
           hosting-kv-status          secrets-write-only-entry — ships and is behaviour-tested; the plan half is the Plugins secret-status action
           hosting-kv-state           secrets-write-only-entry — ships and is behaviour-tested; the plan half is the Plugins secret-lifecycle action
+          #
+          # hosting-kv-synced (MeshWeaver.Plugins#2778) is the same shape: the Reconcile's SyncVaultKeys
+          # remedy that emits it is the Plugins half, which merges after this image is on
+          # hosting-operator:main; the line moves up into the plan list once it has.
+          hosting-kv-synced          Plugins#2778 — ships and is behaviour-tested; the plan half is the Plugins Reconcile SyncVaultKeys remedy
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do

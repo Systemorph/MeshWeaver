@@ -492,6 +492,24 @@ Pinned by `AHeldReadIsToldWhenItsEntryIsTornDownTest`. On the shipped shape, bot
 
 **What #5011 does NOT owe to this.** `AKilledOwnerSiloIsReactivatedByItsHoldersTest` (Orleans, two silos) measures the case the issue's leading hypothesis named. The owner lives on silo B, silo A holds its stream open with no other traffic, and B is killed (`KillSiloAsync`). The held stream's heartbeat re-activates the owner on A within about a second. Its negative control confirms that the heartbeat is the mechanism: push the heartbeat past the budget and the owner stays dark for the full 45 s. Two limits apply. `KillSiloAsync` still writes `Stopping`/`Dead` to the membership table (Orleans' `MembershipAgent` does so on an ungraceful stop), so the test cannot show a SIGSEGV'd silo that leaves its row `Active` for the survivors to vote out. And it says nothing about a cluster where too few live silos remain to cast the death votes.
 
+### A long-lived editor on a leaving process COMPLETES rather than faults (#5958)
+
+The disposal terminal reaches every reader that is still open, including a node editor in a Blazor
+circuit on a pod being replaced. memex-cloud logged `MeshNodeEditorView: Error streaming node at
+path …` with this `ObjectDisposedException` five times. Each sighting was on a different pod, and
+each fell inside a Roll or Restart of that instance (`Ops/Actions` on the control instance: the
+ci-9701 and ci-9758 rolls and three self-update restarts). The cache is disposed with the mesh at
+the end of host shutdown, so the editor was not reading a cache that someone had thrown away. Its
+process was leaving.
+
+`MeshNodeEditor` now tells the two cases apart with the framework's own predicate. If the fault
+carries an `ObjectDisposedException` and the editor's hub `IsLeaving()` (the hub is shutting down,
+or `IHostApplicationLifetime.ApplicationStopping` has fired), the editor's stream completes.
+Otherwise it errors as before. A disposed cache under a live process is still a defect and still
+surfaces as one. Pinned by `ANodeEditorOpenAcrossProcessShutdownTest`. Its leaving arm fails with
+the production exception when the classification is removed, and its negative control disposes the
+cache under a process that is not leaving and requires the error.
+
 ## A delete tombstone is superseded at the recreate's commit — before `Created` is published
 
 The one read failure a reader is *designed not to retry* is the delete tombstone's verdict: `No node found at '…' — the node was deleted, so this address will not reactivate`. A hub that is going down because its node was **deleted** NACKs an abandoned delivery with that authoritative `NotFound` (instead of the transient `ShuttingDown` a recycling hub answers), and the classifier here turns it into a definitive absence — the stream terminates, the negative entry is recorded, and by contract the caller stops. The verdict is read off `RecentlyDeletedRegistry` (`IAddressTombstones`), which the **delete marks synchronously** before its response returns.

@@ -3,6 +3,7 @@
 #                   [--db-connection <vault object> --db-host <fqdn> --db-port <n> --db-user <user>
 #                    --db-name <database> --db-password-secret <vault object>]
 #                   [--skip-registry-key | --registry-key-vault <name> --registry-key-object <object>]
+#                   [--values-half <release>]
 #
 # Make sure the per-instance Key Vault secrets EXIST, and mint the ones only this step can mint.
 #
@@ -30,6 +31,7 @@ HOSTING_CMD="hosting-kv-ensure"
 vault="" prefix="" namespace=""
 db_connection="" db_host="" db_port="" db_user="" db_name="" db_password_secret=""
 skip_registry_key=false registry_key_vault="" registry_key_object=""
+values_half=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)              vault="${2:-}";              shift 2 ;;
@@ -44,6 +46,7 @@ while [ $# -gt 0 ]; do
     --skip-registry-key)   skip_registry_key=true;       shift ;;
     --registry-key-vault)  registry_key_vault="${2:-}"; shift 2 ;;
     --registry-key-object) registry_key_object="${2:-}"; shift 2 ;;
+    --values-half)         values_half="${2:-}";         shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -63,6 +66,7 @@ hosting::safe_name namespace "$namespace"
 [ -z "$db_password_secret" ] || hosting::safe_name db-password-secret "$db_password_secret"
 [ -z "$registry_key_vault" ] || hosting::safe_name registry-key-vault "$registry_key_vault"
 [ -z "$registry_key_object" ] || hosting::safe_name registry-key-object "$registry_key_object"
+[ -z "$values_half" ] || hosting::safe_name values-half "$values_half"
 if [ "$skip_registry_key" = true ] && { [ -n "$registry_key_vault" ] || [ -n "$registry_key_object" ]; }; then
   hosting::die "--skip-registry-key cannot be combined with --registry-key-vault or --registry-key-object"
 fi
@@ -174,6 +178,73 @@ if [ -n "$db_connection" ]; then
       hosting::log "created ${db_connection} in vault ${vault} (read back by id)"
       created=$((created + 1))
       hosting::say kv_db_connection created
+    fi
+  fi
+fi
+
+# ── the helm VALUES HALF (Memex#648) ──────────────────────────────────────────────────────────
+# Only when the plan names a release (--values-half <release>): the record declares
+# `vaultValuesKeys`, so hosting-deploy --vault REQUIRES helm-values-<release> and refuses without
+# it — and on an external database with AdoNet clustering (every multi-replica instance) the chart
+# itself refuses to render without secrets.memex_portal.ConnectionStrings__memex
+# (deploy/helm/templates/_database.tpl, memex.orleansConnectionString). Nothing composed that
+# object: on 2026-09-26 the control instance's Provision stopped at 'Deploy release' and a PERSON
+# built helm-values-control with az from control-db-connection and the server password.
+#
+# Composed here only when ABSENT — never rewritten, the master-key rule again: a captured half may
+# carry keys this step knows nothing about (AI provider keys, OAuth secrets), and replacing it would
+# drop them. The content is the minimal half the chart needs for an external database, families
+# only (hosting-deploy refuses structure, Memex#295):
+#   secrets.memex_portal.{ConnectionStrings__memex, memex_postgres_password}
+#   secrets.memex_migration.{ConnectionStrings__memex, memex_postgres_password}
+# ConnectionStrings__orleans is deliberately NOT written: the chart derives it from the mesh string
+# (`;Search Path=orleans`) by its ONE rule in memex.orleansConnectionString, and a second copy here
+# would be a second rule that can drift. The connection string is the db-connection object's own
+# value (just composed above, or the existing one — a hand-written string stays authoritative); the
+# password is the server's admin password object. Both are read into files and reach the JSON
+# through jq --rawfile: no value is ever on an argv, printed or reported. JSON, not YAML, because jq
+# quotes every byte a password can hold; helm reads JSON values and hosting-deploy's key reader
+# accepts a JSON object.
+if [ -n "$values_half" ]; then
+  half_name="helm-values-${values_half}"
+  if kv_exists "$half_name"; then
+    hosting::log "keep    ${half_name} (exists — never rewritten: a captured half may carry keys this step does not know)"
+    kept=$((kept + 1))
+    hosting::say kv_values_half kept
+  else
+    [ -n "$db_connection" ] && [ -n "$db_password_secret" ] \
+      || hosting::die "${half_name} is absent from vault ${vault} and cannot be composed: --values-half needs --db-connection and --db-password-secret (the mesh connection string and the server's admin password it is composed from). Nothing was written."
+    hosting::log "create  ${half_name} (secrets.memex_portal / secrets.memex_migration: ConnectionStrings__memex from ${db_connection}, memex_postgres_password from ${db_password_secret}; orleans derived by the chart)"
+    if hosting::dry; then
+      created=$((created + 1))
+      hosting::say kv_values_half would-create
+    else
+      umask 077
+      half_dir="$(mktemp -d)"
+      trap 'rm -rf "$half_dir" "${db_file:-}"' EXIT
+      az keyvault secret show --vault-name "$vault" --name "$db_connection" --query value -o tsv > "$half_dir/cs" 2>/dev/null \
+        || hosting::die "could not read ${db_connection} from vault ${vault} — the connection string ${half_name} is composed from. Nothing was written."
+      az keyvault secret show --vault-name "$vault" --name "$db_password_secret" --query value -o tsv > "$half_dir/pw" 2>/dev/null \
+        || hosting::die "could not read ${db_password_secret} from vault ${vault} — the server password ${half_name} carries. Nothing was written."
+      # az -o tsv ends the value with a newline; the value itself never does.
+      for f in cs pw; do
+        printf '%s' "$(cat "$half_dir/$f")" > "$half_dir/$f.v"
+        [ -s "$half_dir/$f.v" ] || hosting::die "a value ${half_name} is composed from is EMPTY (${f}) — a half with a blank connection string fails at silo start with nothing naming this step. Nothing was written."
+      done
+      jq -n --rawfile cs "$half_dir/cs.v" --rawfile pw "$half_dir/pw.v" \
+        '{secrets: {memex_portal: {ConnectionStrings__memex: $cs, memex_postgres_password: $pw},
+                    memex_migration: {ConnectionStrings__memex: $cs, memex_postgres_password: $pw}}}' \
+        > "$half_dir/half.json" \
+        || hosting::die "could not compose ${half_name} (jq). Nothing was written."
+      rm -f "$half_dir/cs" "$half_dir/pw" "$half_dir/cs.v" "$half_dir/pw.v"
+      az keyvault secret set --vault-name "$vault" --name "$half_name" --file "$half_dir/half.json" --output none \
+        || hosting::die "could not create ${half_name} in vault ${vault}. Nothing was written."
+      rm -rf "$half_dir"
+      kv_exists "$half_name" \
+        || hosting::die "${half_name} was written to vault ${vault} but cannot be found back — refusing to report a values half hosting-deploy will not find"
+      hosting::log "created ${half_name} in vault ${vault} (read back by name)"
+      created=$((created + 1))
+      hosting::say kv_values_half created
     fi
   fi
 fi

@@ -235,6 +235,29 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         or SelfUpdateOutcome.MigrationUnavailable
         or SelfUpdateOutcome.HandedOver or SelfUpdateOutcome.HandoverFailed;
 
+    /// <summary>
+    /// 🚨 True when this verdict is a FAILURE of the update path — the check faulted or produced
+    /// nothing, a release could neither be applied nor handed over, a migration refused the roll, a
+    /// landed module can never be activated, or the install's own tag no longer resolves. The ONE
+    /// classification: the reporting site logs exactly these at Warning, records it on
+    /// <c>Admin/UpdatePolicy.lastCheckFailed</c>, and the <c>self_update</c> entry on <c>/health</c>
+    /// reads Degraded on it (policy <c>control-first-never-silent</c>) — so the three surfaces can
+    /// never disagree about whether an instance's self-update is failing.
+    /// </summary>
+    public bool IsFailure => Outcome is SelfUpdateOutcome.NoOutcome
+                                 or SelfUpdateOutcome.CheckFailed
+                                 // An install whose own tag no longer resolves cannot start a new pod (#3543).
+                                 or SelfUpdateOutcome.InstalledTagWithdrawn
+                                 // A landed module nothing will ever activate (#3650).
+                                 or SelfUpdateOutcome.RestartUnavailable
+                                 // A release this install could neither apply nor hand over (#4098).
+                                 or SelfUpdateOutcome.HandoverFailed
+                                 or SelfUpdateOutcome.RestartHandoverFailed
+                                 // A roll the schema refused: the install stays behind until someone acts.
+                                 or SelfUpdateOutcome.MigrationFailed
+                                 or SelfUpdateOutcome.MigrationUnavailable
+                             || UnresolvedInstalledTag is not null;
+
     /// <summary>The policy says never update.</summary>
     public static SelfUpdateVerdict UpdatesDisabled() => new(
         SelfUpdateOutcome.UpdatesDisabled,

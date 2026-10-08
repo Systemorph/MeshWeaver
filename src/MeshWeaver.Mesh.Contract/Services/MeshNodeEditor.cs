@@ -174,7 +174,21 @@ public sealed class MeshNodeEditor : IMeshNodeEditor
         activeSub?.Dispose();
         activeSub = workspace.GetMeshNodeStream(CurrentPath).Subscribe(
             n => node.OnNext(n),
-            ex => node.OnError(ex));
+            ex =>
+            {
+                // 🚨 THE PROCESS LEAVING IS THE END OF THE STREAM, NOT A FAULT OF IT (#5958). The
+                // node-stream cache is a mesh singleton that is disposed with the mesh, and it ends
+                // every live read with an ObjectDisposedException (#5011) — which is right for a
+                // read that ARRIVES after it is gone, and is also what every long-lived editor still
+                // open on a terminating pod receives during a roll. memex-cloud logged it as
+                // "Error streaming node" five times, every one inside a Roll/Restart window. Only
+                // when THIS hub is leaving is the disposal the end of the editor's own lifetime;
+                // a disposed cache under a live hub stays the defect it is and keeps erroring.
+                if (ExceptionChain.Contains<ObjectDisposedException>(ex) && hub.IsLeaving())
+                    node.OnCompleted();
+                else
+                    node.OnError(ex);
+            });
     }
 
     /// <inheritdoc />

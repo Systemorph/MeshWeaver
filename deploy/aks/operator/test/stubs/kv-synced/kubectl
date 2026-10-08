@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-kv-synced's behaviour tests (MeshWeaver.Plugins#2778). It answers
+# the synced Secret, the Deployment and its pods from small generated documents and records every
+# invocation in $HOSTING_KS_STATE/log. Not a mock of kubectl: what is asserted is the command's
+# DECISIONS — wait for a key the CSI driver has not synced yet, restart only when a running pod
+# started before the Secret's last data write, never read or print a value.
+#
+#   HOSTING_KS_STATE          directory: log, reads (secret-read counter), restarted
+#   HOSTING_KS_KEYS           space-separated keys the Secret carries from the first read
+#   HOSTING_KS_LATE_KEYS      keys that appear only from read number HOSTING_KS_LATE_AFTER (default 2)
+#   HOSTING_KS_WRITTEN        the Secret's last data write (managedFields f:data time)
+#   HOSTING_KS_POD_STARTS     space-separated pod start times (status.startTime)
+#   HOSTING_KS_SECRET_FORBIDDEN=1   every secret read answers Forbidden
+set -uo pipefail
+state="${HOSTING_KS_STATE:?the kv-synced kubectl stub needs HOSTING_KS_STATE}"
+printf 'kubectl %s\n' "$*" >> "$state/log"
+[ "${1:-}" = "-n" ] && shift 2
+case "${1:-} ${2:-}" in
+  "get secret")
+    if [ "${HOSTING_KS_SECRET_FORBIDDEN:-0}" = "1" ]; then
+      echo "Error from server (Forbidden): secrets \"${3:-}\" is forbidden: User cannot get resource" >&2; exit 1
+    fi
+    n=$(( $(cat "$state/reads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$state/reads"
+    keys="${HOSTING_KS_KEYS:-}"
+    [ "$n" -ge "${HOSTING_KS_LATE_AFTER:-2}" ] && keys="$keys ${HOSTING_KS_LATE_KEYS:-}"
+    data="{}"
+    for k in $keys; do data="$(printf '%s' "$data" | jq -c --arg k "$k" '. + {($k): "ZmFrZS1ub3QtYS12YWx1ZQ=="}')"; done
+    jq -n --argjson data "$data" --arg w "${HOSTING_KS_WRITTEN:-2026-09-26T19:30:00Z}" --arg n "${3:-}" '{
+      kind: "Secret", metadata: {name: $n, creationTimestamp: "2026-09-01T00:00:00Z",
+        managedFields: [ {manager: "kubectl", time: "2026-09-01T00:00:00Z", fieldsV1: {"f:metadata": {}}},
+                         {manager: "secrets-store-csi-driver", time: $w, fieldsV1: {"f:data": {}}} ]},
+      data: $data }' ;;
+  "get deployment")
+    echo '{"kind":"Deployment","spec":{"selector":{"matchLabels":{"app":"memex-portal"}}}}' ;;
+  "get pods")
+    starts="${HOSTING_KS_POD_STARTS:-}"
+    items="[]"; i=0
+    for t in $starts; do
+      i=$((i + 1))
+      items="$(printf '%s' "$items" | jq -c --arg t "$t" --arg n "memex-portal-deployment-abc-$i" '. + [{metadata: {name: $n}, status: {startTime: $t}}]')"
+    done
+    jq -n --argjson items "$items" '{kind: "List", items: $items}' ;;
+  "rollout restart")
+    touch "$state/restarted"; echo "deployment.apps/${3:-} restarted" ;;
+  *) echo "kubectl stub (kv-synced): unexpected invocation: $*" >&2; exit 1 ;;
+esac

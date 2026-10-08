@@ -250,8 +250,26 @@ public sealed class DynamicTypePreWarmerHostedService(
             // registered ProcessBootClock, so a stamp the census reports as since-boot is exactly
             // one the bind path refuses to heal. A mesh that registered no clock keeps the
             // service's own start as before.
-            _liveCensus = DynamicTypePreWarmer.ObserveLiveRecordCensus(
-                    mesh, mesh.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc ?? startedAt, logger)
+            // 🚨 #6183 — WATCHED, not observed once: a transient infrastructure fault (a connection
+            // reset mid-read, a connect timeout, the fan-in's stall terminal) RE-OPENS the watch,
+            // bounded, instead of ending it for the process's life. Each re-open is RECORDED on the
+            // census first, so /health degrades for the gap instead of printing a frozen reading as
+            // current; the next reading clears it. A fault of any other class, or the re-open
+            // budget spent, reaches the terminal arm below exactly as before.
+            _liveCensus = DynamicTypePreWarmer.WatchLiveRecordCensus(
+                    mesh, mesh.ServiceProvider.GetService<ProcessBootClock>()?.StartedAtUtc ?? startedAt,
+                    (ex, attempt, wait) =>
+                    {
+                        census.RecordLiveRecordsFault(
+                            $"{ex.GetType().Name} interrupted the catalog subscription — re-opening "
+                            + $"({attempt}/{StandingWatchRecovery.DefaultMaxConsecutive}) in {wait.TotalSeconds:0}s");
+                        logger.LogWarning(ex,
+                            "DynamicTypePreWarmer: the live NodeType-record census was interrupted by a "
+                            + "TRANSIENT fault — re-opening it ({Attempt}/{Max}) in {Wait}. /health's "
+                            + "bake-report degrades until the next reading lands (#6183)",
+                            attempt, StandingWatchRecovery.DefaultMaxConsecutive, wait);
+                    },
+                    logger)
                 .Subscribe(
                     census.RecordLiveRecords,
                     ex =>
