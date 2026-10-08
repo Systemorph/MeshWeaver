@@ -262,15 +262,15 @@ internal class RoutingGrain(
             // this silo has accepted and must let land before it stops (#2638). Labelled so the
             // shutdown residual can NAME it if it never lands (#2833).
             //
-            // 🚨 QUEUED, not running (#5703): the leg may wait behind every earlier leg of its channel
-            // before its own timeouts start, so its start is stamped when the drain hands it to the
-            // pool — a queue wait must never read as a leaked slot.
+            // 🚨 QUEUED, not dispatched (#5703): the leg may wait behind every earlier leg of its channel,
+            // so its dispatch is stamped when the drain hands it to the pool — a queue wait must never
+            // read as a leaked slot.
             var slot = quiescence?.TrackQueued($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
                 orderingKey,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
-                () => slot?.MarkRunning(),
+                () => slot?.MarkDispatched(),
                 () =>
                 {
                     SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));

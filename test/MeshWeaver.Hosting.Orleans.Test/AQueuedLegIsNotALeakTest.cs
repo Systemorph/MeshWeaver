@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// queue 61 on one stream channel. A stream-routed leg was tracked from the moment it was ENQUEUED,
 /// so a leg queued behind sixty healthy two-second round trips of its own stream carried an age of
 /// two minutes before its own timeouts had even started, and the level rule (age against
-/// <see cref="RoutingSaturationReport.LegSelfBound"/>, a bound on RUNNING time) read the queue as a
+/// <see cref="RoutingSaturationReport.LegSelfBound"/>, a bound on the time since a leg got its turn) read the queue as a
 /// leak.
 ///
 /// <para>Driven through the real pieces the routing grain wires together — <see cref="IoPool"/>,
@@ -69,7 +69,7 @@ public class AQueuedLegIsNotALeakTest
         RoutingQuiescence quiescence, OrderedRouteDispatcher dispatcher, int id, IObservable<Unit> leg)
     {
         var slot = quiescence.TrackQueued($"stream-routed → {Channel} (delivery {id:000})");
-        dispatcher.Enqueue(Channel, Stream, leg, () => slot.MarkRunning(), slot.Dispose);
+        dispatcher.Enqueue(Channel, Stream, leg, () => slot.MarkDispatched(), slot.Dispose);
     }
 
     [Fact(Timeout = 120_000)]
@@ -83,7 +83,7 @@ public class AQueuedLegIsNotALeakTest
         var started = new int[gates.Length];
         try
         {
-            // Three frames of ONE stream, accepted together: one running, two queued behind it.
+            // Three frames of ONE stream, accepted together: one dispatched, two queued behind it.
             for (var i = 0; i < gates.Length; i++)
                 Route(quiescence, dispatcher, i, GatedLeg(started, i, gates[i]));
             Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref started[0]) == 1, TestTimeouts.Quick),
@@ -97,23 +97,23 @@ public class AQueuedLegIsNotALeakTest
                 "the second leg starts once the head has terminated — one leg per channel");
             UntilTheMonotonicClockMoves();
 
-            var running = quiescence.OldestInFlight();
+            var dispatched = quiescence.OldestInFlight();
             var queued = quiescence.OldestQueued();
             var sample = quiescence.InFlightSample().Labels;
             var sinceHeadLanded = Stopwatch.GetElapsedTime(headLanded);
 
-            running.Should().NotBeNull();
-            running!.Value.Label.Should().Be($"stream-routed → {Channel} (delivery 001)",
-                "the running leg is the one that just started — the head has landed");
+            dispatched.Should().NotBeNull();
+            dispatched!.Value.Label.Should().Be($"stream-routed → {Channel} (delivery 001)",
+                "the dispatched leg is the one that just got its turn — the head has landed");
             queued.Should().NotBeNull();
             queued!.Value.Label.Should().Be($"stream-routed → {Channel} (delivery 002)",
                 "the third frame is still waiting behind the second, and is reported AS waiting");
 
             // 🚨 The defect: leg 001 was accepted at the same moment as leg 002, before the head ran.
             // Measured from acceptance its age includes the head's whole run; measured from its START
-            // it does not. The level rule bounds RUNNING time, so it must be fed the second.
-            running.Value.Age.Should().BeLessThanOrEqualTo(sinceHeadLanded,
-                "a leg's age for the leak verdict is how long it has RUN; leg 001 started only after the "
+            // it does not. The level rule bounds the time since dispatch, so it must be fed the second.
+            dispatched.Value.Age.Should().BeLessThanOrEqualTo(sinceHeadLanded,
+                "a leg's age for the leak verdict runs from its DISPATCH; leg 001 was dispatched only after the "
                 + "head landed, so its age cannot exceed the time since then — measured from acceptance it "
                 + "would carry the head's whole run as well, which is exactly what read a two-minute queue "
                 + "as a leaked slot");
@@ -122,8 +122,8 @@ public class AQueuedLegIsNotALeakTest
                 + "reported, it just decides nothing");
 
             sample.Should().Contain(l => l.StartsWith($"stream-routed → {Channel} (delivery 002)")
-                    && l.EndsWith("(queued, not started)"),
-                "the shutdown residual must be able to say a leg never started, not just how long it was held");
+                    && l.EndsWith("(queued, not dispatched)"),
+                "the shutdown residual must be able to say a leg was never dispatched, not just how long it was held");
         }
         finally
         {
@@ -133,7 +133,7 @@ public class AQueuedLegIsNotALeakTest
 
     /// <summary>
     /// The control that keeps the fix from becoming a blind spot: a head leg that never terminates is
-    /// still the oldest RUNNING leg, its age still grows from its own start, and the level rule
+    /// still the oldest dispatched leg, its age still grows from its own dispatch, and the level rule
     /// still reaches Critical on it — nothing queued behind it can mask it.
     /// </summary>
     [Fact(Timeout = 120_000)]
@@ -158,10 +158,10 @@ public class AQueuedLegIsNotALeakTest
             first!.Value.Label.Should().Be($"stream-routed → {Channel} (delivery 000)");
             Assert.True(
                 SpinWait.SpinUntil(() => quiescence.OldestInFlight()!.Value.Age > first.Value.Age, TestTimeouts.Quick),
-                "a stuck head's running age grows — it is the leak reading, and it stays visible");
+                "a stuck head's age since dispatch grows — it is the leak reading, and it stays visible");
             Volatile.Read(ref started[1]).Should().Be(0, "nothing overtakes a stuck head on its own channel");
             RoutingSaturationReport.SaturationLevel(RoutingSaturationReport.LegSelfBound)
-                .Should().Be(LogLevel.Critical, "a running leg past its own bounds is still the one Critical");
+                .Should().Be(LogLevel.Critical, "a dispatched leg past its own bounds is still the one Critical");
         }
         finally
         {

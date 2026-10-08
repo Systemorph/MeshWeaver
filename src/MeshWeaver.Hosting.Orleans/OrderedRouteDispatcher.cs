@@ -189,9 +189,9 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
 
     /// <summary>
     /// <see cref="Enqueue(string, string?, IObservable{Unit}, Action)"/>, plus a callback for the
-    /// moment the leg STARTS — when the drain hands it to the pool, after every earlier leg of its
-    /// channel has terminated. That is when the leg's own timeouts begin, so it is the start a leak
-    /// verdict has to measure from, never the enqueue (#5703).
+    /// moment the leg is DISPATCHED — when the drain hands it to the pool, after every earlier leg of
+    /// its channel has terminated. From then on it waits on no other leg (only, possibly, on a pool
+    /// thread), so that is the moment a leak verdict measures from, never the enqueue (#5703).
     /// </summary>
     /// <param name="destination">The target address path; half the FIFO key.</param>
     /// <param name="orderingKey">The payload identity — see the other overload.</param>

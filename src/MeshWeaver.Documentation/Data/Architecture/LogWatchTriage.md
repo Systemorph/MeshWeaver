@@ -1215,7 +1215,7 @@ there is over-serialisation rather than one slow leg** — see
 both spellings, which is the only way to tell which image produced which sample.
 
 🚨 **And the one field to read BEFORE deciding whether a crossing is a fault at all is
-`oldest leg running`** (spelled `oldest leg in flight` on images before #5703, where it was measured
+`oldest leg dispatched`** (spelled `oldest leg in flight` on images before #5703, where it was measured
 from ACCEPTANCE and so counted a frame's wait behind its own stream as age — a two-minute "leak" on such
 an image can be a deep queue of healthy legs). The depth and the in-flight count cannot tell a busy silo from one holding a
 slot that will never be released; the line's own advice for that — *a later line with a higher episode
