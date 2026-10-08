@@ -229,6 +229,23 @@ And a regression already recorded on a type whose node then disappears is **with
 same bucket (`RetireRegression`), cascading to its derived verdicts exactly like a retraction — it is
 not laundered into a recovery. Pinned by `ARetiredNodeTypeIsNotARegressionTest`.
 
+### The compile log follows the same verdict (#5219)
+
+The bake gate was not the only reader of a retired type's failure. The compile pipeline's single
+reporting funnel (`MeshNodeCompilationService` → `CompileDiagnostics.ReportCompileFailure`) logged
+**every** failure at `Error`, before and regardless of the classification above. So the red-log
+watcher kept ticketing a retirement the gate had already called "not a regression". `Crm/Client` on
+memex.systemorph.com did this on every pod boot (incident `0e19a398d30973fc`, 2,206 occurrences by
+2026-10-08) while that instance's own `/health` read *"1 retired by their repository — Crm/Client"*.
+
+The level is now chosen by the same `PendingRetirement` predicate `ClassifyCompileFailure` branches on
+first. A retired type's failure is reported at **Warning**, with a second line that names the stamp
+and says it is expected until the instances are retyped or deleted. Every other failure stays at
+**Error**. The compile's ActivityLog still records the full diagnostics as a failed compile. This
+does not complete a retirement: the held instances still have to be retyped or deleted, and the next
+sync then prunes the type. Pinned by `ARetiredTypesCompileFailureIsNotAnErrorTest`, including a source
+guard that fails if the funnel ever logs the report directly again.
+
 ## Hole C — occupancy is not registration
 
 The predicate above asked `IStorageAdapter.Exists`. That answers *"is a node there"*, and the two
