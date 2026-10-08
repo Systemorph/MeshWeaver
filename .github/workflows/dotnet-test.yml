@@ -4068,7 +4068,17 @@ jobs:
         echo "outcome=verdict" >> "$GITHUB_OUTPUT"
         exit 0
     # 🚨 STILL RED — silence is never a pass. The step name is also what merge-queue-steward.py
-    # (DEPENDENT_NO_VERDICT_STEP) matches, dormant while the queue is off: rename one, rename both.
+    # (DEPENDENT_NO_VERDICT_STEP) matches, dormant while the queue is off — AND what
+    # MeshWeaver.Plugins' scripts/core-candidate-requester.py (NO_VERDICT_STEP) reads to decide that
+    # this waiter is RESUMABLE: rename one, rename all three. That script also reads the DECIDE step
+    # below ("Compatible, or a declared break?", DECIDE_STEP): only that step having RUN counts as an
+    # answer, so a waiter that failed before reading any verdict is re-run too — rename it in both.
+    # 🔁 A LATE VERDICT STILL DECIDES (Doc/Architecture/CrossRepoPairGate § "A late verdict still
+    # decides"). When Plugins' candidate answers after this window, its Verdict job RE-RUNS this job
+    # (and Consolidate test results); the waiter's first poll finds the verdict and decides on it. So
+    # this red is not a dead end and needs no human: under load the waiter used to give up first, the
+    # candidate read "completed" as "nobody waits" and stood down, and no verdict was ever accepted
+    # (2026-10-08, core run 37841893441).
     # The message names WHY, from the waiter's last queue census: "no runner within 42 min (queued
     # behind N candidate runs: …)", "still running at the deadline", or "no run carries this key".
     - name: "No verdict in time: the dependent's suites did not report (infrastructure)"
@@ -4077,7 +4087,7 @@ jobs:
         KEY: ${{ needs.dependent-suites-dispatch.outputs.key }}
       run: |
         why=$(cat "$RUNNER_TEMP/no-verdict-$KEY.txt" 2>/dev/null || echo "no verdict within 42 min (the waiter left no census)")
-        echo "::error title=No verdict in time — $why::MeshWeaver.Plugins wrote no verdict for this candidate inside the 42-minute window: $why. The candidate is UNVERIFIED, so this required gate is red. REMEDY: if that candidate run has since written its verdict, re-run THIS job — the waiter reads the verdict it left. A candidate whose core run has finished stands down (and is cancelled by the next candidate's sweep), so if it has not, re-run the 'Dependent suites (request)' job instead: it requests a fresh candidate under a new key, and this job waits for that one."
+        echo "::error title=No verdict in time — $why::MeshWeaver.Plugins wrote no verdict for this candidate inside the 42-minute window: $why. The candidate is UNVERIFIED, so this required gate is red. NO HUMAN STEP IS NEEDED: the candidate keeps measuring, and when its verdict lands MeshWeaver.Plugins re-runs THIS job, which then reads that verdict at once and decides (Doc/Architecture/CrossRepoPairGate, 'A late verdict still decides'). Only if no candidate run is live for this key (e.g. cancelled by hand) re-run 'Dependent suites (request)' — it requests a fresh candidate under a new key."
         { echo "### ⏳ Dependent suites — no verdict in time"; echo; echo "$why"; } >> "$GITHUB_STEP_SUMMARY"
         exit 1
     - name: Compatible, or a declared break? (decide)
