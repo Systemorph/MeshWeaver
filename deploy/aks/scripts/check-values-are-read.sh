@@ -118,4 +118,24 @@ if [ -s "$ITER" ]; then
   exit 1
 fi
 
-python3 "$SELF_DIR/check-values-are-read.py" "$CHART" "${VALUES[@]}"
+# ---------------------------------------------------------------------------
+# The ONE sanctioned exception to the premise: the portal ConfigMap's PASS-THROUGH.
+#
+# config.yaml renders every config.memex_portal key it does not name through
+# memex.portalConfigPassThrough (templates/memex-portal/_portal-config-passthrough.tpl), so a
+# memex_portal key no template names is DELIVERED, verbatim, rather than dropped. That helper
+# reads the section through a variable (`keys $config`), never through the shapes grepped above,
+# so it is asserted here BY NAME instead: both halves must be present — the helper defining it
+# and config.yaml including it — or the exemption is not granted and memex_portal is checked
+# by naming exactly as before. An exemption that outlived its reason would be the vacuous pass
+# this script exists to prevent.
+# ---------------------------------------------------------------------------
+PASSTHROUGH_SECTION=""
+PT_HELPER="$CHART/templates/memex-portal/_portal-config-passthrough.tpl"
+PT_CALLER="$CHART/templates/memex-portal/config.yaml"
+if [ -f "$PT_HELPER" ] && grep -q 'define "memex.portalConfigPassThrough"' "$PT_HELPER" \
+   && [ -f "$PT_CALLER" ] && grep -q 'include "memex.portalConfigPassThrough"' "$PT_CALLER"; then
+  PASSTHROUGH_SECTION="memex_portal"
+fi
+
+PASSTHROUGH_SECTION="$PASSTHROUGH_SECTION" python3 "$SELF_DIR/check-values-are-read.py" "$CHART" "${VALUES[@]}"
