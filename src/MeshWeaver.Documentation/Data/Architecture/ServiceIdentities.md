@@ -45,6 +45,16 @@ The verbs behind the tab are `ServiceIdentities.Create / Revoke / Grant / Rotate
 `ApiTokenService.CreateServiceToken / GetTokensForService / RevokeToken` (memex), which the tests drive
 directly.
 
+**What `RevokeToken` answers (MeshWeaver#6026).** It is ONE write — `GetMeshNodeStream(path).Update`,
+checked at the token's owning hub against the caller's own permissions and durable when it emits —
+and it answers three ways: `true` (the node now carries `isRevoked`), `false` (the path holds no node,
+so nothing there authenticates), or a **fault** (the mesh refused, or the node is not a readable
+token). A refusal is never folded into `false`: it is a statement about a credential that still
+works, so a rotation whose revoke is refused fails rather than reporting success with the old token
+live. It used to follow the update with a second, whole-node `SaveMeshNodeRequest` posted from the
+root mesh hub — a router-sent write whose outcome had nowhere to go; the post-commit flush made it
+redundant and it is gone. Pinned by `TokenRevocationIsIssuedOffTheRouterTest`.
+
 ## Validation — both paths
 
 A token carrying `ServiceIdentityPath` authenticates only while its record **exists and is not
