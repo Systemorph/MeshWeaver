@@ -94,6 +94,24 @@ which defect — is on the second line. A diagnosis that arrives one line too la
 
 Each is a distinct first body line, so each cause arrives as its own incident naming its own cause.
 
+### …and its own EVENT ID, because a recurrence folds by SITE (#1549, second half)
+
+A distinct template gives each class its own *fingerprint* — but the incident watcher also folds
+every fingerprint of one log **site** into a single issue (`ComputeSiteFold`), and a site is part 1
+plus part 2 above: category + event id + exception type. The template is not in it. With every class on
+one category, event id `0` and no exception, the classes were still one site, so after the template
+split `NO NODE EXISTS` (2026-09-24) and `OWNING HUB REACHED NO VERDICT` (2026-09-25) still arrived on
+#1549 as "a different fingerprint of the same log site". That issue was about silent forwards, fixed by
+#1990, and these were neither.
+
+So `LogReleaseRefusal` logs each class under an event id of its own:
+`NodeTypeRecompileExtensions.ReleaseFailureEventId` = **7400 + the class value**, named
+`NodeTypeRelease<Class>` (the console line shows it in the bracket: `fail:
+MeshWeaver.Graph.NodeTypeRecompileExtensions[7405]` is `NodeMissing`). It is derived from the enum,
+so a new class cannot inherit another's id. An undeclared value takes `Unclassified`'s id, the same
+way it takes its template. `EveryFailureClass_LogsUnderAnEventIdOfItsOwn` pins it. The negative
+control is to remove the ids, which leaves every class on one shared id.
+
 ### Classify at the arm, never from the text
 
 🚨 **The class is decided where the exception still is.** Recovering it downstream by matching
