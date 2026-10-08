@@ -725,7 +725,9 @@ the hub. The separate post-creation `Timer` likewise routes through a signal tha
 callbacks when the post-creation chain ends. A CI `MeshHubDisposalLeakTest` root trace exposed the
 former path as `LocalScheduler.WorkItem → Timeout.Absolute → Defer → create handler → mesh hub`.
 Moving or widening the deadline would only shorten or hide the retention window; the callback
-references themselves must be released.
+references themselves must be released. `CreateDeadlineReleasesHubTest` keeps the deadline queued
+while a real create completes, disposes the mesh and provider, and collects the hub. It passed with
+the fix and failed on the pre-fix main commit with the hub still alive.
 
 **Two defects the bound exposed, fixed with it:**
 
