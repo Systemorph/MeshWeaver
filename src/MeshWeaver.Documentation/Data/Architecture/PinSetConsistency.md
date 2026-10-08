@@ -63,7 +63,7 @@ and need no credential, so a satellite runs them on every pull request; I7 needs
 | **I4** | **No placeholder vacuity** — a pin-shaped name whose value ATTEMPTS a digest without being one is a failure | `sha256:PLACEHOLDER` reads to a `sha256:[0-9a-f]+` matcher as "no pin here"; `sha256:df19f10a` reads to it as a good one |
 | **I5** | **No unclassified pin** — a literal digest whose image cannot be determined is a failure | a pin the extractor cannot place has not been checked, and "not checked" must never be spelled the same way as "consistent" |
 | **I6** | **The denominator is printed**, and zero is red under `--require-pins` | Education pins under three names of its own, so a sweep keyed on the two common names reports it clean while verifying none of its pins |
-| **I8** | **No orphaned source ref** — a literal `MW_PLATFORM_REF` must be named by at least one lane the repo calls | the value was moved alone, or everything else was |
+| **I8** | **No orphaned source ref** — a literal `MW_PLATFORM_REF` must be named by at least one lane **its own file** calls; a ref in a file that calls no lane is counted and named, not judged | the value was moved alone, or everything else was |
 | **I7** | **One promoted build** *(`--check-tags`)* — every distinct manifest the repo pins shares at least one TAG with every other | a digest carries no tag, so this is the only way to relate two of them |
 
 ### Three of these are deliberately weaker than the obvious version
@@ -79,8 +79,29 @@ of these was written narrower on measured evidence:
 
 - **I8 is not "`MW_PLATFORM_REF` equals a lane's sha".** The image an `env:` pins and the source a
   lane runs are two different objects; Plugins#1268 moved two of them together and went red, and its
-  landed fix splits them again. What I8 refuses is the value being **orphaned** — declared, and named
-  by nothing else in the repository.
+  landed fix splits them again. What I8 refuses is the value being **orphaned**: declared, and named
+  by no lane of the file that declares it.
+
+  **And I8 is PER FILE, because a workflow `env:` is file-scoped (#4752).** It used to pool every lane
+  of the repository. That is wrong in both directions:
+  - a ref "satisfied" by a lane in another file was never readable by that lane;
+  - a ref in a file that calls no lane is not a lane's source ref at all.
+
+  `Systemorph/PartnerRe.Memex` is the second case, and it was the **only** repository in the fleet
+  declaring a literal source ref (31 scanned, 2026-10-08). Its `helm-release.yml` and
+  `infra-deploy.yml` each pin the core commit they check the chart / Bicep out of. Those pins are
+  moved deliberately and alone, and that repository's one lane, `auto-arm.yml`, is unrelated CI
+  tooling. Pooled, the gate demanded both deploy pins equal the auto-arm sha. It was red on
+  `Pinned image digests` every day for weeks, and the only way to green it was to choose which chart
+  PartnerRe deploys to suit a CI lane.
+
+  Such a ref is now printed in the census (`…in a file that calls NO lane (I8 n/a)`) and named in
+  the log, never folded into a silent green. The self-test drives both directions:
+  - a lane-less deploy pin is not an orphan;
+  - a ref matched only by a lane in **another** file still is.
+
+  Mutating the check back to repository-wide pooling fails 3 controls; mutating it to judge nothing
+  fails 2.
 
 - **I4 is narrow on purpose**: the value *attempts* to be a digest (it starts with `sha256`) and is
   not one. Not "any pin-shaped name whose value is not a digest" — the text scan reads `run:` shell
