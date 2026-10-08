@@ -880,12 +880,12 @@ the request job before anything is dispatched. There is no label and no `none` f
 | step | where | what |
 |---|---|---|
 | preflight | `dotnet-test.yml` → `Required CI inputs` | asserts the App credential RED by name |
-| request | `dotnet-test.yml` → `Dependent suites (request)` | proves the receiver exists on Plugins' default branch, then sends `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base and a key unique to the run attempt — once for Plugins' default branch, once more at a declared counterpart's head |
+| request | `dotnet-test.yml` → `Dependent suites (request)` | **only once core's own build and tests are green on the candidate** (or the tree is a reused green) — otherwise it is NOT sent and goes red as "waiting for core's own suites"; then it proves the receiver exists on Plugins' default branch and sends `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base and a key unique to the run attempt — once for Plugins' default branch, once more at a declared counterpart's head |
 | scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | the per-realm, affected-only selection above, printed as an audit table (selected realms with edges, then not-selected realms); `refused` when it cannot compute one; legs cut by the portal-host lane's measured weights |
-| candidate arm | Plugins `core-candidate-arm.yml` | each leg built **from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) and run; exit codes and dead hosts recorded exactly as the platform canary records them |
+| candidate arm | Plugins `core-candidate-arm.yml` | the union of the legs' suites built **once, from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished), shipped to the legs through `scripts/dedupe-tree.py`, and run there with `--no-build`; a one-leg arm builds in its leg; exit codes and dead hosts recorded exactly as the platform canary records them |
 | control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base), on ANY missing evidence, or on a refused selection; a conclusion per realm; written as a root commit at `refs/core-candidate/<key>` in Plugins |
-| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)") |
+| wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute and prints the **queue census** every 5 minutes; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), whose title says WHY — "no runner within 42 min (queued behind N candidate runs: …)", "still running at the deadline", or "no run carries this key" |
 | decide | the same job → `.github/scripts/check-plugins-break-declaration.py` | green, or a declared break that holds (table above), or red naming the realms and the line to write |
 | require | `Consolidate test results` | NEEDS `preflight`, `dependent-suites-dispatch` and `dependent-suites`, and fails unless all three succeeded; a fork or Dependabot pull request prints **NOT MEASURED** by name |
 
@@ -915,8 +915,60 @@ rule came to exist). Plugins' test bases reference core's foundations (`MeshWeav
 almost every suite: that is the true affected set, not an over-selection, and Tests areas (144 in 41
 realms) follow the same shape. Wall clock: the legs run in parallel, ~5–6 min from-source build plus
 ≤18 min of measured suite time each, so a full-size candidate answers in ~26–30 min after dispatch
-when the `aks-silos` pool has runners — inside the 45-minute cap; the core waiter starts after core's
-own tests and holds a 42-minute deadline.
+when the `aks-silos` pool has runners — inside the 45-minute cap. The request is sent only after
+core's own build and tests are green, and the waiter that follows it holds a 42-minute deadline:
+that window is the dependent's whole budget from the moment it was requested.
+
+### Runner capacity — requested after core's own suites, built once per arm, named when it waits
+
+The gate became required on 2026-10-08 and within hours it was blocking core merges on **runner
+capacity**, not on verdicts. Measured that afternoon over REST (job timings, Plugins and core):
+
+| reading | value |
+|---|---|
+| live candidate runs at 17:30Z | 10 (one per open core PR), 4–12 legs each |
+| candidate legs QUEUED for the shared `aks-silos-dind` pool at 17:30Z | **48**, beside ~30 queued Plugins-CI dind jobs; 31 dind jobs running |
+| run 37809289143 (core #6320, 8 legs): `Build this leg's suites …` per leg | **7.0–8.5 min** on seven legs (1.8 min on the eighth) — the same core closure, eight times, ~58 runner-minutes |
+| the same run: test steps per leg | 0.9–11.2 min |
+| core #6320 | candidate legs done by 17:05Z; its one control leg queued from 17:08Z; the waiter gave up at 17:23:48Z ("No verdict in time") |
+| candidate runs whose requesting core run had already COMPLETED | 2 of 10 at 17:30Z (5 of 12 at 17:43Z), each still holding queued legs |
+| `MW_BUILD_QUEUE` | `off` — the CI queue's gate tier was bypassed, so candidate legs and Plugins-CI legs met GitHub's plain FIFO |
+
+Four changes answer it, none of them a longer wait (the 42 minutes and every cap stand):
+
+1. **Requested after core's own suites.** A candidate that fails its own build or tests cannot merge
+   whatever Plugins says, so measuring it only took runners from the candidates that can. The
+   request job needs `build` and `test`; when they are not green it is not sent and goes red BY NAME
+   (`Dependent suites NOT requested — waiting for core's own suites`), and `Consolidate test results`
+   repeats that sentence. Never a skip: a skipped required ancestor reads as satisfied.
+2. **Built once per arm** (MeshWeaver.Plugins `core-candidate-arm.yml`). A multi-leg arm builds the
+   union of its legs' suites in ONE job — core from source once, copy-local as hard links — and ships
+   each built suite's `bin/` + `obj/` through `scripts/dedupe-tree.py`, the portal-host lane's
+   mechanism (one copy per unique file). The legs restore packages, prove every dll is present and
+   evaluates `IsTestProject=true` (the two measured `--no-build` traps), and run. The per-leg build
+   verdict is read off the union's per-suite outputs, so the verdict script and the control plan
+   read exactly what they read before. A one-leg arm — the usual control arm — still builds in its
+   leg, because a separate build job would only add a second runner wait.
+3. **Named when it waits.** The waiter's queue census reads only Actions metadata of
+   `core-candidate.yml` runs (`actions: read` on the same App token): this candidate's jobs (running,
+   waiting for a runner, done), its position among the live candidate runs and the keys ahead of it,
+   and Plugins' total queued runs. It prints every 5 minutes and once more at the deadline, so a
+   timeout says *"no runner within 42 min (queued behind 4 candidate run(s): …) — waiting for a
+   runner: Control / control (leg 1/1)"* instead of only "No verdict in time". It never decides
+   anything: an unreadable census is reported and the exit code is unchanged.
+4. **A superseded candidate gives its place back.** Each superseded core head already cancels its
+   older candidate run through the concurrency group `pr-<N>` (`cancel-in-progress`), and a leg stands
+   down when it starts and finds its core run finished. Between the two, a leg still QUEUED held its
+   FIFO place — and with the request now waiting for core's own suites, that gap is longer. So every
+   new candidate run's `admission` cancels the candidate runs whose requesting core run has
+   COMPLETED (`scripts/core-candidate-reap.py`; an unreadable status is never a reap). Its first live
+   pass, at 17:43Z, cancelled 5 of 12 live candidate runs.
+
+🚨 **The remedy for a timeout changed with (4).** "Re-run this job once that run has finished" reads a
+verdict only if the candidate was still measuring. A candidate whose core run has completed stands
+down, so after a timeout either re-run the waiter AT ONCE (the core run is live again and the
+candidate keeps measuring), or re-run `Dependent suites (request)`, which requests a fresh candidate
+under a new key. The no-verdict step says both.
 
 ### Proven on the incident (2026-10-08)
 

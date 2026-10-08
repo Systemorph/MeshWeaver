@@ -103,9 +103,12 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
                 + "read; neither checks anything out. `dependent-suites` reads the verdict "
                 + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
-                + "against this candidate — a fact about the candidate, never Plugins source. Under "
-                + "policy `core-merge-never-blocked` it is ADVISORY: no required "
-                + "context reads it, so a sibling's state reports on a core PR and blocks nothing"),
+                + "against this candidate — a fact about the candidate, never Plugins source — and, "
+                + "while it waits, the Actions METADATA of Plugins' core-candidate.yml runs (the "
+                + "queue census: this candidate's position and job states, never a log). Under "
+                + "policy `dependent-suites-affected-gate` it is REQUIRED: `Consolidate test results` "
+                + "needs it, so a sibling's state CAN block a core merge — by design, sized to what "
+                + "the diff reaches"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),

@@ -21,6 +21,16 @@ never a pass.
 
 🔒 This repository is PUBLIC and this log is public. The verdict is printed as it came: counts, one
 sentence and the private run's link — Plugins writes nothing more into it, by construction.
+
+🚦 WHILE IT WAITS, IT SAYS WHERE THE CANDIDATE IS (the QUEUE CENSUS, every `--census-every` seconds and
+once more at the deadline). "No verdict in time" alone could not tell a dependent that is slow from one
+that never got a runner, and the second was the whole story on 2026-10-08: core #6320's control leg sat
+queued behind 48 legs of nine other candidates while its waiter ran out. The census reads only Actions
+METADATA of MeshWeaver.Plugins' `core-candidate.yml` runs (`actions: read` on the same App token): this
+candidate's run and its jobs' states, the candidate runs created BEFORE it that are still live (its queue
+position), and how many Plugins runs are queued in total. Run ids, run keys (`core-candidate <core run
+id>-<attempt>`) and job states — never a job's log, a suite or a test. And it is never a verdict: a
+census that cannot be read says so and changes nothing about the exit code.
 """
 from __future__ import annotations
 
@@ -96,6 +106,80 @@ def validate(verdict: object, key: str, candidate: str, base: str) -> tuple[bool
                    f"The failing suites are named in its run (private): {run}")
 
 
+WORKFLOW = "core-candidate.yml"
+_LIVE = ("queued", "in_progress", "waiting", "pending", "requested")
+
+
+def census(key: str, token: str) -> dict:
+    """Where is the candidate run for this key, and what is ahead of it? Metadata only (see the module
+    docstring). Never raises: an unreadable census comes back as {"error": …}."""
+    try:
+        code, page = _get(f"repos/{REPO}/actions/workflows/{WORKFLOW}/runs?per_page=100", token)
+        if code != 200 or not isinstance(page, dict):
+            return {"error": f"HTTP {code} listing {WORKFLOW} runs"}
+        runs = page.get("workflow_runs") or []
+        mine = next((r for r in runs if r.get("name") == f"core-candidate {key}"), None)
+        live = [r for r in runs if r.get("status") in _LIVE]
+        code, queued_total = _get(f"repos/{REPO}/actions/runs?status=queued&per_page=1", token)
+        queued_runs = queued_total.get("total_count") if code == 200 and isinstance(queued_total, dict) else None
+        if mine is None:
+            return {"found": False, "live": len(live), "pluginsQueuedRuns": queued_runs}
+        ahead = sorted((r for r in live if r.get("id") != mine.get("id")
+                        and (r.get("created_at") or "") < (mine.get("created_at") or "")),
+                       key=lambda r: r.get("created_at") or "")
+        code, jobs = _get(f"repos/{REPO}/actions/runs/{mine['id']}/jobs?filter=latest&per_page=100", token)
+        jobs = (jobs or {}).get("jobs") or [] if code == 200 and isinstance(jobs, dict) else None
+        out = {"found": True, "run": mine.get("html_url"), "status": mine.get("status"),
+               "conclusion": mine.get("conclusion"), "ahead": [r.get("name", "").removeprefix("core-candidate ") for r in ahead],
+               "position": len(ahead) + 1, "live": len(live), "pluginsQueuedRuns": queued_runs}
+        if jobs is None:
+            out["jobsError"] = f"HTTP {code} reading the run's jobs"
+        else:
+            out["queued"] = sorted(j.get("name", "") for j in jobs if j.get("status") in ("queued", "waiting", "pending"))
+            out["running"] = sorted(j.get("name", "") for j in jobs if j.get("status") == "in_progress")
+            out["done"] = sum(1 for j in jobs if j.get("status") == "completed")
+        return out
+    except (urllib.error.URLError, OSError, KeyError, TypeError, ValueError) as e:
+        return {"error": f"transport: {e}"}
+
+
+def _names(names: list, most: int = 3) -> str:
+    return ", ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
+
+
+def describe(c: dict) -> str:
+    """One sentence about the census, for the log while waiting."""
+    if "error" in c:
+        return f"queue census unavailable ({c['error']}) — the wait goes on regardless"
+    if not c.get("found"):
+        return (f"no {WORKFLOW} run for this key yet ({c.get('live')} candidate run(s) live, "
+                f"{c.get('pluginsQueuedRuns')} Plugins run(s) queued in total)")
+    jobs = (f"{len(c['running'])} job(s) running, {len(c['queued'])} waiting for a runner, {c['done']} done"
+            if "queued" in c else c.get("jobsError", "jobs unknown"))
+    ahead = f"behind {len(c['ahead'])} older live candidate run(s) ({_names(c['ahead'])})" if c["ahead"] else "first in line among the candidate runs"
+    return (f"candidate run {c['status']}: {jobs}; queue position {c['position']} of {c['live']} — {ahead}; "
+            f"{c.get('pluginsQueuedRuns')} Plugins run(s) queued in total — {c['run']}")
+
+
+def timeout_sentence(c: dict, minutes: int) -> str:
+    """WHY there is no verdict, as precisely as the census allows. Still red, whatever it says."""
+    if "error" in c:
+        return f"no verdict within {minutes} min, and the queue census could not be read ({c['error']})"
+    if not c.get("found"):
+        return (f"no verdict within {minutes} min and NO {WORKFLOW} run carries this key — the request started "
+                f"nothing visible ({c.get('pluginsQueuedRuns')} Plugins run(s) queued in total)")
+    behind = f"queued behind {len(c['ahead'])} candidate run(s)" + (f": {_names(c['ahead'], 5)}" if c["ahead"] else "")
+    if c.get("status") == "completed":
+        return f"the candidate run finished ({c.get('conclusion')}) without a verdict this waiter could read — {c['run']}"
+    if "queued" not in c:
+        return f"no verdict within {minutes} min ({behind}; its jobs could not be read: {c.get('jobsError')}) — {c['run']}"
+    if c["queued"] and not c["running"]:
+        return (f"no runner within {minutes} min ({behind}) — waiting for a runner: {_names(c['queued'])} — "
+                f"{c.get('pluginsQueuedRuns')} Plugins run(s) queued in total — {c['run']}")
+    return (f"the candidate was still running at the deadline ({len(c['running'])} job(s) running: {_names(c['running'])}; "
+            f"{len(c['queued'])} waiting for a runner; {behind}) — {c['run']}")
+
+
 def _get(path: str, token: str) -> tuple[int, object]:
     req = urllib.request.Request(f"{API}/{path}", headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
@@ -107,10 +191,17 @@ def _get(path: str, token: str) -> tuple[int, object]:
         return e.code, None
 
 
-def poll(key: str, token: str, deadline: float, interval: int = 60, quiet: bool = False) -> tuple[object | None, str]:
-    """(the verdict JSON, or None with the last reason it was not there)."""
+def poll(key: str, token: str, deadline: float, interval: int = 60, quiet: bool = False,
+         census_every: int = 0) -> tuple[object | None, str]:
+    """(the verdict JSON, or None with the last reason it was not there). With `census_every` > 0 the
+    queue census is printed that often — information only, it never decides anything."""
     last = "never polled"
+    next_census = 0.0
     while True:
+        if census_every > 0 and time.time() >= next_census:
+            next_census = time.time() + census_every
+            if not quiet:
+                print(f"  {time.strftime('%H:%M:%S', time.gmtime())}Z — {describe(census(key, token))}", flush=True)
         try:
             code, ref = _get(f"repos/{REPO}/git/ref/core-candidate/{key}", token)
             if code == 200 and isinstance(ref, dict):
@@ -192,6 +283,44 @@ def self_test() -> int:
         v, _ = poll(K, "t", deadline=time.time() + 5, interval=0, quiet=True)
         check("an unparseable message comes back as a malformed verdict, which validate reds",
               not validate(v, K, C, B)[0], str(v))
+        # 🚦 THE CENSUS — what the deadline says, and that it never turns silence into a pass.
+        def api(listing, jobs, queued_total=7):
+            def f(path, token):
+                if "/jobs" in path:
+                    return (200, {"jobs": jobs}) if jobs is not None else (403, None)
+                if "status=queued" in path:
+                    return 200, {"total_count": queued_total}
+                return (200, {"workflow_runs": listing}) if listing is not None else (403, None)
+            return f
+        mine = {"id": 9, "name": f"core-candidate {K}", "status": "queued", "created_at": "2026-10-08T16:30:13Z",
+                "html_url": f"https://github.com/{REPO}/actions/runs/9"}
+        older = [{"id": i, "name": f"core-candidate {i}-1", "status": "queued", "created_at": f"2026-10-08T16:2{i}:00Z"} for i in (1, 2, 3)]
+        newer = {"id": 8, "name": "core-candidate 8-1", "status": "queued", "created_at": "2026-10-08T17:00:00Z"}
+        done = {"id": 7, "name": "core-candidate 7-1", "status": "completed", "created_at": "2026-10-08T16:00:00Z"}
+        _get = api([newer, mine, *older, done], [{"name": "Candidate / candidate (leg 1/8)", "status": "completed"},
+                                                 {"name": "Control / control (leg 1/1)", "status": "queued"}])
+        c = census(K, "t")
+        check("the census finds this key's run and counts ONLY older LIVE runs as ahead (position 4)",
+              c.get("found") and c["position"] == 4 and len(c["ahead"]) == 3 and c["live"] == 5, json.dumps(c))
+        text = timeout_sentence(c, 42)
+        check("a candidate with jobs waiting and none running times out as 'no runner within 42 min (queued behind 3 …)'",
+              text.startswith("no runner within 42 min (queued behind 3 candidate run(s)") and "Control / control" in text, text)
+        _get = api([mine], [{"name": "Candidate / candidate (leg 2/8)", "status": "in_progress"}])
+        text = timeout_sentence(census(K, "t"), 42)
+        check("a candidate still RUNNING at the deadline says so — not 'no runner'", text.startswith("the candidate was still running"), text)
+        _get = api([newer], [])
+        text = timeout_sentence(census(K, "t"), 42)
+        check("no run carrying this key says the request started nothing visible", "NO core-candidate.yml run carries this key" in text, text)
+        _get = api(None, None)
+        c = census(K, "t")
+        check("an unreadable census (no actions: read) is reported, never raised", "error" in c and "403" in c["error"], json.dumps(c))
+        check("…and the timeout still says there is no verdict", timeout_sentence(c, 42).startswith("no verdict within 42 min"))
+        _get = api([mine, *older], [{"name": "Candidate / candidate (leg 1/8)", "status": "queued"}])
+        v, _ = poll(K, "t", deadline=time.time() + 0.5, interval=0, quiet=True, census_every=1)
+        # The poll above read the census api for the verdict ref too, which 403s — silence.
+        check("NEGATIVE CONTROL: with the census on, silence is still NO verdict (the census never passes anything)", v is None, str(v))
+        check("the public sentences carry run keys and job states, never a suite or test name",
+              "Test" not in describe(census(K, "t")).replace("Tests", ""), describe(census(K, "t")))
     finally:
         _get = real
     print(f"await-dependent-verdict self-test: {failures} failure(s)")
@@ -206,6 +335,10 @@ def main() -> int:
     ap.add_argument("--base")
     ap.add_argument("--deadline-minutes", type=int, default=40)
     ap.add_argument("--out", help="write the PUBLIC view of the verdict here (for the break-declaration check)")
+    ap.add_argument("--census-every", type=int, default=300, dest="census_every",
+                    help="seconds between queue-census lines while waiting (0 = none)")
+    ap.add_argument("--no-verdict-out", dest="no_verdict_out",
+                    help="on silence, write WHY (the deadline's census sentence) here, for the no-verdict step")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
@@ -218,11 +351,15 @@ def main() -> int:
     deadline = time.time() + a.deadline_minutes * 60
     print(f"waiting up to {a.deadline_minutes} min for {REPO} refs/core-candidate/{a.key} "
           f"(candidate {a.candidate[:9]}, base {a.base[:9]})", flush=True)
-    verdict, why = poll(a.key, token, deadline)
+    verdict, why = poll(a.key, token, deadline, census_every=a.census_every)
     if verdict is None:
-        print(f"::error::MeshWeaver.Plugins did not answer within {a.deadline_minutes} min ({why}). "
+        reason = timeout_sentence(census(a.key, token), a.deadline_minutes)
+        print(f"::error::MeshWeaver.Plugins did not answer within {a.deadline_minutes} min ({why}): {reason}. "
               "Silence is not a pass: the candidate is unverified. Its run is under "
               f"https://github.com/{REPO}/actions/workflows/core-candidate.yml")
+        if a.no_verdict_out:
+            with open(a.no_verdict_out, "w", encoding="utf-8") as f:
+                f.write(reason + "\n")
         return EXIT_NO_VERDICT
     ok, text = validate(verdict, a.key, a.candidate, a.base)
     print(text if ok else f"::error::{text}")
