@@ -49,7 +49,10 @@ container environment variable, next to the module that registers its types.
    **nothing** (not "everything, then filter"): the rows are exactly the input a closed mesh must not
    read, and a broken one must not be able to occupy, slow or fail the pass the readiness gate reads.
 3. **Adoption** — `PrebuiltAssemblySeeder.SeedDetailed`, the one write every bundle adoption goes
-   through (boot seeders, published root, on demand). A closed mesh answers `NotSeeded`.
+   through (boot seeders, published root, on demand). A closed mesh answers `NotSeeded`. The gate
+   is evaluated at SUBSCRIBE time and only after the leaving check (#3129): a hub whose teardown
+   has finished has disposed the provider the gate reads, so asking it first threw
+   `ObjectDisposedException` out of the seed instead of answering `NotSeeded` (#6060).
 4. **Compile dispatch** — the compile watcher, beside `Modules:RequirePrebuilt`. A compile asked of a
    row itself (its Compile button, a release request, a self-heal kick) skips on-demand adoption and
    is **parked** at `Error` with the closed-set reason instead of reaching Roslyn — and, unlike the
