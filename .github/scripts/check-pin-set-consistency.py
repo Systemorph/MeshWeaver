@@ -635,6 +635,7 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
     emit(f"    platform lane calls                   {len(scan.lanes)}")
     emit(f"    …passing a LITERAL platform-ref       {len(lanes_with_ref)}")
     emit(f"    platform SOURCE refs declared         {len(scan.platform_refs)}")
+    emit(f"    …in a file that calls NO lane (I8 n/a) {len(lane_less_refs(scan))}")
     emit(f"    pin-shaped declarations MALFORMED     {len(scan.malformed)}")
     emit(f"    promoted build NAMED                  "
          + (f"{scan.platform_set[0]} = {scan.platform_set[1]}" if scan.platform_set
@@ -731,7 +732,7 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
         print("  Move both, in one commit, by grepping the OLD value.")
         failures.append("lane-split")
 
-    # I8 — a declared platform SOURCE ref that nothing else in the repository names.
+    # I8 — a declared platform SOURCE ref that the lanes of ITS OWN FILE do not name.
     #
     # 🚨 This is the ONE thing that can be said about `MW_PLATFORM_REF` without demanding a
     # coupling the fleet does not have. It is NOT "MW_PLATFORM_REF equals a lane's sha" — several
@@ -742,16 +743,41 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
     # "`uses:` was 04a2401c6, `platform-ref` 94d18f9cb and MW_PLATFORM_REF 89f886275 — three
     # different commits under a comment asserting they are one" — and moving ONE of the three
     # alone is exactly what leaves an orphan.
-    lane_refs = {c.ref for c in scan.lanes} | {c.platform_ref for c in lanes_with_ref if c.platform_ref}
+    #
+    # 🚨 PER FILE, as the sentence above always said (MeshWeaver#4752). The check used to pool every
+    # lane of the REPOSITORY, which is wrong in both directions, because a workflow `env:` is
+    # FILE-scoped:
+    # - a ref "satisfied" by a lane in another file was never readable by that lane;
+    # - a ref in a file that calls NO lane is not a lane's source ref at all.
+    # PartnerRe.Memex is the second case: `helm-release.yml` and `infra-deploy.yml` each pin the
+    # core commit they check the CHART / Bicep out of. Those are deployment-content pins, moved
+    # deliberately and alone, in a repository whose one lane (`auto-arm.yml`) is unrelated CI
+    # tooling. The repo-wide pooling demanded that both deploy pins equal the auto-arm lane's sha,
+    # and was red every day for that reason (it was the only repository in the fleet declaring a
+    # literal source ref, measured 2026-10-08). The way to make it green was to pick a chart
+    # version to suit a CI lane. Such a ref is counted in the census and named, never judged here.
+    # Whether it names a sane core commit is a question for the repository that deploys from it.
+    lane_refs_by_file: dict[str, set[str]] = {}
+    for call in scan.lanes:
+        refs = lane_refs_by_file.setdefault(call.filename, set())
+        refs.add(call.ref)
+        if call.platform_ref:
+            refs.add(call.platform_ref)
     for filename, line, name, value in scan.platform_refs:
-        if value in lane_refs:
+        file_refs = lane_refs_by_file.get(filename)
+        if not file_refs:
+            emit(f"  {scan.gh_repo}: {filename}:{line} `{name}` = {value[:12]} is declared in a file that "
+                 "calls NO platform lane, so no lane can read it (a workflow `env:` is file-scoped) — "
+                 "it pins what this file checks out of core, not a lane's source. Counted, not judged by I8.")
+            continue
+        if value in file_refs:
             continue
         print(f"::error::{scan.gh_repo} — {filename}:{line} declares `{name}` = {value}, but no "
-              "platform lane in this repository is pinned at it.")
+              "platform lane in this file is pinned at it.")
         print("  The source ref was moved alone, or every lane was moved and it was not. Either")
-        print("  way the repository is reaching for two core commits under a comment that says")
-        print("  one. Lane refs actually called: "
-              + (", ".join(sorted(r[:12] for r in lane_refs)) or "(none)"))
+        print("  way the file is reaching for two core commits under a comment that says")
+        print("  one. Lane refs this file actually calls: "
+              + ", ".join(sorted(r[:12] for r in file_refs)))
         failures.append("orphan-source-ref")
 
     if not classified and not unclassified:
@@ -765,6 +791,12 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
                  "not an unchecked one.")
 
     return failures
+
+
+def lane_less_refs(scan: RepoScan) -> list[tuple[str, int, str, str]]:
+    """The declared source refs in a file that calls no platform lane — outside I8's subject."""
+    lane_files = {c.filename for c in scan.lanes}
+    return [r for r in scan.platform_refs if r[0] not in lane_files]
 
 
 def check_tags(scan: RepoScan, registry: str, cache: dict) -> list[str]:
@@ -906,6 +938,29 @@ HALF_MOVED = CONSISTENT.replace(
     'echo "image-digest=sha256:0BADHEX"',
 )
 
+# A deploy workflow (PartnerRe.Memex's helm-release.yml shape): it checks the chart out of core at
+# its own PLATFORM_REF and calls no platform lane. I8's subject is a LANE's source ref; this is not one.
+DEPLOY_ONLY = """
+env:
+  PLATFORM_REPO: Systemorph/MeshWeaver
+  PLATFORM_REF: 5555555555555555555555555555555555555555
+jobs:
+  release:
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.PLATFORM_REPO }}
+          ref: ${{ env.PLATFORM_REF }}
+"""
+
+# A second file whose lane happens to sit at the sha ci.yml's MW_PLATFORM_REF was moved to. That
+# lane cannot read ci.yml's `env:` — the negative control for per-file I8.
+OTHER_FILE_LANE = """
+jobs:
+  arm:
+    uses: Systemorph/MeshWeaver/.github/workflows/auto-arm.yml@6666666666666666666666666666666666666666
+"""
+
 # A pin under a name nothing binds and no alias covers — I5's subject.
 UNCLASSIFIED = """
 env:
@@ -984,6 +1039,34 @@ def self_test() -> int:
         failures.append("a MW_PLATFORM_REF no lane names passed as consistent")
     if "7777777777" not in log:
         failures.append("the orphaned-source-ref report does not name the value")
+
+    # ── ARM B3: I8 is PER FILE (MeshWeaver#4752). A workflow `env:` is file-scoped. ───────────
+    # (a) a deploy file that calls NO lane pins a chart commit of its own: counted, not judged.
+    deploy = RepoScan(gh_repo="Systemorph/Fixture", workflows=2)
+    for fname, text in (("ci.yml", CONSISTENT), ("helm-release.yml", DEPLOY_ONLY)):
+        sites, lanes, malformed, platform_set, platform_refs = extract(fname, text)
+        deploy.sites += sites; deploy.lanes += lanes; deploy.malformed += malformed
+        deploy.platform_refs += platform_refs
+        deploy.platform_set = deploy.platform_set or platform_set
+    verdicts, log = _quiet(check_static, deploy, True)
+    if "orphan-source-ref" in verdicts:
+        failures.append("a PLATFORM_REF in a file that calls no lane was judged as a lane's orphaned source ref")
+    if len(lane_less_refs(deploy)) != 1 or "calls NO platform lane" not in log or "5555555555" not in log:
+        failures.append("the lane-less deploy pin was not counted and named in the census")
+    # (b) NEGATIVE CONTROL — a ref matched only by a lane in ANOTHER file is still an orphan: that
+    # lane never could read it.
+    cross = RepoScan(gh_repo="Systemorph/Fixture", workflows=2)
+    for fname, text in (("ci.yml", CONSISTENT.replace(
+            "  MW_PLATFORM_REF: 1b5350d547473a5e2ca81e793e774cc962acfeb3",
+            "  MW_PLATFORM_REF: 6666666666666666666666666666666666666666")),
+            ("other.yml", OTHER_FILE_LANE)):
+        sites, lanes, malformed, platform_set, platform_refs = extract(fname, text)
+        cross.sites += sites; cross.lanes += lanes; cross.malformed += malformed
+        cross.platform_refs += platform_refs
+        cross.platform_set = cross.platform_set or platform_set
+    verdicts, log = _quiet(check_static, cross, True)
+    if "orphan-source-ref" not in verdicts or "6666666666" not in log:
+        failures.append("a source ref named only by a lane in ANOTHER file passed as consistent")
 
     # ── ARM C: an unplaceable pin is a FAILURE, never a silent pass. ────────────────────────────
     unk = _scan_of(UNCLASSIFIED)
