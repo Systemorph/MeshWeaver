@@ -248,7 +248,7 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
         Action build = () => seed = Seed(gone, typePath, bytes, fingerprint: null);
         build.Should().NotThrow("building the seed must not resolve from the disposed hub's provider");
 
-        var adopted = await seed!
+        var adopted = await (seed ?? throw new InvalidOperationException("Seed returned without assigning — unreachable after NotThrow"))
             .Should().Within(20.Seconds())
             .Emit("a hub whose teardown has finished answers 'not adopted' — it never faults the pass");
         adopted.Should().BeFalse("nothing is adopted on a hub that has left");
