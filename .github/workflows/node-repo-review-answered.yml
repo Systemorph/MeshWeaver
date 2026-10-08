@@ -87,7 +87,7 @@ name: Node repo review answered (reusable)
 # and NOT the `pull_request_review_comment` run a reply starts (measured on #4649), so a reply that
 # turned the verdict GREEN used to leave the pull request BLOCKED on the older `pull_request` red
 # until a person re-ran it by hand. Now, after a GREEN verdict on any event but `pull_request` /
-# `merge_group`, the `refresh` job re-runs the failed jobs of the newest `pull_request` run of the
+# `merge_group`, the `refresh` job re-runs the WHOLE newest `pull_request` run of the
 # CALLER's workflow for the current head — once per (head, answered state); the decision is
 # `refresh_action` in the predicate, self-tested. It is the ONLY job here that writes, and the ONLY
 # reason a caller grants `actions: write`: a called workflow's job permissions are a HARD requirement
@@ -221,7 +221,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun-failed-jobs
+      actions: write      # list this workflow's runs for the head; POST …/runs/{id}/rerun (whole run)
     steps:
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/setup-python@v7

@@ -217,8 +217,9 @@ jobs:
   # by one copy in both jobs.
   #
   # ♻️ THE LANE ALSO REFRESHES THE VERDICT BRANCH PROTECTION READS (its `refresh` job). A GREEN
-  # verdict on a `pull_request_review_comment` / `pull_request_review` run re-runs the failed jobs
-  # of this workflow's newest `pull_request` run for the head — the one the rollup reads (#4649) —
+  # verdict on a `pull_request_review_comment` / `pull_request_review` run re-runs the WHOLE
+  # newest `pull_request` run of this workflow for the head — the one the rollup reads (#4649); never
+  # only its failed jobs, which GitHub refuses for a run cancelled before any job started (#6315) —
   # so a reply that answers the last thread unblocks the pull request without anyone re-running it
   # by hand. `actions: write` below is for that job alone (a called job can hold only what its caller
   # grants); the gate job above stays read-only.
