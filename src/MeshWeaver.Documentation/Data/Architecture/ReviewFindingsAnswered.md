@@ -514,6 +514,26 @@ What is still owed, and is not an agent's to do:
 | 2 | each repository adds the thin caller, **observe-only**, after its row lands in `.github/lane-caller-grants.yml` as `pending:` (every satellite asserts its row against core's `main`, so the row goes first) | the rollout decision — which repositories, in what order — is the maintainer's |
 | 3 | once `review-answered / Automatic review answered` has been **seen** published on live pull requests in that repository, the context is added to its protection. Under classic protection an absent required context blocks every pull request forever, so this never goes first | a branch-protection edit — the maintainer |
 
+**MeshWeaver.Plugins is the first adopter (MeshWeaver.Plugins#2727, at the maintainer's direction).**
+Its staged pipeline (`node-repo-stage-gate.yml`) holds the heavy legs until the review has landed and
+been answered, **but only when the stage gate runs with `review-before-suites`**. On Plugins it runs
+with that off: the suites start in parallel with the review, and the gate's own log says "merging and
+arming still require the review landed and every thread answered". Arming does: the steward's
+`PrArming` checks it. A **merge** does not, because nothing in Plugins' classic protection reads the
+answer.
+
+Measured over the 25 most recent merges on 2026-10-08, two merged with Copilot findings unanswered:
+- #3115: one thread on head `0c60ab5bbc`, merged by hand 54 minutes after the review;
+- #2962: four threads.
+
+So Plugins takes the three steps in order:
+1. its roster row lands here as `pending:`;
+2. its `review-answered.yml` caller lands observe-only. It floats `@main` with `scripts-ref: main`,
+   because Plugins' `check-shared-lanes.py` refuses a pinned lane. That repo's own rule overrides the
+   lane header's "pin a sha";
+3. the context `review-answered / Automatic review answered` is added to Plugins' classic protection
+   only after it has been seen published on live pull requests there.
+
 ### The same gap, measured wider — 240 merged pull requests
 
 The 120-PR sample above was extended on 2026-09-19 to the **30 most recently updated merged pull
