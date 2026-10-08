@@ -120,13 +120,20 @@ public static class ServiceDefaults
                 //
                 // 🚨 Narrowest possible set: HostNotFound only. `TryAgain` (EAI_AGAIN) is a DNS
                 // server that did not answer — genuinely transient, and it must keep being retried.
-                // Every other transport failure (TLS, connection reset, timeout) is untouched.
+                // Every other transport failure (connection reset, timeout) is untouched.
+                //
+                // 🚨 The same holds for a certificate the remote presents and we REJECT (#5910): an
+                // expired chain (`NotTimeValid`), a wrong name, an untrusted root. Validation is
+                // deterministic — the next attempt receives the same certificate a few milliseconds
+                // later — so the three attempts measured on the control instance 2026-09-30 for
+                // `www.unternehmensindex.ch` were three Error lines and no chance of success. See
+                // CertificateIsRejected for why a handshake the TRANSPORT broke stays retried.
                 var transient = options.Retry.ShouldHandle;
-                options.Retry.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                options.Retry.ShouldHandle = args => IsAboutTheUrlNotTheNetwork(args.Outcome.Exception)
                     ? ValueTask.FromResult(false)
                     : transient(args);
                 var breaks = options.CircuitBreaker.ShouldHandle;
-                options.CircuitBreaker.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                options.CircuitBreaker.ShouldHandle = args => IsAboutTheUrlNotTheNetwork(args.Outcome.Exception)
                     ? ValueTask.FromResult(false)
                     : breaks(args);
             })
@@ -279,6 +286,39 @@ public static class ServiceDefaults
             if (current is System.Net.Sockets.SocketException
                 { SocketErrorCode: System.Net.Sockets.SocketError.HostNotFound })
                 return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is a request failure that a retry can never fix because
+    /// it is a fact about the remote endpoint's identity — its name does not exist
+    /// (<see cref="NameDoesNotResolve"/>) or its certificate is rejected
+    /// (<see cref="CertificateIsRejected"/>). Excluded from both retry and breaker.
+    /// </summary>
+    /// <param name="exception">The outcome's exception, if any.</param>
+    /// <returns><c>true</c> when retrying cannot change the outcome.</returns>
+    internal static bool IsAboutTheUrlNotTheNetwork(Exception? exception) =>
+        NameDoesNotResolve(exception) || CertificateIsRejected(exception);
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> is a TLS handshake that completed far enough for this
+    /// side to VALIDATE the remote certificate, and validation rejected it (#5910) — e.g.
+    /// <c>The remote certificate is invalid because of errors in the certificate chain: NotTimeValid</c>.
+    ///
+    /// <para>The discriminator is structural, not the (localized) message: a validation rejection is
+    /// an <see cref="System.Security.Authentication.AuthenticationException"/> with NO inner
+    /// exception — <c>SslStream</c> raises it from its own verdict. A handshake the transport broke
+    /// (<c>the remote party has closed the transport stream</c>, a reset, a timeout) carries the
+    /// <see cref="System.IO.IOException"/> / socket error that broke it as its inner exception, is
+    /// genuinely transient, and stays retried.</para>
+    /// </summary>
+    /// <param name="exception">The outcome's exception, if any.</param>
+    /// <returns><c>true</c> when the remote certificate was rejected by validation.</returns>
+    internal static bool CertificateIsRejected(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current is System.Security.Authentication.AuthenticationException authentication)
+                return authentication.InnerException is null;
         return false;
     }
 

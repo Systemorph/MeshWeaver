@@ -76,13 +76,38 @@ downstream.
 `SocketError.TryAgain` (EAI_AGAIN) is a **nameserver that failed to answer** — genuinely transient,
 and excluding it would turn a DNS hiccup into a hard failure, which is the opposite defect and a
 worse one. `ConnectionRefused` is a host that exists and is not listening: about the *service*.
-`ConnectionReset`, `TimedOut` and every TLS failure are about the network or the peer. All of them
-keep being retried exactly as before.
+`ConnectionReset`, `TimedOut` and a TLS handshake the transport broke are about the network or the
+peer. All of them keep being retried exactly as before. (A certificate this side REJECTS is the one
+TLS outcome that is permanent — see the next section.)
 
 `ServiceDefaults.NameDoesNotResolve` walks the inner-exception chain, because `HttpClient` wraps the
 resolver's `SocketException` in an `HttpRequestException` and a handler pipeline can wrap that again.
 It is pure, and `NonexistentHostIsNotRetriedTest` asserts it directly — a predicate that can only be
 exercised through a real failed connection is a predicate nobody checks.
+
+## A rejected certificate is the same kind of fact
+
+[#5910](https://github.com/Systemorph/MeshWeaver/issues/5910), measured on the control instance
+2026-09-30: an agent fetch of a site whose certificate had expired went through the retry three
+times, about 100 ms apart, each attempt an Error line:
+
+```
+System.Net.Http.HttpRequestException: The SSL connection could not be established, see inner exception.
+ ---> System.Security.Authentication.AuthenticationException: The remote certificate is invalid
+      because of errors in the certificate chain: NotTimeValid
+```
+
+Validation is deterministic — the next attempt receives the same certificate — so the retry cannot
+succeed, and the breaker must not count one site's certificate against every other host its client
+calls. `ServiceDefaults.CertificateIsRejected` excludes it from both, through the same
+`IsAboutTheUrlNotTheNetwork` predicate as a dead name.
+
+🚨 **The discriminator is structural, not the message.** `SslStream` raises a validation rejection as
+an `AuthenticationException` with **no inner exception** (it is its own verdict). A handshake the
+TRANSPORT broke — *"the remote party has closed the transport stream"*, a reset, a timeout — is the
+same exception type carrying the `IOException` that broke it; that one is transient and stays
+retried. `RejectedCertificateIsNotRetriedTest` pins both arms. The WebSearch plugin applies the same
+predicate to tell the caller why the page could not be fetched (MeshWeaver#5912).
 
 ## The half this does not reach
 
