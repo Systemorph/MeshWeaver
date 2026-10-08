@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
@@ -84,6 +86,44 @@ public class MeshNodeBindingExtensionsTest
         MeshNodeBindingExtensions.IsDeletedBoundNode(
             new InvalidOperationException($"No node found at '{path}'"), path).Should().BeFalse(
             "an unrelated exception with similar text must still reach the error surface");
+    }
+
+    [Fact]
+    public void DeleteAndRecreateCoalescedIntoUpdated_ReattachesWithoutAnObservedAbsence()
+    {
+        const string path = "Document/_Comment/recreated";
+        using var presence = new Subject<bool>();
+        var reads = new List<Subject<object?>>();
+        var values = new List<object?>();
+        var errors = new List<Exception>();
+
+        using var binding = MeshNodeBindingExtensions.BindObserved(presence, () =>
+        {
+            var read = new Subject<object?>();
+            reads.Add(read);
+            return read;
+        }, path).Subscribe(values.Add, errors.Add);
+
+        presence.OnNext(true);
+        reads.Should().HaveCount(1);
+        reads[0].OnNext("before");
+
+        // The owner's cache reports deletion before the query provider publishes its next frame.
+        // Hold that re-query: no false presence is delivered to this binding.
+        reads[0].OnError(new MeshNodeReadEndedWithDeleteException(path));
+        values.Should().Equal("before", null);
+        errors.Should().BeEmpty();
+
+        // The provider coalesces delete + recreate between snapshots into one Updated frame,
+        // whose folded presence is still true. It must attach a new owner read anyway.
+        presence.OnNext(true);
+        reads.Should().HaveCount(2);
+        reads[1].OnNext("after");
+        values.Should().Equal("before", null, "after");
+
+        presence.OnNext(true);
+        reads.Should().HaveCount(2, "an ordinary update does not restart a healthy live read");
+        errors.Should().BeEmpty();
     }
 
     [Fact]
