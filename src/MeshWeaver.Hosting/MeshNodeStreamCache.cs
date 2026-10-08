@@ -3725,9 +3725,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     var released = TearDownEntry(path, entry, detached);
                     // Its readers are told, never left holding a subject nothing writes again
                     // (#5011). "No node found" is the text the missing-node classifiers match.
-                    entry.EndReaders(new InvalidOperationException(
-                        $"No node found at '{path}': the node was deleted, and this read of it ended "
-                        + "with the delete. Read the path again if it is re-created."));
+                    entry.EndReaders(new MeshNodeReadEndedWithDeleteException(path));
                     readStreamEvictions.OnNext(new ReadStreamEviction(path, released, "invalidate"));
                 }
                 catch (Exception ex)
