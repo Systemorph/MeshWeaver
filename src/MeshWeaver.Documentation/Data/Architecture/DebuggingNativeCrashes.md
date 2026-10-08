@@ -1814,8 +1814,10 @@ non-collectible and lives in a Gen2 region.
   16:20:16.640, with the crash at 16:20:22.
 
 So, as in #12–#16, retired collectible contexts were mid-unload. **Unlike** #12–#16, no next mesh had
-started: the #4042 sequencing held. The fault is found by the drain's *own* full blocking GC, in the
-garbage of the mesh that had just been torn down.
+started: the #4042 sequencing held. The fault is found by the drain's *own* full blocking GC, in
+metadata built for the mesh that had just been torn down. A full blocking GC examines reachable
+objects as well as dead ones, and #19's root walk failed (see *What it does NOT establish*), so this
+does not say whether the corrupt object was still reachable.
 
 #### Why #6259 and #6254 are not shown to explain them
 
@@ -1834,10 +1836,14 @@ garbage of the mesh that had just been torn down.
   - **The search.** Every captured page of #19 was scanned for an 8-byte word with a value in
     `[0x7f732d39b0c0, 0x7f732d39b118)`.
   - **The result.** The only hits are the lock array's own element, the GC's mark stack and the signal
-    frame. **No static base and no other interior pointer aims at the zeroed memory.**
-  - **What that leaves open.** The writer's statics could have belonged to one of the two Unloading
-    contexts, whose loader memory may already be absent from the dump. So this argues against the
-    mechanism for this object, but does not exclude it.
+    frame. **No captured word holds a value inside that window.**
+  - **What that leaves open, and it is most of the question.**
+    - A stale static base *below* the window could still reach the zeroed header through a field
+      offset. The scan does not bound that offset, and no static-base census was taken (see below).
+    - The writer's statics could also have belonged to one of the two Unloading contexts, whose loader
+      memory may already be absent from the dump.
+    - So the scan rules out only a pointer to the zeroed object itself or its immediate
+      neighbourhood. It is not evidence against the mechanism in general.
   - **How much of #6259 reaches a test host.** Its ThreadPool half
     (`DOTNET_ThreadPool_ThreadsToKeepAlive=-1`) is a **Helm chart** setting, and the CI test hosts do
     not set it. So even on a #6259 set, ThreadPool workers in a test host still retire. Only the
@@ -1848,8 +1854,14 @@ garbage of the mesh that had just been torn down.
     leg.
   - Runs from 2026-10-07 17:40Z to 2026-10-08 ~06:00Z: **0** in 42. Of those, 28 used sets carrying
     #6259 (`3.0.0-ci.10184`–`ci.10206`), all with Tiered PGO off, and each had FutuRe `exit 0`.
-  - At 1 %, 0.28 deaths were expected, so P(0) = 0.75.
-  - Separating a reduction from noise at 95 % takes **about 300** clean post-fix runs.
+  - The pre-fix rate is an estimate from only **two** events, not a known baseline. Even taking 1 % at
+    face value, 0.28 deaths were expected in 28 runs, so P(0) = 0.75.
+  - **No achievable clean window proves a reduction against two pre-fix events quickly.**
+    - With 0 deaths in *n* post-fix runs, the one-sided exact comparison (conditioning on the two
+      deaths) gives p = C(203,2) / C(203+n,2).
+    - At n = 300 that is ≈ 0.162. It falls below 0.05 only at n ≈ 704.
+    - A longer pre-fix history would tighten the baseline. It was not scanned: the window above starts
+      at 2026-10-05.
 
 #### What it does NOT establish
 
@@ -1860,9 +1872,16 @@ garbage of the mesh that had just been torn down.
 - #20's owner chain and ALC census. They were not read.
 - Any causal effect of #6259 or #6254.
 
-**Close criterion for MeshWeaver.Plugins#1605.** Either about 300 FutuRe executions on #6259-carrying
-sets with Tiered PGO off and **zero** host deaths, or a root cause with a deterministic repro. Never a
-short clean window.
+**Close criterion for MeshWeaver.Plugins#1605.**
+
+- **The preferred route:** a root cause with a deterministic repro.
+- **The operational alternative:** about 300 FutuRe executions on #6259-carrying sets with Tiered PGO
+  off and **zero** host deaths.
+  - This is an *operational* threshold, not proof. It bounds the post-fix rate below about 1 %
+    (one-sided 95 % upper bound) but does not establish a reduction (p ≈ 0.16, above).
+  - The issue should say that in so many words if it is closed on that basis, and reopen on the first
+    death.
+- Never a short clean window.
 
 ### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
