@@ -28,7 +28,7 @@ platform rather than to that person:
 - a `Hosting/InstanceAction` — Provision, Roll, Reconcile, Restart, Suspend, … — **and its approval
   re-plan**;
 - a governance pass (a policy evaluation, a release-readiness gate, a broad-grant activity);
-- a source sync or import;
+- a source sync or import that a person requested;
 - an operator step executed against a deployment record;
 - any watcher that reacts to a `RequestedX` field on a request node and acts on it.
 
@@ -37,6 +37,16 @@ an operator status node — are system-owned. The person who filed or approved t
 **authorized to ask for the operation**; that does not mean they can read every record the
 operation must read to carry it out, and it should not have to.
 
+### Operations nobody requested
+
+A webhook-triggered sync (a push imports at its pushed SHA), a periodic reconcile that repairs lost
+deliveries, a scheduled governance pass: these have **no caller** — no person wrote a request node,
+so there is no identity whose access could be checked twice. Their authority is the platform's own
+declaration (the sync source, the schedule) plus the authenticity of the trigger (the webhook's
+signature), checked where the trigger arrives; they execute as System from the start and record the
+trigger, not a requester. The two checkpoints below apply to every operation that **a person or a
+service identity asked for** — including a manual sync or import, and the approval of any of them.
+
 ## The two checkpoints
 
 ### 1. When the request is WRITTEN
@@ -44,11 +54,15 @@ operation must read to carry it out, and it should not have to.
 The create/update of the request node is validated, and an unauthorized request is **refused by
 name** at that write — it never gets parked as a pending request that nobody can execute.
 
-- The check is an `INodeValidator` (or an `INodeTypeAccessRule` /
-  `INodeTypePermissionRule` the request's NodeType declares) on `Create` and `Update`, evaluated as
-  the CALLER.
+- The check is an `INodeValidator` on `Create` and `Update`, evaluated as the CALLER against the
+  operation's TARGET (the deployment, the source, the partition), returning a
+  `NodeValidationResult` that names it. An `INodeTypeAccessRule` / `INodeTypePermissionRule` is not
+  enough on its own here: both answer a bare `bool`, and on a denial `RlsNodeValidator` writes a
+  generic message about the REQUEST node's path, never the target's.
 - The refusal names the permission and the target: *"User 'alice' lacks Update permission on
-  'Deployments/control' — cannot request Roll"*, not a generic "Access denied".
+  'Deployments/control' — cannot request Roll"*, not a generic "Access denied". A check that could
+  not decide (`PermissionCheckOutcome.IsUndetermined`) is refused as *"could not be checked"*, never
+  as a missing permission.
 - An approval is a write too: an approver who lacks the right to approve is refused at the approval
   write, not at execution.
 
@@ -57,7 +71,10 @@ name** at that write — it never gets parked as a pending request that nobody c
 The caller's access is checked **again**, explicitly, right before the operation runs. Between the
 request and its execution the requester or the approver may have lost the right (a revoked grant,
 a removed membership, a role change). The check uses the Permission API against the identity
-recorded on the request, not the ambient context of whatever thread picked it up:
+recorded on the request, not the ambient context of whatever thread picked it up — and it checks
+**every identity the operation's authority rests on**: the requester's right to request it, and,
+for an operation that needed approval (the approval re-plan included), the recorded approver's
+right to approve it. A requester who still holds the right does not carry an approver who lost it.
 
 - `hub.CheckPermissionOutcome(path, userId, permission)` — the tri-state form, so *could not
   decide* (`Undetermined`) is reported as such and still fails closed. See
@@ -72,24 +89,43 @@ rendering plans, writing results and status — runs as **System**. The operatio
 depend on what the caller can read.
 
 ```csharp
-// 1) explicit authorization, as the recorded caller — fail closed, name the permission
-hub.CheckPermissionOutcome(request.DeploymentPath, request.RequestedBy, Permission.Update)
-    .SelectMany(outcome => outcome.IsGranted
-        // 2) execution as System — reads, plan rendering and result writes
-        ? access.RunAsSystem(() => ExecuteAction(hub, request))
-        : RecordRefusal(hub, request, outcome,
-            $"User '{request.RequestedBy}' lacks Update permission on '{request.DeploymentPath}'"))
+// 1) explicit authorization of EVERY identity the action's authority rests on — fail closed
+var requester = hub.CheckPermissionOutcome(request.DeploymentPath, request.RequestedBy, Permission.Update)
+    .Select(outcome => (who: request.RequestedBy, what: "Update", outcome));
+var approver = request.ApprovedBy is null
+    ? Observable.Return((who: (string?)null, what: "", outcome: PermissionCheckOutcome.Granted))
+    : hub.CheckPermissionOutcome(request.DeploymentPath, request.ApprovedBy, ApprovePermission)
+        .Select(outcome => (who: request.ApprovedBy, what: "Approve", outcome));
+
+requester.Zip(approver, (r, a) => r.outcome.IsGranted ? a : r)   // the first check that did not grant
+    .SelectMany(check => access.RunAsSystemFor(
+        governedBy: request.Path, onBehalfOf: request.RequestedBy,
+        // 2) everything after the checks runs as System — the action, and the refusal's status
+        //    write alike: the status node is system-owned too
+        () => check.outcome.IsGranted
+            ? ExecuteAction(hub, request)
+            : RecordRefusal(hub, request, check.outcome.IsUndetermined
+                // could not decide is NOT a denial (PermissionCheckOutcome) — say which it was
+                ? $"{check.what} permission of '{check.who}' on '{request.DeploymentPath}' could not be checked: {check.outcome.UndeterminedReason}"
+                : $"User '{check.who}' lacks {check.what} permission on '{request.DeploymentPath}'")))
     .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Action {Path} failed", request.Path));
 ```
+
+`ApprovePermission` stands for whatever right the action's approval policy requires; the shape is
+the point — one explicit check per identity, the refusal naming which identity and which right, and
+nothing after the checks running as the caller.
 
 - `AccessService.ImpersonateAsSystem()` is the primitive; in a reactive pipeline compose it through
   `access.RunAsSystem(() => work)` (`ImpersonationScopeExtensions`), which opens and closes the
   scope inside one synchronous `Subscribe`. Never `Observable.Using(() => access.ImpersonateAsSystem(), …)`
   — its store and restore land on different threads and latch System onto the subscriber
   ([Access Context Propagation](../AccessContextPropagation)).
-- Where the operation is the executor of a governed activity, say so:
-  `access.ImpersonateAsSystemFor(governedBy: <activity path>, onBehalfOf: <user>)`, so the
-  broad-grant guard and the audit trail see who the System write serves.
+- Where the operation is the executor of a governed activity, or acts for one user, say so:
+  `access.RunAsSystemFor(governedBy: <activity path>, onBehalfOf: <user>, () => work)` — the same
+  seal as `RunAsSystem`, carrying both fields so the broad-grant guard and the audit trail see whom
+  the System write serves. `AccessService.ImpersonateAsSystemFor(…)` is its raw `IDisposable`
+  primitive; like `ImpersonateAsSystem()` it belongs in a synchronous `using`, never in
+  `Observable.Using`.
 - A single infrastructure post can carry System as a value instead:
   `o.WithAccessContext(WellKnownUsers.SystemContext)`.
 - Results that record WHO asked (`requestedBy`, `approvedBy`) carry the caller's id as data on the
