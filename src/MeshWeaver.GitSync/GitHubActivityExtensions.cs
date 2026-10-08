@@ -202,6 +202,9 @@ public static class GitHubActivityExtensions
             .SelectMany(ok => ok
                 ? AsSystem()
                 : Observable.Throw<string>(new UnauthorizedAccessException(requiresCommitAuthority
+                    && !string.Equals(operation, "commit", StringComparison.Ordinal)
+                    ? LocalizationCatalog.Get("gitsync.trigger.reimportNeedsCommitAuthority", locale, spacePath)
+                    : requiresCommitAuthority
                     ? $"Access denied: committing '{spacePath}' to GitHub needs Update permission on " +
                       "the Space or a platform admin. The Space is system-owned (GitSynced), so " +
                       "per-space write grants do not exist — ask a platform admin, or change the " +
@@ -724,9 +727,18 @@ public static class GitHubActivityExtensions
         // the same tree the unattended imports do; it was missed on the first pass, which is the
         // very defect that section names — a guard whose reach is assumed reads as a guarantee it
         // does not keep.
+        //
+        // 🚨 #5140 — and authorized like every other trigger: the CLICK authorizes, the SYSTEM
+        // executes (TriggerAuthorizedAsSystem). This path used to run its activity and its import
+        // under the CALLER, so on a system-owned Space — where no person holds a write grant — it
+        // worked only for whoever still held a leftover Admin grant the retraction had missed, and
+        // it failed for the platform admin. Choosing the commit a Space is mirrored to is not a mere
+        // convergence (any reader may converge to the branch head with `update`), so it takes the
+        // commit authority: Update on the Space, or a platform admin.
         return HoldSpaceDuringImport(hub, spacePath,
             $"GitSync: a re-import is writing '{spacePath}' at {commitish}",
-            hub.RunActivity(spacePath, ActivityCategory.Import,
+            TriggerAuthorizedAsSystem(hub, sync, spacePath, sourceId, "reimport", requiresCommitAuthority: true,
+            () => hub.RunActivity(spacePath, ActivityCategory.Import,
             new LogMessage($"Re-import {spacePath} at {commitish}", LogLevel.Information)
                 .WithKey("activity.gitsync.reimport.title", ("space", spacePath), ("commitish", commitish)),
             ctx =>
@@ -761,7 +773,7 @@ public static class GitHubActivityExtensions
                                 { Redirected: true } => AtSealedCommit(ctx, sync, plan, spacePath, userId, sourceId, force),
                                 _ => AsAsked(),
                             }));
-            }, onActivityCreated));
+            }, onActivityCreated)));
     }
 
     /// <summary>

@@ -227,6 +227,25 @@ public static class SecurityQueries
         => Enumeration($"path:{partition} scope:descendants id:_Policy "
             + $"nodeType:{SecurityCollections.PartitionAccessPolicyNodeType} {ContentProjection}");
 
+    /// <summary>
+    /// ONE partition's sync config — the node at exactly <c>{partition}/_GitSync</c>, whose ONE-WAY
+    /// presence makes the partition's content repository-owned (#5140). Anchored on the node's own
+    /// path, so it is a point read of one row in the partition's own schema.
+    /// </summary>
+    /// <param name="partition">The partition (first path segment) to read.</param>
+    /// <returns>The query string.</returns>
+    public static string PartitionSyncConfig(string partition)
+        => Enumeration($"path:{AccessAssignmentGuard.SyncConfigPath(partition)} {ContentProjection}");
+
+    /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the sync-config read.</summary>
+    public const string SyncConfigQueryIdPrefix = "$security-sync:";
+
+    /// <summary>The cache id of <see cref="PartitionSyncConfig"/> for <paramref name="partition"/>.</summary>
+    /// <param name="partition">The partition (first path segment).</param>
+    /// <returns>The process-wide cache id.</returns>
+    public static string PartitionSyncConfigQueryId(string partition)
+        => SyncConfigQueryIdPrefix + partition;
+
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the grant read — <c>$security-access:</c>
     /// alone is the ROOT scope's id, and a partition's is this prefix plus its name.</summary>
     public const string AssignmentsQueryIdPrefix = "$security-access:";
@@ -276,7 +295,8 @@ public static class SecurityQueries
     public static ImmutableArray<string> PartitionAnchoredQueryIds(string partition)
         => string.IsNullOrEmpty(partition)
             ? ImmutableArray<string>.Empty
-            : [PartitionAssignmentsQueryId(partition), PartitionPoliciesQueryId(partition)];
+            : [PartitionAssignmentsQueryId(partition), PartitionPoliciesQueryId(partition),
+                PartitionSyncConfigQueryId(partition)];
 
     /// <summary>
     /// The root-scope <c>AccessAssignment</c>s naming ONE subject — <see cref="RootAssignments"/>
@@ -332,6 +352,7 @@ public static class SecurityQueries
         RootPolicy,
         PartitionAssignments("acme"),
         PartitionPolicies("acme"),
+        PartitionSyncConfig("acme"),
         RootAssignmentsFor("rbuergi"),
         PartitionAssignmentsFor("Admin", "rbuergi"),
         PartitionAssignmentsFor("rbuergi", "rbuergi"),
