@@ -358,7 +358,9 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         # requests (measured 2026-10-08: settle #3191 had no requested reviewer and no review 20 minutes in,
         # so a refusal-only rule held it forever).
         generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
-        if generated and (any(k == "refused" for k, _ in kinds) or no_review_coming(pr, as_of)):
+        # The no-request signal applies only when the reviewer has posted NOTHING: an unrecognised response
+        # (an empty body) also removes the pending request, and must stay "not a review" (#6336 review).
+        if generated and (any(k == "refused" for k, _ in kinds) or (not mine and no_review_coming(pr, as_of))):
             notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
         elif run is not None:
             # Checked BEFORE the waiver: it is the governed exit and needs nobody, and when both
@@ -985,14 +987,18 @@ GENERATED_SETTLE_MINUTES = 10
 
 
 def no_review_coming(pr: dict, as_of: str | None) -> bool:
-    """True when no automatic review is requested on the pull request and it opened at least
-    GENERATED_SETTLE_MINUTES before `as_of` (now when None). An unreadable stamp is never "no review". Pure
-    given `as_of`."""
-    if any(is_reviewer(u) for u in pr.get("requested_reviewers") or []):
+    """True when no automatic review is requested on the pull request NOW and it opened at least
+    GENERATED_SETTLE_MINUTES ago. FAILS CLOSED (#6336 review): `requested_reviewers` is the pull request's
+    CURRENT state, so a replay (`as_of`) cannot read what was pending then and never releases; a payload
+    without the field is not a proven-empty list; an unreadable stamp is never "no review"."""
+    if as_of is not None:
+        return False
+    requested = pr.get("requested_reviewers")
+    if not isinstance(requested, list) or any(is_reviewer(u) for u in requested):
         return False
     opened = parse_stamp(pr.get("created_at"))
-    now = parse_stamp(as_of) if as_of else datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-    return opened is not None and now is not None and (now - opened) >= datetime.timedelta(minutes=GENERATED_SETTLE_MINUTES)
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    return opened is not None and (now - opened) >= datetime.timedelta(minutes=GENERATED_SETTLE_MINUTES)
 
 
 def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[bool, str]:
@@ -2358,6 +2364,14 @@ def self_test() -> int:
                  dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, BOT_COMMITS, want_refused=False, reviews=[])
     verdict_case("NEGATIVE CONTROL: a PERSON's lock PR, nothing requested for hours -> RED", False,
                  dict(gpr(user=HUMAN, created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, [{"author": HUMAN}], reviews=[])
+    verdict_case("NEGATIVE CONTROL: settle PR, an UNRECOGNISED (empty) reviewer response, nothing requested -> RED", False,
+                 dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, BOT_COMMITS, reviews=[_review("")])
+    verdict_case("NEGATIVE CONTROL: settle PR, payload without requested_reviewers -> RED (not proven empty)", False,
+                 gpr(created="2026-10-04T08:00:00Z"), LOCKS, BOT_COMMITS, reviews=[])
+    v_replay = evaluate(dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), [], [], NO_WAIVER, "2026-10-04T09:00:00Z", (), LOCKS, BOT_COMMITS)
+    ok = not v_replay.green
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} verdict: {'NEGATIVE CONTROL: a replay (--as-of) never releases on requested_reviewers':51} green={v_replay.green}")
     v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
     ok = (not v.ready) and v.mode == "unreadable"
     failures += 0 if ok else 1
