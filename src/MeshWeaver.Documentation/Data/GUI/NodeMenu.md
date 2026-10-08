@@ -138,6 +138,14 @@ Threads are **not** in this menu — they live in the dedicated top-bar AI menu 
 
 Items with a required permission are checked inside the provider. Only items the viewer is permitted to see ever reach the portal.
 
+### 🚨 Who "the viewer" is — the subscriber, never the ambient identity
+
+The menu is built for the identity that **opened the layout area** (`LayoutAreaHost.ViewerContext`, captured from the subscribe delivery), and nobody else. `RenderMenus` re-runs on every render of the area, and a render re-runs on an emission of whatever stream the area is bound to — a node stream, a mesh query answering. That emission's turn carries the **emitter's** `AccessContext`, which on a user partition root was the system identity: the menu was folded from `All | Sync | Compile` and Pin was built for `system-security` while the person looking at the page held Read only (MeshWeaver.Plugins#2784).
+
+So `RenderMenus` invokes every provider — and subscribes every provider stream — inside `AccessService.SwitchAccessContext(host.ViewerContext)`. A provider that resolves its viewer **on entry** (`GetEffectivePermissions(path)`, `IsGlobalAdmin()`, `AccessService.ViewerId()`, `ViewerScreen()`) therefore gets the subscriber, whichever emission woke the render. What a provider must NOT do is read `AccessService.Context` **inside its projection** (`.Select` / `CombineLatest` selector): that runs later, on the emitting thread, outside the scope. Capture the viewer on entry and close over it.
+
+The menu is an **offer**. Every action it links to re-checks on the server (the `[RequiresPermission]` delivery gate, `RlsNodeValidator`, the page's own gate), so a wrongly offered entry is refused when used — but an offer computed for the wrong principal is still wrong in both directions, and it is pinned by `NodeMenuViewerIdentityTest`.
+
 ---
 
 ## How the Menu Pipeline Works
