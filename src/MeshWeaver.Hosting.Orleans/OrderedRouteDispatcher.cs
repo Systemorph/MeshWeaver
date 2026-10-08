@@ -90,7 +90,7 @@ namespace MeshWeaver.Hosting.Orleans;
 /// </summary>
 internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
 {
-    private readonly record struct QueuedLeg(IObservable<Unit> Leg, Action OnCompleted);
+    private readonly record struct QueuedLeg(IObservable<Unit> Leg, Action? OnStarted, Action OnCompleted);
 
     /// <summary>
     /// The FIFO key: a destination address plus the payload identity of the thing the deliveries on
@@ -185,9 +185,24 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
     /// <param name="onLegCompleted">Invoked once per leg after it terminates (success or fault),
     /// on the completing thread — the in-flight bookkeeping the caller owns.</param>
     public void Enqueue(string destination, string? orderingKey, IObservable<Unit> leg, Action onLegCompleted)
+        => Enqueue(destination, orderingKey, leg, onLegStarted: null, onLegCompleted);
+
+    /// <summary>
+    /// <see cref="Enqueue(string, string?, IObservable{Unit}, Action)"/>, plus a callback for the
+    /// moment the leg is DISPATCHED — when the drain hands it to the pool, after every earlier leg of
+    /// its channel has terminated. From then on it waits on no other leg (only, possibly, on a pool
+    /// thread), so that is the moment a leak verdict measures from, never the enqueue (#5703).
+    /// </summary>
+    /// <param name="destination">The target address path; half the FIFO key.</param>
+    /// <param name="orderingKey">The payload identity — see the other overload.</param>
+    /// <param name="leg">The cold route observable.</param>
+    /// <param name="onLegStarted">Invoked once, just before the leg is subscribed through the pool;
+    /// <c>null</c> for none.</param>
+    /// <param name="onLegCompleted">Invoked once per leg after it terminates (success or fault).</param>
+    public void Enqueue(string destination, string? orderingKey, IObservable<Unit> leg, Action? onLegStarted, Action onLegCompleted)
     {
         var channel = new Channel(destination, orderingKey);
-        var queued = new QueuedLeg(leg, onLegCompleted);
+        var queued = new QueuedLeg(leg, onLegStarted, onLegCompleted);
         lock (gate)
         {
             if (queues.TryGetValue(channel, out var existing))
@@ -223,6 +238,7 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
             queue.Pending = queue.Pending.Dequeue(out next);
         }
 
+        next.OnStarted?.Invoke();
         pool.SubscribeThroughPool(next.Leg)
             .Finally(() =>
             {

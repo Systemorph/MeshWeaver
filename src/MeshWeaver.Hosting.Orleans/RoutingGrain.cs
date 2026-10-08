@@ -163,7 +163,8 @@ internal class RoutingGrain(
                 logger,
                 orderedDispatcher.QueueSnapshot,
                 quiescence is null ? null : quiescence.OldestInFlight,
-                () => (routingPool.CurrentInFlight, routingPool.CurrentlyWaiting)), null);
+                () => (routingPool.CurrentInFlight, routingPool.CurrentlyWaiting),
+                oldestQueued: quiescence is null ? null : quiescence.OldestQueued), null);
             return saturationReport!;
         }
     }
@@ -260,11 +261,16 @@ internal class RoutingGrain(
             // Claimed at ENQUEUE like the in-flight slot — a leg queued behind another leg is work
             // this silo has accepted and must let land before it stops (#2638). Labelled so the
             // shutdown residual can NAME it if it never lands (#2833).
-            var slot = quiescence?.Track($"stream-routed → {addressPath} (delivery {delivery.Id})");
+            //
+            // 🚨 QUEUED, not dispatched (#5703): the leg may wait behind every earlier leg of its channel,
+            // so its dispatch is stamped when the drain hands it to the pool — a queue wait must never
+            // read as a leaked slot.
+            var slot = quiescence?.TrackQueued($"stream-routed → {addressPath} (delivery {delivery.Id})");
             orderedDispatcher.Enqueue(
                 addressPath,
                 orderingKey,
                 BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
+                () => slot?.MarkDispatched(),
                 () =>
                 {
                     SaturationReport.OnTerminated(Interlocked.Decrement(ref inFlightRoutes));

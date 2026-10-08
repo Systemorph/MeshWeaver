@@ -1396,7 +1396,7 @@
   "setup.ai.apiKey": "API key",
   "setup.ai.endpoint": "Endpoint",
   "setup.ai.embedding.heading": "Embeddings",
-  "setup.ai.embedding.help": "An OpenAI-compatible /v1/embeddings endpoint. Without one, search falls back to matching words instead of meaning — silently, so it is worth setting now.",
+  "setup.ai.embedding.help": "An OpenAI-compatible /v1/embeddings endpoint enables semantic search. Without one, SQLite can still match parts of stored text. PostgreSQL matches node names, paths, descriptions and types; searching page text also requires a content index.",
   "setup.ai.embedding.model": "Embedding model",
   "setup.modules.heading": "Modules",
   "setup.modules.help": "Which of the modules in this image start with the instance.",

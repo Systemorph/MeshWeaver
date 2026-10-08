@@ -25,9 +25,10 @@
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
-# Weights are wall-clock SECONDS, the MAX over three green runs (32917064578,
-# 32914770924 and 32912903460, all 2026-08-26) so a shard is sized for the bad
-# case, not the average. The per-project `[CI] <name> exit=` markers in the test
+# Weights are wall-clock SECONDS, the MAX over three full, green main runs
+# (37815766695, 37821637421 and 37822062147, all 2026-10-08), plus completed
+# project markers in red run 37830774943. Size for the bad case, not the average.
+# The per-project `[CI] <name> exit=` markers in the test
 # job's log ARE the measurement: take the delta between each `::group::<name>`
 # and its marker.
 #
@@ -42,24 +43,21 @@
 # drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
 #
 # The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
-# or one part of a split one. Today that is Hosting.Orleans.Test at 269 s, which
-# became the long pole when 17 suites moved to MeshWeaver.Plugins (#2276) and took
-# Hosting.Monolith.Test (663 s / 3 parts) and PluginCatalog.Test (348 s / 2) with
-# them. Adding shards below that floor buys nothing.
+# or one part of a split one. Today that is Hosting.Test at 272 s per part. Adding
+# shards below that floor buys nothing.
 #
 # SPLIT RULE — TWO independent triggers. Either one is sufficient.
 #
-#  (1) BALANCE. Solo weight exceeds the ideal shard load (sum ÷ SHARD_TOTAL,
-#      currently 731 ÷ 6 ≈ 122 s), because only then is the project the binding
-#      floor. (AI.Test's split was dropped under this rule before the suite itself
-#      moved to MeshWeaver.Plugins, #2276; Monolith's three parts and
+#  (1) BALANCE. Solo weight exceeds the ideal shard load (sum ÷ SHARD_TOTAL),
+#      because only then is the project the binding floor. (AI.Test's split was
+#      dropped under this rule before the suite itself moved to
+#      MeshWeaver.Plugins, #2276; Monolith's three parts and
 #      PluginCatalog's two left with the same migration.)
 #
-#      🚨 The remaining table is small enough that this trigger now fires on the
-#      four heaviest entries at once. It is NOT an instruction to split them: the
-#      table is a stale measurement of a tree that just lost two thirds of its
-#      weight, so RE-MEASURE against a real run before acting on it. Trigger (2)
-#      is the one with teeth, and nothing currently breaches it.
+#      Re-measure against a full run before changing a split. A stale low weight
+#      puts several heavy projects on one shard while the printed loads look even.
+#      On run 37830774943, shard 4's measured tests were 290 + 435 + 38 + the
+#      unfinished Compiler.Pipeline suite, against a declared load of 332 s.
 #
 #  (2) 🚨 HEADROOM AGAINST THE PER-PROJECT CAP (#2747). Solo weight exceeds ~60%
 #      of the `timeout 8m` = 480 s wall-clock cap each project runs under in
@@ -83,7 +81,8 @@
 #      Memex.Portal.Shared.Test was the next one: listed at 25 s, it measured 431 s solo on
 #      run 36816633012 (90% of the cap) and was killed at 480 s exit=124 on run 36817124160,
 #      still progressing through its classes, once #5894 added ~28 s of deliberate waits. It
-#      runs in two parts since.
+#      now runs in three parts: the two parts measured 327 and 324 s on
+#      37822062147, both beyond the 288 s headroom threshold.
 #
 #      MeshWeaver.Hosting.Test was the one after that: listed at 27 s, it measured 364-367 s
 #      solo on runs 36907697857, 36909173530 and 36909294363 (76% of the cap) and was killed at
@@ -93,7 +92,9 @@
 #      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
 #      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,
 #      still progressing through its classes (no TEST START without its TEST END). It runs in
-#      two parts since.
+#      two parts since. Messaging.Hub.Test grew from 76 s in the old table to
+#      428 s on each of the three green runs and 435 s on 37830774943; it now
+#      runs in two parts.
 #
 # 🚨 The two triggers must BOTH be checked when re-measuring. A project that grows
 # past 288 s (60% of 480) needs splitting even while the LPT loop still reports
@@ -134,19 +135,19 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-431 Memex.Portal.Shared.Test 2
+651 Memex.Portal.Shared.Test 3
 269 MeshWeaver.Hosting.Orleans.Test
 91 MeshWeaver.Data.Test
-76 MeshWeaver.Messaging.Hub.Test
-74 MeshWeaver.PluginTester.Test
+435 MeshWeaver.Messaging.Hub.Test 2
+49 MeshWeaver.PluginTester.Test
 480 MeshWeaver.Graph.Test 2
-50 MeshWeaver.FaultInjection.Test
-60 MeshWeaver.Updates.Test
-365 MeshWeaver.Hosting.Test 2
-26 MeshWeaver.Layout.Test
+61 MeshWeaver.FaultInjection.Test
+20 MeshWeaver.Updates.Test
+543 MeshWeaver.Hosting.Test 2
+43 MeshWeaver.Layout.Test
 7 MeshWeaver.ContentCollections.Test
-6 MeshWeaver.Documentation.Test
-5 MeshWeaver.Compiler.Pipeline.Test
+37 MeshWeaver.Documentation.Test
+227 MeshWeaver.Compiler.Pipeline.Test
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test
 2 MeshWeaver.Portal.E2E.Test

@@ -807,10 +807,13 @@ public sealed record HostingOperatorSpec
     public string? Executor { get; init; }
 
     /// <summary>
-    /// The ONE user id that may approve its own request on the Actions path: the maintainer of a
-    /// single-admin installation, compared with the id the mesh stamps on the approval write.
-    /// Blank means nobody may, and the approver must differ from the requester. Renders
-    /// <c>Hosting__Operator__Maintainer</c> (<c>Hosting:Operator:Maintainer</c>).
+    /// The ONE user id that may approve its own request: the maintainer of a single-admin
+    /// installation, compared with the id the mesh stamps on the approval write. It is read by every
+    /// approval gate of the installation (policy <c>sole-maintainer-approval</c>): instance actions on
+    /// any executor, and operation requests. Each such approval is stamped and logged as a
+    /// self-approval. Blank means nobody may, and the approver must differ from the requester.
+    /// Renders <c>Hosting__Operator__Maintainer</c> (<c>Hosting:Operator:Maintainer</c>; the name
+    /// predates the wider scope).
     /// </summary>
     [Description("Maintainer: the one user id that may approve its own request")]
     public string? Maintainer { get; init; }
