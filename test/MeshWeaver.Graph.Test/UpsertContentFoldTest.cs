@@ -113,7 +113,7 @@ public class UpsertContentFoldTest(ITestOutputHelper output) : MonolithMeshTestB
         third.Success.Should().BeTrue(third.Error ?? "the update leg must land");
         third.WasCreated.Should().BeFalse("the node existed by now");
 
-        var stored = await ReadTally(path);
+        var stored = await ReadTally(path, expectedCount: 3);
         stored.AccessCount.Should().Be(3,
             "three upserts each folding Sum 1 onto the STORED count — 1 would mean the fold never "
             + "ran, 2 would mean it folded onto the incoming value instead of the live one");
@@ -143,7 +143,7 @@ public class UpsertContentFoldTest(ITestOutputHelper output) : MonolithMeshTestB
         }, at);
 
         response.Success.Should().BeTrue(response.Error ?? "the create must land");
-        (await ReadTally(path)).AccessCount.Should().Be(7,
+        (await ReadTally(path, expectedCount: 7)).AccessCount.Should().Be(7,
             "the seed states the intended INITIAL value; a create leg that folded would write 1");
     }
 
@@ -169,9 +169,13 @@ public class UpsertContentFoldTest(ITestOutputHelper output) : MonolithMeshTestB
         var body = new Tally { AccessCount = 1, FirstAccessedAt = at, LastAccessedAt = at, Label = "same" };
 
         await Upsert(path, body, at);
-        await Upsert(path, body, at);   // byte-identical — the no-op short-circuit's exact shape
+        var updated = await Upsert(path, body, at);   // byte-identical — the no-op short-circuit's exact shape
 
-        (await ReadTally(path)).AccessCount.Should().Be(2,
+        updated.Success.Should().BeTrue(updated.Error ?? "the update must land");
+        updated.Node!.ContentAs<Tally>(Options)!.AccessCount.Should().Be(2,
+            "the write response must confirm that the owner applied the fold");
+
+        (await ReadTally(path, expectedCount: 2)).AccessCount.Should().Be(2,
             "the second upsert carried the same content as the first, so the no-op comparison says "
             + "'nothing changed' — but a Sum fold is a change request the comparison cannot see. "
             + "1 here means the fold was skipped and the caller was told success anyway");
@@ -341,11 +345,13 @@ public class UpsertContentFoldTest(ITestOutputHelper output) : MonolithMeshTestB
         return response;
     }
 
-    private async Task<Tally> ReadTally(string path)
+    private async Task<Tally> ReadTally(string path, int expectedCount)
     {
         var node = await Mesh.GetWorkspace()
             .GetMeshNodeStream(path)
-            .Where(n => n?.Content is not null)
+            // The write response can precede this stream cache's update. An initial emission with
+            // the previous body is not the settled readback of the write we are asserting.
+            .Where(n => n?.ContentAs<Tally>(Options)?.AccessCount == expectedCount)
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);

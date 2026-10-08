@@ -273,8 +273,10 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
                 if (!string.Equals(status, "ahead", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(status, "identical", StringComparison.OrdinalIgnoreCase))
                     return null;
-                var files = cmp.Files ?? (IReadOnlyList<GitHubCommitFile>)Array.Empty<GitHubCommitFile>();
-                if (files.Count >= CompareFileCap)
+                // An omitted file list is not a known-empty diff. The endpoint can also cap the
+                // list at 300 entries; either answer is incomplete, so import the full snapshot.
+                var files = cmp.Files;
+                if (files is null || files.Count >= CompareFileCap)
                     return null;
                 var changed = new List<string>();
                 foreach (var f in files)

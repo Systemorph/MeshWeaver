@@ -907,10 +907,9 @@ public sealed class GitHubSyncService
         if (string.IsNullOrEmpty(baseSha)
             || string.Equals(baseSha, snapshot.CommitSha, StringComparison.OrdinalIgnoreCase))
             return Observable.Return(false);
-        // A READ of the folder at the base commit, not a diff: the production client answers every
-        // GetChangedPaths with null (it is not forwarded to the compare API), which would make this
-        // proof unreachable exactly where it is needed. A fetch at a sha is what every sync already
-        // does; this one runs only on the rare empty-subdirectory path.
+        // A READ of the folder at the base commit, not a diff: compare may answer null when the
+        // diff is unavailable or incomplete. A fetch at a sha is what every sync already does;
+        // this one runs only on the rare empty-subdirectory path.
         return repoClient.Fetch(repoUrl, baseSha, subdirectory, token)
             .Take(1)
             .Select(atBase => atBase.ListingIsComplete && atBase.Files.Count > 0)
