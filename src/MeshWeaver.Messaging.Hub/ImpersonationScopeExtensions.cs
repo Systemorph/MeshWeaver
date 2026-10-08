@@ -96,6 +96,39 @@ public static class ImpersonationScopeExtensions
     }
 
     /// <summary>
+    /// <see cref="RunAsSystem{T}"/>, stating WHY the platform acts — the sealed reactive form of
+    /// <see cref="AccessService.ImpersonateAsSystemFor"/>. The work runs as System carrying
+    /// <paramref name="governedBy"/> (the governed activity it executes) and
+    /// <paramref name="onBehalfOf"/> (the one user it acts for), so the broad-grant guard and the
+    /// audit trail see whom the System write serves; the scope is opened and closed inside one
+    /// synchronous <c>Subscribe</c> and never reaches what the subscriber composes, exactly as
+    /// <see cref="RunAsSystem{T}"/>.
+    /// </summary>
+    /// <typeparam name="T">What the scoped operation emits.</typeparam>
+    /// <param name="access">The access service, or null on a host without one.</param>
+    /// <param name="governedBy">The executing governed activity's path, or null.</param>
+    /// <param name="onBehalfOf">The user the System write serves, or null.</param>
+    /// <param name="work">The cold operation to run as System.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static IObservable<T> RunAsSystemFor<T>(
+        this AccessService? access, string? governedBy, string? onBehalfOf, Func<IObservable<T>> work)
+    {
+        if (access is null)
+            return Observable.Defer(work);
+        // Checked at COMPOSITION, against the code that asked — same reason as RunAsSystem.
+        access.ImpersonationGuard.Check(Assembly.GetCallingAssembly(), nameof(RunAsSystemFor),
+            new AccessContext
+            {
+                ObjectId = AccessService.SystemObjectId,
+                Name = AccessService.SystemObjectId,
+                GovernedBy = string.IsNullOrWhiteSpace(governedBy) ? null : governedBy,
+                OnBehalfOf = string.IsNullOrWhiteSpace(onBehalfOf) ? null : onBehalfOf,
+            });
+        return new SubscribeScopedObservable<T>(
+            access, () => access.ImpersonateAsSystemFor(governedBy, onBehalfOf), work);
+    }
+
+    /// <summary>
     /// Runs <paramref name="work"/> as <paramref name="hub"/>'s own identity, sealed exactly as
     /// <see cref="RunAsSystem{T}"/> is.
     /// </summary>

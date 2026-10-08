@@ -59,7 +59,7 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Messaging.AccessService"] =
                 ["ImpersonateAsSystem", "ImpersonateAsSystemFor", "ImpersonateAsHub", "SetContext",
                  "SetCircuitContext", "SetHostIdentity", "SetStandingIdentity", "SystemObjectId"],
-            ["MeshWeaver.Messaging.ImpersonationScopeExtensions"] = ["RunAsSystem", "RunAsHub"],
+            ["MeshWeaver.Messaging.ImpersonationScopeExtensions"] = ["RunAsSystem", "RunAsSystemFor", "RunAsHub"],
             ["MeshWeaver.Messaging.PostOptions"] = ["ImpersonateAsHub"],
             ["MeshWeaver.Messaging.IMessageDelivery"] = ["SetAccessContext"],
             ["MeshWeaver.Messaging.MessageDelivery"] = ["SetAccessContext"],
