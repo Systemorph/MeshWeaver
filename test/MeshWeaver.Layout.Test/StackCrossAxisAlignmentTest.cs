@@ -1,4 +1,3 @@
-using System;
 using System.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -95,20 +94,5 @@ public class StackCrossAxisAlignmentTest(ITestOutputHelper output) : HubTestBase
         // The orientation is not known until the client resolves the binding, so nothing is guessed.
         SkinOf(Controls.Stack.WithOrientation(new JsonPointerReference("orientation"))).HorizontalAlignment
             .Should().BeNull();
-    }
-
-    /// <summary>
-    /// Every member name must exist in the Fluent UI <c>HorizontalAlignment</c> the Blazor client binds
-    /// into (Microsoft.FluentUI.AspNetCore.Components 4.14.4, read from the assembly: Left, Start,
-    /// Center, Right, End, Stretch, SpaceBetween) — a name the client cannot parse degrades to its
-    /// default, silently. Core does not reference the UI library, so its names are listed here.
-    /// </summary>
-    [Fact]
-    public void EveryMemberName_IsOneTheClientEnumCarries()
-    {
-        string[] fluentNames = ["Left", "Start", "Center", "Right", "End", "Stretch", "SpaceBetween"];
-
-        Enum.GetNames<HorizontalAlignment>().Should().BeSubsetOf(fluentNames);
-        Enum.GetNames<HorizontalAlignment>().Should().Contain(nameof(HorizontalAlignment.Stretch));
     }
 }

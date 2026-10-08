@@ -213,7 +213,7 @@ The underlying `LayoutStackSkin` record maps directly to the `With*` methods abo
 | Property | Type | Default |
 |---|---|---|
 | `Orientation` | `object?` | `Orientation.Vertical` |
-| `HorizontalAlignment` | `object?` | `null` |
+| `HorizontalAlignment` | `object?` | `HorizontalAlignment.Stretch` on a vertical stack (serialised as `"Stretch"`); `null` on a horizontal stack or one with a data-bound orientation — see *Cross-Axis Alignment* |
 | `VerticalAlignment` | `object?` | `null` |
 | `HorizontalGap` | `object?` | `null` |
 | `VerticalGap` | `object?` | `null` |
