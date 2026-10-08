@@ -82,7 +82,7 @@ of these was written narrower on measured evidence:
   landed fix splits them again. What I8 refuses is the value being **orphaned**: declared, and named
   by no lane of the file that declares it.
 
-- **I8 is PER FILE, because a workflow `env:` is file-scoped (#4752).** It used to pool every lane
+  **And I8 is PER FILE, because a workflow `env:` is file-scoped (#4752).** It used to pool every lane
   of the repository. That is wrong in both directions:
   - a ref "satisfied" by a lane in another file was never readable by that lane;
   - a ref in a file that calls no lane is not a lane's source ref at all.
