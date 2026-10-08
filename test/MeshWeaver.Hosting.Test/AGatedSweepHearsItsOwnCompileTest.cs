@@ -99,6 +99,22 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
         bake.MarkRunning("enumerating dynamic NodeTypes");
         bake.Admission.Should().Be(MeshAdmission.Provisional, "precondition — the bake gates and is measuring");
 
+        // 🚨 Core #6050 — PIN the ordering the hold-wait below exists for, deterministically. The
+        // witness (LocalNodeTypeBuilds.Built) is a synchronous Subject, so a read made INSIDE its
+        // OnNext runs on the compile thread at the exact instant the warm learns "Compiled" — and
+        // at that instant the stamp has not been offered to the gate yet
+        // (NodeTypeCompilationHelpers: RecordUsableBuild precedes admission.Publish). That gap is
+        // why a single HeldCount sample taken after the warm answered could read 0. Replay(1) is
+        // connected before the warm so the reading cannot be missed.
+        var gate = Mesh.ServiceProvider.GetRequiredService<MeshPublicationGate>();
+        var heldBefore = gate.HeldCount;
+        var heldWhenWitnessed = Mesh.ServiceProvider.GetRequiredService<LocalNodeTypeBuilds>().Built
+            .Where(p => p == typePath)
+            .Select(_ => gate.HeldCount)
+            .Take(1)
+            .Replay(1);
+        using var witnessed = heldWhenWitnessed.Connect();
+
         var outcome = await Warm(typePath).Should().Within(Budget + TestTimeouts.Convergence)
             .Emit("WarmOne always reaches exactly one outcome", TestContext.Current.CancellationToken);
         Output.WriteLine("outcome: {0} — {1} — {2}", outcome.Status, outcome.Detail ?? "(no detail)", outcome.Duration);
@@ -115,7 +131,12 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
         // stamp …")` runs in that subscription) — so an instantaneous HeldCount read could land in
         // between and see 0 (core #6132, shard 5: "Expected 0 to be greater than 0"). The hold is
         // read first, so the record check below is made once the stamp is known to be held.
-        var gate = Mesh.ServiceProvider.GetRequiredService<MeshPublicationGate>();
+        var atWitness = await heldWhenWitnessed.Should().Within(TestTimeouts.Convergence)
+            .Emit("the compile is witnessed on this process", TestContext.Current.CancellationToken);
+        atWitness.Should().Be(heldBefore,
+            "the local witness fires BEFORE the compile stamp is offered to the gate — the product's "
+            + "ordering, so the warm's Compiled can precede the hold and the hold must be WAITED for");
+
         await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .Select(_ => gate.HeldCount)
             .Where(held => held > 0)
