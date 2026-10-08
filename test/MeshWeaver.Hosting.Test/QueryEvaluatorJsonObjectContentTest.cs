@@ -16,11 +16,13 @@ public class QueryEvaluatorJsonObjectContentTest
     public void ContentSelectorsAndTextSearchReadAllThreeContentShapes()
     {
         const string json = """{"hostedIn":"AI/AiThreads","settings":{"region":"EU"},"text":"distinctive-search-needle"}""";
+        var parsed = JsonNode.Parse(json) as JsonObject
+            ?? throw new InvalidOperationException("The query content fixture must be a JSON object.");
         object[] shapes =
         [
             new ContentShape("AI/AiThreads", new SettingsShape("EU"), "distinctive-search-needle"),
             JsonSerializer.Deserialize<JsonElement>(json),
-            JsonNode.Parse(json)!.AsObject(),
+            parsed,
         ];
         var evaluator = new QueryEvaluator();
         var parser = new QueryParser();
