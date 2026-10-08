@@ -318,6 +318,10 @@ public sealed class NodeTypeBakeReportRegistry
     {
         ArgumentNullException.ThrowIfNull(census);
         live = census;
+        // A reading proves the watch is live again (#6183 — it re-opens after a transient fault),
+        // so a recorded interruption no longer describes it. A TERMINAL fault is never followed by
+        // a reading, so it stays.
+        liveFault = null;
     }
 
     /// <summary>The live catalog census, or <c>null</c> when none has been taken on this replica.</summary>

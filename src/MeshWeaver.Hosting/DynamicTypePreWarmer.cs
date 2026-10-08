@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -722,6 +723,40 @@ public static class DynamicTypePreWarmer
                 LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow,
                 staleBound));
     }
+
+    /// <summary>
+    /// 🚨 <see cref="ObserveLiveRecordCensus"/> as a STANDING watch: re-opened after a transient
+    /// infrastructure fault, bounded, so one connection reset no longer ends it for the process's
+    /// life (MeshWeaver#6183). See <see cref="StandingWatchRecovery"/> for which faults qualify and
+    /// why the re-open belongs here rather than in the query layer.
+    ///
+    /// <para>Each re-open calls <see cref="ObserveLiveRecordCensus"/> again, which asks the synced-
+    /// query cache again — and the cache has already evicted the faulted chain
+    /// (<c>MeshNodeStreamCache.EvictFaultedQuery</c>), so the re-open builds a fresh upstream instead
+    /// of being replayed the latched fault.</para>
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="bootedAt">The boundary <see cref="NodeTypeLiveRecordCensus.ForeignSinceBoot"/> splits on.</param>
+    /// <param name="onReopen">Told each fault the watch is about to re-open from (fault, re-open number, delay).</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="maxConsecutive">Re-opens allowed in a row without an emission.</param>
+    /// <param name="backoff">Delay before re-open number n; <see cref="StandingWatchRecovery.DefaultBackoff"/> when null.</param>
+    /// <param name="scheduler">Scheduler for the backoff; <see cref="Scheduler.Default"/> when null.</param>
+    /// <returns>One census per catalog emission, across re-opens.</returns>
+    public static IObservable<NodeTypeLiveRecordCensus> WatchLiveRecordCensus(
+        IMessageHub mesh,
+        DateTimeOffset bootedAt,
+        Action<Exception, int, TimeSpan>? onReopen,
+        ILogger? logger = null,
+        int maxConsecutive = StandingWatchRecovery.DefaultMaxConsecutive,
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null)
+        => StandingWatchRecovery.ReopenOnTransientFault(
+            () => ObserveLiveRecordCensus(mesh, bootedAt, logger),
+            maxConsecutive,
+            backoff ?? StandingWatchRecovery.DefaultBackoff,
+            scheduler ?? Scheduler.Default,
+            onReopen);
 
     /// <summary>
     /// The census's input from one catalog emission: every ACTIVE node whose definition has
