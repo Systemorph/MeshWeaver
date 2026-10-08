@@ -16,7 +16,7 @@ metadata:
 
        Before the second half existed, a key a Deployment record set (extraPortalConfig) but this
        file did not list reached NO container while helm reported success — the #1925 class, and
-       the reason Memex#689 (Hosting__PrBabysitter__Relay) had to be reverted as inert (#693). The
+       the reason Memex#689 (Hosting__PrBabysitter__Relay) had to be reverted as inert (Memex#693). The
        pass-through reads which keys half 1 RENDERED, so it can never emit a duplicate data key and
        a listed key's own default or transform always wins. What it cannot deliver it REFUSES, by
        name, at render time: see the helper. */}}

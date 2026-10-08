@@ -8,7 +8,7 @@ reaches the container even when this chart has no line for it. Called with
 
 WHY. The literal half names every key it knows explicitly. A key it does not name used to reach NO
 container and helm reported success: #1778, #1780, #1925, #2203 in values files, and on records
-Memex#689 (Hosting__PrBabysitter__Relay: "false", reverted as inert in #693) and memex.systemorph.com's
+Memex#689 (Hosting__PrBabysitter__Relay: "false", reverted as inert in Memex#693) and memex.systemorph.com's
 Hosting__RecordChangeReconcile__Enabled off-switch (Memex#690, closed for the same reason).
 
 THE RULES, in order, per config.memex_portal key:

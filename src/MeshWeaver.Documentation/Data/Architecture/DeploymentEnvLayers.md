@@ -302,7 +302,7 @@ received. Three were live on 2026-10-08, measured against the Memex records:
 
 | Record | Key | What happened |
 |---|---|---|
-| `control`, `memex`, `build` | `Hosting__PrBabysitter__Relay: "false"` | set by Memex#689, reverted by #693 as inert |
+| `control`, `memex`, `build` | `Hosting__PrBabysitter__Relay: "false"` | set by Memex#689, reverted by Memex#693 as inert |
 | `memex` (memex.systemorph.com) | `Hosting__RecordChangeReconcile__Enabled: "false"` | Memex#690, closed: the old plane kept filing Reconciles it could not run |
 | `control` | `Ai__Router__CalibrationNode` | on the record, delivered by nothing |
 

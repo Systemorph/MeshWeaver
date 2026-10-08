@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Linq;
 using Xunit;
 using YamlDotNet.Core;
@@ -13,7 +14,7 @@ namespace MeshWeaver.Documentation.Test;
 /// until the pass-through (<c>templates/memex-portal/_portal-config-passthrough.tpl</c>) a key it
 /// did not name reached NO container while helm reported success. A Deployment record's
 /// <c>extraPortalConfig</c> lands in exactly that section, so a record could state a value no pod
-/// ever received: Memex#689 set <c>Hosting__PrBabysitter__Relay: "false"</c> and #693 reverted it
+/// ever received: Memex#689 set <c>Hosting__PrBabysitter__Relay: "false"</c> and Memex#693 reverted it
 /// as inert; memex.systemorph.com's <c>Hosting__RecordChangeReconcile__Enabled</c> off-switch
 /// (Memex#690) went the same way, and control's record carries
 /// <c>Ai__Router__CalibrationNode</c>, which no template names either. Those three are the
@@ -26,7 +27,7 @@ namespace MeshWeaver.Documentation.Test;
 public class RecordConfigReachesTheConfigMapGuard
 {
     /// <summary>Record keys no template names — measured on the Memex records, 2026-10-08.</summary>
-    private static readonly (string Key, string Yaml, string Expected)[] UnlistedRecordKeys =
+    private static readonly ImmutableArray<(string Key, string Yaml, string Expected)> UnlistedRecordKeys =
     [
         ("Hosting__PrBabysitter__Relay", "false", "false"),
         ("Hosting__RecordChangeReconcile__Enabled", "\"false\"", "false"),
@@ -48,7 +49,7 @@ public class RecordConfigReachesTheConfigMapGuard
         {
             data.Should().ContainKey(key,
                 $"a record that sets {key} must reach the pod even though no template line names it — "
-                + "otherwise the record states a value nobody receives (Memex#689 → #693)");
+                + "otherwise the record states a value nobody receives (Memex#689 → Memex#693)");
             data[key].Value.Should().Be(expected, $"{key} must carry the record's value verbatim");
             data[key].Style.Should().Be(ScalarStyle.DoubleQuoted, $"{key} must render as a quoted string");
         }
@@ -93,12 +94,12 @@ public class RecordConfigReachesTheConfigMapGuard
     }
 
     [Theory(Timeout = 120000)]
-    [InlineData("email__enabled: \"true\"", "differs only by case")]
-    [InlineData("Nested__Map: {a: 1}", "flatten it")]
-    [InlineData("Nested__List: [1, 2]", "flatten it")]
-    [InlineData("\"Weird Key\": x", "not a valid ConfigMap key")]
-    [InlineData("Modules__Required__20: Extra.dll", "boot-module slot")]
-    public void AKeyThePassThroughCannotDeliver_IsRefusedByName(string line, string because)
+    [InlineData("email__enabled: \"true\"", "email__enabled", "differs only by case")]
+    [InlineData("Nested__Map: {a: 1}", "Nested__Map", "flatten it")]
+    [InlineData("Nested__List: [1, 2]", "Nested__List", "flatten it")]
+    [InlineData("\"Weird Key\": x", "Weird Key", "not a valid ConfigMap key")]
+    [InlineData("Modules__Required__20: Extra.dll", "Modules__Required__20", "boot-module slot")]
+    public void AKeyThePassThroughCannotDeliver_IsRefusedByName(string line, string key, string because)
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var (exitCode, _, stderr) = AutomationSwitchesReachTheConfigMapGuard.RenderConfigMap(
@@ -106,6 +107,7 @@ public class RecordConfigReachesTheConfigMapGuard
 
         exitCode.Should().NotBe(0,
             $"`{line}` cannot reach the pod as written, so the render must fail LOUDLY rather than drop it");
-        stderr.Should().Contain(because, "the refusal must say why, naming the key");
+        stderr.Should().Contain(because, "the refusal must say why");
+        stderr.Should().Contain($"config.memex_portal.{key}", "the refusal must name the offending key");
     }
 }
