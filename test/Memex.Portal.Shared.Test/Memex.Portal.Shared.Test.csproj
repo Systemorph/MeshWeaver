@@ -31,6 +31,10 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
     <!-- MapDefaultEndpoints / MapVersionEndpoint live here, beside /health and /alive. -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
+    <!-- MemexReadinessTest drives the memex test container's readiness verdict against BOTH real
+         hosts here — the setup-only wizard and MapDefaultEndpoints — so the wizard can never again
+         satisfy it (#6037). Not a module: nothing in modules/ shadows it. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Testcontainers\MeshWeaver.Testcontainers.csproj" />
     <!-- DbVersionHealthCheckTest drives the portal's own db_version health check: whether a
          cancellation raised by the CALLER is reported as a database verdict (#1183). -->
     <!-- LocalMeshApiRoutesTest asserts the headless sidecar maps the same /api/mesh/* verbs the JS

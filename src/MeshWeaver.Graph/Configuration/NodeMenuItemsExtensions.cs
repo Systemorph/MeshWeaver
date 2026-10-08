@@ -96,6 +96,25 @@ public static class NodeMenuItemsExtensions
         // still runs on the stable untranslated form.
         var access = host.Hub.ServiceProvider.GetService<AccessService>();
 
+        // 🚨 Every provider is invoked — and every provider stream SUBSCRIBED — as the VIEWER this
+        // area was opened for, never as whoever is ambient on this turn (MeshWeaver.Plugins#2784).
+        //
+        // This renderer is a predicate renderer: it re-runs on EVERY render of the area, and a
+        // render re-runs on an emission of whatever stream the area is bound to (a node stream, a
+        // mesh query answering). That emission's turn carries the EMITTER's AccessContext. On a
+        // user partition root the Overview's sources answer under the system identity, so the
+        // providers' identity reads — GetEffectivePermissions(path), IsGlobalAdmin(), ViewerId(),
+        // ViewerScreen() — all resolved `system-security`: measured, the menu was folded from
+        // `All | Sync | Compile` and Pin was built for system-security while the viewer was a
+        // read-only person. Providers resolve the viewer on entry (and cold streams on Subscribe),
+        // both of which happen synchronously inside this scope, so scoping HERE fixes every
+        // provider at once — the platform's and every module's — without each one having to know
+        // which emission woke it. The host's ViewerContext is the subscribe delivery's identity,
+        // captured at construction (the same value the initial render restores). A null capture
+        // clears the ambient identity rather than inheriting the emitter's. The scope is closed on
+        // this thread before return, so the emitter's own continuation gets its identity back.
+        using var viewerScope = access?.SwitchAccessContext(host.ViewerContext);
+
         foreach (var (context, items) in CollectMenuItemStreamsByContext(host, ctx))
         {
             // Default (unnamed) context lands on "$Menu"; named contexts on "$Menu:{context}".
@@ -189,16 +208,13 @@ public static class NodeMenuItemsExtensions
         // outside any test's methodTimeout. "No such user node" is a defined, screened-safe value
         // (PresentationScreen.Off); it must arrive as a VALUE, not as something to wait for.
     {
-        // The PERSON viewing, for the ownership gate of Settings… below. Read on the render turn and
-        // never inside the projection. The request-scoped context is not always the person: on a
-        // user root the menu renders under the SYSTEM identity (measured: Context = system-security,
-        // CircuitContext = the person), so an infrastructure identity there falls back to the
-        // circuit's. This decides only whether an entry is OFFERED; the page gates itself.
-        var menuAccess = host.Hub.ServiceProvider.GetService<AccessService>();
-        var requestViewer = menuAccess?.Context?.ObjectId;
-        var renderViewerId = PresentationScreenExtensions.IsPersonalViewer(requestViewer)
-            ? requestViewer
-            : menuAccess?.CircuitContext?.ObjectId;
+        // The PERSON viewing — for Pin, the presentation toggle and the ownership gate of Settings…
+        // below. Read ONCE, here on the provider's entry, never inside the projection: the
+        // projection runs on whichever thread the node / permission / screen stream emits on, and
+        // that thread carries the EMITTER's identity, not the viewer's. RenderMenus invokes every
+        // provider inside the host's viewer scope (WithViewerScope), so the ambient read here IS the
+        // subscriber the area was opened for (MeshWeaver.Plugins#2784).
+        var viewerId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerId();
         return GetMenuContext(host).CombineLatest(
             host.ViewerScreen().Seeded(), (menuCtx, screen) =>
         {
@@ -228,9 +244,6 @@ public static class NodeMenuItemsExtensions
                 if (edit != null) items.Add(edit with { Order = 10, Icon = "✏️" });
             }
 
-            var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-            var viewerId = accessService?.Context?.ObjectId
-                           ?? accessService?.CircuitContext?.ObjectId;
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
             if (pin != null) items.Add(pin with { Order = 12, Icon = "🔖" });
 
@@ -274,7 +287,7 @@ public static class NodeMenuItemsExtensions
             // (UserNodeType.OwnSettings) — so the entry is gated on ownership, not on Update
             // (which an admin may also hold), and the menu never offers a page that refuses.
             var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath,
-                isProtectedRoot && !PersonApp.IsOwnRoot(menuPath, renderViewerId) ? Permission.None : perms);
+                isProtectedRoot && !PersonApp.IsOwnRoot(menuPath, viewerId) ? Permission.None : perms);
             if (settings != null) items.Add(settings with { Icon = "⚙️" });
 
             var recycle = RecycleLayoutArea.GetMenuItem(menuPath, perms);
