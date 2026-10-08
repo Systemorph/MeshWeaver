@@ -215,8 +215,8 @@ concurrency:
   # of intent, and because it still governs any future ref that groups by name.
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
-# publish-unit-test-result-action runs per shard AND in the collector — both need
-# checks: write to create check-runs and pull-requests: write to comment.
+# publish-unit-test-result-action runs ONCE, in the collector (never per shard — see the shard
+# job's note where that step used to be). It needs checks: write to create check-runs and pull-requests: write to comment.
 # contents: write is for the `refs/ci-green/*` marker refs ONLY (push + prune); a
 # fork PR's read-only token makes that step fail, which is why it is best-effort.
 permissions:
@@ -1719,19 +1719,19 @@ jobs:
           echo "::error::Shard ${{ matrix.shard }}: failing tests in trx — failing the shard."
           exit 1
         fi
-    - name: Publish Test Results (this shard)
-      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
-      if: always()
-      # Best-effort reporter ONLY — the TRX-summarize step above is the gate.
-      # action_fail removed + continue-on-error so a GitHub-API 429 (concurrent
-      # shard publishes) can't fail the build; test failures fail via the trx gate.
-      continue-on-error: true
-      with:
-        # Per-shard check so the matrix legs don't clobber each other's
-        # check-run; distinct from the collector's "Test Results" check.
-        check_name: "Test Results (shard ${{ matrix.shard }})"
-        files: |
-          test/**/*.trx
+    # 🚨 NO PER-SHARD TEST REPORTER. A per-shard `publish-unit-test-result-action` step used to
+    # sit here. It reported the same trx files that the collector's single "Test Results"
+    # publish reports again from the uploaded artifacts, so it added nothing. It was also the
+    # source of a throttle storm. Every run put six concurrent publishers on the GitHub API, and
+    # in the 16:31–16:45Z window of 2026-10-07 every shard publish of eight runs backed off
+    # for 380–620 s. Over the 200 most recent runs the shard publish had a median of 9 s, while
+    # the single collector publish never exceeded 14 s. continue-on-error covers a reporter that
+    # FAILS, not one that WAITS. On run 37652278631, shard 4, tests had run 16½ minutes; the
+    # step began its backoff at 16:54:50Z and the job's 20-minute cap killed it at 17:02:09Z.
+    # A shard whose every project had exited 0 was reported CANCELLED, `Consolidate test
+    # results` went red, and the verdict step below never ran. The job log had stopped
+    # streaming at 16:52:52Z, so the wedge was blamed on the test printing at that moment
+    # (PlatformCompatibilityLadderTest, whose trace record says Passed in 504 ms).
     - name: Fail on non-zero project exit (this shard)
       # A test host that ABORTS mid-run (SIGABRT/FailFast → exit 134) streams
       # green results for every COMPLETED test and then dies: the trx shows zero
@@ -4323,6 +4323,13 @@ jobs:
       # above is the gate. action_fail removed + continue-on-error so a throttled
       # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
       continue-on-error: true
+      # continue-on-error covers a reporter that FAILS, not one that WAITS. A throttle backoff
+      # past this required job's own cap would turn a green build into a CANCELLED required check
+      # (the shard-4 incident of run 37652278631, see the shard job). This step has never taken
+      # more than 14 s in 199 runs. The worst throttled tail measured on the per-shard twin was
+      # 620 s, so 15 minutes lets a legitimate backoff finish and still lets a stall degrade to a
+      # missing report rather than a cancelled check.
+      timeout-minutes: 15
       with:
         # One consolidated check across all shards (reporting only now).
         check_name: "Test Results"
