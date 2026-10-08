@@ -354,7 +354,7 @@ the vault secret is what unblocks the next deploy.
 
 Layer 2 is the one layer that is neither in a repository nor on the record: Secret
 `memex-portal-secrets` renders from `secrets.<half>.*` in the Key Vault **values half**
-(`helm-values-<release>`, written by the config repo's `helm-release capture`). Two deploy paths
+(`helm-values-<release>`, written by the config repo's `helm-release capture`, or — when absent — composed by a Provision's vault step, item 2 below). Two deploy paths
 feed the chart, and until 2026-09-14 they disagreed about that layer:
 
 | path | values handed to `helm upgrade` | what `memex-portal-secrets` became |
@@ -391,7 +391,17 @@ Three things changed, so that neither path can produce that render again:
 2. **The plan passes `--vault` exactly when the record declares `vaultValuesKeys`** — the record's
    own statement that the chart's Secret carries keys nothing in the record renders. A provisioned
    instance (`vaultValuesKeys: []`, its connection string on a CSI class) reads nothing from any
-   vault and keeps its one-layer shape.
+   vault and keeps its one-layer shape — **as long as it runs one pod.** With two or more, AdoNet
+   clustering on the shared server takes its membership string from that half, so such a record
+   must declare it; the Hosting plugin refuses the record at render when it does not
+   ([Memex#648](https://github.com/Systemorph/Memex/issues/648)).
+   **A Provision composes an ABSENT half** (`hosting-kv-ensure --values-half <release>`, planned
+   when the record declares `vaultValuesKeys` on the shared server): from the record's
+   `db-connection` object and the server password object, families only —
+   `secrets.memex_portal` / `secrets.memex_migration` → `ConnectionStrings__memex` +
+   `memex_postgres_password`, with the orleans string left to the chart's own derivation. An
+   EXISTING half is never rewritten: a captured one may carry keys this step knows nothing about.
+   Until then the half was written by a person with `az` (the control instance, 2026-09-26).
 3. **The chart refuses to invent the host.** `memex.orleansConnectionString` used to fall through
    to the in-cluster default whenever neither string was supplied; on an external database
    (`postgres.enabled: false`) it now `fail`s the render naming the missing input. The invariant
