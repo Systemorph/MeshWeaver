@@ -712,7 +712,7 @@ RequestTimeout").
 | Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
 | Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
-| Move | its existing per-stage bounds, the copy leg answered by the copy's own deadline, and the delete leg bounded at `Timeout` | the copy leg's own classification (`Unavailable` for a stalled copy), never re-derived from the wording |
+| Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
 
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
@@ -727,10 +727,11 @@ that ends early names the leg that was running instead of ending at `CREATE_CHAI
 - **"Source node not found" was decided by a QUERY (#5856).** The copy finds its source in the
   caller's `path:{source} scope:subtree` query, which is eventually consistent; a source the index
   had not yet returned was reported `SourceNotFound` while storage held it, and a move's caller
-  concluded its record was gone. The query still decides WHICH paths the caller may copy; whether the
-  source EXISTS is now read from storage. Stored and readable by the caller (or the caller is the
-  platform) ⇒ an availability failure, retryable. Not readable by the caller ⇒ still "not found":
-  denied and deleted are deliberately indistinguishable, and "it exists" would disclose it.
+  concluded its record was gone. The query still decides WHICH paths the caller may copy; the
+  missing-source verdict is decided in an order that discloses nothing: first the caller's Read
+  on the source (skipped only for the platform) — DENIED ⇒ "not found", UNDETERMINED ⇒ retryable,
+  both whatever storage holds — and only for a caller who may read it, storage: absent ⇒
+  `SourceNotFound`, stored ⇒ "the query has not caught up", retryable.
 - **The move mapped its copy leg's failure by substring** — any message containing "not found" became
   `SourceNotFound`. It now carries the copy's own `RejectionReason`.
 
@@ -749,7 +750,11 @@ had no answer inside the window at all.
 
 ## What this is NOT
 
-**It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
+This section is about the STREAM-WRITE fix above (the base read that reached no terminal). The
+lifecycle deadlines in the previous section ARE bounds, and deliberately so: they add the rung-1
+bound those handlers were missing, which the delete always had.
+
+**The stream-write fix is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
 introduced. The change is that a source termination which previously reached no handler now reaches
 one. If you find yourself widening `LateResponseWatchBound` or adding a re-subscribe to "recover" a
 write that never answered, the question to ask first is which of the three terminations your
