@@ -250,6 +250,18 @@ the audit is clean — is in [OperatingFromThePortal](/Doc/Architecture/Operatin
 `hosting-inline-env-retire` and the Hosting module version that plans it; until both are on the
 control instance, the break-glass line is still the only one that works.
 
+**When the re-apply's rollout is handed off, the retirement is FOLDED into it.** A record whose
+startup budget outruns one operator Job does not wait for the re-apply's rollout — the Job records
+its generation and hands it to the control plane. The retirement step therefore always met the
+rollout the re-apply had just started, and `hosting-inline-env-retire` refuses mid-rollout by
+design, so every such `Reconcile` carrying a `retiredBy` failed at that step, deterministically
+([MeshWeaver.Plugins#2776](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2776)). Under a
+hand-off the plan passes `--fold-into-rollout`: the command still measures every key (fall-through,
+named shadow, `EQUAL`), still refuses a PAUSED Deployment, and writes the removal into the rollout
+in flight — superseding a rollout the plan's own re-apply started, which itself had already
+superseded whatever was in flight before it. Without a hand-off the order is unchanged: wait for the
+re-apply's rollout, then retire.
+
 **Why this matters more than one duplicated variable.** MeshWeaver#3201 has outlived three merged
 PRs. Every deferral until 2026-09-08 was about *rollout timing* — a fleet freeze, then the newly
 armed readiness gate (#3404, #3395), then the bake-gate stall (#3663). All three closed by

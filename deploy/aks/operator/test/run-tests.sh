@@ -1155,7 +1155,7 @@ ie() {  # ie <scenario> "<KEY=source> [KEY=source…]" [env…] — sets $_ie_ou
   for pair in $pairs; do retire+=(--retire "$pair"); done
   _ie_state="$(mktemp -d)"
   _ie_out="$(env "$@" PATH="$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$scenario" HOSTING_IE_BASE="$IE_FIXTURES/base" \
-    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" 2>&1)"; _ie_rc=$?
+    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" ${IE_FLAGS:-} 2>&1)"; _ie_rc=$?
   _ie_log="$(cat "$_ie_state/log" 2>/dev/null || true)"
   _ie_patch="$(cat "$_ie_state/patch" 2>/dev/null || true)"
   rm -rf "$_ie_state"
@@ -1260,6 +1260,34 @@ ie rolling "$IE_TOKEN"
 case "$_ie_out" in *"a rollout is in progress"*"1 updated"*) ok "…naming what is not settled" ;;
   *) bad "the rollout refusal names what is unsettled" "said: ${_ie_out}" ;; esac
 case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
+ie_no_patch "…and writes nothing"
+
+# 🚨 MeshWeaver.Plugins#2776 — a Reconcile that HANDS its re-apply's rollout to the control plane
+# meets that rollout at the very next step, so the refusal above failed every such Reconcile that
+# carried a retired entry. The plan says the rollout is its own with --fold-into-rollout; the
+# removal then rides the rollout in flight. Same fixture as the refusal above: the negative control
+# for this arm IS that refusal.
+IE_FLAGS=--fold-into-rollout ie rolling "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "--fold-into-rollout: the plan's OWN handed-off rollout is folded into, not refused (Plugins#2776)" \
+  || bad "--fold-into-rollout folds into the plan's own rollout" "exited ${_ie_rc}: ${_ie_out}"
+case "$_ie_out" in *"FOLDED into it"*"::hosting:: inline_env_folded_generation=43"*) ok "…saying so, and naming the generation it folded into" ;;
+  *) bad "the fold is reported with its generation" "said: ${_ie_out}" ;; esac
+case "$_ie_out" in *"PluginCatalog__RegistryToken  EQUAL (len 31)"*) ok "…after the SAME equality measurement as a settled run" ;;
+  *) bad "a folded run still measures the equality" "said: ${_ie_out}" ;; esac
+[ "$(printf '%s\n' "$_ie_log" | grep -c ' patch deployment ')" = "1" ] && ok "…in one guarded patch" \
+  || bad "a folded run patches once" "kubectl saw: ${_ie_log}"
+ie_no_value "…and no value is printed, patched or passed in an argv"
+
+IE_FLAGS=--fold-into-rollout ie paused "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "--fold-into-rollout still refuses a PAUSED Deployment — a pause is a deliberate hold" \
+  || bad "a paused Deployment is refused even when folding" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"is PAUSED"*) ok "…saying so" ;; *) bad "the paused refusal says so" "said: ${_ie_out}" ;; esac
+case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
+ie_no_patch "…and writes nothing"
+
+IE_FLAGS=--fold-into-rollout ie differ "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "--fold-into-rollout relaxes ONLY the rollout check — a DIFFER is still refused" \
+  || bad "folding does not bypass the equality" "exited 0: ${_ie_out}"
 ie_no_patch "…and writes nothing"
 
 ie valuefrom "$IE_TOKEN"
