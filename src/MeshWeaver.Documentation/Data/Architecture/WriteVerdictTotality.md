@@ -680,6 +680,72 @@ Because ordering was the only discriminator, `SettleRetypedRoot` now logs its re
 Information. It previously logged only its *decline*, so the positive case was attributable to
 nobody.
 
+## Lifecycle requests on the node-operations hub reach a verdict by a DEADLINE (#6149, #6107, #6105)
+
+The FOURTH outcome had a second home: the lifecycle handlers on `portal/nodeops-{meshId}`.
+`HandleCreateNodeRequest`, `HandleCopyNodeRequest` and `HandleMoveNodeRequest` return `Processed()`
+at once and owe their reply from a detached chain, and every leg of those chains — the existence
+read, the partition bootstrap's probes, the write guards, a plugin-contributed `INodeValidator`, the
+NodeType probe, the save, a per-node create inside a copy — is an observable some other component
+supplies. The #981 backstop answers a chain that *completes* unanswered; nothing answered one that
+simply went quiet. Production showed it three times in two days, on three request types, with one
+trail:
+
+```
+ROUTED onTarget=True → HANDLER_ENTER → CREATE_CHAIN_SUBSCRIBED → HANDLER_EXIT state=Processed
+… then nothing for the caller's whole 60 s
+```
+
+**The shared defect is a missing bound, not a missing reply.** `HandleDeleteNodeRequest` has always
+bounded its stages at `MeshOperationOptions.Timeout` — rung 1 of the ladder, "the whole mesh
+operation, as its CALLER bounds it", 30 s against the hub's 60 s request timeout. Create, copy and
+move carried no rung-1 bound at all, so a silent leg produced silence until the CALLER gave up — and
+nested, it was worse: a move's copy leg and a copy's per-node creates were bounded only by the hub's
+default 60 s request timeout, the SAME bound their own caller holds, whose clock started first. The
+inner verdict could never arrive in time (#6105's "the detached reply chain outlives the 60 s
+RequestTimeout").
+
+**The rule now holds for every lifecycle request:**
+
+| Handler | Bound | What the stalled verdict says |
+|---|---|---|
+| Create | `Timeout` from handler entry, over the chain AND the post-creation handlers | `Unavailable`, naming the stage: `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write`, `post-creation-handlers` |
+| Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
+| Move | its existing per-stage bounds, the copy leg answered by the copy's own deadline, and the delete leg bounded at `Timeout` | the copy leg's own classification (`Unavailable` for a stalled copy), never re-derived from the wording |
+
+Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
+that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
+
+**Two defects the bound exposed, fixed with it:**
+
+- **The copy subscribed a LONG-LIVED permission fold without `Take(1)`.** `CopyNodeRequest.
+  PreserveAuthorship` (every move sets it) gates on `MoveEntitlement`, a fold that re-emits on every
+  `AccessAssignment` change and never completes. Every re-emission re-ran the whole copy — a second
+  create pass answering "already exists" over the first one's success — and the chain itself could
+  never complete.
+- **"Source node not found" was decided by a QUERY (#5856).** The copy finds its source in the
+  caller's `path:{source} scope:subtree` query, which is eventually consistent; a source the index
+  had not yet returned was reported `SourceNotFound` while storage held it, and a move's caller
+  concluded its record was gone. The query still decides WHICH paths the caller may copy; whether the
+  source EXISTS is now read from storage. Stored and readable by the caller (or the caller is the
+  platform) ⇒ an availability failure, retryable. Not readable by the caller ⇒ still "not found":
+  denied and deleted are deliberately indistinguishable, and "it exists" would disclose it.
+- **The move mapped its copy leg's failure by substring** — any message containing "not found" became
+  `SourceNotFound`. It now carries the copy's own `RejectionReason`.
+
+**What the deadline cannot establish.** A stalled stage's own work can still land after the verdict
+— a write already handed to storage, a create already posted by the copy. The verdict says so ("read
+the target before retrying"), which is the same honesty [A create timeout cannot establish that
+nothing was written](#a-create-timeout-cannot-establish-that-nothing-was-written) asks of the upsert
+lane. And the deadline answers WHICH leg went silent, not WHY: the production occurrences predate the
+stage stamps, so their stalled leg is still unknown — the next one names it.
+
+Pinned by `LifecycleRequestsAlwaysReachAVerdictTest` (MeshWeaver.Hosting.Test): a creation validator
+that never answers, armed for one path, for a direct create, a copy whose target create stalls and a
+move whose copy leg stalls — each answered inside the budget with the stage named, the move's source
+left in place — with an unarmed control for create and move. Before the fix the three stalled cases
+had no answer inside the window at all.
+
 ## What this is NOT
 
 **It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is

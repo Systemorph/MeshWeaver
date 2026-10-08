@@ -776,6 +776,31 @@ public static class MeshExtensions
     private const string NoMeshConfigurationKey = "activity.node.create.noMeshConfiguration";
 
     /// <summary>
+    /// The verdict a create, copy or move gives when one of its legs went silent past the mesh
+    /// operation budget (<see cref="LifecycleVerdictStalledException"/>).
+    /// </summary>
+    private const string CreateStalledKey = "activity.node.create.stalled";
+
+    // The stages of HandleCreateNodeRequest's detached chain, in order. Recorded on the request's
+    // fate trail (CREATE_STAGE …) and named in a stalled verdict, so a create that went silent says
+    // WHERE — the one thing the #6149 trail (`CREATE_CHAIN_SUBSCRIBED → HANDLER_EXIT`) could not.
+    private const string CreateStageExistenceRead = "existence-read";
+    private const string CreateStagePartitionBootstrap = "partition-bootstrap";
+    private const string CreateStageWriteGuards = "write-guards";
+    private const string CreateStageValidators = "validators";
+    private const string CreateStageNodeTypeResolution = "nodetype-resolution";
+    private const string CreateStageWrite = "write";
+    private const string CreateStagePostCreationHandlers = "post-creation-handlers";
+
+    /// <summary>
+    /// The prefix of every copy verdict that is an AVAILABILITY failure rather than a refusal — a
+    /// stalled leg, or a source that storage holds but the caller's query did not return. The copy's
+    /// rejection vocabulary has no <c>Unavailable</c> member (it is a public enum; widening it would
+    /// break exhaustive switches downstream), so this is how the move tells "retry" from "refused".
+    /// </summary>
+    private const string CopyUnavailablePrefix = "Copy reached no verdict:";
+
+    /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
     /// Its storage / change-feed leaves are ALREADY <see cref="IObservable{T}"/> (or reach the I/O
     /// boundary through <c>IIoPool</c>) and are composed via <c>SelectMany</c>/<c>Subscribe</c>; the
@@ -1009,6 +1034,26 @@ public static class MeshExtensions
         var emitted = false;
         hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_SUBSCRIBED path={node.Path}");
 
+        // 🚨 THE VERDICT DEADLINE (#6149/#6105/#6107). The #981 backstop below covers a chain that
+        // COMPLETES unanswered; it cannot see one that never terminates. Every leg of this chain —
+        // the existence read, the bootstrap probes, the write guards, a plugin-contributed
+        // validator, the NodeType probe, the save — is an observable some other component supplies,
+        // and one that simply goes quiet left the requester waiting out its OWN request timeout
+        // with no verdict and no stage (production: `CREATE_CHAIN_SUBSCRIBED → HANDLER_EXIT
+        // state=Processed`, then nothing for 60 s). HandleDeleteNodeRequest has always bounded its
+        // stages at MeshOperationOptions.Timeout — rung 1 of the ladder, "the whole mesh operation,
+        // as its CALLER bounds it", 30 s against the hub's 60 s request timeout — and the create
+        // now does the same: the chain reaches a verdict by `deadline`, and the verdict NAMES the
+        // stage that went silent, which is what the trail could not say.
+        var createBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+        var deadline = DateTimeOffset.UtcNow + createBudget;
+        var createStage = CreateStageExistenceRead;
+        void EnterCreateStage(string stage)
+        {
+            createStage = stage;
+            hub.NoteRequestStage(request.Id, $"CREATE_STAGE {stage}");
+        }
+
         existingObs
             .Select(existing =>
             {
@@ -1123,12 +1168,17 @@ public static class MeshExtensions
                 //     SelectMany so root + grant are in place by the time RLS / the write-guard run.
                 //     See EnsurePartitionBootstrap.
                 // 2. Validators → 3. NodeType existence → 4-7. Enrich + save + change feed + version
+                EnterCreateStage(CreateStagePartitionBootstrap);
                 return EnsurePartitionBootstrap(hub, node, capturedRequest, logger, request.Id)
                     // 1d. A SYSTEM-OWNED space grants nobody write access. Sequenced AFTER the
                     //     bootstrap (which may have just created the partition) and ahead of the
                     //     validators, and folded into the same rejection tuple so the failure is
                     //     posted by the one code path that already knows how.
-                    .SelectMany(_ => SystemOwnedGrantRejection(hub, node))
+                    .SelectMany(_ =>
+                    {
+                        EnterCreateStage(CreateStageWriteGuards);
+                        return SystemOwnedGrantRejection(hub, node);
+                    })
                     // 1e. BROAD GRANTS only through a governed activity (BroadGrantGuard) — whoever
                     //     writes, System included: this runs ahead of the validators' System bypass.
                     //     Log-only until Access:BroadGrantGuard:Mode says Enforce.
@@ -1146,10 +1196,14 @@ public static class MeshExtensions
                     // CreateNodeResponse.Fail had no keyed surface to render into; it now carries
                     // the ActivityLog MeshWeaver#3917 named as the follow-up, so the refusal a
                     // guard composed is the refusal a viewer reads in their own language.
-                    .SelectMany(grantRejection => grantRejection is not null
-                        ? Observable.Return<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?>(
-                            (grantRejection, NodeCreationRejectionReason.ValidationFailed))
-                        : RunCreationValidatorsObs(hub, node, capturedRequest))
+                    .SelectMany(grantRejection =>
+                    {
+                        if (grantRejection is not null)
+                            return Observable.Return<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?>(
+                                (grantRejection, NodeCreationRejectionReason.ValidationFailed));
+                        EnterCreateStage(CreateStageValidators);
+                        return RunCreationValidatorsObs(hub, node, capturedRequest);
+                    })
                     .SelectMany(validationError =>
                     {
                         if (validationError != null)
@@ -1174,6 +1228,7 @@ public static class MeshExtensions
                         // UPDATE boundary (issue #2993). Two copies of this predicate is how a
                         // create that refuses and an update that accepts drift apart — and the
                         // difference only ever surfaces as an instance nobody can read.
+                        EnterCreateStage(CreateStageNodeTypeResolution);
                         var typeExistsObs = NodeTypeResolution.Resolve(hub, node.NodeType);
 
                         return typeExistsObs.SelectMany(verdict =>
@@ -1246,6 +1301,7 @@ public static class MeshExtensions
                             //    need an enriched node ask the factory at activation time.
                             return Observable.Defer(() =>
                             {
+                                EnterCreateStage(CreateStageWrite);
                                 var enriched = newNode;
                                 logger.LogDebug("[CreateNode] step=save-start path={Path} persistence={HasPersistence} adapter={Adapter}",
                                     enriched.Path, persistence != null, persistence?.GetType().Name);
@@ -1264,6 +1320,11 @@ public static class MeshExtensions
                         });
                     });
             })
+            // ONE result, then completion — so the deadline below can only ever fire BEFORE the
+            // chain produced its node, never race the post-creation leg that owns the reply after it.
+            .Take(1)
+            .Timeout(deadline, Observable.Defer(() => Observable.Throw<(string mode, MeshNode node)>(
+                new LifecycleVerdictStalledException("CreateNode", node.Path, createStage, createBudget))))
             .Subscribe(
                 tuple =>
                 {
@@ -1355,6 +1416,12 @@ public static class MeshExtensions
                     // Deferred inside (as is CompensateFailedCreate below): a hub disposed while the
                     // write was in flight must reach the error arm, never throw out of this callback.
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
+                        // The SAME deadline: a post-creation handler that never terminates is a
+                        // failed handler, and goes down the all-or-nothing arm below (#638) rather
+                        // than leaving the caller with no verdict.
+                        .Timeout(deadline, Observable.Defer(() => Observable.Throw<System.Reactive.Unit>(
+                            new LifecycleVerdictStalledException("CreateNode", resultNode.Path,
+                                CreateStagePostCreationHandlers, createBudget))))
                         .Subscribe(
                             _ => { },
                             ex =>
@@ -1404,7 +1471,23 @@ public static class MeshExtensions
                 ex =>
                 {
                     hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
-                    if (StoreReachability.IsStoreUnreachable(ex))
+                    if (ex is LifecycleVerdictStalledException stalled)
+                    {
+                        // 🚨 A LEG THAT WENT SILENT DECIDED NOTHING. Unavailable — "not evaluated,
+                        // retry is meaningful" (#1446) — and never ValidationFailed, which would tell
+                        // the caller their request was wrong because some read never answered. Error
+                        // level: a stalled leg is an availability failure an operator must see, and
+                        // the line names the stage so the next occurrence is attributable.
+                        logger.LogError(ex,
+                            "[CreateNode] {Path} reached no verdict within {Budget}s — stalled at stage {Stage}",
+                            node.Path, createBudget.TotalSeconds, stalled.Stage);
+                        Respond(CreateNodeResponse.FailWith(
+                            LocalizableText.Keyed(stalled.Message, CreateStalledKey,
+                                ("path", node.Path), ("stage", stalled.Stage),
+                                ("seconds", stalled.BudgetSeconds)),
+                            NodeCreationRejectionReason.Unavailable));
+                    }
+                    else if (StoreReachability.IsStoreUnreachable(ex))
                     {
                         // 🚨 AN UNREACHABLE STORE IS NOT A VERDICT (#3050/#3051). The existence Read
                         // that opens this chain, the NodeType probe and the save all go to the same
@@ -7932,6 +8015,28 @@ public static class MeshExtensions
                         hub.Post(MoveNodeResponse.Fail(refused.Message, refused.Reason), o => o.ResponseFor(request));
                         return;
                     }
+                    if (ex is MoveCopyLegFailedException copyLeg)
+                    {
+                        // The copy leg's OWN classification, carried — see MoveReasonForCopy. Nothing
+                        // was deleted: the delete leg runs only after a successful copy.
+                        logger.LogError("[MoveNode] {Source} -> {Target} failed in its copy leg ({Reason}): {Error}",
+                            sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
+                        hub.Post(MoveNodeResponse.Fail(copyLeg.Message, copyLeg.Reason), o => o.ResponseFor(request));
+                        return;
+                    }
+                    if (ex is LifecycleVerdictStalledException stalledDelete)
+                    {
+                        // The delete leg went silent AFTER the copy landed: the target exists, and
+                        // which source rows are gone is unknown. Not a refusal and not "retry" —
+                        // Unknown, with the state spelled out.
+                        logger.LogError(ex, "[MoveNode] {Source} -> {Target}: delete leg stalled at {Stage}",
+                            sourcePath, targetPath, stalledDelete.Stage);
+                        hub.Post(MoveNodeResponse.Fail(
+                                $"{stalledDelete.Message} The copy at '{targetPath}' had already landed.",
+                                NodeMoveRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                        return;
+                    }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = msg.StartsWith(CopyNodeRequest.IncompleteCopyRefusal, StringComparison.Ordinal)
                         ? NodeMoveRejectionReason.ValidationFailed
@@ -7955,8 +8060,8 @@ public static class MeshExtensions
                 }))
                 .SelectMany(d => d.Message is { Success: true, Node: { } copiedRoot }
                     ? Observable.Return(copiedRoot)
-                    : Observable.Throw<MeshNode>(
-                        new InvalidOperationException(d.Message.Error ?? "Node copy failed")))
+                    : Observable.Throw<MeshNode>(new MoveCopyLegFailedException(
+                        d.Message.Error ?? "Node copy failed", MoveReasonForCopy(d.Message))))
                 .SelectMany(copied =>
                     storage.ListDescendantPaths(sourcePath)
                         .Take(1)
@@ -7986,6 +8091,10 @@ public static class MeshExtensions
                             var ordered = paths.OrderByDescending(p => p.Length).ToList();
                             return storage.DeleteMany(ordered)
                                 .Take(1)
+                                // Rung 1, like every stage of a delete: the copy has landed, so a
+                                // silent delete leg must still reach the caller as a verdict.
+                                .Timeout(budget, Observable.Defer(() => Observable.Throw<IReadOnlyList<string>>(
+                                    new LifecycleVerdictStalledException("MoveNode", sourcePath, "delete-source", budget))))
                                 .Do(deleted =>
                                 {
                                     foreach (var p in deleted)
@@ -8025,6 +8134,27 @@ public static class MeshExtensions
         var callerAccessContext = request.AccessContext
             ?? accessService?.Context ?? accessService?.CircuitContext;
 
+        // 🚨 THE VERDICT DEADLINE (#6105). This chain owes the reply and used to carry no bound of
+        // its own: the stages below bound only some of their reads (15 s each), and the per-node
+        // creates were bounded by nothing but the hub's 60 s request timeout — the SAME bound the
+        // copy's own caller holds, whose clock started first. So a create that went silent made
+        // the copy answer only AFTER its caller had given up: "the detached reply chain outlives
+        // the 60 s RequestTimeout". The copy now reaches a verdict by `copyDeadline` — rung 1 of the
+        // ladder, as HandleDeleteNodeRequest bounds its stages — and the verdict names the stage,
+        // and for the create leg the TARGET paths still outstanding.
+        var copyBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+        var copyDeadline = DateTimeOffset.UtcNow + copyBudget;
+        var copyStage = "authorship-entitlement";
+        var pendingCreates = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        void EnterCopyStage(string stage)
+        {
+            copyStage = stage;
+            hub.NoteRequestStage(request.Id, $"COPY_STAGE {stage}");
+        }
+        string CopyStageNow() => pendingCreates.IsEmpty
+            ? copyStage
+            : $"{copyStage} (outstanding: {string.Join(", ", pendingCreates.Keys.OrderBy(k => k, StringComparer.Ordinal).Take(10))})";
+
         // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
         // sees the caller's identity even though this runs on a scheduler thread. The scope opens on
         // Subscribe — exactly when the cold CreateNode's Defer reads the AsyncLocal and posts.
@@ -8056,10 +8186,19 @@ public static class MeshExtensions
                     ? Observable.Return(created)
                     : Observable.Throw<MeshNode>(d.Message.ToException(node.Path))));
 
-        IObservable<MeshNode> CreateRetargeted(MeshNode stored) =>
-            copyRequest.PreserveAuthorship
-                ? CreatePreservingAuthorship(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: true), stored.Path)
-                : CreateUnderCaller(RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: false));
+        IObservable<MeshNode> CreateRetargeted(MeshNode stored)
+        {
+            var retargeted = RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: copyRequest.PreserveAuthorship);
+            var create = copyRequest.PreserveAuthorship
+                ? CreatePreservingAuthorship(retargeted, stored.Path)
+                : CreateUnderCaller(retargeted);
+            // Which TARGET creates are still outstanding is what a stalled verdict has to name.
+            return Observable.Defer(() =>
+            {
+                pendingCreates.TryAdd(retargeted.Path, 0);
+                return create.Finally(() => pendingCreates.TryRemove(retargeted.Path, out _));
+            });
+        }
 
         // The storage inventory below emits on its own scheduler on a persistent store. Query is
         // constructed AFTER that emission, so MeshService cannot recover the request's AsyncLocal
@@ -8153,7 +8292,12 @@ public static class MeshExtensions
         IObservable<(string Message, bool Undetermined)?> AuthorshipPreservationRefusal() =>
             !copyRequest.PreserveAuthorship
                 ? Observable.Return<(string, bool)?>(null)
+                // 🚨 Take(1): the permission fold is LONG-LIVED — it re-emits on every
+                // AccessAssignment change and never completes. Without the Take, every re-emission
+                // re-ran the whole copy below (a second create pass answering "already exists" over
+                // the first one's success), and the copy chain itself never completed.
                 : MoveEntitlement(hub, sourcePath)
+                    .Take(1)
                     .Select(outcome => outcome.IsGranted
                         ? ((string, bool)?)null
                         : outcome.IsUndetermined
@@ -8234,6 +8378,43 @@ public static class MeshExtensions
                 .Select(list => (IReadOnlyList<MeshNode>)list);
         }
 
+        // The source is absent from the caller's subtree query. Absent from STORAGE too ⇒ the honest
+        // SourceNotFound. Present in storage ⇒ the query's negative is not an answer about
+        // existence: when the caller may READ the source (or is the platform), the query simply
+        // has not caught up — an availability failure, retryable, and never "not found" (#5856).
+        // When the caller may not read it, "not found" stays the answer: denied and deleted are
+        // deliberately indistinguishable to a caller, and saying "it exists" would disclose it.
+        IObservable<(MeshNode Root, int Desc, int Sat)> SourceMissingVerdict()
+        {
+            EnterCopyStage("source-existence");
+            var viewer = callerAccessContext?.ObjectId;
+            var stored = persistence is null
+                ? Observable.Return<MeshNode?>(null)
+                : persistence.Read(sourcePath, hub.JsonSerializerOptions).Take(1).DefaultIfEmpty(null);
+            return stored
+                .SelectMany(node => node is null
+                    ? Observable.Return(false)
+                    : string.IsNullOrEmpty(viewer) || RequestIdentity.IsPlatform(viewer)
+                        ? Observable.Return(true)
+                        : hub.CheckPermissionOutcome(sourcePath, viewer, Permission.Read)
+                            .TakeDecisionOutsideGate()
+                            .Select(outcome => outcome.IsGranted))
+                .SelectMany(readableAndStored =>
+                {
+                    hub.Post(readableAndStored
+                            ? CopyNodeResponse.Fail(
+                                $"{CopyUnavailablePrefix} '{sourcePath}' is stored, but the subtree query "
+                                + "under the caller did not return it yet — the index has not caught up. "
+                                + "Nothing was copied; the copy may be retried.",
+                                NodeCopyRejectionReason.Unknown)
+                            : CopyNodeResponse.Fail(
+                                $"Source node not found at path: {sourcePath}",
+                                NodeCopyRejectionReason.SourceNotFound),
+                        o => o.ResponseFor(request));
+                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
+                });
+        }
+
         logger.LogDebug("[CopyNode] start source={Source} target={Target} (descendants={Desc} satellites={Sat} preserveAuthorship={Preserve} requireComplete={Complete})",
             sourcePath, targetPath, copyRequest.IncludeDescendants, copyRequest.IncludeSatellites,
             copyRequest.PreserveAuthorship, copyRequest.RequireComplete);
@@ -8256,6 +8437,7 @@ public static class MeshExtensions
                     return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
                 }
 
+                EnterCopyStage("stored-inventory");
                 return StoredSubtreePaths().SelectMany(storedPaths =>
                     QueryUnderCaller($"path:{sourcePath} scope:subtree")
             .Take(1)
@@ -8272,13 +8454,11 @@ public static class MeshExtensions
                 var sourceNode = nodes.FirstOrDefault(n =>
                     string.Equals(n.Path, sourcePath, StringComparison.Ordinal));
                 if (sourceNode == null)
-                {
-                    hub.Post(CopyNodeResponse.Fail(
-                            $"Source node not found at path: {sourcePath}",
-                            NodeCopyRejectionReason.SourceNotFound),
-                        o => o.ResponseFor(request));
-                    return Observable.Empty<(MeshNode Root, int Desc, int Sat)>();
-                }
+                    // 🚨 The QUERY decides which paths the caller may copy; it does NOT decide that
+                    // the source is absent (#5856). A query's negative is eventually consistent, and
+                    // "not found" for a record storage holds sent the move's caller off believing
+                    // its source was gone. Existence is decided by storage — see SourceMissingVerdict.
+                    return SourceMissingVerdict();
 
                 // Filter subtree by include flags (descendants vs satellites). A backend that DOES
                 // return satellite rows here (they are all one store in memory) keeps working — the
@@ -8302,9 +8482,11 @@ public static class MeshExtensions
                     .Append(sourcePath)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
+                EnterCopyStage("satellite-sweep");
                 return SatellitesUnder(storedPaths, mainPaths, carriedByQuery)
                     .SelectMany(satellites =>
                     {
+                        EnterCopyStage("create");
                         var toCopy = others.Concat(satellites).ToList();
                         var descCount = toCopy.Count(n =>
                             string.Equals(n.MainNode, n.Path, StringComparison.Ordinal));
@@ -8368,6 +8550,9 @@ public static class MeshExtensions
                     });
             }));
             })
+            .Take(1)
+            .Timeout(copyDeadline, Observable.Defer(() => Observable.Throw<(MeshNode Root, int Desc, int Sat)>(
+                new LifecycleVerdictStalledException("CopyNode", $"{sourcePath} -> {targetPath}", CopyStageNow(), copyBudget))))
             .Subscribe(
                 t =>
                 {
@@ -8377,6 +8562,15 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
+                    if (ex is LifecycleVerdictStalledException stalled)
+                    {
+                        logger.LogError(ex, "[CopyNode] {Source} -> {Target} reached no verdict within {Budget}s — stalled at stage {Stage}",
+                            sourcePath, targetPath, copyBudget.TotalSeconds, stalled.Stage);
+                        hub.Post(CopyNodeResponse.Fail($"{CopyUnavailablePrefix} {stalled.Message}",
+                                NodeCopyRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                        return;
+                    }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
                         ? NodeCopyRejectionReason.TargetAlreadyExists
@@ -8468,6 +8662,56 @@ public static class MeshExtensions
         : InvalidOperationException(message)
     {
         public NodeMoveRejectionReason Reason { get; } = reason;
+    }
+
+    /// <summary>
+    /// A move whose COPY LEG answered with a failure — carried with the move reason it maps to, so the
+    /// move reports the copy's own classification instead of re-deriving one from the wording (the
+    /// substring test read "not found" in any message as <see cref="NodeMoveRejectionReason.SourceNotFound"/>,
+    /// #5856).
+    /// </summary>
+    private sealed class MoveCopyLegFailedException(string message, NodeMoveRejectionReason reason)
+        : InvalidOperationException(message)
+    {
+        public NodeMoveRejectionReason Reason { get; } = reason;
+    }
+
+    /// <summary>
+    /// The move reason a failed copy leg maps to. <see cref="NodeCopyRejectionReason.Unknown"/> is an
+    /// availability failure exactly when the copy said so (<see cref="CopyUnavailablePrefix"/>).
+    /// </summary>
+    private static NodeMoveRejectionReason MoveReasonForCopy(CopyNodeResponse copy) => copy.RejectionReason switch
+    {
+        NodeCopyRejectionReason.SourceNotFound => NodeMoveRejectionReason.SourceNotFound,
+        NodeCopyRejectionReason.TargetAlreadyExists => NodeMoveRejectionReason.TargetAlreadyExists,
+        NodeCopyRejectionReason.ValidationFailed
+            or NodeCopyRejectionReason.Unauthorized
+            or NodeCopyRejectionReason.TargetNamespaceNotFound => NodeMoveRejectionReason.ValidationFailed,
+        _ => copy.Error?.StartsWith(CopyUnavailablePrefix, StringComparison.Ordinal) == true
+            ? NodeMoveRejectionReason.Unavailable
+            : NodeMoveRejectionReason.Unknown,
+    };
+
+    /// <summary>
+    /// 🚨 A lifecycle operation (create, copy, move) whose detached chain did not reach a verdict by
+    /// its <see cref="MeshOperationOptions.Timeout"/> deadline — some leg went silent. Carries the
+    /// STAGE that was running, so the verdict names where the silence was (#6149/#6105/#6107).
+    /// A <see cref="TimeoutException"/> by type, so every generic classifier still reads it as a
+    /// bound that fired; the handlers match it FIRST and answer it as an availability failure,
+    /// never as a refusal.
+    /// </summary>
+    private sealed class LifecycleVerdictStalledException(string operation, string path, string stage, TimeSpan budget)
+        : TimeoutException(FormattableString.Invariant(
+            $"{operation} of '{path}' reached no verdict within {budget.TotalSeconds:0}s: it was still ")
+            + $"waiting at stage '{stage}'. Nothing refused the request; whether the stage's own work "
+            + "lands later is unknown, so read the target before retrying.")
+    {
+        /// <summary>The stage that was running when the deadline fired.</summary>
+        public string Stage { get; } = stage;
+
+        /// <summary>The budget, formatted once, invariantly, for a catalog argument.</summary>
+        public string BudgetSeconds { get; } =
+            budget.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>
