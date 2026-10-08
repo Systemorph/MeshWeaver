@@ -297,7 +297,8 @@ internal static class PermissionEvaluator
                 ObserveScopePolicies(hub, cache, nodePath, staticPolicies),
                 ObserveAllMembershipNodes(cache, options),
                 ObserveGatedNodes(hub, cache, gates, staticGatedNodes),
-                (nodes, policies, memberships, gatedNodes) =>
+                ObserveRepositoryOwnedContent(cache, options, nodePath),
+                (nodes, policies, memberships, gatedNodes, repositoryOwned) =>
                 {
                     // Match grants to the viewer OR any group they belong to (transitively). A group
                     // grant's subject is the group path, and memberships live UNDER the group node —
@@ -306,15 +307,25 @@ internal static class PermissionEvaluator
                     // matches on. Consistent with the Postgres rebuild's global group expansion.
                     var subjects = ResolveUserGroups(userId, memberships, options).Add(userId);
                     var (granted, denied) = ComputeScopeRoles(subjects, nodes, staticNodes, options);
-                    return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes);
+                    return (Granted: granted, Denied: denied, RuntimePolicies: policies, GatedNodes: gatedNodes,
+                        RepositoryOwned: repositoryOwned);
                 })
             .Select(snap =>
             {
                 var state = ComputeRoleState(snap.Granted, nodePath, userId, capturedContext, capturedCircuitContext, staticPolicies, snap.Denied, snap.RuntimePolicies);
+                // 🚨 Content of a SYSTEM-OWNED partition (a one-way `_GitSync`) is written by its
+                // importer alone — System, which short-circuits above this fold — so no ROLE may
+                // confer Create/Update/Delete on it, whatever grants exist (#5140). A cap rather
+                // than a validator so that every seam that asks this fold — the RLS node
+                // validator, the [RequiresPermission] delivery gate on a patch, the delete
+                // pre-flight, the menus — gets the same answer. See RepositoryOwnedWriteCap.
+                var cap = snap.RepositoryOwned
+                    ? state.PermissionCap & ~RepositoryOwnedWriteCap
+                    : state.PermissionCap;
                 // The gate contributes to the PUBLIC grant — ORed in after (roles ∩ cap), exactly
                 // like PartitionAccessPolicy.PublicRead — so a declared public surface needs no
                 // role and no AccessAssignment row of any kind. It only ever ADDS Read.
-                return (state.RoleIds, state.PermissionCap,
+                return (state.RoleIds, PermissionCap: cap,
                     state.PublicGrant | GateGrant(gates, snap.GatedNodes, nodePath));
             });
 
@@ -948,6 +959,56 @@ internal static class PermissionEvaluator
                 }
                 return dict;
             })
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The permissions no role confers on the CONTENT of a system-owned partition: everything that
+    /// writes it. Read, and every non-CRUD capability, are left to the ordinary fold.
+    /// </summary>
+    internal const Permission RepositoryOwnedWriteCap = Permission.Create | Permission.Update | Permission.Delete;
+
+    /// <summary>
+    /// 🚨 Whether <paramref name="nodePath"/> is CONTENT of a SYSTEM-OWNED partition — one with a
+    /// ONE-WAY <c>{partition}/_GitSync</c> (<see cref="AccessAssignmentGuard.IsSystemOwned"/>), whose
+    /// content is its repository's projection and is rewritten by the importer on every sync
+    /// (#5140).
+    ///
+    /// <para><b>Why this is a leg of the fold.</b> Ownership used to be enforced through the GRANTS
+    /// alone — <c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c> refuses a new Admin/Editor
+    /// grant there and <c>SystemOwnedAccessRetractionHandler</c> retracts the ones present when the
+    /// sync config is CREATED. Both act on an event and neither re-examines a partition afterwards,
+    /// so a partition whose sync predates them kept its human Admin, and that grant kept conferring
+    /// write. Measured 2026-10-08 on three live partitions across two portals, one of them edited
+    /// directly by its leftover Admin the day before. Asked here, the rule is a property of the
+    /// PARTITION and holds whatever grants exist; and because every gate asks this fold, the RLS
+    /// validator, the patch delivery gate, the delete pre-flight and the menus agree.</para>
+    ///
+    /// <para><b>Content only.</b> A path with any <c>_</c>-prefixed segment is a satellite and keeps
+    /// its own rules: <c>_Access</c> is already capped to entitlements (and is where the platform
+    /// admin's #5904 grant repair writes), <c>_GitSync</c> keeps its access rule (a platform admin
+    /// may delete it, which is how a partition stops being system-owned), and annotations, threads
+    /// and activities are what an entitlement exists to write. A BIJECTIVE sync is not
+    /// system-owned. System never reaches this leg (it short-circuits at the entry point), so the
+    /// importer is untouched.</para>
+    ///
+    /// <para>🚨 <b>Not seeded</b>, per the monotonicity rule in <see cref="GetEffectivePermissionsCore"/>:
+    /// this leg SUBTRACTS, so an optimistic <c>false</c> seed would be a write window. One cached
+    /// query per partition, anchored on the config's own path (<see cref="SecurityQueries.PartitionSyncConfig"/>).</para>
+    /// </summary>
+    private static IObservable<bool> ObserveRepositoryOwnedContent(
+        IMeshNodeStreamCache cache, JsonSerializerOptions options, string nodePath)
+    {
+        var segments = (nodePath ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (!AccessAssignmentGuard.IsContentPath(nodePath))
+            return Observable.Return(false);
+
+        var partition = segments[0];
+        return SecurityQuery(cache, SecurityQueries.PartitionSyncConfigQueryId(partition), options,
+                SecurityQueries.PartitionSyncConfig(partition))
+            .Select(nodes => nodes.Any(n =>
+                string.Equals(n.Path, AccessAssignmentGuard.SyncConfigPath(partition), StringComparison.OrdinalIgnoreCase)
+                && AccessAssignmentGuard.IsSystemOwned(n, options)))
             .DistinctUntilChanged();
     }
 

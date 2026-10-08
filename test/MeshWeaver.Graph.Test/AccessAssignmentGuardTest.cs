@@ -425,4 +425,29 @@ public class AccessAssignmentGuardTest
             "a config we cannot read must leave the space system-owned, never open it up");
     }
 
+    /// <summary>
+    /// 🚨 A config node that names NO repository is not a sync (#5140): the settings tab mints an
+    /// empty <c>_GitSync</c> the moment it is opened, and reading that as system-owned would strip an
+    /// ordinary Space of its administrators and refuse every write to its content. The control is
+    /// the same config WITH a repository, in both the camelCase and the PascalCase spelling (a typed
+    /// config serialized without the hub's options), which must stay system-owned.
+    /// </summary>
+    [Fact]
+    public void AConfigNamingNoRepository_IsNotSystemOwned()
+    {
+        static MeshNode Config(string json) => new("_GitSync", "Deployments")
+        {
+            NodeType = "GitHubSyncConfig",
+            Content = System.Text.Json.JsonDocument.Parse(json).RootElement.Clone(),
+        };
+
+        Assert.False(AccessAssignmentGuard.IsSystemOwned(Config("""{"$type":"GitHubSyncConfig"}"""), null));
+        Assert.False(AccessAssignmentGuard.IsSystemOwned(
+            Config("""{"$type":"GitHubSyncConfig","repositoryUrl":"  "}"""), null));
+        Assert.True(AccessAssignmentGuard.IsSystemOwned(
+            Config("""{"$type":"GitHubSyncConfig","repositoryUrl":"https://github.com/o/r"}"""), null));
+        Assert.True(AccessAssignmentGuard.IsSystemOwned(
+            Config("""{"$type":"GitHubSyncConfig","RepositoryUrl":"https://github.com/o/r"}"""), null));
+    }
+
 }

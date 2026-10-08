@@ -211,10 +211,13 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         //    "A detection that REPEATS at an unchanged module version is a repair that did not
         //    hold" (CatalogLayoutAreas.SkipOrHeal), measured on memex.meshweaver.cloud over ELEVEN
         //    boots for Feedback/Feedback/Source/FeedbackHandover.
-        await MeshService.DeleteNode(QuizPath)
-            .Should().Within(TestTimeouts.WriteConvergence)
-            .Emit("the prune is the precondition of the repair this gate must not attempt",
-                cancellationToken: TestContext.Current.CancellationToken);
+        // As SYSTEM: the partition's own writer is the platform (the import), and a one-way synced
+        // partition's content is written by System alone (#5140).
+        using (Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem())
+            await MeshService.DeleteNode(QuizPath)
+                .Should().Within(TestTimeouts.WriteConvergence)
+                .Emit("the prune is the precondition of the repair this gate must not attempt",
+                    cancellationToken: TestContext.Current.CancellationToken);
         (await Read(QuizPath)).Should().BeNull("the prune must have landed, or nothing is measured");
         var fetchesBeforeTheHold = repoClient.FetchedRefs.Count;
 

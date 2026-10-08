@@ -84,14 +84,19 @@ public class DeletedSourceFolderIsRetiredTest(ITestOutputHelper output) : Monoli
         await NodeAppears($"{space}/Menu", ct);
         await ConfigWhen(space, c => c.LastSyncCommitSha == WithFolder, ct);
 
-        // A node the partition gained at RUNTIME — never in any import manifest.
-        await NodeFactory.CreateNode(new MeshNode("Runtime", space)
-        {
-            NodeType = "Markdown",
-            Name = "Runtime state",
-            State = MeshNodeState.Active,
-            Content = new MarkdownContent { Content = "written at runtime" },
-        }).Timeout(TestTimeouts.Convergence).Await(ct);
+        // A node the partition gained at RUNTIME — never in any import manifest. Written as SYSTEM,
+        // as the platform's runtime writers do: a one-way synced partition's content is written
+        // by System alone (#5140).
+        Task<MeshNode> runtimeWrite;
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem())
+            runtimeWrite = NodeFactory.CreateNode(new MeshNode("Runtime", space)
+            {
+                NodeType = "Markdown",
+                Name = "Runtime state",
+                State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "written at runtime" },
+            }).Timeout(TestTimeouts.Convergence).Await(ct);
+        await runtimeWrite;
 
         // ── the repository deletes the folder ───────────────────────────────
         var result = await Sync.ReimportAtCommit(space, FolderDeleted, UserId)
