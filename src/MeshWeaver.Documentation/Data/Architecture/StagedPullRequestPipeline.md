@@ -203,10 +203,16 @@ fallback clock keys on the PULL REQUEST's creation, not the head.
 
 **The required verdict agrees (Plugins #3044).** `Automatic review answered` now consults the same
 `generated_only` rule. For a generated-only App pull request, condition 1 ("the review landed") is
-NOT OWED once the reviewer has answered with its terminal REFUSAL, and the log says
-`NOT OWED: … — nothing to review (generated_only)`. It is never released before the reviewer has
-answered: a pass on the `opened` evaluation could merge before a late thread arrives, and a thread
-that opens after the merge can block nothing. Every thread the reviewer did open still needs a
+NOT OWED once a TERMINAL signal says that no review is coming. The log then says
+`NOT OWED: … — nothing to review (generated_only)`. There are two such signals:
+- the reviewer's REFUSAL;
+- no automatic review requested at all `GENERATED_SETTLE_MINUTES` (10) after the pull request
+  opened. The automatic review is requested at open, and it does not reach the App's own pull
+  requests. Measured on Plugins settle #3191: no requested reviewer and no review 20 minutes in, so a
+  refusal-only rule held it forever.
+
+It is never released while the reviewer could still answer: a pass on the `opened` evaluation could
+merge before a late thread arrives, and a thread that opens after the merge can block nothing. Every thread the reviewer did open still needs a
 person's reply, and a draft is still held. Until this, the reviewer
 REFUSED every lock-only pull request ("Copilot wasn't able to review any files in this pull request"
 — locks are in its default exclusions), so the verdict was `RED — UNREVIEWABLE` and only a person's
