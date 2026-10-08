@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -915,8 +916,9 @@ internal class ApiTokenService(
     /// A revoke the mesh refused is a statement about a token that STILL AUTHENTICATES; folding it
     /// into <c>false</c> let a caller that ignores the value (<c>ServiceIdentities.Rotate</c>)
     /// report success with the old credential live. A token node whose content cannot be read as
-    /// an <see cref="ApiToken"/> faults too — it used to be returned unchanged and reported as
-    /// revoked. <c>true</c> means the node now carries <c>IsRevoked</c>; <c>false</c> means the
+    /// an <see cref="ApiToken"/> faults too (the typed <c>Update&lt;ApiToken&gt;</c>) — it used to be
+    /// returned unchanged and reported as revoked, or, read with default options, replaced by a
+    /// default token. <c>true</c> means the node now carries <c>IsRevoked</c>; <c>false</c> means the
     /// path holds no node at all (nothing there authenticates).</para>
     ///
     /// <para>The global index entry is hard-deleted afterwards — the index miss is a
@@ -931,25 +933,24 @@ internal class ApiTokenService(
         logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
 
         var primary = workspace.GetMeshNodeStream(tokenNodePath)
-            .Update(current =>
-            {
-                var token = current.ContentAs<ApiToken>(hub.JsonSerializerOptions)
-                    ?? ExtractApiToken(current)
-                    ?? throw new InvalidOperationException(
-                        $"'{tokenNodePath}' does not hold a readable API token, so it was NOT revoked.");
-                // Flip IsRevoked on the live node — validation reads the node fresh (no cache),
-                // so the revoke takes effect immediately.
-                return current with { Content = token with { IsRevoked = true } };
-            })
+            // The TYPED write: the content is converted with the mesh's own serializer options, and
+            // content that is absent or not an ApiToken faults the write instead of being replaced
+            // by a default-constructed token. Flip IsRevoked on the live node — validation reads
+            // the node fresh (no cache), so the revoke takes effect immediately.
+            .Update<ApiToken>(token => token with { IsRevoked = true })
             .Select(_ => true)
             // An ABSENT path is the one non-fault: there is no token there to revoke, so nothing
-            // authenticates through it — `false`, as DeleteToken answers for the same case. It is
-            // matched on the delivery's own classification, never on the message text, so a
-            // refusal (which a caller without Read also receives as a delivery failure) can never
-            // be mistaken for it.
-            .Catch<bool, DeliveryFailureException>(ex => ex.Failure?.ErrorType == ErrorType.NotFound
-                ? Observable.Return(false)
-                : Observable.Throw<bool>(ex))
+            // authenticates through it — `false`, as DeleteToken answers for the same case. Matched
+            // as the ROUTER's NotFound for THIS address (typed ErrorType.NotFound AND the routing
+            // banner naming the path), never on ErrorType alone: NotFound is also what a LIVE hub
+            // answers for a request it has no handler for, and a refusal arrives as a delivery
+            // failure too — neither may be read as "nothing was there".
+            .Catch<bool, DeliveryFailureException>(ex =>
+                AreaErrorClassifier.IsRoutingNotFoundFailure(ex.Failure)
+                && string.Equals(AreaErrorClassifier.TryGetMissingNodePath(ex), tokenNodePath,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return(false)
+                    : Observable.Throw<bool>(ex))
             // .Do, never a swallowing .Catch: the warning is kept and the refusal reaches the caller.
             .Do(_ => { }, ex => logger.LogWarning(ex, "RevokeToken failed for {Path}", tokenNodePath));
 

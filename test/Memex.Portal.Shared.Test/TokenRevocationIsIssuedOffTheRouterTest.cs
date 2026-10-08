@@ -8,6 +8,7 @@ using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -189,6 +190,38 @@ public class TokenRevocationIsIssuedOffTheRouterTest : MonolithMeshTestBase
         Output.WriteLine($"absent revoke outcome: {outcome.Kind} {outcome.Exception?.Message}");
         outcome.Kind.Should().Be(NotificationKind.OnNext);
         outcome.Value.Should().BeFalse("nothing was there, so nothing was revoked");
+    }
+
+    /// <summary>
+    /// A node at the path whose content is NOT an <see cref="ApiToken"/> must fault the revoke and be
+    /// left as it was — never read leniently into a default token and overwritten, and never
+    /// reported as revoked.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task RevokingANodeThatIsNotAToken_Faults_AndLeavesItUntouched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = $"{OwnerId}/ApiToken/not-a-token";
+        await NodeFactory.CreateNode(new MeshNode("not-a-token", $"{OwnerId}/ApiToken")
+            {
+                Name = "Not A Token",
+                NodeType = ApiTokenNodeType.NodeType,
+                Content = new ApiTokenIndex { TokenHash = "unrelated", TokenPath = "elsewhere" },
+            })
+            .Should().Emit("the decoy must exist, or the revoke would take the absent-path branch", ct);
+
+        var outcome = await GetService().RevokeToken(path).Materialize()
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"non-token revoke outcome: {outcome.Kind} {outcome.Exception?.Message}");
+        outcome.Kind.Should().Be(NotificationKind.OnError,
+            "content that is not a token cannot be revoked, and saying it was would be a lie");
+
+        var persisted = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read(path, Mesh.JsonSerializerOptions)
+            .Should().Emit(cancellationToken: ct);
+        persisted!.ContentAs<ApiTokenIndex>(Mesh.JsonSerializerOptions)!.TokenHash.Should().Be("unrelated",
+            "the node must not have been overwritten with a default-constructed token");
     }
 
     /// <summary>
