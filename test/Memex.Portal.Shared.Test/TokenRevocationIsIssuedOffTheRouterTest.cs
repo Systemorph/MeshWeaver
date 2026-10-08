@@ -161,13 +161,13 @@ public class TokenRevocationIsIssuedOffTheRouterTest : MonolithMeshTestBase
         outcome.Kind.Should().Be(NotificationKind.OnError,
             "a REFUSED revocation is a statement about a token that still authenticates — folding it "
             + "into `false` is how a rotation reported success with the old credential live");
-        outcome.Exception!.Message.Should().Contain("Access denied",
+        (outcome.Exception?.Message ?? "(no exception)").Should().Contain("Access denied",
             "the fault must be the mesh's permission refusal, not some unrelated failure");
 
         var persisted = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(created.Node.Path, Mesh.JsonSerializerOptions)
             .Should().Emit(cancellationToken: ct);
-        persisted!.ContentAs<ApiToken>(Mesh.JsonSerializerOptions)!.IsRevoked.Should().BeFalse(
+        (persisted?.ContentAs<ApiToken>(Mesh.JsonSerializerOptions)?.IsRevoked).Should().Be((bool?)false,
             "the refused caller must not have revoked the token");
 
         var validation = await service.Validate(created.RawToken)
@@ -220,7 +220,7 @@ public class TokenRevocationIsIssuedOffTheRouterTest : MonolithMeshTestBase
         var persisted = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
             .Should().Emit(cancellationToken: ct);
-        persisted!.ContentAs<ApiTokenIndex>(Mesh.JsonSerializerOptions)!.TokenHash.Should().Be("unrelated",
+        (persisted?.ContentAs<ApiTokenIndex>(Mesh.JsonSerializerOptions)?.TokenHash).Should().Be("unrelated",
             "the node must not have been overwritten with a default-constructed token");
     }
 
