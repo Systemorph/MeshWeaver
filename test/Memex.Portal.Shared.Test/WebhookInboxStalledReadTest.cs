@@ -121,9 +121,11 @@ public class WebhookInboxStalledReadTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = TestContext.Current.CancellationToken;
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        await Observable.Using(
-                () => access.ImpersonateAsSystem(),
-                _ => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(
+        // RunAsSystem, never Observable.Using(ImpersonateAsSystem, …) (#1790): Using opens the
+        // AsyncLocal scope on the subscribing thread and disposes it wherever the create's reply
+        // lands, which can leave this test's thread latched as System.
+        await access.RunAsSystem(
+                () => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(
                     new MeshNode(Target)
                     {
                         Name = Target,
