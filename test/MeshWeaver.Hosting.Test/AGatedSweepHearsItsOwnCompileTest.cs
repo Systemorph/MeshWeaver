@@ -139,7 +139,7 @@ public class AGatedSweepHearsItsOwnCompileTest(ITestOutputHelper output) : Monol
 
         await Observable.Interval(100.Milliseconds()).StartWith(0L)
             .Select(_ => gate.HeldCount)
-            .Where(held => held > 0)
+            .Where(held => held > heldBefore)
             .FirstAsync()
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the compile stamp waits for the bake's verdict", TestContext.Current.CancellationToken);
