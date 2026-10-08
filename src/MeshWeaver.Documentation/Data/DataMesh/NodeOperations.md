@@ -183,6 +183,12 @@ Move relocates a node and its entire subtree to a new path. It requires **Delete
 
 The move is implemented at the persistence layer, handling both same-partition and cross-partition moves (including PostgreSQL). Descendants are moved first, then the root node is relocated and the source is deleted.
 
+## A half-landed move is completed by re-issuing it
+
+A move is a copy leg followed by a delete leg. When the reply is lost — the caller gave up while the copy was still running — the copy can land and the delete never run, leaving the same node at both addresses. **Re-issuing the same `MoveNodeRequest` finishes it.** The copy leg checks every target that is already taken against the stored source: when the node there IS the source relocated (same `NodeType`, same `CreatedBy`, same `CreatedDate` — the stamps a move copies verbatim and that nothing else can mint), it is kept as it stands, any node the first attempt never reached is carried, and the move goes on to delete the source.
+
+Anything else at the target is a genuine collision: the move is refused with `TargetAlreadyExists`, and neither the source nor the node at the target is touched. The target's *content* is deliberately not compared — after a half-landed move the node lives at the target, and what has been written to it there since is its newer state, not a different node. A source with no creation stamp has no identity to recognise and is never matched.
+
 ## Programmatic Move
 
 ```csharp
