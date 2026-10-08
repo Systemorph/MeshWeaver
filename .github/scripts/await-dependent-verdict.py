@@ -6,7 +6,7 @@
     python3 .github/scripts/await-dependent-verdict.py --self-test
 
 The waiting half of the `Dependent suites (MeshWeaver.Plugins)` gate in `dotnet-test.yml`
-(policy `dependent-suites-gate`; Doc/Architecture/CrossRepoPairGate § "The dependent's suites run
+(policy `dependent-suites-affected-gate`; Doc/Architecture/CrossRepoPairGate § "The dependent's suites run
 against the candidate"). The job before it sent `repository_dispatch core-candidate-suites` to
 MeshWeaver.Plugins; that repository's `core-candidate.yml` builds its reachable suites against the
 candidate from source, re-runs only what failed at the candidate's first parent, and writes its
@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -46,11 +47,25 @@ PUBLIC_COUNTS = ("selected", "universe", "legs", "drift", "preExisting", "missin
 EXIT_NO_VERDICT = 3
 
 
+# Per REALM (a package id the public registry already lists, or `hosts`): only these integer/verdict
+# fields, so the realms a change breaks can be NAMED in `Breaks-plugins:` without a suite or test name.
+PUBLIC_REALM_FIELDS = ("conclusion", "suites", "drift", "missingEvidence", "meshTestsUnmeasured")
+EXTRA_COUNTS = ("notSelected", "meshTestsUnmeasured")
+_REALM = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+
+
 def public_view(verdict: dict) -> dict:
     counts = verdict.get("counts") if isinstance(verdict.get("counts"), dict) else {}
+    realms = counts.get("realms") if isinstance(counts.get("realms"), dict) else {}
+    view_counts = {k: counts.get(k) for k in PUBLIC_COUNTS + EXTRA_COUNTS if isinstance(counts.get(k), int)}
+    view_counts["realms"] = {
+        r: {f: v.get(f) for f in PUBLIC_REALM_FIELDS if isinstance(v.get(f), (int, str)) and not isinstance(v.get(f), bool)}
+        for r, v in realms.items() if isinstance(r, str) and _REALM.match(r) and isinstance(v, dict)}
+    plugins = verdict.get("pluginsSha")
     return {"conclusion": verdict.get("conclusion"), "candidate": verdict.get("candidate"),
             "base": verdict.get("base"), "key": verdict.get("key"),
-            "counts": {k: counts.get(k) for k in PUBLIC_COUNTS if isinstance(counts.get(k), int)},
+            "pluginsSha": plugins if isinstance(plugins, str) and len(plugins) == 40 else None,
+            "counts": view_counts,
             "summary": verdict.get("summary") if isinstance(verdict.get("summary"), str) else None,
             "run": verdict.get("run") if isinstance(verdict.get("run"), str) else None}
 
@@ -155,6 +170,12 @@ def self_test() -> int:
     view = public_view({**good, "failingTests": ["Secret.Test.Name"], "counts": {**counts, "names": ["x"]}})
     check("the public view drops every field and count that is not allow-listed",
           "failingTests" not in view and "names" not in view["counts"] and "Secret" not in json.dumps(view), json.dumps(view))
+    view = public_view({**good, "counts": {**counts, "realms": {
+        "AI": {"conclusion": "failure", "drift": 1, "suites": 2, "failingSuite": "Secret.Test"},
+        "bad realm name with spaces": {"conclusion": "success"}}}})
+    check("per-realm fields are allow-listed too: realm names and integers ride, a suite name never does",
+          view["counts"]["realms"] == {"AI": {"conclusion": "failure", "suites": 2, "drift": 1}}
+          and "Secret" not in json.dumps(view), json.dumps(view))
     # The poll loop itself, against a scripted API: silence by the deadline must come back as NO
     # verdict (main maps that to exit 1), and a ref that appears must be read through its commit.
     global _get
@@ -184,6 +205,7 @@ def main() -> int:
     ap.add_argument("--candidate")
     ap.add_argument("--base")
     ap.add_argument("--deadline-minutes", type=int, default=40)
+    ap.add_argument("--out", help="write the PUBLIC view of the verdict here (for the break-declaration check)")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
@@ -204,6 +226,13 @@ def main() -> int:
         return EXIT_NO_VERDICT
     ok, text = validate(verdict, a.key, a.candidate, a.base)
     print(text if ok else f"::error::{text}")
+    # The verdict is written whatever it says (only a verdict ABOUT this key/candidate/base): a red one
+    # is what check-plugins-break-declaration.py reads to decide whether a DECLARED break excuses it.
+    about_this = isinstance(verdict, dict) and all(verdict.get(f) == w for f, w in
+                                                   (("key", a.key), ("candidate", a.candidate), ("base", a.base)))
+    if a.out and about_this and verdict.get("schema") == 1:
+        with open(a.out, "w", encoding="utf-8") as f:
+            json.dump(public_view(verdict), f, indent=1)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:

@@ -401,8 +401,9 @@ enough today.
 
 > 🚨 **The queue is OFF on core `main`** (measured 2026-09-27: `enqueuePullRequest` → "No merge
 > queue found for branch 'main'"; no `merge_queue` rule on the ruleset). `--auto` ARMS auto-merge and
-> GitHub merges when the required set is green; no step of the merge waits on another repository
-> (policy `core-merge-never-blocked`, Doc/Architecture/OnePromotionGate). The section below is how
+> GitHub merges when the required set is green; the one cross-repository wait is the REQUIRED,
+> affected-only `Dependent suites (MeshWeaver.Plugins)` verdict on the PR (policy
+> `dependent-suites-affected-gate`, Doc/Architecture/CrossRepoPairGate). The section below is how
 > the queue works when it is enabled.
 
 Core `main` merges through GitHub's **merge queue** (ruleset `main pr protection`, rule
