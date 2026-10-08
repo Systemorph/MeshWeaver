@@ -185,8 +185,11 @@ but no keyed factory existed, so `Graph:Storage:Type=Sqlite` answered `Unknown s
 > reads every stored embedding and ranks in memory, which is right for a single machine and is not
 > Postgres's HNSW. It also only lights up when an embedder is wired: without one,
 > `SqliteStorageAdapter` writes `embedding = NULL`, the vector provider contributes nothing, and
-> search degrades from meaning to words **with no error and no log line**. That is why the wizard
-> asks for an embeddings endpoint and warns when it is left blank.
+> SQLite's generic text query still matches substrings of stored text, including node content, but
+> cannot rank by meaning **with no error and no log line**. On a PostgreSQL install without a content
+> chunk store, text search is narrower: it matches node names, paths, descriptions and types, not
+> text inside pages. That is why the wizard asks for an embeddings endpoint and warns when it is
+> left blank.
 
 ## 🚨 What a real cluster found that no test could
 
