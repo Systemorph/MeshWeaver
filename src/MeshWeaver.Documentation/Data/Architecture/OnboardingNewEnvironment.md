@@ -266,15 +266,17 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
   `DOTNET_DbgMiniDumpName=/data/dumps/…` are worthless on their own: `createdump` does **not create
   directories**, so without a volume mounted at that path every crash fails with *"Could not create
   output file … No such file or directory"* — **destroying its own evidence** — and burns ~6s plus a
-  ~350k-line log storm on the way down. The chart mounts a dedicated `memex-dumps` emptyDir there;
+  ~350k-line log storm on the way down. The chart now writes dumps to `/data/dumps/<pod>/` on a dedicated dump
+  claim (a `dumps` volume on the record) or else the `/data` claim, and the `crash-dump-prepare`
+  init container and the portal's postStart hook create that directory under a headroom gate
+  ([Debugging Native Crashes](../DebuggingNativeCrashes) → "Production: where a dump lands"). Before
+  that, the chart mounted a dedicated `memex-dumps` emptyDir there;
   an env whose live pod lacks it produces **zero dumps while looking fully instrumented**. Verified
   2026-07-28: all three environments had the env vars pointing at a non-existent directory, so every
-  production `exit=139` since had left nothing to analyse. Check the MOUNT, never the env:
-  ```bash
-  kubectl get deploy memex-portal-deployment -n <env> \
-    -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name} -> {.mountPath}{"\n"}{end}' \
-    | grep dumps || echo "NO DUMP MOUNT — crashes will produce nothing"
-  ```
+  production `exit=139` since had left nothing to analyse. Check what the pod SAYS, never the env:
+  the first `[crash-dumps]` line in the portal container's log after each start reads either
+  `armed: dumps go to /data/dumps/<pod> …` or `HELD: dumps are DISABLED …` (not enough free space
+  on `/data` for a heap dump). Read it with a `Logs` action, query `|= "[crash-dumps]"`.
 - **The per-env patch is index-SENSITIVE, and fails loudly when the chart moves.** The data/users/content
   PVC volumes now render from the **chart** (`persistence:` in `values.aks.yaml`); `portal-patch.json` only
   appends the env-specific extras, using `"path": ".../volumes/-"` (append) rather than a numeric index. It
