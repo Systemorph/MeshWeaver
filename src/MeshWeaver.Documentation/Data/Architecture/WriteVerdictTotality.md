@@ -709,7 +709,7 @@ RequestTimeout").
 
 | Handler | Bound | What the stalled verdict says |
 |---|---|---|
-| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
+| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
 | Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
 | Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
