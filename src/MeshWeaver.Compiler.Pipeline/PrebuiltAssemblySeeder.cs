@@ -423,10 +423,13 @@ public static class PrebuiltAssemblySeeder
     /// version.</item>
     /// <item>A build VERIFIED against the live source (adopted with a fingerprint equal to the
     /// live one, or compiled here from exactly the live source versions) is never replaced by
-    /// bytes the owner could not verify (no fingerprint, or a different one), nor by a bundle of
-    /// the same source that is not of a strictly NEWER module version. Replacing proven bytes with
-    /// unprovable ones is a strict loss, and between two equally proven builds the standing one
-    /// wins — which is what makes two writers converge instead of alternating.</item>
+    /// bytes the owner could not verify (no fingerprint, or a different one). A standing ADOPTED
+    /// verified build is also not replaced by a bundle of the same source that is not of a strictly
+    /// NEWER module version. Replacing proven bytes with unprovable ones is a strict loss, and
+    /// between two equally proven adoptions the standing one wins — which is what makes two writers
+    /// converge instead of alternating. (A verified bundle of the live source still replaces a LOCAL
+    /// compile of it: that is the ordinary one-time adoption, and a compile only follows a source
+    /// move, so it cannot alternate.)</item>
     /// </list>
     /// </summary>
     /// <param name="observed">The owner's current definition.</param>
@@ -478,9 +481,11 @@ public static class PrebuiltAssemblySeeder
             return $"the standing build is verified against the live source ({Describe(observed)}) "
                 + $"and this bundle was built from different source ({sourceFingerprint})";
 
+        // A fingerprint-verified bundle of the live source may still replace a LOCAL compile of it:
+        // that is the ordinary "a prebuilt for this identity landed" adoption, it happens once (a
+        // compile only follows a source move), and it cannot alternate.
         if (observed.BuildProvenance is BuildProvenance.Compiled)
-            return "the standing build was compiled here from exactly the live source, and this "
-                + "bundle was built from that same source — the standing build wins";
+            return null;
 
         if (!IsStrictlyNewer(moduleVersion, observed.AdoptedModuleVersion))
             return $"the standing build is verified against the same live source ({Describe(observed)}) "

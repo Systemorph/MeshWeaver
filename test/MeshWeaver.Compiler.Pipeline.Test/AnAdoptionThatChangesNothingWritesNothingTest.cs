@@ -207,11 +207,14 @@ public class StandingBuildKeptTest
     }
 
     [Fact]
-    public void LocallyCompiledLiveBuild_IsKept()
-        => PrebuiltAssemblySeeder.StandingBuildKept(
-                Usable(BuildProvenance.Compiled, null, null, mvid: "1fe1"),
-                true, "other", null, LiveFingerprint, "9.0.0")
-            .Should().NotBeNull();
+    public void LocallyCompiledLiveBuild_IsReplacedByAVerifiedBundle_ButNotByALegacyOne()
+    {
+        var compiled = Usable(BuildProvenance.Compiled, null, null, mvid: "1fe1");
+        PrebuiltAssemblySeeder.StandingBuildKept(compiled, true, "other", null, LiveFingerprint, "1.0.0")
+            .Should().BeNull("a prebuilt of the live source landing over a local compile is the ordinary, one-time adoption");
+        PrebuiltAssemblySeeder.StandingBuildKept(compiled, true, "other", null, null, "9.0.0")
+            .Should().NotBeNull("unverifiable bytes never replace a build compiled from the live source");
+    }
 
     [Theory]
     [InlineData("1.7.0", "1.6.8", true)]

@@ -49,9 +49,11 @@ It writes **nothing** — outcome `SeedOutcome.AlreadyServed`, which every calle
   version, source fingerprint); or
 - the standing build is **verified against the live source** (adopted with a fingerprint equal to
   the live one, or compiled here from exactly the live source versions) and the incoming bundle
-  cannot improve on it: it carries no fingerprint, a different one, or the same one at a module
-  version that is not strictly newer. Between two equally proven builds the standing one wins —
-  that is what makes two writers converge.
+  cannot improve on it: it carries no fingerprint or a different one — or, over a standing
+  ADOPTED verified build, the same one at a module version that is not strictly newer. Between two
+  equally proven adoptions the standing one wins — that is what makes two writers converge. A
+  verified bundle of the live source still replaces a *local compile* of it: that is the ordinary
+  one-time adoption, and since a compile only follows a source move it cannot alternate.
 
 Anything that is not `Baked` here — bytes missing on this process, a framework or dependency roll,
 a failed compile — is replaced exactly as before. A store that cannot answer reads as "no bytes",
