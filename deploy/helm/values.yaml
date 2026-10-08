@@ -43,6 +43,36 @@ persistence:
     claimName: ""
   users:
     claimName: ""
+# ---- Crash dumps (createdump) ------------------------------------------------
+# A crashing portal writes a type-2 (heap) dump to <root>/<pod name>/coredump.<pid>.<time>, on a
+# volume that OUTLIVES THE POD. The old pod-local emptyDir was deleted on every roll, which is how
+# the 09-26 SIGSEGV dump and the 10-07 memex-cloud dump were lost.
+#   * With persistence.dumps.claimName set (RECOMMENDED), that claim is mounted AT the root. The
+#     worst a dump can do is fill the dump claim. Declare it like any persistence entry; `create:
+#     true` + size + storageClass makes the chart create it. Size it for keep + 1 dumps of the
+#     memory limit. A record declares it as a `dumps` volume.
+#   * Otherwise the dump lands on the /data volume: the shared /data claim where
+#     persistence.data.claimName is set, else /data's emptyDir/hostPath. The root MUST be a
+#     normalised directory strictly below /data; the render fails otherwise.
+# The `crash-dump-prepare` init container (before the portal starts) and the portal's postStart
+# hook (every container start) run files/crash-dump-retention.sh:
+#   keep           newest dumps kept across ALL pods' directories; older ones are deleted
+#   maxAgeDays     any dump older than this is deleted
+#   activeMinutes  a dump modified this recently is never deleted: it may still be being written
+#   headroomDumps  arm this pod's dump directory only when the volume has room for this many dumps
+#                  of the memory limit, plus reserveMiB; otherwise log "[crash-dumps] HELD" and
+#                  write no dump. Default when unset: the replica CEILING on /data (every pod that
+#                  could crash at once), 1 on a dedicated claim. It is a snapshot at start, not a
+#                  reservation: on the shared /data claim it bounds, but cannot guarantee, what the
+#                  other writers leave. Only a dedicated claim isolates dumps from /data.
+# Doc/Architecture/DebuggingNativeCrashes → "Production: where a dump lands, and how long it stays".
+crashDumps:
+  root: "/data/dumps"
+  keep: 3
+  maxAgeDays: 14
+  activeMinutes: 30
+  # headroomDumps: unset = the replica ceiling on /data, 1 on a dedicated claim
+  reserveMiB: 2048
 # ---- Self-update (detect on the instance, roll on the control lane) ---------------------------
 # The portal watches the registry and, per the Admin/UpdatePolicy node (Doc/Architecture/ReleaseStrategy),
 # DETECTS a newer image. WHO APPLIES it is `canPatch` below (MeshWeaver#4098, Doc/Architecture/SelfUpdateControlLane):

@@ -117,6 +117,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-chart-drift-render.sh
 
+      # The portal's postStart hook (deploy/helm/files/crash-dump-retention.sh) is the only thing
+      # between a crash loop and a full /data volume, and it deletes files. Rendering it proves
+      # nothing about WHAT it deletes, so it is EXECUTED here against scratch directories: keep the
+      # newest N, delete by age, HOLD when there is no headroom, always exit 0 — plus a negative
+      # control. Invariant #20 above asserts the chart wires it in.
+      - name: Assert crash-dump retention keeps the newest, deletes the rest, and holds without headroom
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/test-crash-dump-retention.sh
+
       - name: Assert observability installation refuses ephemeral or unverified storage
         if: ${{ !cancelled() }}
         run: python3 deploy/aks/scripts/test-observability-storage.py

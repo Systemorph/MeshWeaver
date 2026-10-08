@@ -317,7 +317,7 @@ def degradation_of(check_runs, as_of: str | None) -> dict | None:
 
 
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
-             check_runs: list | tuple = ()) -> Verdict:
+             check_runs: list | tuple = (), files: list | None = None, commits: list | None = None) -> Verdict:
     reasons: list[str] = []
     notes: list[str] = []
     refused: list[str] = []
@@ -344,7 +344,19 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             why = "the automatic review has not landed — the reviewer posted, but not a review: " + "; ".join(parts)
         run = degradation_of(check_runs, as_of)
         granted, message = waiver_holder(waiver, as_of)
-        if run is not None:
+        # 🚨 A GENERATED-ONLY App pull request owes NO review (Plugins #3044): the same provenance rule
+        # the stage gate already applies (`generated_only`, never a title or a branch name). The reviewer
+        # REFUSES such a pull request ("Copilot wasn't able to review any files" — locks are excluded),
+        # so this condition could only be released by a person's waiver; until one came, the lock settle
+        # and the floor stamp sat red, main published, sealed and tagged nothing, and every portal held
+        # each module behind its newest prebuilt (Governance 0.10 installed, 0.9.16 serving, 2026-10-08).
+        # 🚨 Only on the reviewer's TERMINAL refusal — never before it has answered: a pass released on
+        # the `opened` evaluation could merge before a late thread arrives, and a thread that opens after
+        # the merge can block nothing (#6318 review). No answer yet stays "not landed".
+        generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
+        if generated and any(k == "refused" for k, _ in kinds):
+            notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
+        elif run is not None:
             # Checked BEFORE the waiver: it is the governed exit and needs nobody, and when both
             # stand the log should say the system released it, not that a person had to.
             summary = " ".join((((run.get("output") or {}).get("summary")) or "(no summary)").split())[:400]
@@ -1245,7 +1257,12 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
     if not isinstance(check_runs, list) or not isinstance(listing.get("total_count"), int) \
             or len(check_runs) < listing["total_count"]:
         raise ReadError(f"commits/{head_sha[:10]}/check-runs did not return the complete `{DEGRADATION_CHECK_NAME}` listing")
-    return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs
+    files = commits = None
+    if is_generated_bot(pr.get("user")):
+        # Only for the generated-files App's own pull requests — what `generated_only` judges provenance by.
+        files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
+        commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
+    return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs, files, commits
 
 
 def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
@@ -1705,11 +1722,11 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
     settled_for = 0.0
     while True:
         try:
-            pr, reviews, comments, waiver, author_role, check_runs = read_inputs(gh, number, as_of)
+            pr, reviews, comments, waiver, author_role, check_runs, files, commits = read_inputs(gh, number, as_of)
         except (ReadError, KeyError) as e:
             print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
             return 1
-        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs)
+        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits)
         left = deadline - time.monotonic()
         if waiting_would_help(verdict) and left > POLL_SECONDS:
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
@@ -2292,6 +2309,28 @@ def self_test() -> int:
     ok = v.mode == "fallback"
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an App PR falls back on the PR clock, not the head clock':53} got={v.mode}")
+    # ── the REQUIRED verdict (`evaluate`) agrees with the stage gate on generated-only App PRs (Plugins #3044):
+    # the reviewer refuses a lock-only pull request, and without this the settle/stamp PRs sat red until a
+    # person waived them — main published nothing in between. NEGATIVE CONTROLS: the same refusal on a
+    # person's lock-only PR, and on an App PR carrying one hand-written file, stays RED (refused).
+    LOCK_REFUSAL = ("Copilot wasn't able to review any files in this pull request. Check if the **Files changed** "
+                    "in this pull request are included in [default exclusions](https://docs.github.com).")
+    def verdict_case(name, want_green, pr, files, commits, comments=(), want_refused=None, reviews=None):
+        nonlocal failures
+        v = evaluate(pr, [_review(LOCK_REFUSAL)] if reviews is None else reviews, list(comments), NO_WAIVER, None, (), files, commits)
+        ok = v.green == want_green and (want_refused is None or bool(v.refused) == want_refused)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} verdict: {name:51} green={v.green} refused={bool(v.refused)}")
+    verdict_case("settle PR refused by the reviewer -> GREEN (not owed)", True, gpr(), LOCKS, BOT_COMMITS, want_refused=False)
+    verdict_case("floor stamp refused by the reviewer -> GREEN (not owed)", True, gpr(), FLOOR, BOT_COMMITS, want_refused=False)
+    verdict_case("NEGATIVE CONTROL: a person's lock-only PR -> RED", False, gpr(user=HUMAN), LOCKS, [{"author": HUMAN}], want_refused=True)
+    verdict_case("NEGATIVE CONTROL: App PR with a hand-written file -> RED", False, gpr(),
+                 LOCKS[:1] + [{"filename": "Hosting/Deployment/Source/X.cs", "patch": "+x"}], BOT_COMMITS, want_refused=True)
+    verdict_case("NEGATIVE CONTROL: App PR, files unread -> RED", False, gpr(), None, None, want_refused=True)
+    verdict_case("a generated PR's reviewer thread still needs a reply -> RED", False, dict(gpr(), review_comments=1),
+                 LOCKS, BOT_COMMITS, comments=[_comment(1)])
+    verdict_case("NEGATIVE CONTROL: settle PR, reviewer not answered yet -> RED", False, gpr(), LOCKS, BOT_COMMITS,
+                 want_refused=False, reviews=[])
     v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
     ok = (not v.ready) and v.mode == "unreadable"
     failures += 0 if ok else 1

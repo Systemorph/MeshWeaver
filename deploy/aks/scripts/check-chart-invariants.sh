@@ -47,6 +47,9 @@
 #                                                             switched the operator Job off
 #  19. an ingress naming a tlsSecret names an ISSUER for it   or the host is served another
 #                                                             instance's certificate (chart refusal)
+#  20. a crash dump lands in <root>/$(MEMEX_POD_NAME)/ on a    or every roll deletes the dump (the
+#      dedicated claim or /data, root normalised, and the     09-26 and 10-07 dumps were lost so)
+#      retention script runs as init container AND postStart
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -99,6 +102,16 @@ COMBOS=(
   "self-host (neutral chart defaults)|deploy/helm/values.yaml"
   "AKS overlay (the layer every AKS install shares)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
   "memex-local (Colima k3s)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml"
+  # 🚨 The layers `memex-local up` ACTUALLY passes (helm_deploy): chart defaults < tracked defaults
+  # < [self-registry mode layer] < the overlay generated from share/values.local.yaml. The entry
+  # above omits the overlay, and the overlay is what names `ingress.tlsSecret` — so when the chart
+  # learned to refuse a tlsSecret with no issuer, every fresh `memex-local up` died at the helm step
+  # and this gate stayed green (MeshWeaver#6019). The overlay is rendered as shipped: its
+  # __PLACEHOLDER__ secrets are plain strings to helm. Both modes, because both are installed: registry
+  # mode layers ~/.memex-local/registry.yaml (fixture: the shape write_registry_file writes), and
+  # self-registry mode layers the tracked share/values.local.self-registry.yaml.
+  "memex-local as installed: defaults + registry file + the generated overlay (registry consumer)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/aks/scripts/testdata/values.memex-local-registry.yaml:deploy/homebrew/share/values.local.yaml"
+  "memex-local as installed: defaults + self-registry + the generated overlay|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/homebrew/share/values.local.self-registry.yaml:deploy/homebrew/share/values.local.yaml"
   # A record-driven Provision of a MIRROR-CONSUMING instance (MeshWeaver#3353): the only combination
   # that switches on the pull secret, SelfUpdate__Registry and the chart-created PVCs. A fixture, not
   # an environment — without it those template branches render on nothing in this repo and a
@@ -167,6 +180,9 @@ COMBOS=(
   # catalog section, OpenRouter's endpoint and the OpenRouterEU section — set, blank and
   # whitespace-only values. The evidence check below asserts which of them render, trimmed.
   "EU-only AI processing keys (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.eu-ai-residency.yaml"
+  # Crash dumps on a DEDICATED claim (persistence.dumps), on the AKS overlay: the only combination in
+  # which invariant 20 sees the dedicated-claim branch, and invariant 12 a chart-created dump PVC.
+  "AKS overlay + crash dumps on a dedicated claim (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.crash-dumps-dedicated-claim.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -329,6 +345,10 @@ REFUSALS=(
   # MeshWeaver#6052: two replicas on per-pod emptyDir /data — each pod's assembly cache is its own,
   # and the shared NodeType records name bytes only the compiling pod holds.
   "two replicas with a pod-local /data (the #6052 estate)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-pod-local-data.yaml|needs a SHARED /data"
+  # Crash-dump roots that would leave the persistent volume or widen what retention deletes.
+  "a crash-dump root that resolves outside /data|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-escapes-data.yaml|must be a normalised directory strictly below /data"
+  "a crash-dump root that normalises to /data itself|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-is-data.yaml|must be a normalised directory strictly below /data"
+  "a crash-dump root with an empty segment|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-double-slash.yaml|must be a normalised directory strictly below /data"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do
