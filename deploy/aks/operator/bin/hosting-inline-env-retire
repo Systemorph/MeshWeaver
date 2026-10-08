@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # hosting-inline-env-retire --namespace <ns> --retire <KEY>=<shadowed source> [--retire …]
 #                           [--deployment memex-portal-deployment] [--container memex-portal]
+#                           [--fold-into-rollout]
 #
 # Remove inline `env:` entries from the portal Deployment — the entries a Hosting/Deployment record
 # marks RETIRED (`inlineEnv[].retiredBy`) — and only after proving, in the cluster and immediately
@@ -35,6 +36,20 @@
 # held at the bake gate). A Deployment that is not settled — observedGeneration behind, a replica
 # not updated or not available, or paused — is a refusal before any Secret is read.
 #
+# 🚨 …UNLESS THE PLAN SAYS THE ROLLOUT IN FLIGHT IS ITS OWN (`--fold-into-rollout`). A Reconcile
+# whose rollout budget outruns one operator Job HANDS the re-apply's rollout to the control plane
+# instead of waiting for it (MeshWeaver#3782), so the step after the re-apply always meets the
+# rollout the re-apply just started — and the refusal above failed every such Reconcile that
+# carried a retired entry, deterministically (MeshWeaver.Plugins#2776, memex 2026-09-26, generation
+# 807). Superseding THAT rollout is the intent, not the hazard: the re-apply that started it had
+# already superseded whatever was in flight before it (helm never refuses mid-rollout), so folding
+# the removal into it adds no new exposure — the rollout simply carries both changes, which is
+# what the wait-then-retire order converges to in two rollouts. The plan passes the flag ONLY
+# directly after its own re-apply under a hand-off; every other measurement still runs (the
+# fall-through is read from the spec the re-apply wrote and the sources helm just rendered — a
+# vault-synced home that has not synced yet still refuses as a SOLE source). A PAUSED Deployment
+# is a deliberate hold and is refused even here.
+#
 # 🚨 EVERY CONTAINER. The language-gate sidecars carry no `envFrom` and the chart renders exactly
 # MESH_GRPC_URL and MESH_GATE_ADDRESS on them, yet a whole-Deployment `set env` once copied the
 # portal's inline entries — credential included — onto both. A retired key is removed from every
@@ -51,14 +66,19 @@
 #   inline_env_retired=<n>      keys removed from the pod spec — read back, not assumed
 #   inline_env_absent=<n>       retired keys no container carried any more
 #   inline_env_retire=dry-run   a rehearsal: every check ran, nothing was written
+#   inline_env_folded_generation=<n>  --fold-into-rollout met the plan's own rollout in flight at
+#                               generation <n> and wrote the removal into it
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-inline-env-retire"
 
 namespace="" deployment="memex-portal-deployment" container="memex-portal"
+fold=false
 keys=() shadows=()
 while [ $# -gt 0 ]; do
+  # A boolean flag takes no value, so it is matched before the flag/value pair is shifted.
+  if [ "$1" = "--fold-into-rollout" ]; then fold=true; shift; continue; fi
   flag="$1" value="${2:-}"
   # Shift the value only when there is one: a trailing flag with no value must reach the
   # need_flag refusal below, not spin on a `shift 2` that cannot shift.
@@ -116,13 +136,22 @@ rollout="$(printf '%s' "$dep" | jq -r '[
   ] | map(tostring) | join(" ")')" \
   || hosting::die "could not read the rollout state of deployment/${deployment}"
 read -r gen observed want total updated available unavailable paused <<<"$rollout"
-if [ "$observed" -lt "$gen" ] || [ "$total" -ne "$want" ] || [ "$updated" -ne "$want" ] \
-   || [ "$available" -ne "$want" ] || [ "$unavailable" -ne 0 ] || [ "$paused" -ne 0 ]; then
-  paused_note=""
-  [ "$paused" -eq 0 ] || paused_note=", PAUSED"
-  hosting::die "a rollout is in progress on deployment/${deployment} in ${namespace} (generation ${gen}, observed ${observed}; ${want} desired, ${total} running, ${updated} updated, ${available} available, ${unavailable} unavailable${paused_note}). Removing an env entry rewrites the pod template, which starts a NEW rollout and supersedes this one — the pods serving now keep the entry and the new ones meet whatever is holding this one. Hold until it settles, then re-run. Nothing was changed."
+if [ "$paused" -ne 0 ]; then
+  hosting::die "deployment/${deployment} in ${namespace} is PAUSED (generation ${gen}) — a paused Deployment is a deliberate hold, and an env removal written under it would roll the moment someone resumes it. Resume it deliberately (or not), then re-run. Nothing was changed."
 fi
-hosting::log "rollout   deployment/${deployment} is settled (generation ${gen}, ${available}/${want} available)"
+settled=true
+if [ "$observed" -lt "$gen" ] || [ "$total" -ne "$want" ] || [ "$updated" -ne "$want" ] \
+   || [ "$available" -ne "$want" ] || [ "$unavailable" -ne 0 ]; then
+  settled=false
+fi
+if $settled; then
+  hosting::log "rollout   deployment/${deployment} is settled (generation ${gen}, ${available}/${want} available)"
+elif $fold; then
+  hosting::log "rollout   deployment/${deployment} is mid-rollout (generation ${gen}, observed ${observed}; ${updated}/${want} updated, ${available} available) — the plan's own re-apply started it and handed it to the control plane, so this removal is FOLDED into it (--fold-into-rollout): one rollout carries both changes"
+  hosting::say inline_env_folded_generation "$gen"
+else
+  hosting::die "a rollout is in progress on deployment/${deployment} in ${namespace} (generation ${gen}, observed ${observed}; ${want} desired, ${total} running, ${updated} updated, ${available} available, ${unavailable} unavailable). Removing an env entry rewrites the pod template, which starts a NEW rollout and supersedes this one — the pods serving now keep the entry and the new ones meet whatever is holding this one. Hold until it settles, then re-run. Nothing was changed."
+fi
 
 printf '%s' "$dep" | jq -e --arg c "$container" 'any(.spec.template.spec.containers[]; .name == $c)' >/dev/null \
   || hosting::die "deployment/${deployment} has no container '${container}' — the fall-through is measured on the portal container, so there is nothing to measure against"

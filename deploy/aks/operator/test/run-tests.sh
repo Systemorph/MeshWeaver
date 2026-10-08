@@ -473,6 +473,62 @@ case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run n
 case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
+
+# 🚨 Memex#648 — the helm VALUES HALF. A record declaring vaultValuesKeys deploys only with
+# helm-values-<release> in the vault, and on an external database with AdoNet clustering the chart
+# refuses to render without it; nothing composed it, so the control instance's was built by hand.
+KVE_HALF=(--values-half acme)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure composes an ABSENT values half (Memex#648)" || bad "kv-ensure composes an absent values half" "exited ${_kve_rc}: ${_kve_out}"
+_kve_half="$(cat "$_kve_state/set.helm-values-acme" 2>/dev/null || true)"
+_kve_cs="Host=pg.postgres.database.azure.com;Port=5432;Username=memexadmin;Password=fake-server-password-NEVER-PRINTED;Database=acmedb;SslMode=Require;Trust Server Certificate=true"
+if [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal.ConnectionStrings__memex')" = "$_kve_cs" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_migration.ConnectionStrings__memex')" = "$_kve_cs" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal.memex_postgres_password')" = "fake-server-password-NEVER-PRINTED" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_migration.memex_postgres_password')" = "fake-server-password-NEVER-PRINTED" ]; then
+  ok "…carrying the mesh string and the server password for BOTH halves the chart reads"
+else
+  bad "the values half carries the chart's keys" "wrote: ${_kve_half}"
+fi
+[ "$(printf '%s' "$_kve_half" | jq -r 'keys | join(",")')" = "secrets" ] && ok "…families only — nothing hosting-deploy would refuse as structure (Memex#295)" \
+  || bad "the values half is families only" "top-level: $(printf '%s' "$_kve_half" | jq -r 'keys | join(",")')"
+[ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal | has("ConnectionStrings__orleans")')" = "false" ] && ok "…and no orleans string: the chart derives it by its one rule" \
+  || bad "the half leaves orleans to the chart" "wrote: ${_kve_half}"
+case "$_kve_out$_kve_log" in *NEVER-PRINTED*) bad "…and no value is printed or put on an argv" "out: ${_kve_out} az: ${_kve_log}" ;; *) ok "…and no value is printed or put on an argv" ;; esac
+case "$_kve_log" in *"secret set --vault-name Systemorph --name helm-values-acme --file "*) ok "…the half reaches az through --file" ;; *) bad "the half reaches az through --file" "az saw: ${_kve_log}" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=created"*) ok "…and the run reports kv_values_half=created" ;; *) bad "reports kv_values_half=created" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# An EXISTING db-connection is the source: a hand-written string stays authoritative.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  HOSTING_KVE_DBCONN_OBJECT=acme-db-connection -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$(jq -r '.secrets.memex_portal.ConnectionStrings__memex' "$_kve_state/set.helm-values-acme" 2>/dev/null)" = "Host=hand.example.invalid;Password=fake-hand-written-NEVER-PRINTED" ] \
+  && ok "the half is composed from the EXISTING db-connection object, not a re-composed string" \
+  || bad "the half reads the existing db-connection" "exited ${_kve_rc}: ${_kve_out}"
+rm -rf "$_kve_state"
+
+# Present: KEPT — no value read, no write. (Negative control for the compose arm above.)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "an EXISTING values half is kept" || bad "existing values half kept" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*|*"--query value"*) bad "…never rewritten, and no value is read" "az saw: ${_kve_log}" ;; *) ok "…never rewritten, and no value is read" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=kept"*) ok "…and reports kv_values_half=kept" ;; *) bad "reports kept" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# Without its inputs it refuses; a dry run writes nothing and reads no value.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "an absent half with no --db-connection refuses" || bad "half without inputs refuses" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"needs --db-connection and --db-password-secret"*) ok "…naming what it needs" ;; *) bad "names the inputs" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+case "$_kve_log" in *"secret set"*|*"--query value"*) bad "a dry run reads no value and writes no half" "az saw: ${_kve_log}" ;; *) ok "a dry run reads no value and writes no half" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=would-create"*) ok "…and reports would-create" ;; *) bad "dry run would-create" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "kv-ensure refuses a values-half release with a metacharacter" "is not a plain name" \
+  hosting-kv-ensure --vault V --namespace n --values-half 'acme;id'
+unset _kve_half _kve_cs
 echo "── hosting-registry-register: issue the instance key once, prove it, never show it ──"
 # MeshWeaver.Plugins#1720 — hosting-kv-ensure REQUIRES <prefix>PluginCatalog-RegistryToken and
 # nothing issued it: runbook step 2 was a hand curl + az. The registry stub answers
@@ -1155,7 +1211,7 @@ ie() {  # ie <scenario> "<KEY=source> [KEY=source…]" [env…] — sets $_ie_ou
   for pair in $pairs; do retire+=(--retire "$pair"); done
   _ie_state="$(mktemp -d)"
   _ie_out="$(env "$@" PATH="$IE_STUBS:$PATH" HOSTING_IE_FIXTURE="$IE_FIXTURES/$scenario" HOSTING_IE_BASE="$IE_FIXTURES/base" \
-    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" 2>&1)"; _ie_rc=$?
+    HOSTING_IE_STATE="$_ie_state" hosting-inline-env-retire --namespace memex "${retire[@]}" ${IE_FLAGS:-} 2>&1)"; _ie_rc=$?
   _ie_log="$(cat "$_ie_state/log" 2>/dev/null || true)"
   _ie_patch="$(cat "$_ie_state/patch" 2>/dev/null || true)"
   rm -rf "$_ie_state"
@@ -1262,6 +1318,34 @@ case "$_ie_out" in *"a rollout is in progress"*"1 updated"*) ok "…naming what 
 case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
 ie_no_patch "…and writes nothing"
 
+# 🚨 MeshWeaver.Plugins#2776 — a Reconcile that HANDS its re-apply's rollout to the control plane
+# meets that rollout at the very next step, so the refusal above failed every such Reconcile that
+# carried a retired entry. The plan says the rollout is its own with --fold-into-rollout; the
+# removal then rides the rollout in flight. Same fixture as the refusal above: the negative control
+# for this arm IS that refusal.
+IE_FLAGS=--fold-into-rollout ie rolling "$IE_TOKEN"
+[ "$_ie_rc" -eq 0 ] && ok "--fold-into-rollout: the plan's OWN handed-off rollout is folded into, not refused (Plugins#2776)" \
+  || bad "--fold-into-rollout folds into the plan's own rollout" "exited ${_ie_rc}: ${_ie_out}"
+case "$_ie_out" in *"FOLDED into it"*"::hosting:: inline_env_folded_generation=43"*) ok "…saying so, and naming the generation it folded into" ;;
+  *) bad "the fold is reported with its generation" "said: ${_ie_out}" ;; esac
+case "$_ie_out" in *"PluginCatalog__RegistryToken  EQUAL (len 31)"*) ok "…after the SAME equality measurement as a settled run" ;;
+  *) bad "a folded run still measures the equality" "said: ${_ie_out}" ;; esac
+[ "$(printf '%s\n' "$_ie_log" | grep -c ' patch deployment ')" = "1" ] && ok "…in one guarded patch" \
+  || bad "a folded run patches once" "kubectl saw: ${_ie_log}"
+ie_no_value "…and no value is printed, patched or passed in an argv"
+
+IE_FLAGS=--fold-into-rollout ie paused "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "--fold-into-rollout still refuses a PAUSED Deployment — a pause is a deliberate hold" \
+  || bad "a paused Deployment is refused even when folding" "exited 0: ${_ie_out}"
+case "$_ie_out" in *"is PAUSED"*) ok "…saying so" ;; *) bad "the paused refusal says so" "said: ${_ie_out}" ;; esac
+case "$_ie_log" in *"get secret"*) bad "…before any Secret is read" "kubectl saw: ${_ie_log}" ;; *) ok "…before any Secret is read" ;; esac
+ie_no_patch "…and writes nothing"
+
+IE_FLAGS=--fold-into-rollout ie differ "$IE_TOKEN"
+[ "$_ie_rc" -ne 0 ] && ok "--fold-into-rollout relaxes ONLY the rollout check — a DIFFER is still refused" \
+  || bad "folding does not bypass the equality" "exited 0: ${_ie_out}"
+ie_no_patch "…and writes nothing"
+
 ie valuefrom "$IE_TOKEN"
 [ "$_ie_rc" -ne 0 ] && ok "a valueFrom reference is refused — it names its own source and is not a shadow" \
   || bad "a valueFrom entry is refused" "exited 0: ${_ie_out}"
@@ -1292,6 +1376,80 @@ case "$_ie_out" in *"::hosting:: inline_env_retire=dry-run"*) ok "…and never c
 ie_no_value "…still printing no value"
 
 echo
+echo "── hosting-kv-synced: a newly mapped vault key reaches the PROCESS, not only the Secret ──"
+# MeshWeaver.Plugins#2778 — the CSI driver adds a key to an EXISTING synced Secret only on a rotation
+# pass, after the re-apply's pods resolved envFrom: a Reconcile reported Healthy while the key it was
+# run for was absent from every process (build, 2026-09-26). The stub answers the Secret (keys and
+# its last data write), the Deployment's selector and its pods' start times; every fixture value is
+# a fake, and no arm may print one.
+KS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-synced" && pwd)"
+ks() {  # ks [env…] -- <args…> — sets $_ks_out $_ks_rc $_ks_log $_ks_restarted
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _ks_state="$(mktemp -d)"
+  _ks_out="$(env "${envs[@]}" PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE="$_ks_state" HOSTING_KV_SYNC_INTERVAL=1 \
+    hosting-kv-synced --namespace build "$@" 2>&1)"; _ks_rc=$?
+  _ks_log="$(cat "$_ks_state/log" 2>/dev/null || true)"
+  _ks_restarted=no; [ -f "$_ks_state/restarted" ] && _ks_restarted=yes
+  rm -rf "$_ks_state"
+}
+KS_ARGS=(--secret build-portal-keyvault --key Hosting__PlatformWebhookSecret --key Hosting__ControlInbox__Secret)
+
+# THE build case: the key is in the Secret NOW, but the rotation wrote it (19:33) after the pods the
+# waited re-apply started (19:31) — "present now" proves nothing about them.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z 2026-09-26T19:34:02Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a pod that started BEFORE the Secret's last write is restarted, though the key is there now (Plugins#2778)" \
+  || bad "a pod predating the key's sync is restarted" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"memex-portal-deployment-abc-1 started before"*"::hosting:: kv_synced_restart=true"*) ok "…naming the stale pod and reporting the restart" ;;
+  *) bad "the stale pod is named" "said: ${_ks_out}" ;; esac
+case "$_ks_out" in *abc-2*started\ before*) bad "…and not the pod that started after the write" "said: ${_ks_out}" ;; *) ok "…and not the pod that started after the write" ;; esac
+
+# Negative control: the same keys, written long before every pod started — nothing to do.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-20T08:00:00Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z 2026-09-26T19:34:02Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = no ] && ok "every pod started after the Secret's last write → no restart (the common case is a no-op)" \
+  || bad "an unchanged key set rolls nothing" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"::hosting:: kv_synced_restart=false"*) ok "…and says so" ;; *) bad "no-restart is reported" "said: ${_ks_out}" ;; esac
+
+# Under a HAND-OFF the step runs before the rotation pass: it waits for the key, then restarts.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hosting__ControlInbox__Secret" HOSTING_KS_LATE_AFTER=3 \
+   HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a key not yet synced is WAITED for, then the pods that predate it are restarted" \
+  || bad "a late key is waited for" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"waiting   1 declared key(s)"*"build-portal-keyvault:Hosting__ControlInbox__Secret"*"::hosting:: kv_synced_waited=1"*) ok "…naming the key it waited for" ;;
+  *) bad "the waited key is named" "said: ${_ks_out}" ;; esac
+
+# A key that never arrives is a FAILED step — and the pods are NOT restarted onto the same gap.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" \
+   HOSTING_KV_SYNC_SECONDS=2 -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -ne 0 ] && [ "$_ks_restarted" = no ] && ok "a key the driver never syncs fails the step, and nothing is restarted onto the gap" \
+  || bad "a never-synced key fails" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"still lack: build-portal-keyvault:Hosting__ControlInbox__Secret"*) ok "…naming the missing key" ;; *) bad "the missing key is named" "said: ${_ks_out}" ;; esac
+
+# A refused read is REFUSED, never "absent" (#4722) — and never a wait.
+ks HOSTING_KS_SECRET_FORBIDDEN=1 -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -ne 0 ] && ok "a Forbidden secret read is a refusal" || bad "Forbidden refuses" "exited 0: ${_ks_out}"
+case "$_ks_out" in *"REFUSED, not absent"*) ok "…saying REFUSED, not absent" ;; *) bad "the refusal is not read as absent" "said: ${_ks_out}" ;; esac
+
+# Names only: no fake value ever reaches the output or an argv.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+case "$_ks_out$_ks_log" in *ZmFrZS1ub3QtYS12YWx1ZQ*|*fake-not-a-value*) bad "no value is printed or passed" "out: ${_ks_out}" ;; *) ok "no value is printed or passed in an argv" ;; esac
+
+# A dry run decides, narrates the restart, and changes nothing.
+ks HOSTING_DRY_RUN=true HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = no ] && ok "a dry run restarts nothing" || bad "dry run is inert" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"DRY-RUN would run: kubectl -n build rollout restart"*"kv_synced_restart=dry-run"*) ok "…and narrates the restart it would make" ;;
+  *) bad "dry run narrates" "said: ${_ks_out}" ;; esac
+
+refuses_hard "kv-synced needs a --secret before a --key" "comes before any --secret" \
+  env PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE=/nonexistent hosting-kv-synced --namespace build --key K
+refuses_hard "kv-synced refuses a key with a metacharacter" "is not a plain environment-variable name" \
+  env PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE=/nonexistent hosting-kv-synced --namespace build --secret s --key 'K;id'
+unset _ks_out _ks_rc _ks_log _ks_restarted _ks_state
+
 echo "── hosting-kv-rotate refuses under an inline shadow ──────────────"
 # MeshWeaver#3201 / Plugins#1593: an inline `env:` entry outranks every envFrom, so a rotation that
 # lands the new key in the vault and the synced Secret leaves the pods presenting the OLD one — and
