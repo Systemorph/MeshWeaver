@@ -201,12 +201,25 @@ changed file a lock or a root `index.json` whose changed lines are each NOTHING 
 other, a generated-only DRAFT is held as a draft, and for any pull request the App authored the
 fallback clock keys on the PULL REQUEST's creation, not the head.
 
-What this skip is NOT: a merge gate. The required `Automatic review answered` lane never consults
-`generated_only`, so the skip only starts stage 2's suites earlier. Its provenance reads GitHub's
-resolved commit author, which follows the author email — so it is as strong as the App's branch is
-closed to other pushers (the App's commits are unsigned today, so a signature cannot be required
-until the producing jobs commit through the API), and a lock's CONTENT is held exact by
-`Validate node repos`, not by this check.
+**The required verdict agrees (Plugins #3044).** `Automatic review answered` now consults the same
+`generated_only` rule: for a generated-only App pull request, condition 1 ("the review landed") is
+NOT OWED, and the log says `NOT OWED: … — nothing to review (generated_only)`. Every thread the
+reviewer did open still needs a person's reply, and a draft is still held. Until this, the reviewer
+REFUSED every lock-only pull request ("Copilot wasn't able to review any files in this pull request"
+— locks are in its default exclusions), so the verdict was `RED — UNREVIEWABLE` and only a person's
+`review-waived` label let a settle or a floor stamp merge. Measured 2026-10-08 on Plugins: settle PR
+#3165 sat red from 13:38Z; every main run in between read `NOT settled (n lock(s) would move)` and
+published, sealed and tagged NOTHING, so between 07:16Z and the next waiver no module reached the
+registry — while every portal's sync installed each newer source from `HEAD` and declined the older
+prebuilt, holding `Governance/Activity` and `Governance/Standard` at `StaleAdopted 0.9.16` over installed
+`0.10` (#3044, the MeshWeaver#3583 delivery hold).
+
+The provenance it rests on reads GitHub's resolved commit author, which follows the author email —
+so it is as strong as the App's branch is closed to other pushers (the App's commits are unsigned
+today, so a signature cannot be required until the producing jobs commit through the API). What it
+admits is bounded by the file rule: only locks and `minMeshVersion` lines, whose CONTENT is held exact
+by `Validate node repos` and the settle job's own `--settle` check, and every required test context
+still has to pass.
 
 **Stage-0 blockers keep their own rules.** A control whose INPUT is absent (the confidential-terms
 denylist secret on a fork or a Dependabot run) already *skips with a notice* by its own design and so
