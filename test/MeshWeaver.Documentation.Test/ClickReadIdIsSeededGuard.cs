@@ -38,8 +38,10 @@ public class ClickReadIdIsSeededGuard
     private static readonly Regex ClickAction =
         new(@"\bWith(?:Reactive)?ClickAction\s*\(", RegexOptions.Compiled);
 
+    /// <summary>The start of a read; its type argument list (which may hold a tuple's parentheses) is
+    /// walked by <see cref="ReadOpenParen"/>.</summary>
     private static readonly Regex DataStreamRead =
-        new(@"\.GetDataStream\s*<[^;()]*>\s*\(", RegexOptions.Compiled);
+        new(@"\.GetDataStream\s*<", RegexOptions.Compiled);
 
     private static readonly Regex OneOff = new(@"^\s*\.\s*(?:Take\s*\(\s*1\s*\)|FirstAsync\s*\()", RegexOptions.Compiled);
 
@@ -108,6 +110,25 @@ public class ClickReadIdIsSeededGuard
         Offenders(seeded, out reads).Should().BeEmpty();
         reads.Should().Be(2);
 
+        // A tuple type argument is still a read, and a long comment before `.Take(1)` does not hide it.
+        const string tupleAndLongGap = """
+            Controls.Button("x").WithReactiveClickAction(ctx =>
+                ctx.Host.Stream.GetDataStream<(string Name, string Value)>(PairId)
+                    // a comment long enough to push the chained operator well past any fixed look-ahead window
+                    .Take(1).Do(p => Use(p)).Select(_ => Unit.Default));
+            """;
+        Offenders(tupleAndLongGap, out reads).Should().ContainSingle().Which.Should().Contain("PairId");
+        reads.Should().Be(1);
+
+        // Literal ids that differ only by whitespace are different ids: a seed of one does not seed the other.
+        const string whitespaceCollision = """
+            host.UpdateData("draftid", "");
+            Controls.Button("x").WithReactiveClickAction(ctx =>
+                ctx.Host.Stream.GetDataStream<string>("draft id").Take(1).Do(d => Use(d)).Select(_ => Unit.Default));
+            """;
+        Offenders(whitespaceCollision, out reads).Should().ContainSingle().Which.Should().Contain("\"draft id\"");
+        reads.Should().Be(1);
+
         const string liveBinding = """
             Controls.Button("x").WithClickAction(ctx =>
             {
@@ -153,9 +174,13 @@ public class ClickReadIdIsSeededGuard
             {
                 if (read.Index >= lambdaClose)
                     break;
-                var open = read.Index + read.Length - 1;
+                var open = ReadOpenParen(code, read.Index + read.Length - 1);
+                if (open < 0 || open >= lambdaClose)
+                    continue;
                 var close = MatchingClose(code, open);
-                if (close < 0 || !seen.Add(open) || !OneOff.IsMatch(code[(close + 1)..Math.Min(code.Length, close + 64)]))
+                // The operator must be chained directly; the rest of the click span bounds the look,
+                // so no amount of formatting or comment between the read and `.Take(1)` hides it.
+                if (close < 0 || close >= lambdaClose || !seen.Add(open) || !OneOff.IsMatch(code[(close + 1)..lambdaClose]))
                     continue;
                 oneOffReads++;
                 var id = Normalize(ArgumentText(text, code, open));
@@ -174,7 +199,45 @@ public class ClickReadIdIsSeededGuard
         return text.Substring(open + 1, arg.Length);
     }
 
-    private static string Normalize(string s) => Regex.Replace(s, @"\s+", "");
+    /// <summary>The id expression as written, trimmed. Internal whitespace is KEPT: stripping it would
+    /// make the literals <c>"draft id"</c> and <c>"draftid"</c> the same key.</summary>
+    private static string Normalize(string s) => s.Trim();
+
+    /// <summary>The index of the <c>(</c> after the type argument list that opens at
+    /// <paramref name="lt"/>, or -1. Angle brackets are balanced and parentheses inside it (a tuple
+    /// type) are skipped, so <c>GetDataStream&lt;(string Name, string Value)&gt;(id)</c> is a read.</summary>
+    private static int ReadOpenParen(string code, int lt)
+    {
+        var angle = 0;
+        var paren = 0;
+        for (var i = lt; i < code.Length; i++)
+        {
+            switch (code[i])
+            {
+                case '<':
+                    angle++;
+                    break;
+                case '(':
+                    paren++;
+                    break;
+                case ')':
+                    paren--;
+                    break;
+                case ';':
+                    return -1;
+                case '>' when paren == 0:
+                    if (--angle == 0)
+                    {
+                        var j = i + 1;
+                        while (j < code.Length && char.IsWhiteSpace(code[j]))
+                            j++;
+                        return j < code.Length && code[j] == '(' ? j : -1;
+                    }
+                    break;
+            }
+        }
+        return -1;
+    }
 
     private static int MatchingClose(string code, int open)
     {

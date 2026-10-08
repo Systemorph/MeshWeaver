@@ -90,7 +90,7 @@ faults: there is no bound on a returned click observable, and the button stays p
 page goes away. A field bound by pointer does not seed its form — the id is first written when the
 person types. Seeding is also what lets an empty submit reach the handler's own validation message.
 `ClickReadIdIsSeededGuard` (MeshWeaver.Documentation.Test) enforces the rule lexically. Every
-`GetDataStream<T>(id).Take(1)` inside a click lambda in `src/` needs a `UpdateData(id, …)` in the
+`GetDataStream<T>(id).Take(1)` inside a click lambda in `src/` needs an `UpdateData(id, …)` in the
 same file **outside** every click lambda. A write that only another click performs (the
 "open a file, then Save" shape) does not count, because nothing guarantees which click comes first.
 The guard does not prove that the seed runs before the button renders. It is not a timeout either:
