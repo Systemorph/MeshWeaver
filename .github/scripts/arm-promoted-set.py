@@ -457,10 +457,11 @@ def read_control(url: str, get: Get, core_token: str, core_shas: list[str],
         out["why"] = f"{url}/api/version answered {code} without a 40-hex commit"
         return out
     out["commit"] = commit
-    hcode, _ = fetch(f"{url.rstrip('/')}/health")
+    hcode, hbody = fetch(f"{url.rstrip('/')}/health")
     out["healthy"] = hcode == 200
     if hcode != 200:
         out["why"] = f"{url}/health answered {hcode}"
+    out["self_update"] = self_update_reading(hbody)
     for sha in dict.fromkeys(core_shas):
         out["contains"][sha] = contains_commit(get, core_token, commit, sha)
     return out
@@ -471,6 +472,40 @@ def contains_commit(get: Get, core_token: str, commit: str, sha: str) -> bool | 
     the compare could not be read — never a guess."""
     code, cmp = get(f"repos/{CORE}/compare/{sha}...{commit}", core_token)
     return (cmp.get("status") in CONTAINED) if code == 200 and isinstance(cmp, dict) else None
+
+
+SELF_UPDATE_CHECK = "self_update"
+"""The `/health` entry control's OWN self-updater publishes (core memex/aspire/Memex.Portal.ServiceDefaults
+`SelfUpdateHealthCheck`, census-tagged, so it prints whatever its status). Its line reads
+`self_update: <Healthy|Degraded> — <the last check's verdict>`."""
+
+
+def self_update_reading(health_body: str) -> dict | None:
+    """Control's own self-update reading off its PUBLIC `/health` body — {"status", "text"} — or None
+    when the body carries no `self_update` entry (an image older than the check, or no body). Pure.
+
+    🚨 WHY THE ARMING READS IT. Control-first makes the whole fleet wait for ONE instance, so what a
+    reader of a frozen fleet needs first is why THAT instance takes no build. Measured 2026-10-07/08:
+    control sat on cac0664de for 10+ hours while its own `Admin/UpdatePolicy` read `check FAILED:
+    CredentialUnavailableException … The requested identity has not been assigned to this resource` on
+    every check — a node nobody watches — and the arm step said `waiting` on every tick."""
+    for line in (health_body or "").splitlines():
+        if line.startswith(f"{SELF_UPDATE_CHECK}: "):
+            status, _, text = line[len(SELF_UPDATE_CHECK) + 2:].partition(" — ")
+            return {"status": status.strip(), "text": text.strip()}
+    return None
+
+
+def describe_self_update(control: dict) -> str:
+    """One sentence naming control's OWN self-update reading, for every place that says control has
+    not taken a build. An absent reading is said as one, never read as a clean one. Pure."""
+    su = control.get("self_update")
+    if not su:
+        return ("control's /health publishes no `self_update` reading (its image predates the check, or /health "
+                "was not read) — read `Admin/UpdatePolicy.lastCheckVerdict` on control")
+    if su.get("status") != "Healthy":
+        return f"control's OWN self-update check is FAILING ({su.get('status')}): {su.get('text') or 'no verdict text'}"
+    return f"control's own self-update reads Healthy: {su.get('text') or 'no verdict text'}"
 
 
 def _fetch_public(url: str) -> tuple[int, str]:
@@ -541,7 +576,8 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
         return "waiting", f"could not establish whether control's {commit[:9]} contains {rec['core_sha'][:9]}"
     if not contains:
         return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
-                           "control first: the fleet is offered a build only after control runs it")
+                           "control first: the fleet is offered a build only after control runs it; "
+                           + describe_self_update(control))
     if not control.get("healthy"):
         return "waiting", (f"control runs {commit[:9]} (contains this set) but /health is not 200 "
                            f"({control.get('why') or 'unhealthy'}) — not offered to the fleet until control is healthy")
@@ -653,7 +689,49 @@ def control_lag(given: list[dict] | dict | None, control: dict, now: float, boun
                               f"{since} — inside the {bound_minutes} min bound")
     return "lag", (f"control runs {commit[:9]}, which does NOT contain the newest platform build {newest['v_portal']} "
                    f"({newest['core_sha'][:9]}); it has been behind {since} — over the {bound_minutes} min bound "
-                   "(policy control-always-latest)")
+                   f"(policy control-always-latest). {describe_self_update(control)}")
+
+
+def given_builds(records: list[dict], jobs_by_run: dict[int, list[dict] | None]) -> list[dict]:
+    """Every examined promoted set whose `Deploy control first` job SUCCEEDED, newest first, in the
+    shape `control_lag` reads ({core_sha, v_portal, given_at epoch seconds}). Pure."""
+    out = []
+    for r in records:
+        at = control_given_at(jobs_by_run.get(int(r["run_number"])))
+        if at:
+            out.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+    return out
+
+
+def arming_frozen(chosen: dict | None, override: str, given: list[dict], control: dict, now: float,
+                  bound_minutes: int) -> str | None:
+    """🚨 Policy `control-first-never-silent`: the sentence that turns the arm job RED, or None. Pure.
+
+    Control-first makes the whole fleet wait for ONE instance. Until this rule the arming said
+    `waiting — control runs …, which does not contain … yet` on every tick and the job stayed green,
+    so a control that took NO build froze memex and memex-cloud while every main-cd run read success
+    (measured 2026-10-07/08: ci.10184 … ci.10206 each `waiting`, control on cac0664de for 10+ hours).
+    Waiting is right while control converges; it is a FAILURE once control has been behind past the
+    SAME bound the `control-always-latest` alarm reads (`platformLagBoundMinutes`), on the SAME clock
+    (the first build control missed) — one rule (`control_lag`), so the arming and the alarm can never
+    disagree about when the wait stopped being a wait. A set that was selected, or an override, is
+    never frozen; an override stays the maintainer's call and is never suggested as the remedy.
+
+    Only the BOUNDED state freezes: control's running build is read and does NOT contain the newest
+    build it was given, past the bound. An unreadable or unhealthy control, or no build given at all
+    (this run's own `Deploy control first` may still be running), is a single reading with no clock
+    behind it — `control-always-latest` alarms on those on its own schedule; turning one 503 into a
+    red CD run would make the red mean nothing."""
+    if chosen is not None or override or not given:
+        return None
+    if not control.get("commit") or (control.get("contains") or {}).get(given[0]["core_sha"]) is not False:
+        return None
+    state, text = control_lag(given, control, now, bound_minutes)
+    if state != "lag":
+        return None
+    return (f"FLEET DELIVERY FROZEN ON CONTROL — nothing can be armed: {text}. Control-first holds every newer "
+            "set until control RUNS it, so this is no longer a wait (policy control-first-never-silent). The "
+            "remedy is control's own roll; the open `control-lag` issue carries the same reading.")
 
 
 def write_outputs(rec: dict | None, lines: list[str]) -> None:
@@ -877,6 +955,52 @@ def self_test() -> int:
     st, text = control_lag(given, ctl(unknown=(b,)), now=t0 + 10 * 3600, bound_minutes=180)
     check("control-always-latest: an unreadable older answer stops the walk at a floor, never reads as contained",
           st == "converging" and "at least 29 min" in text, text)
+    # ── policy control-first-never-silent: a frozen fleet is RED and names control's own verdict ──
+    failing_body = ("Degraded\ntiming: 7ms total\nself_update: Degraded — check FAILED: CredentialUnavailableException: "
+                    "ManagedIdentityCredential … The requested identity has not been assigned to this resource\n"
+                    "required_modules: Healthy — ok")
+    su = self_update_reading(failing_body)
+    check("self_update_reading: the census line is parsed off the /health body (status + verdict)",
+          su is not None and su["status"] == "Degraded" and su["text"].startswith("check FAILED: CredentialUnavailable"), str(su))
+    check("self_update_reading: a body WITHOUT the entry is None (absent, never clean)",
+          self_update_reading("Degraded\nbake-report: Degraded — x") is None and self_update_reading("") is None)
+    check("describe_self_update: a failing reading is said as FAILING with its verdict",
+          "FAILING" in describe_self_update({"self_update": su}) and "CredentialUnavailable" in describe_self_update({"self_update": su}))
+    check("describe_self_update: NO reading is said as absent and points at the node, never as clean",
+          "publishes no `self_update` reading" in describe_self_update({}))
+    rc = read_control("https://ctl", lambda u, t, raw=False: (404, None), "t", [],
+                      fetch=lambda u: (200, json.dumps({"commit": "f" * 40})) if u.endswith("version") else (200, failing_body))
+    check("read_control: control's own self-update reading rides the control reading",
+          rc["self_update"] == su, str(rc))
+    frozen_ctl = {**ctl(a), "self_update": su}
+    _, text = judge(c, "success", frozen_ctl)
+    check("judge: a set control has not taken NAMES control's own failing self-update verdict",
+          "control first" in text and "CredentialUnavailable" in text, text)
+    st, text = control_lag(given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: the RED sentence (the control-lag issue) names control's own verdict",
+          st == "lag" and "CredentialUnavailable" in text, text)
+    fz = arming_frozen(None, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180)
+    check("arming_frozen: nothing armed and control behind PAST the bound is RED, naming the verdict",
+          fz is not None and "FROZEN" in fz and "CredentialUnavailable" in fz and b["v_portal"] in fz, str(fz))
+    # Negative controls: each of these is a WAIT, never a red.
+    check("arming_frozen: behind only INSIDE the bound is a wait (negative control)",
+          arming_frozen(None, "", given, {**ctl(a, b), "self_update": su}, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: a selected set is never frozen",
+          arming_frozen(c, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: an override is never frozen (and never suggested)",
+          arming_frozen(None, "3.0.0-ci.9461", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None
+          and "override" not in (fz or "").lower())
+    check("arming_frozen: no build given yet (this run's control-first still running) is not frozen",
+          arming_frozen(None, "", [], frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: one unreadable or unhealthy control reading has no clock behind it — the alarm's job, not a red CD",
+          arming_frozen(None, "", given, {"commit": "", "contains": {}, "why": "timeout"}, now=t0 + 10 * 3600,
+                        bound_minutes=180) is None
+          and arming_frozen(None, "", given, ctl(a, b, c, healthy=False), now=t0 + 10 * 3600, bound_minutes=180) is None)
+    job = lambda ok_, at: [{"name": "Deploy control first: memex-control:<version>",
+                            "conclusion": "success" if ok_ else "failure", "completed_at": at}]
+    gb = given_builds([c, b, a], {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None})
+    check("given_builds: only sets whose control-first SUCCEEDED, newest first, with the epoch it was given",
+          [g["v_portal"] for g in gb] == [c["v_portal"]] and gb[0]["given_at"] == _iso_epoch("2026-10-07T19:02:20Z"), str(gb))
     # ── control first, the delivery half: CD hands the build to control's roll lane ──
     cf = control_first([{"tags": ["3.0.0-ci.9590"]}], "3.0.0-ci.9598")
     check("control-first: the newest accepted build is ANNOUNCED to control's roll lane", cf["announce"] is True, str(cf))
@@ -1160,19 +1284,31 @@ def main() -> int:
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
-    ladders = {int(r["run_number"]): ladder_of(read_run_jobs(http_get, core_token, r.get("run_id"))) for r in records[:10]}
+    jobs = {int(r["run_number"]): read_run_jobs(http_get, core_token, r.get("run_id")) for r in records[:10]}
+    ladders = {n: ladder_of(j) for n, j in jobs.items()}
     control = read_control(ci["url"], http_get, core_token, [r["core_sha"] for r in records[:10]])
     print(f"control {ci['url']}: running {control.get('commit') or 'UNKNOWN'}; "
-          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}")
+          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
+          f"{describe_self_update(control)}")
     try:
         rec, lines = select(records, ladders, control, a.armed_max, a.override, a.resume)
     except ValueError as e:
         print(f"::error::{e}")
         return 1
+    import time
+    # 🚨 Policy `control-first-never-silent`: `nothing to arm` because control has been behind past
+    # the bound is a RED, never a green wait (see `arming_frozen`). Read off the SAME runs' jobs.
+    frozen = arming_frozen(rec, a.override, given_builds(records[:10], jobs), control, time.time(),
+                           int(ci["platformLagBoundMinutes"]))
+    if frozen:
+        lines.append(frozen)
     for line in lines:
         print(line)
     write_outputs(rec, lines)
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
+    if frozen:
+        print(f"::error title=Fleet delivery frozen on control::{frozen}")
+        return 1
     return 0
 
 

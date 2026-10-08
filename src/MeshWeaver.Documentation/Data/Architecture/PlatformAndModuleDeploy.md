@@ -95,7 +95,11 @@ On the module side, two things still guard what an instance runs:
   opens `Ops/Actions/selfupdate-roll-control-<version>-…`. A re-run re-announces the same build,
   which the router dedupes. A build older than control's newest tag is never announced, and the
   router refuses a backwards roll anyway. Any answer other than a stored **and verified** delivery
-  turns the job red.
+  turns the job red. 🚨 **A stored and verified delivery is still not a roll.** The inbox answers
+  before its router runs, and the router drops an announcement whose `deployment` names no record
+  the receiving plane holds. So the job claims only that the announcement was stored; whether
+  control RUNS the build is read by `arm` and the alarm (see
+  [A frozen fleet is red](#a-frozen-fleet-is-red)).
 - The control record (Systemorph/Memex `mesh/Deployments/control.json`) is Continuous on
   `3.0.0-ci*` and carries **no `rollGate`**, so that routed `Roll` runs unattended.
   `ActionsExecutor.AdmittedUnattended` requires a routed roll written by the system, a Continuous
@@ -127,8 +131,11 @@ stood behind that, measured 2026-10-06 on control.systemorph.com and memex.syste
    open nothing. `Ops/Actions` on the control plane held `selfupdate-roll-*` actions for memex,
    build and memex-cloud, and none for control.
 
-Defects 1 and 2 are now fixed at the source (Systemorph/MeshWeaver.Plugins#2994). Defect 3 needs
-no fix of its own, because the roll no longer depends on control's watcher (below).
+Defects 1 and 2 are now fixed at the source (Systemorph/MeshWeaver.Plugins#2994), and reach the
+pod only with a Reconcile (below). Defect 3 needs no fix of its own while CD's hand-over goes to a
+plane that holds control's record — but see
+[A frozen fleet is red](#a-frozen-fleet-is-red): once CD's hand-over was
+pointed at control's own inbox, defect 3 became the whole outage.
 
 - **The repository comes from the record.** `DeploymentPortalConfig.SelfUpdatePortalRepository`
   and `SelfUpdateMigrationRepository` render `SelfUpdate__PortalRepository` and
@@ -202,6 +209,94 @@ not matter whether a hold reason exists. A module held because its floor is abov
 platform is the floor working as designed, not lag. Each breach is filed through the existing
 `FleetTargetIntake` as a `fleet-behind-target` triage item that names the module, both versions
 and the hours behind.
+
+## A frozen fleet is red
+
+Policy `control-first-never-silent`
+([register](../PolicyNotProse)). Control-first makes the whole fleet wait for ONE instance. So a
+control that takes no build must be a failure on every surface where it is read. It must never be
+a green wait.
+
+**What happened (measured 2026-10-07/08).** `vars.CONTROL_WEBHOOK_URL` was moved to control's own
+inbox (`https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds`) at 18:04Z. The previous
+target, memex.systemorph.com, had answered `404` at 18:03Z, and core #6275 then made preflight
+require the declared control URL. From ci.10184 (run 37666055296) on, every hand-over answered
+`200 {"status":"accepted","signature":"verified"}`. Control's own mesh holds no `Deployments`
+record, because cut-over steps 4–6 are unfinished: on control, `namespace:Deployments` and
+`namespace:Ops/Actions` both answer `count: 0`. The router therefore dropped every announcement
+(`SelfUpdateRouting`: "the record lookup IS the authorization"). A hand-filed `Roll` of control on
+memex.systemorph.com (`Ops/Actions/roll-control-20261007-10184-handoff`) and the identity
+`Reconcile` both failed at *Launch operator job*: that plane's operator is disabled. Control
+stayed on cac0664de, and control's own self-updater read `check FAILED:
+CredentialUnavailableException … The requested identity has not been assigned to this resource`
+on every check (Plugins#2994). memex and memex-cloud stayed on 57a6e5fd.
+
+Meanwhile:
+
+- `arm` logged `waiting — control runs cac0664de, which does not contain … yet` on every run and
+  stayed green.
+- Every main-cd run read success.
+- The failing verdict sat on control's `Admin/UpdatePolicy`, an authenticated node nobody watches.
+- `control-always-latest` did go red (issue #6277, about 4 hours after the first missed build),
+  but it named no cause.
+
+**What now reads it as a failure:**
+
+1. **The arming goes RED past the bound.** `arm-promoted-set.py select` (`arming_frozen`) fails the
+   `arm` job when all of these hold:
+   - nothing was selected and no override was given;
+   - control's running build is readable;
+   - that build does NOT contain the newest build control was given;
+   - control has been behind for longer than `platformLagBoundMinutes`.
+
+   The bound and the clock (the first build control missed) are the same as the alarm's, through
+   the one `control_lag` rule, so the two can never disagree about when waiting stopped being a
+   wait. `alert-on-failure` then files the run, with an `arm` line saying the fleet is frozen on
+   control. An unreadable or unhealthy control, or a run whose own `Deploy control first` is still
+   running, is a single reading with no clock behind it. Those stay the alarm's job, so a single
+   `503` never turns CD red. The remedy is control's roll. An arm override stays the maintainer's
+   call, and nothing suggests one.
+2. **Every sentence names control's own verdict.** The arming's `waiting` line, its RED error and
+   the `control-lag` issue body each quote control's `self_update` line off its public `/health`.
+   When control publishes none, they say so and point at `Admin/UpdatePolicy.lastCheckVerdict`.
+   An absent reading is never read as a clean one.
+3. **A failing self-update is public.** The one classification `SelfUpdateVerdict.IsFailure`
+   covers a faulted check, a release that could not be applied or handed over, a refused
+   migration, a stranded tag and a module that can never be activated. It feeds three things:
+   - the Warning log level;
+   - `Admin/UpdatePolicy.lastCheckFailed`, which the fleet console can flag without parsing a
+     sentence;
+   - the census-tagged `self_update` entry on `/health` (`SelfUpdateHealthCheck` over
+     `SelfUpdateCheckCensus`).
+
+   The entry reads `self_update: Degraded — <first line of the verdict> [outcome …, trigger …,
+   N min ago]`. It is Degraded, never Unhealthy, and it carries no probe tag: a failing
+   self-update costs delivery, and pulling the pod delivers nothing.
+4. **The hand-over says only what a `200` proves.** `Deploy control first` now writes "stored and
+   signature-verified … that is not yet a roll". It no longer claims that a `Roll` opened.
+
+**Can control fix its own identity without a Reconcile? No.** The fix (core #6227) changes the
+pod's ServiceAccount annotation, the `azure.workload.identity/use` label and `AZURE_CLIENT_ID`,
+and renders `SelfUpdate__PortalRepository`. All of these are helm-rendered. Only `hosting-deploy`
+applies them, and it runs as the Reconcile (or Provision) step "Re-apply the record". Neither
+image path can carry them:
+
+- The self-updater's own path patches only the image, and it needs the very credential that is
+  missing to list the registry, so it is circular.
+- The routed `Roll` (CD's hand-over) runs `kubectl set image` and the migration. It re-renders
+  nothing.
+
+A newer image on the old pod spec is still a pod with no workload identity.
+
+**The one-time remedy.** These are maintainer acts, and none is taken by CD or by an agent:
+
+1. Finish cut-over steps 4–6, so the control plane that receives CD's hand-over holds
+   `Deployments/control` and runs an enabled operator.
+2. Run one governed `Reconcile` of `Deployments/control` there.
+
+From then on, CD's hand-over routes a `Roll` for every build, and control's own self-update
+check lists `memex-control` under its own identity. Until then the arming is red on every run,
+naming the reason.
 
 ## What was measured before the change
 
@@ -384,6 +479,12 @@ No Hosting/Deployment record pins an image tag of either shape, and none may.
 - That the in-mesh compile reference order holds once the seven arrive only through the landed
   sidecar (step 4). While they are seeded, the baseline list fixes their order (Collaboration,
   then AI, then Chat and Mcp). Radzen, Analysis and GoogleMaps have always arrived through the sidecar.
+- That the `self_update` line will read Degraded on control once control runs an image that
+  carries it. Control cannot take that image until it takes builds again, so the arming will quote
+  "no `self_update` reading" until the one-time remedy above lands. The parsing and the line's
+  shape are pinned by `SelfUpdateFailureIsPublicTest` and the `arm-promoted-set.py` self-test.
+- Whether control.systemorph.com's operator is enabled. The plane that receives CD's hand-over
+  needs both the record and an enabled operator, and neither was read there.
 - `platformLagBoundMinutes` (180) is a starting bound, not a measured one. No unattended control
   roll had been timed when it was set.
 
