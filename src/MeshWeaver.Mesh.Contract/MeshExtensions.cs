@@ -1470,7 +1470,12 @@ public static class MeshExtensions
                                 CreatePostCreationOutcomeUnknownKey,
                                 ("path", resultNode.Path), ("seconds", seconds)),
                             NodeCreationRejectionReason.Unavailable));
-                    });
+                    },
+                    // A ONE-SHOT, so it takes the error arm (SubscribeErrorArmRatchetGuard): a faulting
+                    // timer source is logged here rather than left with nowhere to go.
+                    ex => logger.LogWarning(ex,
+                        "[CreateNode] {Path}: the post-creation verdict deadline could not post its answer",
+                        resultNode.Path));
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
                         .Finally(postCreationDeadline.Dispose)
                         .Subscribe(
