@@ -20,10 +20,38 @@ public record StackControl()
 
 public record LayoutStackSkin : Skin<LayoutStackSkin>
 {
+    private readonly object? horizontalAlignment;
+
     /// <summary>
-    /// Gets or initializes the horizontal alignment of the layout stack.
+    /// Gets or initializes the horizontal alignment of the layout stack. For a VERTICAL stack this is
+    /// the cross axis, and when nothing was set it reads <see cref="Layout.HorizontalAlignment.Stretch"/>
+    /// (<c>align-items: stretch</c>): every child is as wide as the column. Under a start alignment a
+    /// child is sized to its own content instead, so a markdown body holding a table wider than the
+    /// column grew to the table's max-content width and the pane's <c>overflow-x: clip</c> cut it off
+    /// (#6036). A horizontal stack, or one whose orientation is data-bound, keeps no default here and
+    /// the client's own default applies. An explicit value always wins — a child that must keep its
+    /// own width asks for <see cref="Layout.HorizontalAlignment.Start"/>.
     /// </summary>
-    public object? HorizontalAlignment { get; init; }
+    public object? HorizontalAlignment
+    {
+        get => horizontalAlignment ?? (IsVertical(Orientation) ? Layout.HorizontalAlignment.Stretch : null);
+        init => horizontalAlignment = value;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="orientation"/> declares a vertical stack. An unset orientation is
+    /// vertical (the stack's default); a value of any shape other than the enum or its name — a data
+    /// binding, for instance — is not known here, so no default is derived from it.
+    /// </summary>
+    private static bool IsVertical(object? orientation) => orientation switch
+    {
+        null => true,
+        Layout.Orientation o => o == Layout.Orientation.Vertical,
+        string s => string.Equals(s, nameof(Layout.Orientation.Vertical), StringComparison.OrdinalIgnoreCase),
+        System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } e
+            => string.Equals(e.GetString(), nameof(Layout.Orientation.Vertical), StringComparison.OrdinalIgnoreCase),
+        _ => false
+    };
 
     /// <summary>
     /// Gets or initializes the vertical alignment of the layout stack.

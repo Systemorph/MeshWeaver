@@ -93,11 +93,44 @@ Every `With*` method returns a **new** `StackControl` instance — the stack is 
 | `WithOrientation(orientation)` | Layout axis | `Orientation.Vertical` (default), `Orientation.Horizontal` |
 | `WithVerticalGap(gap)` | Space between items on the vertical axis | `"8px"`, `"1rem"`, `"16px"` |
 | `WithHorizontalGap(gap)` | Space between items on the horizontal axis | `"8px"`, `"1rem"`, `"16px"` |
-| `WithHorizontalAlignment(align)` | Cross-axis or main-axis horizontal alignment | `"start"`, `"center"`, `"end"` |
+| `WithHorizontalAlignment(align)` | Cross-axis (vertical stack) or main-axis (horizontal stack) horizontal alignment. A vertical stack defaults to `HorizontalAlignment.Stretch` — see below | `HorizontalAlignment.Stretch`, `"start"`, `"center"`, `"end"` |
 | `WithVerticalAlignment(align)` | Cross-axis or main-axis vertical alignment | `"start"`, `"center"`, `"end"` |
 | `WithWidth(width)` | Explicit stack width | `"300px"`, `"100%"` |
 | `WithHeight(height)` | Explicit stack height | `"200px"`, `"100%"` |
 | `WithWrap(wrap)` | Allow items to wrap onto the next row/column | `true`, `false` |
+
+---
+
+# Cross-Axis Alignment: a Vertical Stack Stretches
+
+A vertical stack gives every child the full width of its column: when nothing is set, its
+`HorizontalAlignment` reads `HorizontalAlignment.Stretch` (`align-items: stretch`), and that value is
+sent with the control, so every client renders the same thing.
+
+The reason is content that has no width of its own. Under a start alignment each child is only as
+wide as its own content, and a markdown body holding a table wider than the column takes the table's
+full `max-content` width. The pane then clips it at the right edge with no scrollbar (#6036 — a CRM
+offer page measured 3,211 px inside a 980 px column). Stretched, the same body is as wide as the
+column, and the table wraps or scrolls inside it.
+
+The default applies only where it means something:
+
+- **A horizontal stack derives none.** There `HorizontalAlignment` is the main axis (`justify-content`),
+  and the client's start alignment is unchanged.
+- **A data-bound orientation derives none**, because the orientation is not known until the client
+  resolves the binding.
+- **An explicit value always wins.** A child that must keep its own width — a lone button, a logo —
+  sits in a stack that asks for it:
+
+```csharp
+Controls.Stack
+    .WithHorizontalAlignment(HorizontalAlignment.Start)
+    .WithView(Controls.Button("Save"))
+```
+
+The value is serialised by name, and the Blazor client parses it case-insensitively into Fluent UI's
+own `HorizontalAlignment`, which has a `Stretch` member. So `HorizontalAlignment.Stretch` and the
+string `"stretch"` mean the same thing.
 
 ---
 
