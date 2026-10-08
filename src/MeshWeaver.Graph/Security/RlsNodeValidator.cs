@@ -140,9 +140,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
     {
         var path = context.Node.Path;
         var segments = (path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (context.Operation == NodeOperation.Read
-            || segments.Length == 0
-            || segments.Any(s => s.StartsWith('_')))
+        if (context.Operation == NodeOperation.Read || !AccessAssignmentGuard.IsContentPath(path))
             return Observable.Return(NodeValidationResult.Valid());
 
         return NodeTypeAccessRuleGate

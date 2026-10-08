@@ -328,6 +328,20 @@ public static class AccessAssignmentGuard
         => syncNode is not null && !IsTwoWay(syncNode, options) && NamesARepository(syncNode, options);
 
     /// <summary>
+    /// Whether <paramref name="path"/> is CONTENT — a path with no <c>_</c>-prefixed segment, the
+    /// partition root included. The ONE predicate for which paths of a system-owned partition the
+    /// repository-owned write cap covers (#5140): the permission fold, the RLS own-scope shortcut
+    /// and the denial diagnosis all ask it, so they cannot drift apart. Satellites keep their own rules.
+    /// </summary>
+    /// <param name="path">A node path.</param>
+    /// <returns>True for a non-empty path with no <c>_</c>-prefixed segment.</returns>
+    public static bool IsContentPath(string? path)
+    {
+        var segments = (path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 && !segments.Any(s => s.StartsWith('_'));
+    }
+
+    /// <summary>
     /// 🚨 Whether a sync config actually NAMES a repository — a config node is not a configured sync
     /// (#5140). The GitHub settings tab mints <c>{space}/_GitSync</c> with an EMPTY
     /// <c>GitHubSyncConfig</c> the moment it is opened (<c>GitHubSyncService.EnsureConfigNode</c>), so

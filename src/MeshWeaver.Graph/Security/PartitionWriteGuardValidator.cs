@@ -376,7 +376,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // rule working, not the store disagreeing with the fold. Without this branch a
                 // leftover Admin's refusal was diagnosed below as a #4061 disagreement and told to
                 // report a bug. Satellites keep their own rules and fall through.
-                { Ownerless: false, SystemOwned: true } when IsContentPath(nodePath) =>
+                { Ownerless: false, SystemOwned: true } when AccessAssignmentGuard.IsContentPath(nodePath) =>
                     LocalizationCatalog.Get("access.systemOwned.writeRefused", locale,
                         partition, AccessAssignmentGuard.SyncConfigPath(partition)),
                 // 🚨 A CONFIGURED (static) grant is a grant: the partition is owned, and its grant is
@@ -565,11 +565,6 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         return slash < 0 ? normalized : normalized[..slash];
     }
 
-    /// <summary>A CONTENT path — no <c>_</c>-prefixed segment — the shape the fold's
-    /// repository-owned cap applies to (<c>PermissionEvaluator.ObserveRepositoryOwnedContent</c>).</summary>
-    private static bool IsContentPath(string? path)
-        => !string.IsNullOrEmpty(path)
-           && !path.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(s => s.StartsWith('_'));
 
     /// <summary>
     /// Identity for the operation — explicit request identity first

@@ -1000,7 +1000,7 @@ internal static class PermissionEvaluator
         IMeshNodeStreamCache cache, JsonSerializerOptions options, string nodePath)
     {
         var segments = (nodePath ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0 || segments.Any(s => s.StartsWith('_')))
+        if (!AccessAssignmentGuard.IsContentPath(nodePath))
             return Observable.Return(false);
 
         var partition = segments[0];

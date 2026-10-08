@@ -49,6 +49,7 @@ public class SystemOwnedPartitionRefusesNonSystemWritesTest(ITestOutputHelper ou
     private const string Bijective = "WorkingCopySpace";
     private const string PartitionAdmin = "leftover-admin";
     private const string RepoUrl = "https://github.com/test/repo-owned";
+    private const string HomeOwner = "home-owner";
 
     private static readonly AccessContext Admin = new() { ObjectId = PartitionAdmin, Name = "Leftover Admin" };
 
@@ -72,6 +73,7 @@ public class SystemOwnedPartitionRefusesNonSystemWritesTest(ITestOutputHelper ou
             .AddMeshNodes(
                 new MeshNode(OneWay) { Name = "Repo-owned space", NodeType = "Markdown" },
                 new MeshNode(Bijective) { Name = "Working-copy space", NodeType = "Markdown" },
+                new MeshNode(HomeOwner) { Name = "A person's home", NodeType = "Markdown" },
                 AdminGrant(OneWay),
                 AdminGrant(Bijective));
 
@@ -217,5 +219,35 @@ public class SystemOwnedPartitionRefusesNonSystemWritesTest(ITestOutputHelper ou
             + "them is the point — the rule keys on the DIRECTION, not on the presence of a sync");
         (await ReadStored(page, n => n.Name == "edited in the working copy")).Name
             .Should().Be("edited in the working copy");
+    }
+
+    /// <summary>
+    /// The RLS own-scope shortcut admits a person's writes to their OWN partition without the
+    /// fold — so it is the one seam that would still admit a content create there once that home
+    /// is synced one-way. Control: the same create, before the sync is wired, lands.
+    /// </summary>
+    [Fact]
+    public async Task TheOwner_CannotCreateContent_InTheirOwnHome_OnceItIsSyncedOneWay()
+    {
+        var owner = new AccessContext { ObjectId = HomeOwner, Name = "Home owner" };
+        ActAs(owner);
+        var before = await Outcome(NodeFactory.CreateNode(
+                MeshNode.FromPath($"{HomeOwner}/before") with { NodeType = "Markdown", Name = "before" }))
+            .Should().Within(Budget).Emit("the create must answer");
+        before.Should().BeNull("the control: an ordinary home is its owner's to write");
+
+        Access.SetContext(null);
+        await Sync.SaveConfig(HomeOwner, RepoUrl, "main", null, false, false,
+                direction: SyncDirection.ImportOnly, twoWay: false)
+            .Should().Within(Budget).Emit("the sync config must be written",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        ActAs(owner);
+        var after = await Outcome(NodeFactory.CreateNode(
+                MeshNode.FromPath($"{HomeOwner}/after") with { NodeType = "Markdown", Name = "after" }))
+            .Should().Within(Budget).Emit("the create must answer");
+        after.Should().NotBeNull(
+            "once the home is synced one-way its content is the repository's — the own-scope "
+            + "shortcut must not be the seam where that rule stops holding (#5140)");
     }
 }
