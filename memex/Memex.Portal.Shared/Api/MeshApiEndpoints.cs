@@ -97,6 +97,11 @@ public static class MeshApiEndpoints
                 ? RunString(http, rootHub, ct, ops => ops.WhoAmI(path))
                 : Task.FromResult(HandleWhoAmI(http)));
 
+        // The caller opened a page — the access log "last used" orders by (MeshOperations.Visit).
+        // Bearer-only: it writes, if only to the caller's own partition.
+        group.MapPost("/visit", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
+            RunString(http, rootHub, ct, ops => ops.Visit(body.Path)));
+
         group.MapPost("/search", (HttpContext http, IMessageHub rootHub, SearchBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Search(body.Query, body.BasePath)));
 
