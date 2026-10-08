@@ -296,6 +296,128 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
             "a NodeType built against N+1 must bind N+1 once it is current — in the running process");
     }
 
+    // ───────────────────────────────────────────── a module's private dependency, for a context outside the modules
+
+    /// <summary>
+    /// A kernel script session is a context OUTSIDE the modules, and it compiles against a module's
+    /// private closure (the file beside the module DLL). <see cref="ModuleContexts.ResolveDependency"/>
+    /// is what it binds at run time: the entry assembly, or the private dependency loaded through the
+    /// module's OWN context — the identity the module's code uses — each with a lease on that
+    /// context; and nothing for a name the platform answers, a name nobody ships, or a version higher
+    /// than the one shipped.
+    /// </summary>
+    [Fact]
+    public void ResolveDependency_BindsAModulesPrivateDependency_ThroughTheModulesOwnContext()
+    {
+        using var contexts = new ModuleContexts();
+        var generation = InstallWithPrivateDependency(contexts, "g1");
+
+        var entry = contexts.ResolveDependency(new AssemblyName(PrivateModule));
+        entry.Should().NotBeNull();
+        entry!.Assembly.Should().BeSameAs(generation.Assembly);
+        entry.Context.Should().BeSameAs(generation.Context);
+        contexts.Leases.InFlight(generation.Context).Should().Be(1, "a binding comes with its lease");
+        entry.Lease.Dispose();
+
+        var dependency = contexts.ResolveDependency(new AssemblyName($"{PrivateDependency}, Version=6.2.0.0"));
+        dependency.Should().NotBeNull("the module ships it beside its DLL — what the script compiled against");
+        dependency!.Context.Should().BeSameAs(generation.Context, "it binds through the module's own context");
+        AssemblyLoadContext.GetLoadContext(dependency.Assembly).Should().BeSameAs(generation.Context);
+        generation.Assembly.GetType($"{PrivateModule}.Mailer")!.GetMethod("DependencyAssembly")!.Invoke(null, null)
+            .Should().BeSameAs(dependency.Assembly, "ONE identity: the module's own code binds the same assembly");
+        dependency.Lease.Dispose();
+        var again = contexts.ResolveDependency(new AssemblyName(PrivateDependency))!;
+        again.Assembly.Should().BeSameAs(dependency.Assembly, "once loaded, the module context's copy is the answer");
+        again.Lease.Dispose();
+        contexts.Leases.InFlight(generation.Context).Should().Be(0);
+
+        contexts.ResolveDependency(new AssemblyName($"{PrivateDependency}, Version=7.0.0.0")).Should().BeNull(
+            "a context may never answer a request with a lower version than the one asked for");
+        contexts.ResolveDependency(new AssemblyName($"{PrivateModule}, Version=7.0.0.0")).Should().BeNull(
+            "the entry assembly is held to the same version rule");
+        contexts.ResolveDependency(typeof(MeshNode).Assembly.GetName()).Should().BeNull(
+            "the platform is the default context's to answer");
+        contexts.ResolveDependency(new AssemblyName("MeshWeaver.Test.NobodyShipsThis")).Should().BeNull();
+        contexts.Leases.InFlight(generation.Context).Should().Be(0, "a refusal leaves no lease behind");
+    }
+
+    /// <summary>
+    /// The session leases every module context it binds into until it ends — so a retiring
+    /// generation waits for it — and releases them all when it does.
+    /// </summary>
+    [Fact]
+    public void ModuleScriptBindings_LeaseTheBoundModuleUntilTheSessionEnds()
+    {
+        using var contexts = new ModuleContexts();
+        var generation = InstallWithPrivateDependency(contexts, "g1");
+        var bindings = MeshWeaver.Kernel.Hub.ModuleScriptBindings.PinCurrent(contexts);
+
+        bindings.Bind(new AssemblyName(PrivateDependency)).Should().NotBeNull();
+        bindings.Bind(new AssemblyName(PrivateModule)).Should().BeSameAs(generation.Assembly);
+        contexts.Leases.InFlight(generation.Context).Should().Be(1, "one lease per bound context, held for the session");
+
+        bindings.Dispose();
+        contexts.Leases.InFlight(generation.Context).Should().Be(0, "the session's end releases it");
+        bindings.Bind(new AssemblyName(PrivateModule)).Should().BeNull("an ended session binds nothing");
+        contexts.Leases.InFlight(generation.Context).Should().Be(0);
+    }
+
+    /// <summary>
+    /// Compile and run see the SAME generation: a session pinned to N never binds N+1 after a swap
+    /// (it compiled against N), and never binds a displaced N it had not leased (N may already be
+    /// unloading) — while a session pinned after the swap binds N+1. A generation the session HAD
+    /// bound stays leased across the swap, so its retirement waits for the session.
+    /// </summary>
+    [Fact]
+    public void ModuleScriptBindings_BindThePinnedGeneration_AndNeverOneASwapDisplacedBeforeTheBind()
+    {
+        using var contexts = new ModuleContexts();
+        var n = InstallWithPrivateDependency(contexts, "g1");
+        using var boundBeforeSwap = MeshWeaver.Kernel.Hub.ModuleScriptBindings.PinCurrent(contexts);
+        using var unboundAtSwap = MeshWeaver.Kernel.Hub.ModuleScriptBindings.PinCurrent(contexts);
+        boundBeforeSwap.Bind(new AssemblyName(PrivateModule)).Should().BeSameAs(n.Assembly);
+        boundBeforeSwap.SessionAssemblies(new ServiceCollection().BuildServiceProvider())
+            .Should().Contain(n.Assembly, "the session compiles against the generation it pinned");
+
+        var n1 = InstallWithPrivateDependency(contexts, "g2");
+        contexts.Current(PrivateModule).Should().BeSameAs(n1);
+
+        boundBeforeSwap.Bind(new AssemblyName(PrivateDependency)).Should().BeNull(
+            "the session compiled against N; N+1's copy would be the wrong generation, and N is displaced");
+        unboundAtSwap.Bind(new AssemblyName(PrivateModule)).Should().BeNull(
+            "N was displaced before this session leased it — it may be unloading; never bind it");
+        contexts.Leases.InFlight(n.Context).Should().Be(1, "only the session that bound N before the swap holds it");
+        contexts.Leases.InFlight(n1.Context).Should().Be(0, "a session pinned to N never touches N+1");
+
+        using var afterSwap = MeshWeaver.Kernel.Hub.ModuleScriptBindings.PinCurrent(contexts);
+        afterSwap.Bind(new AssemblyName(PrivateModule)).Should().BeSameAs(n1.Assembly, "a new session binds N+1");
+    }
+
+    private const string PrivateModule = "MeshWeaver.Test.PrivateDepLib";
+    private const string PrivateDependency = "MeshWeaver.Test.PrivateDepOnly";
+
+    private ModuleGeneration InstallWithPrivateDependency(ModuleContexts contexts, string generationName)
+    {
+        var dependencyBytes = Emit(PrivateDependency, $$"""
+            [assembly: System.Reflection.AssemblyVersion("6.2.0.0")]
+            namespace {{PrivateDependency}};
+            public sealed class Envelope { }
+            """);
+        var modulePath = Write(PrivateModule, generationName, Emit(PrivateModule, $$"""
+            [assembly: {{PrivateModule}}.Module]
+            namespace {{PrivateModule}};
+            public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute { }
+            public static class Mailer
+            {
+                public static System.Reflection.Assembly DependencyAssembly() => typeof({{PrivateDependency}}.Envelope).Assembly;
+            }
+            """, MetadataReference.CreateFromImage(dependencyBytes)));
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(modulePath)!, PrivateDependency + ".dll"), dependencyBytes);
+        var generation = contexts.Load(modulePath);
+        contexts.Commit(generation);
+        return generation;
+    }
+
     // ───────────────────────────────────────────── helpers
 
     [MethodImpl(MethodImplOptions.NoInlining)]

@@ -57,6 +57,12 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private ImmutableDictionary<string, Assembly>? cellSurfaceBindings;
     private readonly System.Reactive.Disposables.CompositeDisposable cellSurfaceLeases = new();
 
+    // The session's module surface (ModuleScriptBindings): the module generations current when the
+    // reference set was built — compiled against, and bound at run time (entry assembly or private
+    // dependency, through the module's own context, leased until the session ends). Set with
+    // scriptOptions in EnsureInitializedAsync, disposed with the session.
+    private ModuleScriptBindings? moduleBindings;
+
     // REPL submissions run STRICTLY in arrival order on a 100%-reactive serial queue:
     // Concat subscribes the next submission only AFTER the previous Execute completes
     // (i.e. after scriptState is assigned), so block #2 always sees block #1's variables.
@@ -153,6 +159,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     // Release the cell-surface generation pins with the session — after this,
                     // a superseded NodeType generation this session was bound to can unload.
                     cellSurfaceLeases.Dispose();
+                    // …and the module generations it bound into, likewise.
+                    moduleBindings?.Dispose();
                 })))
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
@@ -447,13 +455,16 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // worker before its first await (Doc/Architecture/CompileOffTheThreadPool).
             scope => Observable.Defer(() =>
                 {
-                    // A module the script names binds its CURRENT generation from the mesh's
-                    // registry — modules run in their own collectible contexts (policy
-                    // module-live-update-default), which the default context cannot see.
-                    var modules = publicHub.ServiceProvider.GetService<ModuleContexts>();
+                    // A module the script names — its entry assembly or one of its PRIVATE
+                    // dependencies — binds the generation the session COMPILED against, through the
+                    // module's own context (ModuleScriptBindings): modules run in their own
+                    // collectible contexts (policy module-live-update-default), which the default
+                    // context cannot see.
+                    var bindings = moduleBindings;
                     var current = session ??= new ScriptSession(
                         scriptGlobals!,
-                        name => cellSurfaceBindings?.GetValueOrDefault(name) ?? modules?.Resolve(name));
+                        name => (name.Name is { } simple ? cellSurfaceBindings?.GetValueOrDefault(simple) : null)
+                                ?? bindings?.Bind(name));
                     var options = scriptOptions;
                     return cpuLane
                         .InvokeBlocking(t =>
@@ -585,8 +596,23 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // submission's attempt to build it, permanently wedging the session. Local variables
         // here (rather than writing straight into the instance fields) keep a failed attempt
         // from leaving scriptLogger/scriptGlobals half-set either.
-        var references = await MeshScriptEnvironment.ReferencesAsync(publicHub.ServiceProvider, ct)
-            .ConfigureAwait(false);
+        // The module generations this session compiles against are PINNED here, and the run-time
+        // bind resolves from the same set — so a live swap can never make a submission compile
+        // against one generation and run against another (ModuleScriptBindings).
+        var localModuleBindings = ModuleScriptBindings.PinCurrent(
+            publicHub.ServiceProvider.GetService<ModuleContexts>());
+        ImmutableArray<MetadataReference> references;
+        try
+        {
+            references = await KernelScriptReferences
+                .GetReferencesAsync(localModuleBindings.SessionAssemblies(publicHub.ServiceProvider), ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            localModuleBindings.Dispose();
+            throw;
+        }
         var options = ScriptOptions.Default
             .WithReferences(references)
             // 🚨 Required for the sharing to be complete: the compilation resolves
@@ -600,6 +626,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         scriptLogger = localScriptLogger;
         scriptGlobals = localScriptGlobals;
         scriptOptions = options;
+        moduleBindings = localModuleBindings;
         initialized = true;
         return Unit.Default;
     }

@@ -33,6 +33,17 @@ public sealed record ModuleGeneration(string Name, string Location, ModuleLoadCo
 }
 
 /// <summary>
+/// An assembly <see cref="ModuleContexts.ResolveDependency"/> bound for a context outside the
+/// modules, the module context it lives in, and a lease on that context — taken BEFORE anything was
+/// loaded from it, while it was still current, so it cannot have started unloading. The caller holds
+/// <paramref name="Lease"/> for as long as it can call into the assembly, and disposes it after.
+/// </summary>
+/// <param name="Assembly">The bound assembly.</param>
+/// <param name="Context">The module context that holds it.</param>
+/// <param name="Lease">The caller's lease on <paramref name="Context"/> (<see cref="ModuleContexts.Leases"/>).</param>
+public sealed record ModuleBinding(Assembly Assembly, ModuleLoadContext Context, IDisposable Lease);
+
+/// <summary>
 /// The mesh's modules, each in its OWN collectible load context — the registry a live module
 /// update swaps generations in (policy <c>module-live-update-default</c>,
 /// <c>Doc/Architecture/LiveModuleUpdate</c>).
@@ -428,6 +439,128 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         !string.IsNullOrEmpty(simpleName) && current.TryGetValue(simpleName, out var generation)
             ? generation.Assembly
             : null;
+
+    /// <summary>
+    /// <paramref name="assemblyName"/> as a context that is NOT a module asks for it at run time —
+    /// a kernel script session: a module's entry assembly, or one of a module's PRIVATE
+    /// dependencies, bound through that module's own context and returned with a LEASE on it. Null
+    /// when no candidate module holds or ships it, and null when the module context answers it from
+    /// the default context (the platform), so the caller falls through to the default context for
+    /// exactly the same answer.
+    ///
+    /// <para><b>Why the module's dependencies too.</b> A module ships its private closure beside its
+    /// entry DLL (Microsoft.Graph and Kiota beside <c>MeshWeaver.Mail.MicrosoftGraph</c>), and the
+    /// image does not. A script compiles against that closure — the shared metadata resolver finds
+    /// the file next to the module DLL that references it — so binding only the entry assembly made
+    /// the script compile and then throw <see cref="FileNotFoundException"/> the moment it touched a
+    /// type from the closure: the default context cannot see the module's directory. Loading the
+    /// dependency through the module's context also gives the script the SAME identity the module's
+    /// own code binds, so a value crosses between them with its type intact.</para>
+    ///
+    /// <para><b>Which generations.</b> <paramref name="among"/> — the generations the caller compiled
+    /// against, so compile and run see the same module code — or, when null, the current ones. A
+    /// candidate is used only while it is still CURRENT, and it is leased before anything is loaded
+    /// from it and re-checked after: a generation a swap has already displaced may be unloading, and
+    /// loading from it is the use-after-unload this registry's leases exist to prevent. A retirement
+    /// that starts after the lease waits for it.</para>
+    ///
+    /// <para><b>Resolution order.</b> (1) a candidate's entry assembly; (2) an assembly a
+    /// candidate's context already holds; (3) a file of that name in a candidate's generation
+    /// directory, loaded through that candidate's context — whose own order puts the platform first.
+    /// Candidates are visited in name order, and one whose version is lower than the one requested
+    /// is skipped.</para>
+    /// </summary>
+    public ModuleBinding? ResolveDependency(AssemblyName assemblyName, IReadOnlyCollection<ModuleGeneration>? among = null)
+    {
+        ArgumentNullException.ThrowIfNull(assemblyName);
+        if (assemblyName.Name is not { Length: > 0 } name)
+            return null;
+        var candidates = (among ?? current.Values.ToArray())
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var generation in candidates)
+            if (string.Equals(generation.Name, name, StringComparison.Ordinal)
+                && Satisfies(generation.Assembly.GetName(), assemblyName)
+                && LeaseIfCurrent(generation) is { } lease)
+                return new ModuleBinding(generation.Assembly, generation.Context, lease);
+
+        foreach (var generation in candidates)
+        {
+            if (LeaseIfCurrent(generation) is not { } lease)
+                continue;
+            foreach (var assembly in generation.Context.Assemblies)
+                if (assembly.GetName() is { } held
+                    && string.Equals(held.Name, name, StringComparison.Ordinal)
+                    && Satisfies(held, assemblyName))
+                    return new ModuleBinding(assembly, generation.Context, lease);
+            lease.Dispose();
+        }
+
+        foreach (var generation in candidates)
+        {
+            var candidate = Path.Combine(generation.Context.Directory, name + ".dll");
+            if (!File.Exists(candidate) || !Satisfies(NameOf(candidate), assemblyName)
+                || LeaseIfCurrent(generation) is not { } lease)
+                continue;
+            Assembly loaded;
+            try
+            {
+                loaded = generation.Context.LoadFromAssemblyName(assemblyName);
+            }
+            catch (Exception e) when (e is FileNotFoundException or FileLoadException or BadImageFormatException)
+            {
+                lease.Dispose();
+                continue;
+            }
+            if (AssemblyLoadContext.GetLoadContext(loaded) is ModuleLoadContext owner)
+            {
+                if (ReferenceEquals(owner, generation.Context))
+                    return new ModuleBinding(loaded, owner, lease);
+                // Served from a module this one depends on: lease THAT generation instead, on the
+                // same terms — current, or not at all.
+                var ownerLease = Current(owner.ModuleName) is { } ownerGeneration
+                                 && ReferenceEquals(ownerGeneration.Context, owner)
+                    ? LeaseIfCurrent(ownerGeneration)
+                    : null;
+                lease.Dispose();
+                return ownerLease is null ? null : new ModuleBinding(loaded, owner, ownerLease);
+            }
+            // The platform's (or the image's) answer is the default context's to give.
+            lease.Dispose();
+            return null;
+        }
+        return null;
+    }
+
+    // Leases `generation` and keeps the lease only if it is STILL current after the lease is taken:
+    // Retire removes a generation from `current` BEFORE it waits for quiescence, so a lease that
+    // sees it current is one the retirement will wait for.
+    private IDisposable? LeaseIfCurrent(ModuleGeneration generation)
+    {
+        var lease = Leases.Enter(generation.Context);
+        if (current.TryGetValue(generation.Name, out var live) && ReferenceEquals(live, generation))
+            return lease;
+        lease.Dispose();
+        return null;
+    }
+
+    private static AssemblyName? NameOf(string path)
+    {
+        try
+        {
+            return AssemblyName.GetAssemblyName(path);
+        }
+        catch (Exception e) when (e is BadImageFormatException or FileLoadException or FileNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    // A context may not answer a request with a LOWER version than the one asked for.
+    private static bool Satisfies(AssemblyName? candidate, AssemblyName requested) =>
+        candidate is not null
+        && (requested.Version is null || (candidate.Version is { } version && version >= requested.Version));
 
     /// <summary>
     /// The current generations that depend — directly or transitively — on
