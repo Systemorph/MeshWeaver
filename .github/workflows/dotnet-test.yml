@@ -4323,6 +4323,13 @@ jobs:
       # above is the gate. action_fail removed + continue-on-error so a throttled
       # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
       continue-on-error: true
+      # continue-on-error covers a reporter that FAILS, not one that WAITS. A throttle backoff
+      # past this required job's own cap would turn a green build into a CANCELLED required check
+      # (the shard-4 incident of run 37652278631, see the shard job). This step has never taken
+      # more than 14 s in 199 runs. The worst throttled tail measured on the per-shard twin was
+      # 620 s, so 15 minutes lets a legitimate backoff finish and still lets a stall degrade to a
+      # missing report rather than a cancelled check.
+      timeout-minutes: 15
       with:
         # One consolidated check across all shards (reporting only now).
         check_name: "Test Results"
