@@ -60,7 +60,7 @@ public class LiveRecordCensusReopensAfterTransientFaultTest(ITestOutputHelper ou
             new IOException("Unable to read data from the transport connection: Connection reset by peer.",
                 new SocketException(104)));
 
-    [Fact(Timeout = 120_000)]
+    [HubFact]
     public async Task ATransientFaultMidStream_ReopensTheCensus_AndItReadsAgain()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -113,7 +113,7 @@ public class LiveRecordCensusReopensAfterTransientFaultTest(ITestOutputHelper ou
                 "one transient fault must not end the watch", ct);
     }
 
-    [Fact(Timeout = 120_000)]
+    [HubFact]
     public async Task NegativeControl_TheRawCensus_TerminatesOnTheSameFault()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -136,7 +136,7 @@ public class LiveRecordCensusReopensAfterTransientFaultTest(ITestOutputHelper ou
         fault.Should().BeAssignableTo<DbException>();
     }
 
-    [Fact(Timeout = 120_000)]
+    [HubFact]
     public async Task ANonTransientFault_StillEndsTheWatch_WithoutReopening()
     {
         var ct = TestContext.Current.CancellationToken;

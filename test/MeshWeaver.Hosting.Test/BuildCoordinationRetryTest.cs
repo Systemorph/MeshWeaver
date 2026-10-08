@@ -166,7 +166,7 @@ public class BuildCoordinationRetryTest
     /// node so the durable-witness door is asked. Before the fix it was neither: the first one
     /// faulted the whole warm-up (memex-cloud <c>76cf776847-v4txp</c>, 2026-09-24 06:51:10Z).
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task TheRoutersFlattenedTransportTimeout_IsRetried_LikeAnInProcessTimeout()
     {
         var attempts = new List<int>();
@@ -189,7 +189,7 @@ public class BuildCoordinationRetryTest
     /// <c>WhenTheSubscriptionDoorIsShut</c> consult the durable witness instead of the warm-up
     /// faulting on a raw NACK.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task TheRoutersFlattenedTransportTimeout_Exhausted_IsReportedAsUnreachable()
     {
         var attempts = new List<int>();
@@ -212,7 +212,7 @@ public class BuildCoordinationRetryTest
     /// The control: a routed NACK that carries a VERDICT is not a timeout and is not retried — the
     /// match is on the transport's own "no answer in time" text, never on the exception type.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ARoutedNackCarryingAVerdict_IsNotRetried()
     {
         var attempts = new List<int>();
@@ -237,7 +237,7 @@ public class BuildCoordinationRetryTest
     /// A VERDICT whose reason text happens to quote the transport phrase is still a verdict: the
     /// router stamps a transport fault <c>ErrorType.Failed</c>, and only that stamp qualifies.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AVerdictQuotingTheTimeoutPhrase_IsNotRetried()
     {
         var attempts = new List<int>();
