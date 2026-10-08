@@ -299,6 +299,7 @@ public class SecurityQueryShapesTest
     {
         RouteOf(SecurityQueries.PartitionAssignments("acme")).Should().Be((QueryRoute.Pinned, "acme"));
         RouteOf(SecurityQueries.PartitionPolicies("acme")).Should().Be((QueryRoute.Pinned, "acme"));
+        RouteOf(SecurityQueries.PartitionSyncConfig("acme")).Should().Be((QueryRoute.Pinned, "acme"));
         // "Admin" is PermissionEvaluator.AdminScope, which is internal to Mesh.Contract.
         RouteOf(SecurityQueries.PartitionAssignments("Admin")).Should().Be((QueryRoute.Pinned, "admin"),
                 "the Admin partition is excluded from searchable_schemas, so its grants are only "

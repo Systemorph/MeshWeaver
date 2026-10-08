@@ -211,9 +211,13 @@ public class ModuleUpdateLadderSyncTest(ITestOutputHelper output) : MonolithMesh
         await SourceAt(space, PushedSha, ct);
         await Children(space, paths => paths.Contains(retired, StringComparer.OrdinalIgnoreCase), ct);
 
-        // The running portal writes state of its own into the synced partition.
+        // The running portal writes state of its own into the synced partition — as SYSTEM, which is
+        // how the real writer does it (measured 2026-10-08: all 2,845 versions of Hosting/Babysitter
+        // on memex.systemorph.com were written by system-security). A one-way synced partition's
+        // content is written by System alone; a named non-System identity is refused there whatever
+        // grant it holds (#5140), so writing as one here would test a shape production cannot have.
         IObservable<MeshNode> write;
-        using (Access.SwitchAccessContext(new AccessContext { ObjectId = "pr-babysitter", Name = "PR babysitter" }))
+        using (Access.ImpersonateAsSystem())
             write = MeshService.CreateNode(new MeshNode("Babysitter", space)
             {
                 Name = "Babysitter",

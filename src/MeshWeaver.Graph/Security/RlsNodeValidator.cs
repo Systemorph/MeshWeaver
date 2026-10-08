@@ -104,23 +104,61 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
         // PseudoIdentity.)
         if (WellKnownUsers.IsAuthenticated(userId))
         {
-            if (!string.IsNullOrEmpty(context.Node.MainNode)
-                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
-                return Observable.Return(NodeValidationResult.Valid());
+            var ownMainNode = !string.IsNullOrEmpty(context.Node.MainNode)
+                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase);
 
             // Per-user own-scope shortcut: every user owns the partition
             // named after their userId. A node at `{userId}` or `{userId}/…`
             // is in their own partition, granted unconditionally without
             // walking the access-rule chain.
             var nodePath = context.Node.Path;
-            if (!string.IsNullOrEmpty(nodePath))
-            {
-                if (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
-                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase))
-                    return Observable.Return(NodeValidationResult.Valid());
-            }
+            var ownScope = !string.IsNullOrEmpty(nodePath)
+                && (nodePath.Equals(userId, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userId + "/", StringComparison.OrdinalIgnoreCase));
+
+            if (ownMainNode || ownScope)
+                return OwnScopeShortcut(context, userId);
         }
 
+        return ValidateThroughChain(context, userId);
+    }
+
+    /// <summary>
+    /// The own-scope shortcuts' verdict — <see cref="NodeValidationResult.Valid"/> without walking
+    /// the access-rule chain, EXCEPT for a write to the CONTENT of a SYSTEM-OWNED partition (#5140).
+    ///
+    /// <para>The permission fold caps Create/Update/Delete out of every role on such content
+    /// (<c>PermissionEvaluator.ObserveRepositoryOwnedContent</c>), and a shortcut that answers before
+    /// the fold would be the one seam where that rule does not hold — a user whose own home carries
+    /// a one-way <c>_GitSync</c> could still create and delete there while the patch path refused
+    /// their updates. So for exactly that case the shortcut is not taken and the ordinary chain
+    /// decides, which reaches the fold. Reads, satellites (any <c>_</c>-prefixed segment) and every
+    /// partition without a one-way sync keep the shortcut, so the common case pays one point read
+    /// on writes only.</para>
+    /// </summary>
+    private IObservable<NodeValidationResult> OwnScopeShortcut(NodeValidationContext context, string? userId)
+    {
+        var path = context.Node.Path;
+        var segments = (path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (context.Operation == NodeOperation.Read || !AccessAssignmentGuard.IsContentPath(path))
+            return Observable.Return(NodeValidationResult.Valid());
+
+        return NodeTypeAccessRuleGate
+            .ReadSubjectNode(_hub, AccessAssignmentGuard.SyncConfigPath(segments[0]))
+            .Take(1)
+            .SelectMany(sync => AccessAssignmentGuard.IsSystemOwned(sync, _hub.JsonSerializerOptions)
+                ? ValidateThroughChain(context, userId)
+                : Observable.Return(NodeValidationResult.Valid()))
+            // A probe that cannot answer reaches no decision — and an undecided write is not
+            // admitted (the chain below fails closed the same way).
+            .Catch((Exception ex) => Observable.Return(
+                UnestablishedCheck(context, userId, path ?? string.Empty, ex)));
+    }
+
+    /// <summary>The ordinary decision: hub rule → per-type rule → partition-owner create → the
+    /// permission fold.</summary>
+    private IObservable<NodeValidationResult> ValidateThroughChain(NodeValidationContext context, string? userId)
+    {
         var requiredPermission = context.Operation switch
         {
             NodeOperation.Read => Permission.Read,
@@ -431,8 +469,8 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
     {
         // The principal is passed so the probe can name the ONE denial the durable store
         // disagrees with (#4061 finding 2) — see DescribeDeniedWrite. It changes no verdict.
-        return PartitionWriteGuardValidator.DescribeDeniedWrite(
-                _hub, context.Node.Path, effectiveUserId)
+        return PartitionWriteGuardValidator.DescribeDeniedWriteIn(
+                _hub, context.Node.Path, effectiveUserId, context.AccessContext?.Locale)
             .Take(1)
             .Select(diagnosis => NodeValidationResult.Unauthorized(
                 diagnosis is null ? denial : $"{denial}. {diagnosis}"))

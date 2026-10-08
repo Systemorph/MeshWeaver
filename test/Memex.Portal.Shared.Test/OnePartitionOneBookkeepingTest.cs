@@ -518,10 +518,13 @@ public class OnePartitionOneBookkeepingTest(ITestOutputHelper output) : Monolith
     /// absence.</summary>
     private async Task Drift(string path)
     {
-        await Mesh.GetMeshNodeStream(path)
-            .Update(node => node with { Name = DriftedName })
-            .Should().Within(TestTimeouts.WriteConvergence).Emit($"drifting {path} is a precondition",
-                cancellationToken: TestContext.Current.CancellationToken);
+        // As SYSTEM: the partition is one-way synced, so its content is written by System alone
+        // (#5140) — the second writer this stands for is the platform's own, never a person.
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem())
+            await Mesh.GetMeshNodeStream(path)
+                .Update(node => node with { Name = DriftedName })
+                .Should().Within(TestTimeouts.WriteConvergence).Emit($"drifting {path} is a precondition",
+                    cancellationToken: TestContext.Current.CancellationToken);
         (await NameOf(path)).Should().Be(DriftedName,
             "the drift must have landed, or the arm below measures nothing");
     }
