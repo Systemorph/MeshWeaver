@@ -473,6 +473,62 @@ case "$_kve_log" in *"memex-postgres-password"*|*"secret set"*) bad "a dry run n
 case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and reports would-create, never created" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
+
+# 🚨 Memex#648 — the helm VALUES HALF. A record declaring vaultValuesKeys deploys only with
+# helm-values-<release> in the vault, and on an external database with AdoNet clustering the chart
+# refuses to render without it; nothing composed it, so the control instance's was built by hand.
+KVE_HALF=(--values-half acme)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure composes an ABSENT values half (Memex#648)" || bad "kv-ensure composes an absent values half" "exited ${_kve_rc}: ${_kve_out}"
+_kve_half="$(cat "$_kve_state/set.helm-values-acme" 2>/dev/null || true)"
+_kve_cs="Host=pg.postgres.database.azure.com;Port=5432;Username=memexadmin;Password=fake-server-password-NEVER-PRINTED;Database=acmedb;SslMode=Require;Trust Server Certificate=true"
+if [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal.ConnectionStrings__memex')" = "$_kve_cs" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_migration.ConnectionStrings__memex')" = "$_kve_cs" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal.memex_postgres_password')" = "fake-server-password-NEVER-PRINTED" ] \
+   && [ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_migration.memex_postgres_password')" = "fake-server-password-NEVER-PRINTED" ]; then
+  ok "…carrying the mesh string and the server password for BOTH halves the chart reads"
+else
+  bad "the values half carries the chart's keys" "wrote: ${_kve_half}"
+fi
+[ "$(printf '%s' "$_kve_half" | jq -r 'keys | join(",")')" = "secrets" ] && ok "…families only — nothing hosting-deploy would refuse as structure (Memex#295)" \
+  || bad "the values half is families only" "top-level: $(printf '%s' "$_kve_half" | jq -r 'keys | join(",")')"
+[ "$(printf '%s' "$_kve_half" | jq -r '.secrets.memex_portal | has("ConnectionStrings__orleans")')" = "false" ] && ok "…and no orleans string: the chart derives it by its one rule" \
+  || bad "the half leaves orleans to the chart" "wrote: ${_kve_half}"
+case "$_kve_out$_kve_log" in *NEVER-PRINTED*) bad "…and no value is printed or put on an argv" "out: ${_kve_out} az: ${_kve_log}" ;; *) ok "…and no value is printed or put on an argv" ;; esac
+case "$_kve_log" in *"secret set --vault-name Systemorph --name helm-values-acme --file "*) ok "…the half reaches az through --file" ;; *) bad "the half reaches az through --file" "az saw: ${_kve_log}" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=created"*) ok "…and the run reports kv_values_half=created" ;; *) bad "reports kv_values_half=created" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# An EXISTING db-connection is the source: a hand-written string stays authoritative.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  HOSTING_KVE_DBCONN_OBJECT=acme-db-connection -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$(jq -r '.secrets.memex_portal.ConnectionStrings__memex' "$_kve_state/set.helm-values-acme" 2>/dev/null)" = "Host=hand.example.invalid;Password=fake-hand-written-NEVER-PRINTED" ] \
+  && ok "the half is composed from the EXISTING db-connection object, not a re-composed string" \
+  || bad "the half reads the existing db-connection" "exited ${_kve_rc}: ${_kve_out}"
+rm -rf "$_kve_state"
+
+# Present: KEPT — no value read, no write. (Negative control for the compose arm above.)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+[ "$_kve_rc" -eq 0 ] && ok "an EXISTING values half is kept" || bad "existing values half kept" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*|*"--query value"*) bad "…never rewritten, and no value is read" "az saw: ${_kve_log}" ;; *) ok "…never rewritten, and no value is read" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=kept"*) ok "…and reports kv_values_half=kept" ;; *) bad "reports kept" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# Without its inputs it refuses; a dry run writes nothing and reads no value.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}"
+[ "$_kve_rc" -ne 0 ] && ok "an absent half with no --db-connection refuses" || bad "half without inputs refuses" "exited 0: ${_kve_out}"
+case "$_kve_out" in *"needs --db-connection and --db-password-secret"*) ok "…naming what it needs" ;; *) bad "names the inputs" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+kve HOSTING_DRY_RUN=true HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}"
+case "$_kve_log" in *"secret set"*|*"--query value"*) bad "a dry run reads no value and writes no half" "az saw: ${_kve_log}" ;; *) ok "a dry run reads no value and writes no half" ;; esac
+case "$_kve_out" in *"::hosting:: kv_values_half=would-create"*) ok "…and reports would-create" ;; *) bad "dry run would-create" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "kv-ensure refuses a values-half release with a metacharacter" "is not a plain name" \
+  hosting-kv-ensure --vault V --namespace n --values-half 'acme;id'
+unset _kve_half _kve_cs
 echo "── hosting-registry-register: issue the instance key once, prove it, never show it ──"
 # MeshWeaver.Plugins#1720 — hosting-kv-ensure REQUIRES <prefix>PluginCatalog-RegistryToken and
 # nothing issued it: runbook step 2 was a hand curl + az. The registry stub answers
