@@ -155,8 +155,9 @@ jobs:
       # body in this event payload. The caller must trigger this workflow on pull_request.edited as
       # well as opened/synchronize/reopened, or a post-check body edit is not observed. This gate
       # does not inspect commit messages or a merge message edited at merge time. Its public issue
-      # reads are anonymous and positively/negatively controlled; a GITHUB_TOKEN scoped to this
-      # caller is not used to read another repository's labels.
+      # reads use the caller's GITHUB_TOKEN for an authenticated public REST rate-limit bucket.
+      # Positive and negative controls prove that this token can see core issue labels before
+      # any reference can be treated as absent. An unreadable response fails the gate closed.
       - name: Fetch the platform's closing-keyword gate at the lane's scripts ref
         if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
         env:
@@ -176,6 +177,7 @@ jobs:
         env:
           CALLER_REPOSITORY: ${{ github.repository }}
           CORE_PR_BODY_FILE: ${{ runner.temp }}/satellite-pr-body.md
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$CORE_PR_BODY_FILE"
