@@ -709,7 +709,8 @@ RequestTimeout").
 
 | Handler | Bound | What the stalled verdict says |
 |---|---|---|
-| Create | `Timeout` from handler entry, over the chain AND the post-creation handlers | `Unavailable`, naming the stage: `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write`, `post-creation-handlers` |
+| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
+| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
 | Move | its existing per-stage bounds, the copy leg answered by the copy's own deadline, and the delete leg bounded at `Timeout` | the copy leg's own classification (`Unavailable` for a stalled copy), never re-derived from the wording |
 

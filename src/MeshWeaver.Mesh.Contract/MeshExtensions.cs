@@ -781,6 +781,12 @@ public static class MeshExtensions
     /// </summary>
     private const string CreateStalledKey = "activity.node.create.stalled";
 
+    /// <summary>
+    /// The verdict a create gives when its row is written but a post-creation handler has not
+    /// finished by the deadline — written, outcome unknown, nothing cancelled or rolled back.
+    /// </summary>
+    private const string CreatePostCreationOutcomeUnknownKey = "activity.node.create.postCreationOutcomeUnknown";
+
     // The stages of HandleCreateNodeRequest's detached chain, in order. Recorded on the request's
     // fate trail (CREATE_STAGE …) and named in a stalled verdict, so a create that went silent says
     // WHERE — the one thing the #6149 trail (`CREATE_CHAIN_SUBSCRIBED → HANDLER_EXIT`) could not.
@@ -1415,13 +1421,34 @@ public static class MeshExtensions
                     hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_START");
                     // Deferred inside (as is CompensateFailedCreate below): a hub disposed while the
                     // write was in flight must reach the error arm, never throw out of this callback.
+                    //
+                    // 🚨 The SAME deadline — but as a VERDICT, never as a cancellation. The row is
+                    // already written here, and a post-creation handler still running may yet land
+                    // its own writes (the creator grant), so neither disposing it nor rolling the
+                    // row back is safe: either would race work that is still in flight. What the
+                    // caller is owed is the truth, on time — "written, a post-creation step has not
+                    // finished, the outcome is unknown" — claimed through the same once-only gate,
+                    // so a handler that completes (or fails and compensates) later is not answered
+                    // twice. The handler chain itself runs on untouched.
+                    var postCreationDeadline = Observable.Timer(deadline).Subscribe(_ =>
+                    {
+                        if (System.Threading.Volatile.Read(ref responded) != 0)
+                            return;
+                        hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers} deadline");
+                        logger.LogError(
+                            "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s — answering 'outcome unknown'",
+                            resultNode.Path, createBudget.TotalSeconds);
+                        var seconds = createBudget.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+                        Respond(CreateNodeResponse.FailWith(
+                            LocalizableText.Keyed(
+                                $"'{resultNode.Path}' was written, but a post-creation step had not finished within {seconds}s; "
+                                + "the outcome is unknown — read the node before retrying.",
+                                CreatePostCreationOutcomeUnknownKey,
+                                ("path", resultNode.Path), ("seconds", seconds)),
+                            NodeCreationRejectionReason.Unavailable));
+                    });
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
-                        // The SAME deadline: a post-creation handler that never terminates is a
-                        // failed handler, and goes down the all-or-nothing arm below (#638) rather
-                        // than leaving the caller with no verdict.
-                        .Timeout(deadline, Observable.Defer(() => Observable.Throw<System.Reactive.Unit>(
-                            new LifecycleVerdictStalledException("CreateNode", resultNode.Path,
-                                CreateStagePostCreationHandlers, createBudget))))
+                        .Finally(postCreationDeadline.Dispose)
                         .Subscribe(
                             _ => { },
                             ex =>
