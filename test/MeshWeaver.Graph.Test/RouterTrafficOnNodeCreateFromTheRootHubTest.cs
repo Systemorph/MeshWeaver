@@ -414,6 +414,77 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// 🚨 <b>The RUNTIME pin for <see href="https://github.com/Systemorph/MeshWeaver/issues/5937">#5937</see>
+    /// (and its requester half folded into #5726) — a unified path that names NO node.</b>
+    ///
+    /// <para>Production (memex, five pods, 2026-10-01..06) logged
+    /// <c>ORIGIN: GetDataRequest was POSTED with the mesh hub as sender AND target</c> from
+    /// <c>MeshOperations.TryResolveUnifiedPath</c> and its echo
+    /// <c>ORIGIN: GetDataResponse … sender AND target</c> from
+    /// <c>DataExtensions.HandleGetDataRequest</c>. Before the fix this test reproduced BOTH lines, byte
+    /// for byte, for every path below: with no address part the read fell back to the facade's own
+    /// hub, which for the agent surface is the root mesh hub, so the router executed the read on
+    /// its own action block. The router owns nothing a unified path can name, so the read is
+    /// answered without a delivery, naming the shape the caller has to use.</para>
+    ///
+    /// <para><b>The positive anchor.</b> The answer must be the explicit refusal — an answer of any
+    /// other kind means the read took some other route, and silence from the detector would then
+    /// say nothing about this one.</para>
+    /// </summary>
+    [Theory(Timeout = 120_000)]
+    [InlineData("content/readme.md")]
+    [InlineData("schema/")]
+    [InlineData("data/")]
+    [InlineData("layoutAreas/")]
+    [InlineData("/schema/")]
+    public async Task AnAddressLessUnifiedPathReadFromTheRootMeshHub_NeverPutsTheRouterOnEitherEnd(string path)
+    {
+        var answer = await new MeshOperations(Mesh).Get(path)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        DumpReports();
+        answer.Should().StartWith("Error:").And.Contain("names no node",
+            "a unified path with no node address has no owner to read from, and the caller has to "
+            + "be told the documented shape ('{nodePath}/" + path.TrimStart('/') + "') rather than "
+            + "be answered by whichever hub happened to build the facade");
+        Origins().Where(r => r.MessageType is nameof(GetDataRequest) or nameof(GetDataResponse))
+            .Should().BeEmpty(
+                "#5937: the read was POSTED with the mesh hub as sender AND target, and answered "
+                + "the same way — the router executed a one-shot read on its own action block");
+        Reports().Where(r => r.MessageType is nameof(GetDataRequest) or nameof(GetDataResponse))
+            .Should().BeEmpty("and no receiving hub may see the router at an end of it either");
+    }
+
+    /// <summary>
+    /// The other half of #5937's remedy: a unified path that DOES name a node, read from the root
+    /// mesh hub, is still answered — by the owning node, with the read issued on
+    /// <c>ReadIssuingHub()</c> — so the refusal above did not simply switch unified reads off.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANodeAddressedUnifiedPathReadFromTheRootMeshHub_IsAnsweredOffTheRouter()
+    {
+        var path = await SeedNode("RouterTrafficUnifiedReadProbe");
+
+        var answer = await new MeshOperations(Mesh).Get($"{path}/schema/")
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        DumpReports();
+        answer.Should().NotStartWith("Error:",
+            "the owning node answers its own schema — the read has to have RUN for the silence "
+            + "below to mean anything");
+        answer.Should().Contain("schema");
+        Origins().Where(r => r.MessageType is nameof(GetDataRequest) or nameof(GetDataResponse))
+            .Should().BeEmpty(
+                "a node-addressed read from the root hub leaves from portal/reads-{meshId}, so the "
+                + "router is on neither end of the request nor of its reply");
+        Reports().Where(r => r.MessageType is nameof(GetDataRequest) or nameof(GetDataResponse)
+                             || (r.MessageType == "RawJson" && r.Target == path))
+            .Should().BeEmpty("and the owning node must not see the router as the sender");
+    }
+
+    /// <summary>
     /// The subscription family, at the ORIGIN site — which always carries the real CLR type, so
     /// this filter is exact there. Narrow on purpose: this test pins ONE defect, and a blanket
     /// "no router traffic anywhere" assertion would red on any unrelated pre-existing line and
