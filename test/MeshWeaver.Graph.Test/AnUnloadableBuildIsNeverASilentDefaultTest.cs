@@ -123,7 +123,7 @@ public class AnUnloadableBuildIsNeverASilentDefaultTest(ITestOutputHelper output
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
         // Bytes the store serves and the loader rejects — the observable shape of every
-        // LoadNodeAssembly failure branch (absent, older than the framework, a bad image).
+        // LoadNodeAssembly failure branch (absent, or a bad image).
         const long storeVersion = 1;
         var unloadable = Encoding.UTF8.GetBytes("this is not a PE image");
         var location = await store.PutWithLocation(typePath, storeVersion, unloadable, null)

@@ -714,7 +714,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
     /// <summary>
     /// Why the most recent <see cref="LoadNodeAssembly"/> answered <c>null</c> — the file was
-    /// absent, older than the framework, or a <see cref="BadImageFormatException"/> with the file's
+    /// absent, or a <see cref="BadImageFormatException"/> with the file's
     /// length and the volume's capacity — so the compile verdict the record carries names the
     /// cause instead of a generic "corrupt cached .dll or a missing dependency". <c>null</c> until a
     /// load has failed; a later successful load does not clear it (the loaded assembly is the
@@ -750,32 +750,30 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                 return null;
             }
 
-            // Check if cached DLL is older than the framework DLL (code generator)
-            var dllLastWrite = File.GetLastWriteTimeUtc(_dllPath);
-            var frameworkLocation = typeof(CompilationCacheService).Assembly.Location;
-            if (!string.IsNullOrEmpty(frameworkLocation) && File.Exists(frameworkLocation))
-            {
-                var frameworkLastWrite = File.GetLastWriteTimeUtc(frameworkLocation);
-                if (dllLastWrite < frameworkLastWrite)
-                {
-                    LastLoadFailure =
-                        $"The file at '{_dllPath}' ({dllLastWrite:O}) predates the framework "
-                        + $"({frameworkLastWrite:O}) and was deleted for regeneration.";
-                    _logger?.LogInformation("Cached assembly at {DllPath} is older than framework, deleting for regeneration", _dllPath);
-                    try
-                    {
-                        File.Delete(_dllPath);
-                        var pdbPath = Path.ChangeExtension(_dllPath, ".pdb");
-                        if (File.Exists(pdbPath))
-                            File.Delete(pdbPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogWarning(ex, "Failed to delete stale assembly at {DllPath}", _dllPath);
-                    }
-                    return null;
-                }
-            }
+            // 🚨 NO WRITE-TIME VERDICT HERE, and above all NO DELETE (#6161/#6052). This used to
+            // compare the file's mtime with the framework DLL's and DELETE the file "for
+            // regeneration" when it was older. On a ReadWriteMany /data that is every build in
+            // /data/assembly-cache the moment a NEW IMAGE boots — its framework DLL is newer than
+            // anything compiled before the image was built — so the first replica of each roll
+            // deleted the CURRENT shared builds out from under every replica still serving them
+            // (measured on memex.systemorph.com 2026-10-08: ~180 "predates the framework …
+            // deleted" lines at the ci.10245 boot; Store/Plugin's recorded v19020 at the ci.10256
+            // boot), each one a store miss → a recompile on the owner → a new record version, and
+            // while the recompile ran every Store/Plugin instance overlaid and logged "stuck
+            // AGAIN" (#6161). The registry refetch (#6262) could not repair it either: the record
+            // named a LOCAL build, so no shipped bundle carries its MVID (#6052).
+            //
+            // Generation is not this reader's question, and a write time is not a generation. The
+            // owners decide it by identity, before a path ever reaches this context:
+            //   • the assembly store keys every file by the framework tag and serves only its own
+            //     (FileSystemAssemblyStore.FrameworkTag, NamedBuild) — a COMPATIBLE same-identity
+            //     build from an earlier image is exactly what the compatibility policy admits;
+            //   • the record's CompiledFrameworkVersion gates the bind (HasUsableBuild);
+            //   • the local disk cache checks the framework time itself
+            //     (TryGetLatestCachedDllPath, Check 2) before it hands a path out;
+            //   • a release's hash includes the framework (NodeTypeRelease).
+            // A reader that mutates what other replicas are reading is the defect; the only delete
+            // left here is the bad-image one below, where the bytes are provably unloadable.
 
             // Load the assembly into this isolated context
             try
@@ -1130,8 +1128,9 @@ internal class CompilationCacheService(
         // projecting the 128-bit MVID into ticks yields a uniformly-random date (frequently in the
         // FUTURE), which makes the `dllLastWrite < frameworkTime` check reject every fresh DLL →
         // permanent cache miss / recompile storm (the regression that broke
-        // CompilationCacheServiceTest 2026-06-20). It also mirrors the parallel file-time check in
-        // NodeAssemblyLoadContext.LoadNodeAssembly, which was never MVID-keyed.
+        // CompilationCacheServiceTest 2026-06-20). It applies to THIS cache's own disk entries
+        // only: NodeAssemblyLoadContext.LoadNodeAssembly no longer judges (or deletes) by write
+        // time, because the paths it loads include the identity-keyed shared store (#6161/#6052).
         //
         // 🚨 The framework's per-image CONTENT identity (for cross-image / cross-silo cache keying —
         // the prod BadImageFormatException-on-deploy fix) is the Graph assembly MVID, but it is
