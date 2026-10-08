@@ -451,15 +451,17 @@ node hub's sub-millisecond reply could arrive before the subject existed and be 
 
 ### A read whose TARGET defaulted to the router (#5937)
 
-The fourth sighting of the class is different in kind. `MeshOperations.TryResolveUnifiedPath`
-already issued its read on `ReadIssuingHub()`, yet production (memex, five pods, 2026-10-01..06)
-kept logging `GetDataRequest was POSTED with the mesh hub as sender AND target` from it, with the
-echo `GetDataResponse … sender AND target` from `DataExtensions.HandleGetDataRequest`. The reason
-was the target, not the sender. A unified path with no address part (`content/x.md`, `schema/`,
-`layoutAreas/`, typically from an agent chat with no context) fell back to the facade's own
-`hub.Address`. For the agent surface that hub is the router, so the read was a self-read on the
-router, and the self-directed exclusion (the seam would misdeliver it) kept both `src/` ratchets
-blind to it by construction.
+The fourth sighting of the class is different in kind. `MeshOperations.TryResolveUnifiedPath` used
+the read seam CONDITIONALLY: `ReadIssuingHub()` when the resolved target was another hub, and the
+bare `hub` when the target was `hub.Address`, because a self-directed read cannot be hopped. Yet
+production (memex, five pods, 2026-10-01..06) kept logging
+`GetDataRequest was POSTED with the mesh hub as sender AND target` from it, with the echo
+`GetDataResponse … sender AND target` from `DataExtensions.HandleGetDataRequest`. Those came from
+the bare branch. A unified path with no address part (`content/x.md`, `schema/`, `layoutAreas/`,
+typically from an agent chat with no context) fell back to the facade's own `hub.Address`, so the
+target equalled the sender. For the agent surface that hub is the router, so the read was a
+self-read on the router. The self-directed exclusion (the seam would misdeliver it) kept both
+`src/` ratchets blind to it by construction.
 
 Hopping cannot fix that shape: moving only the sender leaves the router as the target, and
 `portal/reads-{meshId}` registers no handlers, so it cannot answer in its place. The defect is the
