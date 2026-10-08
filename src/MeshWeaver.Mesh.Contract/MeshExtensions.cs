@@ -799,6 +799,48 @@ public static class MeshExtensions
     private const string CreateStageWrite = "write";
     private const string CreateStagePostCreationHandlers = "post-creation-handlers";
 
+    // Rx's LocalScheduler keeps a cancelled absolute-deadline WorkItem in its priority queue
+    // until the deadline. The WorkItem retains Timeout.Absolute._, including its fallback
+    // observable. Keep that fallback's closure separate from the create handler's closure:
+    // the latter owns the hub, request, and services and would otherwise keep a disposed mesh
+    // alive for the whole operation budget even when the create completed immediately.
+    private sealed class CreateStageProgress(string path, TimeSpan budget)
+    {
+        private string stage = CreateStageAuthorshipSource;
+
+        public void Enter(string next) => System.Threading.Volatile.Write(ref stage, next);
+
+        public IObservable<T> StalledVerdict<T>() => Observable.Defer(() => Observable.Throw<T>(
+            new LifecycleVerdictStalledException("CreateNode", path,
+                System.Threading.Volatile.Read(ref stage), budget)));
+    }
+
+    // Observable.Timer's scheduled work likewise retains its observer after Dispose. Clear the
+    // callbacks when post-creation work ends, so a cancelled deadline cannot retain its hub.
+    private sealed class CreateDeadlineSignal(Action onDeadline, Action<Exception> onError)
+    {
+        private Action? deadline = onDeadline;
+        private Action<Exception>? error = onError;
+
+        public void Fire(long _)
+        {
+            System.Threading.Interlocked.Exchange(ref error, null);
+            System.Threading.Interlocked.Exchange(ref deadline, null)?.Invoke();
+        }
+
+        public void Fail(Exception exception)
+        {
+            System.Threading.Interlocked.Exchange(ref deadline, null);
+            System.Threading.Interlocked.Exchange(ref error, null)?.Invoke(exception);
+        }
+
+        public void Cancel()
+        {
+            System.Threading.Interlocked.Exchange(ref deadline, null);
+            System.Threading.Interlocked.Exchange(ref error, null);
+        }
+    }
+
     /// <summary>
     /// The prefix of every copy verdict that is an AVAILABILITY failure rather than a refusal — a
     /// stalled leg, or a source that storage holds but the caller's query did not return. The copy's
@@ -1057,10 +1099,10 @@ public static class MeshExtensions
         // stage that went silent, which is what the trail could not say.
         var createBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
         var deadline = DateTimeOffset.UtcNow + createBudget;
-        var createStage = CreateStageAuthorshipSource;
+        var createProgress = new CreateStageProgress(node.Path, createBudget);
         void EnterCreateStage(string stage)
         {
-            createStage = stage;
+            createProgress.Enter(stage);
             hub.NoteRequestStage(request.Id, $"CREATE_STAGE {stage}");
         }
 
@@ -1353,8 +1395,7 @@ public static class MeshExtensions
             // ONE result, then completion — so the deadline below can only ever fire BEFORE the
             // chain produced its node, never race the post-creation leg that owns the reply after it.
             .Take(1)
-            .Timeout(deadline, Observable.Defer(() => Observable.Throw<(string mode, MeshNode node)>(
-                new LifecycleVerdictStalledException("CreateNode", node.Path, createStage, createBudget))))
+            .Timeout(deadline, createProgress.StalledVerdict<(string mode, MeshNode node)>())
             .Subscribe(
                 tuple =>
                 {
@@ -1454,7 +1495,7 @@ public static class MeshExtensions
                     // finished, the outcome is unknown" — claimed through the same once-only gate,
                     // so a handler that completes (or fails and compensates) later is not answered
                     // twice. The handler chain itself runs on untouched.
-                    var postCreationDeadline = Observable.Timer(deadline).Subscribe(_ =>
+                    var postCreationSignal = new CreateDeadlineSignal(() =>
                     {
                         if (System.Threading.Volatile.Read(ref responded) != 0)
                             return;
@@ -1476,8 +1517,14 @@ public static class MeshExtensions
                     ex => logger.LogWarning(ex,
                         "[CreateNode] {Path}: the post-creation verdict deadline could not post its answer",
                         resultNode.Path));
+                    var postCreationDeadline = Observable.Timer(deadline).Subscribe(
+                        postCreationSignal.Fire, postCreationSignal.Fail);
                     RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
-                        .Finally(postCreationDeadline.Dispose)
+                        .Finally(() =>
+                        {
+                            postCreationSignal.Cancel();
+                            postCreationDeadline.Dispose();
+                        })
                         .Subscribe(
                             _ => { },
                             ex =>
