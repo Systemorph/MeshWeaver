@@ -60,7 +60,10 @@ internal static class InstanceAuthResponses
     /// <param name="http">The request — the 503 carries <c>Retry-After</c> on its response.</param>
     /// <param name="cause">The availability fault the route's read terminated with.</param>
     /// <param name="logger">Diagnostic sink, resolved while the request scope was alive.</param>
-    internal static IResult ReadUnavailable(HttpContext http, Exception cause, ILogger? logger)
+    /// <param name="error">The body's <c>error</c> text, naming what this ROUTE could not read; the
+    /// registry's catalogue wording when omitted.</param>
+    internal static IResult ReadUnavailable(
+        HttpContext http, Exception cause, ILogger? logger, string? error = null)
     {
         logger?.LogWarning(cause,
             "Mesh read behind {Path} is UNAVAILABLE — answering 503 + Retry-After rather than an "
@@ -69,7 +72,7 @@ internal static class InstanceAuthResponses
         http.Response.Headers.RetryAfter =
             InstanceRegistryAuthenticator.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
         return Results.Json(
-            new { error = "The registry could not read its catalogue just now — retry shortly." },
+            new { error = error ?? "The registry could not read its catalogue just now — retry shortly." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
@@ -82,10 +85,11 @@ internal static class InstanceAuthResponses
     /// <param name="answer">The route's answer.</param>
     /// <param name="http">The request.</param>
     /// <param name="logger">Diagnostic sink, resolved while the request scope was alive.</param>
+    /// <param name="error">The 503 body's <c>error</c> text (see <see cref="ReadUnavailable"/>).</param>
     internal static IObservable<IResult> UnavailableOnAStalledRead(
-        this IObservable<IResult> answer, HttpContext http, ILogger? logger) =>
+        this IObservable<IResult> answer, HttpContext http, ILogger? logger, string? error = null) =>
         answer.Catch<IResult, Exception>(ex =>
             MeshWeaver.Layout.AreaErrorClassifier.IsStorageUnavailable(ex)
-                ? Observable.Return(ReadUnavailable(http, ex, logger))
+                ? Observable.Return(ReadUnavailable(http, ex, logger, error))
                 : Observable.Throw<IResult>(ex));
 }

@@ -105,14 +105,36 @@ public static class WebhookInboxEndpoints
         var headers = request.Headers.Select(h =>
             new KeyValuePair<string, string>(h.Key, h.Value.ToString()));
 
-        var result = (await WebhookInbox.Deliver(
+        // 🚨 A STALLED read is 503 + Retry-After, never an unhandled 500 (#6125). Before storing,
+        // Deliver confirms the target node exists with a `path:{target}` query, and when a query
+        // provider never delivers its Initial the fan-in terminates that read with
+        // QueryProviderStalledException (policy query-fanin-stall-terminal) — an availability
+        // failure that says, in its own text, that it is retryable. It used to escape this handler,
+        // so ASP.NET's exception middleware answered a bare 500 and logged the stall as a defect of
+        // the ENDPOINT. Same mapping as the plugin-bundle routes (#5345): only what
+        // AreaErrorClassifier.IsStorageUnavailable classifies becomes 503; every other fault still
+        // escapes, so a real defect keeps surfacing as one. Nothing was stored on that path, so a
+        // sender that delivers again loses nothing and duplicates nothing.
+        return (await WebhookInbox.Deliver(
                 hub, allowed, target, request.ContentType, headers, body)
+            .Select(result => Answer(result, target, logger))
+            .UnavailableOnAStalledRead(request.HttpContext, logger, StalledReadError)
             .FirstAsync()
             .ObserveCompletion(
                 ex => logger?.LogWarning(ex,
                     "Webhook delivery for target '{Target}' faulted after the response had already been sent",
                     target),
                 ct))!;
+    }
+
+    /// <summary>The 503 body's <c>error</c> when the delivery's own read could not be answered.
+    /// Nothing was stored, and the text says so: the sender's next move is to deliver again.</summary>
+    internal const string StalledReadError =
+        "The inbox could not confirm its target just now — nothing was stored; retry shortly.";
+
+    /// <summary>Maps a delivery's verdict to its HTTP answer, with the log line that goes with it.</summary>
+    private static IResult Answer(WebhookInbox.DeliveryResult result, string target, ILogger? logger)
+    {
         switch (result.Status)
         {
             case WebhookInbox.DeliveryStatus.Accepted when result.VerifyOnly:
