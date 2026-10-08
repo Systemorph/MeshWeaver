@@ -47,8 +47,8 @@ public static class AreaErrorClassifier
             // area's permanent content until a reload. Re-subscribing a VIEW is a new request, so
             // #1172's "never re-send a timed-out delivery" (a grain-layer rule about the SAME
             // delivery) does not apply here, and the retry stays bounded by RetryAreaWithBackoff.
-            if (msg.Contains("Response did not arrive on time", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("Grain placement operation timed out", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains(TransportTimeout.ResponseTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains(TransportTimeout.PlacementTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
             // Framework undeliverable / timeout banners reach the GUI wrapped in a
             // DeliveryFailureException, so the typed checks above don't always catch them.
             if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
@@ -98,8 +98,8 @@ public static class AreaErrorClassifier
         {
             if (e is TimeoutException) return true;
             var msg = e.Message ?? string.Empty;
-            if (msg.Contains("Response did not arrive on time", StringComparison.OrdinalIgnoreCase)) return true;
-            if (msg.Contains("Grain placement operation timed out", StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains(TransportTimeout.ResponseTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
+            if (msg.Contains(TransportTimeout.PlacementTimeoutPhrase, StringComparison.OrdinalIgnoreCase)) return true;
             if (msg.Contains("No response received in hub", StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
