@@ -67,6 +67,78 @@ gh api repos/Systemorph/MeshWeaver/actions/artifacts/<ARTIFACT_ID>/zip > shard.z
 unzip -q shard.zip -d shard && find shard -name '*.dmp'
 ```
 
+## Production: where a dump lands, and how long it stays
+
+A portal pod writes its dump to **`/data/dumps/<pod name>/coredump.<pid>.<epoch>`** on the **`/data`
+volume**. On AKS that volume is the shared `/data` claim (`persistence.data.claimName`, `memex-data`),
+so **the dump outlives the pod that wrote it** and any replica, or a later pod, can read it.
+
+🚨 **Before this, every roll deleted the dump.** The target was a pod-local `memex-dumps` emptyDir. It
+was deleted with the pod, and rolls are frequent. The 09-26 SIGSEGV dump and the 10-07 memex-cloud dump
+were both lost that way, which left #4654, #1605 and #5555 with no dump to read.
+
+### How it is wired (deploy/helm)
+
+| Piece | Where | What it does |
+|---|---|---|
+| `DOTNET_DbgMiniDumpName` | `templates/memex-portal/deployment.yaml` | `<crashDumps.root>/$(MEMEX_POD_NAME)/coredump.%p.%t`. `MEMEX_POD_NAME` comes from `metadata.name` and is defined earlier in the env list, so Kubernetes expands it. |
+| `crashDumps.root` | `values.yaml` (default `/data/dumps`) | The render **fails** for a root outside `/data/`, or for `/data` itself. Anywhere else would be the container's writable layer, which a roll deletes. |
+| postStart hook | `files/crash-dump-retention.sh` | Runs on **every container start**, including each restart in place after a crash. It applies retention and the headroom gate (below), and creates this pod's directory. `createdump` does **not** create directories, so the directory has to exist before the crash. |
+| Invariant #20 | `deploy/aks/scripts/check-chart-invariants.py` | In every values combination: the dump path is on `memex-data` at `/data`, `MEMEX_POD_NAME` comes before the dump name, the memory limit is wired, no `memex-dumps` volume, and the hook runs. Against the old chart it reports all six findings in all 17 renders. |
+| Executed test | `deploy/aks/scripts/test-crash-dump-retention.sh` (Chart Gate) | Runs the hook under `sh` on scratch directories: keep the newest N, delete by age, HOLD when there is no headroom, held dumps still counted, refusals exit 0, plus a negative control. |
+
+### Retention, and why it cannot fill `/data`
+
+The hook runs in this order, across **every** pod's directory:
+
+1. Delete any dump older than `crashDumps.maxAgeDays` (default 14).
+2. Keep only the newest `crashDumps.keep` dumps (default 3). The newest are kept, so a dump another
+   pod is writing right now is never the one deleted.
+3. Remove the empty directories of other pods.
+4. **Headroom gate.** Arm this pod's directory only if the volume has free space for
+   `crashDumps.headroomDumps` dumps (default 2) of the container's **memory limit** each, plus
+   `crashDumps.reserveMiB` (default 2048). A type-2 heap dump is at most the process's memory. If
+   there is not enough room, the directory is moved aside to `<pod>.held-<epoch>`. Its dumps are kept,
+   and step 2 still counts them. The next crash then has no directory to write into, so it writes
+   nothing.
+
+`/data` also holds the DataProtection key ring and the assembly cache, so a full volume is an outage.
+Step 4 is what prevents that. A crash loop (the 45 × 666 MB SIGABRT dumps of
+[Image Pair Skew](../ImagePairSkew)) is bounded too, because each restart in place runs the hook again.
+
+**What the gate cannot cover:** several pods crashing **at the same moment**, each with an armed
+directory. `headroomDumps: 2` covers two simultaneous dumps. Raise it if more replicas than that can
+crash together.
+
+The hook **always exits 0**. A failing postStart kills the container, and losing retention must not
+take the portal down. Every outcome is logged to the container's stdout as `[crash-dumps] …`, so it
+reaches Loki under the pod's labels:
+
+- `armed: dumps go to /data/dumps/<pod> (free … MiB >= needed … MiB …)`: the next crash writes a dump.
+- `HELD: dumps are DISABLED for this container start: free … < needed …`: **the next crash writes
+  nothing.** Free space on the volume, lower `keep`, or grow the claim.
+- `deleted (older than … days)` / `deleted (beyond the newest …)`: what retention removed.
+- `ERROR: …`: a setting or the volume was unusable, so dumps are disabled for that start.
+
+🚨 With the AKS memory limit of 16 Gi, step 4 needs **34 Gi free** on `/data`. The control instance's
+record declares `memex-data` at 128 Gi, and a config audit has reported a live claim of 16 Gi
+against such a record. **On a 16 Gi claim every pod logs `HELD` and no dump is written.** That is
+the intended trade (no dump rather than a full `/data`), but check the first `[crash-dumps]` line
+after a roll instead of assuming dumps are armed.
+
+### Taking effect
+
+This is a **chart change**. It reaches an instance only on that instance's next **Reconcile**
+(a `helm upgrade` from the record). An image Roll does not apply it. Until then the instance keeps
+the emptyDir, and a roll still deletes its dump.
+
+### Reading a production dump
+
+Any pod of the instance sees every retained dump: `ls -lt /data/dumps/*/` lists them newest first,
+including those in `*.held-*` directories. No Hosting `InstanceAction` copies a dump off the volume
+yet, so reading the volume is a **break-glass** read (OperatingFromThePortal). Once the dump is
+copied off, the procedure is the same as for a CI dump: start at the macOS section below.
+
 ## 🚀 Start here on macOS: name the faulting frame with no container at all
 
 **Before reaching for Docker, answer "where did it fault and on what address" in about ten minutes,

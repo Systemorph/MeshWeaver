@@ -43,6 +43,28 @@ persistence:
     claimName: ""
   users:
     claimName: ""
+# ---- Crash dumps (createdump) ------------------------------------------------
+# A crashing portal writes a type-2 (heap) dump to <root>/<pod name>/coredump.<pid>.<time>. The root
+# MUST be under /data (the render fails otherwise), so with persistence.data.claimName set the dump
+# lands on the shared /data claim and OUTLIVES THE POD. The old pod-local emptyDir was deleted on
+# every roll, which is how the 09-26 SIGSEGV dump and the 10-07 memex-cloud dump were lost. With no
+# claim, /data is an emptyDir (or the dev hostPath) and dumps live as long as that volume.
+# Retention runs as the container's postStart hook on every container start
+# (files/crash-dump-retention.sh):
+#   keep           newest dumps kept across ALL pods' directories; older ones are deleted
+#   maxAgeDays     any dump older than this is deleted
+#   headroomDumps  the hook arms this pod's dump directory only when the volume has room for this
+#                  many dumps of the container's memory limit each, plus reserveMiB. Otherwise
+#                  dumps are disabled for that container start and the hook logs "[crash-dumps]
+#                  HELD". So a dump can never fill the volume that also holds the DataProtection
+#                  keys and the assembly cache.
+# Doc/Architecture/DebuggingNativeCrashes → "Where a dump lands, and how long it stays".
+crashDumps:
+  root: "/data/dumps"
+  keep: 3
+  maxAgeDays: 14
+  headroomDumps: 2
+  reserveMiB: 2048
 # ---- Self-update (detect on the instance, roll on the control lane) ---------------------------
 # The portal watches the registry and, per the Admin/UpdatePolicy node (Doc/Architecture/ReleaseStrategy),
 # DETECTS a newer image. WHO APPLIES it is `canPatch` below (MeshWeaver#4098, Doc/Architecture/SelfUpdateControlLane):

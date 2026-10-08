@@ -47,6 +47,8 @@
 #                                                             switched the operator Job off
 #  19. an ingress naming a tlsSecret names an ISSUER for it   or the host is served another
 #                                                             instance's certificate (chart refusal)
+#  20. a crash dump lands in <root>/$(MEMEX_POD_NAME)/ on the  or every roll deletes the dump (the
+#      /data volume, and the postStart retention hook runs    09-26 and 10-07 dumps were lost so)
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
