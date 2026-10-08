@@ -526,13 +526,14 @@ Measured over the 25 most recent merges on 2026-10-08, two merged with Copilot f
 - #3115: one thread on head `0c60ab5bbc`, merged by hand 54 minutes after the review;
 - #2962: four threads.
 
-So Plugins takes the three steps in order:
-1. its roster row lands here as `pending:`;
-2. its `review-answered.yml` caller lands observe-only. It floats `@main` with `scripts-ref: main`,
-   because Plugins' `check-shared-lanes.py` refuses a pinned lane. That repo's own rule overrides the
-   lane header's "pin a sha";
-3. the context `review-answered / Automatic review answered` is added to Plugins' classic protection
-   only after it has been seen published on live pull requests there.
+Step 1 (the lane) is already landed. For Plugins, steps 2 and 3 of the table above go like this:
+- **Step 2** has two parts, in this order:
+  - its roster row lands here as `pending:`;
+  - then its `review-answered.yml` caller lands observe-only. The caller floats `@main` with
+    `scripts-ref: main`, because Plugins' `check-shared-lanes.py` refuses a pinned lane. That repo's
+    own rule overrides the lane header's "pin a sha".
+- **Step 3**: the context `review-answered / Automatic review answered` is added to Plugins' classic
+  protection, and only after it has been seen published on live pull requests there.
 
 ### The same gap, measured wider — 240 merged pull requests
 
