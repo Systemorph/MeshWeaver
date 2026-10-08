@@ -47,6 +47,9 @@
 #                                                             switched the operator Job off
 #  19. an ingress naming a tlsSecret names an ISSUER for it   or the host is served another
 #                                                             instance's certificate (chart refusal)
+#  20. a crash dump lands in <root>/$(MEMEX_POD_NAME)/ on a    or every roll deletes the dump (the
+#      dedicated claim or /data, root normalised, and the     09-26 and 10-07 dumps were lost so)
+#      retention script runs as init container AND postStart
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -167,6 +170,9 @@ COMBOS=(
   # catalog section, OpenRouter's endpoint and the OpenRouterEU section — set, blank and
   # whitespace-only values. The evidence check below asserts which of them render, trimmed.
   "EU-only AI processing keys (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.eu-ai-residency.yaml"
+  # Crash dumps on a DEDICATED claim (persistence.dumps), on the AKS overlay: the only combination in
+  # which invariant 20 sees the dedicated-claim branch, and invariant 12 a chart-created dump PVC.
+  "AKS overlay + crash dumps on a dedicated claim (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.crash-dumps-dedicated-claim.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -329,6 +335,10 @@ REFUSALS=(
   # MeshWeaver#6052: two replicas on per-pod emptyDir /data — each pod's assembly cache is its own,
   # and the shared NodeType records name bytes only the compiling pod holds.
   "two replicas with a pod-local /data (the #6052 estate)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-pod-local-data.yaml|needs a SHARED /data"
+  # Crash-dump roots that would leave the persistent volume or widen what retention deletes.
+  "a crash-dump root that resolves outside /data|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-escapes-data.yaml|must be a normalised directory strictly below /data"
+  "a crash-dump root that normalises to /data itself|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-is-data.yaml|must be a normalised directory strictly below /data"
+  "a crash-dump root with an empty segment|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.crash-dumps-root-double-slash.yaml|must be a normalised directory strictly below /data"
 )
 refused=0
 for entry in "${REFUSALS[@]}"; do
