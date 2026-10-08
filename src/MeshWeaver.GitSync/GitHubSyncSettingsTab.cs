@@ -25,7 +25,7 @@ namespace MeshWeaver.GitSync;
 ///   <item><b>Sync</b> — "Sync now" (export), the stored synced commit, and an editable
 ///     commit field with "Re-import at this commit" (re-import the Space to that state).</item>
 /// </list>
-/// Mirrors <c>ModelsSettingsTab</c>: form data via <c>host.UpdateData</c> + bound controls,
+/// Shape: form data via <c>host.UpdateData</c> + bound controls,
 /// click actions calling <see cref="GitHubSyncService"/>/<see cref="GitHubOAuthService"/>,
 /// a live HTML status area, and a databound connect-state body.
 /// </summary>

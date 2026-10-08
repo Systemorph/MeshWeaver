@@ -1,6 +1,6 @@
 ---
 Name: AI Model Provider Settings
-Description: "Settings → Models UX: per-provider-type layout, model lists for API providers, and delegating Claude Code / GitHub Copilot to their CLI login."
+Description: "Where a user wires AI in today (the Providers app's ProviderSetup view, the /Provider/AiModels catalog, /login in the chat composer), plus the original Settings → Models design it replaced."
 ---
 
 > **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: the settings UI.**
@@ -8,13 +8,15 @@ Description: "Settings → Models UX: per-provider-type layout, model lists for 
 
 # AI Model Provider Settings
 
-The **Settings → Models** page is the user's single destination for wiring AI into Memex — adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot. This document is the actionable implementation spec: it identifies the exact files to touch, the behavioral seams to introduce, and the testing approach.
+> **Current state first.** The **Settings → Models** tab this page was written to specify (`ModelsSettingsTab`) **no longer exists**. Today a user wires AI in three places: provider keys in the Providers app's **ProviderSetup** view, models in the `/Provider/AiModels` catalog, and a CLI harness login through **`/login`** in the chat composer. *What is wired* below names the code. Everything from *Two provider kinds* through the *Scope note* is the **original design, kept as history**: its card layouts, diagrams and state machine describe a UI that is not served. The AI engine code named on this page lives in **MeshWeaver.Plugins**, not in this repository.
+
+This page began as the implementation spec for a single **Settings → Models** destination: adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot.
 
 > **Setting up models (admin or user)?** This page is the *UI design spec*. For the operational how-to — provider/model mesh nodes, the system/space/user layers, which query goes where in a user's namespace, the open-weight tier choices, and the install-time config gaps — read **[Setting Up Model Providers](/Doc/AI/ModelProviderSetup)**.
 
 ---
 
-## Two provider kinds, two different UIs
+## Two provider kinds, two different UIs *(original design — historical)*
 
 The fundamental insight driving this design: API providers and CLI providers need **completely different layouts**. Rendering both as a key/endpoint form is wrong.
 
@@ -76,10 +78,11 @@ The fundamental insight driving this design: API providers and CLI providers nee
 
 ## What is wired
 
-**This design has shipped** — the sections below describe the code as it stands, not pending work.
+**What is served today.** The original design shipped and was later replaced; these bullets describe the code as it stands on MeshWeaver.Plugins `main`.
 
 - The catalog chain registers all providers in `MemexConfiguration` via `.AddAnthropic().AddAzureFoundry().AddAzureOpenAI().AddOpenAI().AddClaudeCode().AddCopilot()`, each gated by its `Features:Ai:Providers:*` / `Features:Ai:Clis:*` flag.
-- `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` branches on `ProviderKind`: `BuildCliCard` for `Cli` sources, the BYO-key form for `Api` sources. CLI providers are **no longer filtered out**.
+- **Where a user enters provider keys today** is the Providers app's **ProviderSetup** view (MeshWeaver.Plugins `Providers/ProvidersApp/Source/ProviderSetupAreas.cs`; its rules live in the pure `ProviderSetup.cs`, tested by `Providers/ProvidersApp/Test/ProviderSetupTests.cs`). The AI menu's **Models** entry links the scope-tabbed model catalog at `/Provider/AiModels` (`AiCatalogLayoutAreas.ModelsArea`). The settings tab this page originally specified, `ModelsSettingsTab` with its `BuildCliCard`, **no longer exists** in either repository.
+- A CLI harness login is no longer a settings card: it is the `/login` harness command in the chat composer (`ThreadChatView.StartHarnessConnect` in MeshWeaver.Plugins `src/MeshWeaver.Blazor.Chat/`), which drives the same `ConnectSessionManager.StartConnect` backend described below.
 - Per-user credentials live in `ModelProvider` mesh nodes (`ModelProviderService`, `ModelProviderNodeType`), with keys encrypted via `Ai:KeyProtection:MasterKey` (sourced from Key Vault).
 - The CLI connect flow is implemented: `ConnectSessionManager` drives `ClaudeConnectStrategy` / `CopilotConnectStrategy` (`src/MeshWeaver.AI/Connect/`).
 
@@ -89,7 +92,7 @@ The fundamental insight driving this design: API providers and CLI providers nee
 
 ### 1  The `ProviderKind` seam
 
-An explicit `ProviderKind` enum (`Api` | `Cli`, declared in `BuiltInLanguageModelProvider.cs`) sits on the provider catalog entry, replacing the implicit "has a key form" test. CLI providers (`AddClaudeCode`, `AddCopilot`) report `Cli`; everything else reports `Api`. `ModelsSettingsTab` switches the rendered card on `ProviderKind` — this single branch drives the entire different-layout requirement.
+An explicit `ProviderKind` enum (`Api` | `Cli`, declared in `BuiltInLanguageModelProvider.cs`) sits on the provider catalog entry, replacing the implicit "has a key form" test. CLI providers (`AddClaudeCode`, `AddCopilot`) report `Cli`; everything else reports `Api`. The settings card that originally switched on `ProviderKind` (`ModelsSettingsTab`) has been removed; the enum remains on the catalog entry (MeshWeaver.Plugins `src/MeshWeaver.AI/BuiltInLanguageModelProvider.cs`).
 
 ### 2  API providers — key/endpoint form + model list
 
@@ -199,7 +202,8 @@ NotConnected ──[Connect]──▶ Connecting ──(code submitted / device 
 
 | File | Role |
 |---|---|
-| `memex/Memex.Portal.Shared/Settings/ModelsSettingsTab.cs` | Switches on `ProviderKind`; renders the API card (form + model list) or `BuildCliCard` (login status + connect button) |
+| `Providers/ProvidersApp/Source/ProviderSetupAreas.cs` (MeshWeaver.Plugins) | The per-user provider key form (one card per visible provider, its fields and its models); rules in `ProviderSetup.cs` |
+| `src/MeshWeaver.Blazor.Chat/ThreadChatView.razor.cs` (MeshWeaver.Plugins) | `/login` harness command → `StartHarnessConnect` → `ConnectSessionManager.StartConnect`, rendered inline in the chat |
 | `memex/Memex.Portal.Shared/Models/ProviderModelLister.cs` | `ListModels(endpoint, apiKey, providerName)` behind the **Fetch models** button |
 | `src/MeshWeaver.AI.ClaudeCode/ClaudeCodeExtensions.cs` | Exposes `ProviderKind = Cli` + its `IConnectStrategy` |
 | `src/MeshWeaver.AI.Copilot/*` | Same — `ProviderKind = Cli` + `CopilotConnectStrategy` |
@@ -215,7 +219,7 @@ NotConnected ──[Connect]──▶ Connecting ──(code submitted / device 
 
 Three test scenarios:
 
-1. **Rendering** — `ModelsSettingsTab` renders a model list for an API provider and a connect button (no list) for a CLI provider. Assert on the control tree.
+1. **Rendering** — the ProviderSetup rules (`ProviderSetupTests` in MeshWeaver.Plugins `Providers/ProvidersApp/Test/`) decide which fields and models a provider card shows. Assert on what the pure helper returns.
 
 2. **Connect flow** — a committed **fake CLI** (prints an auth URL, reads stdin, prints a token) drives `IConnectStrategy`: `IsLoggedIn` returns false → connect → strategy captures the token → a `ModelProvider` node is written with an `enc:`-tagged key that round-trips through `ChatClientCredentialResolver`.
 
@@ -225,7 +229,7 @@ Three test scenarios:
 
 ## Scope note
 
-What shipped is **Phase 1**: per-user CLI Connect plus the Models-tab rework — the UI and the CLI login backend. The `ProviderKind` layout split was the quick visible win; the CLI login backend (`ConnectSessionManager` + strategies) was the substantive part.
+*(Historical.)* What originally shipped was **Phase 1**: per-user CLI Connect plus the Models-tab rework, meaning the UI and the CLI login backend. The Models tab has since been removed; the CLI login backend remains and is driven from `/login`. The `ProviderKind` layout split was the quick visible win; the CLI login backend (`ConnectSessionManager` + strategies) was the substantive part.
 
 ---
 
