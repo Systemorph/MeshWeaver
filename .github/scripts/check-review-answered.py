@@ -350,11 +350,17 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         # so this condition could only be released by a person's waiver; until one came, the lock settle
         # and the floor stamp sat red, main published, sealed and tagged nothing, and every portal held
         # each module behind its newest prebuilt (Governance 0.10 installed, 0.9.16 serving, 2026-10-08).
-        # 🚨 Only on the reviewer's TERMINAL refusal — never before it has answered: a pass released on
-        # the `opened` evaluation could merge before a late thread arrives, and a thread that opens after
-        # the merge can block nothing (#6318 review). No answer yet stays "not landed".
+        # 🚨 Only on a TERMINAL signal that no review is coming — never before the reviewer could still answer:
+        # a pass released on the `opened` evaluation could merge before a late thread arrives, and a thread
+        # that opens after the merge can block nothing (#6318 review). Two signals are terminal: the
+        # reviewer's REFUSAL, or no review requested at all for GENERATED_SETTLE_MINUTES after the pull
+        # request opened — the automatic review is requested at open and does not reach the App's own pull
+        # requests (measured 2026-10-08: settle #3191 had no requested reviewer and no review 20 minutes in,
+        # so a refusal-only rule held it forever).
         generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
-        if generated and any(k == "refused" for k, _ in kinds):
+        # The no-request signal applies only when the reviewer has posted NOTHING: an unrecognised response
+        # (an empty body) also removes the pending request, and must stay "not a review" (#6336 review).
+        if generated and (any(k == "refused" for k, _ in kinds) or (not mine and no_review_coming(pr, as_of))):
             notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
         elif run is not None:
             # Checked BEFORE the waiver: it is the governed exit and needs nobody, and when both
@@ -974,6 +980,25 @@ def _floor_only_patch(patch: str | None) -> bool:
     changed = [l for l in (patch or "").splitlines()
                if l[:1] in "+-" and not l.startswith(("+++", "---")) and l[1:].strip()]
     return bool(changed) and all(FLOOR_LINE.fullmatch(l[1:]) for l in changed)
+
+
+#: How long after it opened a generated-only App pull request with no requested reviewer is taken to get none.
+GENERATED_SETTLE_MINUTES = 10
+
+
+def no_review_coming(pr: dict, as_of: str | None) -> bool:
+    """True when no automatic review is requested on the pull request NOW and it opened at least
+    GENERATED_SETTLE_MINUTES ago. FAILS CLOSED (#6336 review): `requested_reviewers` is the pull request's
+    CURRENT state, so a replay (`as_of`) cannot read what was pending then and never releases; a payload
+    without the field is not a proven-empty list; an unreadable stamp is never "no review"."""
+    if as_of is not None:
+        return False
+    requested = pr.get("requested_reviewers")
+    if not isinstance(requested, list) or any(is_reviewer(u) for u in requested):
+        return False
+    opened = parse_stamp(pr.get("created_at"))
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    return opened is not None and (now - opened) >= datetime.timedelta(minutes=GENERATED_SETTLE_MINUTES)
 
 
 def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[bool, str]:
@@ -2352,8 +2377,24 @@ def self_test() -> int:
     verdict_case("NEGATIVE CONTROL: App PR, files unread -> RED", False, gpr(), None, None, want_refused=True)
     verdict_case("a generated PR's reviewer thread still needs a reply -> RED", False, dict(gpr(), review_comments=1),
                  LOCKS, BOT_COMMITS, comments=[_comment(1)])
-    verdict_case("NEGATIVE CONTROL: settle PR, reviewer not answered yet -> RED", False, gpr(), LOCKS, BOT_COMMITS,
+    verdict_case("NEGATIVE CONTROL: settle PR, reviewer requested and not answered yet -> RED", False,
+                 dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[REVIEWER_COMMENT_USER]), LOCKS, BOT_COMMITS,
                  want_refused=False, reviews=[])
+    verdict_case("NEGATIVE CONTROL: settle PR opened 1 min ago, nothing requested -> RED (may still be requested)", False,
+                 dict(gpr(created=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")), requested_reviewers=[]),
+                 LOCKS, BOT_COMMITS, want_refused=False, reviews=[])
+    verdict_case("settle PR, no reviewer requested 10+ min after open -> GREEN (no review is coming)", True,
+                 dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, BOT_COMMITS, want_refused=False, reviews=[])
+    verdict_case("NEGATIVE CONTROL: a PERSON's lock PR, nothing requested for hours -> RED", False,
+                 dict(gpr(user=HUMAN, created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, [{"author": HUMAN}], reviews=[])
+    verdict_case("NEGATIVE CONTROL: settle PR, an UNRECOGNISED (empty) reviewer response, nothing requested -> RED", False,
+                 dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), LOCKS, BOT_COMMITS, reviews=[_review("")])
+    verdict_case("NEGATIVE CONTROL: settle PR, payload without requested_reviewers -> RED (not proven empty)", False,
+                 gpr(created="2026-10-04T08:00:00Z"), LOCKS, BOT_COMMITS, reviews=[])
+    v_replay = evaluate(dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), [], [], NO_WAIVER, "2026-10-04T09:00:00Z", (), LOCKS, BOT_COMMITS)
+    ok = not v_replay.green
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} verdict: {'NEGATIVE CONTROL: a replay (--as-of) never releases on requested_reviewers':51} green={v_replay.green}")
     v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
     ok = (not v.ready) and v.mode == "unreadable"
     failures += 0 if ok else 1
