@@ -1746,6 +1746,143 @@ zeroed MethodTable word in `SVR::gc_heap` with collectible contexts mid-unload j
 that shows a dangling collectible static base joins #18; one that shows anything else is a second
 defect and must not be filed under this one.
 
+### 2026-10-07: sightings #19 and #20 — both inside the teardown unload drain's own `GC.Collect()`, and neither #6259 nor #6254 is shown to explain them
+
+Two `MeshWeaver.FutuRe.Test` host deaths on one day. Both were exit 139 with no failing test, both on
+`portal-hosts (network-135 · leg 2/8)`, and both have a retained dump. Neither was re-run. Tracked on
+MeshWeaver.Plugins#1605.
+
+| # | run / job | platform set | crash thread | dump |
+|---|---|---|---|---|
+| 19 | `37597577981` (main) / `112723680927` | `3.0.0-ci.10125` (core `b5042e8f7`) | `129cc` | `MeshWeaver.Futu-76143.dmp`, 1.07 GB |
+| 20 | `37648450111` / `112891252295` | `3.0.0-ci.10157` (core `cac0664de`) | `12f2f` | `MeshWeaver.Futu-77599.dmp`, 1.10 GB |
+
+Neither set carries core #6259 (`f0336ab3f`, *keep IoPool lane threads alive*) or #6254 (`76b171e57`,
+*Tiered PGO off*). Both runs also predate MeshWeaver.Plugins `ad6ab25ff` (`DOTNET_TieredPGO: "0"` in
+its CI), so Tiered PGO was on in both hosts.
+
+#### The readings
+
+Both dumps were read the same way:
+
+- the macOS-native ELF parse from *Start here on macOS*, with no container;
+- the fault `ucontext` taken from the alternate signal stack (`TRAPNO=14`, `CR2 == si_addr`);
+- symbols from the build-id `.debug` on msdl.
+
+As a control on the symbolization, #15's `0x5d5d82` resolves to its recorded
+`find_first_object+0x132`.
+
+| | #19 | #20 |
+|---|---|---|
+| `Unwind: exception type` | none in the log, so it is a native fault | none |
+| `NT_SIGINFO` | `11 / 1 (SEGV_MAPERR) / 0x0` | `11 / 1 / 0x0` |
+| `ucontext` | `TRAPNO=14 ERR=0x4 CR2=0x0` | `TRAPNO=14 ERR=0x4 CR2=0x0` |
+| libcoreclr | `10.0.12`, build-id `79945f51…` (the same binary as #15/#16) | same |
+| frame | **`WKS::gc_heap::plan_phase+0x24fc`** (vaddr `0x5cf51c`) | **`WKS::gc_heap::mark_object_simple1+0x9c7`** (vaddr `0x5d70a7`) |
+| instruction | `mov rax,[r14]; and rax,-8; mov ecx,[rax]` with `RAX=0` | `mov rcx,[r8]; and rcx,-8; mov r9d,[rcx]` with `RCX=0` |
+| what was read | the object at `0x7f732d39b100`, whose sync-block and MethodTable words are **both zero**; the object before it and the four after it are intact | `[R8]` = `0x1`, so the MethodTable reads zero once the mark bit is stripped; the neighbouring words look like the interior of a live object, so this is a reference to a non-object address (the #11-like stale form) |
+
+So both join the family's portable fingerprint: a MethodTable word that reads zero.
+
+#### #19's corrupt object, read with ClrMD
+
+This ran in an amd64 container, using the recipe in sighting #18's section. The zeroed object is lock
+#1 of a `ConcurrentDictionary`. Its `_locks` is an `object[6]` whose element 0 is the array itself,
+which is the runtime's own `locks[0] = locks`.
+
+The owner chain upward:
+
+1. `ConcurrentDictionary<Type, PolymorphicTypeResolver.DerivedJsonTypeInfo>.Tables`
+2. `PolymorphicTypeResolver._typeToDiscriminatorId`, whose `BaseType` is `MeshWeaver.Data.WorkspaceReference<object>`
+3. `JsonTypeInfo<WorkspaceReference<object>>`
+4. a mesh's `JsonSerializerOptions`, whose `_originatingResolver` is `MeshWeaver.Messaging.Serialization.PolymorphicTypeInfoResolver`
+
+This is **STJ polymorphic metadata**, the same class of object as #12's. Every type on the chain is
+non-collectible and lives in a Gen2 region.
+
+#### The phase: the teardown unload drain's own forced collection
+
+- **The faulting thread.** #19's faulting thread `0x129cc` is a ThreadPool worker. Its managed stack is
+  `System.GC.Collect()` ← `MeshWeaver.Fixture.CollectibleUnloadDrain.WaitUntilCollectedAsync`.
+- **Where in the teardown.** The trace log's last lines for that pid are `DISPOSE_DONE … teardown
+  clean` for `EuropeRe_EstimateVsActual_ShouldHaveData`. No `DISPOSE_UNLOADS_*` line and no next
+  `CTOR` follow.
+- **The ALC census (#19, through the GC handles).** Two `NodeAssemblyLoadContext`s,
+  `DynamicNode_FutuRe_LocalAnalysis` and `DynamicNode_FutuRe_BusinessUnit`, both with `_state = 1`
+  (Unloading).
+- **#20.** Its trace stops at the same point: `DISPOSE_DONE elapsed=103ms teardown clean` at
+  16:20:16.640, with the crash at 16:20:22.
+
+So, as in #12–#16, retired collectible contexts were mid-unload. **Unlike** #12–#16, no next mesh had
+started: the #4042 sequencing held. The fault is found by the drain's *own* full blocking GC, in
+metadata built for the mesh that had just been torn down. A full blocking GC examines reachable
+objects as well as dead ones, and #19's root walk failed (see *What it does NOT establish*), so this
+does not say whether the corrupt object was still reachable.
+
+#### Why #6259 and #6254 are not shown to explain them
+
+- **#6254: the Tiered PGO miscompile that drops the `isinst`
+  ([NodeTypeCompilation](../NodeTypeCompilation)).**
+  - Its measured effect is a **managed** `NullReferenceException` inside Roslyn's emit
+    (`PROCESS CANNOT EMIT`).
+  - Both deaths here are native GC-heap faults, and neither has a managed exception.
+  - Tiered PGO was on in both hosts, so a different consequence of the same miscompile is not
+    excluded. Nothing in either dump points to it.
+- **#6259: thread-exit handle reuse
+  ([Collectible Thread-Static Handle Reuse](../CollectibleThreadStaticHandleReuse)).**
+  - **The footprint it would leave.** That mechanism frees a GC-statics box while its `m_pGCStatics`
+    keeps the old address. A later static store then writes into whatever object now occupies the
+    memory. So a write that zeroed #19's object would leave a static base aimed at it.
+  - **The search.** Every captured page of #19 was scanned for an 8-byte word with a value in
+    `[0x7f732d39b0c0, 0x7f732d39b118)`.
+  - **The result.** The only hits are the lock array's own element, the GC's mark stack and the signal
+    frame. **No captured word holds a value inside that window.**
+  - **What that leaves open, and it is most of the question.**
+    - A stale static base *below* the window could still reach the zeroed header through a field
+      offset. The scan does not bound that offset, and no static-base census was taken (see below).
+    - The writer's statics could also have belonged to one of the two Unloading contexts, whose loader
+      memory may already be absent from the dump.
+    - So the scan rules out only a pointer to the zeroed object itself or its immediate
+      neighbourhood. It is not evidence against the mechanism in general.
+  - **How much of #6259 reaches a test host.** Its ThreadPool half
+    (`DOTNET_ThreadPool_ThreadsToKeepAlive=-1`) is a **Helm chart** setting, and the CI test hosts do
+    not set it. So even on a #6259 set, ThreadPool workers in a test host still retire. Only the
+    IoPool-lane half reaches this suite.
+- **The post-fix sample is uninformative.**
+  - All `Plugin Catalog CI` runs from 2026-10-05 00:00Z to 2026-10-07 17:40Z: **2** FutuRe host deaths
+    in **203** runs whose leg matrix ran, about 1 %. There were no other host deaths in any failed
+    leg.
+  - Runs from 2026-10-07 17:40Z to 2026-10-08 ~06:00Z: **0** in 42. Of those, 28 used sets carrying
+    #6259 (`3.0.0-ci.10184`–`ci.10206`), all with Tiered PGO off, and each had FutuRe `exit 0`.
+  - The pre-fix rate is an estimate from only **two** events, not a known baseline. Even taking 1 % at
+    face value, 0.28 deaths were expected in 28 runs, so P(0) = 0.75.
+  - **No achievable clean window proves a reduction against two pre-fix events quickly.**
+    - With 0 deaths in *n* post-fix runs, the one-sided exact comparison (conditioning on the two
+      deaths) gives p = C(203,2) / C(203+n,2).
+    - At n = 300 that is ≈ 0.162. It falls below 0.05 only at n ≈ 704.
+    - A longer pre-fix history would tighten the baseline. It was not scanned: the window above starts
+      at 2026-10-05.
+
+#### What it does NOT establish
+
+- What zeroed #19's header, or put a non-object address into #20's mark path.
+- Whether #19's zeroed object was still reachable. The ClrMD heap walk segfaulted on this dump, and
+  `ClrType.StaticFields` raised an uncatchable `AccessViolationException` inside `CacheFields`. So no
+  root walk and no static-base census were taken.
+- #20's owner chain and ALC census. They were not read.
+- Any causal effect of #6259 or #6254.
+
+**Close criterion for MeshWeaver.Plugins#1605.**
+
+- **The preferred route:** a root cause with a deterministic repro.
+- **The operational alternative:** about 300 FutuRe executions on #6259-carrying sets with Tiered PGO
+  off and **zero** host deaths.
+  - This is an *operational* threshold, not proof. It bounds the post-fix rate below about 1 %
+    (one-sided 95 % upper bound) but does not establish a reduction (p ≈ 0.16, above).
+  - The issue should say that in so many words if it is closed on that basis, and reopen on the first
+    death.
+- Never a short clean window.
+
 ### 2026-09-11: the runtime question — the upstream GC-hole fix ships in `10.0.12`, and sightings #15 and #16 crashed ON `10.0.12`
 
 This entry records no new dump. It answers the question every reader of sightings #10/#11 eventually
