@@ -266,8 +266,9 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
   `DOTNET_DbgMiniDumpName=/data/dumps/…` are worthless on their own: `createdump` does **not create
   directories**, so without a volume mounted at that path every crash fails with *"Could not create
   output file … No such file or directory"* — **destroying its own evidence** — and burns ~6s plus a
-  ~350k-line log storm on the way down. The chart now writes dumps to `/data/dumps/<pod>/` on the `/data`
-  claim, and the portal's postStart hook creates that directory under a headroom gate
+  ~350k-line log storm on the way down. The chart now writes dumps to `/data/dumps/<pod>/` on a dedicated dump
+  claim (a `dumps` volume on the record) or else the `/data` claim, and the `crash-dump-prepare`
+  init container and the portal's postStart hook create that directory under a headroom gate
   ([Debugging Native Crashes](../DebuggingNativeCrashes) → "Production: where a dump lands"). Before
   that, the chart mounted a dedicated `memex-dumps` emptyDir there;
   an env whose live pod lacks it produces **zero dumps while looking fully instrumented**. Verified

@@ -45,21 +45,7 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/memex-portal/config.yaml") . | sha256sum }}
         checksum/secrets: {{ include (print $.Template.BasePath "/memex-portal/secrets.yaml") . | sha256sum }}
 {{- $bundles := include "memex.bundles" . | fromYaml }}
-{{- /* Crash dumps (values: crashDumps). The root MUST be on the /data volume: that is the volume
-       that outlives the pod (the shared /data claim on AKS). A root anywhere else lands on the
-       container's writable layer, which a roll deletes exactly as it deleted the old emptyDir. */}}
-{{- $dumps := dict
-      "root" (trimSuffix "/" (((.Values.crashDumps).root) | default "/data/dumps"))
-      "keep" (((.Values.crashDumps).keep) | default 3)
-      "maxAgeDays" (((.Values.crashDumps).maxAgeDays) | default 14)
-      "headroomDumps" (((.Values.crashDumps).headroomDumps) | default 2)
-      "reserveMiB" (((.Values.crashDumps).reserveMiB) | default 2048) }}
-{{- if not (hasPrefix "/data/" (printf "%s/" $dumps.root)) }}
-{{- fail (printf "crashDumps.root %q is not under /data: dumps there would not outlive the pod (Doc/Architecture/DebuggingNativeCrashes)" $dumps.root) }}
-{{- end }}
-{{- if eq $dumps.root "/data" }}
-{{- fail "crashDumps.root must be a directory BELOW /data (e.g. /data/dumps), not /data itself: retention deletes files under it" }}
-{{- end }}
+{{- $dumps := include "memex.crashDumps" . | fromYaml }}
 {{- if $bundles.enabled }}
         # The bundle-fetch init container's script (bundle-fetch.yaml): an edit to it must roll the
         # pods for the same reason a config edit must — nothing re-runs an init container in place.
@@ -116,6 +102,30 @@ spec:
                     app.kubernetes.io/instance: "{{ .Release.Name }}"
       terminationGracePeriodSeconds: {{ .Values.portal.drainSeconds | default 1800 }}
       initContainers:
+        # 🩺 Crash-dump preparation, SYNCHRONOUSLY before the portal process exists: retention, the
+        # headroom gate, and this pod's dump directory (files/crash-dump-retention.sh). The portal's
+        # postStart hook runs the same script on every later container start; postStart alone runs
+        # concurrently with the entrypoint, so a crash at the very first start could precede it.
+        # Runs the portal image (same user, same tools) and always exits 0, so it never holds the pod.
+        - name: "crash-dump-prepare"
+          image: "{{ .Values.portal.image }}"
+          imagePullPolicy: "IfNotPresent"
+          command:
+            - "sh"
+            - "-c"
+            - {{ .Files.Get "files/crash-dump-retention.sh" | quote }}
+          env:
+            - name: "MEMEX_CRASHDUMP_LOG_TO_STDOUT"
+              value: "1"
+            {{- include "memex.crashDumpEnv" (dict "root" $ "phase" "init") | nindent 12 }}
+          volumeMounts:
+            {{- include "memex.crashDumpMounts" . | nindent 12 }}
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits: { memory: "64Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
         # Postgres and the portal start concurrently on a fresh install; the portal's hub
         # init FAILS (and the host aborts) if Postgres isn't yet accepting connections.
         # Gate startup on Postgres TCP readiness so the ordering is deterministic.
@@ -368,32 +378,18 @@ spec:
             # 🚨 WHERE the dump lands decides whether anyone ever reads it. It used to be a pod-local
             # `memex-dumps` emptyDir, and every roll deleted it with the pod: the 09-26 SIGSEGV dump
             # and the 10-07 memex-cloud dump were both lost that way. Dumps now go to
-            # <crashDumps.root>/<pod name>/ ON THE /data VOLUME (the shared /data claim wherever
+            # <crashDumps.root>/<pod name>/, on the dedicated dump claim (persistence.dumps) when one is
+            # declared and otherwise on the /data volume (the shared /data claim wherever
             # persistence.data.claimName is set), so they outlive the pod. createdump does NOT
             # create directories: the postStart hook below (files/crash-dump-retention.sh) creates
             # this pod's directory, and only when the volume has room for the dump. It also enforces
             # retention (keep the newest crashDumps.keep, delete anything older than
-            # crashDumps.maxAgeDays). Doc/Architecture/DebuggingNativeCrashes → "Where a dump lands".
+            # crashDumps.maxAgeDays). The same script runs first as the `crash-dump-prepare` init
+            # container, synchronously, before the portal process exists. A dedicated dump claim
+            # (persistence.dumps) is mounted at the root when declared, so a dump can fill only
+            # that claim. Doc/Architecture/DebuggingNativeCrashes → "Where a dump lands".
             # check-chart-invariants #20 asserts the target is the /data volume and the hook runs.
-            - name: "MEMEX_POD_NAME"
-              valueFrom:
-                fieldRef:
-                  fieldPath: "metadata.name"
-            - name: "MEMEX_MEMORY_LIMIT_BYTES"
-              valueFrom:
-                resourceFieldRef:
-                  resource: "limits.memory"
-                  divisor: "1"
-            - name: "MEMEX_CRASHDUMP_ROOT"
-              value: {{ $dumps.root | quote }}
-            - name: "MEMEX_CRASHDUMP_KEEP"
-              value: {{ $dumps.keep | quote }}
-            - name: "MEMEX_CRASHDUMP_MAX_AGE_DAYS"
-              value: {{ $dumps.maxAgeDays | quote }}
-            - name: "MEMEX_CRASHDUMP_HEADROOM_DUMPS"
-              value: {{ $dumps.headroomDumps | quote }}
-            - name: "MEMEX_CRASHDUMP_RESERVE_MIB"
-              value: {{ $dumps.reserveMiB | quote }}
+            {{- include "memex.crashDumpEnv" (dict "root" $ "phase" "postStart") | nindent 12 }}
             - name: "DOTNET_DbgEnableMiniDump"
               value: "1"
             - name: "DOTNET_DbgMiniDumpType"
@@ -432,8 +428,7 @@ spec:
               containerPort: {{ .Values.grpc.port }}
 {{- end }}
           volumeMounts:
-            - name: "memex-data"
-              mountPath: "/data"
+            {{- include "memex.crashDumpMounts" . | nindent 12 }}
             - name: "memex-users"
               mountPath: "/mnt/users"
 {{- if $bundles.enabled }}
@@ -456,7 +451,7 @@ spec:
        .Values.persistence. data + users are mounted above at fixed paths — their
        persistence entries only supply the claim for the volumes below. */}}
 {{- range $name, $spec := .Values.persistence }}
-{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") }}
+{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") (ne $name "dumps") }}
             - name: "memex-{{ $name }}"
               mountPath: "{{ $spec.mountPath }}"
 {{- end }}
@@ -728,7 +723,7 @@ spec:
        workspace, …). Rendered between users and dumps so the historical volume order
        (data=0, users=1) stays stable for any remaining per-env index patches. */}}
 {{- range $name, $spec := .Values.persistence }}
-{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") }}
+{{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") (ne $name "dumps") }}
         - name: "memex-{{ $name }}"
           persistentVolumeClaim:
             claimName: "{{ $spec.claimName }}"
@@ -755,9 +750,15 @@ spec:
 {{- range .Values.extraVolumes }}
         - {{ toYaml . | nindent 10 | trim }}
 {{- end }}
-        # 🩺 No dump volume here any more: crash dumps go to the /data volume (memex-data above), under
-        # crashDumps.root/<pod>, so they outlive the pod. The pod-local `memex-dumps` emptyDir that
-        # used to be here was deleted with the pod on every roll. See the DOTNET_DbgMiniDumpName env.
+        # 🩺 Crash dumps outlive the pod: on the dedicated claim below when persistence.dumps names one,
+        # otherwise on the /data volume (memex-data above), under crashDumps.root/<pod>. The pod-local
+        # `memex-dumps` emptyDir that used to be here was deleted with the pod on every roll. See the
+        # DOTNET_DbgMiniDumpName env and templates/memex-portal/_crashdumps.tpl.
+{{- if $dumps.claim }}
+        - name: "memex-crashdumps"
+          persistentVolumeClaim:
+            claimName: {{ $dumps.claim | quote }}
+{{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: "{{ .Chart.Name }}"

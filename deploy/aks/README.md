@@ -1378,15 +1378,16 @@ ever been exercised in the transient two-silo window of a rollout, never in stea
 state. `scripts/check-chart-drift.sh` reports the annotation as CLUSTER-ONLY drift so
 it stops being invisible.
 
-### Crash dumps: on the /data claim, armed by the postStart hook
+### Crash dumps: on a volume that outlives the pod
 
-Dumps go to `/data/dumps/<pod name>/` on the `/data` volume (the shared `memex-data`
-claim), so they outlive the pod. `createdump` does not create directories: the
-portal's postStart hook (`deploy/helm/files/crash-dump-retention.sh`) creates the
-pod's directory, applies retention (`crashDumps.keep`, `crashDumps.maxAgeDays`) and
-holds dumps when `/data` lacks headroom. The old `memex-dumps` emptyDir is gone; it was
-deleted on every roll. Verify on the LIVE pod by reading its first `[crash-dumps]` log
-line after a start: `armed: …` or `HELD: …`. Full account:
+Dumps go to `/data/dumps/<pod name>/`: on a dedicated dump claim when the record declares a
+`dumps` volume (`persistence.dumps`, recommended), otherwise on the shared `/data` claim.
+`createdump` does not create directories. The `crash-dump-prepare` init container and the
+portal's postStart hook (`deploy/helm/files/crash-dump-retention.sh`) create the pod's
+directory, apply retention (`crashDumps.keep`, `maxAgeDays`, `activeMinutes`) and HOLD dumps
+when the volume lacks headroom for every pod that could crash at once. The old `memex-dumps`
+emptyDir is gone; it was deleted on every roll. On a live pod, read its first `[crash-dumps]`
+log line after a start: `armed: …` or `HELD: …`. Full account:
 `src/MeshWeaver.Documentation/Data/Architecture/DebuggingNativeCrashes.md` → "Production:
 where a dump lands, and how long it stays". The change reaches an instance on its next
 Reconcile, not on an image Roll.
@@ -1467,9 +1468,9 @@ stitches the platform around it. All config flows from deploy parameters → env
 
 - **Dump mount not applied to the live clusters** (2026-07-28): all three
   namespaces carry the dump env vars while no pod mounts `/data/dumps`, so every
-  production `exit=139` so far produced no dump. Superseded: dumps now go to the
-  `/data` claim under a headroom gate (see "Crash dumps" above), from the next
-  Reconcile of each instance.
+  production `exit=139` so far produced no dump. Superseded: dumps now go to a
+  dedicated dump claim or the `/data` claim under a headroom gate (see "Crash dumps"
+  above), from the next Reconcile of each instance.
 - ~~**Multi-replica HA**~~ (chart side done 2026-08-14): Orleans **AdoNet**
   clustering is the HA provider (`Features:Orleans:Clustering`, legacy key
   `Deployment:Orleans:Clustering`), backed by a dedicated `orleans` database the

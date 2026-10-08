@@ -1,0 +1,3 @@
+# Refusal control: a crash-dump root with an empty segment.
+crashDumps:
+  root: "/data//"
