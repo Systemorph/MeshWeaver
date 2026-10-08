@@ -20,7 +20,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 | policy | the rule |
 |---|---|
-| `core-merge-never-blocked` | A core pull request merges on core's OWN required checks. No required context, gate or queue step waits on MeshWeaver.Plugins or any other repository. |
+| ~~`core-merge-never-blocked`~~ → `dependent-suites-affected-gate` | SUPERSEDED. A core pull request now waits on ONE cross-repository verdict: MeshWeaver.Plugins' suites that the diff can REACH, per realm, against the candidate — or a declared break with a green counterpart ([Cross-Repo Pair Gate](../CrossRepoPairGate) → "The dependent's suites run against the candidate"). Only what is affected runs; the four-hour wait below was a merge-queue entry waiting on an unbounded run, which the affected-only selection and the refusal rule bound. |
 | `build-latest-green` | Every CI consumer — Plugins pull requests, Plugins `main`, the image build — takes the NEWEST GREEN core `main` build. A red core `main` falls back to the last green one, never forward into red. No pin to move for ordinary changes; the freeze variable `MW_PLATFORM_REF` stays for incidents. |
 | `one-promotion-gate` | The fleet rolls only to an ARMED set, and a set is armed only when MeshWeaver.Plugins' dependent suites passed against exactly the pair it was built from. That is the one place a cross-repository verdict decides anything. |
 
