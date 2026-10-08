@@ -801,18 +801,36 @@ public static class MeshExtensions
 
     // Rx's LocalScheduler keeps a cancelled absolute-deadline WorkItem in its priority queue
     // until the deadline. The WorkItem retains Timeout.Absolute._, including its fallback
-    // observable. Keep that fallback's closure separate from the create handler's closure:
+    // observable. Keep that fallback's closure separate from the lifecycle handler's closure:
     // the latter owns the hub, request, and services and would otherwise keep a disposed mesh
-    // alive for the whole operation budget even when the create completed immediately.
-    private sealed class CreateStageProgress(string path, TimeSpan budget)
+    // alive for the whole operation budget even when the operation completed immediately.
+    // ONE tracker for every lifecycle deadline (create, copy, move): a fallback written as a
+    // lambda inside the handler shares the handler's display class — and with it the hub —
+    // because C# hoists every captured local of a scope into one closure object. The fallback
+    // must therefore be BUILT here, so its Defer closes over this tracker alone.
+    private sealed class LifecycleStageProgress(string operation, string subject, TimeSpan budget, string initialStage)
     {
-        private string stage = CreateStageAuthorshipSource;
+        private string stage = initialStage;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> outstanding =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public void Enter(string next) => System.Threading.Volatile.Write(ref stage, next);
 
+        /// <summary>Marks a target write the stalled verdict must name until it settles.</summary>
+        public void Outstanding(string path) => outstanding.TryAdd(path, 0);
+
+        public void Settled(string path) => outstanding.TryRemove(path, out _);
+
+        private string Describe()
+        {
+            var current = System.Threading.Volatile.Read(ref stage);
+            return outstanding.IsEmpty
+                ? current
+                : $"{current} (outstanding: {string.Join(", ", outstanding.Keys.OrderBy(k => k, StringComparer.Ordinal).Take(10))})";
+        }
+
         public IObservable<T> StalledVerdict<T>() => Observable.Defer(() => Observable.Throw<T>(
-            new LifecycleVerdictStalledException("CreateNode", path,
-                System.Threading.Volatile.Read(ref stage), budget)));
+            new LifecycleVerdictStalledException(operation, subject, Describe(), budget)));
     }
 
     // Observable.Timer's scheduled work likewise retains its observer after Dispose. Clear the
@@ -1099,7 +1117,7 @@ public static class MeshExtensions
         // stage that went silent, which is what the trail could not say.
         var createBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
         var deadline = DateTimeOffset.UtcNow + createBudget;
-        var createProgress = new CreateStageProgress(node.Path, createBudget);
+        var createProgress = new LifecycleStageProgress("CreateNode", node.Path, createBudget, CreateStageAuthorshipSource);
         void EnterCreateStage(string stage)
         {
             createProgress.Enter(stage);
@@ -8033,10 +8051,10 @@ public static class MeshExtensions
         var opts = hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions();
         var moveBudget = opts.Timeout;
         var moveDeadline = DateTimeOffset.UtcNow + moveBudget;
-        var moveStage = MoveStagePreflight;
+        var moveProgress = new LifecycleStageProgress("MoveNode", $"{sourcePath} -> {targetPath}", moveBudget, MoveStagePreflight);
         void EnterMoveStage(string stage)
         {
-            moveStage = stage;
+            moveProgress.Enter(stage);
             hub.NoteRequestStage(request.Id, $"MOVE_STAGE {stage}");
         }
         var budget = opts.NestedTimeout;
@@ -8117,8 +8135,7 @@ public static class MeshExtensions
             .WithinSubtreeDeletion(sourcePath, MoveWithinScope)
             // Disposing the scope's subscription releases it (Observable.Using), so a stalled move
             // never leaves the source's subtree-deletion scope held behind its verdict.
-            .Timeout(moveDeadline, Observable.Defer(() => Observable.Throw<MeshNode>(
-                new LifecycleVerdictStalledException("MoveNode", $"{sourcePath} -> {targetPath}", moveStage, moveBudget))))
+            .Timeout(moveDeadline, moveProgress.StalledVerdict<MeshNode>())
             .Subscribe(
                 movedNode =>
                 {
@@ -8273,16 +8290,12 @@ public static class MeshExtensions
         // and for the create leg the TARGET paths still outstanding.
         var copyBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
         var copyDeadline = DateTimeOffset.UtcNow + copyBudget;
-        var copyStage = "authorship-entitlement";
-        var pendingCreates = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var copyProgress = new LifecycleStageProgress("CopyNode", $"{sourcePath} -> {targetPath}", copyBudget, "authorship-entitlement");
         void EnterCopyStage(string stage)
         {
-            copyStage = stage;
+            copyProgress.Enter(stage);
             hub.NoteRequestStage(request.Id, $"COPY_STAGE {stage}");
         }
-        string CopyStageNow() => pendingCreates.IsEmpty
-            ? copyStage
-            : $"{copyStage} (outstanding: {string.Join(", ", pendingCreates.Keys.OrderBy(k => k, StringComparer.Ordinal).Take(10))})";
 
         // Wraps a per-node CreateNode so its eager AccessContext capture (MeshService.CaptureContext)
         // sees the caller's identity even though this runs on a scheduler thread. The scope opens on
@@ -8324,8 +8337,8 @@ public static class MeshExtensions
             // Which TARGET creates are still outstanding is what a stalled verdict has to name.
             return Observable.Defer(() =>
             {
-                pendingCreates.TryAdd(retargeted.Path, 0);
-                return create.Finally(() => pendingCreates.TryRemove(retargeted.Path, out _));
+                copyProgress.Outstanding(retargeted.Path);
+                return create.Finally(() => copyProgress.Settled(retargeted.Path));
             });
         }
 
@@ -8706,8 +8719,7 @@ public static class MeshExtensions
             }));
             })
             .Take(1)
-            .Timeout(copyDeadline, Observable.Defer(() => Observable.Throw<(MeshNode Root, int Desc, int Sat)>(
-                new LifecycleVerdictStalledException("CopyNode", $"{sourcePath} -> {targetPath}", CopyStageNow(), copyBudget))))
+            .Timeout(copyDeadline, copyProgress.StalledVerdict<(MeshNode Root, int Desc, int Sat)>())
             .Subscribe(
                 t =>
                 {
