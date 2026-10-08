@@ -95,7 +95,7 @@ of these was written narrower on measured evidence:
   `Pinned image digests` every day for weeks, and the only way to green it was to choose which chart
   PartnerRe deploys to suit a CI lane.
 
-  Such a ref is now printed in the census (`…in a file that calls NO lane (I8 n/a)`) and named in
+  Such a ref is now printed in the census (`…in a file calling NO lane (I8 n/a)`) and named in
   the log, never folded into a silent green. The self-test drives both directions:
   - a lane-less deploy pin is not an orphan;
   - a ref matched only by a lane in **another** file still is.

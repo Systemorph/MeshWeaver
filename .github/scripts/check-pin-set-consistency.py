@@ -638,7 +638,7 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
     emit(f"    platform lane calls                   {len(scan.lanes)}")
     emit(f"    …passing a LITERAL platform-ref       {len(lanes_with_ref)}")
     emit(f"    platform SOURCE refs declared         {len(scan.platform_refs)}")
-    emit(f"    …in a file that calls NO lane (I8 n/a) {len(lane_less_refs(scan))}")
+    emit(f"    …in a file calling NO lane (I8 n/a)   {len(lane_less_refs(scan))}")
     emit(f"    pin-shaped declarations MALFORMED     {len(scan.malformed)}")
     emit(f"    promoted build NAMED                  "
          + (f"{scan.platform_set[0]} = {scan.platform_set[1]}" if scan.platform_set
