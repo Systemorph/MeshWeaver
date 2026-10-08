@@ -193,6 +193,45 @@ public class TokenRevocationIsIssuedOffTheRouterTest : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// The absent-path shape that matters in practice: a token that WAS there and has been deleted,
+    /// under a partition whose other token is alive (so the partition and its hubs are live, not a
+    /// routing miss on an unknown prefix). Must answer <c>false</c>, not fault.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task RevokingADeletedTokenUnderALivePartition_AnswersFalse_NotAFault()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = GetService();
+        await service.CreateToken(OwnerId, "Revoke Owner", "revoke-owner@example.com", "Survivor")
+            .Should().Emit("a live sibling keeps the partition live", ct);
+        var doomed = await service.CreateToken(OwnerId, "Revoke Owner", "revoke-owner@example.com", "Doomed")
+            .Should().Emit(cancellationToken: ct);
+        (await service.DeleteToken(doomed.Node.Path).Should().Emit(cancellationToken: ct))
+            .Should().BeTrue("the token must really have been removed first");
+
+        var outcome = await service.RevokeToken(doomed.Node.Path).Materialize()
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        Output.WriteLine($"deleted-token revoke outcome: {outcome.Kind} {outcome.Exception?.Message}");
+        outcome.Kind.Should().Be(NotificationKind.OnNext);
+        outcome.Value.Should().BeFalse("the token is gone, so nothing was revoked and nothing authenticates");
+    }
+
+    /// <summary>The dependents' own shape (MeshWeaver.Plugins <c>RevokeToken_NonexistentPath_ReturnsFalse</c>):
+    /// a path under the global <c>ApiToken</c> namespace that never held a token.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task RevokingANonexistentGlobalTokenPath_AnswersFalse_NotAFault()
+    {
+        var outcome = await GetService().RevokeToken("ApiToken/nonexistent").Materialize()
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"global-absent revoke outcome: {outcome.Kind} {outcome.Exception?.Message}");
+        outcome.Kind.Should().Be(NotificationKind.OnNext);
+        outcome.Value.Should().BeFalse();
+    }
+
+    /// <summary>
     /// A node at the path whose content is NOT an <see cref="ApiToken"/> must fault the revoke and be
     /// left as it was — never read leniently into a default token and overwritten, and never
     /// reported as revoked.
