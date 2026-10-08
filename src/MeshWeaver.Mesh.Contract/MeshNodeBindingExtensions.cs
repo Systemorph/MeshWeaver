@@ -107,7 +107,7 @@ public static class MeshNodeBindingExtensions
     /// window; the same instrument <c>ActivityRunner</c>, <c>MarkdownViewLogic</c> and
     /// <c>TrackActivity</c> already gate on. It is LIVE — an authoritative <c>Initial</c> frame and
     /// then deltas, folded into one boolean (see <see cref="Exists"/>), never a one-shot — so a node
-    /// created or deleted later flips the gate and the binding follows without a re-render, and
+    /// created or deleted later updates the gate and the binding follows without a re-render, and
     /// there is no <c>.Take(1)</c> anywhere on the value path. And it runs
     /// <see cref="MeshQueryRequest.AsSystem"/>: the gate decides only EXISTENCE, the CONTENT read
     /// below is still row-level-security-gated by the owner exactly as before, and a query filtered
@@ -152,8 +152,8 @@ public static class MeshNodeBindingExtensions
         IScheduler? scheduler = null)
     {
         var pointer = Combine(subPath, reference.Pointer);
-        var content = Observable.Defer(() =>
-            FieldStream(hub, nodePath, bindContent, pointer, firstValueBudget, scheduler));
+        Func<IObservable<object?>> read = () =>
+            FieldStream(hub, nodePath, bindContent, pointer, firstValueBudget, scheduler);
 
         // No query surface on this hub (a minimal fixture, a client with no IMeshService) ⇒ the
         // gate cannot be asked, so the read stays exactly what it was. Degrading to the PREVIOUS
@@ -161,32 +161,75 @@ public static class MeshNodeBindingExtensions
         // pretending "absent" would blank every control on it.
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
-            return content;
+            return BindObserved(Observable.Return(true), read, nodePath);
 
         var announcedAbsent = 0;
-        return Exists(meshService, hub, nodePath, firstValueBudget, scheduler)
-            .Select(exists => exists
-                ? content
-                : Observable.Defer(() =>
-                {
-                    if (Interlocked.Exchange(ref announcedAbsent, 1) == 0)
-                        ReadBudget.Logger(hub)?.LogDebug(
-                            "MeshNodeBinding: '{Field}' is bound to {Path}, which does not exist — "
-                            + "drawing the control empty and watching for it to appear. This is the "
-                            + "OPTIONAL-node state, not a fault; the point read that would have "
-                            + "NotFound-stormed the path was never issued (#3517).",
-                            pointer, nodePath);
-                    return Observable.Return<object?>(null);
-                }))
-            .Switch()
-            // Outside the Switch: an existence flip that re-opens the content leg must not re-fire
-            // the setter with the value the control already shows.
-            .DistinctUntilChanged(JsonElementValueComparer.Instance);
+        return BindObserved(
+            Exists(meshService, hub, nodePath, firstValueBudget, scheduler),
+            read,
+            nodePath,
+            () =>
+            {
+                if (Interlocked.Exchange(ref announcedAbsent, 1) == 0)
+                    ReadBudget.Logger(hub)?.LogDebug(
+                        "MeshNodeBinding: '{Field}' is bound to {Path}, which does not exist — "
+                        + "drawing the control empty and watching for it to appear. This is the "
+                        + "OPTIONAL-node state, not a fault; the point read that would have "
+                        + "NotFound-stormed the path was never issued (#3517).",
+                        pointer, nodePath);
+            });
     }
 
     /// <summary>
-    /// LIVE existence of the node at <paramref name="nodePath"/> — <c>true</c> while the index
-    /// carries a row for exactly that path, <c>false</c> while it does not.
+    /// Keeps one owner read attached while presence remains true. An owner read ended by deletion
+    /// emits an empty value and waits for the next query observation of this path. That observation
+    /// can still say <c>true</c>: a provider may coalesce the delete and recreation into one
+    /// <c>Updated</c> frame without exposing a false state to the binding.
+    /// </summary>
+    internal static IObservable<object?> BindObserved(
+        IObservable<bool> presence, Func<IObservable<object?>> read, string nodePath,
+        Action? onAbsent = null)
+        => Observable.Defer(() =>
+        {
+            var reading = false;
+            var endedByDelete = 0;
+            return presence
+                .Select(exists =>
+                {
+                    if (!exists)
+                    {
+                        reading = false;
+                        Interlocked.Exchange(ref endedByDelete, 0);
+                        onAbsent?.Invoke();
+                        return (Switch: true, Stream: Observable.Return<object?>(null));
+                    }
+
+                    if (reading && Interlocked.CompareExchange(ref endedByDelete, 0, 1) == 0)
+                        return (Switch: false, Stream: Observable.Empty<object?>());
+
+                    reading = true;
+                    return (Switch: true, Stream: Observable.Defer(read)
+                        .Catch<object?, Exception>(error =>
+                        {
+                            if (!IsDeletedBoundNode(error, nodePath))
+                                return Observable.Throw<object?>(error);
+                            Interlocked.Exchange(ref endedByDelete, 1);
+                            return Observable.Return<object?>(null);
+                        }));
+                })
+                .Where(selection => selection.Switch)
+                .Select(selection => selection.Stream)
+                .Switch()
+                // A refresh can re-open a read whose value is unchanged; the control's setter
+                // must not run again for that same value.
+                .DistinctUntilChanged(JsonElementValueComparer.Instance);
+        });
+
+    /// <summary>
+    /// LIVE existence observations for the node at <paramref name="nodePath"/> — <c>true</c> while
+    /// the index carries a row for exactly that path, <c>false</c> while it does not. Repeated
+    /// <c>true</c> observations are kept because an <c>Updated</c> frame can represent a delete
+    /// followed by recreation between provider snapshots.
     ///
     /// <para>The index TRAILS the durable store, which is what makes it sound as a gate in this
     /// direction: "the index has seen it" implies "the store has it", so the point read opened on
@@ -245,6 +288,11 @@ public static class MeshNodeBindingExtensions
         TimeSpan? budget, IScheduler? scheduler)
         => meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}").AsSystem())
+            // Keep a matching Updated frame even when presence stays true. A delete and recreate
+            // between provider snapshots can be reported as only Updated, and a content read ended
+            // by the delete must use that frame to attach to the recreated owner.
+            .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset
+                || change.Items.Any(node => string.Equals(node.Path, nodePath, StringComparison.Ordinal)))
             .Scan(false, (present, change) => FoldPresence(present, change, nodePath))
             .DegradeIfNoFirstEmission(
                 fallback: false,
@@ -256,8 +304,7 @@ public static class MeshNodeBindingExtensions
                 target: nodePath,
                 what: "node existence",
                 budget: budget,
-                scheduler: scheduler)
-            .DistinctUntilChanged();
+                scheduler: scheduler);
 
     /// <summary>
     /// Folds one <see cref="QueryResultChange{T}"/> into "is the node at <paramref name="nodePath"/>
@@ -305,6 +352,24 @@ public static class MeshNodeBindingExtensions
                 what: $"field '{pointer}'",
                 budget: firstValueBudget,
                 scheduler: scheduler);
+    }
+
+    internal static bool IsDeletedBoundNode(Exception error, string nodePath)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            if (current is MeshNodeReadEndedWithDeleteException deleted
+                && string.Equals(deleted.NodePath, nodePath, StringComparison.Ordinal))
+                return true;
+
+            // The query can also report an existing row just before the owner is deleted. The
+            // subsequent point read then gets the router's typed NotFound instead of a cache
+            // invalidation. Match the exact requested path; another missing dependency is a fault.
+            if (current is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound } failure
+                && failure.Message.StartsWith($"No node found at '{nodePath}'", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

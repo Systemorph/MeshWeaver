@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -56,6 +59,71 @@ public class MeshNodeBindingExtensionsTest
         // An absolute pointer is a layout-area path even under a node-bound context.
         MeshNodeBindingExtensions.IsNodeBound(nodeCtx, new JsonPointerReference("/data/foo"))
             .Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteRecovery_OnlyAcceptsTheBoundPathsOwnDefinitiveMissingSignal()
+    {
+        const string path = "Document/_Comment/removed";
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new MeshNodeReadEndedWithDeleteException(path), path).Should().BeTrue();
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new MeshNodeReadEndedWithDeleteException("Document/_Comment/other"), path).Should().BeFalse();
+
+        var routingMiss = new DeliveryFailureException(new DeliveryFailure(null!,
+            $"No node found at '{path}'. Closest ancestor is 'Document'")
+        {
+            ErrorType = ErrorType.NotFound,
+        });
+        MeshNodeBindingExtensions.IsDeletedBoundNode(routingMiss, path).Should().BeTrue();
+        MeshNodeBindingExtensions.IsDeletedBoundNode(routingMiss, "Document/_Comment/remove")
+            .Should().BeFalse("a prefix of the missing path is a different node");
+
+        var unavailable = new DeliveryFailureException(new DeliveryFailure(null!,
+            $"No node found at '{path}'") { ErrorType = ErrorType.Failed });
+        MeshNodeBindingExtensions.IsDeletedBoundNode(unavailable, path).Should().BeFalse(
+            "a failed route carrying similar text is not an authoritative NotFound");
+        MeshNodeBindingExtensions.IsDeletedBoundNode(
+            new InvalidOperationException($"No node found at '{path}'"), path).Should().BeFalse(
+            "an unrelated exception with similar text must still reach the error surface");
+    }
+
+    [Fact]
+    public void DeleteAndRecreateCoalescedIntoUpdated_ReattachesWithoutAnObservedAbsence()
+    {
+        const string path = "Document/_Comment/recreated";
+        using var presence = new Subject<bool>();
+        var reads = new List<Subject<object?>>();
+        var values = new List<object?>();
+        var errors = new List<Exception>();
+
+        using var binding = MeshNodeBindingExtensions.BindObserved(presence, () =>
+        {
+            var read = new Subject<object?>();
+            reads.Add(read);
+            return read;
+        }, path).Subscribe(values.Add, errors.Add);
+
+        presence.OnNext(true);
+        reads.Should().HaveCount(1);
+        reads[0].OnNext("before");
+
+        // The owner's cache reports deletion before the query provider publishes its next frame.
+        // Hold that re-query: no false presence is delivered to this binding.
+        reads[0].OnError(new MeshNodeReadEndedWithDeleteException(path));
+        values.Should().Equal("before", null);
+        errors.Should().BeEmpty();
+
+        // The provider coalesces delete + recreate between snapshots into one Updated frame,
+        // whose folded presence is still true. It must attach a new owner read anyway.
+        presence.OnNext(true);
+        reads.Should().HaveCount(2);
+        reads[1].OnNext("after");
+        values.Should().Equal("before", null, "after");
+
+        presence.OnNext(true);
+        reads.Should().HaveCount(2, "an ordinary update does not restart a healthy live read");
+        errors.Should().BeEmpty();
     }
 
     [Fact]
