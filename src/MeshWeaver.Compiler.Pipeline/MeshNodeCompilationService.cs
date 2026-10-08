@@ -1147,9 +1147,13 @@ internal class MeshNodeCompilationService(
                         // in a complete pod log, and the parser reads the fault's own message off
                         // the exception line (which is what the incident fingerprint keys on, so
                         // this reordering cannot fork existing incidents).
-                        logger.LogError(ex, "{CompileFailure}",
-                            CompileDiagnostics.FormatCompileFailureReport(
-                                node.Path, ex.Message, executedQueries, matchedCodePaths));
+                        //
+                        // 🚨 …and the LEVEL is decided by the same retirement predicate the bake
+                        // gate classifies on (#5219): a type its repository retired fails its
+                        // compile by design and is reported at Warning, never ticketed as Error.
+                        CompileDiagnostics.ReportCompileFailure(
+                            logger, ex, node.Path, ntDef?.PendingRetirement,
+                            executedQueries, matchedCodePaths);
                         // The ActivityLog is NOT size-capped, so it keeps the complete diagnostics
                         // AND the complete matched-node list — this is where the bounded sample
                         // above tells the reader to look.

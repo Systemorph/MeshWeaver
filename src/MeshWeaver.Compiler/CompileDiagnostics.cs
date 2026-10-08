@@ -168,6 +168,55 @@ public static class CompileDiagnostics
     internal const int MaxLoggedMatchedPaths = 8;
 
     /// <summary>
+    /// Whether a NodeType's <c>PendingRetirement</c> stamp marks it retired — the same predicate
+    /// the bake gate's <c>ClassifyCompileFailure</c> branches on first.
+    /// </summary>
+    internal static bool IsRetired(string? pendingRetirement) => pendingRetirement is { Length: > 0 };
+
+    /// <summary>
+    /// 🚨 THE single report of a compile failure (issue #5219) — the level AND the text, decided
+    /// together so the funnel cannot log a failure at a level its own classifier disagrees with.
+    ///
+    /// <para><b>The defect.</b> The funnel logged every failure at <c>Error</c>. For a NodeType its
+    /// repository has RETIRED — held, with its sources, only because instances still name it
+    /// (<c>NodeTypeDefinition.PendingRetirement</c>) — a failing compile is the retirement's
+    /// expected consequence: the bake gate classifies it <c>Retired</c>, "not a regression", and it
+    /// holds no roll. But the Error line was written BEFORE that classification and regardless of
+    /// it, so the red-log watcher ticketed it on every recompile: <c>Crm/Client</c> on
+    /// memex.systemorph.com logged it on every pod boot for more than two weeks after
+    /// <c>/health</c> already read "1 retired by their repository — Crm/Client".</para>
+    ///
+    /// <para><b>The rule.</b> A retired type's failure is reported at <c>Warning</c>, naming the
+    /// retirement — still visible, and still in the compile's ActivityLog in full, but no longer
+    /// incident-grade. Every other failure stays at <c>Error</c>: an un-stamped type that fails is
+    /// a defect in its own content and must keep surfacing.</para>
+    /// </summary>
+    /// <param name="logger">The compile service's logger.</param>
+    /// <param name="exception">The compile failure, attached so the full diagnostics print.</param>
+    /// <param name="nodePath">The node whose compile failed.</param>
+    /// <param name="pendingRetirement">The owning NodeType's <c>PendingRetirement</c> stamp.</param>
+    /// <param name="executedQueries">Every source query the compile ran.</param>
+    /// <param name="matchedCodePaths">Every Code node those queries matched.</param>
+    /// <returns>The level the failure was reported at.</returns>
+    internal static Microsoft.Extensions.Logging.LogLevel ReportCompileFailure(
+        Microsoft.Extensions.Logging.ILogger logger,
+        Exception exception,
+        string nodePath,
+        string? pendingRetirement,
+        IReadOnlyList<string> executedQueries,
+        IReadOnlyList<string> matchedCodePaths)
+    {
+        var level = IsRetired(pendingRetirement)
+            ? Microsoft.Extensions.Logging.LogLevel.Warning
+            : Microsoft.Extensions.Logging.LogLevel.Error;
+        Microsoft.Extensions.Logging.LoggerExtensions.Log(
+            logger, level, exception, "{CompileFailure}",
+            FormatCompileFailureReport(
+                nodePath, exception.Message, executedQueries, matchedCodePaths, pendingRetirement));
+        return level;
+    }
+
+    /// <summary>
     /// 🚨 THE failure report the compile pipeline's single reporting funnel LOGS — and the order of
     /// its sections is the whole point (issue #1840).
     ///
@@ -199,16 +248,26 @@ public static class CompileDiagnostics
     /// i.e. the output of <see cref="FormatCompileFailure"/> for a Roslyn failure.</param>
     /// <param name="executedQueries">Every source query the compile ran.</param>
     /// <param name="matchedCodePaths">Every Code node those queries matched.</param>
+    /// <param name="pendingRetirement">The owning NodeType's <c>PendingRetirement</c> stamp, if
+    /// any — a retired type's report says so on its second line (#5219).</param>
     internal static string FormatCompileFailureReport(
         string nodePath,
         string? compileError,
         IReadOnlyList<string> executedQueries,
-        IReadOnlyList<string> matchedCodePaths)
+        IReadOnlyList<string> matchedCodePaths,
+        string? pendingRetirement = null)
     {
         var sb = new System.Text.StringBuilder();
 
         // 1. WHAT failed. One short line, so the two facts below always start inside any budget.
         sb.Append("Failed to compile assembly for node '").Append(nodePath).AppendLine("'.");
+        // 1b. …and, for a type its repository has RETIRED, that this is the retirement's expected
+        //     consequence rather than a regression — the same content verdict the bake gate gives
+        //     it (PreWarmStatus.Retired). Short, so the diagnostics below still start inside budget.
+        if (IsRetired(pendingRetirement))
+            sb.Append("Retired by its repository and held only for its remaining instances (")
+                .Append(pendingRetirement)
+                .AppendLine("). Expected until those instances are retyped or deleted; not a regression.");
 
         // 2. WHY — the compiler's own verdict, FIRST, because it is the only part that says what to
         //    change. Bounded by line count, never by a character cut that could slice a CS id in half.
