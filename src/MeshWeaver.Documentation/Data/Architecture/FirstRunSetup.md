@@ -229,6 +229,36 @@ identically to never stating it. Verified by hand on a shared portal instance
 (2026-09-03: `memex-portal-config.data.Graph__Storage__Type = "PostgreSql"`); any new environment
 should be checked the same way once, at ramp-up.
 
+### A deployment path nobody listed: the test container (#6037)
+
+`MeshWeaver.Testcontainers` starts the portal image as a test substrate, and it is a deployment
+path too — one that stated `ConnectionStrings:memex` and **not** `Graph:Storage:Type`. Every
+container it ever started therefore served the wizard. Nothing noticed, because its wait was
+`200` on `/healthz`, and the wizard answers **every** probe path (`/healthz`, `/health`, `/alive`,
+`/ready`) with a flat `ok` — it has to, or the pod it runs in never goes READY (above). Measured on
+the portal image `3.0.0-ci.8323` with the helper's exact environment: all four probes `200 ok`,
+`/api/version` → `302 /setup`, and the stdout banner *"Serving the FIRST-RUN SETUP wizard and
+nothing else"*. A green start proved a container, never a mesh. (Two more defects sat behind it,
+unreachable while the wizard answered: a `Deployment:DataRoot` of `/data`, which the non-root image
+cannot create, and no migrated schema, which `DbVersionGate` refuses.)
+
+**A probe path's `200` is never evidence of a started mesh** — the GUI host's own `/healthz` is a
+pre-mesh short-circuit by design, and the wizard answers them all. The helper now waits through
+`MemexReadiness`, which reads two things only a composed host produces:
+
+| Reading | Wizard | Composed, booting | Composed, started |
+|---|---|---|---|
+| `/api/version` (redirects not followed) | `302 → /setup` | — | `200` |
+| `/health` first line | `ok` | `503 Unhealthy` | `200 Healthy` / `Degraded` (the startup census) |
+| Verdict | **SetupWizard** — `StartAsync` throws at once, naming it | NotYet — keep waiting | **MeshStarted** |
+
+`WithPostgres` now states both halves of the storage decision, and a container that EXITS before
+its mesh starts (an unmigrated schema, an unwritable data root) fails the wait at once instead of at
+the start budget. `MemexReadinessTest` (core, `Memex.Portal.Shared.Test`) drives the verdict against
+the REAL setup-only host and the REAL `MapDefaultEndpoints` pipeline, so neither side is a recorded
+string free to agree with itself. The same hollow wait still exists outside core: Plugins'
+`PortalImageFacility` waits on `/healthz` and states no storage type either.
+
 ## The chart had to stop answering these questions
 
 The portal ConfigMap lists keys explicitly, so an unconditional line emits `Graph__Storage__Type=""`
