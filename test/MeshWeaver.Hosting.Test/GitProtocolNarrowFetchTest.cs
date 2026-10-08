@@ -151,6 +151,24 @@ public class GitProtocolNarrowFetchTest
         Assert.DoesNotContain(world.Log, line => line.Contains("path(s) selected"));
     }
 
+    /// <summary>The production wrapper must expose Octokit's compare result. Equal commits are
+    /// resolved locally by Octokit, so this pins the delegation without a network dependency: the
+    /// interface default instead returns null and makes every settled sync a full import.</summary>
+    [Fact]
+    public async Task EqualCommits_ExposeAnEmptyChangedPathSet()
+    {
+        using var pools = new IoPoolRegistry();
+        var client = new GitProtocolRepoClient(
+            new OctokitGitHubRepoClient(pools), new GitCli(pools), pools);
+
+        var changed = await client.GetChangedPaths(
+                "https://github.com/Systemorph/MeshWeaver", "same-sha", "same-sha", "content", "")
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(changed);
+        Assert.Empty(changed);
+    }
+
     // ── harness ──────────────────────────────────────────────────────────────
 
     /// <summary>A seeded origin repository on disk plus a client pointed at it. Five paths, of
