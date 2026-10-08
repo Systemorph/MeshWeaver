@@ -13,6 +13,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Http.Resilience;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Persistence;
 using Microsoft.Extensions.Logging;
@@ -428,7 +429,14 @@ public static class ServiceDefaults
             // past the fleet's 45-minute CI job cap, where the ordinary webhook-before-seal
             // ordering can no longer explain the hold.
             .AddCheck<SealedSyncHealthCheck>(
-                SealedSyncCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
+                SealedSyncCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
+            // Policy control-first-never-silent: the last self-update check's verdict, Degraded when
+            // it FAILED. The control instance's reading is what the CD arming quotes when the fleet
+            // is frozen on control; before it, that failure lived only on control's own
+            // Admin/UpdatePolicy, behind authentication. Census-tagged (prints whatever its status),
+            // no probe tag (a failing self-update costs delivery, never a reason to pull the pod).
+            .AddCheck<SelfUpdateHealthCheck>(
+                SelfUpdateCheckCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
 
         // 🚨 A roll gate holds READINESS only (policy bake-gate-readiness-only, #5544). The host
         // registers the NodeType bake gate by NAME, in another repository, and until this change it
