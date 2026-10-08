@@ -69,18 +69,41 @@ public static class StandingWatchRecovery
     /// <param name="fault">The fault that terminated the watch; may be null.</param>
     public static bool IsTransient(Exception? fault)
     {
+        // Bounded and reference-deduplicated, like InfrastructureFault's walk: a caller-supplied
+        // fault graph can be cyclic or shared.
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        return IsTransientWalk(fault, seen);
+    }
+
+    private const int MaxNodes = 256;
+
+    private static bool IsTransientWalk(Exception? fault, HashSet<Exception> seen)
+    {
         if (fault is null)
             return false;
-        if (StorageFaults.IsTransientConnectFault(fault) || InfrastructureFault.IsTransient(fault))
-            return true;
-        // A database read that dies mid-stream surfaces as the driver's DbException wrapping the
-        // transport fault (IOException → SocketException 104), which both predicates above match.
-        // The fan-in's stall terminal is the other availability fault a standing read meets — on a
-        // pod in a GC or thread-pool stall every query misses its Initial bound together.
         for (var e = fault; e is not null; e = e.InnerException)
+        {
+            if (!seen.Add(e) || seen.Count > MaxNodes)
+                return false;
+            // 🚨 An aggregate is transient only when EVERY branch is — the rule InfrastructureFault
+            // states for the same reason: `Aggregate(transient DB fault, JsonException)` carries a
+            // real defect, and re-opening on it would trade a latch for a loop. The shared
+            // classifiers below walk only `InnerException` (branch 0 of an aggregate), so the
+            // aggregate is decided HERE, before they are asked.
+            if (e is AggregateException aggregate)
+            {
+                var branches = aggregate.Flatten().InnerExceptions;
+                return branches.Count > 0 && branches.All(branch => IsTransientWalk(branch, seen));
+            }
+            // The fan-in's stall terminal: the availability fault a standing read meets on a pod in
+            // a GC or thread-pool stall, where every query misses its Initial bound together.
             if (e is QueryProviderStalledException)
                 return true;
-        return false;
+        }
+        // A chain with no aggregate in it: a database read that died mid-stream surfaces as the
+        // driver's DbException wrapping the transport fault (IOException → SocketException 104),
+        // which both shared predicates match by walking exactly this chain.
+        return StorageFaults.IsTransientConnectFault(fault) || InfrastructureFault.IsTransient(fault);
     }
 
     /// <summary>

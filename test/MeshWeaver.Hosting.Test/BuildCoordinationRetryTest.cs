@@ -233,6 +233,32 @@ public class BuildCoordinationRetryTest
         attempts.Should().ContainSingle();
     }
 
+    /// <summary>
+    /// A VERDICT whose reason text happens to quote the transport phrase is still a verdict: the
+    /// router stamps a transport fault <c>ErrorType.Failed</c>, and only that stamp qualifies.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task AVerdictQuotingTheTimeoutPhrase_IsNotRetried()
+    {
+        var attempts = new List<int>();
+        var act = () => BuildProtocolDriver.RetryUnreachableCoordination(
+                Handshake(int.MaxValue, () => new MeshWeaver.Messaging.DeliveryFailureException(
+                    new MeshWeaver.Messaging.DeliveryFailure(null!,
+                        "Delivery to 'Admin/Build' failed: Response did not arrive on time in 00:00:30")
+                    {
+                        ErrorType = MeshWeaver.Messaging.ErrorType.Forbidden,
+                    }), attempts),
+                BuildProtocolDriver.CoordinationAttempts,
+                NoBackoff,
+                Scheduler.Immediate,
+                logger: null)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<MeshWeaver.Messaging.DeliveryFailureException>();
+        attempts.Should().ContainSingle();
+    }
+
     /// <summary>The #5716 incident's exact NACK text, as the router posts it.</summary>
     private static Exception RoutedResponseTimeout() => new MeshWeaver.Messaging.DeliveryFailureException(
         new MeshWeaver.Messaging.DeliveryFailure(null!,

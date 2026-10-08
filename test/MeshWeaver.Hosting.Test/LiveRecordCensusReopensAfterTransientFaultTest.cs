@@ -195,6 +195,21 @@ public class LiveRecordCensusReopensAfterTransientFaultTest(ITestOutputHelper ou
         StandingWatchRecovery.IsTransient(new JsonException("bad content")).Should().BeFalse();
         StandingWatchRecovery.IsTransient(new ObjectDisposedException("mesh")).Should().BeFalse();
         StandingWatchRecovery.IsTransient(null).Should().BeFalse();
+
+        // An aggregate is transient only when EVERY branch is: a mixed one carries a real defect.
+        StandingWatchRecovery.IsTransient(
+                new AggregateException(ConnectionResetMidRead(), new JsonException("bad content")))
+            .Should().BeFalse("a transient branch must not launder a defect in another branch");
+        StandingWatchRecovery.IsTransient(
+                new AggregateException(new JsonException("bad content"), ConnectionResetMidRead()))
+            .Should().BeFalse("branch order must not matter");
+        StandingWatchRecovery.IsTransient(
+                new AggregateException(ConnectionResetMidRead(), ConnectionResetMidRead()))
+            .Should().BeTrue();
+        StandingWatchRecovery.IsTransient(
+                new InvalidOperationException("wrapped",
+                    new AggregateException(ConnectionResetMidRead(), new JsonException("bad content"))))
+            .Should().BeFalse("a mixed aggregate deeper in the chain is still mixed");
     }
 
     /// <summary>

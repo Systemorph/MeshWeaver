@@ -42,11 +42,14 @@ public static class TransportTimeout
 
     /// <summary>
     /// True when <paramref name="exception"/> is the ROUTER's flattened transport timeout: a
-    /// <see cref="DeliveryFailureException"/> whose text carries one of the transport-timeout phrases.
+    /// <see cref="DeliveryFailureException"/> stamped <see cref="ErrorType.Failed"/> — the stamp the
+    /// router gives a transport fault — whose text carries one of the transport-timeout phrases.
+    /// A NACK carrying a VERDICT (<see cref="ErrorType.NotFound"/>, <see cref="ErrorType.Forbidden"/>,
+    /// …) is never one, whatever its reason text happens to quote.
     /// </summary>
     /// <param name="exception">One exception (its inner chain is not walked).</param>
     public static bool IsRoutedTransportTimeout(Exception? exception) =>
-        exception is DeliveryFailureException { Message: { } message }
+        exception is DeliveryFailureException { Failure.ErrorType: ErrorType.Failed, Message: { } message }
         && (message.Contains(ResponseTimeoutPhrase, StringComparison.OrdinalIgnoreCase)
             || message.Contains(PlacementTimeoutPhrase, StringComparison.OrdinalIgnoreCase));
 
