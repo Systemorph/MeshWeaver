@@ -32,6 +32,10 @@ case "${1:-}" in
     [ -f "$f" ] || { echo "Error from server (NotFound): ${2:-} not found" >&2; exit 1; }
     cat "$f" ;;
   create)
+    if [ "${HOSTING_DEPLOY_STUB_PARSE_FAILS:-false}" = "true" ]; then
+      # kubectl echoing part of its input back on stdout before failing — the error path must not print it
+      cat; echo "error: stubbed parse failure" >&2; exit 1
+    fi
     cat >/dev/null
     cat "$fixture/names.txt" ;;
   annotate|label)

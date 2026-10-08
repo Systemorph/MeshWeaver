@@ -27,6 +27,7 @@ public sealed class CrossProcessChangeRelay : IDisposable
     private ImmutableList<IDisposable> _subscriptions = ImmutableList<IDisposable>.Empty;
     private FaultSwitch? _hold;
     private FaultSwitch? _drop;
+    private int _disposed;
 
     /// <summary>
     /// Adds a process. Its local commits are relayed to every other member from now on, and it
@@ -60,9 +61,31 @@ public sealed class CrossProcessChangeRelay : IDisposable
     /// <summary>
     /// From now on, relayed notifications are LOST until the returned switch is released; each lost
     /// one is an arrival on it. Nothing is replayed on release — that is the fault.
+    ///
+    /// <para>On release every member is told a <see cref="ChangeFeedGap"/> happened, exactly as the
+    /// PostgreSQL listener declares one when its LISTEN session comes back after a dropped
+    /// connection (Plugins#3000). <paramref name="announceGap"/> <c>false</c> is the pre-fix
+    /// listener — the notifications are lost AND nobody is told — and exists for a negative
+    /// control: with it, a cache retracted only by the feed must stay stale.</para>
     /// </summary>
-    public FaultSwitch Drop()
-        => Arm(ref _drop, "drop the cross-process change relay");
+    /// <param name="announceGap">Whether the release declares the gap to every member.</param>
+    public FaultSwitch Drop(bool announceGap = true)
+    {
+        var lostAt = DateTimeOffset.UtcNow;
+        var fault = Arm(ref _drop, "drop the cross-process change relay");
+        if (announceGap)
+            fault.Released.Subscribe(_ =>
+            {
+                // A release by Dispose is teardown, not a reconnect: the members are going away.
+                if (Volatile.Read(ref _disposed) != 0)
+                    return;
+                var gap = new ChangeFeedGap("test:cross-process-relay", lostAt, DateTimeOffset.UtcNow,
+                    "relay dropped by the test");
+                foreach (var member in Volatile.Read(ref _members))
+                    member.DeliverChangeFeedGap(gap);
+            });
+        return fault;
+    }
 
     private void Forward(FaultInjectingStorageAdapter origin, DataChangeNotification notification)
     {
@@ -91,6 +114,7 @@ public sealed class CrossProcessChangeRelay : IDisposable
     /// <summary>Stops relaying and releases any hold, so nothing waits on a relay that is gone.</summary>
     public void Dispose()
     {
+        Interlocked.Exchange(ref _disposed, 1);
         Volatile.Read(ref _hold)?.Release();
         Volatile.Read(ref _drop)?.Release();
         foreach (var s in Interlocked.Exchange(ref _subscriptions, ImmutableList<IDisposable>.Empty))

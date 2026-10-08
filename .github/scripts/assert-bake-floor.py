@@ -40,6 +40,9 @@ from pathlib import Path
 MANIFEST_ENTRY = "meshweaver/manifest.json"  # NuGetPackageWriter.ManifestEntry
 VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$")
 CHANNELS = ("ci", "edge")
+# Policy `platform-semver-versioning`: from line 3.1 on a continuous build is the plain
+# `<major>.<minor>.<run>` (run = patch, never 0). Same cut-over as platform-version.py.
+SEMVER_ERA_START = (3, 1)
 
 
 def parse(version: str) -> tuple[tuple[int, int, int], int | None] | None:
@@ -54,6 +57,8 @@ def parse(version: str) -> tuple[tuple[int, int, int], int | None] | None:
             return core, int(pre[i + 1])
     if pre:
         return None  # a pre-release label no build mints carries no ordinal and no release order
+    if core[2] > 0 and core[:2] >= SEMVER_ERA_START:
+        return core, core[2]  # a SemVer-era continuous build: its patch IS the run ordinal
     return core, None
 
 
@@ -136,6 +141,12 @@ def self_test() -> int:
            floor_problem("3.1.0-ci.7841", "3.0.0-ci.9000") is None)
     expect("edge ordinal compares with ci", floor_problem("3.0.0-edge.10", "3.0.0-ci.9") is not None)
     expect("retired rc.ci shape reads its ordinal", floor_problem("3.0.0-rc9.ci.7824", "3.0.0-ci.7825") is None)
+    expect("SemVer-era floor above the platform is RED", floor_problem("3.1.10001", "3.1.10000") is not None)
+    expect("SemVer-era equal floor passes", floor_problem("3.1.10000", "3.1.10000") is None)
+    expect("mixed era: old ci floor under a SemVer platform passes", floor_problem("3.0.0-ci.9999", "3.1.10000") is None)
+    expect("mixed era: SemVer floor above an old ci platform is RED", floor_problem("3.1.10000", "3.0.0-ci.9999") is not None)
+    expect("mixed era: withdrawn 3.1.0-ci slip orders by its ordinal", floor_problem("3.1.0-ci.7841", "3.1.10000") is None)
+    expect("a clean 3.0.0 release stays a clean release", floor_problem("3.0.0-ci.5", "3.0.0") is not None)
     expect("build metadata ignored", floor_problem("3.0.0-ci.5+abc", "3.0.0-ci.5") is None)
     expect("clean releases compare by X.Y.Z", floor_problem("3.0.1", "3.0.0") is not None
            and floor_problem("3.0.0", "3.0.1") is None)

@@ -88,6 +88,18 @@ public sealed class SystemOwnedAccessRetractionHandler(
             return Observable.Return(Unit.Default);
         }
 
+        // 🚨 A config that names no repository is not a sync (#5140) — the settings tab mints an
+        // empty one just by being opened. Retracting there would strip an ordinary Space of its
+        // administrators because someone LOOKED at its sync settings. Same predicate as the write
+        // boundary and the permission fold (AccessAssignmentGuard.IsSystemOwned).
+        if (!AccessAssignmentGuard.IsSystemOwned(createdNode, hub.JsonSerializerOptions))
+        {
+            logger?.LogInformation(
+                "[SystemOwned] '{Partition}/_GitSync' names no repository yet — nothing is synced, so "
+                + "nothing is retracted.", partition);
+            return Observable.Return(Unit.Default);
+        }
+
         var accessFolder = $"{partition}/_Access";
 
         return persistence.ListChildPaths(accessFolder)

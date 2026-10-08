@@ -22,6 +22,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -346,7 +347,7 @@ public partial class MeshOperations
                     var list = change.Items
                         .Select(node => (object)new { node.Path, node.Name, node.NodeType, node.Icon })
                         .ToImmutableList();
-                    return JsonSerializer.Serialize(list, hub.JsonSerializerOptions);
+                    return ToolAnswerJson.Serialize(list, hub.JsonSerializerOptions);
                 })
                 .Catch((Exception ex) =>
                 {
@@ -379,7 +380,7 @@ public partial class MeshOperations
             // perfectly good answer with an error.
             return FetchNode(documentPath, timeoutSeconds: 3)
                 .SelectMany(doc => doc.Node is not null
-                    ? Observable.Return(JsonSerializer.Serialize(doc.Node, hub.JsonSerializerOptions))
+                    ? Observable.Return(ToolAnswerJson.Serialize(doc.Node, hub.JsonSerializerOptions))
                     : ReadNodeOrUnified(resolvedPath));
         }
 
@@ -435,10 +436,10 @@ public partial class MeshOperations
                     return UserPiiRedaction.RedactEmailForReader(hub, node, caller)
                         .SelectMany(readable => LookupCompilationError(readable)
                             .Select(compileError => compileError != null
-                                ? JsonSerializer.Serialize(
+                                ? ToolAnswerJson.Serialize(
                                     new { node = readable, compilationError = compileError },
                                     hub.JsonSerializerOptions)
-                                : JsonSerializer.Serialize(readable, hub.JsonSerializerOptions)));
+                                : ToolAnswerJson.Serialize(readable, hub.JsonSerializerOptions)));
                 });
             })
             .Catch((Exception ex) =>
@@ -542,14 +543,14 @@ public partial class MeshOperations
                     .Select(c => c.Items.FirstOrDefault())
                     .Select(qn => qn is null
                         ? $"Not found: {resolvedPath}"
-                        : JsonSerializer.Serialize(
+                        : ToolAnswerJson.Serialize(
                             new { node = qn, compilationError = compileError },
                             hub.JsonSerializerOptions))
                     .Catch((Exception ex) =>
                     {
                         logger.LogWarning(ex,
                             "Catalog fallback for broken NodeType at {Path} failed", resolvedPath);
-                        return Observable.Return(JsonSerializer.Serialize(
+                        return Observable.Return(ToolAnswerJson.Serialize(
                             new { compilationError = compileError, error = "Catalog read failed: " + ex.Message },
                             hub.JsonSerializerOptions));
                     });
@@ -793,7 +794,7 @@ public partial class MeshOperations
                 ["html"] = result.Html,
                 ["codeSubmissions"] = submissions,
             };
-            return Observable.Return(payload.ToJsonString());
+            return Observable.Return(ToolAnswerJson.Write(payload));
         })
         .Catch((Exception ex) =>
         {
@@ -865,7 +866,7 @@ public partial class MeshOperations
                     ? UnavailableMessage(fullPath, outcome.UnavailableReason!)
                     : outcome.Node is null
                         ? result
-                        : JsonSerializer.Serialize(outcome.Node, hub.JsonSerializerOptions));
+                        : ToolAnswerJson.Serialize(outcome.Node, hub.JsonSerializerOptions));
             });
 
     /// <summary>
@@ -1297,6 +1298,30 @@ public partial class MeshOperations
         var reference = new UnifiedReference(remainder);
         var address = !string.IsNullOrEmpty(addressPart) ? new Address(addressPart) : hub.Address;
 
+        // 🚨 A UNIFIED PATH THAT NAMES NO NODE IS NEVER READ FROM THE ROUTER (#5937). With no address
+        // part — `content/x.md`, `schema/`, `layoutAreas/` from a chat with no context — the read
+        // falls back to THIS hub's own address, and for the agent/AI surface this facade's hub is
+        // the DI-injected root mesh hub. The read was then a self-read on the ROUTER: posted from
+        // `mesh/{id}` AND addressed at it, so HandleGetDataRequest ran on the routing action block
+        // and its GetDataResponse was posted from and to the router (production, memex, five pods
+        // 2026-10-01..06: `GetDataRequest … sender AND target` from this method, and
+        // `GetDataResponse … sender AND target` from DataExtensions.HandleGetDataRequest). The
+        // read seam cannot help: hopping only the sender would leave the router the TARGET, and
+        // portal/reads-{meshId} registers no handlers, so it could never answer in its place.
+        //
+        // The defect is the DEFAULT, not the hop: the router is not a node and owns nothing a
+        // unified path can name (it answered `content/…` with "collection not found", `data/` with
+        // null, `layoutAreas/` with [] and `schema/` with the bare MeshNode schema every node's own
+        // `{node}/schema/MeshNode` returns as well). So a target that is a mesh hub is answered here, without
+        // a delivery, with the documented shape the caller has to use. A per-node / session /
+        // portal facade keeps its own-hub meaning untouched — the check is on the TARGET's type,
+        // which also covers an explicit `mesh/{id}/schema/…`.
+        if (string.Equals(address.Type, AddressExtensions.MeshType, StringComparison.Ordinal))
+            return Observable.Return<string?>(
+                $"Error: '{resolvedPath}' names no node — a unified path is "
+                + $"'{{nodePath}}/{remainder}' (e.g. '@Org/Project/{remainder}'); the mesh root is not a "
+                + "node and is never the target of a read.");
+
         // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub — but ONLY when the read actually LEAVES
         // this hub, and that is decided by the resolved TARGET, never by whether an address part was
         // written. A UCR may address this very hub EXPLICITLY (`mesh/{id}/$area/…` parses an
@@ -1308,6 +1333,9 @@ public partial class MeshOperations
         // answer. Comparing the resolved address is the same structural exclusion the lifecycle
         // ratchet makes for a self-directed post — a rule whose remedy is nonsense at a site must
         // not be applied there. (Copilot on #4487; the emptiness test was the first spelling.)
+        // Since #5937 the self-directed branch is reached only by a NON-router hub (a per-node,
+        // session or portal facade reading itself): a mesh-typed target, explicit or defaulted, is
+        // answered above without any delivery, so the router never executes this read.
         //
         // Spelled as the seam CALL rather than through the cached `ReadHub` property deliberately:
         // the receiver of a post is what RouterAsRouterCapableReceiverRatchetGuard reads, and a
@@ -1352,7 +1380,7 @@ public partial class MeshOperations
                                     if (responseMsg.Error != null)
                                         observer.OnNext($"Error: {responseMsg.Error}");
                                     else
-                                        observer.OnNext(JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
+                                        observer.OnNext(ToolAnswerJson.Serialize(responseMsg.Data, hub.JsonSerializerOptions));
                                 }
                                 else
                                 {
@@ -1497,7 +1525,7 @@ public partial class MeshOperations
                 if (truncated)
                     payload["hint"] =
                         "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1569,7 +1597,7 @@ public partial class MeshOperations
                     ["count"] = plugins.Count,
                     ["plugins"] = JsonSerializer.SerializeToNode(plugins, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1613,7 +1641,7 @@ public partial class MeshOperations
                     ["nodeCount"] = all.Count,
                     ["nodes"] = JsonSerializer.SerializeToNode(all, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1676,7 +1704,7 @@ public partial class MeshOperations
                     ["count"] = items.Count,
                     ["results"] = JsonSerializer.SerializeToNode(items, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
-                return payload.ToJsonString();
+                return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
             {
@@ -1724,12 +1752,12 @@ public partial class MeshOperations
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Catch((Exception _) => Observable.Return<string?>(null))
-                    .Select(redirect => new JsonObject
+                    .Select(redirect => ToolAnswerJson.Write(new JsonObject
                     {
                         ["prefix"] = resolution.Prefix,
                         ["remainder"] = resolution.Remainder,
                         ["redirectOnDenied"] = redirect,
-                    }.ToJsonString()))
+                    })))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Resolve failed for {Path}", resolvedPath);
@@ -1750,10 +1778,23 @@ public partial class MeshOperations
         return Observable.Defer(() =>
         {
             MeshNode? meshNode;
+            // The caller's RAW content too: the typed deserialisation drops every content member
+            // the bound type does not declare, and only the raw JSON still names what was dropped
+            // — or what `$type` the caller claimed (see ValidateCreatedContent).
+            JsonObject? rawContent;
             try
             {
                 var sanitized = RepairJson(node);
                 meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
+                // The same JSON syntax the typed read above accepted (comments, trailing commas): adding
+                // validation must not narrow what the verb takes.
+                rawContent = (JsonNode.Parse(
+                    sanitized,
+                    documentOptions: new JsonDocumentOptions
+                    {
+                        CommentHandling = hub.JsonSerializerOptions.ReadCommentHandling,
+                        AllowTrailingCommas = hub.JsonSerializerOptions.AllowTrailingCommas,
+                    }) as JsonObject)?["content"] as JsonObject;
             }
             catch (JsonException ex)
             {
@@ -1772,9 +1813,21 @@ public partial class MeshOperations
             if (identityError != null)
                 return Observable.Return(identityError);
 
+            // 🚨 Same silent drop Patch and Update refuse: a content member the bound type does
+            // not declare is lost by the typed deserialisation above, and Create answered
+            // "Created:" over it (Systemorph/MeshWeaver.Plugins#3042 — `description` and an
+            // unknown `status` on a Feedback filing vanished without a word). Refuse it here when
+            // this hub has typed the content; the probe below judges the in-mesh case, where the
+            // content is still a JsonElement on this hub.
+            if (meshNode.Content is { } typedContent
+                && UnknownContentMembers(rawContent, typedContent, hub.JsonSerializerOptions)
+                    is { Count: > 0 } unknownMembers)
+                return Observable.Return(UnknownContentMembersMessage(
+                    "create", meshNode.Path, meshNode.NodeType, typedContent.GetType(), unknownMembers));
+
             // Validate content against schema when content is provided.
             var validationObs = meshNode.Content != null
-                ? ValidateContentWithSchema(meshNode)
+                ? ValidateContentWithSchema(meshNode, rawContent)
                 : Observable.Return<string?>(null);
 
             return validationObs.SelectMany(validationError =>
@@ -1970,7 +2023,7 @@ public partial class MeshOperations
     /// one massive minified line.
     /// </summary>
     private string SerialisePretty(MeshNode node) =>
-        JsonSerializer.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
+        ToolAnswerJson.Serialize(node, new JsonSerializerOptions(hub.JsonSerializerOptions) { WriteIndented = true });
 
     /// <summary>
     /// Partial update of a single node: only the keys present in <paramref name="fields"/> change, with
@@ -2844,7 +2897,7 @@ public partial class MeshOperations
                                     // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
                                     hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
 
-                                    return JsonSerializer.Serialize(new
+                                    return ToolAnswerJson.Serialize(new
                                     {
                                         status = "Uploaded",
                                         path = $"{resolution.Prefix}/{collectionName}/{filePath}",
@@ -2948,7 +3001,7 @@ public partial class MeshOperations
                                     _ => new { kind = "unknown", name = item.Name, path = item.Path },
                                 })
                                 .ToArray()
-                                .Select(items => JsonSerializer.Serialize(new
+                                .Select(items => ToolAnswerJson.Serialize(new
                                 {
                                     collection = qualifiedCollectionName,
                                     path = dir,
@@ -3085,6 +3138,15 @@ public partial class MeshOperations
     /// down — two full hubs for one failed agent write.
     /// </remarks>
     internal IObservable<string?> ValidateContentWithSchema(MeshNode meshNode)
+        => ValidateContentWithSchema(meshNode, createdContent: null);
+
+    /// <summary>
+    /// <see cref="ValidateContentWithSchema(MeshNode)"/>, plus — when
+    /// <paramref name="createdContent"/> is given, i.e. on CREATE — the two checks that need the
+    /// bound content type, which only the probe hub knows for an in-mesh NodeType (see
+    /// <see cref="ValidateCreatedContent"/>).
+    /// </summary>
+    private IObservable<string?> ValidateContentWithSchema(MeshNode meshNode, JsonObject? createdContent)
     {
         if (string.IsNullOrEmpty(meshNode.NodeType))
             return Observable.Return<string?>(null);
@@ -3092,9 +3154,17 @@ public partial class MeshOperations
         return ReadFromContentType(
             meshNode.NodeType!,
             TransientProbeAddresses.SchemaValidationProbePrefix,
-            (probeHub, typeDefinition) =>
+            (probeHub, contentType, exact) =>
             {
-                var validationError = ValidateAgainst(meshNode, typeDefinition.Type);
+                // ValidateAgainst keeps its historical reach — only a type registered under the
+                // NodeType's own name (see ReadFromContentType) — so this change does not start
+                // refusing, on Update and Patch, the partial-content shapes the write boundary
+                // deliberately admits (#4648). The create-only checks use the bound type however
+                // it was resolved.
+                var validationError = (createdContent is null
+                        ? null
+                        : ValidateCreatedContent(meshNode, createdContent, contentType, probeHub))
+                    ?? (exact ? ValidateAgainst(meshNode, contentType) : null);
                 if (validationError == null)
                     return null;
                 // A schema is a NICE-TO-HAVE on top of the error the agent must see: never let a
@@ -3103,7 +3173,7 @@ public partial class MeshOperations
                 {
                     return validationError
                         + $" Expected content schema for NodeType '{meshNode.NodeType}': "
-                        + GenerateSchema(probeHub, typeDefinition.Type);
+                        + GenerateSchema(probeHub, contentType);
                 }
                 catch (Exception ex)
                 {
@@ -3210,7 +3280,7 @@ public partial class MeshOperations
     /// production log volume came from (~22 error lines per probe, none actionable).</para>
     ///
     /// <para>This is also the ONE place a probe hub is built, so a caller that needs both the
-    /// validation result and the schema (see <see cref="ValidateContentWithSchema"/>) pays for one
+    /// validation result and the schema (see <see cref="ValidateContentWithSchema(MeshNode)"/>) pays for one
     /// probe, not two.</para>
     /// </summary>
     /// <param name="nodeType">NodeType path whose content type is being resolved.</param>
@@ -3220,12 +3290,14 @@ public partial class MeshOperations
     /// the shared constants so <see cref="TransientProbeAddresses.IsProbeAddress"/> stays
     /// exhaustive: a probe minted under a prefix the predicate does not know is a probe whose
     /// own-address reads are gated and routed like a real node's (#2894).</param>
-    /// <param name="read">Reads the answer off the probe hub. Runs before the probe is disposed.</param>
+    /// <param name="read">Reads the answer off the probe hub, given the content type and whether it
+    /// was resolved by the historical NodeType-name lookup (<c>true</c>) or only by the mesh-wide
+    /// NodeType → content-type map (<c>false</c>). Runs before the probe is disposed.</param>
     /// <param name="skipLogContext">What is being skipped, for the debug log on failure.</param>
     private IObservable<string?> ReadFromContentType(
         string nodeType,
         string addressPrefix,
-        Func<IMessageHub, ITypeDefinition, string?> read,
+        Func<IMessageHub, Type, bool, string?> read,
         string skipLogContext)
     {
         return ResolveHubConfigForSchema(nodeType)
@@ -3248,10 +3320,24 @@ public partial class MeshOperations
                     if (probeHub == null) return null;
                     try
                     {
+                        // 🚨 TWO resolutions, and `read` is told which one answered. The historical
+                        // one looks the NodeType PATH up as a `$type` name, which hits only when the
+                        // content record happens to be named like the NodeType (`Story` → `Story`):
+                        // `WithContentType` registers the CLR NAME, never the path. For every other
+                        // NodeType — `Feedback/Feedback` binds `FeedbackContent` — it missed, the
+                        // probe answered null, and Create's schema check passed content it never
+                        // looked at (Systemorph/MeshWeaver.Plugins#3042). The exact answer is the
+                        // mesh-wide NodeType → content-type map, which `WithContentType` fills on
+                        // THIS probe under the path stamped above.
                         var typeRegistry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
-                        if (typeRegistry == null || !typeRegistry.TryGetType(nodeType, out var typeDefinition))
-                            return null;
-                        return read(probeHub, typeDefinition!);
+                        if (typeRegistry != null
+                            && typeRegistry.TryGetType(nodeType, out var typeDefinition)
+                            && typeDefinition?.Type is { } byName)
+                            return read(probeHub, byName, true);
+                        return probeHub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } contentTypes
+                               && contentTypes.TryResolveByNodeType(nodeType, out var byNodeType)
+                            ? read(probeHub, byNodeType, false)
+                            : null;
                     }
                     finally
                     {
@@ -3280,7 +3366,97 @@ public partial class MeshOperations
     /// </para>
     /// </summary>
     private static string GenerateSchema(IMessageHub probeHub, Type contentType)
-        => probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType).ToJsonString();
+        => ToolAnswerJson.Write(probeHub.JsonSerializerOptions.GetJsonSchemaAsNode(contentType));
+
+    /// <summary>
+    /// The CREATE-only checks against the BOUND content type, run on the probe hub — the one place
+    /// an in-mesh NodeType's content type is known to this facade (on the facade's own hub such
+    /// content is an untyped <see cref="JsonElement"/>, so judging typed content can say nothing
+    /// about it).
+    ///
+    /// <para>🚨 <b>The defect</b> (Systemorph/MeshWeaver.Plugins#3042). An agent created
+    /// <c>Feedback/Feedback</c> nodes with content <c>{"$type":"Feedback","status":…,"category":…,"description":…}</c>.
+    /// No type named <c>Feedback</c> exists — the NodeType binds <c>FeedbackContent</c> — and
+    /// <see cref="ValidateAgainst"/> could not see it: deserialising into the concrete bound type
+    /// ignores a foreign <c>$type</c> and skips unmapped members, so it bound to a record with an
+    /// empty message and the create answered <c>Created:</c>. The owning hub's handover watcher then
+    /// found nothing to hand over and returned; the filings were dead letters. The reverse shape —
+    /// the right <c>$type</c> plus a member the type lacks — dropped that member silently, which
+    /// Patch and Update already refuse.</para>
+    ///
+    /// <list type="number">
+    ///   <item>A <c>$type</c> that names a different record than the bound one AND resolves to no
+    ///     type on the NodeType's own registry (full name, then short name) nor in the bound type's
+    ///     own assembly (where a polymorphic subtype would live) is refused. A <c>$type</c> that
+    ///     resolves to a real type is left alone — judging it would be reshaping it.</item>
+    ///   <item>A top-level member the bound type does not declare is refused, naming it — the
+    ///     same rule and message as <see cref="Patch"/> and <see cref="Update"/>. Not asked of
+    ///     content whose <c>$type</c> resolves to a DIFFERENT record: its members are that
+    ///     record's, and the write boundary admits it.</item>
+    /// </list>
+    /// </summary>
+    private string? ValidateCreatedContent(
+        MeshNode meshNode, JsonObject createdContent, Type contentType, IMessageHub probeHub)
+    {
+        if (createdContent["$type"] is JsonValue typeValue
+            && typeValue.TryGetValue<string>(out var discriminator)
+            && !string.IsNullOrEmpty(discriminator)
+            && !ContentDiscriminator.Admits(createdContent, contentType))
+            // A foreign discriminator that RESOLVES is a different record: its members are that
+            // record's, so judging them against the declared type would refuse here what the write
+            // boundary (ContentSchemaValidator) admits — the verb and the boundary must agree
+            // (review on #6231).
+            return DiscriminatorResolves(discriminator, contentType, probeHub)
+                ? null
+                : $"Error: refused create of {meshNode.Path}: the content's \"$type\" is '{discriminator}', "
+                + $"but no type of that name exists for NodeType '{meshNode.NodeType}' — its content type is "
+                + $"{contentType.Name}. Stored, the node would read as empty to every consumer and anything "
+                + "that reacts to this NodeType would skip it without a word. Send the content as "
+                + $"\"$type\": \"{contentType.Name}\" with its declared members (get @<path>/schema/). "
+                + "Nothing was written.";
+
+        // The PROBE's options: the bound type and its serialization configuration (NodeType-specific
+        // converters, naming, extension data) belong to the probe hub, not to this facade.
+        return UnknownContentMembersOfType(createdContent, contentType, probeHub.JsonSerializerOptions) is { Count: > 0 } unknown
+            ? UnknownContentMembersMessage("create", meshNode.Path, meshNode.NodeType, contentType, unknown)
+            : null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="discriminator"/> names a type the NodeType's own hub, the mesh-wide
+    /// content-type map, or the bound type's own assembly knows. The full-name → short-name fallback is the load path's
+    /// (<c>MeshNodeTypeSource.ResolveJsonElementContent</c>).
+    /// </summary>
+    private bool DiscriminatorResolves(string discriminator, Type contentType, IMessageHub probeHub)
+    {
+        var shortName = discriminator.Contains('.')
+            ? discriminator[(discriminator.LastIndexOf('.') + 1)..]
+            : discriminator;
+        var registry = probeHub.ServiceProvider.GetService<ITypeRegistry>();
+        if (registry is not null
+            && ((registry.TryGetType(discriminator, out var def) && def?.Type is not null)
+                || (registry.TryGetType(shortName, out def) && def?.Type is not null)))
+            return true;
+        // The mesh-wide content-type map too — the same instruments, in the same order, as the
+        // write-boundary validator (ContentSchemaValidator): a discriminator belonging to another
+        // activated runtime NodeType may be known ONLY there, and the verb must not refuse what
+        // the write boundary admits.
+        if (probeHub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } contentTypes
+            && (contentTypes.TryResolveByDiscriminator(discriminator, out _)
+                || contentTypes.TryResolveByDiscriminator(shortName, out _)))
+            return true;
+        try
+        {
+            return contentType.Assembly.GetTypes()
+                .Any(t => string.Equals(t.Name, shortName, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (ex is System.Reflection.ReflectionTypeLoadException or NotSupportedException)
+        {
+            // Cannot enumerate here — a fact about this process, not the content: do not refuse on it.
+            logger.LogDebug(ex, "Create: could not enumerate the assembly of {ContentType}", contentType.Name);
+            return true;
+        }
+    }
 
     /// <summary>
     /// Deserializes <paramref name="meshNode"/>'s content into <paramref name="contentType"/> and
@@ -3310,7 +3486,7 @@ public partial class MeshOperations
         => ReadFromContentType(
             nodeType,
             TransientProbeAddresses.SchemaLookupProbePrefix,
-            (probeHub, typeDefinition) => GenerateSchema(probeHub, typeDefinition.Type),
+            (probeHub, contentType, exact) => exact ? GenerateSchema(probeHub, contentType) : null,
             "Schema retrieval");
 
     /// <summary>
@@ -3327,7 +3503,7 @@ public partial class MeshOperations
         return ReadFromContentType(
             meshNode.NodeType!,
             TransientProbeAddresses.SchemaValidationProbePrefix,
-            (_, typeDefinition) => ValidateAgainst(meshNode, typeDefinition.Type),
+            (_, contentType, exact) => exact ? ValidateAgainst(meshNode, contentType) : null,
             "Schema validation");
     }
 
@@ -3659,7 +3835,7 @@ public partial class MeshOperations
         return permissions
             .Zip(globalAdmin, (granted, isGlobalAdmin) => granted is not { } g || isGlobalAdmin is not { } admin
                 ? $"Unavailable: access at '{resolvedPath}' reached no verdict (the permission fold completed without an answer) — ask again."
-                : JsonSerializer.Serialize(new
+                : ToolAnswerJson.Serialize(new
             {
                 userId = identified ? userId : null,
                 name = identified ? ctx?.Name : null,
@@ -3675,6 +3851,62 @@ public partial class MeshOperations
             {
                 logger.LogWarning(ex, "WhoAmI could not evaluate access at {Path}", resolvedPath);
                 return Observable.Return($"Error: could not evaluate access at '{resolvedPath}': {ex.Message}");
+            });
+    }
+
+    /// <summary>The node types a visit is never recorded for — identity and access records, the same
+    /// set the Blazor navigation tracker skips.</summary>
+    private static readonly FrozenSet<string> UntrackedVisitTypes = new[]
+    {
+        "User", "Role", "Group", "AccessAssignment",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Records that the CALLER opened <paramref name="path"/> — the access log
+    /// (<c>{user}/_UserActivity</c>) that "last used" orders by: the home Apps grid
+    /// (<c>SortByAccess</c>), "recently viewed", the search box's recent pages. The Blazor portal
+    /// records a visit inside its own navigation; a client that navigates on its own (the native
+    /// app) had no way to, so on a phone every app stayed "never opened" (2026-10-08).
+    ///
+    /// <para>The same request and the same skips as that tracker: never for an anonymous, system
+    /// or email-shaped caller (an unprovisioned partition), never for a satellite or an
+    /// identity/access node. The path is recorded AS GIVEN — an app tile's target can be a route
+    /// (<c>{user}/Chat</c>), and the grid looks its tile up by exactly that path — with the node's
+    /// name and type when a node answers there.</para>
+    /// </summary>
+    /// <returns>A cold observable emitting <c>{"recorded":true|false,"path":…}</c>.</returns>
+    public IObservable<string> Visit(string path)
+    {
+        var resolvedPath = string.IsNullOrWhiteSpace(path) ? "" : ResolvePath(path).Trim('/');
+        if (resolvedPath.Length == 0)
+            return Observable.Return("Error: path is required.");
+        var userId = ResolveCallerUserId();
+        string Answer(bool recorded) => ToolAnswerJson.Serialize(new { recorded, path = resolvedPath }, JsonSerializerOptions.Web);
+        if (userId == WellKnownUsers.Anonymous
+            || string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+            || userId.Contains('@')
+            || resolvedPath.Contains('@')
+            || resolvedPath.StartsWith('_')
+            || resolvedPath.Contains("/_", StringComparison.Ordinal))
+            return Observable.Return(Answer(false));
+
+        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(3))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .DefaultIfEmpty(null)
+            .Select(node =>
+            {
+                if (node?.NodeType is { } type && UntrackedVisitTypes.Contains(type))
+                    return Answer(false);
+                var slash = resolvedPath.LastIndexOf('/');
+                hub.GetMeshHub().Post(new TrackActivityRequest(
+                    resolvedPath,
+                    userId,
+                    node?.Name ?? resolvedPath[(slash + 1)..],
+                    node?.NodeType,
+                    node?.Namespace ?? (slash < 0 ? "" : resolvedPath[..slash])));
+                return Answer(true);
             });
     }
 
@@ -3771,14 +4003,14 @@ public partial class MeshOperations
                         // Explicit JsonObject so the count keys are ALWAYS present — a 0 count (e.g.
                         // an access-denied import that wrote nothing) would otherwise be dropped by
                         // the hub serializer's WhenWritingDefault, breaking consumers that read them.
-                        .Select(uploadedCount => new JsonObject
+                        .Select(uploadedCount => ToolAnswerJson.Write(new JsonObject
                         {
                             ["status"] = "Imported",
                             ["exportRoot"] = root,
                             ["targetNamespace"] = target,
                             ["nodesImported"] = createdCount,
                             ["filesImported"] = uploadedCount,
-                        }.ToJsonString());
+                        }));
                 });
             })
             .Catch((Exception ex) =>
@@ -4051,13 +4283,13 @@ public partial class MeshOperations
         logger.LogInformation("Recycle called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -4129,12 +4361,12 @@ public partial class MeshOperations
                         "Recycle: the permission fold for {Path} reached NO verdict — reporting it "
                         + "as retryable, not as a denial: {Reason}",
                         resolvedPath, outcome.UndeterminedReason);
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Error", path = resolvedPath, message = RecycleUndeterminedMessage },
                         hub.JsonSerializerOptions));
                 }
 
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                     hub.JsonSerializerOptions));
             });
@@ -4162,7 +4394,7 @@ public partial class MeshOperations
     {
         logger.LogInformation("ReloadModule called with module={Module}", module ?? "(all)");
         if (string.IsNullOrWhiteSpace(reason))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
                 hub.JsonSerializerOptions));
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -4178,7 +4410,7 @@ public partial class MeshOperations
                 })
                 : Observable.Return(new ModuleReloadTicket(null,
                     "reloading a module requires a platform admin (an admin on the Admin partition) — it can restart this instance")))
-            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+            .Select(ticket => ToolAnswerJson.Serialize(ticket.Accepted
                     ? new
                     {
                         status = "Requested",
@@ -4213,7 +4445,7 @@ public partial class MeshOperations
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var caller = (accessService?.Context ?? accessService?.CircuitContext)?.ObjectId;
-        string Error(string message) => JsonSerializer.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
+        string Error(string message) => ToolAnswerJson.Serialize(new { status = "Error", message }, hub.JsonSerializerOptions);
         IObservable<string> Gate(Func<IObservable<string>> act) =>
             hub.IsGlobalAdmin().Take(1).Catch((Exception _) => Observable.Return(false))
                 .SelectMany(admin => admin
@@ -4252,7 +4484,7 @@ public partial class MeshOperations
             .Where(until)
             .Take(1)
             .Timeout(UninstallPreviewBudget)
-            .Select(r => JsonSerializer.Serialize(new
+            .Select(r => ToolAnswerJson.Serialize(new
             {
                 status = r.Status,
                 path,
@@ -4272,7 +4504,7 @@ public partial class MeshOperations
                     _ => r.Failure ?? r.Status,
                 },
             }, hub.JsonSerializerOptions))
-            .Catch((Exception ex) => Observable.Return(JsonSerializer.Serialize(
+            .Catch((Exception ex) => Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Pending", path, message = $"the request is still running ({ex.Message}) — read {path}" },
                 hub.JsonSerializerOptions)));
     }
@@ -4296,7 +4528,7 @@ public partial class MeshOperations
     {
         logger.LogInformation("RebootInstance called (wedged={Wedged})", wedged);
         if (string.IsNullOrWhiteSpace(reason))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "a reason is required — it is carried into the restart announcement and every log line" },
                 hub.JsonSerializerOptions));
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -4313,7 +4545,7 @@ public partial class MeshOperations
                 })
                 : Observable.Return(new InstanceRebootTicket(null,
                     "rebooting an instance requires a platform admin (an admin on the Admin partition) — it restarts this instance")))
-            .Select(ticket => JsonSerializer.Serialize(ticket.Accepted
+            .Select(ticket => ToolAnswerJson.Serialize(ticket.Accepted
                     ? new
                     {
                         status = "Requested",
@@ -4634,7 +4866,7 @@ public partial class MeshOperations
                             + "hub is NOT disposed — a caller who may not write this node may not "
                             + "recycle it either. Nothing was changed.",
                             resolvedPath);
-                        return Observable.Return<string?>(JsonSerializer.Serialize(
+                        return Observable.Return<string?>(ToolAnswerJson.Serialize(
                             new { status = "Error", path = resolvedPath, message = RecycleDeniedMessage },
                             hub.JsonSerializerOptions));
                     }
@@ -4703,7 +4935,7 @@ public partial class MeshOperations
                             Reason = RecycleReason(resolvedPath, reason),
                         },
                         o => o.WithTarget(new Address(resolvedPath)));
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Recycled",
@@ -4716,7 +4948,7 @@ public partial class MeshOperations
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error recycling {Path}", resolvedPath);
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", path = resolvedPath, message = ex.Message },
                 hub.JsonSerializerOptions));
         }
@@ -4730,7 +4962,7 @@ public partial class MeshOperations
         logger.LogInformation("GetDiagnostics called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -4746,7 +4978,7 @@ public partial class MeshOperations
                 // verdict must say so — the "Unknown / Not found" reply below would otherwise
                 // point the caller at the node's existence instead of at the degradation (#974).
                 if (outcome.IsUnavailable)
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Unavailable",
@@ -4763,7 +4995,7 @@ public partial class MeshOperations
                 var nodeTypePath = isNodeTypeDef ? node!.Path : node?.NodeType;
 
                 if (string.IsNullOrEmpty(nodeTypePath))
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Unknown", message = $"Not found: {resolvedPath}" },
                         hub.JsonSerializerOptions));
 
@@ -4837,7 +5069,7 @@ public partial class MeshOperations
                                 // type have come from" is exactly what the reader is asking.
                                 ResolveContentType(nodeTypePath));
                         return WithContentType(
-                            JsonSerializer.Serialize(
+                            ToolAnswerJson.Serialize(
                                 new { status = "Unknown", message = $"NodeType '{nodeTypePath}' has no definition" },
                                 hub.JsonSerializerOptions),
                             ContentTypeBlock(ResolveContentType(nodeTypePath)),
@@ -4960,13 +5192,13 @@ public partial class MeshOperations
         logger.LogInformation("Compile called with path={Path}", path);
 
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrWhiteSpace(resolvedPath))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
@@ -5010,12 +5242,12 @@ public partial class MeshOperations
                         "Compile: the permission fold for {Path} reached NO verdict — reporting it "
                         + "as retryable, not as a denial: {Reason}",
                         resolvedPath, outcome.UndeterminedReason);
-                    return Observable.Return(JsonSerializer.Serialize(
+                    return Observable.Return(ToolAnswerJson.Serialize(
                         new { status = "Error", path = resolvedPath, message = CompileUndeterminedMessage },
                         hub.JsonSerializerOptions));
                 }
 
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = CompileDeniedMessage },
                     hub.JsonSerializerOptions));
             });
@@ -5027,7 +5259,7 @@ public partial class MeshOperations
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Compile: workspace unavailable for {Path}", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new { status = "Error", path = resolvedPath, message = ex.Message },
                     hub.JsonSerializerOptions));
             }
@@ -5106,7 +5338,7 @@ public partial class MeshOperations
                     catch (Exception ex)
                     {
                         logger.LogWarning(ex, "Compile trigger failed for {Path}", resolvedPath);
-                        return Observable.Return(JsonSerializer.Serialize(
+                        return Observable.Return(ToolAnswerJson.Serialize(
                             new { status = "Error", path = resolvedPath, message = ex.Message },
                             hub.JsonSerializerOptions));
                     }
@@ -5135,7 +5367,7 @@ public partial class MeshOperations
                             var status = ReadCompilationStatusFromNode(n);
                             var error = ReadCompilationError(n);
                             var activityPath = ReadActivityPath(n);
-                            return JsonSerializer.Serialize(
+                            return ToolAnswerJson.Serialize(
                                 new
                                 {
                                     status = status?.ToString() ?? "Unknown",
@@ -5172,7 +5404,7 @@ public partial class MeshOperations
                                 .Take(1)
                                 .Timeout(TimeSpan.FromSeconds(5))
                                 .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-                                .Select(now => JsonSerializer.Serialize(
+                                .Select(now => ToolAnswerJson.Serialize(
                                     new
                                     {
                                         status = (ReadCompilationStatusFromNode(now) ?? CompilationStatus.Pending)
@@ -5319,12 +5551,28 @@ public partial class MeshOperations
     internal static IReadOnlyList<string> UnknownContentMembers(
         JsonObject? callerContent, object? typedContent, JsonSerializerOptions options)
     {
-        if (callerContent is null or { Count: 0 } || typedContent is null or JsonElement or JsonNode)
+        if (typedContent is null or JsonElement or JsonNode)
+            return [];
+        return UnknownContentMembersOfType(callerContent, typedContent.GetType(), options);
+    }
+
+    /// <summary>
+    /// The same rule judged against the bound content TYPE rather than an instance of it — the
+    /// shape the create path has on the probe hub, where the content itself is still untyped JSON.
+    /// </summary>
+    /// <param name="callerContent">The content keys the caller SENT.</param>
+    /// <param name="contentType">The content type the NodeType binds.</param>
+    /// <param name="options">The hub's serializer options — they define the member names.</param>
+    /// <returns>The undeclared keys, in the caller's order.</returns>
+    internal static IReadOnlyList<string> UnknownContentMembersOfType(
+        JsonObject? callerContent, Type contentType, JsonSerializerOptions options)
+    {
+        if (callerContent is null or { Count: 0 })
             return [];
         System.Text.Json.Serialization.Metadata.JsonTypeInfo typeInfo;
         try
         {
-            typeInfo = options.GetTypeInfo(typedContent.GetType());
+            typeInfo = options.GetTypeInfo(contentType);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
         {
@@ -5444,7 +5692,7 @@ public partial class MeshOperations
         string? activityPath,
         DateTimeOffset? startedAt,
         JsonSerializerOptions options)
-        => JsonSerializer.Serialize(
+        => ToolAnswerJson.Serialize(
             new
             {
                 status = "Compiling",
@@ -5587,7 +5835,7 @@ public partial class MeshOperations
         if (node is null)
             return json;
         node["contentType"] = contentTypeBlock;
-        return node.ToJsonString(options);
+        return ToolAnswerJson.Write(node, options);
     }
 
     private static string FormatDiagnosticsCore(
@@ -5606,7 +5854,7 @@ public partial class MeshOperations
                 var elapsedMs = startedAt is null
                     ? (long?)null
                     : (long)(DateTimeOffset.UtcNow - startedAt.Value).TotalMilliseconds;
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Compiling",
@@ -5618,7 +5866,7 @@ public partial class MeshOperations
                     options);
             }
             case CompilationStatus.Error:
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Error",
@@ -5641,7 +5889,7 @@ public partial class MeshOperations
                 // So the reply now says exactly what it knows (the compile succeeded), NAMES the
                 // build it is about (mvid), and points at the one check that is actually about the
                 // served bytes. Do not restore the "is loaded" clause.
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Ok",
@@ -5665,7 +5913,7 @@ public partial class MeshOperations
                 // 🚨 Must never read as a compile failure: `error` here describes why the
                 // state could not be DETERMINED, not what is wrong with the source. An
                 // agent that confuses the two starts "fixing" code that compiles fine.
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Unavailable",
@@ -5683,7 +5931,7 @@ public partial class MeshOperations
                 // describes a build this process cannot LOAD AT ALL. Never "Ok" — the compile
                 // did succeed, for somebody else — and never "Error", which would send the
                 // reader to correct source code that is fine (the #641 mistake).
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Foreign",
@@ -5702,7 +5950,7 @@ public partial class MeshOperations
                     options);
             case CompilationStatus.Unknown:
             default:
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Unknown",
@@ -5745,13 +5993,13 @@ public partial class MeshOperations
     {
         logger.LogInformation("ExecuteScript called with path={Path}", path);
         if (string.IsNullOrWhiteSpace(path))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new { status = "Error", message = "path is required" },
                 hub.JsonSerializerOptions));
 
         var resolvedPath = ResolvePath(path);
         if (string.IsNullOrEmpty(resolvedPath.Split('/', 2)[0]))
-            return Observable.Return(JsonSerializer.Serialize(
+            return Observable.Return(ToolAnswerJson.Serialize(
                 new
                 {
                     status = "Error",
@@ -5868,7 +6116,7 @@ public partial class MeshOperations
         logger.LogWarning(
             "ExecuteScript refused for {Path} ({ErrorType}): {Error} No Activity node was created.",
             resolvedPath, errorType, message);
-        return JsonSerializer.Serialize(
+        return ToolAnswerJson.Serialize(
             new { status = "Error", path = resolvedPath, errorType, message },
             hub.JsonSerializerOptions);
     }
@@ -5901,7 +6149,7 @@ public partial class MeshOperations
                     logger.LogWarning(
                         "ExecuteScript dispatch refused for {Path}: {Error}",
                         resolvedPath, response.Error);
-                    return JsonSerializer.Serialize(
+                    return ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Error",
@@ -5923,7 +6171,7 @@ public partial class MeshOperations
                 // Activity, never a locally reconstructed guess.
                 var activityPath = response.ActivityLog;
                 if (string.IsNullOrEmpty(activityPath))
-                    return JsonSerializer.Serialize(
+                    return ToolAnswerJson.Serialize(
                         new
                         {
                             status = "Error",
@@ -5941,7 +6189,7 @@ public partial class MeshOperations
                         },
                         hub.JsonSerializerOptions);
 
-                return JsonSerializer.Serialize(
+                return ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Dispatched",
@@ -5960,7 +6208,7 @@ public partial class MeshOperations
                 // STACK to the logger, TYPE + message + detail to the caller — a caller
                 // that cannot tell "pending" from "dropped" is the defect this fixes.
                 logger.LogError(ex, "ExecuteScript dispatch failed for {Path}", resolvedPath);
-                return Observable.Return(JsonSerializer.Serialize(
+                return Observable.Return(ToolAnswerJson.Serialize(
                     new
                     {
                         status = "Error",

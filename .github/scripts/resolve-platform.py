@@ -209,6 +209,86 @@ PLUGINS_SEAL_JOB = ("plugins seal", "Plugins: bake + seal the publication for th
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SET_NAME = re.compile(r"^(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)[.-]ci\.(\d+)$")
+# 🚨 THE SEMVER NOTATION (policy `platform-semver-versioning`, core Doc/Architecture/PlatformVersioning).
+# From line 3.1 on, core mints a set as the plain `<major>.<minor>.<run>` — the PATCH is the same
+# monotonic CD run number `-ci.<run>` carried — so both notations share ONE lineage. Read ONLY at
+# or above the boundary: no name the old notation published (`3.0.0`, the withdrawn
+# `3.1.0-ci.7841`) changes meaning. The C# twin is `PlatformReleaseOrder.SemVerEraStart`.
+SEMVER_ERA_START = (3, 1)
+SEMVER_SET_NAME = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+# A SemVer-notation set in a notice message: it opens the message and is followed by "— core".
+NOTICE_SEMVER_SET = re.compile(r"(?<![0-9A-Za-z.\-])(\d+)\.(\d+)\.(\d+)(?=\s+—\s+core\b)")
+
+
+def semver_line(line: str | None) -> bool:
+    """True when the props LINE (`3.1.0`) mints the SemVer notation, i.e. is at or above the boundary."""
+    m = SEMVER_SET_NAME.match(line or "")
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= SEMVER_ERA_START
+
+
+class _SetName:
+    """A parsed set name in the SET_NAME match's shape: group(1) is the LINE (the props
+    `PlatformVersion`, `3.0.0` / `3.1.0`), group(2) the run number — whichever notation it wore."""
+
+    def __init__(self, line: str, run: str):
+        self._groups = ("", line, run)
+
+    def group(self, index: int) -> str:
+        return self._groups[index]
+
+
+def match_set_name(text: str | None):
+    """Parse a set name in EITHER notation, or None: `3.0.0-ci.9999` (and the retired `.ci.`)
+    → (`3.0.0`, `9999`); `3.1.10000` → (`3.1.0`, `10000`). Everything else — a sha, `main`, a
+    pointer, a clean `3.0.x` promotion below the boundary — is no set."""
+    legacy = SET_NAME.fullmatch(text or "")
+    if legacy:
+        return legacy
+    m = SEMVER_SET_NAME.fullmatch(text or "")
+    # A zero patch is a floor or a release (`3.1.0`), never a CD run.
+    if m and (int(m.group(1)), int(m.group(2))) >= SEMVER_ERA_START and int(m.group(3)) > 0:
+        return _SetName(f"{m.group(1)}.{m.group(2)}.0", m.group(3))
+    return None
+
+
+# 🚨 THE LINE ALONE DOES NOT DECIDE THE NOTATION. The withdrawn slip published `3.1.0-ci.7832…7841`
+# under the props line `3.1.0` with the OLD minter, so (line `3.1.0`, run 7841) composed by line
+# alone spells a set that never existed (`3.1.7841`). Every other run on a line at or above the era
+# start comes from the SemVer minter, which moves `PlatformVersion` to 3.1.0 in the same change
+# (cut-over step 4, Doc/Architecture/PlatformVersioning §4) — so the slip's last run is the one
+# boundary that separates the two, and it is EVIDENCE (a published range), not a guess.
+WITHDRAWN_SLIP_LAST_RUN = 7841
+
+
+def compose_set_name(line: str, run_number: int) -> str:
+    """The set name a CD run of `run_number` published under the props LINE `line` — the ONE
+    composer, so the two notations can never be spelled two ways: `3.0.0` → `3.0.0-ci.<run>`,
+    `3.1.0` → `3.1.<run>`, and the withdrawn slip (`3.1.0`, ≤ 7841) → `3.1.0-ci.<run>`."""
+    if semver_line(line) and run_number > WITHDRAWN_SLIP_LAST_RUN:
+        major, minor, _ = line.split(".")
+        return f"{major}.{minor}.{run_number}"
+    return f"{line}-ci.{run_number}"
+
+
+def canonical_set_name(text: str | None) -> str | None:
+    """A WRITTEN set name in its canonical spelling, keeping the notation it was WRITTEN in — never
+    re-composed from its line: `3.1.0-ci.7841` stays `3.1.0-ci.7841`, the retired `.ci.` separator
+    becomes `-ci.`, `3.1.10000` stays `3.1.10000`. None when the text is no set."""
+    legacy = SET_NAME.fullmatch(text or "")
+    if legacy:
+        return f"{legacy.group(1)}-ci.{legacy.group(2)}"
+    return text if match_set_name(text) else None
+
+
+def notice_set_number(message: str) -> int | None:
+    """The run number a `Platform for this run` notice names, in either notation, or None."""
+    legacy = NOTICE_SET.search(message)
+    if legacy:
+        return int(legacy.group(2))
+    m = NOTICE_SEMVER_SET.search(message)
+    if m and (int(m.group(1)), int(m.group(2))) >= SEMVER_ERA_START and int(m.group(3)) > 0:
+        return int(m.group(3))
+    return None
 PLATFORM_VERSION = re.compile(
     r"<PlatformVersion\b[^>]*>\s*(\d+\.\d+\.\d+[^<\s]*)\s*</PlatformVersion>")
 MAX_RUN_PAGES = 3          # 300 runs ≈ several days of core CD at the observed cadence
@@ -380,6 +460,11 @@ def stale_listing(runs: list[dict], passed_ceiling: int | None, now: float) -> s
     is judged by the ceiling alone (the live API always sends it — the self-test fixtures don't)."""
     main_runs = [r for r in runs if r.get("head_branch") in (None, CORE_BRANCH)]
     if not main_runs:
+        # An EMPTY page is proven stale by a ceiling exactly as a short one is: the caller's own
+        # `main` passed on core CD #ceiling, so that run exists and page 1 omits it.
+        if passed_ceiling is not None:
+            return (f"it holds no main-cd run at all, but this repository's `main` has already "
+                    f"passed on core CD #{passed_ceiling}, which the page does not contain")
         return None
     newest = _newest_main_run(runs)
     if passed_ceiling is not None and newest < passed_ceiling:
@@ -410,7 +495,11 @@ def ceiling_shortfall(runs: list[dict], passed_ceiling: int | None) -> int | Non
     if passed_ceiling is None:
         return None
     newest = _newest_main_run(runs)
-    return newest if newest is not None and newest < passed_ceiling else None
+    if newest is None:
+        # An EMPTY page (no main run) under a ceiling is the same proven shortfall, reported as 0:
+        # the witnessed run exists and the page holds nothing up to it.
+        return 0
+    return newest if newest < passed_ceiling else None
 
 
 def recent_listing_witness(fetch: Fetch, runs: list[dict], now: float) -> tuple[dict | None, str]:
@@ -466,8 +555,9 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
     how many of those re-reads came back EMPTY.
 
     🚨 THE EMPTY COUNT IS RETURNED SEPARATELY because an attempt has THREE outcomes, not two:
-    settled, still stale, and empty — and an empty page is not a staleness finding at all, it is a
-    page that was not adopted. Collapsing the last two let the refusal claim page 1 "was still
+    settled, still stale, and empty — and an empty re-read is not a NEW staleness finding, it is a
+    page that was not adopted. An independent recent-run witness can still prove the initial empty
+    page incomplete. Collapsing the last two let the refusal claim page 1 "was still
     stale every time" over evidence that said `came back EMPTY`, which is the same class of defect
     as the refusal this function exists to soften: a summary stronger than what was measured.
 
@@ -506,9 +596,8 @@ def settle_page_one(fetch: Fetch, runs: list[dict], passed_ceiling: int | None, 
         fresh = cd_runs(fetch, 1)
         rereads = attempt
         if not fresh:
-            # 🚨 An EMPTY page says NOTHING about staleness — `stale_listing` has no main rows to
-            # judge, so adopting it would turn a refusal into a resolution off a page holding no
-            # candidates at all. Keep the page that at least had rows, and the refusal it earned.
+            # 🚨 An EMPTY re-read says NOTHING new about staleness. Keep the previous page and
+            # the finding supported by its independent witness or ceiling.
             empties += 1
             log(f"  re-read {attempt} of {STALE_REREADS}: page 1 came back EMPTY — not adopted; "
                 "the previous page and its refusal stand")
@@ -560,10 +649,10 @@ def reread_note(rereads: int, empties: int = 0) -> str:
         saw = "and was still stale every time"
     elif stale <= 0:
         saw = (f"and every one of the {empties} came back EMPTY — an empty page is never adopted, "
-               "so the refusal stands on the page that had rows")
+               "so the previous page and its refusal stand")
     else:
         saw = (f"— {stale} came back still stale and {empties} came back EMPTY (an empty page is "
-               "never adopted, so the refusal stands on the page that had rows)")
+               "never adopted, so the previous page and its refusal stand)")
     return (f" [MeshWeaver#4750: page 1 WAS re-read {rereads} time(s) over ~{seconds:.0f}s before "
             f"this refusal {saw}; what each re-read held is logged line by line above. The "
             "sentence before this one predates the re-reads and is kept verbatim because a "
@@ -683,7 +772,7 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
                 raise ProvenanceUnavailable(f"platform-bake job {job_id} has a malformed final receipt")
             fields[key] = value
         sha = fields.get("source-sha", "")
-        release = SET_NAME.fullmatch(fields.get("release", ""))
+        release = match_set_name(fields.get("release", ""))
         counts = [fields.get(key, "") for key in
                   ("bundles", "targets-published", "targets-converged", "release-markers")]
         # 🚨 A TARGET THAT ALREADY HELD THIS PUBLICATION REACHED IT (#4247). `targets-already` counts
@@ -707,7 +796,9 @@ def publication_source(fetch: Fetch, jobs: list[dict], run_number: int,
             raise ProvenanceUnavailable(
                 f"platform-bake job {job_id} has an incomplete or inconsistent final publication receipt")
         version = release.group(1)
-        receipt = PublicationSource(sha, version, f"{version}-ci.{run_number}")
+        # The receipt NAMES its release — keep that spelling rather than re-composing it from the
+        # line, which cannot tell the withdrawn slip's `3.1.0-ci.<n>` from `3.1.<n>`.
+        receipt = PublicationSource(sha, version, canonical_set_name(fields["release"]))
         receipts[job_id, run_number] = receipt
         sources.add(receipt)
     # 🚨 ZERO AND TWO ARE DIFFERENT SENTENCES (#4242). This said "successful platform bakes
@@ -1501,9 +1592,9 @@ def main_passed_ceiling(fetch: Fetch, repo: str, limit: int = MAIN_RUNS_EXAMINED
         # if a run publishes two different sets under the production title, its own verdict cannot
         # be told from a fixture, so the RUN is skipped and said. `best` is a max over the other
         # runs examined, so one poisoned run costs a data point, never a wrong ceiling.
-        named = [int(match.group(2))
+        named = [number
                  for row in rows if NOTICE_TITLE in str(row.get("title") or "")
-                 for match in [NOTICE_SET.search(str(row.get("message") or ""))] if match]
+                 for number in [notice_set_number(str(row.get("message") or ""))] if number is not None]
         distinct = sorted(set(named))
         if len(distinct) > 1:
             ambiguous += 1
@@ -1782,8 +1873,8 @@ def promotion_identity(fetch: Fetch, run_id: int, run_number: int) -> PromotionI
         version = record["v_portal"]
         staging = str(record.get("staging") or "")
         if (record["run_number"] != run_number or not SHA.fullmatch(core)
-                or not SHA.fullmatch(plugins) or not SET_NAME.fullmatch(version)
-                or int(SET_NAME.fullmatch(version).group(2)) != run_number
+                or not SHA.fullmatch(plugins) or not match_set_name(version)
+                or int(match_set_name(version).group(2)) != run_number
                 or record["v_plugin"] != version or record["v_migration"] != version
                 or record["short"] != core[:7] or record["plugins_short"] != plugins[:7]
                 or record["key"] != f"pair-{core[:7]}-p{plugins[:7]}"):
@@ -1807,7 +1898,8 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
     only a set whose PORTAL carries its version tag counts, because main-cd's `arm` job is the only
     writer of that tag and the fleet rolls only to it. Measured 2026-10-04: set 3.0.0-ci.9898 was
     sealed but not armed, and a roll to it failed at the mirror — the tag did not exist."""
-    tags = [f"{version}-ci.{run_number}", f"{version}.ci.{run_number}"] if version else []
+    tags = ([compose_set_name(version, run_number)] if semver_line(version)
+            else [f"{version}-ci.{run_number}", f"{version}.ci.{run_number}"]) if version else []
     out: dict[str, str] = {}
     via = ""
     images = [(tester, "image-digest"), (portal, "portal-image-digest")]
@@ -1867,12 +1959,13 @@ def parse_freeze(value: str) -> tuple[str, str]:
     value = value.strip()
     if SHA.match(value):
         return "sha", value
-    match = SET_NAME.match(value)
+    match = match_set_name(value)
     if match:
-        return "set", f"{match.group(1)}-ci.{int(match.group(2))}"
+        return "set", canonical_set_name(value)
     raise ResolutionError(
         f"the freeze `{value}` is neither a 40-character core commit nor a set name of the shape "
-        "`X.Y.Z[-prerelease]-ci.<n>` (also accepting `.ci.<n>`). A freeze names ONE sealed "
+        "`X.Y.Z[-prerelease]-ci.<n>` (also accepting `.ci.<n>`) or, from line 3.1 on, "
+        "`<major>.<minor>.<n>`. A freeze names ONE sealed "
         "platform set exactly; it is not a branch and not a prefix.")
 
 
@@ -1911,8 +2004,6 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
         if chosen is not None and (publication is not None or lookback >= PLUGINS_LOOKBACK):
             break
         runs = cd_runs(fetch, page)
-        if not runs:
-            break
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
         # one set and must keep working in an incident, so it is neither re-read nor refused here.
         why_stale, rereads, empties = None, 0, 0
@@ -1928,6 +2019,14 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 "Re-run this job; the resolver refuses rather than re-reading, because this red is "
                 "the harmless answer and a silently old platform is not."
                 + reread_note(rereads, empties))
+        if not runs:
+            if page == 1 and not freeze_kind:
+                raise ResolutionError(
+                    f"page 1 of {CORE_CD_WORKFLOW} runs on {CORE_REPO} {CORE_BRANCH} returned "
+                    "EMPTY and the independent recent-run query found no main-CD witness. "
+                    "No platform set was examined; check the GitHub run listing before treating "
+                    "this as an absent release.")
+            break
         for run in runs:
             if run.get("head_branch") not in (None, CORE_BRANCH):
                 continue
@@ -1946,7 +2045,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     version = platform_version(fetch, sha, log=log)
                     publication = PluginsPublication(
                         number, str(run.get("html_url", "")),
-                        f"{version}-ci.{number}" if version else f"ci.{number} (line unknown)",
+                        compose_set_name(version, number) if version else f"ci.{number} (line unknown)",
                         v.plugins_sealed_at)
                     log(f"  plugins publication: {label} sealed it at {v.plugins_sealed_at or '?'}"
                         f" ({publication.set_name}) — an older set than the platform chosen")
@@ -1958,7 +2057,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             # attribute correctly. The same check is re-applied below, against the receipt.
             if freeze_kind == "sha" and not verify_source and sha != freeze_value:
                 continue
-            if freeze_kind == "set" and number != int(SET_NAME.fullmatch(freeze_value).group(2)):
+            if freeze_kind == "set" and number != int(match_set_name(freeze_value).group(2)):
                 continue
             examined += 1
 
@@ -2049,7 +2148,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 version = platform_version(fetch, sha, log=log)
                 publication = PluginsPublication(
                     number, str(run.get("html_url", "")),
-                    f"{version}-ci.{number}" if version else f"ci.{number} (line unknown)",
+                    compose_set_name(version, number) if version else f"ci.{number} (line unknown)",
                     v.plugins_sealed_at)
                 log(f"  plugins publication: {label} sealed it at {v.plugins_sealed_at or '?'}"
                     f" ({publication.set_name})")
@@ -2113,7 +2212,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             else:
                 if version is ...:
                     version = platform_version(fetch, sha, log=log)
-                set_name = f"{version}-ci.{number}" if version else f"ci.{number} (line unknown)"
+                set_name = compose_set_name(version, number) if version else f"ci.{number} (line unknown)"
             if freeze_kind == "set" and set_name != freeze_value:
                 raise ResolutionError(
                     f"the freeze names {freeze_value}, but {label} resolves to {set_name}. "
@@ -2140,7 +2239,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                     continue
                 portal_tags = None
                 if identity is not None:
-                    if (version is not None and identity.version != f"{version}-ci.{number}") \
+                    if (version is not None and identity.version != compose_set_name(version, number)) \
                             or (verify_source and identity.core_sha != sha):
                         skipped.append(f"{label} = {set_name}: promotion record disagrees with "
                                        "the release or final bake receipt")
@@ -2149,7 +2248,7 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                             raise ResolutionError(f"the freeze names {label}: {skipped[-1]}")
                         continue
                     sha = identity.core_sha
-                    version = SET_NAME.fullmatch(identity.version).group(1)
+                    version = match_set_name(identity.version).group(1)
                     set_name = identity.version
                     portal_tags = identity.portal_identity_tags
                     label = f"main-cd #{number} (promoted core {sha[:9]}, Plugins {identity.plugins_sha[:9]})"
@@ -2473,6 +2572,46 @@ def self_test() -> int:
     failures: list[str] = []
     logs: list[str] = []
     total = 0
+
+    # ── the SemVer notation (policy `platform-semver-versioning`): both notations, ONE lineage ──
+    def _parsed(text: str):
+        m = match_set_name(text)
+        return (m.group(1), m.group(2)) if m else None
+
+    def _freeze(text: str):
+        try:
+            return parse_freeze(text)
+        except ResolutionError as error:
+            return f"refused: {error}"
+
+    for name, got, want in (
+        ("old notation parses", _parsed("3.0.0-ci.9999"), ("3.0.0", "9999")),
+        ("retired .ci. parses", _parsed("3.0.0-rc9.ci.7824"), ("3.0.0-rc9", "7824")),
+        ("SemVer notation parses: line 3.1.0, run = patch", _parsed("3.1.10000"), ("3.1.0", "10000")),
+        ("a clean 3.0.x below the boundary is NO set", _parsed("3.0.0"), None),
+        ("a zero patch is a floor or a release, NO set", _parsed("3.1.0"), None),
+        ("a pointer is no set", _parsed("3.1-latest"), None),
+        ("the withdrawn slip keeps its ci number", _parsed("3.1.0-ci.7841"), ("3.1.0", "7841")),
+        ("compose: an old line mints -ci.<run>", compose_set_name("3.0.0", 9999), "3.0.0-ci.9999"),
+        ("compose: a SemVer line mints <major>.<minor>.<run>", compose_set_name("3.1.0", 10000), "3.1.10000"),
+        ("compose: a minor bump keeps the notation", compose_set_name("3.2.0", 10400), "3.2.10400"),
+        ("a freeze in the SemVer notation is a set", _freeze("3.1.10000"), ("set", "3.1.10000")),
+        ("a freeze in the old notation is unchanged", _freeze("3.0.0.ci.8203"), ("set", "3.0.0-ci.8203")),
+        # The line alone cannot decide the notation: the withdrawn slip is `3.1.0-ci.<n>` on a
+        # SemVer-era line, and re-composing it from (3.1.0, 7841) spells the nonexistent `3.1.7841`.
+        ("a freeze of the withdrawn slip keeps its notation", _freeze("3.1.0-ci.7841"), ("set", "3.1.0-ci.7841")),
+        ("compose: the withdrawn slip's runs keep -ci.<run>", compose_set_name("3.1.0", 7841), "3.1.0-ci.7841"),
+        ("compose: the first run past the slip is SemVer", compose_set_name("3.1.0", 7842), "3.1.7842"),
+        ("canonical: a written SemVer name is kept", canonical_set_name("3.1.10000"), "3.1.10000"),
+        ("canonical: the retired .ci. separator becomes -ci.", canonical_set_name("3.0.0-rc9.ci.7824"), "3.0.0-rc9-ci.7824"),
+        ("canonical: a non-set is None", canonical_set_name("3.1.0"), None),
+        ("notice: old notation", notice_set_number("3.0.0-ci.8207 — core aaaaaaaaa (x)"), 8207),
+        ("notice: SemVer notation", notice_set_number("3.1.10000 — core aaaaaaaaa (x)"), 10000),
+        ("notice: a clean 3.0.0 names no set", notice_set_number("3.0.0 — core aaaaaaaaa"), None),
+    ):
+        total += 1
+        if got != want:
+            failures.append(f"semver notation: {name}: got {got!r}, want {want!r}")
 
     def case(name: str, expect_ok: bool, fn: Callable[[], Chosen], check=None) -> None:
         nonlocal total
@@ -3102,6 +3241,56 @@ def self_test() -> int:
                         log=logs.append, now=lambda: recent_at),
          lambda message: "page 1 freshness is unverified" in message
                          and "synthetic recent-query read failure" in message)
+
+    # The first read can be EMPTY too. Previously choose() broke out before asking for the
+    # independent witness, reported "newest 0 runs", and the named transient steward could not
+    # recognise the GitHub listing fault (Plugins main run 37695330204, 2026-10-07).
+    fetch_initial_empty, initial_empty = _flipping_page_one([[], recent_settled])
+    fetch_initial_empty = _with_recent_witness(fetch_initial_empty, initial_empty, recent_witness)
+    case("an initially EMPTY page 1 with a recent witness is re-read and resolves", True,
+         lambda: choose(fetch_initial_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: recent_at, sleep=initial_empty["slept"].append),
+         lambda c: c.sha == C and initial_empty["page1"] == 2
+         and initial_empty["witness_reads"] == 1 and initial_empty["slept"] == [20.0]
+         and any("page 1's newest (none)" in line for line in logs))
+    fetch_still_empty, still_empty = _flipping_page_one([[]])
+    fetch_still_empty = _with_recent_witness(fetch_still_empty, still_empty, recent_witness)
+    case("an initially EMPTY page still EMPTY after bounded re-reads is a keyed refusal", False,
+         lambda: choose(fetch_still_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: recent_at, sleep=still_empty["slept"].append),
+         lambda message: "STALE run listing" in message and KEYED_4433 in message
+         and "came back EMPTY" in message and "newest 0" not in message
+         and still_empty["page1"] == 1 + STALE_REREADS
+         and still_empty["slept"] == [20.0, 40.0, 60.0])
+    # An EMPTY page under a ceiling is CEILING-proven stale on its own: the caller's main passed
+    # on that run, so it exists. It must take the keyed bounded re-read, not the unverified-
+    # listing error, even when the recent-run query is empty too (automatic review, #6278).
+    fetch_ceiling_empty, ceiling_empty = _flipping_page_one([[], settled])
+    case("an initially EMPTY page 1 under a passed ceiling is re-read and resolves", True,
+         lambda: choose(fetch_ceiling_empty, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_empty["slept"].append),
+         lambda c: c.set_name == "3.0.0-ci.8676" and ceiling_empty["page1"] == 2
+         and ceiling_empty["slept"] == [20.0])
+    fetch_ceiling_stuck, ceiling_stuck = _flipping_page_one([[]])
+    case("an EMPTY page 1 under a passed ceiling still EMPTY after re-reads is a keyed refusal",
+         False,
+         lambda: choose(fetch_ceiling_stuck, _registry(full3), tester, portal, log=logs.append,
+                        now=lambda: made_at + 3600, passed_ceiling=8676,
+                        sleep=ceiling_stuck["slept"].append),
+         lambda message: "STALE run listing" in message and KEYED_4433 in message
+         and "#8676" in message and "came back EMPTY" in message
+         and "no main-CD witness" not in message
+         and ceiling_stuck["page1"] == 1 + STALE_REREADS
+         and ceiling_stuck["slept"] == [20.0, 40.0, 60.0])
+    fetch_unwitnessed_empty, unwitnessed_empty = _flipping_page_one([[]])
+    case("an EMPTY page without a witness names missing evidence, not an absent release", False,
+         lambda: choose(fetch_unwitnessed_empty, _registry(full3), tester, portal,
+                        log=logs.append, now=lambda: recent_at,
+                        sleep=unwitnessed_empty["slept"].append),
+         lambda message: "returned EMPTY" in message and "no main-CD witness" in message
+         and "No platform set was examined" in message and unwitnessed_empty["page1"] == 1
+         and unwitnessed_empty["slept"] == [])
 
     fetch_settles, settles = _flipping_page_one([aged, settled])
     case("#4750: a page 1 stale by the CEILING is RE-READ, and a settled re-read resolves", True,

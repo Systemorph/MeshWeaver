@@ -56,7 +56,11 @@ public static class PluginRegistryEndpoints
                 ?.CreateLogger(typeof(PluginRegistryEndpoints));
 
             var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
+            // The request's stage ledger starts at its arrival here, so the answer deadline counts
+            // the authentication too (RegistryAnswerDeadline, #4963).
+            var stages = RegistryAnswerDeadline.Stages(http);
             var outcome = (await authenticator.AuthenticateOutcome(http.Request.Headers.Authorization)
+                .InStage(stages, "instance-key authentication")
                 .FirstAsync()
                 .ObserveCompletion(
                     ex => logger?.LogWarning(ex,
@@ -97,7 +101,7 @@ public static class PluginRegistryEndpoints
         });
 
         group.MapGet("", (HttpContext http, IMessageHub rootHub, IConfiguration config, CancellationToken ct) =>
-            List(rootHub, config, Caller(http), ct));
+            List(http, rootHub, config, Caller(http), ct));
 
         group.MapPost("/files", (HttpContext http, IMessageHub rootHub, IConfiguration config,
                 FilesBody body, CancellationToken ct) =>
@@ -136,10 +140,10 @@ public static class PluginRegistryEndpoints
     // catalog down (degrade to empty + log); with exactly ONE source the failure propagates so List
     // can surface it as a 502 (the historical single-source behavior — the consumer sees the cause).
     private static IObservable<IReadOnlyList<PackageManifest>> ListFrom(
-        ConfiguredPackageSource s, bool soleSource, ILogger? logger)
+        ConfiguredPackageSource s, bool soleSource, ILogger? logger, RegistryRequestStages? stages = null)
         => soleSource
-            ? s.Source.ListPackages(s.GitRef)
-            : s.Source.ListPackages(s.GitRef).Catch((Exception ex) =>
+            ? s.Source.ListPackages(s.GitRef).InStage(stages, $"source listing '{s.Name}'")
+            : s.Source.ListPackages(s.GitRef).InStage(stages, $"source listing '{s.Name}'").Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Plugin registry: listing packages from {Name} @ {Ref} failed",
                     s.Name, s.GitRef);
@@ -168,10 +172,11 @@ public static class PluginRegistryEndpoints
     /// cache that leaked would otherwise be invisible until it was in production.</remarks>
     internal static IObservable<RegistryListing> ListAll(
         IReadOnlyList<ConfiguredPackageSource> sources, AuthenticatedInstance? caller,
-        IObservable<IReadOnlyList<PublicationArtifact>> artifacts, ILogger? logger)
+        IObservable<IReadOnlyList<PublicationArtifact>> artifacts, ILogger? logger,
+        RegistryRequestStages? stages = null)
         => Observable.CombineLatest(sources.Select(s =>
-                ListFrom(s, sources.Count == 1, logger).Select(list => (Source: s, Packages: list))))
-            .SelectMany(perSource => artifacts.Select(pushed => new RegistryListing
+                ListFrom(s, sources.Count == 1, logger, stages).Select(list => (Source: s, Packages: list))))
+            .SelectMany(perSource => artifacts.InStage(stages, "pushed artifacts record").Select(pushed => new RegistryListing
             {
                 // Stamp the source each package came from BEFORE the merge — afterwards the
                 // provenance is gone. Consumers scope source-specific actions on it (notably
@@ -228,13 +233,13 @@ public static class PluginRegistryEndpoints
         => caller is null || caller.Allows(source.Name, package.Id, package.Tier);
 
     private static Task<IResult> List(
-        IMessageHub hub, IConfiguration config, AuthenticatedInstance? caller, CancellationToken ct)
+        HttpContext http, IMessageHub hub, IConfiguration config, AuthenticatedInstance? caller, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
         var sources = Sources(hub, config);
         if (sources.Count == 0)
             return Task.FromResult(Results.Content(PluginRegistryPayloads.List([]), "application/json"));
-        return ListAll(sources, caller, Artifacts(hub), logger)
+        return ListAll(sources, caller, Artifacts(hub), logger, RegistryAnswerDeadline.Stages(http))
             .Do(listing =>
             {
                 // Named on the registry too, as before #4097 — now beside the wire answer rather
@@ -255,6 +260,11 @@ public static class PluginRegistryEndpoints
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
+            // The listing ANSWERS or REFUSES within the deadline, naming the stage it was waiting
+            // on — a shared source listing that hangs must not hold every catalog request open
+            // with nothing written and nothing logged (#4963).
+            .AnsweredWithin(http, RegistryAnswerDeadline.Budget(http, RegistryAnswerDeadline.AnswerBudget),
+                InstanceRegistryAuthenticator.RetryAfterSeconds, logger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => logger?.LogWarning(ex,

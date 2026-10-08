@@ -91,6 +91,38 @@ public class SystemScopeDoesNotEscapeTest
     }
 
     /// <summary>
+    /// The governed form: the work runs as System CARRYING the governed activity and the user it
+    /// serves — what the broad-grant guard and the audit trail read — and the subscriber still gets
+    /// its own identity back.
+    /// </summary>
+    [Fact]
+    public void RunAsSystemForCarriesGovernedByAndOnBehalfOfAndHandsBackTheCallersIdentity()
+    {
+        var access = new AccessService();
+        access.SetContext(Alice);
+
+        AccessContext? seenByTheWork = null;
+        string? seenByTheSubscriber = null;
+
+        access
+            .RunAsSystemFor("Ops/Actions/roll-1", "alice", () => Observable.Defer(() =>
+            {
+                seenByTheWork = access.Context;
+                return Observable.Return(1);
+            }))
+            .Subscribe(_ => seenByTheSubscriber = access.Context?.ObjectId);
+
+        seenByTheWork.Should().NotBeNull("the scope must cover the work");
+        seenByTheWork!.ObjectId.Should().Be(System, "the work executes as System");
+        seenByTheWork.GovernedBy.Should().Be("Ops/Actions/roll-1",
+            "the governed activity the System write executes must travel with it");
+        seenByTheWork.OnBehalfOf.Should().Be("alice", "so must the user it serves");
+        seenByTheSubscriber.Should().Be("alice",
+            "the System identity was established FOR the work; the subscriber never inherits it");
+        access.Context?.ObjectId.Should().Be("alice", "the subscribing thread is never latched");
+    }
+
+    /// <summary>
     /// The half that matters most: the leak reaches whatever the subscriber BUILDS, because the mesh
     /// write primitives capture the ambient when they are called. This is the shape the install path
     /// had.

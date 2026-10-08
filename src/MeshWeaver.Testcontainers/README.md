@@ -12,6 +12,8 @@ await using var postgres = new PostgreSqlBuilder("pgvector/pgvector:pg17")
     .WithDatabase("memex").WithUsername("postgres").WithPassword("postgres")
     .Build();
 await postgres.StartAsync(ct);
+// …then run the memex-migration image of the SAME build once on `network` with
+// ConnectionStrings__memex set, and require exit code 0 — the portal refuses an unmigrated schema.
 
 await using var memex = new MemexBuilder()
     .WithImage("meshweaver.azurecr.io/memex-portal-ai@sha256:…")   // the pinned build under test
@@ -29,11 +31,12 @@ The portal image runs `Memex.Portal.Distributed` (Orleans + Postgres). A throwaw
 
 | setting | value | reason |
 |---|---|---|
-| `Deployment:Backend` | `Filesystem` | Azure-free self-host backend; `Deployment:DataRoot=/data` |
+| `Deployment:Backend` | `Filesystem` | Azure-free self-host backend; `Deployment:DataRoot=/tmp/memex-data` (the image runs non-root and cannot create `/data`) |
 | `Features:Orleans:Clustering` | `Localhost` | single silo in one container |
-| `ConnectionStrings:memex` | **required** — `WithPostgres(...)` | the instance's data; reachable *from inside* the container (a network alias, not a host-mapped port) |
+| `ConnectionStrings:memex` | **required** — `WithPostgres(...)` | the instance's data; reachable *from inside* the container (a network alias, not a host-mapped port). Migrate it first with the `memex-migration` image of the same build — `DbVersionGate` refuses an unmigrated schema |
+| `Graph:Storage:Type` | `PostgreSql` — set by `WithPostgres(...)` | the image bakes no storage type, so without it the container serves the first-run SETUP wizard and composes no mesh (#6037) |
 | `Authentication:EnableDevLogin` | `true` (explicit) | the host forces it OFF unless the value is literally `true` |
-| wait strategy | HTTP 2xx on `/healthz` (port 8080) | the instance answers before the test proceeds |
+| wait strategy | `MemexReadiness`: `/health` answers the startup census (`Healthy`/`Degraded`) and `/api/version` is not redirected to `/setup` | the MESH started, not merely the process — a probe path's flat `200 ok` is answered by the setup wizard too. A wizard, or a container that exits first, fails `StartAsync` at once with the reason |
 | output | stdout/stderr → the test output | the container's log is the test's log |
 
 `WithImage` is the consumer's: this module never guesses a tag.

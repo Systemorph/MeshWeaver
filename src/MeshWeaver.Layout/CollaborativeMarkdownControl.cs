@@ -14,6 +14,16 @@ public record CollaborativeMarkdownControl()
     public object? Value { get; init; }
 
     /// <summary>
+    /// <see cref="Value"/> rendered on the SERVER by the one Markdig pipeline
+    /// (<c>MarkdownViewLogic.Render</c>) — byte-identical to what <c>POST /api/mesh/render-markdown</c>
+    /// answers, interactive markers included. Remote clients (the React web pack, the React Native
+    /// app) render it directly instead of a second, separately authenticated round-trip per page;
+    /// the Blazor view renders in-process and ignores it. <c>null</c> when the producer did not
+    /// render (a client then falls back to the endpoint).
+    /// </summary>
+    public string? Html { get; init; }
+
+    /// <summary>
     /// The node path for comment creation/resolution.
     /// </summary>
     public string? NodePath { get; init; }
@@ -72,6 +82,10 @@ public record CollaborativeMarkdownControl()
     /// <param name="value">The markdown string (with annotation markers) to render.</param>
     /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated value.</returns>
     public CollaborativeMarkdownControl WithValue(string value) => this with { Value = value };
+    /// <summary>Returns a copy carrying <paramref name="html"/> as the server-rendered <see cref="Value"/>.</summary>
+    /// <param name="html">The Markdig render of the value.</param>
+    /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the pre-rendered HTML.</returns>
+    public CollaborativeMarkdownControl WithHtml(string? html) => this with { Html = html };
     /// <summary>Returns a copy with <paramref name="nodePath"/> as the node path for comment anchoring.</summary>
     /// <param name="nodePath">The mesh node path used when creating or resolving comments.</param>
     /// <returns>A new <see cref="CollaborativeMarkdownControl"/> with the updated node path.</returns>

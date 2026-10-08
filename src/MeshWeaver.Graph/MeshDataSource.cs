@@ -1558,6 +1558,21 @@ public static class MeshDataSourceExtensions
             }
         });
         hub.RegisterForDisposal(delSub);
+
+        // 🚨 A declared hole in the cross-process feed (Plugins#3000): a commit another process
+        // made to THIS node while the channel was down will never arrive above, and the mirror
+        // would serve — and the next own write build on — the pre-gap state indefinitely (the
+        // stale-snapshot shape behind #1814). Same remedy as an entity-less notification: the
+        // coalesced re-read, adopted forward-only (AdoptPersisted), so a gap that changed nothing
+        // here adopts nothing. A row the re-read finds ABSENT is left alone, exactly as on the
+        // notification path: the delete itself reaches this hub as a lifecycle request
+        // (HandleDeleteNodeRequest's fan-out), not through the feed.
+        var gapSub = storage.ChangeFeedGaps.Subscribe(
+            _ => reReadTrigger.OnNext(Unit.Default),
+            ex => TryLogWarning(hub, ex,
+                "Change-feed gap subscription faulted on {Hub} — a later gap will not re-read this "
+                + "node", hub.Address));
+        hub.RegisterForDisposal(gapSub);
         return;
 
         // Adopts a state that is ALREADY DURABLE, whether it arrived ON the notification (an

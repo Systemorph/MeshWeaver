@@ -30,8 +30,16 @@ no second secret.
 {{- end -}}
 {{- $identity := ($b.identity | default "") -}}
 {{- $identityFile := ($b.identityFile | default "") -}}
-{{- if and (not $identity) (not $identityFile) -}}
-{{- fail "bundles.identity (the framework identity of portal.image) or bundles.identityFile (a file inside the init container holding it) is required when bundles.registry is set — the publication is addressed by identity, and without one the init container cannot name a tag" -}}
+{{- /* 🚨 MeshWeaver#6052 ask 3: the identity is READ FROM THE PORTAL IMAGE by default — the image
+       carries `meshweaver-framework.identity` (written by MeshWeaverSurfaceManifest.targets), and the
+       `bundle-identity` init container copies it out before `bundle-fetch` runs. `bundles.identity`
+       is no longer the source: it is the FALLBACK for an image that predates the file. Only an
+       explicit `bundles.identityFile` (an operator-owned file on the data volume) turns the
+       derivation off. */ -}}
+{{- $fromImage := not $identityFile -}}
+{{- $imageIdentityPath := ($b.imageIdentityPath | default "/app/meshweaver-framework.identity") -}}
+{{- if and $fromImage (not (hasPrefix "/" $imageIdentityPath)) -}}
+{{- fail (printf "bundles.imageIdentityPath must be an absolute path inside the portal image (got %q)" $imageIdentityPath) -}}
 {{- end -}}
 {{- $image := required "bundles.image is required when bundles.registry is set — the ORAS image, pinned by digest (ghcr.io/oras-project/oras:v1.3.4@sha256:…)" $b.image -}}
 {{- $root := ($b.root | default ((.Values.config).memex_portal).PreWarm__PrebuiltBundleRoot | default "") -}}
@@ -45,6 +53,9 @@ no second secret.
       "sources" $sources
       "identity" $identity
       "identityFile" $identityFile
+      "fromImage" $fromImage
+      "imageIdentityPath" $imageIdentityPath
+      "portalImage" ((.Values.portal).image | default "")
       "image" $image
       "root" $root
       "pullSecret" $pullSecret

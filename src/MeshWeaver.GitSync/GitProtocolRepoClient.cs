@@ -370,6 +370,11 @@ public sealed class GitProtocolRepoClient(
         => octokit.GetHeadSha(repositoryUrl, commitish, accessToken);
 
     /// <inheritdoc />
+    public IObservable<IReadOnlyList<string>?> GetChangedPaths(
+        string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
+        => octokit.GetChangedPaths(repositoryUrl, baseSha, headSha, subdirectory, accessToken);
+
+    /// <inheritdoc />
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
         => octokit.CreateBranch(request);
 

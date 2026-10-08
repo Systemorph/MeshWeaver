@@ -136,6 +136,17 @@ public record UpdatePolicyContent
     [Browsable(false)]
     public string? LastCheckVerdict { get; init; }
 
+    /// <summary>
+    /// Whether <see cref="LastCheckVerdict"/> is a FAILURE of the update path
+    /// (<c>SelfUpdateVerdict.IsFailure</c>: the check faulted, a release could neither be applied
+    /// nor handed over, a migration refused the roll, …) — so a reader such as the fleet console
+    /// can flag a failing self-update without parsing the sentence (policy
+    /// <c>control-first-never-silent</c>). Null on a record written before the field existed. Not
+    /// user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public bool? LastCheckFailed { get; init; }
+
     /// <summary>What woke that check — <c>Startup</c>, <c>BuildCompletion</c>, <c>PolicyChange</c>
     /// or <c>SafetyNet</c>. An install whose checks are ONLY ever <c>SafetyNet</c> has a dead event
     /// channel, and that is not visible from anything else. Not user-editable.</summary>

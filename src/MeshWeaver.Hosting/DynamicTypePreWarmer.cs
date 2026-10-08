@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -497,10 +498,13 @@ public static class DynamicTypePreWarmer
                     var classified = overlay.Definitions;
 
                     var store = ResolveAssemblyStore(mesh);
-                    return NodeTypeBakeStatus
+                    IObservable<NodeTypeBakeReport> ProbeStore() => NodeTypeBakeStatus
                         .Probe(classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
-                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
+                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+                    return ProbeStore()
+                        // #6052 ask 2: BytesMissing re-lands the SHIPPED build before it is rebuilt.
+                        .SelectMany(report => RefetchBytesMissing(mesh, classified, store, report, ProbeStore, logger))
                         .Select(report => report with
                         {
                             ClassifiedFromLocalAdoption = overlay.Applied.Count,
@@ -702,6 +706,9 @@ public static class DynamicTypePreWarmer
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         var liveFramework = NodeTypeCompilationHelpers.FrameworkVersion;
         var options = mesh.JsonSerializerOptions;
+        // Memex#668 — the census also counts stale-but-serving builds against the mesh's bound.
+        var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
+            mesh.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
         // RunAsSystem, never `Observable.Using(AccessContextScope.AsSystem, …)` — see
         // WarmDynamicTypes (#1444/#1790) for why the scope must be sealed inside the one Subscribe.
         return accessService.RunAsSystem(() => mesh
@@ -713,8 +720,43 @@ public static class DynamicTypePreWarmer
             // every unrelated NodeType write — a log wave during a bake. The boot-time DynamicTypesOf
             // already names each untyped path once; here it is COUNTED (Untyped) and printed.
             .Select(nodes => NodeTypeLiveRecordCensus.Of(
-                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow));
+                LiveRecordsOf(nodes, options, logger: null), liveFramework, bootedAt, DateTimeOffset.UtcNow,
+                staleBound));
     }
+
+    /// <summary>
+    /// 🚨 <see cref="ObserveLiveRecordCensus"/> as a STANDING watch: re-opened after a transient
+    /// infrastructure fault, bounded, so one connection reset no longer ends it for the process's
+    /// life (MeshWeaver#6183). See <see cref="StandingWatchRecovery"/> for which faults qualify and
+    /// why the re-open belongs here rather than in the query layer.
+    ///
+    /// <para>Each re-open calls <see cref="ObserveLiveRecordCensus"/> again, which asks the synced-
+    /// query cache again — and the cache has already evicted the faulted chain
+    /// (<c>MeshNodeStreamCache.EvictFaultedQuery</c>), so the re-open builds a fresh upstream instead
+    /// of being replayed the latched fault.</para>
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="bootedAt">The boundary <see cref="NodeTypeLiveRecordCensus.ForeignSinceBoot"/> splits on.</param>
+    /// <param name="onReopen">Told each fault the watch is about to re-open from (fault, re-open number, delay).</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="maxConsecutive">Re-opens allowed in a row without an emission.</param>
+    /// <param name="backoff">Delay before re-open number n; <see cref="StandingWatchRecovery.DefaultBackoff"/> when null.</param>
+    /// <param name="scheduler">Scheduler for the backoff; <see cref="Scheduler.Default"/> when null.</param>
+    /// <returns>One census per catalog emission, across re-opens.</returns>
+    public static IObservable<NodeTypeLiveRecordCensus> WatchLiveRecordCensus(
+        IMessageHub mesh,
+        DateTimeOffset bootedAt,
+        Action<Exception, int, TimeSpan>? onReopen,
+        ILogger? logger = null,
+        int maxConsecutive = StandingWatchRecovery.DefaultMaxConsecutive,
+        Func<int, TimeSpan>? backoff = null,
+        IScheduler? scheduler = null)
+        => StandingWatchRecovery.ReopenOnTransientFault(
+            () => ObserveLiveRecordCensus(mesh, bootedAt, logger),
+            maxConsecutive,
+            backoff ?? StandingWatchRecovery.DefaultBackoff,
+            scheduler ?? Scheduler.Default,
+            onReopen);
 
     /// <summary>
     /// The census's input from one catalog emission: every ACTIVE node whose definition has
@@ -805,6 +847,56 @@ public static class DynamicTypePreWarmer
         {
             Ownership = report.Ownership,
         };
+    }
+
+    /// <summary>
+    /// 🚨 <b>BytesMissing is re-FETCHED before it is re-BUILT</b> (MeshWeaver#6052 ask 2). A type in
+    /// <see cref="BakeState.BytesMissing"/> has a record naming a usable build for this framework
+    /// and a store without its bytes — on a pod-local store, the normal state of every type another
+    /// pod compiled or adopted. When the bytes the record names are a SHIPPED build, the registry
+    /// still has them: one <see cref="IShippedBuildSource"/> call (one download per package) lands
+    /// each that IS the record's build (<see cref="ShippedBuildRefetch.Land"/>), and the store is
+    /// probed again so those types read <see cref="BakeState.Baked"/> and are not compiled. Anything
+    /// not landed stays BytesMissing and is rebuilt exactly as before. No source registered, or
+    /// nothing missing: the report is returned unchanged and nothing is asked.
+    /// </summary>
+    /// <param name="mesh">The mesh hub (resolves the optional source).</param>
+    /// <param name="definitions">The classified definitions the report was probed from.</param>
+    /// <param name="store">The store the probe read.</param>
+    /// <param name="report">The probe's report.</param>
+    /// <param name="reprobe">Probes the store again over the same definitions.</param>
+    /// <param name="logger">Logger.</param>
+    internal static IObservable<NodeTypeBakeReport> RefetchBytesMissing(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        NodeTypeBakeReport report,
+        Func<IObservable<NodeTypeBakeReport>> reprobe,
+        ILogger? logger)
+    {
+        if (report.BytesMissing.IsEmpty)
+            return Observable.Return(report);
+        var source = mesh.ServiceProvider.GetService<IShippedBuildSource>();
+        if (source is null)
+            return Observable.Return(report);
+        var missing = report.BytesMissing
+            .Select(e => definitions.TryGetValue(e.TypePath, out var d) && d?.LastCompiledVersion is { } v
+                ? new MissingBuild(e.TypePath, v, d.LatestAssemblyPath, d.LatestAssemblyMvid)
+                : null)
+            .Where(m => m is not null)
+            .Select(m => m!)
+            .ToList();
+        return ShippedBuildRefetch.Land(mesh.ServiceProvider, store, source, missing, logger)
+            .SelectMany(landed =>
+            {
+                if (landed.IsEmpty)
+                    return Observable.Return(report);
+                logger?.LogInformation(
+                    "DynamicTypePreWarmer: re-fetched the SHIPPED build of {Landed} of {Missing} BytesMissing "
+                    + "NodeType(s) instead of rebuilding them: {Types}",
+                    landed.Count, report.BytesMissing.Count, string.Join(", ", landed));
+                return reprobe();
+            });
     }
 
     /// <summary>

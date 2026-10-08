@@ -84,7 +84,10 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
                 BuildProvenance = adoptedBefore ? BuildProvenance.AdoptedVerified : BuildProvenance.Compiled,
             },
         };
-        await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        // As SYSTEM, the identity the module installer writes a type under: a partition with a
+        // one-way _GitSync takes content writes from System alone (#5140).
+        using (Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem())
+            await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence)
             .Match(n => n?.Content is NodeTypeDefinition d
                         && string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal),
@@ -118,15 +121,20 @@ public class UntrackedModuleContentNeverCompilesHereTest(ITestOutputHelper outpu
     /// request. Force means "build the live source, not whatever a bundle resolves", so it skips
     /// the on-demand adoption pass and lands straight on the gate; on an untracked module partition
     /// the live source is the problem, which is why the gate does not exempt it.</summary>
-    private Task RequestForcedRelease(string path) =>
-        Mesh.GetMeshNodeStream(path)
-            .Update<NodeTypeDefinition>(d => d with
-            {
-                RequestedReleaseAt = DateTimeOffset.UtcNow,
-                RequestedReleaseForce = true,
-                RequestedReleaseBy = "operator",
-            })
-            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+    private async Task RequestForcedRelease(string path)
+    {
+        // Stamped as SYSTEM: the tracked partition is one-way synced, and no person holds a write
+        // on its content (#5140); this test's subject is the gate, not who may write the stamp.
+        using (Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem())
+            await Mesh.GetMeshNodeStream(path)
+                .Update<NodeTypeDefinition>(d => d with
+                {
+                    RequestedReleaseAt = DateTimeOffset.UtcNow,
+                    RequestedReleaseForce = true,
+                    RequestedReleaseBy = "operator",
+                })
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+    }
 
     /// <summary>The record after the request settled: an <c>Error</c>, an <c>Ok</c> whose MVID
     /// is no longer the seeded one (the seeded Ok is what the stream starts with, so it is not a

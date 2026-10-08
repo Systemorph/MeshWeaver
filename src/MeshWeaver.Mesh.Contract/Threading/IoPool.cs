@@ -17,6 +17,10 @@ public sealed class IoPool : IIoPool, IDisposable
 {
     private readonly SemaphoreSlim _gate;
     private readonly TaskFactory _blockingFactory;
+    // The scheduler behind _blockingFactory. Its lane threads are KEPT between bursts (#4654 — a
+    // thread exit is the trigger of a CoreCLR collectible-thread-static defect), so disposal must
+    // tell it to let them go: TryFinishDisposal calls Complete() once no blocking leaf can still run.
+    private readonly LimitedConcurrencyLevelTaskScheduler _blockingScheduler;
     private readonly int _maxConcurrency;
     // Pool-wide cancellation, linked into every leaf's token. Drain()/Dispose() cancel it so all
     // in-flight leaves unwind promptly — the join then knows they will release their gate permits.
@@ -210,11 +214,12 @@ public sealed class IoPool : IIoPool, IDisposable
         _drainGrace = drainGrace;
         _maxConcurrency = maxConcurrency;
         _gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        _blockingScheduler = new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, blockingThreadName);
         _blockingFactory = new TaskFactory(
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             TaskContinuationOptions.None,
-            new LimitedConcurrencyLevelTaskScheduler(maxConcurrency, blockingThreadName));
+            _blockingScheduler);
         // 🚨 STARTED HERE, NOT AT TEARDOWN — see StartCanceller. Every field the thread touches is
         // assigned above; it parks on _cancelRequestedLatch and does nothing until Drain()/Dispose()
         // raises it.
@@ -591,8 +596,12 @@ public sealed class IoPool : IIoPool, IDisposable
                     // admission only when a slot was actually granted. A cancelled wait never became
                     // an admission, and folding it into the distribution would blend "how long work
                     // waited to run" with "how long a teardown took to unwind".
+                    // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                    // is waiting has not yet been given a thread to reach the gate at all.
+                    Interlocked.Increment(ref _atGate);
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    catch { LeaveWaitOnce(); throw; }
+                    catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                    Interlocked.Decrement(ref _atGate);
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
@@ -716,6 +725,64 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <inheritdoc />
     public int CurrentlyWaiting => Volatile.Read(ref _waiting);
 
+    // How many of `_waiting` are BLOCKING leaves (queued on the limited-concurrency scheduler, which
+    // never touches `_gate`). Kept apart so the async half of the queue can be read against the
+    // gate's own free-permit count — see AdmissionReading (#5057).
+    private int _blockingWaiting;
+
+    // How many async leaves are INSIDE `_gate.WaitAsync` right now — from the call until it returns,
+    // granted or cancelled (#5057). The rest of the async queue has been accepted and has not yet
+    // been given a ThreadPool thread to reach the gate. A permit granted to one of these waiters
+    // keeps it counted here until its continuation runs, which is what GrantedNotRunning measures.
+    private int _atGate;
+
+    /// <summary>
+    /// 🚨 WHAT THE QUEUE IS WAITING FOR — the cap, or a thread (#5057).
+    ///
+    /// <para><see cref="CurrentlyWaiting"/> counts work from ACCEPTED to RUNNING (#1198), and for
+    /// the three async entry points that interval has TWO halves: the ThreadPool hop before the leaf
+    /// reaches the gate (its prologue runs under <c>SubscribeOn(TaskPoolScheduler)</c>), and the gate
+    /// wait itself — which, once a permit is released, also needs a ThreadPool thread to RESUME the
+    /// waiter, because <see cref="SemaphoreSlim"/> completes its async waiters asynchronously. So the
+    /// queue is split by WHERE each leaf is, not inferred from the permit count: leaves not yet at the
+    /// gate wait for a thread whatever the cap is doing; gate waiters holding a granted permit wait for
+    /// a thread to resume them; only gate waiters with no permit are held back by the cap. A queue can
+    /// hold all three at once, so each is reported. The release create that missed its 10 s bound on
+    /// memex-cloud read <c>pg-read:Postgres(cap 16) 94 waiting, 10 in flight</c> — six permits that
+    /// were neither running nor demonstrably free — and the census could not say which.</para>
+    ///
+    /// <para>Lock-free reads of independently moving counters: individually exact, not a
+    /// transaction, so the derived numbers are clamped at zero. A diagnostic, never an input to how
+    /// much work to issue.</para>
+    /// </summary>
+    internal IoPoolAdmission AdmissionReading
+    {
+        get
+        {
+            var waiting = Volatile.Read(ref _waiting);
+            var blockingWaiting = Volatile.Read(ref _blockingWaiting);
+            var atGate = Volatile.Read(ref _atGate);
+            var inFlight = Volatile.Read(ref _inFlight);
+            var blockingInFlight = Volatile.Read(ref _blockingInFlight);
+            // CurrentCount never throws, not even on a disposed SemaphoreSlim — which matters
+            // because this is read from failure paths whose own message it would otherwise replace.
+            var free = _gate.CurrentCount;
+            var asyncInFlight = Math.Max(0, inFlight - blockingInFlight);
+            var asyncWaiting = Math.Max(0, waiting - blockingWaiting);
+            var atGateClamped = Math.Min(atGate, asyncWaiting);
+            var granted = Math.Min(atGateClamped, Math.Max(0, _maxConcurrency - free - asyncInFlight));
+            return new IoPoolAdmission(
+                AsyncWaiting: asyncWaiting,
+                BlockingWaiting: blockingWaiting,
+                PermitsFree: free,
+                GrantedNotRunning: granted)
+            {
+                BeforeGate = asyncWaiting - atGateClamped,
+                BehindCap = atGateClamped - granted
+            };
+        }
+    }
+
     /// <inheritdoc />
     public IoPoolWaitStats QueueWait => new(
         StopwatchElapsed(Volatile.Read(ref _waitTicks)),
@@ -785,8 +852,12 @@ public sealed class IoPool : IIoPool, IDisposable
                     var ct = linked.Token;
                     // Ends the wait that began at SUBSCRIBE; records an admission only when a slot
                     // was granted — see InvokeCore for why a cancelled wait is not one.
+                    // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                    // is waiting has not yet been given a thread to reach the gate at all.
+                    Interlocked.Increment(ref _atGate);
                     try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                    catch { LeaveWaitOnce(); throw; }
+                    catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                    Interlocked.Decrement(ref _atGate);
                     LeaveWaitOnce();
                     RecordWait(queuedAt);
                     Interlocked.Increment(ref _inFlight);
@@ -874,6 +945,7 @@ public sealed class IoPool : IIoPool, IDisposable
             // the continuation, and the scheduling-threw path.
             var queuedAt = Stopwatch.GetTimestamp();
             Interlocked.Increment(ref _waiting);
+            Interlocked.Increment(ref _blockingWaiting);
 
             // 🚨 EXACTLY-ONCE EXIT FROM THE WAITING GAUGE, and it cannot live only in the
                 // delegate. The task below is created WITH cts.Token, so a subscription disposed
@@ -895,8 +967,10 @@ public sealed class IoPool : IIoPool, IDisposable
             var waitLeft = 0;
             void LeaveWaitOnce()
             {
-                if (Interlocked.Exchange(ref waitLeft, 1) == 0)
-                    Interlocked.Decrement(ref _waiting);
+                if (Interlocked.Exchange(ref waitLeft, 1) != 0)
+                    return;
+                Interlocked.Decrement(ref _blockingWaiting);
+                Interlocked.Decrement(ref _waiting);
             }
 
             try
@@ -1221,8 +1295,12 @@ public sealed class IoPool : IIoPool, IDisposable
                             var ct = linked.Token;
                             // Ends the wait that began at SUBSCRIBE; an admission is recorded only
                             // when a slot was granted (see InvokeCore).
+                            // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
+                            // is waiting has not yet been given a thread to reach the gate at all.
+                            Interlocked.Increment(ref _atGate);
                             try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
-                            catch { LeaveWaitOnce(); throw; }
+                            catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
+                            Interlocked.Decrement(ref _atGate);
                             LeaveWaitOnce();
                             RecordWait(queuedAt);
                             Interlocked.Increment(ref _inFlight);
@@ -1609,6 +1687,15 @@ public sealed class IoPool : IIoPool, IDisposable
     internal bool CancellerIsAlive => _canceller.IsAlive;
 
     /// <summary>
+    /// The blocking lane's live threads, parked ones included (dedicated mode). Kept between bursts
+    /// and released by disposal (#4654); pinned by <c>BlockingLaneThreadsAreKeptTest</c>.
+    /// </summary>
+    internal int LiveBlockingThreads => _blockingScheduler.LiveDrainLoops;
+
+    /// <summary>The blocking lane's threads currently parked waiting for work.</summary>
+    internal int ParkedBlockingThreads => _blockingScheduler.ParkedLaneThreads;
+
+    /// <summary>
     /// Drains in-flight work (see <see cref="Drain"/>) then disposes the gate and cancellation
     /// source. Synchronous by design: when it returns, no pool thread is running, so the caller may
     /// safely unload the node ALCs whose types that work referenced. Called when the mesh is torn
@@ -1702,8 +1789,17 @@ public sealed class IoPool : IIoPool, IDisposable
         // the canceller is never still parked here.
         _cancelRequestedLatch.Dispose();
         _cancelCompleted.Dispose();
-        _disposedSubject.OnNext(0);
-        _disposedSubject.OnCompleted();
+        // The lane threads were kept parked between bursts; no blocking leaf can run any more
+        // (_gateUsers, _inFlight and _blockingInFlight are all zero), so let them exit. Non-blocking:
+        // it pulses and returns, and is safe even when this runs ON a lane thread. Disposed is
+        // published from the scheduler's drained callback — after the LAST lane thread has left its
+        // loop's accounting (or at once when none is alive) — so the signal keeps meaning "no pool
+        // thread remains" without anything here waiting for it.
+        _blockingScheduler.Complete(() =>
+        {
+            _disposedSubject.OnNext(0);
+            _disposedSubject.OnCompleted();
+        });
     }
 
     /// <summary>

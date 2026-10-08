@@ -55,8 +55,9 @@ provenance-gated and recoverable — point the source back and the next sync imp
 but it is accepted, not excluded.
 
 🚨 It is a **read** of the folder at the base commit, not a git diff. The production repository
-client (`GitProtocolRepoClient`) does not forward `GetChangedPaths` to the compare API, so it answers
-every diff with `null` — a proof built on the diff would never fire where it is needed.
+client (`GitProtocolRepoClient`) forwards `GetChangedPaths` to GitHub's compare API for incremental
+imports, but that diff may answer `null` when the comparison is unavailable or incomplete. Retirement
+proof must still work when it does.
 
 Once retired, a source **stays** retired under the same configuration: on a later commit the base is
 the retirement commit, where the folder is already empty, so the recorded `Retired` outcome (scoped by

@@ -31,6 +31,9 @@ public static class SelfUpdateConfiguration
             // kubectl set image via /api/plugins/is-updatable), and a gate wired for only one of
             // them is not a gate. Platform-neutral (a query plus file-system reads).
             services.AddSingleton<ReleaseAvailabilityService>();
+            // The last check's verdict, readable from OUTSIDE the instance: /health's `self_update`
+            // entry (policy control-first-never-silent). A mesh-scoped instance, never static.
+            services.TryAddSingleton<SelfUpdateCheckCensus>();
             // 🚨 The gate's DENOMINATOR, remembered per framework identity (#4742). A mesh-scoped
             // singleton, so its lifetime is the mesh's and nothing survives disposal: the published
             // root is append-only, and re-walking every identity it has ever held — on a network

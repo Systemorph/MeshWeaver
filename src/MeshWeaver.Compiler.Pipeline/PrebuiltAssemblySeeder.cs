@@ -716,6 +716,45 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyList<string>? sourceIncludes,
         string? producerPlatformVersion,
         string? platformCeiling)
+        // 🚨 #6060 — DEFERRED, and the LEAVING check first. The gates below resolve from the hub's
+        // service provider, and a hub whose teardown has finished has disposed it: resolved at CALL
+        // time, ahead of the #3129 leaving check, the closed-type-set gate threw
+        // ObjectDisposedException synchronously out of Seed — a sweep pass faulted instead of being
+        // told "not adopted". IsLeaving reads IsShuttingDown before it touches the provider, so
+        // asking it first means no gate below ever resolves from a provider the hub no longer owns;
+        // Defer makes every check describe the hub at SUBSCRIBE time, the per-node boundary at
+        // which a pass in flight runs it (see SeedAdmitted).
+        => Observable.Defer(() => hub.IsLeaving()
+            ? NotSeededLeaving(nodeTypePath, logger)
+            : SeedGated(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
+                sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes, producerPlatformVersion,
+                platformCeiling));
+
+    private static IObservable<SeedOutcome> NotSeededLeaving(string nodeTypePath, ILogger? logger)
+    {
+        logger?.LogInformation(
+            "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is LEAVING (#3129: "
+            + "shutting down, or hosted by a process that has begun stopping) — a leaving hub "
+            + "writes nothing on a NodeType every generation shares; the next generation seeds "
+            + "its own bundles",
+            nodeTypePath);
+        return Observable.Return(SeedOutcome.NotSeeded);
+    }
+
+    private static IObservable<SeedOutcome> SeedGated(
+        IMessageHub hub,
+        string nodeTypePath,
+        byte[] assemblyBytes,
+        byte[]? pdbBytes,
+        string? frameworkMvid,
+        ILogger? logger,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        IReadOnlyList<string>? sourcePaths,
+        IReadOnlyList<string>? sourceIncludes,
+        string? producerPlatformVersion,
+        string? platformCeiling)
     {
         // A CLOSED type set (ClosedTypeSet) adopts nothing onto a database NodeType: every
         // adoption — the boot seeders, the published root, an on-demand seed — writes through here,
@@ -827,15 +866,7 @@ public static class PrebuiltAssemblySeeder
             // only IsShuttingDown: the mesh is disposed at the very END of host shutdown, so the
             // hub signal alone is false for the whole grace period (see HubLeavingExtensions).
             if (hub.IsLeaving())
-            {
-                logger?.LogInformation(
-                    "Prebuilt assembly for {NodeTypePath} NOT seeded: this hub is LEAVING (#3129: "
-                    + "shutting down, or hosted by a process that has begun stopping) — a leaving hub "
-                    + "writes nothing on a NodeType every generation shares; the next generation seeds "
-                    + "its own bundles",
-                    nodeTypePath);
-                return Observable.Return(SeedOutcome.NotSeeded);
-            }
+                return NotSeededLeaving(nodeTypePath, logger);
 
             var workspace = hub.GetWorkspace();
 
@@ -940,18 +971,45 @@ public static class PrebuiltAssemblySeeder
             && !string.Equals(producerFingerprint, liveFingerprint, StringComparison.Ordinal))
         {
             var verdict = ModuleVersionCompatibility.Classify(moduleVersion, observed.CurrentModuleVersion);
+            // Memex#668 — the bound is read BEFORE the decline line so EVERY judgement (within the
+            // bound, past it, or with the bound disabled) prints the distance and the effective bound.
+            var staleBound = StaleAdoptionBound.MaxMinorVersionsBehind(
+                hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>());
+            var tooFarBehind = StaleAdoptionBound.Exceeds(
+                moduleVersion, observed.CurrentModuleVersion, staleBound);
+            var distance = StaleAdoptionBound.DescribeDistance(moduleVersion, observed.CurrentModuleVersion);
+            var boundText = StaleAdoptionBound.DescribeBound(staleBound);
             logger?.LogWarning(
                 "Prebuilt assembly for {NodeTypePath} DECLINED before writing (#2813): the bundle "
                 + "records source fingerprint {Producer} but the live sources are {Live} (bundle "
-                + "module version {Adopted}, current {Current}: {Verdict}) — the owner would not "
-                + "verify the adoption, so the live build's coordinates are left in place. Rebake "
-                + "this package to adopt again.",
+                + "module version {Adopted}, current {Current}: {Verdict}; {Distance}, {Bound}) — the "
+                + "owner would not verify the adoption, so the live build's coordinates are left in "
+                + "place. Rebake this package to adopt again.",
                 nodeTypePath, producerFingerprint, liveFingerprint,
                 ModuleVersionCompatibility.Display(moduleVersion),
-                ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict);
+                ModuleVersionCompatibility.Display(observed.CurrentModuleVersion), verdict,
+                distance, boundText);
+            // Memex#668 — a version-compatible bundle further behind the live source than the
+            // stale-adoption bound is NOT adopted as the last build either: same MAJOR is not a
+            // licence to serve an arbitrarily old program. Said at Error, with the bound.
+            if (tooFarBehind)
+                logger?.LogError(
+                    "Prebuilt assembly for {NodeTypePath} will NOT be adopted as a stale-but-serving "
+                    + "build (Memex#668): bundle module version {Adopted} over current {Current} is "
+                    + "{Distance}, past the stale-adoption {Bound}. A build of the current source lifts it.",
+                    nodeTypePath, ModuleVersionCompatibility.Display(moduleVersion),
+                    ModuleVersionCompatibility.Display(observed.CurrentModuleVersion),
+                    distance, boundText);
             return AfterStaleDeclineObserved(
                 hub, workspace, store, observed, nodeTypePath, logger,
-                adoptAnyway: verdict is ModuleVersionVerdict.Incompatible
+                // Memex#668 — the refusal keeps its REASON: a same-MAJOR bundle past the bound is
+                // not "MAJOR-incompatible", and the unservable diagnosis must not say it is.
+                pastBound: verdict is not ModuleVersionVerdict.Incompatible && tooFarBehind
+                    ? $"bundle module version {ModuleVersionCompatibility.Display(moduleVersion)} over current "
+                      + $"{ModuleVersionCompatibility.Display(observed.CurrentModuleVersion)} is {distance}, "
+                      + $"past the stale-adoption {boundText}"
+                    : null,
+                adoptAnyway: verdict is ModuleVersionVerdict.Incompatible || tooFarBehind
                     ? null
                     : () =>
                     {
@@ -1239,9 +1297,13 @@ public static class PrebuiltAssemblySeeder
     /// will NOT compile the type (RequirePrebuilt, or a module partition nothing syncs): null
     /// means the bytes are incompatible and nothing can serve (Critical, unservable); otherwise
     /// the continuation adopts them as the last build the mesh holds.</param>
+    /// <param name="pastBound">Memex#668 — when the bundle is refused because it is same-MAJOR but
+    /// past the stale-adoption bound, the sentence naming both versions, the distance and the
+    /// bound; null when the refusal (if any) is a MAJOR incompatibility.</param>
     private static IObservable<SeedOutcome> AfterStaleDeclineObserved(
         IMessageHub hub, IWorkspace workspace, IAssemblyStore store,
         NodeTypeDefinition observed, string nodeTypePath, ILogger? logger,
+        string? pastBound,
         Func<IObservable<SeedOutcome>>? adoptAnyway)
     {
         var resolves = observed.LastCompiledVersion is { } claimed && claimed >= 0
@@ -1295,6 +1357,19 @@ public static class PrebuiltAssemblySeeder
                     // record names cannot be loaded here. Serving the bundle is a page; a Roslyn
                     // compile is a wait — see DecideAfterStaleDecline for the rule.
                     return adoptAnyway!();
+                case StaleDeclineAction.Unservable when pastBound is not null:
+                    logger?.LogCritical(
+                        "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "
+                        + "build it left in place does not resolve on this process ({Collection}/{Path}) "
+                        + "AND this mesh will not compile it ({Key}=true, or the partition tracks no "
+                        + "source) AND the bundle is too far behind its source to adopt (Memex#668): "
+                        + "{PastBound}. NOTHING THIS PROCESS CAN DO WILL SERVE THE TYPE: publish a bundle "
+                        + "of the current source for framework {Framework}, or bring this instance's "
+                        + "sources onto the publication's commit.",
+                        nodeTypePath, observed.LatestAssemblyCollection ?? "(null)",
+                        observed.LatestAssemblyPath ?? "(null)", RequirePrebuiltConfigKey, pastBound,
+                        NodeTypeCompilationHelpers.FrameworkVersion);
+                    return Observable.Return(SeedOutcome.DeclinedStaleSourcesUnservable);
                 case StaleDeclineAction.Unservable:
                     logger?.LogCritical(
                         "Prebuilt assembly for {NodeTypePath} DECLINED on stale sources AND the live "

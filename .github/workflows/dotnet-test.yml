@@ -215,8 +215,8 @@ concurrency:
   # of intent, and because it still governs any future ref that groups by name.
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
 
-# publish-unit-test-result-action runs per shard AND in the collector — both need
-# checks: write to create check-runs and pull-requests: write to comment.
+# publish-unit-test-result-action runs ONCE, in the collector (never per shard — see the shard
+# job's note where that step used to be). It needs checks: write to create check-runs and pull-requests: write to comment.
 # contents: write is for the `refs/ci-green/*` marker refs ONLY (push + prune); a
 # fork PR's read-only token makes that step fail, which is why it is best-effort.
 permissions:
@@ -601,13 +601,14 @@ jobs:
   # away from the gate that needs it is how a proof and its subject drift apart.
 
   # ── THE STAGE GATE of the staged pull-request pipeline (Doc/Architecture/StagedPullRequestPipeline) ──
-  # 🔀 Policy review-then-suites: review first (this gate), then the suites on a fresh merge with the
+  # 🔀 Policy suites-parallel-with-review: the suites run beside the review (this gate lets them start after stage 0), on a fresh merge with the
   # current main (policy suites-test-fresh-merge), then the arm once the review is answered and every
   # required check is green.
-  # Maintainer, 2026-10-04: "code review must pass and also other controls such as no client etc.
-  # must pass before we start test. and we arm only at end of test". On a pull request the build and
-  # the shards wait for (a) the cheap static controls below — stage 0, which fail fast — and (b) the
-  # head's automatic review having landed with every reviewer thread answered. A HOLD is this job
+  # This caller omits `review-before-suites`, so on a pull request the build and the shards wait only
+  # for (a) the cheap static controls below — stage 0, which fail fast. (Review-first — the build and
+  # shards also waiting for (b) the head's automatic review having landed with every reviewer thread
+  # answered — is the opt-in `review-before-suites: true`; the hold/re-run wording below applies to it.)
+  # The arm still needs the answered review. A HOLD is this job
   # FAILING (never skipping): `build` requires its success explicitly, `collect-results` reads red
   # with the hold as its first line, and stage-advance.yml re-runs the failed jobs the moment the
   # review lands / a finding is answered / the bounded fallback elapses. push, merge_group and
@@ -657,10 +658,16 @@ jobs:
     # must hold the build too, and `!cancelled()` alone would read a skipped need as fine.
     if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.stage-gate.result == 'success' }}
     timeout-minutes: 25
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # `dotnet build` of the whole solution launches a long-lived Roslyn compiler server that
+    # emits in-process, so it is exposed to the same Tier-1 JIT defect as the test shards (see
+    # the `test` job's env); `<TieredPGO>` in a runtimeconfig does not configure that process.
+    env:
+      DOTNET_TieredPGO: "0"
     runs-on: ubuntu-latest
     outputs:
       # THE MAIN THE SUITES TEST AGAINST, resolved HERE — as the suites START. A run held at the stage
-      # gate (policy review-then-suites) is released by `rerun-failed-jobs`, which re-runs this job
+      # gate (when a caller opts in to review-before-suites) is released by `rerun-failed-jobs`, which re-runs this job
       # but NOT a green `precheck`, so precheck's main may be hours old by then. Every suite job and
       # the green-tree marker take this one; empty off pull requests.
       main-sha: ${{ steps.fresh.outputs.main-sha }}
@@ -860,6 +867,14 @@ jobs:
     # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
     # weights, so a shard that hits this is stuck, not slow.
     timeout-minutes: 20
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     runs-on: ubuntu-latest
     strategy:
       # Don't cancel sibling shards when one fails — we want every shard's
@@ -1704,19 +1719,19 @@ jobs:
           echo "::error::Shard ${{ matrix.shard }}: failing tests in trx — failing the shard."
           exit 1
         fi
-    - name: Publish Test Results (this shard)
-      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
-      if: always()
-      # Best-effort reporter ONLY — the TRX-summarize step above is the gate.
-      # action_fail removed + continue-on-error so a GitHub-API 429 (concurrent
-      # shard publishes) can't fail the build; test failures fail via the trx gate.
-      continue-on-error: true
-      with:
-        # Per-shard check so the matrix legs don't clobber each other's
-        # check-run; distinct from the collector's "Test Results" check.
-        check_name: "Test Results (shard ${{ matrix.shard }})"
-        files: |
-          test/**/*.trx
+    # 🚨 NO PER-SHARD TEST REPORTER. A per-shard `publish-unit-test-result-action` step used to
+    # sit here. It reported the same trx files that the collector's single "Test Results"
+    # publish reports again from the uploaded artifacts, so it added nothing. It was also the
+    # source of a throttle storm. Every run put six concurrent publishers on the GitHub API, and
+    # in the 16:31–16:45Z window of 2026-10-07 every shard publish of eight runs backed off
+    # for 380–620 s. Over the 200 most recent runs the shard publish had a median of 9 s, while
+    # the single collector publish never exceeded 14 s. continue-on-error covers a reporter that
+    # FAILS, not one that WAITS. On run 37652278631, shard 4, tests had run 16½ minutes; the
+    # step began its backoff at 16:54:50Z and the job's 20-minute cap killed it at 17:02:09Z.
+    # A shard whose every project had exited 0 was reported CANCELLED, `Consolidate test
+    # results` went red, and the verdict step below never ran. The job log had stopped
+    # streaming at 16:52:52Z, so the wedge was blamed on the test printing at that moment
+    # (PlatformCompatibilityLadderTest, whose trace record says Passed in 504 ms).
     - name: Fail on non-zero project exit (this shard)
       # A test host that ABORTS mid-run (SIGABRT/FailFast → exit 134) streams
       # green results for every COMPLETED test and then dies: the trx shows zero
@@ -1890,6 +1905,14 @@ jobs:
     # Same wall-clock contract as plugin-gate: depends on `build` like the shards, so it runs
     # CONCURRENTLY with them; while it stays under the slowest shard it costs the PR nothing.
     timeout-minutes: 12
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     outputs:
       failure: ${{ steps.gate.outputs.failure }}
     steps:
@@ -2086,6 +2109,14 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     permissions:
       contents: read
       actions: read
@@ -2401,6 +2432,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/resolve-platform.py --self-test
 
+    # The ONE shell-facing reader of a platform version tag (policy `platform-semver-versioning`):
+    # main-cd's never-backwards checks and line pointers read the run number through it, in both the
+    # `3.0.0-ci.<run>` and the `3.<minor>.<run>` notation.
+    - name: "The platform version reader reads both notations as one lineage (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/platform-version.py --self-test
+
     # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
     # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
     # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.
@@ -2416,6 +2454,16 @@ jobs:
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
+
+    # The lookup a standing tracking issue is found by (chart-drift.yml). It scanned the 200 newest
+    # issues, so the long-lived sentinel aged out of the window and the workflow opened a fresh one
+    # each time — #5049, #5491, #5844. It now filters on a dedicated label, server-side, to the last
+    # page. Offline cases: aged-out, paginated, duplicates (keep the oldest), closed-only, a labelled
+    # PR, an unknown label (must FAIL, not answer "none"), an API failure; the old window scan and a
+    # first-page-only pager are the negative controls and must miss.
+    - name: "A standing tracking issue is found by its label, never by a recent-issues window (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/sentinel-issue.py --self-test
 
     # 🚨 THE STEWARD THAT SPENT A WEEK DECIDING WITHOUT READING ANYTHING (#4534). Its `gh api …/logs`
     # read failed on every run from at least 2026-09-10, because the hosted runner's `gh` refuses a
@@ -3846,7 +3894,7 @@ jobs:
 
   dependent-suites-dispatch:
     name: "Dependent suites (request)"
-    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for stage 1 too.
+    # Stage 2 like the build: it spends MeshWeaver.Plugins' runners, so it waits for the stage gate too.
     needs: [preflight, stage-gate]
     if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]' && needs.preflight.result == 'success' && needs.stage-gate.result == 'success' }}
     runs-on: ubuntu-latest
@@ -4110,7 +4158,7 @@ jobs:
         if [ "$MODE" = "stage0-red" ]; then
           echo "::error title=Stage 2 held — stage 0 red::STAGE 2 HELD (stage 0 red): a cheap static control failed (shared rules, closing keywords, package pins, interface additions, i18n mirror, CI shell or cross-repo pair — see the red job), so the build and the shards did not start. Fix it and push; the new head restarts at stage 0."
         else
-          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the head's automatic review has not landed or a reviewer thread is unanswered — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
+          echo "::error title=Stage 2 held — stage 1 (${MODE:-$GATE})::STAGE 2 HELD (stage 1, ${MODE:-$GATE}): the stage gate held the suites (with the opt-in review hold: the head's automatic review has not landed or a reviewer thread is unanswered) — see the stage gate job for exactly which. The suites start by themselves when it turns green (stage-advance.yml re-runs this run's failed jobs); nothing to push."
         fi
         echo "### ⏸ Stage 2 held (${MODE:-$GATE}) — no test ran on this attempt" >> "$GITHUB_STEP_SUMMARY"
         exit 1
@@ -4296,6 +4344,13 @@ jobs:
       # above is the gate. action_fail removed + continue-on-error so a throttled
       # GitHub-API publish (429) can't fail the run; failures fail via the trx gate.
       continue-on-error: true
+      # continue-on-error covers a reporter that FAILS, not one that WAITS. A throttle backoff
+      # past this required job's own cap would turn a green build into a CANCELLED required check
+      # (the shard-4 incident of run 37652278631, see the shard job). This step has never taken
+      # more than 14 s in 199 runs. The worst throttled tail measured on the per-shard twin was
+      # 620 s, so 15 minutes lets a legitimate backoff finish and still lets a stall degrade to a
+      # missing report rather than a cancelled check.
+      timeout-minutes: 15
       with:
         # One consolidated check across all shards (reporting only now).
         check_name: "Test Results"

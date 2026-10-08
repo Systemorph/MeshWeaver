@@ -574,6 +574,14 @@ jobs:
     # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
     # Measured 2026-09-02 the bake runs ~20 min; past 45 it is stuck, not slow.
     timeout-minutes: 45
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     outputs:
       # Read by dispatch-dependents below: a run that baked NOTHING (already sealed) publishes
       # nothing and therefore wakes nobody.
@@ -595,6 +603,8 @@ jobs:
       contents: read
       id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Resolve and bind the artifact store
         id: store
         uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
@@ -821,7 +831,7 @@ jobs:
           [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image-digest and platform-image-digest are both empty, so this lane resolves the newest sealed platform set itself — and that needs acr-username + acr-password (secrets, the BASIC registry credential) to prove the set's images are in the registry. Pass them, or pin both digests (an OIDC-only caller pins)."; exit 1; }
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-platform.py has no ref to be fetched at"; exit 1; }
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           python3 "$SCRIPT" --self-test
@@ -1701,8 +1711,11 @@ jobs:
           # shape since #2922). `--app /app --shared-frameworks /usr/share/dotnet/shared` makes the
           # bake's reference set the portal's /app plus its IMPLEMENTATION frameworks — what the
           # portal's own runtime compile sees — and keys every bundle to the portal's identity.
+          # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix
+          # ships. Same switch as the job env, carried INTO the container (the runner env does not
+          # cross `docker run`).
           # shellcheck disable=SC2086  # EXT_MODULE_ARGS is a flag list built above; word-splitting is the point
-          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_TieredPGO=0 "${EXT_V[@]}" \
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll compile /repo \
             --app /app --shared-frameworks /usr/share/dotnet/shared \
@@ -1741,8 +1754,11 @@ jobs:
           # only a genuinely incompatible one — or none at all — becomes `Unservable`, said at
           # Critical. A named verdict replaces an unreadable compile failure, and NOTHING that
           # passes today starts failing: adoption is the path that already carries every gate.
+          # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix
+          # ships. Same switch as the job env, carried INTO the container (the runner env does not
+          # cross `docker run`).
           # shellcheck disable=SC2086
-          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp \
+          docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_TieredPGO=0 \
             -e Modules__RequirePrebuilt=true "${EXT_V[@]}" \
             -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
             --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll /repo --app /app \

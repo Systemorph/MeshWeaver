@@ -166,6 +166,37 @@ as the babysitter's state or a queue entry, is lost work and has no source to re
 `FullReplace` and `Additive` now prune the same set. Both values remain because they are persisted
 and configurable (`Features:StaticRepoSync:Modes:{Partition}`).
 
+### Ownership outlives a run that did not prune
+
+Because the manifest is now the only memory of what the repository put in a partition, a path leaves
+it in exactly two ways:
+
+- the source carries the path again (it is re-recorded under its new token);
+- the run **deleted** it (a successful delete; a failed one stays and is retried).
+
+Every other previously-owned path is carried forward under the token last recorded for it.
+
+Before this rule, `WriteManifest` rebuilt the map from the run's source nodes and carried over only
+the NodeTypes held by **that same run**. Any run that did not re-hold a held type dropped it, and
+from then on no import could prune it. That covers a truncated listing, an `UpsertOnly` partition,
+a node kept as a server edit, a failed delete, and a candidate the run never saw. Measured on
+memex.systemorph.com: `Crm/Client` was held on every Crm import from 2026-09-25 to 2026-10-03. The
+2026-10-06 07:05Z import (`Imported 29 node(s), pruned 0`) neither held nor pruned it, and it is gone
+from `Crm/_Activity/import-manifest`. `/health` still lists it as retired by its repository.
+
+The cost of the rule is that an entry for a node deleted out of band stays in the manifest. It is
+inert: the prune only considers nodes that exist. Two consequences follow:
+
+- a node later created at exactly that path, and absent from the source, is pruned once;
+- while the entry stays, the content-marker skip finds the manifest no longer matches the source, so
+  that path re-evaluates the full source.
+
+`AHeldTypeStaysOwnedUntilPrunedTest` pins the rule. In it, a held type goes through an intermediate
+run with an incomplete listing that does not re-hold it, and is pruned once its instance is gone. It
+failed before the fix (`pruned=[]`). Its negative control is
+`ImportDanglingNodeTypeTest.Prune_OfANodeTypeWithLiveInstances_IsRefused_UntilTheInstancesAreGone`,
+which runs the same sequence without the intermediate run.
+
 ## Webhook registration
 
 Register a synced repository's webhook with **Pushes** (required: the sync trigger), **Workflow

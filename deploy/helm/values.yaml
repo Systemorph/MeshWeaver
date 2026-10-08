@@ -612,12 +612,17 @@ portal:
 bundles:
   registry: ""                    # e.g. cr.meshweaver.cloud — set ⇒ the init container renders
   sources: []                     # source names as the publisher named them, e.g. [plugins]
-  # The framework identity to pull — the identity of portal.image (the bake lane prints it as
-  # `baked identity:`, and the publication it registered carries it). A roll that changes the
-  # image without a `helm upgrade` leaves this stale: the pre-warm then finds no directory for
-  # its own identity and compiles — inert, never wrong. Either this or identityFile.
+  # 🚨 The framework identity to pull is READ FROM THE PORTAL IMAGE (MeshWeaver#6052 ask 3): the
+  # build writes `meshweaver-framework.identity` beside the binaries, and the `bundle-identity`
+  # init container (running portal.image) copies it out for `bundle-fetch`. So the identity is the
+  # running image's own, not a value fixed per helm release that a self-update left behind.
+  # identity: the FALLBACK, used only when the image predates that file — logged as such, and it
+  #   does NOT follow a roll. Leave it empty on images that carry the file.
+  # identityFile: an operator-owned one-line file on the data volume; set ⇒ no derivation.
+  # imageIdentityPath: where the portal image carries the file (the published app directory).
   identity: ""
-  identityFile: ""                # a file INSIDE the init container (under /data) holding it
+  identityFile: ""
+  imageIdentityPath: "/app/meshweaver-framework.identity"
   # ORAS, pinned by digest. Resolved 2026-09-08 with `crane digest` (multi-arch index digest).
   image: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"
   root: ""                        # defaults to config.memex_portal.PreWarm__PrebuiltBundleRoot

@@ -26,6 +26,12 @@
          the central src policy here so the test tree tracks it uniformly. Vulnerability handling
          (bump/replace) is a deliberate dependency decision, not a per-build -warnaserror gate. -->
     <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
+    <!-- 🚨 #890: test hosts run with Tiered PGO OFF, exactly as the root Directory.Build.props sets it for
+         src/ (this file does not import the root). Under Tiered PGO the .NET 10 linux-x64 Tier-1 JIT can
+         drop the isinst inside Roslyn's inlined SourceMemberContainerTypeSymbol.ContainingType, after
+         which no Emit in that process succeeds — Doc/Architecture/NodeTypeCompilation, "The defect, in
+         one listing". TieredPgoIsOffInEveryCompilingHostTest pins that the setting reaches the host. -->
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
   <ItemGroup>
     <!-- Security override, not a dependency we use: Testcontainers (any published version, incl.

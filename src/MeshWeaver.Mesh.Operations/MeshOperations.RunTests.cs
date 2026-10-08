@@ -83,7 +83,7 @@ public partial class MeshOperations
         });
     }
 
-    private string Json(object value) => JsonSerializer.Serialize(value, hub.JsonSerializerOptions);
+    private string Json(object value) => ToolAnswerJson.Serialize(value, hub.JsonSerializerOptions);
 
     // ONE subscription to the Tests area for the whole run: every changed row becomes a log line,
     // and the first frame that is not a progress frame is the verdict.

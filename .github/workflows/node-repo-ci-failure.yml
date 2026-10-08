@@ -3,7 +3,7 @@ name: Node repo ci-failure ledger (reusable)
 # ♻️ REUSABLE (workflow_call) — a red `main` gets ONE issue and ONE signed event; a green one closes it.
 #
 # Maintainer, 2026-09-12: "put the ci-failure on all repos, in main; triaging is done by
-# systemorph-com (the control instance memex.systemorph.com); communicate via MCP — open a thread
+# systemorph-com (the control instance control.systemorph.com); communicate via MCP — open a thread
 # with a triage agent; pool such connections by portal."
 #
 # Every satellite (MeshWeaver.Plugins, .SocialMedia, .Crm, .Reinsurance, .Education, .Manufacturing)
@@ -32,7 +32,7 @@ name: Node repo ci-failure ledger (reusable)
 #
 # 🚨 NOTHING IS SIGNED FOR AN ARBITRARY URL. Before the ledger writes and before curl runs, the
 # script validates `control-webhook-url` (`--check-url`, self-tested): https, host equal to
-# `control-webhook-host` (default memex.systemorph.com), path under /api/hooks/. A red naming the
+# `control-webhook-host` (default control.systemorph.com), path under /api/hooks/. A red naming the
 # offending URL otherwise — an HMAC over the event sent to whatever a variable happened to hold is
 # a credential handed to that host.
 #
@@ -132,13 +132,13 @@ name: Node repo ci-failure ledger (reusable)
 #       github-token: ${{ secrets.GITHUB_TOKEN }}
 #       control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
 #
-# `CONTROL_WEBHOOK_URL` (org variable) and `CONTROL_WEBHOOK_SECRET` (org secret) exist, scoped to the
-# fleet repositories, and point at https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds —
+# The effective `CONTROL_WEBHOOK_URL` (repo override or org variable) and `CONTROL_WEBHOOK_SECRET`
+# (org secret) must point at https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds —
 # the same inbox the build fact and the publication records go to. `failed-jobs` may be left out: the
 # lane lists the run's failed jobs itself (that is what `actions: read` is for). Pass it only when the
 # caller has a better list than "every job that concluded failure". `control-webhook-host` defaults
-# to memex.systemorph.com and is the host `control-webhook-url` MUST resolve to; override it only for
-# a control instance that is not memex.systemorph.com.
+# to control.systemorph.com and is the host `control-webhook-url` MUST resolve to; override it only for
+# a control instance that is not control.systemorph.com.
 #
 # 🚨 A satellite's `gates-executed` job (the one that counts how many gate jobs actually ran) must NOT
 # count these two: they are conditional on `main` and skipped on every pull request, so counting them
@@ -206,7 +206,7 @@ on:
         type: string
         default: ci-main-red
       control-webhook-url:
-        description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds).
+        description: The control portal's triage inbox — pass vars.CONTROL_WEBHOOK_URL (https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds).
         required: true
         type: string
       control-webhook-host:
@@ -215,7 +215,7 @@ on:
           other host, any non-https scheme, or any path outside /api/hooks/.
         required: false
         type: string
-        default: memex.systemorph.com
+        default: control.systemorph.com
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's ledger script is fetched at. Pin it beside the
@@ -250,6 +250,8 @@ jobs:
       issues: write
       actions: read
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       # No `if:` on any step here except the ledger's own `post` decision. The assertions below
       # ASSERT and fail; they never choose whether to run. A step asking "is the secret set?" and
       # skipping would render exactly like a green that had nothing to report.
@@ -270,9 +272,9 @@ jobs:
           set -euo pipefail
           missing=()
           [ -n "${GH_TOKEN:-}" ]               || missing+=("secrets.github-token           the caller's secrets.GITHUB_TOKEN — forward it as \`secrets: github-token:\` = secrets.GITHUB_TOKEN with \`permissions: {contents: read, issues: write, actions: read}\` on the caller job")
-          [ -n "${CONTROL_WEBHOOK_URL:-}" ]    || missing+=("inputs.control-webhook-url      pass vars.CONTROL_WEBHOOK_URL — org variable, scoped to the fleet repos, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds (Settings → Secrets and variables → Actions → Variables, at the ORG)")
+          [ -n "${CONTROL_WEBHOOK_URL:-}" ]    || missing+=("inputs.control-webhook-url      pass vars.CONTROL_WEBHOOK_URL — repo override or org variable, https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds (Settings → Secrets and variables → Actions → Variables)")
           [ -n "${CONTROL_WEBHOOK_SECRET:-}" ] || missing+=("secrets.control-webhook-secret  pass secrets.CONTROL_WEBHOOK_SECRET — org secret, scoped to the fleet repos, byte-identical to the control instance's Hosting:PlatformWebhookSecret (Settings → Secrets and variables → Actions → Secrets, at the ORG; it has NO Dependabot-store copy, and this lane is never reachable from a pull request)")
-          [ -n "${CONTROL_WEBHOOK_HOST:-}" ]   || missing+=("inputs.control-webhook-host     the host control-webhook-url must point at (default memex.systemorph.com) — an empty host would let any URL through")
+          [ -n "${CONTROL_WEBHOOK_HOST:-}" ]   || missing+=("inputs.control-webhook-host     the host control-webhook-url must point at (default control.systemorph.com) — an empty host would let any URL through")
           [ -n "${RUN_ID:-}" ]                 || missing+=("inputs.run                      github.run_id")
           [ -n "${RUN_URL:-}" ]                || missing+=("inputs.run-url                  github.server_url/github.repository/actions/runs/github.run_id")
           [ -n "${SHA:-}" ]                    || missing+=("inputs.sha                      github.sha")
@@ -315,7 +317,7 @@ jobs:
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
         run: |
           set -euo pipefail
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/ci-failure-ledger.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$RUNNER_TEMP/ci-failure-ledger.py" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/ci-failure-ledger.py" > "$RUNNER_TEMP/ci-failure-ledger.py" \
             || { echo "::error::could not fetch ci-failure-ledger.py (Systemorph/MeshWeaver, under .github/scripts) at ${SCRIPTS_REF} — a scripts-ref older than the lane needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/ci-failure-ledger.py" | grep -q "ci-failure-ledger" || { echo "::error::the fetched ci-failure-ledger.py at ${SCRIPTS_REF} does not look like the ledger"; exit 1; }
 

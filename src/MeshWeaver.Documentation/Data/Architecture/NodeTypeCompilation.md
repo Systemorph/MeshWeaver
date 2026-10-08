@@ -748,6 +748,49 @@ Anything else triggers a recompile. This makes a cold hub start **self-healing**
 | **MeshWeaver redeployed with a breaking change** | The cached DLL bound against the *old* framework surface (ABI-stale) | Rule 3 |
 | Module updated | The cached DLL may bind the replaced module's old ABI | Rule 4 |
 
+### 🚨 Bytes missing on THIS pod are re-FETCHED from what was shipped before anything recompiles (#6052)
+
+The NodeType record is SHARED (database); the assembly store behind it may not be. A per-pod
+`FileSystemAssemblyStore` (collection `local`) holds bytes for the pod that wrote them only, so a
+type compiled or adopted on pod A leaves a record naming bytes pod B never held. Before #6052 pod
+B's only recoveries were `TriggerRecompileAndRetry` — which flips the type `Pending` *through its
+owner*, so the compile, and the bytes, landed on pod A again — and after one attempt the
+assembly-unavailable card. On a client estate that read `bake-report bytesmissing=93` on both pods.
+
+When the record's bytes were a SHIPPED build, the registry still has them, exactly. So every place
+that resolves a record's build — activation (`NodeTypeEnrichmentHelpers.ResolveAssembly`), the
+content-type registration pass and the boot sweep's `BytesMissing` set — asks
+`ShippedBuildRefetch` (`src/MeshWeaver.Mesh.Contract/Services/IShippedBuildSource.cs`) first:
+
+1. The store's own answer, by identity (`TryGetBuildPath`), as before.
+2. On a miss, the registered `IShippedBuildSource` — the plugin catalog's `RegistryShippedBuildSource`
+   reads the configured registries through `PluginBundleClient.FetchShippedBuilds` (same index, same
+   OCI-by-digest or HTTP route, same compatibility rule as every adoption — policy
+   `platform-backwards-compatibility`, never an exact build identity) and writes NOTHING itself. The
+   package is the type path's first segment and must be installed here; one download per package is
+   shared by every concurrent asker and dropped once it settles.
+3. A shipped build is landed under the record's own `(path, version)` **only when its MVID is the
+   record's `LatestAssemblyMvid`** — content addressing then puts the same bytes on the same name the
+   record already carries, so the record needs no write and no other pod is disturbed. A different
+   build (the record names a compile made elsewhere) is not landed: the bind-time identity check
+   would refuse it anyway. 🚨 A record that states NO MVID — a legacy record, or a pinned release,
+   which carries only a content path — is not refetched at all: nothing could verify the shipped
+   bytes are its build, and the bind-time check accepts a missing MVID, so an unverified landing
+   would bind the registry's current build under a pinned version.
+   A path is not proof either: the store falls back to the version's newest file when none carries
+   the record's MVID, so a found file whose MVID is not the record's is refetched too, and when no
+   refetch can supply the recorded bytes the store's own answer is returned to the existing
+   stale-build recovery unchanged. Every probe runs through the file-system I/O pool.
+4. Anything not landed falls through to the recovery that was there before, unchanged.
+
+The boot sweep lands its whole `BytesMissing` set in one source call and probes again, so those
+types read `Baked` and are not compiled (`DynamicTypePreWarmer.RefetchBytesMissing`). Pinned by
+`BytesMissingRefetchesTheShippedBuildTest` (two stores standing in for two pods; the negative
+control is the same resolve with no source, which still misses).
+
+**Not done here:** refusing a local compile outright on a client instance (#6052 ask 1) is a policy
+choice (`Modules:RequirePrebuilt`); this change makes the miss recoverable without one.
+
 ### A compile that FAILED is re-driven too — one attempt per set of inputs
 
 `HasUsableBuild` and its framework-stale twin both key on **assembly coordinates**, and a failed
@@ -925,7 +968,8 @@ all three writers that can fulfil the request, so turning assert into check fixe
 |---|---|---|
 | yes | yes | adopt; `BuildProvenance = AdoptedVerified` |
 | yes | **no**, and NOT ONE declared source query has matched a node here (#4208) | 🚨 **DEFER** — the record is returned untouched, so the one-shot stamp request is left **standing**; the sources watcher's next publication judges it |
-| yes | **no**, same module MAJOR (or versions nobody recorded) | the build keeps serving as `StaleAdopted` (#3583); a mesh that compiles module content also flips `Pending` |
+| yes | **no**, same module MAJOR (or versions nobody recorded), **within the stale-adoption bound** | the build keeps serving as `StaleAdopted` (#3583); a mesh that compiles module content also flips `Pending` |
+| yes | **no**, same module MAJOR but **more MINOR versions behind than the stale-adoption bound** (Memex#668) | 🚨 **refuse** exactly as a MAJOR bump — `AdoptionRefused`, the notice *"Build too far behind its source …"* names both versions, the distance and the bound |
 | yes | **no**, module **MAJOR** bump | 🚨 **refuse** — no stamp, `AdoptionRefused` |
 | no (legacy), or the owner's own not published yet | — | adopt, **keep the stamp**; `AdoptedUnverified` |
 
@@ -994,6 +1038,40 @@ all three writers that can fulfil the request, so turning assert into check fixe
 `BuildProvenance` is operational (stripped on export, preserved from the live node on import), and a
 control plane reads it off the NodeType node through `GetMeshNodeStream(path)`. The compile-state
 satellite that used to mirror it is [retired](../CompileStateSatelliteRetired) and no longer updated.
+
+#### The stale-adoption bound (Memex#668)
+
+"Same MAJOR keeps serving" said nothing about **how far** behind. Measured on memex.systemorph.com:
+`Hosting/InstanceAction` served an adopted build at module version 1.29.7 over source at 1.56 —
+twenty-seven MINOR versions, across a change to how operations are signed — and every dispatch the
+old build signed failed verification downstream. `Hosting/Deployment` on the control instance sat
+the same way (adopted 1.57.0 over 1.59, a build of a different source set) while its compile failed.
+Nothing on the node or on `/health` said how old the serving build was.
+
+The rule (`StaleAdoptionBound`, policy `stale-adoption-bound` in
+[Policy Not Prose](../PolicyNotProse)):
+
+- **Past the bound the build is refused**, in all three places a stale build can be kept serving:
+  the owner's judgement (`ApplyAdoptedSourceStamp`), the compile watcher's delivery gates
+  (`BuildDeliveryHold.Settle`) and the bundle seeder's stale-decline adoption
+  (`PrebuiltAssemblySeeder`). On a mesh that compiles, the coordinates are cleared and the live
+  source is compiled — **if that compile fails the type has no build, by design**: an arbitrarily
+  old program must not keep running behind a red compile. On a mesh that cannot compile the
+  coordinates are kept, the execute-time gate refuses them, and the type reads `Unavailable`
+  with the notice. Each refusal logs at **Error** with both versions, the distance and the bound.
+- **Within the bound it keeps serving, loudly**: the judgement's warning carries the distance and
+  the bound, and `bake-report`'s live record census prints `STALE-BUT-SERVING: …` on every reading
+  (per partition, the furthest distance, how many are past the bound) — `none` is printed as such.
+  A stale record past the bound **degrades** `bake-report`: the judgement refuses those, so one on
+  the record has not been re-judged since (a release request re-runs it).
+- **Configured, never hard-coded**: `Modules:StaleAdoptionMaxMinorVersionsBehind` (default 5, the
+  value policy `stale-adoption-bound` sets). A negative value disables the bound — and every judgement prints that
+  it is disabled. When either version cannot be read nothing is measured and nothing is refused on
+  this rule (the INCONCLUSIVE rule the MAJOR check follows).
+
+What it does **not** cover: the bound is a version distance, not a wall-clock age (neither side
+records when its build was made); and a type that **compiled** here (`Compiled`, not adopted) whose
+next compile fails keeps its last compiled build as before.
 
 #### "The write did not converge" means a CONFIRMED stamp is still standing, and nothing less
 
@@ -2109,6 +2187,90 @@ per-process rate above is a test-host rate and says nothing about a portal eithe
 harness null a statement about `linux-x64`: it ran on arm64, and a codegen hypothesis is
 architecture-specific.
 
+#### The defect, in one listing — the JIT drops the `isinst`, and Tiered PGO off removes it
+
+The capture above was finally read on core, where a workload change made the condition frequent:
+the class split that #6128 shifted moved `InstallNeverInheritsRepoCompileVerdictTest` into
+`Memex.Portal.Shared.Test` part 1/2, behind the stand-in emits of `ModulePlatformMemberLinkTest`,
+`ModuleLinkVersionTest` and friends. From then on that part poisoned in **4 of 12** `main` runs
+(`InstallNeverInherits…` and both `ModulesUpdateIndependentlyOfThePlatformTest` cases, or the whole of
+`ModuleLinkVersionTest` when the onset came earlier) — no diff in those pull requests was involved.
+
+**The reproduction in CI's own shape** (experiment branch `exp/890-tieredpgo-split-arm`, run
+[`37647154163`](https://github.com/Systemorph/MeshWeaver/actions/runs/37647154163)): the very
+`build-output-3` artifact of a poisoned pull-request run, part 1/2 launched exactly as the shard launches
+it (`dotnet Memex.Portal.Shared.Test.dll -class …`), 14 runners per arm, on whatever `ubuntu-latest` hosts
+GitHub assigned (EPYC 7763 without AVX-512, EPYC 9V74/9V45 and Xeon with it):
+
+| arm | poisoned | clean |
+|---|---|---|
+| defaults + `DOTNET_JitDisasm` capture | **4** | 10 |
+| `DOTNET_TieredPGO=0` | **0** | 14 |
+| the FIX build (#6254's own `build-output`, Tiered PGO off from its runtimeconfig, no env knob; run [`37652533236`](https://github.com/Systemorph/MeshWeaver/actions/runs/37652533236)) | **0** | 14 |
+
+Off against on is therefore 0 of 28 against 4 of 14 (one-sided Fisher *p* ≈ 0.009). In the fix build's
+listing, Tier-1 `AsNestedTypeDefinitionImpl` carries no profile data and does not inline
+`ContainingType` at all: it makes the virtual call, whose standalone body casts. With no guarded inline,
+the cast has nothing to be dropped from.
+
+**And the mechanism, 14 of 14.** The Tier-1 listing of
+`NamedTypeSymbol:AsNestedTypeDefinitionImpl` inlines `SourceMemberContainerTypeSymbol.ContainingType`
+(`_containingSymbol as NamedTypeSymbol`) behind a guarded devirtualisation. In all **10** clean hosts the
+inlined body keeps the cast — a likely-class compare, then `CORINFO_HELP_ISINSTANCEOFCLASS`. In all **4**
+poisoned hosts it is gone:
+
+```text
+G_M000_IG07:
+       mov      rax, gword ptr [rbx+0x38]     ; _containingSymbol, NO isinst
+       jmp      SHORT G_M000_IG04             ; → test rax, rax / jne: "is nested"
+```
+
+So for a top-level type the namespace container reads as a non-null containing type, the guard admits
+it, and `get_ContainingTypeDefinition` — whose own, separately compiled `ContainingType` still casts —
+returns null and the writer dereferences it. That one listing explains every reading this page
+collected: `dissect=READS-HEALTHY` (a direct call goes through the correct standalone method),
+`flat=SAME-FRAME` (one member-less top-level class is enough), `compiler=PRIVATE-COPY-EMITS` (a cold copy
+runs tier-0 code), the acquired onset (the method reaches tier 1 after enough emits) and the per-process
+lottery (which code tier 1 produces depends on the profile that process collected). It is independent
+of the ISA (both VEX and EVEX hosts poisoned). The standalone `ContainingType` in a poisoned host still
+casts, so this is the inliner's copy only. *Why* the cast is folded is not established — the listing
+shows the result, not the JIT phase; the profile-driven cast expansion is the suspect, because the
+dropped cast and the surviving one differ only in which PGO data fed them.
+
+**The remedy is the supported runtime switch, at the narrowest place that covers every compiling host:**
+`<TieredPGO>false</TieredPGO>` in the root `Directory.Build.props` (every executable under `src/`,
+`tools/` and `memex/`, including the bake host `mw-plugin-test`) and in `test/Directory.Build.props`
+(which does not import the root). It reaches the runtime as `System.Runtime.TieredPGO: false` in each
+host's runtimeconfig — the file a `dotnet <name>.dll` launch reads, which is how CI's shards start
+hosts. Two guards pin that it arrives, one per props file: `TieredPgoIsOffInEveryCompilingHostTest`
+(a test host, `test/Directory.Build.props`; negative control: a build with `-p:TieredPGO=true` fails
+both of its assertions) and `BakeHostRunsWithTieredPgoOffTest` (the runtimeconfigs of `mw-plugin-test`
+and `mw-combo-verify`, which inherit the root; negative control: deleting the root property alone turns
+both cases red while the test tree's copy stays). This is a workaround for a runtime defect, stated as
+one: the defect is in the .NET 10 JIT, not in this repository, and the switch is removed only with a
+measurement on a runtime that fixes it — the arm above, re-run. The portal hosts live in
+MeshWeaver.Plugins and need the same property there.
+
+**The environment half — policy [`tiered-pgo-off-5212`](../PolicyNotProse), tracked in
+[#5212](https://github.com/Systemorph/MeshWeaver/issues/5212).** The runtimeconfig property reaches only
+hosts BUILT from this tree at or after the commit that added it; a satellite lane runs the tester and the
+portal image at whatever pin it holds, and the portal hosts are built in MeshWeaver.Plugins. So the same
+switch is also set as `DOTNET_TieredPGO=0`, which the runtime reads from the process environment and which
+wins over the runtimeconfig:
+
+- **Core CI** — job `env` on the `test`, `doc-gate` and `platform-compat` jobs of `dotnet-test.yml`.
+- **Satellite lanes** — job `env` on `node-repo-compile-check` (its `dotnet build` compiler server),
+  `node-repo-gate` (`gate`), `node-repo-module-pack` (`build-workspace`, `pack`, `tests`) and
+  `node-repo-publish-bake` (`publish-bake`), plus `-e DOTNET_TieredPGO=0` on every `docker run` that
+  emits, because the runner's environment does not cross into a container.
+- **Portals** — `DOTNET_TieredPGO: "0"` in each portal Deployment record's `extraPortalConfig`, rendered by
+  the chart into the `memex-portal-config` ConfigMap (fed to the container through `envFrom`) only when the
+  key is present. A record change reaches a running instance only through a Reconcile, and only on the
+  next process start.
+
+Every one of these carries a comment naming #5212 and is removed when the runtime fix ships, together with
+the runtimeconfig property — after the split arm above is re-run on that runtime.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
@@ -2505,6 +2667,23 @@ safe:
   alias and creates a fresh context, exactly as a first read of that path always did.
 - **One lease per context.** `LeaseNodeContexts` leases each context once however many keys name it,
   so releasing the hub's one lease performs the deferred unload.
+- **A context that can no longer LOAD its build is never aliased (#5555).** The MVID is read once,
+  from the header, and outlives the file. Re-adopting identical bytes lands them under a new store
+  name (`v{node version}-{tag}-{hash}.dll`) and the retention sweep deletes the old name, so a context
+  over the old name that never loaded its assembly still reports the build's MVID while it can load
+  nothing. Aliasing a read of the present copy to it made every load answer *"No file at"* the deleted
+  path, and every recompile's identical bytes were aliased back to the same dead context — a
+  permanent loop. Measured on memex.systemorph.com 2026-10-07: `Store/Plugin` instances failed 604
+  times in 25 minutes on one pod (*"Failed to load assembly at …/v18979-c003e001-1db01ff9e178.dll —
+  No file at …/v14766-c003e001-1db01ff9e178.dll"*), the type node was written ~6,900 times in 15 hours
+  (v12083 → v18986), the recycle-on-new-build rule read each re-adoption as a new build (2,126
+  recycle jobs for that type alone), and the replica held an 11+ GiB heap with GC taking more than
+  half of wall time. The resolver now makes the candidate's bytes RESIDENT before aliasing to it
+  (`NodeAssemblyLoadContext.TryMakeResident` — load the assembly; a load that loses the deletion race
+  skips the candidate). An existence check would not do: the sweep can delete the file between the
+  check and the caller's load, so loading is the only durable guarantee. Pinned by
+  `ScanPinSupersessionTest.AReadIsNeverAliasedToASameBuildContextThatCanNoLongerLoadIt` (red on the
+  old resolver) and its control `ASameBuildContextThatHasLoadedItsAssemblyIsStillReusedAfterItsFileIsGone`.
 
 No identity ⇒ no alias: an unreadable file, or an in-memory context, resolves a fresh context as
 before. Pinned in core by `ScanPinSupersessionTest.AReadOfTheStoreCopyOfThePublishedBuildIsThatBuildsContext`,

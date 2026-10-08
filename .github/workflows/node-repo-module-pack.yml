@@ -1730,6 +1730,14 @@ jobs:
     # `workspace-runner` (inputs): a Docker-capable label — the compiler is the platform image.
     runs-on: ${{ inputs.workspace-runner }}
     timeout-minutes: 30
+    # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+    # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+    # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+    # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+    # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+    # this env covers every process the job launches, whatever pin it was built at.
+    env:
+      DOTNET_TieredPGO: "0"
     # Inherit for the same reason as `prepare`: OIDC is a caller-selected capability, while basic
     # callers must remain able to grant `actions: read` without also granting an identity token.
     steps:
@@ -1954,8 +1962,11 @@ jobs:
           echo "global build: ${#projects[@]} container entr(y|ies) in ONE workspace — ${projects[*]}"
           # AS THE RUNNER'S UID (a root-owned /out is unwritable to later steps); HOME=/tmp keeps
           # runtime probes off read-only image paths. No --extra-refs, ever, on this lane.
+          # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix
+          # ships. Same switch as the job env, carried INTO the container (the runner env does not
+          # cross `docker run`).
           docker run --rm --init --platform linux/amd64 \
-            --user "$(id -u):$(id -g)" -e HOME=/tmp \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_TieredPGO=0 \
             -v "$GITHUB_WORKSPACE:/repo:ro" \
             -v "$tester_app:/tester:ro" \
             -v "$out:/out" \
@@ -2086,6 +2097,13 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     env:
+      # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+      # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+      # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+      # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+      # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+      # this env covers every process the job launches, whatever pin it was built at.
+      DOTNET_TieredPGO: "0"
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}
@@ -4383,6 +4401,13 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     env:
+      # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+      # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+      # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+      # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+      # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+      # this env covers every process the job launches, whatever pin it was built at.
+      DOTNET_TieredPGO: "0"
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       DOTNET_INSTALL_DIR: ${{ inputs.runner != 'ubuntu-latest' && '/home/runner/.dotnet' || '' }}

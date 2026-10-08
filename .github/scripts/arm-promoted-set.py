@@ -125,6 +125,19 @@ PAIR_TAG = re.compile(r"^([0-9a-f]{7})-p[0-9a-f]{7}$")
 STAGING_TAG = re.compile(r"^staging-([0-9a-f]{7})-[0-9]+$")
 BASE_KINDS = ("armed", "first-parent", "unresolved")
 SET_NAME = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?[.-]ci\.(\d+)$")
+# 🚨 THE SEMVER NOTATION (policy `platform-semver-versioning`, core Doc/Architecture/PlatformVersioning):
+# from line 3.1 on a set is the plain `<major>.<minor>.<run>` and the PATCH is the CD run number —
+# the same monotonic counter `-ci.<run>` carried. Read ONLY at or above the boundary, so no tag the
+# old notation published (`3.0.0`, the withdrawn `3.1.0-ci.7841`) changes meaning. The C# twin is
+# `PlatformReleaseOrder.SemVerEraStart`; the two must name the same boundary.
+SEMVER_ERA_START = (3, 1)
+SEMVER_SET_NAME = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_set(version: str):
+    m = SEMVER_SET_NAME.match(version or "")
+    # A zero patch is a floor or a release (`3.1.0`), never a CD run.
+    return m if m and (int(m.group(1)), int(m.group(2))) >= SEMVER_ERA_START and int(m.group(3)) > 0 else None
 
 Get = Callable[[str, str], tuple[int, object]]
 
@@ -137,7 +150,10 @@ def verdict_key(short: str, plugins_short: str) -> str:
 
 def run_number_of(version: str) -> int | None:
     m = SET_NAME.match(version or "")
-    return int(m.group(1)) if m else None
+    if m:
+        return int(m.group(1))
+    m = _semver_set(version)
+    return int(m.group(3)) if m else None
 
 
 def check_record(rec: object) -> str | None:
@@ -264,11 +280,15 @@ CONTROL_FIRST_REPORTER = "main-cd control-first"
 
 def line_pattern(version: str) -> str:
     """The version LINE a set belongs to, as the self-update pattern syntax spells it:
-    `3.0.0-ci.10052` → `3.0.0-ci*`. Pure; a non-set name is a ValueError."""
+    `3.0.0-ci.10052` → `3.0.0-ci*`, and in the SemVer notation `3.1.10052` → `3.1.*` (the minor
+    line — a record's `3.*` admits it). Pure; a non-set name is a ValueError."""
     m = SET_NAME.match(version or "")
-    if m is None:
-        raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N — it names no line")
-    return version[: m.start(1) - 1] + "*"
+    if m is not None:
+        return version[: m.start(1) - 1] + "*"
+    e = _semver_set(version)
+    if e is not None:
+        return f"{e.group(1)}.{e.group(2)}.*"
+    raise ValueError(f"{version!r} is not a set name X.Y.Z[-pre]-ci.N or <major>.<minor>.<run> — it names no line")
 
 
 def control_announcement(deployment: str, version: str, image_repository: str, instance: str,
@@ -437,10 +457,11 @@ def read_control(url: str, get: Get, core_token: str, core_shas: list[str],
         out["why"] = f"{url}/api/version answered {code} without a 40-hex commit"
         return out
     out["commit"] = commit
-    hcode, _ = fetch(f"{url.rstrip('/')}/health")
+    hcode, hbody = fetch(f"{url.rstrip('/')}/health")
     out["healthy"] = hcode == 200
     if hcode != 200:
         out["why"] = f"{url}/health answered {hcode}"
+    out["self_update"] = self_update_reading(hbody)
     for sha in dict.fromkeys(core_shas):
         out["contains"][sha] = contains_commit(get, core_token, commit, sha)
     return out
@@ -451,6 +472,40 @@ def contains_commit(get: Get, core_token: str, commit: str, sha: str) -> bool | 
     the compare could not be read — never a guess."""
     code, cmp = get(f"repos/{CORE}/compare/{sha}...{commit}", core_token)
     return (cmp.get("status") in CONTAINED) if code == 200 and isinstance(cmp, dict) else None
+
+
+SELF_UPDATE_CHECK = "self_update"
+"""The `/health` entry control's OWN self-updater publishes (core memex/aspire/Memex.Portal.ServiceDefaults
+`SelfUpdateHealthCheck`, census-tagged, so it prints whatever its status). Its line reads
+`self_update: <Healthy|Degraded> — <the last check's verdict>`."""
+
+
+def self_update_reading(health_body: str) -> dict | None:
+    """Control's own self-update reading off its PUBLIC `/health` body — {"status", "text"} — or None
+    when the body carries no `self_update` entry (an image older than the check, or no body). Pure.
+
+    🚨 WHY THE ARMING READS IT. Control-first makes the whole fleet wait for ONE instance, so what a
+    reader of a frozen fleet needs first is why THAT instance takes no build. Measured 2026-10-07/08:
+    control sat on cac0664de for 10+ hours while its own `Admin/UpdatePolicy` read `check FAILED:
+    CredentialUnavailableException … The requested identity has not been assigned to this resource` on
+    every check — a node nobody watches — and the arm step said `waiting` on every tick."""
+    for line in (health_body or "").splitlines():
+        if line.startswith(f"{SELF_UPDATE_CHECK}: "):
+            status, _, text = line[len(SELF_UPDATE_CHECK) + 2:].partition(" — ")
+            return {"status": status.strip(), "text": text.strip()}
+    return None
+
+
+def describe_self_update(control: dict) -> str:
+    """One sentence naming control's OWN self-update reading, for every place that says control has
+    not taken a build. An absent reading is said as one, never read as a clean one. Pure."""
+    su = control.get("self_update")
+    if not su:
+        return ("control's /health publishes no `self_update` reading (its image predates the check, or /health "
+                "was not read) — read `Admin/UpdatePolicy.lastCheckVerdict` on control")
+    if su.get("status") != "Healthy":
+        return f"control's OWN self-update check is FAILING ({su.get('status')}): {su.get('text') or 'no verdict text'}"
+    return f"control's own self-update reads Healthy: {su.get('text') or 'no verdict text'}"
 
 
 def _fetch_public(url: str) -> tuple[int, str]:
@@ -521,7 +576,8 @@ def judge(rec: dict, ladder: str | None, control: dict) -> tuple[str, str]:
         return "waiting", f"could not establish whether control's {commit[:9]} contains {rec['core_sha'][:9]}"
     if not contains:
         return "waiting", (f"control runs {commit[:9]}, which does not contain {rec['core_sha'][:9]} yet — "
-                           "control first: the fleet is offered a build only after control runs it")
+                           "control first: the fleet is offered a build only after control runs it; "
+                           + describe_self_update(control))
     if not control.get("healthy"):
         return "waiting", (f"control runs {commit[:9]} (contains this set) but /health is not 200 "
                            f"({control.get('why') or 'unhealthy'}) — not offered to the fleet until control is healthy")
@@ -633,7 +689,64 @@ def control_lag(given: list[dict] | dict | None, control: dict, now: float, boun
                               f"{since} — inside the {bound_minutes} min bound")
     return "lag", (f"control runs {commit[:9]}, which does NOT contain the newest platform build {newest['v_portal']} "
                    f"({newest['core_sha'][:9]}); it has been behind {since} — over the {bound_minutes} min bound "
-                   "(policy control-always-latest)")
+                   f"(policy control-always-latest). {describe_self_update(control)}")
+
+
+def given_builds(records: list[dict], jobs_of: Callable[[dict], list[dict] | None],
+                 contains_of: Callable[[str], bool | None]) -> list[dict]:
+    """Every examined promoted set whose `Deploy control first` job SUCCEEDED, newest first, in the
+    shape `control_lag` reads ({core_sha, v_portal, given_at epoch seconds}) — walked back to the
+    FIRST one control contains (inclusive) or to the end of the examined records. Pure over its two
+    readers, which the caller backs with REST (and caches), so the walk costs one jobs read and one
+    compare per build control is behind, exactly as the `control-lag` command's walk does.
+
+    🚨 It walks the WHOLE examined history, never a fixed prefix (review on MeshWeaver#6289): a
+    window of the newest ten sets drops the first build control missed as soon as it misses more
+    than ten, and when those ten span less than the bound `control_lag` reads `converging` for ever
+    — the very reset-by-new-builds blindness the alarm's clock was moved to avoid."""
+    out = []
+    for r in records:
+        at = control_given_at(jobs_of(r))
+        if not at:
+            continue
+        out.append({"core_sha": r["core_sha"], "v_portal": r["v_portal"], "given_at": _iso_epoch(at)})
+        if contains_of(r["core_sha"]) is not False:
+            break
+    return out
+
+
+def arming_frozen(chosen: dict | None, override: str, given: list[dict], control: dict, now: float,
+                  bound_minutes: int) -> str | None:
+    """🚨 Policy `control-first-never-silent`: the sentence that turns the arm job RED, or None. Pure.
+
+    Control-first makes the whole fleet wait for ONE instance. Until this rule the arming said
+    `waiting — control runs …, which does not contain … yet` on every tick and the job stayed green,
+    so a control that took NO build froze memex and memex-cloud while every main-cd run read success
+    (measured 2026-10-07/08: ci.10184 … ci.10206 each `waiting`, control on cac0664de for 10+ hours).
+    Waiting is right while control converges; it is a FAILURE once control has been behind past the
+    SAME bound the `control-always-latest` alarm reads (`platformLagBoundMinutes`), on the SAME clock
+    (the first build control missed) — one rule (`control_lag`), so the arming and the alarm can never
+    disagree about when the wait stopped being a wait. A set that was selected, or an override, is
+    never frozen; an override stays the maintainer's call and is never suggested as the remedy.
+
+    Only the BOUNDED state freezes: control's running build is read and does NOT contain the newest
+    build it was given, past the bound. That fact is clocked, so it freezes whatever `/health`
+    answers in the same reading — a control that has taken no build for hours is frozen whether or
+    not its last probe also failed (review on MeshWeaver#6289; the self-test pins
+    behind-and-unhealthy). What never freezes is a reading with NO clock behind it: an unreadable
+    control, a control that RUNS the newest build but answered one non-200, or no build given at all
+    (this run's own `Deploy control first` may still be running). `control-always-latest` alarms on
+    those on its own schedule; turning one 503 into a red CD run would make the red mean nothing."""
+    if chosen is not None or override or not given:
+        return None
+    if not control.get("commit") or (control.get("contains") or {}).get(given[0]["core_sha"]) is not False:
+        return None
+    state, text = control_lag(given, control, now, bound_minutes)
+    if state != "lag":
+        return None
+    return (f"FLEET DELIVERY FROZEN ON CONTROL — nothing can be armed: {text}. Control-first holds every newer "
+            "set until control RUNS it, so this is no longer a wait (policy control-first-never-silent). The "
+            "remedy is control's own roll; the open `control-lag` issue carries the same reading.")
 
 
 def write_outputs(rec: dict | None, lines: list[str]) -> None:
@@ -857,6 +970,76 @@ def self_test() -> int:
     st, text = control_lag(given, ctl(unknown=(b,)), now=t0 + 10 * 3600, bound_minutes=180)
     check("control-always-latest: an unreadable older answer stops the walk at a floor, never reads as contained",
           st == "converging" and "at least 29 min" in text, text)
+    # ── policy control-first-never-silent: a frozen fleet is RED and names control's own verdict ──
+    failing_body = ("Degraded\ntiming: 7ms total\nself_update: Degraded — check FAILED: CredentialUnavailableException: "
+                    "ManagedIdentityCredential … The requested identity has not been assigned to this resource\n"
+                    "required_modules: Healthy — ok")
+    su = self_update_reading(failing_body)
+    check("self_update_reading: the census line is parsed off the /health body (status + verdict)",
+          su is not None and su["status"] == "Degraded" and su["text"].startswith("check FAILED: CredentialUnavailable"), str(su))
+    check("self_update_reading: a body WITHOUT the entry is None (absent, never clean)",
+          self_update_reading("Degraded\nbake-report: Degraded — x") is None and self_update_reading("") is None)
+    check("describe_self_update: a failing reading is said as FAILING with its verdict",
+          "FAILING" in describe_self_update({"self_update": su}) and "CredentialUnavailable" in describe_self_update({"self_update": su}))
+    check("describe_self_update: NO reading is said as absent and points at the node, never as clean",
+          "publishes no `self_update` reading" in describe_self_update({}))
+    rc = read_control("https://ctl", lambda u, t, raw=False: (404, None), "t", [],
+                      fetch=lambda u: (200, json.dumps({"commit": "f" * 40})) if u.endswith("version") else (200, failing_body))
+    check("read_control: control's own self-update reading rides the control reading",
+          rc["self_update"] == su, str(rc))
+    frozen_ctl = {**ctl(a), "self_update": su}
+    _, text = judge(c, "success", frozen_ctl)
+    check("judge: a set control has not taken NAMES control's own failing self-update verdict",
+          "control first" in text and "CredentialUnavailable" in text, text)
+    st, text = control_lag(given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180)
+    check("control-always-latest: the RED sentence (the control-lag issue) names control's own verdict",
+          st == "lag" and "CredentialUnavailable" in text, text)
+    fz = arming_frozen(None, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180)
+    check("arming_frozen: nothing armed and control behind PAST the bound is RED, naming the verdict",
+          fz is not None and "FROZEN" in fz and "CredentialUnavailable" in fz and b["v_portal"] in fz, str(fz))
+    # Negative controls: each of these is a WAIT, never a red.
+    check("arming_frozen: behind only INSIDE the bound is a wait (negative control)",
+          arming_frozen(None, "", given, {**ctl(a, b), "self_update": su}, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: a selected set is never frozen",
+          arming_frozen(c, "", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: an override is never frozen (and never suggested)",
+          arming_frozen(None, "3.0.0-ci.9461", given, frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None
+          and "override" not in (fz or "").lower())
+    check("arming_frozen: no build given yet (this run's control-first still running) is not frozen",
+          arming_frozen(None, "", [], frozen_ctl, now=t0 + 10 * 3600, bound_minutes=180) is None)
+    check("arming_frozen: one unreadable or unhealthy control reading has no clock behind it — the alarm's job, not a red CD",
+          arming_frozen(None, "", given, {"commit": "", "contains": {}, "why": "timeout"}, now=t0 + 10 * 3600,
+                        bound_minutes=180) is None
+          and arming_frozen(None, "", given, ctl(a, b, c, healthy=False), now=t0 + 10 * 3600, bound_minutes=180) is None)
+    job = lambda ok_, at: [{"name": "Deploy control first: memex-control:<version>",
+                            "conclusion": "success" if ok_ else "failure", "completed_at": at}]
+    jm = {9461: job(True, "2026-10-07T19:02:20Z"), 9460: job(False, "x"), 9459: None}
+    gb = given_builds([c, b, a], lambda r: jm.get(r["run_number"]), lambda sha: False)
+    check("given_builds: only sets whose control-first SUCCEEDED, newest first, with the epoch it was given",
+          [g["v_portal"] for g in gb] == [c["v_portal"]] and gb[0]["given_at"] == _iso_epoch("2026-10-07T19:02:20Z"), str(gb))
+    gb = given_builds([c, b, a], lambda r: job(True, "2026-10-07T19:02:20Z"), lambda sha: sha == b["core_sha"])
+    check("given_builds: the walk stops AT the first build control contains (inclusive), reading nothing older",
+          [g["v_portal"] for g in gb] == [c["v_portal"], b["v_portal"]], str(gb))
+    # 🚨 Review on #6289: a fixed window of the newest ten sets loses the first build control missed.
+    # Fifteen sets given 20 min apart, control on none of them: the newest ten span 3 h — inside a 240
+    # min bound — while the first miss was 4 h 40 min ago.
+    many = [rec(9600 - i, "%x" % (i % 16), "9") for i in range(15)]
+    for i, r in enumerate(many):
+        r["core_sha"] = f"{i:040x}"
+    t_new = _iso_epoch("2026-10-08T05:00:00Z")
+    stamp = lambda r: job(True, __import__("datetime").datetime.fromtimestamp(
+        t_new - (9600 - int(r["run_number"])) * 20 * 60, __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    behind_all = {"commit": "f" * 40, "healthy": True, "contains": {r["core_sha"]: False for r in many}, "why": ""}
+    full = given_builds(many, stamp, lambda sha: False)
+    now_ = t_new + 1
+    check("arming_frozen: control behind 15 builds is RED from the FIRST miss (the whole walk)",
+          len(full) == 15 and arming_frozen(None, "", full, behind_all, now_, 240) is not None
+          and many[-1]["v_portal"] in (arming_frozen(None, "", full, behind_all, now_, 240) or ""))
+    check("...and a newest-ten window would have read the same state as a wait — the negative control",
+          arming_frozen(None, "", full[:10], behind_all, now_, 240) is None)
+    check("arming_frozen: BEHIND past the bound AND unhealthy is still RED — the lag is clocked, the 503 is not the reason",
+          arming_frozen(None, "", given, {**ctl(a, healthy=False), "self_update": su}, now=t0 + 10 * 3600,
+                        bound_minutes=180) is not None)
     # ── control first, the delivery half: CD hands the build to control's roll lane ──
     cf = control_first([{"tags": ["3.0.0-ci.9590"]}], "3.0.0-ci.9598")
     check("control-first: the newest accepted build is ANNOUNCED to control's roll lane", cf["announce"] is True, str(cf))
@@ -867,6 +1050,19 @@ def self_test() -> int:
     check("control-first: an OLDER build than the newest control version is never announced", cf["announce"] is False, str(cf))
     check("line_pattern: a set names its own line", line_pattern("3.0.0-ci.10052") == "3.0.0-ci*", line_pattern("3.0.0-ci.10052"))
     check("line_pattern: a pre-release line keeps its prefix", line_pattern("3.0.0-rc9.ci.7231") == "3.0.0-rc9.ci*")
+    check("line_pattern: a SemVer-notation set names its minor line", line_pattern("3.1.10052") == "3.1.*", line_pattern("3.1.10052"))
+    check("run_number_of: the SemVer notation's run number is the PATCH", run_number_of("3.1.10052") == 10052)
+    check("run_number_of: both notations share ONE lineage (old 9999 < new 10000)",
+          run_number_of("3.0.0-ci.9999") < run_number_of("3.1.10000"))
+    check("run_number_of: the withdrawn slip keeps its ci number", run_number_of("3.1.0-ci.7841") == 7841)
+    for not_a_set in ("3.0.0", "3.1.0", "3.0.5", "2.9.12345", "3.1.10052-rc1", "3-latest", "3.1-latest"):
+        check(f"run_number_of: {not_a_set!r} below the boundary or not a build is no set", run_number_of(not_a_set) is None)
+    cf = control_first([{"tags": ["3.0.0-ci.9999"]}], "3.1.10000")
+    check("control-first: the first SemVer-notation build is newer than the last ci set (announced, pointers move)",
+          cf["announce"] is True and cf["move_pointers"] is True, str(cf))
+    cf = control_first([{"tags": ["3.1.10003"]}], "3.0.0-ci.10001")
+    check("control-first: an old-notation build OLDER than a SemVer-notation one is never announced",
+          cf["announce"] is False and cf["move_pointers"] is False, str(cf))
     try:
         line_pattern("main")
         check("line_pattern: a non-set name is RED", False)
@@ -1127,19 +1323,46 @@ def main() -> int:
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
-    ladders = {int(r["run_number"]): ladder_of(read_run_jobs(http_get, core_token, r.get("run_id"))) for r in records[:10]}
+    jobs = {int(r["run_number"]): read_run_jobs(http_get, core_token, r.get("run_id")) for r in records[:10]}
+    ladders = {n: ladder_of(j) for n, j in jobs.items()}
     control = read_control(ci["url"], http_get, core_token, [r["core_sha"] for r in records[:10]])
     print(f"control {ci['url']}: running {control.get('commit') or 'UNKNOWN'}; "
-          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}")
+          f"/health {'200' if control.get('healthy') else 'NOT 200'}{' — ' + control['why'] if control.get('why') else ''}; "
+          f"{describe_self_update(control)}")
     try:
         rec, lines = select(records, ladders, control, a.armed_max, a.override, a.resume)
     except ValueError as e:
         print(f"::error::{e}")
         return 1
+    import time
+    # 🚨 Policy `control-first-never-silent`: `nothing to arm` because control has been behind past
+    # the bound is a RED, never a green wait (see `arming_frozen`). Read off the SAME runs' jobs.
+    def jobs_of(r: dict) -> list[dict] | None:
+        n = int(r["run_number"])
+        if n not in jobs:
+            jobs[n] = read_run_jobs(http_get, core_token, r.get("run_id"))
+        return jobs[n]
+
+    def contains_of(sha: str) -> bool | None:
+        if not control.get("commit"):
+            return None
+        if sha not in control["contains"]:
+            control["contains"][sha] = contains_commit(http_get, core_token, control["commit"], sha)
+        return control["contains"][sha]
+
+    # Only when nothing was selected: the walk then reads jobs and compares beyond the ten sets
+    # `select` judged, back to the first build control contains — the clock's true start.
+    given = [] if rec is not None or a.override else given_builds(records, jobs_of, contains_of)
+    frozen = arming_frozen(rec, a.override, given, control, time.time(), int(ci["platformLagBoundMinutes"]))
+    if frozen:
+        lines.append(frozen)
     for line in lines:
         print(line)
     write_outputs(rec, lines)
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
+    if frozen:
+        print(f"::error title=Fleet delivery frozen on control::{frozen}")
+        return 1
     return 0
 
 

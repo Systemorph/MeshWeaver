@@ -9,8 +9,8 @@ namespace MeshWeaver.Messaging;
 /// <summary>
 /// The ONE ordered lane on which released owned connections tell their attached subscribers that
 /// they are over (<see cref="OwnedConnectionExtensions"/>). Releases posted here run on the
-/// ThreadPool — never on the thread that disposed the owner — and ONE AT A TIME, in the order they
-/// were posted.
+/// ThreadPool — never INLINE in the dispose that posted them (the pool may still hand the work item
+/// back to that same managed thread later) — and ONE AT A TIME, in the order they were posted.
 ///
 /// <para>🚨 <b>Why one at a time — the deadlock this exists to prevent.</b> An owner registry is
 /// released in ONE synchronous sweep (<c>MeshNodeStreamCache</c> disposes every query connection it
@@ -47,7 +47,7 @@ namespace MeshWeaver.Messaging;
 /// <c>Zip</c> gate to dispose it. Neither returned; the render's pooled subscribe leaf never left the
 /// Layout pool and the teardown was reported DIRTY after the whole drain budget. Every terminal an
 /// owned connection produces — release or refusal — is therefore delivered here, through
-/// <see cref="Post"/> or <see cref="Refuse{T}"/>, never on the thread that asked.</para>
+/// <see cref="Post"/> or <see cref="Refuse{T}"/>, never inline in the call that asked.</para>
 ///
 /// <para><b>Not a gate.</b> Nothing waits on the lane; a post is an enqueue. The serialisation is
 /// Rx's own <c>ObserveOn</c> queue, fed through <see cref="Subject.Synchronize{TSource}(ISubject{TSource})"/>
@@ -103,8 +103,8 @@ public sealed class ReleaseLane
 
     /// <summary>
     /// A sequence that REFUSES every subscriber with <paramref name="error"/> — delivered on this
-    /// lane, behind every release posted before the subscription, and never on the subscribing
-    /// thread. The one spelling for "this owner is released, go away" on a read that a consumer may
+    /// lane, behind every release posted before the subscription, and never inline in the
+    /// subscribe call. The one spelling for "this owner is released, go away" on a read that a consumer may
     /// compose with the owner's other connections (see the remarks on why a synchronous
     /// <c>Observable.Throw</c> there deadlocks). Disposing the subscription before the lane reaches
     /// it cancels the delivery.

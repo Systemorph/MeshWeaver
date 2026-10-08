@@ -118,7 +118,7 @@ public static class OwnedConnectionExtensions
         // whatever it buffered and then goes silent — the "burst then dead silence" wedge. A
         // refusal names the owner and terminates.
         //
-        // 🚨 And refuse ON THE LANE, never on the subscriber's thread. A refusal is the same
+        // 🚨 And refuse ON THE LANE, never inline in the subscribe call. A refusal is the same
         // terminal as a release, and a consumer composing this connection with its siblings (the
         // permission fold: a SelectMany over Zips of cache queries) receives both: the lane's release
         // of one inner held that Zip's gate on its way to the SelectMany gate, while a synchronous
@@ -165,7 +165,7 @@ public static class OwnedConnectionExtensions
             released.OnError(Disposed(ownerName));
         });
 
-        /// <summary>The signal a subscriber takes its terminal from — never on its own thread.</summary>
+        /// <summary>The signal a subscriber takes its terminal from — never inline in its own subscribe call.</summary>
         public IObservable<Unit> Signal => Observable.Create<Unit>(observer =>
         {
             lock (gate)

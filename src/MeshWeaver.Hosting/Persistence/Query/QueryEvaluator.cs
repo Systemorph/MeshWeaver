@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
 
@@ -224,6 +225,15 @@ public class QueryEvaluator
         if (obj is JsonElement jsonElement)
             return TryGetJsonPropertyValue(jsonElement, propertyName, out value);
 
+        if (obj is JsonObject jsonObject)
+            return TryGetJsonPropertyValue(jsonObject, propertyName, out value);
+
+        if (obj is JsonNode)
+        {
+            value = null;
+            return false;
+        }
+
         // Use reflection for regular objects
         var type = obj.GetType();
         var property = type.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
@@ -267,6 +277,34 @@ public class QueryEvaluator
 
         return false;
     }
+
+    /// <summary>
+    /// Reads as-written JSON content with the same exact-then-case-insensitive lookup and scalar
+    /// conversion as a deserialized <see cref="JsonElement"/>. A present JSON null remains present.
+    /// </summary>
+    private static bool TryGetJsonPropertyValue(JsonObject jsonObject, string propertyName, out object? value)
+    {
+        if (jsonObject.TryGetPropertyValue(propertyName, out var propertyValue))
+        {
+            value = JsonNodeToObject(propertyValue);
+            return true;
+        }
+
+        foreach (var property in jsonObject)
+        {
+            if (property.Key.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = JsonNodeToObject(property.Value);
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static object? JsonNodeToObject(JsonNode? node) =>
+        node is null ? null : JsonElementToObject(JsonSerializer.SerializeToElement(node));
 
     /// <summary>
     /// Converts a JsonElement to a .NET object.
@@ -430,6 +468,12 @@ public class QueryEvaluator
         if (obj is JsonElement jsonElement)
         {
             ExtractJsonStrings(jsonElement, sb, maxDepth, currentDepth);
+            return;
+        }
+
+        if (obj is JsonNode jsonNode)
+        {
+            ExtractJsonStrings(JsonSerializer.SerializeToElement(jsonNode), sb, maxDepth, currentDepth);
             return;
         }
 

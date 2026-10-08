@@ -325,7 +325,64 @@ public static class AccessAssignmentGuard
     /// <param name="syncNode">The <c>{partition}/_GitSync</c> node, or null when there is none.</param>
     /// <param name="options">The HUB's serializer options — never a hand-rolled instance.</param>
     public static bool IsSystemOwned(MeshNode? syncNode, JsonSerializerOptions? options)
-        => syncNode is not null && !IsTwoWay(syncNode, options);
+        => syncNode is not null && !IsTwoWay(syncNode, options) && NamesARepository(syncNode, options);
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is CONTENT — a path with no <c>_</c>-prefixed segment, the
+    /// partition root included. The ONE predicate for which paths of a system-owned partition the
+    /// repository-owned write cap covers (#5140): the permission fold, the RLS own-scope shortcut
+    /// and the denial diagnosis all ask it, so they cannot drift apart. Satellites keep their own rules.
+    /// </summary>
+    /// <param name="path">A node path.</param>
+    /// <returns>True for a non-empty path with no <c>_</c>-prefixed segment.</returns>
+    public static bool IsContentPath(string? path)
+    {
+        var segments = (path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length > 0 && !segments.Any(s => s.StartsWith('_'));
+    }
+
+    /// <summary>
+    /// 🚨 Whether a sync config actually NAMES a repository — a config node is not a configured sync
+    /// (#5140). The GitHub settings tab mints <c>{space}/_GitSync</c> with an EMPTY
+    /// <c>GitHubSyncConfig</c> the moment it is opened (<c>GitHubSyncService.EnsureConfigNode</c>), so
+    /// that the editor has a node to bind to; the sync triggers already treat that as untracked. Read
+    /// as system-owned it would make an ordinary Space repo-owned by someone merely LOOKING at its
+    /// settings — the retraction sweep would strip its administrators and the permission fold would
+    /// refuse every write to its content, with no repository to change it through.
+    ///
+    /// <para>Fails CLOSED, like <see cref="IsTwoWay"/>: only a READABLE config that carries no
+    /// non-empty <c>repositoryUrl</c> answers <c>false</c>. No content, or content that cannot be
+    /// read, answers <c>true</c> and keeps the partition protected.</para>
+    /// </summary>
+    /// <param name="syncNode">The <c>{partition}/_GitSync</c> node.</param>
+    /// <param name="options">The HUB's serializer options — never a hand-rolled instance.</param>
+    public static bool NamesARepository(MeshNode syncNode, JsonSerializerOptions? options)
+    {
+        if (syncNode.Content is not { } content)
+            return true;
+        try
+        {
+            var element = content is JsonElement je
+                ? je
+                : JsonSerializer.SerializeToElement(content, content.GetType(), options);
+            if (element.ValueKind != JsonValueKind.Object)
+                return true;
+            // Case-insensitive: a typed config serialized without the hub's camelCase options
+            // spells it `RepositoryUrl`, and missing it would fail OPEN.
+            return element.EnumerateObject().Any(p =>
+                string.Equals(p.Name, "repositoryUrl", StringComparison.OrdinalIgnoreCase)
+                && p.Value.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(p.Value.GetString()));
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+        catch (NotSupportedException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// Whether a sync config is bijective. Pure and total: an unreadable or absent

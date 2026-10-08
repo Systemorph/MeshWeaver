@@ -1,7 +1,7 @@
 ---
 Name: A Stale Run Listing Is Not a Broken Main
 Category: Architecture
-Description: GitHub serves the platform resolver a weeks-old page of workflow runs, per call, with no error — eight measured occurrences (five on the core CD listing, three on the satellite ceiling listing), one of which left `main` without a verdict and one of which resolved an OLD ceiling SILENTLY. The refusal that results is correct; twice its wording sent the reader at a `main` that was fine, and until MeshWeaver#4750 it cost a whole CI cycle every time. What each of the two listings can and cannot check, which branches are re-read and why only those, and how the refusal orders its remedies by the evidence it actually read.
+Description: GitHub serves the platform resolver stale or empty workflow-run pages, per call, with no error — nine measured occurrences (six on the core CD listing, three on the satellite ceiling listing), one of which left `main` without a verdict and one of which resolved an OLD ceiling SILENTLY. The refusal that results is correct; twice its wording sent the reader at a `main` that was fine, and until MeshWeaver#4750 it cost a whole CI cycle every time. What each of the two listings can and cannot check, which branches are re-read and why only those, and how the refusal orders its remedies by the evidence it actually read.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/><path d="M3 4l18 16"/></svg>
 ---
 
@@ -17,10 +17,10 @@ the reader's time in the wrong place, and they trust it while doing so. And **on
 on the first read** where a second read, minutes later, would have answered correctly — which cost
 a whole CI cycle every time.
 
-**Eight occurrences are measured below, and they are not all the same measurement.** Counting the
-table's `×N` rows: **five** are the **core CD** listing (2026-09-15 ×2 and 2026-09-18 ×3) — the
-listing MeshWeaver#4750 taught to re-read, and one of the three on 09-18 left `main` itself without a
-verdict. The other **three** (2026-09-14, 2026-09-17, 2026-09-23) are the **satellite's own
+**Nine occurrences are measured below, and they are not all the same measurement.** Counting the
+table's `×N` rows: **six** are the **core CD** listing (2026-09-15 ×2, 2026-09-18 ×3 and
+2026-10-07 ×1) — the listing MeshWeaver#4750 taught to re-read, and one of the three on 09-18 left
+`main` itself without a verdict. The other **three** (2026-09-14, 2026-09-17, 2026-09-23) are the **satellite's own
 ceiling** listing. The first two refused, correctly; the third did NOT — its stale page still named
 a set, so an old ceiling was resolved silently — and that is what the witness described under
 *The silent kind* below now proves and re-reads. (`ceiling_refusal`'s own text says *"measured three times"* for the two refusals: it
@@ -61,6 +61,17 @@ retry.
 | 2026-09-17 | MeshWeaver.Plugins PR #2038, job `105367690432` (ceiling listing) | twelve runs from **2026-08-12/13**, newest `31741597338` created `2026-08-13T20:35:15Z` |
 | 2026-09-23 | MeshWeaver.Plugins PR #2307, run `35830062164` (ceiling listing) — **no refusal** | newest vouching run `35587322366` (created 2026-09-21T10:10Z, set `9081`) while `main` had green, annotated runs `35822711093` (05:30Z) and `35821116466` (05:07Z) on set `9218`; the ceiling resolved `9081` SILENTLY and the build failed `CS0246` on a core type newer than 9081. The same script run by hand minutes later printed `9218` |
 | 2026-09-18 ×3 | MeshWeaver.Plugins, core CD listing — PR #2071 run `35328406174`, PR #2043 run `35334000904`, **`main`** run `35345612101` | page 1 ~**2,600 runs** behind on the first (newest `main-cd #6215` against a ceiling of `#8892`); `main-cd #8423`, 143 h old, on the third. **17, 17 and 18** downstream jobs red; every hand re-run green minutes later with no code change |
+| 2026-10-07 | MeshWeaver.Plugins `main` run `37695330204`, core CD listing | page 1 answered **empty** while core CD had recent runs. The resolver broke out before its independent recent-run query, reported “newest 0” and reddened 12 dependent jobs; the named transient steward could not classify that different refusal. |
+
+An **initially empty** core CD page now reaches the same independent recent-run query as a page
+with old rows. If that query names a run, the empty page is provably incomplete and gets the
+bounded 20/40/60-second re-read. A re-read that finds the witnessed run may resolve it; persistent
+empty pages get the keyed stale-listing refusal, which the transient steward recognizes. If the
+independent query finds no witness, the resolver stays red and says that no platform set was
+examined. It does not turn an empty listing into evidence that no release exists.
+When the caller passes `--passed-ceiling`, an empty page needs no second witness: the caller's
+own `main` passed on that core CD run, so it exists, and the empty page is ceiling-proven stale.
+It takes the same bounded re-read and keyed refusal, whatever the recent-run query returns.
 
 The 2026-09-17 page was not garbage: run `31741597338` is a genuine `success` `push` run of `ci.yml`
 on `main`, created exactly when the page said. The rows are strictly descending and contiguous — an

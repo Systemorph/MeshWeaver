@@ -37,9 +37,10 @@ public class NodeRepoLaneSelfResolveGuard
         var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), workflow)));
 
         // The same fetch shape as compose-gate-host.sh: core's script, at the LANE's scripts ref —
-        // never at the platform's commit (hours behind the lane) and never a vendored copy.
+        // never at the platform's commit (hours behind the lane) and never a vendored copy. Read over
+        // git by the platform-file reader, never the REST contents API (Doc/Architecture/CiRestBudget).
         Assert.Contains(
-            "gh api \"repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}\"",
+            "\"$RUNNER_TEMP/mw-core-file\" \"${SCRIPTS_REF}\" \".github/scripts/resolve-platform.py\"",
             lines, StringComparison.Ordinal);
         // An unproven resolver is no resolver: the offline cases run before the real API is read.
         Assert.Contains("python3 \"$SCRIPT\" --self-test", lines, StringComparison.Ordinal);

@@ -342,6 +342,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/control-instance.json
+            .github/scripts/check-control-webhook-url.py
+          sparse-checkout-cone-mode: false
       - name: Every external input, or a red build naming what to provision
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -365,9 +371,9 @@ jobs:
           # `control-first` hands every accepted build to control's roll lane with these two: the
           # control PLANE's inbox (the instance holding the Deployments records and Ops/Actions) and
           # the HMAC it verifies. Without them control is tagged a build nothing ever rolls it to.
-          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (org variable, https://memex.systemorph.com/api/hooks/Hosting/PlatformBuilds) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
+          [ -n "$CONTROL_WEBHOOK_URL" ]    || missing+=("vars.CONTROL_WEBHOOK_URL          the control plane's inbox (repo or org variable, declared by .github/control-instance.json) — control-first POSTs the signed self-update-available announcement for the control record there; without it control is never rolled to the build it was given")
           [ -n "$CONTROL_WEBHOOK_SECRET" ] || missing+=("secrets.CONTROL_WEBHOOK_SECRET    the HMAC that inbox verifies (org secret, byte-identical to that instance's Hosting:PlatformWebhookSecret)")
-          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and `published-modules` READS the sealed module publications from there (<account>/<share>…)")
+          [ -n "$BAKE_PUBLISH_TARGETS" ]               || missing+=("vars.BAKE_PUBLISH_TARGETS                  the portals' storage shares: the platform bake publishes there, and published-modules READS the sealed module publications from there (<account>/<share>…)")
           # 🚨 The fleet registry's publisher password. Every image job and every bake job pushes
           # to cr.meshweaver.cloud with it, so an unset value is a delivery that reaches ACR and
           # not the fleet — asserted here, RED, never discovered as `unauthorized` three jobs later.
@@ -387,6 +393,8 @@ jobs:
             for m in "${missing[@]}"; do echo "  • $m"; done
             exit 1
           fi
+          python3 .github/scripts/check-control-webhook-url.py \
+            .github/control-instance.json "$CONTROL_WEBHOOK_URL"
           echo "All external inputs are present."
 
   # Every downstream job takes its commit from here, so a push run and a heal run are literally
@@ -859,12 +867,15 @@ jobs:
             exit 0
           fi
           digest=$(printf '%s' "$row" | jq -r '.digest')
-          version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | .[0] // empty')
-          run_number="${version##*-ci.}"
+          # Both notations (policy `platform-semver-versioning`): `3.0.0-ci.<run>` and `3.<minor>.<run>`.
+          # The run number is read by the ONE shell-facing reader, never a `${v##*-ci.}` strip — which
+          # hands the WHOLE version back for the SemVer notation.
+          version=$(printf '%s' "$row" | jq -r '[.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-ci\\.[0-9]+)?$"))] | map(select(test("^[0-9]+\\.[0-9]+\\.0$") | not)) | .[0] // empty')
+          run_number=$(python3 .github/scripts/platform-version.py ordinal "$version" || true)
           case "$digest" in sha256:*) ;; *) echo "reason=the main manifest's digest is not a sha256 (got '$digest')" >> "$GITHUB_OUTPUT"; echo "::warning::satellite-compat baseline NOT established: main's digest is '$digest'"; exit 0 ;; esac
           if [ -z "$version" ] || ! [ "$run_number" -eq "$run_number" ] 2>/dev/null; then
             echo "digest=$digest" >> "$GITHUB_OUTPUT"
-            echo "reason=mw-plugin-test:main ($digest) carries no 3.0.0-ci.<run> version tag, so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
+            echo "reason=mw-plugin-test:main ($digest) carries no set version tag (3.0.0-ci.<run> or 3.<minor>.<run>), so the bundles that shipped with it cannot be located" >> "$GITHUB_OUTPUT"
             echo "::warning::satellite-compat baseline NOT established: main ($digest) carries no ci version tag (tags: $(printf '%s' "$row" | jq -c .tags))"
             exit 0
           fi
@@ -2075,7 +2086,9 @@ jobs:
           # The LINE POINTERS too (3-latest, 3.0-latest, 3.0.0-latest), exactly as `arm`'s phase D
           # moves them for memex-portal-ai: a NEW control instance seeds from the line pointer, never
           # a specific build (Memex AGENTS.md "NO PINS"; Plugins#2034).
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # Spelled by the one reader (policy `platform-semver-versioning`): `3-latest 3.1-latest` for
+          # the SemVer notation, the three pointers for the old one — exactly as phase D spells them.
+          line_tags() { python3 .github/scripts/platform-version.py line-pointers "$1"; }
           tags=("$V_CONTROL")
           if [ "$MOVE" = true ]; then read -r -a pointers <<< "$(line_tags "$V_CONTROL")"; tags+=("${pointers[@]}"); fi
           [ "$MOVE" = true ] || echo "::notice::a newer memex-control version exists — tagging $V_CONTROL only, the line pointers stay"
@@ -2127,7 +2140,14 @@ jobs:
                 *) echo "::error::the control plane's inbox stored the announcement but did not VERIFY its signature (signature: $verdict) — the router drops what it cannot verify, so control would not be rolled. Declare WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on that instance."
                    exit 1 ;;
               esac
-              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` stored and verified at the control plane (HTTP $code) — it opens \`Ops/Actions/selfupdate-roll-control-*\`, unattended under the record's Continuous \`3.0.0-ci*\` line" >> "$GITHUB_STEP_SUMMARY"
+              # 🚨 STORED AND VERIFIED IS NOT DELIVERED (policy `control-first-never-silent`). The inbox
+              # answers before its router runs, and the router DROPS an announcement whose `deployment`
+              # names no record the receiving plane holds (SelfUpdateRouting: "the record lookup IS the
+              # authorization") — measured 2026-10-07 from ci.10184 on: `200 accepted, verified` at a
+              # plane holding no Deployments record, every build dropped, control frozen 10+ h. So this
+              # line claims only what the 200 proves; whether control RUNS the build is read by `arm`
+              # (red past the bound) and by `control-always-latest`.
+              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` STORED and signature-verified at \`${URL%/api/hooks/*}\` (HTTP $code). That is not yet a roll: the plane opens one only if it holds the \`control\` record — \`arm\` and \`control-always-latest\` read whether control actually runs this build" >> "$GITHUB_STEP_SUMMARY"
               ;;
             000) echo "::error::could not reach the control plane's inbox at all (DNS/TLS/connection refused) — control was NOT handed $V_CONTROL"; exit 1 ;;
             401) echo "::error::the control plane's inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical — control was NOT handed $V_CONTROL"; exit 1 ;;
@@ -2432,13 +2452,15 @@ jobs:
           # run, the moving pointers stay where that set put them (ACR, cr and GHCR alike).
           # FAIL-CLOSED on both reads: a tag list that cannot be read, or a version without a run
           # ordinal, is RED — never "no newer set", which would move the pointers on no evidence.
-          [[ "$V_PLUGIN" =~ [.-]ci\.([0-9]+)$ ]] || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no ci.<n> run ordinal — cannot decide whether a newer set already holds main/latest"; exit 1; }
-          n_self="${BASH_REMATCH[1]}"
+          # Both notations share ONE lineage (policy `platform-semver-versioning`): the run number is
+          # read by `platform-version.py`, never a `ci.` regex that cannot see `3.<minor>.<run>`.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_PLUGIN") \
+            || { echo "::error::V_PLUGIN '$V_PLUGIN' carries no run ordinal (neither <line>-ci.<n> nor <major>.<minor>.<n>) — cannot decide whether a newer set already holds main/latest"; exit 1; }
           tags=$(az acr repository show-tags -n meshweaver --repository mw-plugin-test --orderby time_desc --top 200 -o tsv) \
             || { echo "::error::could not list mw-plugin-test tags — cannot decide whether a newer set already holds main/latest; refusing to move them blind"; exit 1; }
           # Phase A just wrote this run's own version tag, so an EMPTY reading is itself a broken read.
-          n_max=$(printf '%s\n' "$tags" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no <line>-ci.<n> tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
+          n_max=$(printf '%s\n' "$tags" | python3 .github/scripts/platform-version.py max-ordinal)
+          [ -n "$n_max" ] || { echo "::error::mw-plugin-test lists no set tag, not even this run's $V_PLUGIN written by phase A — the listing is not trustworthy"; exit 1; }
           if [ "$n_max" -gt "$n_self" ]; then
             echo "::notice title=Moving pointers left in place::a newer set (ci.$n_max) was promoted while this run (ci.$n_self) built — main/latest stay on it; this set keeps its own version and identity tags"
             echo "- moving pointers NOT moved: ci.$n_max is newer than this run's ci.$n_self (never backwards)" >> "$GITHUB_STEP_SUMMARY"
@@ -2563,7 +2585,11 @@ jobs:
   # publish, the hourly reconcile, a dispatch — and arms the newest promoted set, NEWER than
   # everything armed, whose platform verdict is green. A red ladder is refused; a ladder still
   # running, or a control that has not taken the set yet, waits; a newer green one supersedes both.
-  # Never backwards. The ladder of THIS run is a need so this run can arm its own set when control
+  # Never backwards. 🚨 But a wait has a BOUND (policy `control-first-never-silent`): when nothing is
+  # armed and control has been behind the newest build it was given for longer than
+  # `platformLagBoundMinutes` (`.github/control-instance.json`, the SAME bound and clock as
+  # `control-always-latest`), this job goes RED naming control's own self-update verdict — a green
+  # CD over a fleet frozen on control is exactly the silence this replaced (ci.10184…ci.10206). The ladder of THIS run is a need so this run can arm its own set when control
   # already runs it (a rebuild of the commit control is on); otherwise a later tick arms it.
   #
   # 🚨 WHAT IT DOES NOT GATE: promote, verify, the platform bake, control-first and every CI
@@ -2741,14 +2767,22 @@ jobs:
           # anyway self-updating => should point to latest image to start"; "1, 2 or 3 digits").
           # 🚨 NEVER BACKWARDS, re-checked at the write: a concurrent main-cd run (the reconcile lane
           # and the main lane can overlap) may have armed a NEWER set since `select` read the tags.
-          n_self="${V_PORTAL##*ci.}"
-          n_max=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv \
-                  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+)?[.-]ci\.[0-9]+$' | sed -E 's/.*ci\.//' | sort -n | tail -1 || true)
-          if [ -n "$n_max" ] && [ "$n_max" -gt "$n_self" ]; then
-            echo "::notice::a newer set (ci.$n_max) was armed while this job ran — leaving the line pointers where it put them"
+          # Both notations, ONE lineage (policy `platform-semver-versioning`) — read by the one reader.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_PORTAL") \
+            || { echo "::error::V_PORTAL '$V_PORTAL' carries no run ordinal — refusing to move the line pointers on no evidence"; exit 1; }
+          # FAIL CLOSED: a failed listing, or one with no run ordinal at all (phase C has just written
+          # $V_PORTAL, so even this run's own tag would be missing), is no evidence this set is newest.
+          portal_tags=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai --orderby time_desc --top 200 -o tsv) \
+            || { echo "::error::could not list memex-portal-ai tags — refusing to move the line pointers on no evidence"; exit 1; }
+          n_max=$(printf '%s\n' "$portal_tags" | python3 .github/scripts/platform-version.py max-ordinal)
+          [ -n "$n_max" ] || { echo "::error::memex-portal-ai lists no run-numbered tag, not even this run's $V_PORTAL written by phase C — the listing is not trustworthy"; exit 1; }
+          if [ "$n_max" -gt "$n_self" ]; then
+            echo "::notice::a newer set (run $n_max) was armed while this job ran — leaving the line pointers where it put them"
             exit 0
           fi
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # `3-latest 3.0-latest 3.0.0-latest` for the old notation; `3-latest 3.1-latest` for the
+          # SemVer one, where a three-part pointer would name ONE build and point nowhere useful.
+          line_tags() { python3 .github/scripts/platform-version.py line-pointers "$1"; }
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           for pair in "memex-migration:$V_MIGRATION:$V_MIGRATION" "memex-portal-ai:$V_PORTAL:$SRC_PORTAL_TAG"; do
             repo="${pair%%:*}"; rest="${pair#*:}"; ver="${rest%%:*}"; src="${rest#*:}"
@@ -3442,7 +3476,14 @@ jobs:
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
           newest=$(printf '%s' "$st" | jq -r '.version')
-          n_newest="${newest##*ci.}"; n_self="${V_SELF##*ci.}"
+          # Both notations, ONE lineage (policy `platform-semver-versioning`): the run number is read
+          # by the one reader, never `${v##*ci.}` — which leaves `3.1.10001` whole, makes `-gt` an
+          # "integer expression expected" and took the not-superseded branch for an OLDER set.
+          # FAIL-CLOSED: this run just armed V_SELF, so either reading being absent is a broken read.
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
+            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — cannot decide whether a newer set superseded it; refusing to announce on no evidence"; exit 1; }
+          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+            || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy; refusing to announce on no evidence"; exit 1; }
           if [ "$n_newest" -gt "$n_self" ]; then
             echo "superseded=true" >> "$GITHUB_OUTPUT"
             echo "::notice::$V_SELF was superseded by $newest before its release event — sending nothing (the newer set's arming announces the line)"
@@ -4879,6 +4920,7 @@ jobs:
           Triage the failed job in the linked run - which of the two things CD delivers is broken depends on WHICH job went red:
 
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
+          * arm: the FLEET is frozen on control (policy control-first-never-silent) when its ::error reads 'FLEET DELIVERY FROZEN ON CONTROL' - every image is published, but control has run none of the builds it was given for longer than the platformLagBoundMinutes bound, so control-first offers the fleet nothing. The error names control's running commit, the first build it missed and control's OWN self-update verdict (its /health self_update line); the open control-lag issue carries the same reading. The remedy is control's roll, never an arm override.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
           * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 

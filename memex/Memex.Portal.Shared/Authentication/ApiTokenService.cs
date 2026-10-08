@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -897,17 +898,32 @@ internal class ApiTokenService(
 
     /// <summary>
     /// Reactive token revocation. Writes the IsRevoked flag through
-    /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the
-    /// canonical remote-stream write per
-    /// <c>Doc/Architecture/AsynchronousCalls.md</c>. No
-    /// <c>UpdateNodeRequest</c> forwarding (the previous, now-retired shape
-    /// timed out in distributed deployments when the per-node hub's
-    /// forwarded request didn't get a response within ~30s).
+    /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> — the ONE mutation API — and nothing
+    /// else. The write routes to the token node's owning hub, is checked there against the
+    /// CALLER's permissions (the caller's <c>AccessContext</c> rides the update), and is durable
+    /// by the time the update emits: the owner flushes a patch-driven change post-commit
+    /// (<c>PostCommitFlushRegistry</c>, #1249).
     ///
-    /// <para>The global index entry is hard-deleted as a fire-and-forget
-    /// side effect — the index miss is a defense-in-depth gate on top of
-    /// the authoritative <c>IsRevoked</c> flag, not a primary requirement
-    /// for the revoke to be effective.</para>
+    /// <para>🚨 <b>No second write</b> (MeshWeaver#6026). This used to follow the update with a raw
+    /// whole-node <c>SaveMeshNodeRequest</c> posted from whatever hub the service was handed — in
+    /// production the ROOT MESH HUB, so the router became the SENDER of a node write
+    /// (<c>ROUTER_TRAFFIC ORIGIN</c>) and that write's outcome had nowhere to go. It was a
+    /// workaround for a persistence gap the post-commit flush has since closed (the durability is
+    /// pinned by <c>TokenRevocationIsIssuedOffTheRouterTest</c>, which reads the revocation back
+    /// from the storage adapter), so it is deleted rather than moved onto another hub.</para>
+    ///
+    /// <para>🚨 <b>A refusal FAULTS</b>, exactly as <see cref="DeleteToken"/> does (MeshWeaver#4707).
+    /// A revoke the mesh refused is a statement about a token that STILL AUTHENTICATES; folding it
+    /// into <c>false</c> let a caller that ignores the value (<c>ServiceIdentities.Rotate</c>)
+    /// report success with the old credential live. A token node whose content cannot be read as
+    /// an <see cref="ApiToken"/> faults too (the typed <c>Update&lt;ApiToken&gt;</c>) — it used to be
+    /// returned unchanged and reported as revoked, or, read with default options, replaced by a
+    /// default token. <c>true</c> means the node now carries <c>IsRevoked</c>; <c>false</c> means the
+    /// path holds no node at all (nothing there authenticates).</para>
+    ///
+    /// <para>The global index entry is hard-deleted afterwards — the index miss is a
+    /// defense-in-depth gate on top of the authoritative <c>IsRevoked</c> flag, not a primary
+    /// requirement for the revoke to be effective.</para>
     /// </summary>
     public IObservable<bool> RevokeToken(string tokenNodePath)
     {
@@ -917,36 +933,26 @@ internal class ApiTokenService(
         logger.LogInformation("Revoking API token at {Path}", tokenNodePath);
 
         var primary = workspace.GetMeshNodeStream(tokenNodePath)
-            .Update(current =>
-            {
-                var token = current.Content as ApiToken ?? ExtractApiToken(current);
-                if (token == null) return current;
-                // Flip IsRevoked on the live node — validation reads the node fresh (no cache),
-                // so the revoke takes effect immediately.
-                return current with { Content = token with { IsRevoked = true } };
-            })
-            .Do(updatedNode =>
-            {
-                // Force the per-node hub to persist the patched node. The
-                // sync-protocol path (workspace.GetMeshNodeStream(remote)
-                // .Update) updates the mesh-hub-side stream and emits a
-                // DataChangeRequest to the per-node hub, but the per-node
-                // hub's data source `saveSub` only fires on `ownStream`
-                // emissions — and those don't fire for sync-driven changes,
-                // so persistence never sees the IsRevoked=true update. The
-                // SaveMeshNodeRequest below routes to the per-node hub's
-                // HandleSaveMeshNode which writes through IStorageService
-                // (firing IDataChangeNotifier.Updated, so the synced
-                // GetTokensForUser view picks up the change).
-                hub.Post(new SaveMeshNodeRequest(updatedNode),
-                    o => o.WithTarget(new Address(tokenNodePath)));
-            })
+            // The TYPED write: the content is converted with the mesh's own serializer options, and
+            // content that is absent or not an ApiToken faults the write instead of being replaced
+            // by a default-constructed token. Flip IsRevoked on the live node — validation reads
+            // the node fresh (no cache), so the revoke takes effect immediately.
+            .Update<ApiToken>(token => token with { IsRevoked = true })
             .Select(_ => true)
-            .Catch<bool, Exception>(ex =>
-            {
-                logger.LogWarning(ex, "RevokeToken failed for {Path}", tokenNodePath);
-                return Observable.Return(false);
-            });
+            // An ABSENT path is the one non-fault: there is no token there to revoke, so nothing
+            // authenticates through it — `false`, as DeleteToken answers for the same case. Matched
+            // as the ROUTER's NotFound for THIS address (typed ErrorType.NotFound AND the routing
+            // banner naming the path), never on ErrorType alone: NotFound is also what a LIVE hub
+            // answers for a request it has no handler for, and a refusal arrives as a delivery
+            // failure too — neither may be read as "nothing was there".
+            .Catch<bool, DeliveryFailureException>(ex =>
+                AreaErrorClassifier.IsRoutingNotFoundFailure(ex.Failure)
+                && string.Equals(AreaErrorClassifier.TryGetMissingNodePath(ex), tokenNodePath,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? Observable.Return(false)
+                    : Observable.Throw<bool>(ex))
+            // .Do, never a swallowing .Catch: the warning is kept and the refusal reaches the caller.
+            .Do(_ => { }, ex => logger.LogWarning(ex, "RevokeToken failed for {Path}", tokenNodePath));
 
         // Chain the global-index delete into the returned observable rather
         // than firing a separate Subscribe — see the matching comment in

@@ -649,6 +649,8 @@ jobs:
       # The base tip every shard merges the head onto (empty off pull requests).
       merge-main-sha: ${{ steps.fresh.outputs.main-sha }}
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - name: Resolve and bind the artifact store
         id: store
         uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
@@ -719,7 +721,7 @@ jobs:
           if [ "$ADOPTED_VERDICT" = "auto" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
             # The lane decides: fetch the platform's adopt-verdict.py at the lane's scripts ref and ask it.
             SCRIPT="${RUNNER_TEMP:-/tmp}/adopt-verdict.py"
-            gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/adopt-verdict.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+            "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/adopt-verdict.py" > "$SCRIPT" \
               || { echo "::warning::could not fetch .github/scripts/adopt-verdict.py at ${SCRIPTS_REF} — gating as usual"; ADOPTED_VERDICT=''; }
             if [ -n "$ADOPTED_VERDICT" ]; then
               python3 "$SCRIPT" --base "origin/${{ github.base_ref }}" --workflow "$CALLER_WORKFLOW" --repo "$GITHUB_REPOSITORY" --github-output "$RUNNER_TEMP/adopt.txt" | tail -3
@@ -837,8 +839,17 @@ jobs:
             # resolve-platform.py's SET_NAME, segment for segment: a prerelease is dot-separated
             # NON-EMPTY identifiers, so `3.0.0-rc..ci.1` is refused here exactly as the resolver
             # would refuse it — this input may never name a set the resolver cannot.
-            [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]] \
-              || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N) — pass the resolver's \`set\` output, or nothing"; exit 1; }
+            # And its SemVer notation (policy `platform-semver-versioning`): `<major>.<minor>.<run>`
+            # from line 3.1 on, the run (patch) never 0 — `match_set_name` in the resolver.
+            is_set=false
+            if [[ "$PINNED_SET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?[.-]ci\.[0-9]+$ ]]; then
+              is_set=true
+            elif [[ "$PINNED_SET" =~ ^([0-9]+)\.([0-9]+)\.[1-9][0-9]*$ ]] \
+                && { [ "${BASH_REMATCH[1]}" -gt 3 ] || { [ "${BASH_REMATCH[1]}" -eq 3 ] && [ "${BASH_REMATCH[2]}" -ge 1 ]; }; }; then
+              is_set=true
+            fi
+            [ "$is_set" = true ] \
+              || { echo "::error::platform-set '${PINNED_SET}' is not a set name (X.Y.Z[-prerelease]-ci.N, or <major>.<minor>.N from 3.1 on) — pass the resolver's \`set\` output, or nothing"; exit 1; }
             # Only when NEITHER digest is pinned; a half-pin falls through to its own, more
             # specific refusal below rather than being misdescribed as "none".
             if [ -z "${IMAGE_DIGEST:-}" ] && [ -z "${PLATFORM_DIGEST:-}" ]; then
@@ -880,7 +891,7 @@ jobs:
           [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ] || { echo "::error::image-digest and platform-image-digest are both empty, so this lane resolves the newest sealed platform set itself — and that needs acr-username + acr-password (secrets) to prove the set's images are in the registry. Pass them, or pin both digests."; exit 1; }
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-platform.py has no ref to be fetched at"; exit 1; }
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
-          gh api "repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" --jq .content | base64 -d > "$SCRIPT" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           python3 "$SCRIPT" --self-test
@@ -933,6 +944,13 @@ jobs:
     # needs more is STUCK, not slow.
     timeout-minutes: 45
     env:
+      # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
+      # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
+      # devirtualisation on Roslyn's MetadataWriter.PopulateNestedClassTableRows /
+      # getConsolidatedTypeParameters path, after which every in-process Emit NREs. The
+      # runtimeconfig half (<TieredPGO>false</TieredPGO>, #890) covers hosts built from THIS tree;
+      # this env covers every process the job launches, whatever pin it was built at.
+      DOTNET_TieredPGO: "0"
       # The self-hosted runner is non-root: setup-dotnet cannot write /usr/share/dotnet there.
       # EMPTY on ubuntu-latest, which setup-dotnet reads as unset — the default path is unchanged.
       # No step here runs setup-dotnet today; the line is the rule, uniform with module-pack.
@@ -941,6 +959,8 @@ jobs:
       contents: read
       id-token: write     # azure/login OIDC for upstream-seed — granted BY the caller, as for publish-bake
     steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
       - uses: actions/checkout@v7
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the run's current base tip
@@ -1106,16 +1126,10 @@ jobs:
           fi
           [ -n "${PLATFORM_BASELINE:-}" ] || { echo "::error::plan reports resolved=true but handed this shard no baseline row — the plan step and this one disagree about their contract"; exit 1; }
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-platform.py"
-          # curl, not `gh api`: THIS job honours the `runner` input and the self-hosted runner image
-          # ships no `gh` (header, "Where the heavy legs run"). The two other lane-script fetches in
-          # this job moved off `gh` for exactly that reason and this one was left behind, so an
-          # unpinned caller on `aks-silos` / `aks-silos-dind` would have died here on a missing
-          # binary. Same endpoint, same ref, same token; the raw media type returns the bytes
-          # without the base64 round-trip. (`plan`'s copy keeps `gh api` — both runner kinds it lands on carry `gh`.)
-          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-platform.py?ref=${SCRIPTS_REF}" \
+          # The git reader, never `gh api`: THIS job honours the `runner` input and the self-hosted
+          # runner image ships no `gh` (header, "Where the heavy legs run"); and never a REST read at
+          # all, which spends the CALLER's per-repository token budget (Doc/Architecture/CiRestBudget).
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$SCRIPT" \
             || { echo "::error::could not fetch resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-platform.py at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           ROWS="${RUNNER_TEMP:-/tmp}/platform-rows.txt"; : > "$ROWS"
@@ -1217,10 +1231,7 @@ jobs:
           set -euo pipefail
           SCRIPT="${RUNNER_TEMP:-/tmp}/resolve-gate-platform.sh"
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — resolve-gate-platform.sh has no ref to be fetched at"; exit 1; }
-          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/resolve-gate-platform.sh?ref=${SCRIPTS_REF}" \
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-gate-platform.sh" > "$SCRIPT" \
             || { echo "::error::could not fetch resolve-gate-platform.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched resolve-gate-platform.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           chmod +x "$SCRIPT"
@@ -1425,12 +1436,9 @@ jobs:
           set -euo pipefail
           SCRIPT="${RUNNER_TEMP:-/tmp}/compose-gate-host.sh"
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — compose-gate-host.sh has no ref to be fetched at"; exit 1; }
-          # curl, not `gh api`: the self-hosted runner image ships no `gh` (header). Same endpoint,
-          # same ref, same token; the raw media type returns the bytes without a base64 round-trip.
-          curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
-            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-gate-host.sh?ref=${SCRIPTS_REF}" \
+          # The git reader: the self-hosted runner image ships no `gh` (header), and a REST read spends
+          # the caller's token budget (Doc/Architecture/CiRestBudget).
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/compose-gate-host.sh" > "$SCRIPT" \
             || { echo "::error::could not fetch compose-gate-host.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
           head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-gate-host.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
           chmod +x "$SCRIPT"
@@ -1831,12 +1839,9 @@ jobs:
               # so a fetch keyed on it silently read main while claiming a pin.
               SCRIPT="${RUNNER_TEMP:-/tmp}/compose-sealed-modules.sh"
               [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the compose script has no ref to be fetched at"; exit 1; }
-              # curl, not `gh api`: the self-hosted runner image ships no `gh` (header) — same
-              # endpoint, same ref, same token, raw media type.
-              curl -fsSL --retry 3 --retry-delay 5 -o "$SCRIPT" \
-                -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.raw+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "${GITHUB_API_URL:-https://api.github.com}/repos/Systemorph/MeshWeaver/contents/.github/scripts/compose-sealed-modules.sh?ref=${SCRIPTS_REF}" \
+              # The git reader: the self-hosted runner image ships no `gh` (header), and a REST read
+              # spends the caller's token budget (Doc/Architecture/CiRestBudget).
+              "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/compose-sealed-modules.sh" > "$SCRIPT" \
                 || { echo "::error::could not fetch compose-sealed-modules.sh at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
               head -c 2 "$SCRIPT" | grep -q '#!' || { echo "::error::the fetched compose-sealed-modules.sh at ${SCRIPTS_REF} is not a script (starts: $(head -c 40 "$SCRIPT" | tr -d '\n'))"; exit 1; }
               chmod +x "$SCRIPT"
@@ -2189,7 +2194,10 @@ jobs:
             if [ "$MODE" = volume ]; then
               "$DOTNET" "$HOST_DIR/mw-plugin-test.dll" "$@"
             else
-              docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp "${EXT_V[@]}" \
+              # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix
+              # ships. Same switch as the job env, carried INTO the container (the runner env does not
+              # cross `docker run`).
+              docker run --rm --init --user "$(id -u):$(id -g)" -e HOME=/tmp -e DOTNET_TieredPGO=0 "${EXT_V[@]}" \
                 -v "$HOST_DIR:/host:ro" -v "$REPO_MOUNT:/repo" "${TESTER_MOUNTS[@]}" "${DUMP_ARGS[@]}" \
                 --entrypoint dotnet "$PLATFORM_REF" /host/mw-plugin-test.dll "$@"
             fi

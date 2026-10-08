@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Services;
@@ -20,6 +21,9 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     private readonly ISubject<MeshChangeEvent> _subject;
     private readonly ISubject<MeshChangeEvent> _invalidations;
     private readonly StorageChangeFeedRelay? _storageRelay;
+    private readonly Subject<ChangeFeedGap> _gapsLifetime = new();
+    private readonly ISubject<ChangeFeedGap> _gaps;
+    private readonly IDisposable? _gapRelay;
     private readonly ILogger? logger;
     private bool _disposed;
 
@@ -34,6 +38,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         // synchronized wrappers preserve one ordered callback at a time in this process.
         _subject = Subject.Synchronize(_subjectLifetime);
         _invalidations = Subject.Synchronize(_invalidationLifetime);
+        _gaps = Subject.Synchronize(_gapsLifetime);
     }
 
     /// <summary>
@@ -47,6 +52,62 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     {
         this.logger = logger;
         _storageRelay = new StorageChangeFeedRelay(storage, PublishInvalidation, logger);
+        // Plugins#3000: the backend's declared holes reach every process-local cache through the
+        // same mesh-scoped feed as its notifications. Logged once here at Warning because a gap is
+        // the one event after which this replica may have been serving stale state.
+        _gapRelay = storage.ChangeFeedGaps.Subscribe(
+            PublishGap,
+            ex => logger?.LogError(ex,
+                "Storage change-feed GAP relay stopped — this process will no longer be told when "
+                + "its cross-process change feed lost notifications"));
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 Each subscriber is ISOLATED, exactly as <see cref="IMeshInvalidationFeed.Subscribe"/>
+    /// callbacks are: a raw Subject aborts its fan-out at the first observer that throws, so one
+    /// cache faulting while it drops its state (or one torn down mid-delivery) would keep every
+    /// later subscriber stale — the very failure a gap exists to end.
+    /// </remarks>
+    public IObservable<ChangeFeedGap> Gaps => Observable.Create<ChangeFeedGap>(observer =>
+        _gaps.Subscribe(
+            gap =>
+            {
+                try
+                {
+                    observer.OnNext(gap);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex,
+                        "Mesh change-feed gap subscriber failed for '{Source}'; continuing with the others",
+                        gap.Source);
+                }
+            },
+            observer.OnError,
+            observer.OnCompleted));
+
+    private void PublishGap(ChangeFeedGap gap)
+    {
+        if (_disposed)
+            return;
+        logger?.LogWarning(
+            "Change feed '{Source}' lost delivery between {LostAt:O} and {ResumedAt:O} ({Reason}) — "
+            + "commits made by other processes in that window were never announced here; "
+            + "process-local caches now re-read their authoritative state",
+            gap.Source, gap.LostAt, gap.ResumedAt, gap.Reason ?? "no reason given");
+        // Subscribers are isolated in Gaps; this catch is only the backstop that keeps anything
+        // escaping the subject itself from reaching the backend's listener loop, where it would
+        // read as a connection error and cost another reconnect.
+        try
+        {
+            _gaps.OnNext(gap);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex,
+                "Delivering the change-feed gap for '{Source}' faulted", gap.Source);
+        }
     }
 
     /// <summary>
@@ -134,6 +195,9 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         if (_disposed) return;
         _disposed = true;
         _storageRelay?.Dispose();
+        _gapRelay?.Dispose();
+        _gaps.OnCompleted();
+        _gapsLifetime.Dispose();
         _subject.OnCompleted();
         _invalidations.OnCompleted();
         _subjectLifetime.Dispose();

@@ -16,6 +16,12 @@ This document explains the model, the six propagation phases, the sanctioned exc
 > (doc sync, cache hydration) runs as System; an empty context is rejected, never faked. That page
 > covers the cold-start submit deadlock this prevents.
 
+> 🚨 **For CONTROL-PLANE operations — read [Authorize as Caller, Execute as System](/Doc/Architecture/AuthorizeAsCallerExecuteAsSystem).**
+> An instance action, a governance pass, a sync or an operator step checks the caller's access
+> EXPLICITLY (when the request is written and again before it runs), then executes as System. That
+> is not an exception to this page: application writes on a user's behalf still carry the user's
+> identity, and impersonation is never a substitute for the check.
+
 ---
 
 ## 🚨🚨🚨 THE INVARIANT: AccessContext must ALWAYS be set — never null
@@ -737,6 +743,7 @@ If step 3 had stamped `ImpersonateAsHub(Hub.Address)` instead of carrying `user`
 
 ## Related docs
 
+- @../AuthorizeAsCallerExecuteAsSystem — control-plane operations: explicit authorization as the caller, at the request write and before execution; execution as System.
 - @../AsyncLocalAcrossHops — the general rule behind this page: an `AsyncLocal` write made inside an `async` method is discarded on return, and a scheduler hop starts from a context where your slot was never set.
 - @../AsynchronousCalls — reactive end-to-end patterns; `AccessContext` rides for free through framework primitives.
 - @../CqrsAndContentAccess — `GetStream` is access-checked; details the TTL cache and `GetPermissionRequest` handshake.

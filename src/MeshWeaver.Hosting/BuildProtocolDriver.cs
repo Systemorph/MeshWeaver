@@ -937,13 +937,18 @@ public static class BuildProtocolDriver
         _ => false,
     };
 
-    internal static bool IsUnreachable(Exception exception) => exception switch
-    {
-        TimeoutException => true,
-        AggregateException aggregate => aggregate.InnerExceptions.Any(IsUnreachable),
-        { InnerException: { } inner } => IsUnreachable(inner),
-        _ => false,
-    };
+    /// <remarks>
+    /// 🚨 #5716 — "no answer in time" has TWO shapes and this used to recognise one. A bound that
+    /// fires in this process is a <see cref="TimeoutException"/>; the transport's own 30 s bound
+    /// fires in the ROUTER, which flattens it into a <see cref="DeliveryFailureException"/>
+    /// ("Delivery to 'Admin/Build' failed: Response did not arrive on time in 00:00:30 …"). The
+    /// second shape was read as a hard verdict: not retried, not wrapped as
+    /// <see cref="BuildCoordinationUnreachableException"/>, so the durable-witness door never got
+    /// asked and the whole warm-up faulted on one slow exchange (memex-cloud
+    /// <c>76cf776847-v4txp</c>, 2026-09-24 06:51:10Z). The registration is idempotent per holder,
+    /// so re-asking after a timeout whose request may have landed is safe.
+    /// </remarks>
+    internal static bool IsUnreachable(Exception exception) => TransportTimeout.IsNoAnswerInTime(exception);
 
 
     /// <summary>

@@ -680,9 +680,102 @@ Because ordering was the only discriminator, `SettleRetypedRoot` now logs its re
 Information. It previously logged only its *decline*, so the positive case was attributable to
 nobody.
 
+## Lifecycle requests on the node-operations hub reach a verdict by a DEADLINE (#6149, #6107, #6105)
+
+The FOURTH outcome had a second home: the lifecycle handlers on `portal/nodeops-{meshId}`.
+`HandleCreateNodeRequest`, `HandleCopyNodeRequest` and `HandleMoveNodeRequest` return `Processed()`
+at once and owe their reply from a detached chain, and every leg of those chains — the existence
+read, the partition bootstrap's probes, the write guards, a plugin-contributed `INodeValidator`, the
+NodeType probe, the save, a per-node create inside a copy — is an observable some other component
+supplies. The #981 backstop answers a chain that *completes* unanswered; nothing answered one that
+simply went quiet. Production showed it three times in two days, on three request types, with one
+trail:
+
+```
+ROUTED onTarget=True → HANDLER_ENTER → CREATE_CHAIN_SUBSCRIBED → HANDLER_EXIT state=Processed
+… then nothing for the caller's whole 60 s
+```
+
+**The shared defect is a missing bound, not a missing reply.** `HandleDeleteNodeRequest` has always
+bounded its stages at `MeshOperationOptions.Timeout` — rung 1 of the ladder, "the whole mesh
+operation, as its CALLER bounds it", 30 s against the hub's 60 s request timeout. Create, copy and
+move carried no rung-1 bound at all, so a silent leg produced silence until the CALLER gave up — and
+nested, it was worse: a move's copy leg and a copy's per-node creates were bounded only by the hub's
+default 60 s request timeout, the SAME bound their own caller holds, whose clock started first. The
+inner verdict could never arrive in time (#6105's "the detached reply chain outlives the 60 s
+RequestTimeout").
+
+**The rule now holds for every lifecycle request:**
+
+| Handler | Bound | What the stalled verdict says |
+|---|---|---|
+| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
+| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
+| Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
+| Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
+
+Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
+that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
+
+**The deadline must release the hub after a prompt create.** Rx's absolute `Timeout` schedules a
+`LocalScheduler.WorkItem` that can remain in its priority queue until the deadline even after the
+subscription completes and disposes. Its fallback observable therefore captures only a small
+create-stage tracker (path, budget, current stage), never the create handler's closure containing
+the hub. The separate post-creation `Timer` likewise routes through a signal that clears its
+callbacks when the post-creation chain ends. A CI `MeshHubDisposalLeakTest` root trace exposed the
+former path as `LocalScheduler.WorkItem → Timeout.Absolute → Defer → create handler → mesh hub`.
+Moving or widening the deadline would only shorten or hide the retention window; the callback
+references themselves must be released.
+
+The copy and move deadlines had the same chain, and the create fix did not reach them: each wrote
+its fallback as a lambda inside the handler (`Defer(() => Throw(... moveStage ...))`,
+`... CopyStageNow() ...`). C# hoists every captured local of a scope into ONE closure object, so a
+lambda that reads the live stage shares the display class that also holds `hub`. All three now
+build their fallback through one tracker (`LifecycleStageProgress` — operation, subject, budget,
+current stage, and for the copy the outstanding target creates), whose `Defer` closes over the
+tracker alone. `CreateDeadlineReleasesHubTest` and `CopyMoveDeadlineReleasesHubTest` pin all
+three; the copy and move cases failed on the code before the tracker (negative control). `CreateDeadlineReleasesHubTest` keeps the deadline queued
+while a real create completes, disposes the mesh and provider, and collects the hub. It passed with
+the fix and failed on the pre-fix main commit with the hub still alive.
+
+**Two defects the bound exposed, fixed with it:**
+
+- **The copy subscribed a LONG-LIVED permission fold without `Take(1)`.** `CopyNodeRequest.
+  PreserveAuthorship` (every move sets it) gates on `MoveEntitlement`, a fold that re-emits on every
+  `AccessAssignment` change and never completes. Every re-emission re-ran the whole copy — a second
+  create pass answering "already exists" over the first one's success — and the chain itself could
+  never complete.
+- **"Source node not found" was decided by a QUERY (#5856).** The copy finds its source in the
+  caller's `path:{source} scope:subtree` query, which is eventually consistent; a source the index
+  had not yet returned was reported `SourceNotFound` while storage held it, and a move's caller
+  concluded its record was gone. The query still decides WHICH paths the caller may copy; the
+  missing-source verdict is decided in an order that discloses nothing: first the caller's Read
+  on the source (skipped only for the platform) — DENIED ⇒ "not found", UNDETERMINED ⇒ retryable,
+  both whatever storage holds — and only for a caller who may read it, storage: absent ⇒
+  `SourceNotFound`, stored ⇒ "the query has not caught up", retryable.
+- **The move mapped its copy leg's failure by substring** — any message containing "not found" became
+  `SourceNotFound`. It now carries the copy's own `RejectionReason`.
+
+**What the deadline cannot establish.** A stalled stage's own work can still land after the verdict
+— a write already handed to storage, a create already posted by the copy. The verdict says so ("read
+the target before retrying"), which is the same honesty [A create timeout cannot establish that
+nothing was written](#a-create-timeout-cannot-establish-that-nothing-was-written) asks of the upsert
+lane. And the deadline answers WHICH leg went silent, not WHY: the production occurrences predate the
+stage stamps, so their stalled leg is still unknown — the next one names it.
+
+Pinned by `LifecycleRequestsAlwaysReachAVerdictTest` (MeshWeaver.Hosting.Test): a creation validator
+that never answers, armed for one path, for a direct create, a copy whose target create stalls and a
+move whose copy leg stalls — each answered inside the budget with the stage named, the move's source
+left in place — with an unarmed control for create and move. Before the fix the three stalled cases
+had no answer inside the window at all.
+
 ## What this is NOT
 
-**It is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
+This section is about the STREAM-WRITE fix above (the base read that reached no terminal). The
+lifecycle deadlines in the previous section ARE bounds, and deliberately so: they add the rung-1
+bound those handlers were missing, which the delete always had.
+
+**The stream-write fix is not a timeout, a retry, or a watchdog.** No bound moves; nothing is re-attempted; no poller is
 introduced. The change is that a source termination which previously reached no handler now reaches
 one. If you find yourself widening `LateResponseWatchBound` or adding a re-subscribe to "recover" a
 write that never answered, the question to ask first is which of the three terminations your

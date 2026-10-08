@@ -75,6 +75,15 @@ public class HandWovenGateRatchetGuard
             + "AGENTS.md names it as the one sanctioned SemaphoreSlim in the repo. Everything else "
             + "channels through it precisely so no other file needs one."),
 
+        ("src/MeshWeaver.Mesh.Contract/Threading/LimitedConcurrencyLevelTaskScheduler.cs",
+            "The INTERNAL scheduler behind IoPool's blocking lanes — constructed only by IoPool, "
+            + "so it is the same sealed boundary split into a second file. Its one Monitor.Wait is "
+            + "where an idle lane thread (a thread this scheduler started itself, never a hub turn, "
+            + "a grain turn or a ThreadPool worker) waits for its next blocking leaf. The thread is "
+            + "kept rather than started per burst because a thread EXIT triggers the CoreCLR "
+            + "collectible thread-static defect (#4654, Doc/Architecture/CollectibleThreadStatic"
+            + "HandleReuse); IoPool's disposal releases it through Complete()."),
+
         ("tools/MeshWeaver.ThumbnailGenerator/ThumbnailGenerator.cs",
             "A STANDALONE Playwright CLI (OutputType Exe) whose csproj references Microsoft."
             + "Playwright, SixLabors.ImageSharp and System.CommandLine and NOT ONE MeshWeaver "

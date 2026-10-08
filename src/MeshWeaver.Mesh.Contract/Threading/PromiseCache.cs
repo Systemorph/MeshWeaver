@@ -133,6 +133,21 @@ public sealed class PromiseCache<TKey, TValue>
         return false;
     }
 
+    /// <summary>
+    /// Removes <paramref name="key"/> ONLY when it still holds exactly <paramref name="promise"/> —
+    /// the pair-exact counterpart of <see cref="Invalidate"/> for an IN-FLIGHT share that must not
+    /// outlive its settlement: whoever observes the settled promise releases THAT entry, and a
+    /// replacement a later caller already installed is never dropped.
+    /// </summary>
+    /// <param name="key">Key to release.</param>
+    /// <param name="promise">The promise this caller was handed by <see cref="GetOrAdd"/>.</param>
+    /// <returns>True when that exact entry was removed.</returns>
+    public bool Release(TKey key, IObservable<TValue> promise)
+        => entries.TryGetValue(key, out var entry)
+           && entry.Promise.IsValueCreated
+           && ReferenceEquals(entry.Promise.Value, promise)
+           && entries.TryRemove(new KeyValuePair<TKey, Entry>(key, entry));
+
     /// <summary>True when <paramref name="key"/> currently holds a promise (settled or in flight).</summary>
     /// <param name="key">Key to test.</param>
     public bool Contains(TKey key) => entries.ContainsKey(key);

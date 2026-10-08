@@ -52,17 +52,20 @@ gh api "repos/Systemorph/MeshWeaver/pulls/<n>/comments/<comment-id>/replies" -f 
 🚨 Quote the path. Unquoted, the shell reads `<n>` as a redirection and the command fails
 before `gh` runs — which looks like a broken instruction rather than a quoting mistake.
 
-🚨 **And answering every thread is NECESSARY, NOT SUFFICIENT.** The verdict branch protection
-reads can still be an older failure taken on the same head, while the check's own newest run says
-GREEN. The remedy — re-run the check's `pull_request` run — the measurement behind it, and what was
-changed so it stops happening are below, under **"The check's log says GREEN and the pull request
-is still BLOCKED"**.
+🚨 **Answering every thread used to be NECESSARY, NOT SUFFICIENT — the check now finishes the job
+itself.** Branch protection reads the check's `pull_request` run, not the
+`pull_request_review_comment` run your reply starts, so the verdict it read stayed an older failure
+on the same head while the newest run said GREEN, until somebody re-ran the `pull_request` run by
+hand. The lane's `refresh` job now does that re-run on its own after every GREEN verdict taken on a
+different event. The measurement, the self-refresh, and the manual fallback for the cases it cannot
+cover (a fork, or a red `refresh` job) are below, under **"The check's log says GREEN and the pull
+request is still BLOCKED"**.
 
 ## Why: a review was advisory
 
 The ruleset `main pr protection` (2128472) carries a `copilot_code_review` rule, so every pull
-request into `main` is reviewed. `auto-arm.yml` arms every pull request for the merge queue the
-moment it opens. Nothing joined the two, so a merge waited for the required checks and never for
+request into `main` is reviewed. The control plane (`PrArming`) arms a pull request once its review
+lane is satisfied; `auto-arm.yml` only DISARMS on a push. Nothing joined the two, so a merge waited for the required checks and never for
 the review — and on the pull requests whose checks are fast, the checks usually won.
 
 | Instance | What merged past the review | Cost |
@@ -121,12 +124,23 @@ uses:
 
 Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
 
-- **The request.** Every repository's ruleset carries `copilot_code_review` with `review_on_push: true` and `review_draft_pull_requests: false`. So Copilot reviews every pushed head, not only the first commit as in the measurement above, where the rule carried `review_on_push: false`.
+- **The request.** Every repository's ruleset carries `copilot_code_review`. Under this policy alone it carried `review_on_push: true` (`review_draft_pull_requests: false`), so Copilot reviewed every pushed head; [One review per pull request](#one-review-per-pull-request) below turns that back to one review.
 - **What branch protection requires.** `internal-review` is not a required context in any repository. Core still requires `Automatic review answered`.
 - **This merge gate.** It takes a landed Copilot review, as it always did. Every thread Copilot or the internal reviewer opened still needs a person's reply.
-- **The stage gate and the arm gate.** They ask about THIS HEAD's review. They accept a Copilot review submitted against the current head: `commit_id` equal to the head, not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_on` in `check-review-answered.py`). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
-- **What does not count.** A Copilot review of an earlier head does not count; the push invalidated it. The internal bot's *review* alone does not count either, because its verdict on a head is its `internal-review` check run. The self-test pins every one of these cases, and replacing `copilot_review_on` with one that finds nothing turns the acceptance cases red.
+- **The stage gate and the arm gate.** They accept a landed Copilot review of the pull request: not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_of_pull_request` in `check-review-answered.py` — the head's own review first, otherwise one of an earlier head; see below). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
+- **What does not count.** A refusal on any head. The internal bot's *review* alone, because its verdict on a head is its `internal-review` check run. The self-test pins every one of these cases, and replacing `copilot_review_on` with one that finds nothing turns the acceptance cases red.
 - **One timing difference.** Copilot's own `pull_request_review` event starts no workflow run (see *The reviewer's own event cannot start a run here* below). So a Copilot review releases a held stage gate on the next `stage-advance.yml` sweep, at most about 15 minutes later, rather than on the event itself.
+
+### One review per pull request
+
+Policy [`review-once-per-pull-request`](../PolicyNotProse) narrows `copilot-code-review`: a pull request is reviewed ONCE, not once per push. With `review_on_push: true` every push bought a full new review round, and every round's new threads held the merge again until a person answered them — so a pull request that needed three fix pushes paid for four reviews and four rounds of replies.
+
+- **The gates.** All three — `Automatic review answered` (`evaluate`), the stage gate (`stage_readiness`) and the arm gate (`arm_readiness`) — count a landed Copilot review against ANY head of the pull request as "reviewed". `copilot_review_of_pull_request` returns the newest landed review against the current head when there is one, otherwise the newest landed review against an earlier head, and the verdict's note names which head it was. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it returns reviewed this pull request. The merge gate's condition 1 never looked at the head; the stage and arm gates did, and now do not.
+- **What is unchanged.** Every thread a reviewer opened still needs a person's reply, whichever head it was opened on. A refusal is still not a review on any head. No review at all is still red.
+- **The ruleset.** The `copilot_code_review` rule runs with `review_on_push: false`; `review_draft_pull_requests` keeps its value. `.github/scripts/set-copilot-review-once.py` applies that to the nine repositories idempotently (dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed).
+- **The order.** The gate change merges FIRST, the ruleset flip comes second. Flipped first, every new push would carry no review of its head while the old stage and arm gates still demanded one.
+- **Drafts.** With `review_draft_pull_requests: false` a draft is not reviewed while it is a draft; the one review must then come when it is marked ready. Whether `review_on_push: false` still requests that review on ready-for-review was not measured when the policy was set. Check it on the first pull request opened as a draft after the flip. If no review arrives, the stage gate's fallback and the `review-waived` label are the existing exits, and `review_draft_pull_requests: true` is the remedy — the one review then lands while the pull request is still a draft.
+- **The self-test.** The `ONCE` cases pin it: an older-head review with every thread answered is green on all three gates, an older-head review with an unanswered thread is red, an older-head refusal is red, and no review at all is red. With `copilot_review_of_pull_request` cut back to the head alone, every stage- and arm-gate `ONCE` case that reaches the thread condition turns red.
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
 check matches on the account id or either login, and only for `type: Bot`, so a person who names
@@ -499,6 +513,27 @@ What is still owed, and is not an agent's to do:
 |---|---|---|
 | 2 | each repository adds the thin caller, **observe-only**, after its row lands in `.github/lane-caller-grants.yml` as `pending:` (every satellite asserts its row against core's `main`, so the row goes first) | the rollout decision — which repositories, in what order — is the maintainer's |
 | 3 | once `review-answered / Automatic review answered` has been **seen** published on live pull requests in that repository, the context is added to its protection. Under classic protection an absent required context blocks every pull request forever, so this never goes first | a branch-protection edit — the maintainer |
+
+**MeshWeaver.Plugins is the first adopter (MeshWeaver.Plugins#2727, at the maintainer's direction).**
+Its staged pipeline (`node-repo-stage-gate.yml`) holds the heavy legs until the review has landed and
+been answered, **but only when the stage gate runs with `review-before-suites`**. On Plugins it runs
+with that off: the suites start in parallel with the review, and the gate's own log says "merging and
+arming still require the review landed and every thread answered". Arming does: the steward's
+`PrArming` checks it. A **merge** does not, because nothing in Plugins' classic protection reads the
+answer.
+
+Measured over the 25 most recent merges on 2026-10-08, two merged with Copilot findings unanswered:
+- #3115: one thread on head `0c60ab5bbc`, merged by hand 54 minutes after the review;
+- #2962: four threads.
+
+Step 1 (the lane) is already landed. For Plugins, steps 2 and 3 of the table above go like this:
+- **Step 2** has two parts, in this order:
+  - its roster row lands here as `pending:`;
+  - then its `review-answered.yml` caller lands observe-only. The caller floats `@main` with
+    `scripts-ref: main`, because Plugins' `check-shared-lanes.py` refuses a pinned lane. That repo's
+    own rule overrides the lane header's "pin a sha".
+- **Step 3**: the context `review-answered / Automatic review answered` is added to Plugins' classic
+  protection, and only after it has been seen published on live pull requests there.
 
 ### The same gap, measured wider — 240 merged pull requests
 
@@ -972,7 +1007,29 @@ Two traps when sweeping a repo for stubs, both of which produce a confident unde
 
 ### 🚨 The check's log says GREEN and the pull request is still BLOCKED
 
-**The remedy first, because this is found under pressure. Re-run the check's `pull_request` run:**
+**The check now refreshes itself.** After a GREEN verdict on any event other than `pull_request`
+(and never for a `merge_group` entry, which is its own commit), the `refresh` job of
+`node-repo-review-answered.yml` (`lane / Refresh the verdict branch protection reads` in core)
+re-runs the failed jobs of the newest `pull_request` run of the same workflow for the current head
+(`check-review-answered.py --refresh-read-run`). The decision is the pure function `refresh_action`,
+covered by the script's `--self-test`. It re-runs that run only if it has **completed**, is **not
+`success`**, and **started before** this GREEN verdict was taken. A run that is in flight, already
+green, or started after the verdict is left alone, and the job prints why. That makes it idempotent
+per (head sha, answered state), with no loop and no polling: the re-run is itself a `pull_request`
+run, which never refreshes, and a re-run made with the workflow token raises no new event. Covered
+the same way: a pull request that went RED because answers were missing goes green when a later
+reply's run is GREEN, because that run refreshes too. `refresh` is the only job in the lane that
+writes, and it holds `actions: write` alone. A caller adopting the lane grants it on its `uses:`
+job and records the grant in `.github/lane-caller-grants.yml` in the same change.
+
+The staged pipeline's hold is re-evaluated on the same reply events by the existing listener,
+`stage-advance.yml` → `node-repo-stage-advance.yml`. Its `on-answer` job fires on
+`pull_request_review_comment: created` and `pull_request_review: submitted` and re-runs the failed
+jobs of the head's held `dotnet-test.yml` run once stage 1 is green.
+
+**Manual fallback.** The self-refresh cannot help in two cases. A **fork** pull request's token
+cannot re-run a workflow, so the job warns and names this remedy. And if the `refresh` job itself
+is **red**, it names what it could not read. In both cases, re-run the check's `pull_request` run:
 
 ```bash
 # the run whose verdict branch protection actually reads
@@ -1059,6 +1116,68 @@ So the mechanism is **not** a latched rollup and **not** "the newest run loses":
 check counts replies whose `in_reply_to_id` is the reviewer's root comment, and its log names every
 thread it still considers unanswered. If the log disagrees with what you think you answered, read
 that list before reaching for the re-run.
+
+## The arm gate — auto-merge is armed only on a reviewed, answered head
+
+**Measured 2026-10-03/04 on MeshWeaver.Plugins:** `auto-arm.yml` armed auto-merge on every open, push
+and undraft, BEFORE the internal review had run on the new head. On Plugins the review is
+comment-only and nothing required waits for it, so #2549 (6 of 6 findings unanswered), #2643/#2647
+(reviewer unavailable) and Memex#641 merged unreviewed or unanswered, and agents disarmed by hand
+after every push (#2791 twice in an hour).
+
+**Arming is a decision, so it moved to the control plane** (policy
+[`review-then-suites`](../PolicyNotProse)). The control instance's PR steward (MeshWeaver.Plugins
+`PrArming`, App `systemorph-com`) already reads every fleet pull request's review state and
+answered-findings verdict; it is the one place that arms. **No workflow arms auto-merge any more** —
+`ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails the build if one does.
+
+### What the control plane arms on
+
+It arms a pull request only when **all** of these hold, read on its **current head**:
+
+1. it is open, not a draft, and its head branch is in the same repository (a fork never arms itself);
+2. its base is the repository's **default branch**, read from `repos/{o}/{r}` and never assumed. An
+   unprotected base has an empty required set, so an arm there is an immediate merge
+   (MeshWeaver.Plugins#1685 merged 61 seconds after it opened, before its own CI started);
+3. the head has **its own review**: a Copilot review submitted against the current head (policy
+   [`copilot-code-review`](../PolicyNotProse); `commit_id` equal to the head, not `PENDING`, not a
+   refusal — `copilot_review_on`, see *Copilot is the reviewer again* above), or, while one is still
+   posted, a completed `internal-review` check run of the `systemorph-com` App (id 4918443) on the
+   head whose newest run is **not** the neutral `Reviewer unavailable …` degradation. The degradation
+   releases the *merge* gate's review condition (a down reviewer must not hold every pull request),
+   but it is not a review — arming on it would land an unreviewed change nobody decided to merge, so
+   a person merges it by hand;
+4. every thread the automatic reviewer opened has a reply from a person, following `in_reply_to_id`
+   to the root, read from a provably complete listing — the **same** `reviewer_threads` /
+   `listing_incomplete` predicate this gate uses, so the two can never disagree;
+5. every required status check of the base is `success` on the head (`required_checks_green`,
+   policy `review-then-suites` — see [Staged Pull Request Pipeline](../StagedPullRequestPipeline)).
+
+The reference implementation of 1 and 3–5 is `check-review-answered.py --arm-gate`
+(`arm_readiness`), and its `--self-test` cases are the test vectors the control plane's port must
+pass. The arm is the GraphQL `enablePullRequestAutoMerge` mutation (or `enqueuePullRequest` on a
+base with a merge queue) carrying `expectedHeadOid` = the head it judged, so an arm that races a push
+is refused by GitHub instead of landing on the new, unreviewed head. It is attempted **once per
+head** and read back (`autoMergeRequest` / `mergeQueueEntry`); a head a person disarmed is not
+re-armed.
+
+🚨 **The port has to keep up with the reference.** `PrArming` is a one-for-one port of
+`arm_readiness`, so a condition widened here is not live until the port carries it. Copilot's
+acceptance in condition 3 is exactly such a widening (the register lists the port as owed under
+`copilot-code-review`): until `PrArming` accepts a Copilot review of the head, a head reviewed only
+by Copilot is never armed by the control plane and needs a person's arm.
+
+### What stays in the workflow: the disarm
+
+**A push invalidates the review**, and GitHub keeps auto-merge armed across a push by anyone with
+write access — so a pull request armed on a reviewed head would merge the next, unreviewed head the
+moment the required contexts pass. `auto-arm.yml` (still the fleet's one lane, still called by every
+repository through `workflow_call`, its name kept so no caller changes) therefore now does exactly
+one thing: on `synchronize`, if the pull request is armed, it takes the arm off (`gh pr merge
+--disable-auto`) and reads the result back. It reacts to the event itself, so a fast CI cannot
+outrun it, and it tolerates no failed step: a disarm that silently did not happen is the hole
+reopened. It uses the meshweaver-cloud token it always used (`contents: write`,
+`pull-requests: write`) — no `checks` permission, and no change to any caller's grants.
 
 ## Related
 

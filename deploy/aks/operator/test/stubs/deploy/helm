@@ -7,7 +7,21 @@ log="${HOSTING_DEPLOY_STUB_LOG:?the helm stub needs HOSTING_DEPLOY_STUB_LOG}"
 fixture="${HOSTING_DEPLOY_FIXTURE:?the helm stub needs HOSTING_DEPLOY_FIXTURE}"
 printf 'helm %s\n' "$*" >> "$log"
 case "${1:-}" in
-  template) cat "$fixture/rendered.yaml" ;;
+  template)
+    # hosting-deploy's VALUES PROBE (Memex#376): a one-template chart that prints the merged values.
+    # Answered from $FIXTURE/supplied-values.json — what the upgrade supplies — else `{}`.
+    if [ "${2:-}" = "values-probe" ]; then
+      [ -f "$fixture/supplied-values.json" ] && cat "$fixture/supplied-values.json" || echo '{}'
+      exit 0
+    fi
+    cat "$fixture/rendered.yaml"
+    # A render that FAILS after writing the manifest to stdout, on demand (Memex#626): the error path
+    # must name helm's stderr line and never fold the manifest it already printed into the log.
+    if [ "${HOSTING_DEPLOY_STUB_TEMPLATE_FAILS:-false}" = "true" ]; then
+      echo "Error: stubbed render failure" >&2; exit 1
+    fi ;;
+  get)      # `helm get values <rel> --namespace <ns> -o json` → $FIXTURE/live-values.json, else `{}`
+    [ -f "$fixture/live-values.json" ] && cat "$fixture/live-values.json" || echo '{}' ;;
   status)   # `helm status <rel> --namespace <ns> -o json` → $FIXTURE/status.json, else "not found"
     [ -f "$fixture/status.json" ] && cat "$fixture/status.json" || { echo "Error: release: not found" >&2; exit 1; } ;;
   upgrade)

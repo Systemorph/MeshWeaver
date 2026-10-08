@@ -17,7 +17,7 @@ satellite that re-implements a piece drifts, and the next incident is measured t
 | **Generated-lock conflicts** — a PR that conflicts only on `*/manifest.lock` lands anyway | `node-repo-resolve-locks.yml` + `.github/scripts/resolve-generated-conflicts.py` | a 12-line workflow on `push: main`, hourly, dispatch; the App secrets |
 | **Verdict adoption** — a merge from main (the resolver, `update-branch`, a hand merge) or a lock-only commit never costs the run | `.github/scripts/adopt-verdict.py`, decided by `node-repo-gate.yml` (`adopted-verdict: auto`) | nothing (Plugins decides itself in its change-set classifier and passes the URL) |
 | **Cancellation** — nothing on main cancels; a person's PR push supersedes; the bot's push never | `.github/scripts/check-main-runs-not-cancelled.py`, run by the validate lane | `cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.sender.type != 'Bot' }}` |
-| Auto-merge armed on every non-draft PR to main; draft is the only hold | `auto-arm.yml` | the call |
+| Auto-merge DISARMED on every push; arming is the control plane's (Plugins `PrArming`, on a reviewed, answered, green head) | `auto-arm.yml` (disarm-only, `synchronize`) | the call |
 | Build queue front door (admission through the build instance) | Plugins `admission` job today; a `node-repo-admission.yml` lane next | — |
 
 ## Why adoption is sound
@@ -154,7 +154,7 @@ follow whatever `main` last passed.
 
 ## Draft is the hold — until the PR is IN the merge queue
 
-`auto-arm.yml` arms auto-merge on every non-draft PR whose base is `main`, so **draft is the opt-out**
+The control plane's PR steward arms auto-merge on a non-draft PR whose base is `main` once its current head is reviewed and answered ([Review Findings Answered](../ReviewFindingsAnswered) → *The arm gate*; `auto-arm.yml` only disarms on a push), so **draft is the opt-out**
 and the way any session holds a PR after a late finding. It stops being a hold the moment the entry
 is admitted to the merge queue, and that is not obvious from either UI.
 
