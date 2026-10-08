@@ -51,8 +51,17 @@ namespace MeshWeaver.Documentation.Test;
 /// marker attribute or a name in a test can. It is also SELF-EXTENDING: the moment a new file's
 /// first site is hopped, every sibling post on that same reference joins this denominator.</para>
 ///
+/// <para><b>A second declaration, by what the file IS (#5937 sweep).</b> A hosted service
+/// (<c>IHostedService</c> / <c>BackgroundService</c>) is resolved from the root container, so the
+/// <c>IMessageHub</c> it holds is the router whether or not any line says so; such a file declares
+/// that hub without calling a seam. See <c>HostedServiceBase</c>.</para>
+///
 /// <para><b>What it cannot see, stated rather than implied.</b> A file that has NEVER hopped
-/// anything declares nothing, so its posts are invisible here — exactly as a non-lifecycle message
+/// anything and is not a hosted service declares nothing, so its posts are invisible here. Two
+/// cases remain: a plain <c>AddSingleton</c> service handed the root hub, and a hosted service
+/// whose base list names <c>IHostedService</c>/<c>BackgroundService</c> only INDIRECTLY (through a
+/// derived interface or an intermediate base class), because the match is on the literal base
+/// list. This is exactly as a non-lifecycle message
 /// is invisible to the sibling guard. The two ratchets are complements, not a cover: between them
 /// they see every lifecycle message anywhere, plus every message on a receiver already known to
 /// reach the router. What remains uncovered is a brand-new mesh-singleton posting non-lifecycle
@@ -106,6 +115,9 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
         "src/MeshWeaver.Hosting/MeshService.cs",
         "src/MeshWeaver.Mesh.Operations/MeshOperations.cs",
         "src/MeshWeaver.Mesh.Contract/Services/MeshNodeEditor.cs",
+        // Declared by WHAT IT IS (a hosted service holding the root hub), not by a seam call — the
+        // anchor that proves the second derivation reached the tree (#5937 sweep).
+        "src/MeshWeaver.Graph/AccessGrantNotifier.cs",
     ];
 
     /// <summary>One matched call: where it is, what it is posted on, and how it is addressed.</summary>
@@ -154,7 +166,8 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
                 failures.Add(
                     $"  NEW SITE   {file} ({count}) — this file ALREADY calls "
                     + "NodeOperationIssuingHub()/ReadIssuingHub()/StreamSubscribingHub() on this "
-                    + "very receiver, so it has declared that the receiver can be the ROUTER. Issue "
+                    + "very receiver, or is a hosted service handed it by the root container (#5937), "
+                    + "so it has declared that the receiver can be the ROUTER. Issue "
                     + "this delivery from the same seam: NodeOperationIssuingHub() for a node "
                     + "mutation, ReadIssuingHub() for a bounded request/response the target "
                     + "executes, StreamSubscribingHub() for a remote stream SUBSCRIPTION (#4614). "
@@ -341,6 +354,23 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
             }
             """);
 
+        // 🚨 THE #5937 SWEEP SHAPE: a hosted service that never hopped anything still declares its
+        // injected hub, because it is resolved from the root container. This is
+        // EventSubscriptionRunner's pre-fix RunScript continuation, verbatim in shape.
+        AssertOneViolatingSite(
+            "a hosted service observing a request/response straight off its injected hub",
+            """
+            public sealed class EventSubscriptionRunner(IMessageHub hub, AccessService access) : IHostedService, IDisposable
+            {
+                IObservable<object> Run(string path) =>
+                    hub.Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address(path)));
+            }
+            """);
+        // …and the same post in a class that is NOT a hosted service declares nothing.
+        Assert.Empty(SitesIn(
+            "not-hosted.cs",
+            "class P(IMessageHub hub) { void M() => hub.Observe(new Thing(), o => o.WithTarget(t)); }"));
+
         // Comment and string masking, both sides. The same line is a site when it is code and
         // nothing when it is prose — the difference between measuring the tree and measuring the
         // remarks that describe it. MessageHub's own ROUTER_TRAFFIC log message names both seams
@@ -429,9 +459,41 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// literal, and counting that would declare a receiver called <c>MeshExtensions</c>.
     /// </summary>
     private static ImmutableHashSet<string> DeclaredIn(string text) =>
-        RouterOriginScan.SeamCall.IsMatch(text)
+        MayDeclare(text)
             ? DeclaredInMasked(SourceScan.MaskCommentsAndStrings(text))
             : ImmutableHashSet<string>.Empty;
+
+    /// <summary>
+    /// Cheap pre-filter on the raw text: a file can declare a router-capable receiver only by
+    /// calling a seam or by being a hosted service that holds an <c>IMessageHub</c>.
+    /// </summary>
+    private static bool MayDeclare(string text) =>
+        RouterOriginScan.SeamCall.IsMatch(text) || HostedServiceBase.IsMatch(text);
+
+    /// <summary>
+    /// 🚨 <b>The SECOND way a file declares a receiver router-capable — by what it IS rather than by
+    /// what it calls</b> (<see href="https://github.com/Systemorph/MeshWeaver/issues/5937">#5937</see>
+    /// sweep). A hosted service (<c>IHostedService</c> / <c>BackgroundService</c>) is resolved from
+    /// the mesh's ROOT container by construction, so the <c>IMessageHub</c> it is handed IS the
+    /// router — no call site has to say so. Before this, such a file that had never hopped anything
+    /// declared nothing and its posts were invisible here: <c>EventSubscriptionRunner</c>'s
+    /// <c>ExecuteScriptRequest</c> was observed straight off its injected hub, with the script's
+    /// reply addressed back at <c>mesh/{id}</c>. A false positive costs nothing but a hop that does
+    /// nothing, because every seam is the identity function off the router.
+    /// </summary>
+    private static readonly Regex HostedServiceBase =
+        new(@"\b(?:class|record)\s+\w+[^{;]*:[^{;]*\b(?:IHostedService|BackgroundService)\b",
+            RegexOptions.Compiled);
+
+    /// <summary>Every name an <c>IMessageHub</c> is bound to — a constructor parameter or a field.</summary>
+    private static readonly Regex HubBinding =
+        new(@"\bIMessageHub\??\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?=[,);=])", RegexOptions.Compiled);
+
+    /// <summary>The <c>IMessageHub</c> names a hosted-service file holds (already-masked code).</summary>
+    private static IEnumerable<string> HostedServiceHubs(string code) =>
+        HostedServiceBase.IsMatch(code)
+            ? HubBinding.Matches(code).Select(m => m.Groups[1].Value)
+            : [];
 
     /// <summary>
     /// <see cref="DeclaredIn"/> over ALREADY-masked code, so the per-file scan masks once rather
@@ -446,7 +508,9 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// the ratchet entirely. Planted as a case below.</para>
     /// </summary>
     private static ImmutableHashSet<string> DeclaredInMasked(string code) =>
-        RouterOriginScan.ReceiverOfSeamCall(code).ToImmutableHashSet(StringComparer.Ordinal);
+        RouterOriginScan.ReceiverOfSeamCall(code)
+            .Concat(HostedServiceHubs(code))
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
     private static IReadOnlyList<Site> Scan(string root) =>
         SourceScan.SourceFiles(root, ScannedRoots)
@@ -462,7 +526,7 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     /// </summary>
     private static IReadOnlyList<Site> SitesIn(string file, string text)
     {
-        if (!RouterOriginScan.SeamCall.IsMatch(text))
+        if (!MayDeclare(text))
             return [];
 
         var code = SourceScan.MaskCommentsAndStrings(text);
