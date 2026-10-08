@@ -57,8 +57,11 @@ namespace MeshWeaver.Documentation.Test;
 /// that hub without calling a seam. See <c>HostedServiceBase</c>.</para>
 ///
 /// <para><b>What it cannot see, stated rather than implied.</b> A file that has NEVER hopped
-/// anything and is not a hosted service declares nothing — a plain <c>AddSingleton</c> service
-/// handed the root hub is the remaining case — so its posts are invisible here — exactly as a non-lifecycle message
+/// anything and is not a hosted service declares nothing, so its posts are invisible here. Two
+/// cases remain: a plain <c>AddSingleton</c> service handed the root hub, and a hosted service
+/// whose base list names <c>IHostedService</c>/<c>BackgroundService</c> only INDIRECTLY (through a
+/// derived interface or an intermediate base class), because the match is on the literal base
+/// list. This is exactly as a non-lifecycle message
 /// is invisible to the sibling guard. The two ratchets are complements, not a cover: between them
 /// they see every lifecycle message anywhere, plus every message on a receiver already known to
 /// reach the router. What remains uncovered is a brand-new mesh-singleton posting non-lifecycle

@@ -1332,6 +1332,9 @@ public partial class MeshOperations
         // answer. Comparing the resolved address is the same structural exclusion the lifecycle
         // ratchet makes for a self-directed post — a rule whose remedy is nonsense at a site must
         // not be applied there. (Copilot on #4487; the emptiness test was the first spelling.)
+        // Since #5937 the self-directed branch is reached only by a NON-router hub (a per-node,
+        // session or portal facade reading itself): a mesh-typed target, explicit or defaulted, is
+        // answered above without any delivery, so the router never executes this read.
         //
         // Spelled as the seam CALL rather than through the cached `ReadHub` property deliberately:
         // the receiver of a post is what RouterAsRouterCapableReceiverRatchetGuard reads, and a
