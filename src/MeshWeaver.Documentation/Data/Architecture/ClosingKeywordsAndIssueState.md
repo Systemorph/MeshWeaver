@@ -107,17 +107,20 @@ The seven live node-repo callers currently use `node-repo-validate.yml@main` wit
 caller code change; that floating shared-workflow contract is separate from the `edited` trigger
 requirement.
 
-The satellite lane reads core issue labels through GitHub's public REST API without a token. It
-first proves both directions: known core issue #5011 must be readable, and the impossible issue
-#2147483647 must return 404. Any failed control, rate limit, network error, or unreadable labels
-fails closed as `Undecidable`; only after both controls pass may a 404 for the referenced issue
+The satellite lane reads core issue labels through GitHub's public REST API using the caller's
+`GITHUB_TOKEN`. This gives the read an authenticated rate-limit bucket without granting the caller
+new repository permissions. It first proves both directions: known core issue #5011 must be
+readable, and the impossible issue #2147483647 must return 404. Any failed control, rate limit,
+network error, or unreadable labels fails closed as `Undecidable`; only after both controls pass
+may a 404 for the referenced issue
 mean absent. The core repository's own gate continues to use its established authenticated
 same-repository reader.
 
-Unauthenticated REST requests are limited to 60 per hour per originating IP, so the satellite scan
-caps one PR at 20 distinct core issues (at most 22 requests including both controls). A GitHub
-403/429 rate-limit response remains red, but is reported explicitly with the reset/retry-after
-header when present; the gate does not retry automatically. Split a PR with more than 20 core
+The previous anonymous read shared GitHub's 60-request hourly limit per originating IP across
+runner jobs, and an unrelated job could exhaust that bucket. The scan still caps one PR at 20
+distinct core issues (at most 22 requests including both controls). A GitHub 403/429 rate-limit
+response remains red, but is reported explicitly with the reset/retry-after header when present;
+the gate does not retry automatically. Split a PR with more than 20 core
 targets, and rerun a rate-limited scan only after the indicated window. See [GitHub REST API rate
 limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
 

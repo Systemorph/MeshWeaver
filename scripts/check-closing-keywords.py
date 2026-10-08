@@ -77,8 +77,8 @@ WHAT THE PARSER SEES, and why this file mirrors it rather than improving on it:
     reads issues in its own repository only; a cross-repository reference is named in the run and
     label-checked nowhere. A caller may explicitly protect a public repository. Satellite PRs use
     that mode for Systemorph/MeshWeaver: only explicit core references are checked, using the
-    anonymous public REST API with positive and negative controls. A failure to prove that reader
-    works is red, never an absent issue.
+    public REST API with the caller's GitHub token and positive and negative controls. A failure
+    to prove that reader works is red, never an absent issue.
 
 NOT ESTABLISHED (stated because a gate's blind spots belong with it, not in a commit message):
   * whether GitHub's parser reads a keyword inside a BLOCKQUOTE. This gate scans quoted lines, the
@@ -98,6 +98,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -180,9 +181,9 @@ BLOCKING_LABELS = ("sev:B", "sev:H")
 # path uses. The worst of the 99 merged bodies measured (two days to 2026-09-22T11:17Z) resolves
 # TWO subjects, so this sits ~30x above anything real and cannot become a wall.
 MAX_RESOLVED_SUBJECTS = 60
-# Anonymous REST is limited to 60 requests/hour per source IP. The protected satellite path needs
-# two controlled reads plus one per distinct issue, so keep one PR well below that shared ceiling.
-MAX_ANONYMOUS_ISSUE_SUBJECTS = 20
+# Keep each scan bounded even when an authenticated token gives it a larger rate-limit bucket.
+# The protected satellite path needs two controlled reads plus one per distinct issue.
+MAX_PUBLIC_ISSUE_SUBJECTS = 20
 PUBLIC_ISSUE_READ_PROBES = {"systemorph/meshweaver": 5011}
 PUBLIC_ISSUE_NOT_FOUND_SENTINEL = 2147483647
 
@@ -425,14 +426,17 @@ def resolve_via_gh(repo: str, number: int) -> dict | None:
 
 
 def _public_issue_request(repo: str, number: int) -> dict | None:
-    """Read a public issue anonymously; distinguish a proven 404 from every other failure."""
+    """Read a public issue, using the caller token when present; prove each 404."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "MeshWeaver-closing-keyword-gate",
+    }
+    if token := os.environ.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"https://api.github.com/repos/{repo}/issues/{number}",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "MeshWeaver-closing-keyword-gate",
-        },
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
@@ -458,40 +462,40 @@ def _public_issue_request(repo: str, number: int) -> dict | None:
                 ) if part
             )
             raise Undecidable(
-                f"anonymous GitHub REST read of {repo}#{number} was rate-limited "
+                f"GitHub REST read of {repo}#{number} was rate-limited "
                 f"(HTTP {exc.code}{'; ' + details if details else ''}); no retry was attempted. "
                 "Wait until the indicated window resets before rerunning the gate."
             ) from exc
         raise Undecidable(
-            f"anonymous GitHub REST read of {repo}#{number} returned HTTP {exc.code}; "
+            f"GitHub REST read of {repo}#{number} returned HTTP {exc.code}; "
             "only a controlled 404 proves absence."
         ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise Undecidable(
-            f"anonymous GitHub REST read of {repo}#{number} failed: {exc}; "
+            f"GitHub REST read of {repo}#{number} failed: {exc}; "
             "a network failure is not an absent issue."
         ) from exc
 
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise Undecidable(f"the anonymous REST response for {repo}#{number} is not JSON: {exc}") from exc
+        raise Undecidable(f"the public REST response for {repo}#{number} is not JSON: {exc}") from exc
     if not isinstance(parsed, dict) or parsed.get("number") != number:
         raise Undecidable(
-            f"the anonymous REST response for {repo}#{number} identifies something else "
+            f"the public REST response for {repo}#{number} identifies something else "
             f"({parsed.get('number') if isinstance(parsed, dict) else type(parsed).__name__})."
         )
     expected_repository_url = f"https://api.github.com/repos/{repo}".lower()
     if str(parsed.get("repository_url", "")).lower() != expected_repository_url:
         raise Undecidable(
-            f"the anonymous REST response for {repo}#{number} identifies repository "
+            f"the public REST response for {repo}#{number} identifies repository "
             f"{parsed.get('repository_url')!r}, not {expected_repository_url}."
         )
     labels = parsed.get("labels")
     if not isinstance(labels, list) or any(
         not isinstance(label, dict) or not isinstance(label.get("name"), str) for label in labels
     ):
-        raise Undecidable(f"the anonymous REST response for {repo}#{number} has no readable labels array.")
+        raise Undecidable(f"the public REST response for {repo}#{number} has no readable labels array.")
     return {
         "number": number,
         "is_pull_request": "pull_request" in parsed,
@@ -568,7 +572,7 @@ def evaluate(
     # Bound by distinct repository/issue pairs before any REST work begins.
     subjects = {(r.slug.lower(), r.number) for r in refs if r.slug.lower() in checked}
     subject_limit = (
-        MAX_ANONYMOUS_ISSUE_SUBJECTS if only_checked_repositories else MAX_RESOLVED_SUBJECTS
+        MAX_PUBLIC_ISSUE_SUBJECTS if only_checked_repositories else MAX_RESOLVED_SUBJECTS
     )
     if len(subjects) > subject_limit:
         raise Undecidable(
@@ -1072,25 +1076,25 @@ def self_test() -> int:
 
     at_public_cap = "\n".join(
         f"Closes {REPO}#{number}"
-        for number in range(12000, 12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS)
+        for number in range(12000, 12000 + MAX_PUBLIC_ISSUE_SUBJECTS)
     )
     try:
         errors, _, _ = evaluate(
             at_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
         )
         if errors:
-            failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be evaluated: {errors}")
+            failures.append(f"exactly {MAX_PUBLIC_ISSUE_SUBJECTS} public subjects must be evaluated: {errors}")
     except Undecidable as exc:
-        failures.append(f"exactly {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be within the cap: {exc}")
+        failures.append(f"exactly {MAX_PUBLIC_ISSUE_SUBJECTS} public subjects must be within the cap: {exc}")
 
-    over_public_cap = f"{at_public_cap}\nCloses {REPO}#{12000 + MAX_ANONYMOUS_ISSUE_SUBJECTS}"
+    over_public_cap = f"{at_public_cap}\nCloses {REPO}#{12000 + MAX_PUBLIC_ISSUE_SUBJECTS}"
     try:
         evaluate(
             over_public_cap, satellite_repo, _fake_resolve, protected, only_checked_repositories=True
         )
-        failures.append(f"more than {MAX_ANONYMOUS_ISSUE_SUBJECTS} public subjects must be refused")
+        failures.append(f"more than {MAX_PUBLIC_ISSUE_SUBJECTS} public subjects must be refused")
     except Undecidable as exc:
-        if f"over the cap of {MAX_ANONYMOUS_ISSUE_SUBJECTS}" not in str(exc):
+        if f"over the cap of {MAX_PUBLIC_ISSUE_SUBJECTS}" not in str(exc):
             failures.append(f"public subject cap refusal must name its bound: {exc}")
 
     # The public resolver must exercise both controls before returning a verdict, cache the
@@ -1137,6 +1141,27 @@ def self_test() -> int:
 
     from email.message import Message
     from io import BytesIO
+
+    public_response = {
+        "number": 5057,
+        "repository_url": f"https://api.github.com/repos/{REPO}",
+        "labels": [{"name": "sev:H"}],
+    }
+    for token, expected_header in (("test-token", "Bearer test-token"), ("", None)):
+        seen_requests: list[urllib.request.Request] = []
+
+        def capture_public_request(request: urllib.request.Request, timeout: int) -> BytesIO:
+            seen_requests.append(request)
+            return BytesIO(json.dumps(public_response).encode())
+
+        with patch.dict(os.environ, {"GH_TOKEN": token}), patch(
+            __name__ + ".urllib.request.urlopen", side_effect=capture_public_request
+        ):
+            result = _public_issue_request(REPO, 5057)
+        if (result or {}).get("labels") != ["sev:H"] or len(seen_requests) != 1:
+            failures.append(f"public REST read with token present={bool(token)} did not return labels")
+        elif seen_requests[0].get_header("Authorization") != expected_header:
+            failures.append(f"public REST read with token present={bool(token)} used the wrong auth header")
 
     rate_headers = Message()
     rate_headers["X-RateLimit-Remaining"] = "0"
