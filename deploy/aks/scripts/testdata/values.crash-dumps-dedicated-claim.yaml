@@ -1,0 +1,9 @@
+# Crash dumps on a DEDICATED claim (persistence.dumps): the claim is mounted AT crashDumps.root,
+# so a dump can fill only that claim. Invariant 20 asserts the mount; invariant 12 the created PVC.
+persistence:
+  dumps:
+    claimName: "memex-dumps"
+    create: true
+    size: "64Gi"
+    storageClass: "azurefile-memex"
+    accessMode: "ReadWriteMany"

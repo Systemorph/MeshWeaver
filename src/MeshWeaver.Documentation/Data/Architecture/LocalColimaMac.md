@@ -211,6 +211,7 @@ ingress:
   enabled: true                  # see §6
   host: "memex.localhost"
   tlsSecret: "memex-portal-tls"
+  clusterIssuer: "none"          # the Secret is minted by mkcert (§5), not issued by cert-manager
 
 ollama:
   external:
@@ -449,7 +450,7 @@ The shape (a plan, not exact secrets):
 1. **Buy a cheap domain** and create an `A` record `memex.<yourdomain>` → your Mac's **LAN IP**. Pin that IP with a **DHCP reservation** on your router so it doesn't change.
 2. **Install cert-manager** into k3s (`helm upgrade --install cert-manager jetstack/cert-manager --set crds.enabled=true`).
 3. **Issue a real wildcard cert via DNS-01.** Create a `ClusterIssuer` (Let's Encrypt ACME) with a **DNS-01 solver** for your DNS provider (e.g. Cloudflare API token in a secret), then a `Certificate` requesting `*.<yourdomain>` / `memex.<yourdomain>`. DNS-01 only needs cert-manager to write a TXT record — it works **without ever exposing the cluster to the internet**.
-4. **Point the ingress at the issued secret** — set `ingress.host` to `memex.<yourdomain>` and `ingress.tlsSecret` to the Certificate's secret. Bind the ingress port-forward / service to the **LAN** interface so other devices can reach it.
+4. **Point the ingress at the issued secret** — set `ingress.host` to `memex.<yourdomain>` and `ingress.tlsSecret` to the Certificate's secret. Keep `ingress.clusterIssuer: "none"` (`memex-local`'s tracked defaults layer already sets it). The explicit `Certificate` from step 3 owns that Secret. A real issuer name would also annotate the Ingress, and cert-manager's ingress-shim would then try to manage the same Secret through a second `Certificate`. Name the issuer in `ingress.clusterIssuer` only if you skip step 3's `Certificate` and want ingress-shim to create it instead. The chart refuses to render an ingress that names a `tlsSecret` and no issuer at all. Bind the ingress port-forward / service to the **LAN** interface so other devices can reach it.
 
 The result: every device trusts the cert out of the box (no mkcert CA install), and the portal is reachable on the home network by a real name — all without any inbound internet exposure. Treat the provider tokens and the ClusterIssuer email as secrets kept outside the repo.
 

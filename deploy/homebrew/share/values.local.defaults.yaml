@@ -65,3 +65,18 @@ config:
     # the previous behaviour rather than a slower variant of it.
     PreWarm__BatchBake: "true"
     PreWarm__BetweenTypes: "00:00:00"
+
+# ---- Portal Ingress: the TLS Secret is minted by `memex-local up`, not issued -------------------
+# The chart refuses an ingress that names a `tlsSecret` with no issuer reaching it (an ingress
+# naming a Secret nobody issues is served another host's certificate — see
+# deploy/helm/templates/memex-portal/ingress.yaml). Locally nobody is SUPPOSED to issue it:
+# `memex-local up` creates `memex-portal-tls` itself with mkcert (setup_tls), so "none" is the true
+# answer, stated rather than omitted.
+#
+# 🚨 It lives HERE, not in the overlay template, because the overlay is generated ONCE: an install
+# whose ~/.memex-local/values.local.yaml predates the chart's refusal would otherwise fail
+# `helm upgrade` on its next `memex-local up`, and a fresh install did exactly that (MeshWeaver#6019).
+# This layer reaches every install on `brew upgrade`, and an overlay that names its own issuer still
+# wins (it is passed last).
+ingress:
+  clusterIssuer: "none"
