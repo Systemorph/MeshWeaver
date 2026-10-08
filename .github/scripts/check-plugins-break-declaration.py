@@ -182,8 +182,9 @@ def decide(main: dict | None, counterpart: dict | None, body: str, counterpart_p
         return False, out + [f"🚨 the counterpart read is #{pr.get('number')}, not the declared #{decl['pr']}"]
     if merged:
         return False, out + [f"🚨 the counterpart {PLUGINS}#{decl['pr']} is already MERGED, so Plugins' default branch "
-                             "carries it — and the verdict against that branch is still red. The counterpart does not "
-                             "fix this break; there is nothing left to declare it against."]
+                             "carries it and a declaration has nothing left to excuse: 'Re-run all jobs' — the main "
+                             "measurement then runs against a default branch that includes it, and must be green on its "
+                             "own. If it is still red there, the counterpart does not fix this break."]
     if state != "open" or repo.lower() != PLUGINS.lower():
         return False, out + [f"🚨 the counterpart {PLUGINS}#{decl['pr']} is {state} with its head in "
                              f"{repo or '?'} — it must be OPEN in {PLUGINS} (never a fork), or merged"]

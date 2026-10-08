@@ -920,7 +920,27 @@ own tests and holds a 42-minute deadline.
 
 ### Proven on the incident (2026-10-08)
 
-<!--REPLAY-->
+Replayed through Plugins' `core-candidate.yml` (`workflow_dispatch`, the per-realm selector of
+MeshWeaver.Plugins#3168). The decision was then run with
+`.github/scripts/check-plugins-break-declaration.py` over the verdicts those runs wrote:
+
+| measurement | Plugins at | result |
+|---|---|---|
+| core #6297: candidate `da827571e3` (its merge) against base `c26b9401d9` | #3168's head (without the GitSync fix) — run 37787136202 | **`failure` — 8 drifts, realm `hosts`**: all 8 in `MeshWeaver.GitSync.Test`, which exits 2 at the candidate and passes at the base in the control arm. 81 of 84 suites and 144 Tests areas in 66 of 77 realms were selected; 11 realms were named as not selected; 3 more failures already exist at the base and do not block. GitSync.Test was pulled in by `memex/Memex.Portal.Shared → src/MeshWeaver.GitSync`. Dispatch to verdict: 47 min, with the control arm queued behind the full-size legs |
+| the same candidate, with the counterpart | #3168 + MeshWeaver.Plugins#3164 (the GitSync adaptation) — run 37787175604 | **`success`** — drift 0; realm `hosts` 46 of 46 suites green; the same 3 base failures |
+| a docs-only change: core #6234 (`0e6cdd2a17`, `AGENTS.md` only) | #3168's head — run 37789249026 | **`success` — 0 of 84 suites, 0 of 77 realms selected, 77 named as not selected**; 6.5 min from dispatch to verdict |
+
+The decision, over those real verdicts:
+
+| PR body | `PlatformVersion` in the diff | decision |
+|---|---|---|
+| no `Breaks-plugins:` line (what #6297 had) | 3.0.0 → 3.0.0 | **RED**: "this change BREAKS MeshWeaver.Plugins realm(s) hosts, and the PR body declares no break", with the line to write |
+| `Breaks-plugins: hosts — one-way-synced partitions refuse every non-system write … — counterpart Systemorph/MeshWeaver.Plugins#3164; semver: minor` | 3.0.0 → 3.1.0 | **GREEN**: a declared break, with the counterpart green against this candidate and the minor bump in the diff |
+| the same declaration | 3.0.0 → 3.0.0 | **RED**: "the declared MINOR bump is not in the diff" |
+| the same declaration, after #3164 merged | — | **RED**: asks for a re-measure ("Re-run all jobs"); the default branch now carries the fix, so the main measurement must be green on its own |
+
+So the gate would have stopped #6297 with a red check naming the realm. Two ways through were left
+open: fix the behaviour, or land it as a declared, minor-versioned break together with #3164.
 
 ### Proven live, both directions (the first build, 2026-09)
 
