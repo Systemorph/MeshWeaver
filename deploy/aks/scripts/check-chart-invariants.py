@@ -999,6 +999,116 @@ for _label, _obj in (
 if _composing:
     checks += 1
 
+# ---- 20. a crash dump OUTLIVES the pod, and its retention runs ---------------
+# The dump target used to be a pod-local `memex-dumps` emptyDir: every roll deleted it with the pod,
+# and the 09-26 SIGSEGV dump and the 10-07 memex-cloud dump were lost that way (blocking #4654,
+# #1605, #5555). In every render:
+#   * MEMEX_CRASHDUMP_ROOT is a NORMALISED path strictly below /data (posixpath.normpath leaves it
+#     unchanged, so `..`, `.`, `//` cannot widen what retention deletes or move it off the volume);
+#   * DOTNET_DbgMiniDumpName is <root>/$(MEMEX_POD_NAME)/coredump.…, and MEMEX_POD_NAME is defined
+#     EARLIER from metadata.name (Kubernetes leaves a later reference as literal text);
+#   * the dump path's longest-prefix mount is either the dedicated dump claim (`memex-crashdumps`,
+#     a persistentVolumeClaim, mounted AT the root) or `memex-data` at /data — never another volume;
+#   * no `memex-dumps` emptyDir comes back;
+#   * the retention script runs BOTH as the `crash-dump-prepare` init container (synchronously,
+#     before the portal process exists) and as the portal's postStart hook (every container start),
+#     both seeing the same root through the same mounts, sized by the portal's memory limit.
+checks += 1
+import posixpath as _pp
+
+_dump_fix = ("templates/memex-portal/_crashdumps.tpl and deployment.yaml (the crash-dump env, the "
+             "crash-dump-prepare init container, the postStart hook); Doc/Architecture/"
+             "DebuggingNativeCrashes → \"Production: where a dump lands\".")
+
+
+def _env_map(c):
+    env = c.get("env") or []
+    return {e.get("name"): (i, e) for i, e in enumerate(env)}
+
+
+def _covering_mount(c, path):
+    best = None
+    for m in c.get("volumeMounts") or []:
+        mp = (m.get("mountPath") or "").rstrip("/") or "/"
+        if path == mp or path.startswith(mp + "/"):
+            if best is None or len(mp) > len((best.get("mountPath") or "").rstrip("/")):
+                best = m
+    return best or {}
+
+
+_vols = {v.get("name"): v for v in (pod.get("volumes") or [])}
+_penv = _env_map(portal)
+_root = (((_penv.get("MEMEX_CRASHDUMP_ROOT") or (0, {}))[1]).get("value") or "")
+if not _root or _pp.normpath(_root) != _root or not _root.startswith("/data/"):
+    finding(
+        f"MEMEX_CRASHDUMP_ROOT is {_root!r}, not a normalised directory strictly below /data",
+        "a root with '..', '.', '//' or outside /data either leaves the persistent volume or widens "
+        "what retention deletes. " + _dump_fix,
+    )
+_dump_name = (((_penv.get("DOTNET_DbgMiniDumpName") or (0, {}))[1]).get("value") or "")
+if not _root or not _dump_name.startswith(f"{_root}/$(MEMEX_POD_NAME)/coredump."):
+    finding(
+        f"DOTNET_DbgMiniDumpName is {_dump_name!r}, not <MEMEX_CRASHDUMP_ROOT={_root!r}>/$(MEMEX_POD_NAME)/coredump.…",
+        "the dump must go to this pod's directory under the retention root — the directory the "
+        "retention script creates, prunes and gates. " + _dump_fix,
+    )
+_pi, _pe = _penv.get("MEMEX_POD_NAME") or (10**6, {})
+if ((_pe.get("valueFrom") or {}).get("fieldRef") or {}).get("fieldPath") != "metadata.name":
+    finding("the portal's MEMEX_POD_NAME is not taken from metadata.name",
+            "the per-pod dump directory would not be the pod's. " + _dump_fix)
+elif _pi > (_penv.get("DOTNET_DbgMiniDumpName") or (-1, {}))[0]:
+    finding(
+        "MEMEX_POD_NAME is defined AFTER DOTNET_DbgMiniDumpName",
+        "Kubernetes expands $(VAR) only from variables defined earlier in the list; the dump path "
+        "would keep the literal text '$(MEMEX_POD_NAME)' and point at a directory nothing created. " + _dump_fix,
+    )
+if "memex-dumps" in _vols:
+    finding("a `memex-dumps` volume is rendered again",
+            "that pod-local emptyDir is exactly what lost the 09-26 and 10-07 dumps. " + _dump_fix)
+
+_prep = next((c for c in (pod.get("initContainers") or []) if c.get("name") == "crash-dump-prepare"), None)
+_post_text = "\n".join(str(x) for x in
+                       ((((portal.get("lifecycle") or {}).get("postStart") or {}).get("exec") or {}).get("command") or []))
+if "crash-dump-retention" not in _post_text or "MEMEX_CRASHDUMP_ROOT" not in _post_text:
+    finding("the portal has no postStart hook running files/crash-dump-retention.sh",
+            "without it a restart in place after a crash is followed by no retention and no headroom "
+            "check. " + _dump_fix)
+if _prep is None:
+    finding("no `crash-dump-prepare` init container",
+            "postStart runs CONCURRENTLY with the entrypoint, so on a pod's first start only the init "
+            "container prepares the dump directory before the portal process exists. " + _dump_fix)
+
+for _label, _c in (("portal", portal), ("crash-dump-prepare", _prep)):
+    if _c is None or not _root:
+        continue
+    _cenv = _env_map(_c)
+    _croot = (((_cenv.get("MEMEX_CRASHDUMP_ROOT") or (0, {}))[1]).get("value") or "")
+    if _croot != _root:
+        finding(f"{_label}: MEMEX_CRASHDUMP_ROOT is {_croot!r}, the portal's is {_root!r}",
+                "the two runs of the retention script would prune and arm different directories. " + _dump_fix)
+    _lim = ((((_cenv.get("MEMEX_MEMORY_LIMIT_BYTES") or (0, {}))[1]).get("valueFrom") or {}).get("resourceFieldRef") or {})
+    if _lim.get("resource") != "limits.memory" or str(_lim.get("divisor", "1")) != "1" \
+            or _lim.get("containerName", "memex-portal") != "memex-portal":
+        finding(f"{_label}: MEMEX_MEMORY_LIMIT_BYTES is not the portal's limits.memory in bytes",
+                "the headroom gate sizes a dump by the PORTAL's memory limit. " + _dump_fix)
+    if _label == "crash-dump-prepare":
+        _ctext = "\n".join(str(x) for x in (_c.get("command") or []))
+        if "crash-dump-retention" not in _ctext:
+            finding("crash-dump-prepare does not run files/crash-dump-retention.sh", _dump_fix)
+    _m = _covering_mount(_c, _root)
+    _vol = _vols.get(_m.get("name")) or {}
+    _mp = (_m.get("mountPath") or "").rstrip("/")
+    _dedicated = _m.get("name") == "memex-crashdumps" and _mp == _root \
+        and isinstance(_vol.get("persistentVolumeClaim"), dict)
+    _shared = _m.get("name") == "memex-data" and _mp == "/data"
+    if not (_dedicated or _shared):
+        finding(
+            f"{_label}: the dump root {_root!r} is served by mount {_m.get('name')!r} at {_m.get('mountPath')!r}",
+            "it must be the dedicated dump claim (memex-crashdumps, a PVC mounted AT the root) or "
+            "memex-data at /data: any other volume, or the container's writable layer, is deleted "
+            "by the next roll. " + _dump_fix,
+        )
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
