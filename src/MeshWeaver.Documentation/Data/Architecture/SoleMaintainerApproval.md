@@ -53,8 +53,11 @@ unchanged.
 ## Where the maintainer is declared
 
 The installation's maintainer is the configuration key `Hosting:Operator:Maintainer`, which the
-deployment record's `operator.maintainer` renders (`Hosting__Operator__Maintainer`). Absent, nobody
-may approve their own request. It is deliberately NOT a node: a node in the `Admin` partition would let
+deployment record's `operator.maintainer` renders (`Hosting__Operator__Maintainer`;
+`HostingOperatorSpec.Maintainer`). The key kept its historical name, from when it covered
+only the instance-action Actions path. It now holds for every approval gate of the installation:
+instance actions on any executor, and operation requests. Absent, nobody may approve their own
+request. It is deliberately NOT a node: a node in the `Admin` partition would let
 any global administrator name themselves and approve their own requests — the very bypass the rule
 exists to prevent. Changing the record is itself a governed Reconcile that someone approves. A
 Governance standard may name a narrower maintainer for that standard alone (`authority.maintainer`,
@@ -66,7 +69,7 @@ committed content); the decision is the same function either way.
 |---|---|---|---|
 | instance action | `selfApprovedBy` / `selfApprovedAt`, stamped by the watcher in the write that starts the approved run; cleared by the next park | `SELF-APPROVED BY MAINTAINER: '<id>' requested … and approved it themselves … (policy sole-maintainer-approval …)` | a warning above the plan and a row in the Summary |
 | operation request | `selfApprovedBy` / `selfApprovedAt`, stamped by the control plane when the run starts | the same line, kept at the HEAD of the run log by every later frame | a fact row "Self-approved by maintainer" |
-| governed activity | — | — | the signature gate's detail names `self-approved by maintainer '<id>' (policy sole-maintainer-approval)` |
+| governed activity | the maintainer's own `signatures` entry (signer, `signedAt`) and the Signatures gate's `detail`, which names `<id> (self-approved by maintainer '<id>' (policy sole-maintainer-approval))` | the gate transition line the activity logs with its timestamp (`gates: …: Green (1/1 — <id> (self-approved by maintainer …))`) | the gate's evidence in the Gates grid, and the signature row |
 
 The page label and explanation are translated (English, German) through
 `SoleMaintainerApproval.Label` / `Explanation`; the log line is machine-facing English and UTC.
