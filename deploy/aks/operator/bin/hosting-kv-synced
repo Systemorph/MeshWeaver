@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# hosting-kv-synced --namespace <ns> --secret <synced Secret> --key <KEY> [--key …] [--secret … --key …]
+#                   [--deployment memex-portal-deployment] [--wait-seconds 300] [--interval 10]
+#
+# Make every key a record maps through a Key Vault class REACH the portal process — not only the
+# synced Secret.
+#
+# 🚨 WHY THIS EXISTS (MeshWeaver.Plugins#2778). The chart renders each `keyVaultSecrets` class as a
+# SecretProviderClass whose `secretObjects` sync into a Kubernetes Secret the portal reads through
+# `envFrom`. The Secrets Store CSI driver CREATES that Secret when a pod first mounts the class and
+# leaves an EXISTING one alone on later mounts — a key added to the class reaches the Secret only on
+# the driver's next ROTATION pass (enableSecretRotation, every couple of minutes). A container
+# resolves `envFrom` once, at start. So a Reconcile that adds a mapping re-renders the class, rolls
+# the pods — and the new pods start BEFORE the Secret carries the key: the run reports success and
+# Healthy while the configuration it was run for is absent from every process. Measured on build
+# 2026-09-26: Reconcile helm rev 4 → pod booted 19:31:36Z with `Hosting:ControlInbox:Secret is
+# empty`; a plain restart six minutes later booted with it. Nothing in the plan checked.
+#
+# WHAT IT DOES, per synced Secret, names only (a value is never read out, printed or compared):
+#   1. waits (bounded) until the Secret carries every declared key — a key that never arrives is a
+#      FAILED step naming it (an absent vault object fails the whole CSI mount long before this);
+#   2. compares WHEN the Secret's data was last written (the newest `managedFields` entry that owns
+#      `f:data` — the CSI driver's own write) with when each running portal pod STARTED. A pod that
+#      started before that write resolved envFrom from an older Secret and may lack the key — and
+#      "the key is there NOW" proves nothing about it: a waited rollout gives the rotation pass all
+#      the time it needs to land AFTER the pods booted, which is exactly the build measurement;
+#   3. restarts the Deployment (`rollout restart`, one rollout) only on that evidence — a pod that
+#      predates the Secret's last write. Otherwise nothing is rolled (the common case). The plan's
+#      next step observes or hands off the rollout this starts.
+#
+# Output contract (the ::hosting:: lines):
+#   kv_synced_keys=<n>       declared keys confirmed present in their synced Secret(s)
+#   kv_synced_waited=<n>     of those, keys that had to be waited for
+#   kv_synced_restart=true|false|dry-run
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-synced"
+
+namespace="" deployment="memex-portal-deployment"
+wait_seconds="${HOSTING_KV_SYNC_SECONDS:-300}" interval="${HOSTING_KV_SYNC_INTERVAL:-10}"
+secrets=() pairs=()   # pairs: "<secret>|<key>"
+current=""
+while [ $# -gt 0 ]; do
+  flag="$1" value="${2:-}"
+  if [ $# -gt 1 ]; then shift 2; else shift; fi
+  case "$flag" in
+    --namespace)    namespace="$value" ;;
+    --deployment)   deployment="$value" ;;
+    --wait-seconds) wait_seconds="$value" ;;
+    --interval)     interval="$value" ;;
+    --secret)       current="$value"; secrets+=("$value") ;;
+    --key)
+      [ -n "$current" ] || hosting::die "--key '${value}' comes before any --secret — name the synced Secret it lands in first"
+      pairs+=("${current}|${value}") ;;
+    *) hosting::die "unknown argument '${flag}'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name deployment "$deployment"
+[ "${#pairs[@]}" -gt 0 ] || hosting::die "missing required flags --secret <synced Secret> --key <KEY> — name every key the record maps through a Key Vault class"
+[[ "$wait_seconds" =~ ^[0-9]{1,5}$ ]] || hosting::die "wait-seconds '${wait_seconds}' is not a number of seconds"
+[[ "$interval" =~ ^[1-9][0-9]{0,3}$ ]] || hosting::die "interval '${interval}' is not a positive number of seconds"
+for s in "${secrets[@]}"; do hosting::safe_name "synced Secret" "$s"; done
+for p in "${pairs[@]}"; do
+  k="${p#*|}"
+  [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || hosting::die "key '${k}' is not a plain environment-variable name — refusing to interpolate it"
+done
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the Secret's key set cannot be read without it"
+
+# missing_keys — every declared "<secret>|<key>" the cluster does not carry right now, one per line.
+# Reads the Secret's KEY NAMES only (`.data | keys`); a refused read is a refusal, never "absent".
+missing_keys() {
+  local secret rc names p
+  for secret in $(printf '%s\n' "${secrets[@]}" | sort -u); do
+    hosting::probe any kubectl -n "$namespace" get secret "$secret" -o json; rc=$?
+    [ "$rc" -eq 2 ] && hosting::die_refused "secret/${secret} in ${namespace}"
+    if [ "$rc" -ne 0 ]; then
+      names=""
+    else
+      names="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '(.data // {}) | keys[]')" \
+        || hosting::die "secret/${secret} in ${namespace} did not parse as a Secret — its key set cannot be read"
+    fi
+    for p in "${pairs[@]}"; do
+      [ "${p%%|*}" = "$secret" ] || continue
+      printf '%s\n' "$names" | grep -qxF "${p#*|}" || printf '%s\n' "$p"
+    done
+  done
+}
+
+first="$(missing_keys)"
+waited=0
+if [ -n "$first" ]; then
+  waited="$(printf '%s\n' "$first" | grep -c .)"
+  hosting::log "waiting   ${waited} declared key(s) not yet in their synced Secret: $(printf '%s' "$first" | tr '\n' ' ' | sed 's/|/:/g') — the CSI driver adds a new key on its next rotation pass (up to ${wait_seconds}s)"
+  if hosting::dry; then
+    hosting::log "(dry run) would wait for them and then restart deployment/${deployment}"
+    hosting::say kv_synced_keys "$(( ${#pairs[@]} - waited ))"
+    hosting::say kv_synced_waited "$waited"
+    hosting::say kv_synced_restart dry-run
+    exit 0
+  fi
+  deadline=$(( $(date +%s) + wait_seconds ))
+  left="$first"
+  while [ -n "$left" ]; do
+    [ "$(date +%s)" -lt "$deadline" ] \
+      || hosting::die "after ${wait_seconds}s the synced Secret(s) still lack: $(printf '%s' "$left" | tr '\n' ' ' | sed 's/|/:/g'). The SecretProviderClass declares them but the CSI driver has not synced them — check that the vault object each maps exists and that secret rotation is enabled on the cluster's Key Vault provider (a key added to a class reaches an EXISTING synced Secret only on a rotation pass). The pods were NOT restarted: they would start without the keys again."
+    sleep "$interval"
+    left="$(missing_keys)"
+  done
+fi
+hosting::log "present   all ${#pairs[@]} declared key(s) are in their synced Secret(s) (names read, no value)"
+hosting::say kv_synced_keys "${#pairs[@]}"
+hosting::say kv_synced_waited "$waited"
+
+# ── which pods predate the Secret's last data write ────────────────────────────────────────────
+# The newest time a manager wrote `.data` on any of the synced Secrets — managedFields carry it to
+# the second; creationTimestamp when no entry names f:data (a Secret only ever created, never updated).
+last_write=""
+for secret in $(printf '%s\n' "${secrets[@]}" | sort -u); do
+  hosting::probe any kubectl -n "$namespace" get secret "$secret" -o json; rc=$?
+  [ "$rc" -eq 2 ] && hosting::die_refused "secret/${secret} in ${namespace}"
+  [ "$rc" -eq 0 ] || hosting::die "lost secret/${secret} in ${namespace} after it carried every key (${HOSTING_PROBE_ERR})"
+  t="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '
+      [ (.metadata.managedFields // [])[] | select((.fieldsV1 // {}) | has("f:data")) | .time ]
+      + [ .metadata.creationTimestamp ] | map(select(. != null)) | max // ""')"
+  { [ -z "$last_write" ] || [[ "$t" > "$last_write" ]]; } && last_write="$t"
+done
+[ -n "$last_write" ] || hosting::die "the synced Secret(s) carry no write time (managedFields, creationTimestamp) — whether the running pods read the current keys cannot be decided"
+
+hosting::probe any kubectl -n "$namespace" get deployment "$deployment" -o json; rc=$?
+[ "$rc" -eq 2 ] && hosting::die_refused "deployment/${deployment} in ${namespace}"
+[ "$rc" -eq 0 ] || hosting::die "could not read deployment/${deployment} in ${namespace} (${HOSTING_PROBE_ERR})"
+selector="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '(.spec.selector.matchLabels // {}) | to_entries | map("\(.key)=\(.value)") | join(",")')"
+[ -n "$selector" ] || hosting::die "deployment/${deployment} has no matchLabels selector — its pods cannot be listed"
+hosting::probe any kubectl -n "$namespace" get pods -l "$selector" -o json; rc=$?
+[ "$rc" -eq 2 ] && hosting::die_refused "pods in ${namespace}"
+[ "$rc" -eq 0 ] || hosting::die "could not list the pods of deployment/${deployment} (${HOSTING_PROBE_ERR})"
+# A running, non-terminating pod's start — its status.startTime (when the kubelet took it, before
+# any container resolved envFrom). Pods without one have not started and will read the Secret as it is.
+stale="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r --arg w "$last_write" '
+    [ .items[] | select(.metadata.deletionTimestamp == null) | select(.status.startTime != null)
+      | select(.status.startTime < $w) | .metadata.name ] | join(" ")')"
+
+if [ -z "$stale" ]; then
+  hosting::log "current   every running pod started after the synced Secret's last write (${last_write}) — nothing to restart"
+  hosting::say kv_synced_restart false
+  exit 0
+fi
+
+hosting::log "stale     pod(s) ${stale} started before the synced Secret's last write (${last_write}) — they resolved envFrom from an older key set"
+hosting::do kubectl -n "$namespace" rollout restart deployment "$deployment" >/dev/null \
+  || hosting::die "could not restart deployment/${deployment} in ${namespace} — the key(s) are in the synced Secret but pods ${stale} started before they could read them"
+hosting::log "restarted deployment/${deployment} so every pod starts on the current key set"
+hosting::say kv_synced_restart "$(hosting::dry && echo dry-run || echo true)"

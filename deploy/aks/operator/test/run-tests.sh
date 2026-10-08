@@ -1376,6 +1376,80 @@ case "$_ie_out" in *"::hosting:: inline_env_retire=dry-run"*) ok "…and never c
 ie_no_value "…still printing no value"
 
 echo
+echo "── hosting-kv-synced: a newly mapped vault key reaches the PROCESS, not only the Secret ──"
+# MeshWeaver.Plugins#2778 — the CSI driver adds a key to an EXISTING synced Secret only on a rotation
+# pass, after the re-apply's pods resolved envFrom: a Reconcile reported Healthy while the key it was
+# run for was absent from every process (build, 2026-09-26). The stub answers the Secret (keys and
+# its last data write), the Deployment's selector and its pods' start times; every fixture value is
+# a fake, and no arm may print one.
+KS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-synced" && pwd)"
+ks() {  # ks [env…] -- <args…> — sets $_ks_out $_ks_rc $_ks_log $_ks_restarted
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _ks_state="$(mktemp -d)"
+  _ks_out="$(env "${envs[@]}" PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE="$_ks_state" HOSTING_KV_SYNC_INTERVAL=1 \
+    hosting-kv-synced --namespace build "$@" 2>&1)"; _ks_rc=$?
+  _ks_log="$(cat "$_ks_state/log" 2>/dev/null || true)"
+  _ks_restarted=no; [ -f "$_ks_state/restarted" ] && _ks_restarted=yes
+  rm -rf "$_ks_state"
+}
+KS_ARGS=(--secret build-portal-keyvault --key Hosting__PlatformWebhookSecret --key Hosting__ControlInbox__Secret)
+
+# THE build case: the key is in the Secret NOW, but the rotation wrote it (19:33) after the pods the
+# waited re-apply started (19:31) — "present now" proves nothing about them.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z 2026-09-26T19:34:02Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a pod that started BEFORE the Secret's last write is restarted, though the key is there now (Plugins#2778)" \
+  || bad "a pod predating the key's sync is restarted" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"memex-portal-deployment-abc-1 started before"*"::hosting:: kv_synced_restart=true"*) ok "…naming the stale pod and reporting the restart" ;;
+  *) bad "the stale pod is named" "said: ${_ks_out}" ;; esac
+case "$_ks_out" in *abc-2*started\ before*) bad "…and not the pod that started after the write" "said: ${_ks_out}" ;; *) ok "…and not the pod that started after the write" ;; esac
+
+# Negative control: the same keys, written long before every pod started — nothing to do.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-20T08:00:00Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z 2026-09-26T19:34:02Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = no ] && ok "every pod started after the Secret's last write → no restart (the common case is a no-op)" \
+  || bad "an unchanged key set rolls nothing" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"::hosting:: kv_synced_restart=false"*) ok "…and says so" ;; *) bad "no-restart is reported" "said: ${_ks_out}" ;; esac
+
+# Under a HAND-OFF the step runs before the rotation pass: it waits for the key, then restarts.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hosting__ControlInbox__Secret" HOSTING_KS_LATE_AFTER=3 \
+   HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a key not yet synced is WAITED for, then the pods that predate it are restarted" \
+  || bad "a late key is waited for" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"waiting   1 declared key(s)"*"build-portal-keyvault:Hosting__ControlInbox__Secret"*"::hosting:: kv_synced_waited=1"*) ok "…naming the key it waited for" ;;
+  *) bad "the waited key is named" "said: ${_ks_out}" ;; esac
+
+# A key that never arrives is a FAILED step — and the pods are NOT restarted onto the same gap.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" \
+   HOSTING_KV_SYNC_SECONDS=2 -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -ne 0 ] && [ "$_ks_restarted" = no ] && ok "a key the driver never syncs fails the step, and nothing is restarted onto the gap" \
+  || bad "a never-synced key fails" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"still lack: build-portal-keyvault:Hosting__ControlInbox__Secret"*) ok "…naming the missing key" ;; *) bad "the missing key is named" "said: ${_ks_out}" ;; esac
+
+# A refused read is REFUSED, never "absent" (#4722) — and never a wait.
+ks HOSTING_KS_SECRET_FORBIDDEN=1 -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -ne 0 ] && ok "a Forbidden secret read is a refusal" || bad "Forbidden refuses" "exited 0: ${_ks_out}"
+case "$_ks_out" in *"REFUSED, not absent"*) ok "…saying REFUSED, not absent" ;; *) bad "the refusal is not read as absent" "said: ${_ks_out}" ;; esac
+
+# Names only: no fake value ever reaches the output or an argv.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+case "$_ks_out$_ks_log" in *ZmFrZS1ub3QtYS12YWx1ZQ*|*fake-not-a-value*) bad "no value is printed or passed" "out: ${_ks_out}" ;; *) ok "no value is printed or passed in an argv" ;; esac
+
+# A dry run decides, narrates the restart, and changes nothing.
+ks HOSTING_DRY_RUN=true HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret Hosting__ControlInbox__Secret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z \
+   HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = no ] && ok "a dry run restarts nothing" || bad "dry run is inert" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+case "$_ks_out" in *"DRY-RUN would run: kubectl -n build rollout restart"*"kv_synced_restart=dry-run"*) ok "…and narrates the restart it would make" ;;
+  *) bad "dry run narrates" "said: ${_ks_out}" ;; esac
+
+refuses_hard "kv-synced needs a --secret before a --key" "comes before any --secret" \
+  env PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE=/nonexistent hosting-kv-synced --namespace build --key K
+refuses_hard "kv-synced refuses a key with a metacharacter" "is not a plain environment-variable name" \
+  env PATH="$KS_STUBS:$PATH" HOSTING_KS_STATE=/nonexistent hosting-kv-synced --namespace build --secret s --key 'K;id'
+unset _ks_out _ks_rc _ks_log _ks_restarted _ks_state
+
 echo "── hosting-kv-rotate refuses under an inline shadow ──────────────"
 # MeshWeaver#3201 / Plugins#1593: an inline `env:` entry outranks every envFrom, so a rotation that
 # lands the new key in the vault and the synced Secret leaves the pods presenting the OLD one — and
