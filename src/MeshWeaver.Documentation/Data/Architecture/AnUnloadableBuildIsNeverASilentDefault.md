@@ -56,7 +56,8 @@ activation code that produces that combination silently, and the regression test
 1. `HasUsableBuild` is true — the record names a build for the live framework.
 2. `ResolveAssembly` returns a local path — the bytes are there.
 3. `GetConfigurationsFromExistingAssembly` → `CompileResultFromAssembly` → `LoadNodeAssembly`
-   answers `null` (the file vanished, was deleted as older than the framework, or is a bad image) and
+   answers `null` (the file vanished or is a bad image — the loader no longer deletes by write time, see
+   [A Reader Never Deletes A Shared Build](../AReaderNeverDeletesASharedBuild)) and
    the result comes back with **no `AssemblyLocation`**, no configurations, and the loader's reason
    appended to its log as an Error.
 4. The caller took `matching?.HubConfiguration` — `null` — and bound `ApplyEntry(hubConfig: null)`,
@@ -91,8 +92,7 @@ bytes and asserts they are still bound.
 
 ## The log line names the cause, not a list of possible causes
 
-The loader's reason (`CompilationCacheService.LastLoadFailure`: the file was absent, older than the
-framework and deleted, or a bad image with its length and the volume's free space) used to reach
+The loader's reason (`CompilationCacheService.LastLoadFailure`: the file was absent, or a bad image with its length and the volume's free space) used to reach
 only the **record** — the verdict appended to the compile's log. The `Error` line
 `MeshNodeCompilationService` writes said *"Common causes: corrupt cached .dll …, source compilation
 error …, or missing dependency"* and never which one applied.
