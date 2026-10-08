@@ -99,6 +99,14 @@ COMBOS=(
   "self-host (neutral chart defaults)|deploy/helm/values.yaml"
   "AKS overlay (the layer every AKS install shares)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
   "memex-local (Colima k3s)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml"
+  # 🚨 The layers `memex-local up` ACTUALLY passes (helm_deploy): chart defaults < tracked defaults
+  # < [self-registry mode layer] < the overlay generated from share/values.local.yaml. The entry
+  # above omits the overlay, and the overlay is what names `ingress.tlsSecret` — so when the chart
+  # learned to refuse a tlsSecret with no issuer, every fresh `memex-local up` died at the helm step
+  # and this gate stayed green (MeshWeaver#6019). The overlay is rendered as shipped: its
+  # __PLACEHOLDER__ secrets are plain strings to helm. Both modes, because both are installed.
+  "memex-local as installed: defaults + the generated overlay (registry consumer)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/homebrew/share/values.local.yaml"
+  "memex-local as installed: defaults + self-registry + the generated overlay|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/homebrew/share/values.local.self-registry.yaml:deploy/homebrew/share/values.local.yaml"
   # A record-driven Provision of a MIRROR-CONSUMING instance (MeshWeaver#3353): the only combination
   # that switches on the pull secret, SelfUpdate__Registry and the chart-created PVCs. A fixture, not
   # an environment — without it those template branches render on nothing in this repo and a
