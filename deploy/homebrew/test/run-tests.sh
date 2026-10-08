@@ -95,6 +95,18 @@ cat > "$STUBS/kubectl" <<'EOF'
 for a in "$@"; do
   if [ "$a" = "exec" ]; then
     [ -n "${FAKE_EXEC_FAILS:-}" ] && exit 1
+    if [ -n "${FAKE_PROBE_IMAGE_ROOT:-}" ]; then
+      # Exercise the CLI's actual in-pod probe against a temporary image layout.
+      # Only replace the container's absolute /app path with this test's root.
+      previous=""; script=""
+      for arg in "$@"; do
+        [ "$previous" = "-c" ] && script="$arg"
+        previous="$arg"
+      done
+      script="$(printf '%s' "$script" | sed "s@/app/modules@$FAKE_PROBE_IMAGE_ROOT/modules@g")"
+      Modules__Root="$FAKE_PROBE_DATA_ROOT" sh -c "$script" sh "${!#}"
+      exit $?
+    fi
     # 🚨 Report ONLY the modules the probe actually asked about — the real in-pod script loops over
     # the list it is handed as its last argument, so a pack the caller does not name is a pack
     # nothing looks at. Echoing the whole fixture instead made "a missing <pack> is caught" pass for
@@ -303,6 +315,23 @@ elif case "$OUT" in *"view packs loaded"*) false ;; *) true ;; esac; then
   bad "a healthy portal verifies green" "no 'view packs loaded' line in: ${OUT}"
 else
   ok "a healthy portal verifies green"
+fi
+
+# MeshWeaver#6025: Modules__Root=/data does not move image DLLs out of /app/modules.
+# Run the real probe body with a temporary /app substitute; the ordinary module
+# fixture above would pass even if the CLI never searched the image directory.
+image_root="$STUBS/image"; data_root="$STUBS/data"
+mkdir -p "$data_root" "$image_root/modules"
+for module in MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph MeshWeaver.Blazor.EntityViews; do
+  mkdir -p "$image_root/modules/$module"
+  : > "$image_root/modules/$module/$module.dll"
+done
+run_verify FAKE_HTTP_ROOT=200 FAKE_HTTP_LOGIN=200 \
+  FAKE_PROBE_IMAGE_ROOT="$image_root" FAKE_PROBE_DATA_ROOT="$data_root"
+if [ "$RC" -eq 0 ] && [[ "$OUT" == *"view packs loaded:"* ]]; then
+  ok "image view packs are found when Modules__Root points to empty /data"
+else
+  bad "image view packs are found when Modules__Root points to empty /data" "exited $RC: $OUT"
 fi
 
 # A 302 to the sign-in page is the NORMAL anonymous response — treating it as red would make the

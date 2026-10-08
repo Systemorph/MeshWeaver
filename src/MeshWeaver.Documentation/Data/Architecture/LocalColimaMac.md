@@ -484,8 +484,14 @@ memex-local verify
 # Asserts three things and exits non-zero, naming a remedy, if any fails:
 #   • the portal SERVES        — an HTTP status in the serving range (a 503 is not "reachable")
 #   • /login is ROUTED         — there is a way to sign in
-#   • the view packs are there — MeshWeaver.Blazor.Views + MeshWeaver.Blazor.Graph
+#   • the view packs are installed and loaded — Views + Graph + EntityViews
 ```
+
+The on-disk probe checks both landed bundles under `Modules__Root/modules` and image modules
+under `/app/modules`, since `Modules__Root=/data` does not move modules already shipped in the
+image. The boot `[ModuleLoad]` report then confirms that the running portal actually loaded all
+three packs. A loaded image pack must not be reported as missing just because `/data/modules`
+does not contain its DLL (#6025).
 
 🚨 `up` and `update` run this for you and refuse to report success without it. The check it replaced
 curl'd `/` and printed "Portal reachable" whenever **curl** exited 0 — so a 503, a 404 and a portal
