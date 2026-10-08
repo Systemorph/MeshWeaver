@@ -999,21 +999,25 @@ still reads a candidate's verdict — MeshWeaver.Plugins `scripts/core-candidate
 
 | state | when | legs | reaper | when the verdict lands |
 |---|---|---|---|---|
-| waiting | the core run is not completed | measure | keep | the waiter reads it itself |
-| **resumable** | the run completed, its waiter failed on `No verdict in time`, the PR is open and its head is still this run's head, and the request job's attempt is still the one that minted this key | **measure** | **keep** | **the Verdict job re-runs that waiter job** |
-| answered | the waiter read a verdict (green, or a red decision) | stand down | reap | nothing |
+| waiting | the waiter JOB has not finished — it still polls (the run's own status is not read: it stays `in_progress` after the waiter stopped polling) | measure | keep | the waiter reads it itself; the Verdict job follows the waiter to its end |
+| **resumable** | the waiter finished WITHOUT reading a verdict — it failed on `No verdict in time`, or on an earlier step before reading anything — and, once the run completed, the PR is open, its head is still this run's head, and the request job's attempt is still the one that minted this key | **measure** | **keep** | **the Verdict job re-runs that waiter job** |
+| answered | the waiter's DECISION step (`Compatible, or a declared break?`) ran — it read a verdict and decided, green or red | stand down | reap | nothing |
 | superseded | run cancelled; PR closed, merged or moved on; request re-issued under a new key | stand down | reap | nothing |
-| unknown | anything unreadable | measure | keep | nothing |
+| unknown | anything unreadable, including a finished waiter whose steps do not read | measure | keep | nothing |
 
 After publishing `refs/core-candidate/<key>`, Plugins' `Verdict for core` job mints the
 `meshweaver` App token with `actions: write` on this repository and nothing else, and — when the
 request is RESUMABLE — calls `POST /actions/jobs/<waiter>/rerun`. That re-runs the waiter and its
-dependent, `Consolidate test results`. It then reads the run back: a POST that returned is not a
-re-run. On the re-run the waiter's first poll finds the verdict, because the request job's outputs
+dependent, `Consolidate test results`. A POST that returned is not a re-run, and the run's status
+proves nothing either way (it can still read `completed` while GitHub applies the request, and a
+fast re-run may already be done), so the job reads back the waiter itself: a NEWER execution of it —
+a new job id or a higher run attempt, in any status — confirms the re-run; none within 5 minutes is
+RED. On the re-run the waiter's first poll finds the verdict, because the request job's outputs
 (key, candidate, base) are kept from the attempt that minted them. It validates the verdict as
-always and decides. If the core run is still finishing its other jobs (a re-run needs a completed
-run), the Verdict job waits for it, bounded at 20 minutes. Past that bound it goes RED and names the
-job to re-run.
+always and decides. The Verdict job follows the waiter to a terminal state, bounded at 20 minutes:
+a waiter still in its last poll when the verdict lands either reads it itself (answered) or ends
+on `No verdict in time` (re-run once the run completes — a re-run needs a completed run). Past
+that bound it goes RED and names the job to re-run.
 
 What this keeps:
 
@@ -1036,9 +1040,14 @@ The rule's self-test (`core-candidate-requester.py --self-test`, run in the scop
 resume) pins the four cases: a verdict before the deadline (nothing re-run), a verdict after the
 waiter gave up (exactly the waiter re-run, also when the run is still finishing), no verdict ever
 (refused, red), and a superseded head (ignored, legs stand down). A negative control flips
-RESUMABLE to SUPERSEDED by changing one input. On core's side, `await-dependent-verdict.py
---self-test` pins that a re-run's first look returns an already-published verdict without waiting
-an interval.
+RESUMABLE to SUPERSEDED by changing one input. It also pins the window's edge (a verdict landing
+while the waiter is in its last step is followed to the end, then re-run once), a waiter that failed
+before reading anything (resumable, never answered — the decision step having run is what flips it),
+and the read-back (a newer waiter execution in any status confirms; none is red). On core's side,
+`await-dependent-verdict.py --self-test` pins that a re-run's first look returns an
+already-published verdict without waiting: `time.sleep` is replaced by a recorder, so a regression
+fails at once instead of sleeping into the job cap, and a negative control shows the recorder does
+see a wait when the first look finds nothing.
 
 **The remedy for a timeout is therefore none.** The no-verdict step says the gate turns itself green
 or red when the verdict lands. A person acts only when no candidate run is live for the key — for

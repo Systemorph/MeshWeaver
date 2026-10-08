@@ -300,11 +300,29 @@ def self_test() -> int:
         check("a transient 500 is retried, then the verdict is read from the ref's commit message", v == good, str(v))
         # 🔁 A RE-RUN (MeshWeaver.Plugins re-runs this job when its verdict lands after the window):
         # the verdict is ALREADY published, so the first look must return it — not after an interval.
+        # `time.sleep` is replaced by a recorder, so a regression that waits before its first look
+        # FAILS this check at once instead of sleeping the job into its cap.
         _get = lambda path, token: (200, {"object": {"sha": "s"}}) if "/ref/" in path else (200, {"message": json.dumps(good)})
-        t0 = time.time()
-        v, _ = poll(K, "t", deadline=time.time() + 3600, interval=3600, quiet=True)
+        slept: list[float] = []
+        real_sleep = time.sleep
+        time.sleep = slept.append
+        try:
+            v, _ = poll(K, "t", deadline=time.time() + 5, interval=1, quiet=True)
+        finally:
+            time.sleep = real_sleep
         check("a re-run finds an already-published verdict on its FIRST look (no interval waited)",
-              v == good and time.time() - t0 < 5, f"{v} after {time.time() - t0:.1f} s")
+              v == good and slept == [], f"{v}, sleeps requested: {slept}")
+        # Negative control: the recorder DOES see a wait when the first look finds nothing.
+        looks = iter([(404, None), (200, {"object": {"sha": "s"}}), (200, {"message": json.dumps(good)})])
+        _get = lambda path, token: next(looks)
+        slept.clear()
+        time.sleep = slept.append
+        try:
+            v, _ = poll(K, "t", deadline=time.time() + 5, interval=1, quiet=True)
+        finally:
+            time.sleep = real_sleep
+        check("negative control: a first look that finds nothing IS followed by a recorded wait",
+              v == good and slept == [1], f"{v}, sleeps requested: {slept}")
         _get = lambda path, token: (200, {"object": {"sha": "s"}}) if "/ref/" in path else (200, {"message": "not json"})
         v, _ = poll(K, "t", deadline=time.time() + 5, interval=0, quiet=True)
         check("an unparseable message comes back as a malformed verdict, which validate reds",

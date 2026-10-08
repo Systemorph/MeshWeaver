@@ -4070,7 +4070,9 @@ jobs:
     # 🚨 STILL RED — silence is never a pass. The step name is also what merge-queue-steward.py
     # (DEPENDENT_NO_VERDICT_STEP) matches, dormant while the queue is off — AND what
     # MeshWeaver.Plugins' scripts/core-candidate-requester.py (NO_VERDICT_STEP) reads to decide that
-    # this waiter is RESUMABLE: rename one, rename all three.
+    # this waiter is RESUMABLE: rename one, rename all three. That script also reads the DECIDE step
+    # below ("Compatible, or a declared break?", DECIDE_STEP): only that step having RUN counts as an
+    # answer, so a waiter that failed before reading any verdict is re-run too — rename it in both.
     # 🔁 A LATE VERDICT STILL DECIDES (Doc/Architecture/CrossRepoPairGate § "A late verdict still
     # decides"). When Plugins' candidate answers after this window, its Verdict job RE-RUNS this job
     # (and Consolidate test results); the waiter's first poll finds the verdict and decides on it. So
