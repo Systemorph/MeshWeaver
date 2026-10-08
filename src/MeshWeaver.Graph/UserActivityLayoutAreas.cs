@@ -478,10 +478,10 @@ public static class UserActivityLayoutAreas
                         Tooltip: "Edit your bio, links, and showcase")
                         { LabelKey = "menu.editProfile", TooltipKey = "menu.editProfileTooltip" });
                     items.Add(new NodeMenuItemDefinition(
-                        "Edit home page", MeshNodeLayoutAreas.EditArea,
+                        "Edit home page layout", MeshNodeLayoutAreas.EditArea,
                         Icon: "✏️", RequiredPermission: Permission.Update, Order: 10,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.EditArea),
-                        Tooltip: "Edit this home page's markdown")
+                        Tooltip: "Change what your home page shows (its sections and their order)")
                         { LabelKey = "menu.editHomePage", TooltipKey = "menu.editHomePageTooltip" });
 
                     if (!string.IsNullOrWhiteSpace(node.ContentAs<User>(options)?.Body))
