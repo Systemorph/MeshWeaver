@@ -1,6 +1,7 @@
 using System;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -66,6 +67,39 @@ public class MoveResumesAHalfLandedMoveTest(ITestOutputHelper output) : Monolith
         // Storage, not a hub read: the question is whether the delete leg removed the ROWS.
         (await Stored(source)).Should().BeNull("the move completed: the source is gone");
         (await Stored(sourceChild)).Should().BeNull("the move completed: the source subtree is gone");
+    }
+
+    /// <summary>
+    /// The source was WRITTEN between the half-landed attempt and the retry — its subtree-deletion
+    /// scope is released when the first attempt ends, so the old address is writable again. Resuming
+    /// would keep the stale target and the delete leg would destroy the newer source, so the retry
+    /// must refuse and touch nothing (raised in review on #6319).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARetriedMove_IsRefused_WhenTheSourceChangedAfterTheCopyLanded()
+    {
+        Access.SetCircuitContext(TestUsers.Admin);
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var source = $"{TestPartition}/submission-{suffix}";
+        var target = $"{TestPartition}/inbox-{suffix}";
+        await Seed(source, "Submission");
+
+        var copied = await ObserveNodeOperation(new CopyNodeRequest(source, target) { PreserveAuthorship = true })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        copied.Message.Success.Should().BeTrue(copied.Message.Error ?? "precondition: the copy leg lands");
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(source).Update(node => node with { Name = "Submission, edited after the copy" })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+
+        var moved = await ObserveNodeOperation(new MoveNodeRequest(source, target))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        Output.WriteLine($"source edited: success={moved.Message.Success} reason={moved.Message.RejectionReason} error={moved.Message.Error}");
+
+        moved.Message.Success.Should().BeFalse("resuming would discard the source's newer state");
+        moved.Message.RejectionReason.Should().Be(NodeMoveRejectionReason.TargetAlreadyExists);
+        (await Stored(source))!.Name.Should().Be("Submission, edited after the copy",
+            "a refused retry deletes nothing — the source keeps its edit");
+        (await Stored(target))!.Name.Should().Be("Submission", "and the target is left as the copy left it");
     }
 
     /// <summary>
