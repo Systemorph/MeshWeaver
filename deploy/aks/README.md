@@ -1378,18 +1378,19 @@ ever been exercised in the transient two-silo window of a rollout, never in stea
 state. `scripts/check-chart-drift.sh` reports the annotation as CLUSTER-ONLY drift so
 it stops being invisible.
 
-### Crash dumps: verify the MOUNT
+### Crash dumps: on a volume that outlives the pod
 
-`DOTNET_DbgEnableMiniDump` + `DOTNET_DbgMiniDumpName=/data/dumps/…` do nothing
-without a volume at that path — `createdump` does not create directories, so the
-crash destroys its own evidence. The chart mounts a dedicated `memex-dumps`
-emptyDir; verify the LIVE pod actually has it:
-
-```bash
-kubectl get deploy memex-portal-deployment -n <env> \
-  -o jsonpath='{range .spec.template.spec.containers[0].volumeMounts[*]}{.name} -> {.mountPath}{"\n"}{end}' \
-  | grep dumps || echo "NO DUMP MOUNT — every crash will produce nothing"
-```
+Dumps go to `/data/dumps/<pod name>/`: on a dedicated dump claim when the record declares a
+`dumps` volume (`persistence.dumps`, recommended), otherwise on the shared `/data` claim.
+`createdump` does not create directories. The `crash-dump-prepare` init container and the
+portal's postStart hook (`deploy/helm/files/crash-dump-retention.sh`) create the pod's
+directory, apply retention (`crashDumps.keep`, `maxAgeDays`, `activeMinutes`) and HOLD dumps
+when the volume lacks headroom for every pod that could crash at once. The old `memex-dumps`
+emptyDir is gone; it was deleted on every roll. On a live pod, read its first `[crash-dumps]`
+log line after a start: `armed: …` or `HELD: …`. Full account:
+`src/MeshWeaver.Documentation/Data/Architecture/DebuggingNativeCrashes.md` → "Production:
+where a dump lands, and how long it stays". The change reaches an instance on its next
+Reconcile, not on an image Roll.
 
 ⚠️ A per-env `portal-patch.json` replaces volumes **by index**, so adding or
 reordering a chart volume silently misaligns an environment and a cluster can run an
@@ -1467,9 +1468,9 @@ stitches the platform around it. All config flows from deploy parameters → env
 
 - **Dump mount not applied to the live clusters** (2026-07-28): all three
   namespaces carry the dump env vars while no pod mounts `/data/dumps`, so every
-  production `exit=139` so far produced no dump. Applying the current chart fixes
-  it; until then a `mkdir /data/dumps` on the `/data` PVC is a stopgap that puts
-  heap-sized dumps on a shared 16Gi share instead of the size-bounded emptyDir.
+  production `exit=139` so far produced no dump. Superseded: dumps now go to a
+  dedicated dump claim or the `/data` claim under a headroom gate (see "Crash dumps"
+  above), from the next Reconcile of each instance.
 - ~~**Multi-replica HA**~~ (chart side done 2026-08-14): Orleans **AdoNet**
   clustering is the HA provider (`Features:Orleans:Clustering`, legacy key
   `Deployment:Orleans:Clustering`), backed by a dedicated `orleans` database the

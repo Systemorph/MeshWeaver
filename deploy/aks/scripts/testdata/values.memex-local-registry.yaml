@@ -1,0 +1,12 @@
+# Fixture: the file `memex-local registry <url> --key … --id …` writes to ~/.memex-local/registry.yaml
+# (write_registry_file in deploy/homebrew/bin/memex-local), with a pinned id and a key. helm_deploy
+# layers it between share/values.local.defaults.yaml and the user's overlay in REGISTRY mode, so
+# check-chart-invariants.sh renders it there. Keep it in step with write_registry_file. The key is a
+# placeholder, never a credential.
+pluginCatalog:
+  registryUrl: "https://memex.meshweaver.cloud"
+  instanceId: "dev-laptop"
+  homeUrl: "https://memex.localhost"
+secrets:
+  memex_portal:
+    PluginCatalog__BootstrapKey: "mwr_placeholder-not-a-key"
