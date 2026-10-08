@@ -748,23 +748,23 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     + "WebhookInbox target → Admin/_Build) is not reaching this instance; every "
                     + "joint of it fails silently, so check them rather than this service.",
                     trigger, verdict.Message);
-            else if (verdict.Outcome is SelfUpdateOutcome.NoOutcome
-                     or SelfUpdateOutcome.CheckFailed
-                     // 🚨 An install whose own tag no longer resolves cannot start a new pod, and
-                     // #3543's complaint is precisely that it said so in the same voice as a healthy
-                     // one. Both the terminal strand and the recovery roll carry
-                     // UnresolvedInstalledTag, so the level follows the FACT rather than the outcome.
-                     or SelfUpdateOutcome.InstalledTagWithdrawn
-                     // A landed module nothing will ever activate is a state an operator must see (#3650).
-                     or SelfUpdateOutcome.RestartUnavailable
-                     // A release this install could neither apply nor hand over is a delivery that
-                     // stopped (#4098) — the pairing or the inbox is what an operator has to look at.
-                     or SelfUpdateOutcome.HandoverFailed
-                     or SelfUpdateOutcome.RestartHandoverFailed
-                     || verdict.UnresolvedInstalledTag is not null)
+            // 🚨 ONE classification (SelfUpdateVerdict.IsFailure) for the log level, the policy node's
+            // lastCheckFailed and the `self_update` entry on /health — three surfaces that can never
+            // disagree about whether this install's self-update is failing (policy
+            // control-first-never-silent). An install whose own tag no longer resolves (#3543), a
+            // landed module nothing will activate (#3650), a release neither applied nor handed over
+            // (#4098) and a roll the schema refused are all deliveries that stopped.
+            else if (verdict.IsFailure)
                 _logger?.LogWarning("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
             else
                 _logger?.LogInformation("[SelfUpdate] check ({Trigger}): {Verdict}", trigger, verdict.Message);
+
+            // The PUBLIC half: /health's `self_update` entry reads this, so a failing self-update is
+            // visible from outside the instance — the CD arming reads control's (policy
+            // control-first-never-silent). In-memory and synchronous, so it cannot fail the way the
+            // node write below can; a host without the census (a test) simply has no public reading.
+            _hub.ServiceProvider.GetService<SelfUpdateCheckCensus>()?.Record(new SelfUpdateCheckReading(
+                DateTimeOffset.UtcNow, trigger.ToString(), verdict.Outcome.ToString(), verdict.Message, verdict.IsFailure));
 
             return RecordCheck(trigger, verdict)
                 .Catch((Exception ex) =>
@@ -1900,6 +1900,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     {
                         LastCheckedAt = DateTimeOffset.UtcNow,
                         LastCheckVerdict = verdict.Message,
+                        LastCheckFailed = verdict.IsFailure,
                         LastCheckTrigger = trigger.ToString(),
                         // 🚨 Written on EVERY check, so it CLEARS itself the moment the tag
                         // resolves again — the same unconditional-clearing rule the availability

@@ -2140,7 +2140,14 @@ jobs:
                 *) echo "::error::the control plane's inbox stored the announcement but did not VERIFY its signature (signature: $verdict) — the router drops what it cannot verify, so control would not be rolled. Declare WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on that instance."
                    exit 1 ;;
               esac
-              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` stored and verified at the control plane (HTTP $code) — it opens \`Ops/Actions/selfupdate-roll-control-*\`, unattended under the record's Continuous \`3.0.0-ci*\` line" >> "$GITHUB_STEP_SUMMARY"
+              # 🚨 STORED AND VERIFIED IS NOT DELIVERED (policy `control-first-never-silent`). The inbox
+              # answers before its router runs, and the router DROPS an announcement whose `deployment`
+              # names no record the receiving plane holds (SelfUpdateRouting: "the record lookup IS the
+              # authorization") — measured 2026-10-07 from ci.10184 on: `200 accepted, verified` at a
+              # plane holding no Deployments record, every build dropped, control frozen 10+ h. So this
+              # line claims only what the 200 proves; whether control RUNS the build is read by `arm`
+              # (red past the bound) and by `control-always-latest`.
+              echo "- control handed \`$V_CONTROL\`: \`self-update-available\` for \`control\` STORED and signature-verified at \`${URL%/api/hooks/*}\` (HTTP $code). That is not yet a roll: the plane opens one only if it holds the \`control\` record — \`arm\` and \`control-always-latest\` read whether control actually runs this build" >> "$GITHUB_STEP_SUMMARY"
               ;;
             000) echo "::error::could not reach the control plane's inbox at all (DNS/TLS/connection refused) — control was NOT handed $V_CONTROL"; exit 1 ;;
             401) echo "::error::the control plane's inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical — control was NOT handed $V_CONTROL"; exit 1 ;;
@@ -2578,7 +2585,11 @@ jobs:
   # publish, the hourly reconcile, a dispatch — and arms the newest promoted set, NEWER than
   # everything armed, whose platform verdict is green. A red ladder is refused; a ladder still
   # running, or a control that has not taken the set yet, waits; a newer green one supersedes both.
-  # Never backwards. The ladder of THIS run is a need so this run can arm its own set when control
+  # Never backwards. 🚨 But a wait has a BOUND (policy `control-first-never-silent`): when nothing is
+  # armed and control has been behind the newest build it was given for longer than
+  # `platformLagBoundMinutes` (`.github/control-instance.json`, the SAME bound and clock as
+  # `control-always-latest`), this job goes RED naming control's own self-update verdict — a green
+  # CD over a fleet frozen on control is exactly the silence this replaced (ci.10184…ci.10206). The ladder of THIS run is a need so this run can arm its own set when control
   # already runs it (a rebuild of the commit control is on); otherwise a later tick arms it.
   #
   # 🚨 WHAT IT DOES NOT GATE: promote, verify, the platform bake, control-first and every CI
@@ -4909,6 +4920,7 @@ jobs:
           Triage the failed job in the linked run - which of the two things CD delivers is broken depends on WHICH job went red:
 
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
+          * arm: the FLEET is frozen on control (policy control-first-never-silent) when its ::error reads 'FLEET DELIVERY FROZEN ON CONTROL' - every image is published, but control has run none of the builds it was given for longer than the platformLagBoundMinutes bound, so control-first offers the fleet nothing. The error names control's running commit, the first build it missed and control's OWN self-update verdict (its /health self_update line); the open control-lag issue carries the same reading. The remedy is control's roll, never an arm override.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
           * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 
