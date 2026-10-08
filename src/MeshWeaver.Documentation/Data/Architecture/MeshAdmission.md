@@ -135,6 +135,15 @@ the recovery watch does. What it still cannot hear locally is a compile that ran
 (the type's grain placed on a serving replica) or a local FAILURE (only successes are published
 locally) — those still time out as *unevaluated*, never as a verdict.
 
+🚨 **"Compiled, its stamp is held" is announced BEFORE the stamp is held** (#6050). The witness fires
+first, synchronously on the compile thread, and the stamp is offered to `MeshPublicationGate` a
+moment later in the same callback — that ordering is the point of the witness, so it is pinned, not
+"fixed". Consequently `MeshPublicationGate.HeldCount` read once, right after `WarmOne` answered,
+can still be 0: anything that needs the hold (a test, a diagnostic) WAITS for it rather than sampling
+it. `AGatedSweepHearsItsOwnCompileTest` asserts both halves — the gate's count read inside the
+witness's own notification is unchanged, and the hold then arrives; swapping the two statements in
+`NodeTypeCompilationHelpers` turns the first assertion red.
+
 ### The readiness message names the step it is waiting on
 
 The gate's detail used to be set once — `enumerating dynamic NodeTypes` — before the bundle seeding,

@@ -16,11 +16,22 @@ namespace MeshWeaver.Testcontainers;
 /// <para><b>What the image needs, and what the builder sets.</b> The portal image runs
 /// <c>Memex.Portal.Distributed</c> (Orleans + Postgres). A throwaway instance is single-node
 /// (<c>Features:Orleans:Clustering=Localhost</c>), Azure-free (<c>Deployment:Backend=Filesystem</c>
-/// with <c>Deployment:DataRoot=/data</c>), has dev login ON (the host forces it OFF unless the
-/// value is literally <c>true</c>) and needs ONE Postgres for its data
-/// (<c>ConnectionStrings:memex</c>) — which is why <see cref="MemexBuilder.WithPostgres(string)"/>
-/// is required: the memex reaches Postgres INSIDE the Docker network, so hand it the alias-based
-/// connection string of a Postgres container on the same network, never a host-mapped port.</para>
+/// with <c>Deployment:DataRoot</c> under <c>/tmp</c> — the image runs as a non-root user, and a
+/// <c>/data</c> root kills the host at its first <c>CreateDirectory</c>), has dev login ON (the
+/// host forces it OFF unless the value is literally <c>true</c>) and needs ONE Postgres for its
+/// data — which is why <see cref="MemexBuilder.WithPostgres(string)"/> is required. It states BOTH
+/// halves of the storage decision: <c>ConnectionStrings:memex</c> and
+/// <c>Graph:Storage:Type=PostgreSql</c>. The image deliberately bakes no storage type, so an
+/// instance that is not TOLD one serves the first-run setup wizard instead of a mesh
+/// (MeshWeaver#6037). The memex reaches Postgres INSIDE the Docker network, so hand it the
+/// alias-based connection string of a Postgres container on the same network, never a host-mapped
+/// port — and migrate that database first (the <c>memex-migration</c> image of the same build):
+/// the portal's <c>DbVersionGate</c> refuses to start over a schema it does not find.</para>
+///
+/// <para><b>Started means the MESH started.</b> The wait is <see cref="MemexReadiness"/>: the
+/// startup census on <c>/health</c> of a composed host, never a probe path's flat <c>200 ok</c>,
+/// which the setup wizard answers too. A container serving the wizard, or one that exits before
+/// its mesh starts, fails <c>StartAsync</c> at once with the reason.</para>
 ///
 /// <para><b>The container's log is the test's log.</b> stdout/stderr are redirected to the test
 /// output by default, so a failing test shows the portal's own lines beside it (maintainer:
@@ -35,7 +46,7 @@ public sealed class MemexContainer(MemexConfiguration configuration) : DockerCon
     /// <summary>The MCP endpoint (<c>/mcp</c>).</summary>
     public Uri McpEndpoint => new(BaseAddress, "/mcp");
 
-    /// <summary>The health endpoint the wait strategy polls (<c>/healthz</c>).</summary>
+    /// <summary>The startup census the wait strategy reads (<c>/health</c>).</summary>
     public Uri HealthEndpoint => new(BaseAddress, MemexBuilder.HealthPath);
 }
 
@@ -87,8 +98,18 @@ public sealed class MemexBuilder : ContainerBuilder<MemexBuilder, MemexContainer
     /// <summary>The port the portal listens on inside the container.</summary>
     public const ushort HttpPort = 8080;
 
-    /// <summary>The health path the wait strategy polls.</summary>
-    public const string HealthPath = "/healthz";
+    /// <summary>
+    /// The startup census the wait strategy reads. NOT <c>/healthz</c>: that path answers a flat
+    /// <c>ok</c> on the setup wizard and on the GUI host's pre-mesh short-circuit alike, so it
+    /// proves a process, never a mesh (MeshWeaver#6037).
+    /// </summary>
+    public const string HealthPath = MemexReadiness.HealthPath;
+
+    /// <summary>The storage type <see cref="WithPostgres(string)"/> states.</summary>
+    public const string PostgresStorageType = "PostgreSql";
+
+    /// <summary>The writable data root inside the container (the image runs as a non-root user).</summary>
+    public const string DataRoot = "/tmp/memex-data";
 
     /// <summary>Starts a builder with the memex defaults applied.</summary>
     public MemexBuilder() : this(new MemexConfiguration())
@@ -105,15 +126,23 @@ public sealed class MemexBuilder : ContainerBuilder<MemexBuilder, MemexContainer
     protected override MemexConfiguration DockerResourceConfiguration { get; }
 
     /// <summary>
-    /// The Postgres the memex stores its data in — <c>ConnectionStrings:memex</c>. The string must
-    /// resolve FROM INSIDE the container: on a shared Docker network, use the Postgres container's
-    /// network alias and port 5432, not the host-mapped port a test on the host would use.
+    /// The Postgres the memex stores its data in — <c>ConnectionStrings:memex</c> AND
+    /// <c>Graph:Storage:Type=PostgreSql</c>. The string must resolve FROM INSIDE the container: on a
+    /// shared Docker network, use the Postgres container's network alias and port 5432, not the
+    /// host-mapped port a test on the host would use.
+    ///
+    /// <para>🚨 The storage TYPE is not optional. The image deliberately bakes none (a baked type
+    /// would make the first-run wizard unreachable on every real deployment), and
+    /// <c>SetupOnlyHost.IsAwaitingSetup</c> reads the raw key: with only the connection string the
+    /// container serves the setup wizard and composes no mesh — which this helper did until
+    /// MeshWeaver#6037, while its <c>/healthz</c> wait reported it started.</para>
     /// </summary>
     public MemexBuilder WithPostgres(string connectionString)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         return Merge(DockerResourceConfiguration, new MemexConfiguration(memexConnectionString: connectionString))
-            .WithEnvironment("ConnectionStrings__memex", connectionString);
+            .WithEnvironment("ConnectionStrings__memex", connectionString)
+            .WithEnvironment("Graph__Storage__Type", PostgresStorageType);
     }
 
     /// <summary>
@@ -138,13 +167,14 @@ public sealed class MemexBuilder : ContainerBuilder<MemexBuilder, MemexContainer
             // Azure-free, single-node: the self-host filesystem backend and Localhost clustering
             // are the two switches that make the Distributed host run alone in one container.
             .WithEnvironment("Deployment__Backend", "Filesystem")
-            .WithEnvironment("Deployment__DataRoot", "/data")
+            .WithEnvironment("Deployment__DataRoot", DataRoot)
             .WithEnvironment("Features__Orleans__Clustering", "Localhost")
             .WithEnvironment("Authentication__EnableDevLogin", "true")
             // The container's log IS the test's log.
             .WithOutputConsumer(Consume.RedirectStdoutAndStderrToConsole())
-            .WithWaitStrategy(Wait.ForUnixContainer()
-                .UntilHttpRequestIsSucceeded(request => request.ForPort(HttpPort).ForPath(HealthPath)));
+            // Started = the MESH started (MemexReadiness), never a probe path's flat 200: the setup
+            // wizard answers every probe path with "ok" and composes nothing (MeshWeaver#6037).
+            .WithWaitStrategy(Wait.ForUnixContainer().AddCustomWaitStrategy(new UntilMeshStarted()));
 
     /// <inheritdoc />
     protected override void Validate()
