@@ -108,6 +108,16 @@ def validate(verdict: object, key: str, candidate: str, base: str) -> tuple[bool
 
 WORKFLOW = "core-candidate.yml"
 _LIVE = ("queued", "in_progress", "waiting", "pending", "requested")
+# 🔒 A Plugins job name reaches this PUBLIC log only if it is one of core-candidate.yml's own fixed
+# shapes; anything else (a future matrix value, a renamed job) is printed as `<job>`. The API makes no
+# promise about what a name contains, so the boundary is an allow-list, never a hope.
+_PUBLIC_JOB = re.compile(r"^(?:Admitted by the CI queue \(gate tier\)|Select the suites the candidate can reach"
+                         r"|Plan the control arm \(only what the candidate did not pass\)|Verdict for core"
+                         r"|(?:Candidate|Control) / (?:candidate|control) \((?:leg \d{1,3}/\d{1,3}|build once for \d{1,3} legs)\))$")
+
+
+def public_job(name: str) -> str:
+    return name if _PUBLIC_JOB.match(name or "") else "<job>"
 
 
 def census(key: str, token: str) -> dict:
@@ -135,8 +145,8 @@ def census(key: str, token: str) -> dict:
         if jobs is None:
             out["jobsError"] = f"HTTP {code} reading the run's jobs"
         else:
-            out["queued"] = sorted(j.get("name", "") for j in jobs if j.get("status") in ("queued", "waiting", "pending"))
-            out["running"] = sorted(j.get("name", "") for j in jobs if j.get("status") == "in_progress")
+            out["queued"] = sorted(public_job(j.get("name", "")) for j in jobs if j.get("status") in ("queued", "waiting", "pending"))
+            out["running"] = sorted(public_job(j.get("name", "")) for j in jobs if j.get("status") == "in_progress")
             out["done"] = sum(1 for j in jobs if j.get("status") == "completed")
         return out
     except (urllib.error.URLError, OSError, KeyError, TypeError, ValueError) as e:
@@ -173,6 +183,10 @@ def timeout_sentence(c: dict, minutes: int) -> str:
         return f"the candidate run finished ({c.get('conclusion')}) without a verdict this waiter could read — {c['run']}"
     if "queued" not in c:
         return f"no verdict within {minutes} min ({behind}; its jobs could not be read: {c.get('jobsError')}) — {c['run']}"
+    if not c["queued"] and not c["running"] and not c["done"] and c.get("status") in _LIVE:
+        return (f"no runner within {minutes} min ({behind}) — the candidate run itself never started: it is "
+                f"'{c.get('status')}' with no job materialised yet (admission / concurrency) — "
+                f"{c.get('pluginsQueuedRuns')} Plugins run(s) queued in total — {c['run']}")
     if c["queued"] and not c["running"]:
         return (f"no runner within {minutes} min ({behind}) — waiting for a runner: {_names(c['queued'])} — "
                 f"{c.get('pluginsQueuedRuns')} Plugins run(s) queued in total — {c['run']}")
@@ -308,6 +322,15 @@ def self_test() -> int:
         _get = api([mine], [{"name": "Candidate / candidate (leg 2/8)", "status": "in_progress"}])
         text = timeout_sentence(census(K, "t"), 42)
         check("a candidate still RUNNING at the deadline says so — not 'no runner'", text.startswith("the candidate was still running"), text)
+        _get = api([mine, *older], [])
+        text = timeout_sentence(census(K, "t"), 42)
+        check("a QUEUED run with no job materialised says the run never started — not 'still running'",
+              text.startswith("no runner within 42 min (queued behind 3") and "never started" in text, text)
+        _get = api([mine], [{"name": "portal-hosts (Secret.Customer.Test)", "status": "queued"},
+                            {"name": "Candidate / candidate (build once for 8 legs)", "status": "queued"}])
+        text = timeout_sentence(census(K, "t"), 42)
+        check("a job name outside core-candidate.yml's fixed shapes is printed as <job>, never verbatim",
+              "Secret" not in text and "<job>" in text and "build once for 8 legs" in text, text)
         _get = api([newer], [])
         text = timeout_sentence(census(K, "t"), 42)
         check("no run carrying this key says the request started nothing visible", "NO core-candidate.yml run carries this key" in text, text)

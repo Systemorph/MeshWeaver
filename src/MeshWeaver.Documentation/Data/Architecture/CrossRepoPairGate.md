@@ -882,7 +882,7 @@ the request job before anything is dispatched. There is no label and no `none` f
 | preflight | `dotnet-test.yml` → `Required CI inputs` | asserts the App credential RED by name |
 | request | `dotnet-test.yml` → `Dependent suites (request)` | **only once core's own build and tests are green on the candidate** (or the tree is a reused green) — otherwise it is NOT sent and goes red as "waiting for core's own suites"; then it proves the receiver exists on Plugins' default branch and sends `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base and a key unique to the run attempt — once for Plugins' default branch, once more at a declared counterpart's head |
 | scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | the per-realm, affected-only selection above, printed as an audit table (selected realms with edges, then not-selected realms); `refused` when it cannot compute one; legs cut by the portal-host lane's measured weights |
-| candidate arm | Plugins `core-candidate-arm.yml` | the union of the legs' suites built **once, from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished), shipped to the legs through `scripts/dedupe-tree.py`, and run there with `--no-build`; a one-leg arm builds in its leg; exit codes and dead hosts recorded exactly as the platform canary records them |
+| candidate arm | Plugins `core-candidate-arm.yml` | (with MeshWeaver.Plugins#3187; before it, each leg builds its own suites from source) the union of the legs' suites built **once, from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished), shipped to the legs through `scripts/dedupe-tree.py`, and run there with `--no-build`; a one-leg arm builds in its leg; exit codes and dead hosts recorded exactly as the platform canary records them |
 | control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
 | verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base), on ANY missing evidence, or on a refused selection; a conclusion per realm; written as a root commit at `refs/core-candidate/<key>` in Plugins |
 | wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute and prints the **queue census** every 5 minutes; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), whose title says WHY — "no runner within 42 min (queued behind N candidate runs: …)", "still running at the deadline", or "no run carries this key" |
@@ -941,7 +941,7 @@ Four changes answer it, none of them a longer wait (the 42 minutes and every cap
    request job needs `build` and `test`; when they are not green it is not sent and goes red BY NAME
    (`Dependent suites NOT requested — waiting for core's own suites`), and `Consolidate test results`
    repeats that sentence. Never a skip: a skipped required ancestor reads as satisfied.
-2. **Built once per arm** (MeshWeaver.Plugins `core-candidate-arm.yml`). A multi-leg arm builds the
+2. **Built once per arm** (MeshWeaver.Plugins `core-candidate-arm.yml`, landing with MeshWeaver.Plugins#3187 — until it merges, each leg still builds from source). A multi-leg arm builds the
    union of its legs' suites in ONE job — core from source once, copy-local as hard links — and ships
    each built suite's `bin/` + `obj/` through `scripts/dedupe-tree.py`, the portal-host lane's
    mechanism (one copy per unique file). The legs restore packages, prove every dll is present and
@@ -961,7 +961,7 @@ Four changes answer it, none of them a longer wait (the 42 minutes and every cap
    down when it starts and finds its core run finished. Between the two, a leg still QUEUED held its
    FIFO place — and with the request now waiting for core's own suites, that gap is longer. So every
    new candidate run's `admission` cancels the candidate runs whose requesting core run has
-   COMPLETED (`scripts/core-candidate-reap.py`; an unreadable status is never a reap). Its first live
+   COMPLETED (`scripts/core-candidate-reap.py`, also MeshWeaver.Plugins#3187; an unreadable status is never a reap). Its first live
    pass, at 17:43Z, cancelled 5 of 12 live candidate runs.
 
 🚨 **The remedy for a timeout changed with (4).** "Re-run this job once that run has finished" reads a
