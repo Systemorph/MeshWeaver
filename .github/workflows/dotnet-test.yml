@@ -864,8 +864,10 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     # HARD CAP on a shard. Each project already has its own `timeout 8m` below, but that
     # only bounds a project that is RUNNING — it cannot bound a shard that wedges between
-    # projects. 20 min is ~1.5x the slowest observed shard (14m36s) with the rebalanced
-    # weights, so a shard that hits this is stuck, not slow.
+    # projects. The measured full-suite assignment is ~8.4 min of tests per shard; the
+    # browser-provision step can cost ~9.5 min on a slow apt mirror. Run 37830774943
+    # hit this cap while tests still progressed because stale weights stacked >16 min
+    # of tests on shard 4. Re-measure/split units in shard-assign.sh, never widen the cap.
     timeout-minutes: 20
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
