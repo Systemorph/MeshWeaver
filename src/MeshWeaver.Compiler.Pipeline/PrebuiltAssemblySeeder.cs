@@ -376,6 +376,158 @@ public static class PrebuiltAssemblySeeder
         /// so the bytes were adopted anyway as the LAST build this mesh holds
         /// (<see cref="BuildProvenance.StaleAdopted"/>, MeshWeaver#3583). Serving over dead.</summary>
         AdoptedStale = 8,
+
+        /// <summary>NOTHING was uploaded or written, because the record ALREADY serves a build this
+        /// bundle must not replace (MeshWeaver#6038): the very same bytes under the very same
+        /// stamp, or a build verified against the live source that these bytes cannot improve on.
+        /// The type IS covered — a caller counts it exactly as it counts <see cref="Adopted"/> —
+        /// but the shared record, the assembly store and the node's version are left untouched.
+        /// See <see cref="StandingBuildKept"/>.</summary>
+        AlreadyServed = 9,
+    }
+
+    /// <summary>
+    /// Whether <paramref name="outcome"/> leaves the type served by prebuilt bytes — the one
+    /// reading every caller of <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/>
+    /// that only needs "covered or not" applies, so a new covered outcome cannot be counted as a
+    /// miss (and compiled over) by a caller that enumerated the old ones.
+    /// </summary>
+    /// <param name="outcome">The seed's outcome.</param>
+    public static bool IsCovered(SeedOutcome outcome)
+        => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale or SeedOutcome.AlreadyServed;
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6038 — why an adoption that has passed every gate must STILL write nothing,
+    /// or <c>null</c> when the write should go ahead. Pure: the caller resolves
+    /// <paramref name="storeHasBytes"/> by probing the store at the record's
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/>.
+    ///
+    /// <para><b>The defect this closes.</b> The seed is an unconditional REPLACE: it uploads the
+    /// bundle's bytes under the node's CURRENT version and stamps the record, and the owner then
+    /// fulfils the source stamp — two versions per adoption, plus a fresh store generation, even
+    /// when the record already named exactly those bytes. Measured on memex.systemorph.com
+    /// (2026-10-08, <c>Feedback/Feedback</c> v323389–v323396): the same legacy bundle (module
+    /// 1.2.0, MVID 97cc…) re-stamped at 15:11 and again at 15:23 over its own stamp, and a second
+    /// bundle (module 1.6.8, fingerprint-verified against the live source) and the legacy one
+    /// replaced EACH OTHER every few minutes — each writer's "would my stamp change the record"
+    /// check is true by construction while the other one's stamp is in place, so two bundles for
+    /// one type ping-pong forever. That is the version churn (~323k versions on one node).</para>
+    ///
+    /// <para><b>The rule.</b> Only a record whose build is USABLE HERE can be kept — anything
+    /// <see cref="NodeTypeBakeStatus.Classify"/> does not call <see cref="BakeState.Baked"/>
+    /// (bytes missing on this process, a framework or dependency roll, a failed compile) is
+    /// replaced exactly as before. Over a usable build:</para>
+    /// <list type="number">
+    /// <item>The same bytes (MVID) under the same stamp — dependency record, module version,
+    /// source fingerprint — are already served: writing them again changes nothing but the
+    /// version.</item>
+    /// <item>A build VERIFIED against the live source (adopted with a fingerprint equal to the
+    /// live one, or compiled here from exactly the live source versions) is never replaced by
+    /// bytes the owner could not verify (no fingerprint, or a different one), nor by a bundle of
+    /// the same source that is not of a strictly NEWER module version. Replacing proven bytes with
+    /// unprovable ones is a strict loss, and between two equally proven builds the standing one
+    /// wins — which is what makes two writers converge instead of alternating.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="observed">The owner's current definition.</param>
+    /// <param name="storeHasBytes">Whether the store resolves bytes at the record's
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> on this process.</param>
+    /// <param name="incomingMvid">The bundle bytes' MVID (<see cref="ServedBuildIdentity.OfBytes"/>).</param>
+    /// <param name="dependencies">The dependency record the seed would stamp.</param>
+    /// <param name="sourceFingerprint">The producer's source fingerprint, or null (legacy).</param>
+    /// <param name="moduleVersion">The bundle's module version, or null.</param>
+    /// <param name="liveFrameworkMvid">Framework identity to classify against; defaults to the live one.</param>
+    /// <param name="liveDependencyIdOf">Live dependency-id resolver for <see cref="NodeTypeBakeStatus.Classify"/>.</param>
+    /// <param name="liveToolchainId">Live toolchain id for <see cref="NodeTypeBakeStatus.Classify"/>.</param>
+    public static string? StandingBuildKept(
+        NodeTypeDefinition observed,
+        bool storeHasBytes,
+        string? incomingMvid,
+        IReadOnlyDictionary<string, string>? dependencies,
+        string? sourceFingerprint,
+        string? moduleVersion,
+        string? liveFrameworkMvid = null,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+
+        if (NodeTypeBakeStatus.Classify(
+                observed, storeHasBytes, liveFrameworkMvid ?? LiveFrameworkMvid,
+                liveDependencyIdOf, liveToolchainId) is not BakeState.Baked)
+            return null;
+
+        if (incomingMvid is { Length: > 0 }
+            && string.Equals(incomingMvid, observed.LatestAssemblyMvid, StringComparison.Ordinal)
+            && StampWouldMatch(observed.CompiledDependencies, dependencies)
+            && string.Equals(moduleVersion, observed.AdoptedModuleVersion, StringComparison.Ordinal)
+            && string.Equals(sourceFingerprint, observed.AdoptedSourceFingerprint, StringComparison.Ordinal))
+            return $"the record already serves these exact bytes (MVID {incomingMvid}) under the "
+                + "same stamp — writing them again would change nothing but the node's version";
+
+        if (!IsVerifiedAgainstLiveSource(observed))
+            return null;
+
+        if (sourceFingerprint is not { Length: > 0 })
+            return $"the standing build is verified against the live source ({Describe(observed)}) "
+                + $"and this bundle (module {ModuleVersionCompatibility.Display(moduleVersion)}) "
+                + "carries no source fingerprint, so the owner could not verify it — replacing "
+                + "proven bytes with unprovable ones is a strict loss";
+
+        if (!string.Equals(sourceFingerprint, observed.CurrentSourceFingerprint, StringComparison.Ordinal))
+            return $"the standing build is verified against the live source ({Describe(observed)}) "
+                + $"and this bundle was built from different source ({sourceFingerprint})";
+
+        if (observed.BuildProvenance is BuildProvenance.Compiled)
+            return "the standing build was compiled here from exactly the live source, and this "
+                + "bundle was built from that same source — the standing build wins";
+
+        if (!IsStrictlyNewer(moduleVersion, observed.AdoptedModuleVersion))
+            return $"the standing build is verified against the same live source ({Describe(observed)}) "
+                + $"and this bundle's module version {ModuleVersionCompatibility.Display(moduleVersion)} "
+                + $"is not newer than the standing "
+                + $"{ModuleVersionCompatibility.Display(observed.AdoptedModuleVersion)} — the standing build wins";
+
+        return null;
+    }
+
+    /// <summary>Whether the record's build is PROVEN to correspond to the live source: adopted with
+    /// a fingerprint equal to the live one, or compiled here from exactly the live source
+    /// versions.</summary>
+    private static bool IsVerifiedAgainstLiveSource(NodeTypeDefinition d) => d.BuildProvenance switch
+    {
+        BuildProvenance.AdoptedVerified =>
+            d.AdoptedSourceFingerprint is { Length: > 0 } adopted
+            && string.Equals(adopted, d.CurrentSourceFingerprint, StringComparison.Ordinal),
+        BuildProvenance.Compiled =>
+            d.CompiledSources is { Count: > 0 } compiled
+            && d.CurrentSourceVersions is { } live
+            && compiled.Count == live.Count
+            && compiled.All(kv => live.TryGetValue(kv.Key, out var v) && v == kv.Value),
+        _ => false,
+    };
+
+    private static string Describe(NodeTypeDefinition d)
+        => d.BuildProvenance is BuildProvenance.Compiled
+            ? "compiled here"
+            : $"adopted, module {ModuleVersionCompatibility.Display(d.AdoptedModuleVersion)}, "
+              + $"fingerprint {d.AdoptedSourceFingerprint}";
+
+    /// <summary>Whether <paramref name="candidate"/> is a strictly newer release than
+    /// <paramref name="standing"/>, compared on the numeric core (prerelease and build metadata
+    /// ignored). Unknown on either side is NOT newer — an unprovable claim never displaces a
+    /// standing build.</summary>
+    internal static bool IsStrictlyNewer(string? candidate, string? standing)
+        => CoreOf(candidate) is { } c && CoreOf(standing) is { } s && c > s;
+
+    private static Version? CoreOf(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return null;
+        var core = version.Split('-', '+')[0];
+        return Version.TryParse(core.Count(ch => ch == '.') == 0 ? core + ".0" : core, out var parsed)
+            ? parsed
+            : null;
     }
 
     /// <summary>
@@ -464,7 +616,7 @@ public static class PrebuiltAssemblySeeder
         IReadOnlyList<string>? sourceIncludes)
         => SeedDetailed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
                 sourceFingerprint, moduleVersion, sourcePaths, sourceIncludes)
-            .Select(outcome => outcome is SeedOutcome.Adopted or SeedOutcome.AdoptedStale);
+            .Select(IsCovered);
 
     /// <summary>What <see cref="DecideAfterStaleDecline"/> concluded for one declined entry.</summary>
     public enum StaleDeclineAction
@@ -1074,7 +1226,27 @@ public static class PrebuiltAssemblySeeder
                     nodeTypePath, deferred, unjudged);
         }
 
-        return Write(SeedOutcome.Adopted);
+        // 🚨 #6038 — every gate passed; now ask whether the write would change anything worth a
+        // version. Probed at LastCompiledVersion (the key the standing bytes were uploaded under),
+        // never node.Version. A store that cannot answer reads as "no bytes", so the record is
+        // replaced exactly as before — an unreadable store must never keep a type on bytes nobody
+        // can load.
+        return StandingBytesResolve(store, observed, nodeTypePath, logger)
+            .SelectMany(storeHasBytes =>
+            {
+                var kept = StandingBuildKept(
+                    observed, storeHasBytes, ServedBuildIdentity.OfBytes(assemblyBytes), dependencies,
+                    sourceFingerprint, moduleVersion,
+                    liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
+                    liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+                if (kept is null)
+                    return Write(SeedOutcome.Adopted);
+                logger?.LogInformation(
+                    "Prebuilt assembly for {NodeTypePath} NOT re-stamped (#6038): {Reason}. Nothing "
+                    + "uploaded, nothing written — the record stays at version {Version}",
+                    nodeTypePath, kept, node.Version);
+                return Observable.Return(SeedOutcome.AlreadyServed);
+            });
 
         IObservable<SeedOutcome> Write(SeedOutcome onStamped)
         {
@@ -1279,6 +1451,26 @@ public static class PrebuiltAssemblySeeder
                 });
         }
     }
+
+    /// <summary>Whether the store resolves the standing build's bytes on this process, at the
+    /// record's <see cref="NodeTypeDefinition.LastCompiledVersion"/>. No recorded version, or a store
+    /// that throws, answers <c>false</c> — "replace", the direction that ends with bytes in place.</summary>
+    private static IObservable<bool> StandingBytesResolve(
+        IAssemblyStore store, NodeTypeDefinition observed, string nodeTypePath, ILogger? logger)
+        => observed.LastCompiledVersion is { } claimed && claimed >= 0
+            ? store.TryGetAssemblyPath(nodeTypePath, claimed)
+                .Take(1)
+                .Select(path => !string.IsNullOrEmpty(path))
+                .DefaultIfEmpty(false)
+                .Catch<bool, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Prebuilt assembly for {NodeTypePath}: the assembly store could not answer "
+                        + "whether the standing build resolves here — adopting over it (#6038)",
+                        nodeTypePath);
+                    return Observable.Return(false);
+                })
+            : Observable.Return(false);
 
     /// <summary>
     /// The I/O half of <see cref="AfterStaleDecline"/>: probes the store for the live build the
