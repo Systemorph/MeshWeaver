@@ -181,15 +181,22 @@ run (a token count, an id) yields nothing rather than a bogus code.
 - **A credential the provider REJECTS** → `chat.modelCredentialRejected`, naming the model and the
   status. This is a **permanent verdict, not a transient one**, which is what distinguishes it from
   every entry above: the key has to be replaced before any round on that model can succeed, so the
-  prose says so and deliberately does not offer "submit again later". ⚠️ **Not yet wired** — unlike
-  every other entry in this list, the platform string exists and the engine-side branch that selects
-  it does not. Read the gap note below before relying on this row.
+  prose says so and deliberately does not offer "submit again later". `ProviderFailureClassifier`
+  carries the 401 predicate and the `providerStatus` switch the arm (`ProviderFailureMessages.CredentialRejected`).
 - **The stream ended abnormally** — no HTTP status is involved, so these are named ahead of the
   status switch, from the exception rather than from a code: the provider went silent mid-answer
   (`chat.modelStreamStalled`) or sent a payload the wire protocol cannot represent
   (`chat.modelStreamFaulted`, e.g. an OpenAI-compatible gateway ending the stream with a
   `finish_reason` the protocol does not define). Both carry a `PROVIDER_STREAM_*` warning so
   monitoring can separate a recurring upstream stall from a one-off fault.
+- **The gateway refused THIS request under a content policy** → `chat.modelRequestBlocked`. An
+  OpenAI-wire gateway streams an `error` object such as `[403] Request blocked: PII detected
+  (redaction_context_lost)` (MeshWeaver#5960). It is a verdict on the request's content, so
+  `chat.modelStreamFaulted`'s "not a problem with your request — submit again" would be false: the
+  same content is refused again. `OpenAIWireStreamGuard` recognises it from the code (a 4xx other
+  than the retried 408/429) **and** the gateway's wording, and marks the fault with
+  `ProviderStreamException.RequestBlockedDataKey`; `LocalizationKey` then names this key. A key
+  limit is a 403 too, which is why the code alone never decides.
 - **The thread's own history could not be loaded** → `chat.historyLoadFailed`. Not a provider
   condition at all, but it shares the discipline and is the reason it is listed here: a history load
   that did not complete is **reported, never substituted**. Answering on an empty or holed history
@@ -231,46 +238,14 @@ before the image carrying the string does. Rendering a raw `chat.…` token to a
 that check exists to prevent. The reverse order has no such tolerance: a branch selecting a key the
 loaded platform does not define is what that guard is defending against.
 
-### The gap this table currently has: a rejected credential
+### What the table still leaves generic: other 4xx statuses
 
-> 🕐 **This subsection is provisional and names its own expiry.** It describes a half-landed pair — the
-> platform string exists here, the engine-side branch does not yet. **Delete it the moment
-> `ProviderFailureClassifier` gains a 401 predicate and the switch gains its arm**, and fold
-> `chat.modelCredentialRejected` into the list above as an ordinary entry. Left standing past that
-> point it becomes an actively false claim about a repository this page cannot see, which is the
-> failure mode the subsection above warns about — so do not re-measure it here, measure it there.
-
-A provider that **rejects the credential** answers `401` (Anthropic renders it `PermissionDenied`).
-Measured against `MeshWeaver.Plugins@main`, nothing claims it: `ProviderFailureClassifier` has
-predicates for 402, 404, 429 and 5xx and none for 401; the `providerStatus` switch in
-`ThreadExecution` has cases for exactly those four ranges and a `_ => null` default; the Anthropic
-client maps 401 to no typed condition; and the only mention of `401` anywhere in `ThreadExecution` is
-a comment about the *CLI harness* path. So the round falls to the unclassified default and pastes the
-SDK's own sentence — `Response status code does not indicate success: 401 (PermissionDenied).` —
-into the user's cell: raw, English-only whatever the viewer's locale, and naming no remedy. That is
-precisely the defect the rest of this section exists to prevent, still live for the one condition an
-operator is most able to fix.
-
-Two things follow, and they are easy to conflate:
-
-- **The retry half is a different question from the legibility half, and only one of them is a
-  defect.** `AnthropicChatClient.SendWithRetryAsync` retries `500`, `502`, `503` and `429` only, so a
-  401 is already treated as terminal and goes straight to `EnsureSuccessStatusCode()` — correctly,
-  because a rejected credential is a permanent verdict and retrying it could never do anything but
-  waste the round. A report that a 401 is *retried* does not survive reading that set. What is wrong
-  is what the user is shown afterwards.
-- **Adding a retry would be the wrong fix twice over** — it is a band-aid, and it contradicts the
-  verdict the status carries. The fix is classification: name the condition, render
-  `chat.modelCredentialRejected`, keep the provider's own text on the `LogError` where an operator
-  reads it.
-
-**What this note does not establish.** Only `401` is measured, from production occurrences. Whether
-`403` and other 4xx statuses should also be named — and under which prose — is deliberately left
-open: `403` means different things at different providers (permission, region, content policy), and a
-confidently wrong name is worse for a reader than a generic one. `chat.modelProviderError` already
-interpolates its status and is the obvious home for a widened default, but its current wording ends
-in "Submit again later", which is true of a 5xx and false of most 4xx — so widening the branch is a
-wording decision, not a mechanical one, and it is not made here.
+`401` (credential rejected) and a streamed content-policy block are named above. Every other `403`
+and 4xx stays generic on purpose: `403` means different things at different providers (permission,
+region, key limit), and a confidently wrong name is worse for a reader than a generic one.
+`chat.modelProviderError` already interpolates its status and is the obvious home for a widened
+default, but its wording ends in "Submit again later", which is true of a 5xx and false of most
+4xx — so widening the branch is a wording decision, not a mechanical one, and it is not made here.
 
 ---
 
