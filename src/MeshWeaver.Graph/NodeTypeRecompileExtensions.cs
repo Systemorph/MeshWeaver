@@ -43,6 +43,32 @@ public static class NodeTypeRecompileExtensions
     private static readonly TimeSpan PrebuiltSeedBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// 🚨 <b>Every failure class logs under an <see cref="EventId"/> of its OWN</b> (#1549, second
+    /// half). The class moved into the template so a reader and a fingerprint can tell the causes
+    /// apart — but the incident watcher FOLDS every fingerprint of one log SITE into a single issue,
+    /// and a site is keyed on category + event id + exception type, never on the template. With all
+    /// templates sharing one category, event id 0 and no exception, they were still one site:
+    /// <c>NO NODE EXISTS</c> (2026-09-24) and <c>OWNING HUB REACHED NO VERDICT</c> (2026-09-25) both
+    /// arrived on #1549 as "a different fingerprint of the same log site", 459 occurrences of causes
+    /// that issue was never about. One id per class makes one site per class.
+    ///
+    /// <para>Derived from the enum value (<see cref="ReleaseFailureEventIdBase"/> + value) so a new
+    /// class gets a distinct id by construction and cannot silently inherit another's; the name is
+    /// the class, so the id reads in a log line. An undeclared value (a cast) gets the
+    /// <see cref="NodeTypeReleaseFailure.Unclassified"/> id, exactly as it gets that template.</para>
+    /// </summary>
+    /// <param name="failure">The classified failure.</param>
+    /// <returns>The event id that failure is logged under.</returns>
+    internal static EventId ReleaseFailureEventId(NodeTypeReleaseFailure failure) =>
+        Enum.IsDefined(failure)
+            ? new EventId(ReleaseFailureEventIdBase + (int)failure, $"NodeTypeRelease{failure}")
+            : new EventId(ReleaseFailureEventIdBase + (int)NodeTypeReleaseFailure.Unclassified,
+                $"NodeTypeRelease{NodeTypeReleaseFailure.Unclassified}");
+
+    /// <summary>First event id of the release-failure range (7400–7499; the disposal verdicts use 73xx).</summary>
+    internal const int ReleaseFailureEventIdBase = 7400;
+
+    /// <summary>
     /// 🚨 The release-refusal log line, ONE TEMPLATE PER FAILURE CLASS — issue #1549.
     ///
     /// <para><b>What was wrong.</b> Every refusal went through a single template,
@@ -92,80 +118,81 @@ public static class NodeTypeRecompileExtensions
             return;
         var path = refusal.NodeTypePath;
         var message = refusal.Reason;
+        var eventId = ReleaseFailureEventId(refusal.Failure);
         switch (refusal.Failure)
         {
             case NodeTypeReleaseFailure.NoNodeTypePath:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — NO NODETYPE PATH was supplied: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.CompileDenied:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — COMPILE DENIED to the caller: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.PermissionCheckFailed:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the COMPILE PERMISSION CHECK COULD NOT RUN, so nothing was decided: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.PermissionCheckNoVerdict:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the COMPILE PERMISSION CHECK ENDED WITHOUT A VERDICT, neither granting nor denying: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.NodeMissing:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — NO NODE EXISTS at that path: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.OwnerUnreachable:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the OWNING HUB REACHED NO VERDICT on the trigger write: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.OwnerRecycling:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the OWNING ACTIVATION WAS RECYCLING, so the write never applied: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.WriteDenied:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the OWNER DENIED the trigger write: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.WriteRejected:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the OWNER REJECTED the merged value: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.BaseStateNeverArrived:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — NO INITIAL STATE for the node ever arrived, so the write had nothing to diff against: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.HostTearingDown:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the HOST WAS TEARING DOWN under the in-flight write: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.StorageUnavailable:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the DATA STORE COULD NOT BE REACHED: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.TransientHubFailure:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — a TRANSIENT HUB OR ROUTING MISS ended the write: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.NoAnswerWithinBound:
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — the RELEASE LEG NEVER ANSWERED within its ordered bound: {Message}",
                     path, message);
                 break;
             case NodeTypeReleaseFailure.HostLeaving:
-                logger.LogWarning(
+                logger.LogWarning(eventId,
                     "[Recompile] Release request for {Path} not issued — THIS HOST IS LEAVING, so nothing it sends can reach the owner: {Message}",
                     path, message);
                 break;
@@ -174,7 +201,7 @@ public static class NodeTypeRecompileExtensions
                 // 🚨 Named, not absorbed. An arrival here says a real shape has no rule yet — which
                 // is a finding about the classifier, and must not be filed as any of the classes
                 // above. It is the one template that is expected to shrink to zero traffic.
-                logger.LogError(
+                logger.LogError(eventId,
                     "[Recompile] Release request for {Path} failed — UNCLASSIFIED trigger-write fault, no rule claimed its shape: {Message}",
                     path, message);
                 break;
