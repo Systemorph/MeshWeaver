@@ -540,8 +540,14 @@ public sealed class EventSubscriptionRunner(
             // delivered — and a nightly job that silently stopped running is exactly the failure
             // this whole mechanism exists to make visible. Observing the reply ties the
             // subscription's Fired/Failed to what the script actually did.
+            //
+            // 🚨 Issued on ReadIssuingHub(), never on `hub` itself: this runner is an IHostedService
+            // resolved from the mesh's root container, so `hub` IS the router, and observing on it
+            // made the router both the sender of the request and the target of the script's reply
+            // — the one-shot request/response shape of #5937/#5620. The script executes on the
+            // TARGET; this side is only the reply mailbox, which is what the read seam is for.
             EventContinuationType.RunScript when subscription is { TargetPath.Length: > 0 } =>
-                AsSystem(() => hub.Observe<ExecuteScriptResponse>(
+                AsSystem(() => hub.ReadIssuingHub().Observe<ExecuteScriptResponse>(
                         new ExecuteScriptRequest(),
                         o => o.WithTarget(new Address(subscription.TargetPath!)))
                     .Take(1)

@@ -123,7 +123,12 @@ internal static class OutOfBandContentTransfer
         // Qualified so two nodes' same-named collections never share one cache entry on this hub.
         var qualifiedName = $"{node}/{collectionName}";
 
-        return hub.NodeOperationIssuingHub()
+        // 🚨 The READ seam, not the node-operation one: this is a bounded config read the owning
+        // node answers, and NodeOperationIssuingHub() is the mesh's node-CRUD EXECUTION hub — its
+        // reply would wait in that block behind every write in flight, which during a bulk import
+        // is exactly the burst this transfer runs inside (#2901's ~10 s-then-timeout shape).
+        // Both seams are the identity function for a non-router hub.
+        return hub.ReadIssuingHub()
             .Observe(new GetDataRequest(new ContentCollectionReference([collectionName])), configurePost)
             .Take(1)
             .Timeout(ConfigTimeout)

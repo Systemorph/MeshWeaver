@@ -449,6 +449,42 @@ The orchestrator also moved from `Post` then `Observe(delivery)` to the pre-regi
 `Observe(request, …)`. The old ordering registered the response subject after the post, so a warm
 node hub's sub-millisecond reply could arrive before the subject existed and be dropped.
 
+### A read whose TARGET defaulted to the router (#5937)
+
+The fourth sighting of the class is different in kind. `MeshOperations.TryResolveUnifiedPath`
+already issued its read on `ReadIssuingHub()`, yet production (memex, five pods, 2026-10-01..06)
+kept logging `GetDataRequest was POSTED with the mesh hub as sender AND target` from it, with the
+echo `GetDataResponse … sender AND target` from `DataExtensions.HandleGetDataRequest`. The reason
+was the target, not the sender. A unified path with no address part (`content/x.md`, `schema/`,
+`layoutAreas/`, typically from an agent chat with no context) fell back to the facade's own
+`hub.Address`. For the agent surface that hub is the router, so the read was a self-read on the
+router, and the self-directed exclusion (the seam would misdeliver it) kept both `src/` ratchets
+blind to it by construction.
+
+Hopping cannot fix that shape: moving only the sender leaves the router as the target, and
+`portal/reads-{meshId}` registers no handlers, so it cannot answer in its place. The defect is the
+default. The router is not a node and owns nothing a unified path can name. Measured from the root
+hub before the fix, it answered `content/…` with "collection not found", `data/` with `null`,
+`layoutAreas/` with `[]` and `schema/` with the bare `MeshNode` schema that every node's own
+`{node}/schema/MeshNode` also returns. So a unified read whose resolved target is a mesh-typed
+address is now answered without any delivery, and the answer names the shape to use instead:
+`Error: '…' names no node — a unified path is '{nodePath}/…'`. A per-node, session or portal
+facade keeps its own-hub meaning, because the check is on the target's address type.
+
+### A hosted service declares its hub by what it IS (#5937 sweep)
+
+`EventSubscriptionRunner` (an `IHostedService`) observed its `ExecuteScriptRequest` directly off
+its injected hub, so the script's reply came back addressed to `mesh/{id}`. No guard saw it,
+because the file had never called a seam and so declared nothing. A hosted service is always
+resolved from the root container, so its `IMessageHub` is the router whether or not the code says
+so. `RouterAsRouterCapableReceiverRatchetGuard` now treats every `IMessageHub` a hosted-service
+file holds as declared, which brings every such service into the denominator. On the tree this
+change landed on, every counted site goes through a seam. The same sweep moved `OutOfBandContentTransfer`'s
+collection-config read from `NodeOperationIssuingHub()` to `ReadIssuingHub()`. It is a bounded
+read, and on the node-CRUD execution hub its reply waited behind the bulk import it runs inside.
+What remains uncovered is a plain `AddSingleton` service handed the root hub. For that case the
+runtime ORIGIN line is still the instrument.
+
 ## Reading a report
 
 `ROUTER_TRAFFIC ORIGIN:` prints up to twelve frames, with `MessageHub`'s own plumbing dropped off the
@@ -495,6 +531,12 @@ another process.
   Reverted in rehearsal it reproduces both production lines down to the frame:
   `ChatCompletionOrchestrator…<SendAutocompleteRequest>b__0 (ChatCompletionOrchestrator.cs:503)` as
   sender and `DataExtensions.PostAutocompleteResponse (DataExtensions.cs:4768)` as target.
+- `RouterTrafficOnNodeCreateFromTheRootHubTest.AnAddressLessUnifiedPathReadFromTheRootMeshHub_NeverPutsTheRouterOnEitherEnd`
+  — #5937, for `content/readme.md`, `schema/`, `data/`, `layoutAreas/` and `/schema/` from the root
+  hub. With the check disabled, all five reproduce both production lines down to the frame
+  (`DataExtensions.cs:3446` on the answering half). Its companion
+  `ANodeAddressedUnifiedPathReadFromTheRootMeshHub_IsAnsweredOffTheRouter` keeps the addressed read
+  working and off the router.
 - `EverySeam_IsTheIdentityFunction_ForAHubThatIsNotTheRouter` — the premise all three seams rest on,
   plus the half that matters for the third: `StreamSubscribingHub()` must not resolve to
   `ReadIssuingHub()`'s hub, because that one registers no handlers and could never deliver a
