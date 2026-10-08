@@ -11,4 +11,11 @@
   <ItemGroup>
     <PackageReference Include="Testcontainers" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- MemexReadinessTest drives the internal probe and the installed wait predicate against the
+         REAL setup-only host and MapDefaultEndpoints pipeline (#6037). Internal because the probe is
+         Task-shaped and the library's only Task seam should be Testcontainers' own IWaitUntil. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+  </ItemGroup>
 </Project>
