@@ -2231,8 +2231,12 @@ jobs:
     # No term list lives here or in a secret. 🚨 It FAILS CLOSED (no secret, unreachable, refused,
     # timeout, NotChecked), and it is a NEEDS of `Consolidate test results` with an explicit fail
     # step there, like every other gate. The fork / Dependabot exemption is the EVENT, nowhere else.
+    # 🚨 NOT skipped on green-tree reuse: a green marker vouches for a TREE, while this verdict depends
+    # on the diff's base and on the CRM's current catalogue. A tree restored from an earlier green run
+    # can carry a name its earlier diff never added, or a client the CRM has gained since. It is one
+    # cheap request, so it runs on every run that is not exempt by event.
     needs: [precheck]
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) }}
     uses: ./.github/workflows/client-names.yml
     with:
       # The checker that runs with the secrets is the REVIEWED one: the pull request's base (the
@@ -4456,8 +4460,9 @@ jobs:
         exit 1
 
     # ── …and a client name in the change decides it too ─────────────────────────────────────
+    # Unlike the gates above, NO reuse exemption: this verdict is about the diff, not the tree.
     - name: Fail if the client-names gate failed
-      if: needs.precheck.outputs.skip != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) && needs.client-names.result != 'success'
+      if: (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]')) && needs.client-names.result != 'success'
       run: |
         echo "::error::A client of ours is named in this change, or the change could not be checked — see the 'No client names' job for client#n at file:line. Replace it with a neutral placeholder (AGENTS.md, 'Confidential terms'). 'Not checked' is a failure too: an unchecked diff is not a clean one."
         exit 1

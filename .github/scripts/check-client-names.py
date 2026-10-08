@@ -48,8 +48,10 @@ NODE_TYPE = "Governance/NameCheck"
 CONTENT_TYPE = "NameCheckContent"
 PROTOCOL_VERSION = "2025-06-18"
 CHUNK_LINES = 2000            # the watcher's cap is 5,000 per node
-MAX_TEXT = 2000               # a longer line is cut; a name in the first 2,000 characters is still seen
-MAX_FILE_BYTES = 2_000_000
+CHUNK_CHARS = 1_000_000       # …and a request carries at most this much text (a longer line goes alone)
+# Lines are sent WHOLE: a name after any cut would never reach the matcher while the line counted as
+# checked. A line longer than this is refused as not checked, never truncated.
+MAX_LINE_CHARS = 1_000_000
 HTTP_TIMEOUT_S = 60
 HTTP_ATTEMPTS = 3
 RETRY_DELAY_S = float(os.environ.get("NAME_CHECK_RETRY_DELAY_S", "5"))
@@ -69,11 +71,13 @@ GRANT_REMEDY = ("the build's service user may not create on " + NAMESPACE + ". O
 
 class NotChecked(RuntimeError):
     """The check could not be performed. Never a pass. ``hits`` are the masked hits of the chunks
-    that DID answer: a known client name is reported, and fails, whatever else went unchecked."""
+    that DID answer, and ``failed`` says whether any of them answered ``Fail`` (with or without hit
+    details): a known rejection is reported, and fails, whatever else went unchecked."""
 
-    def __init__(self, message: str, hits: list[dict] | None = None):
+    def __init__(self, message: str, hits: list[dict] | None = None, failed: bool = False):
         super().__init__(message)
         self.hits: list[dict] = hits or []
+        self.failed: bool = failed or bool(self.hits)
 
 
 # ── collect ──────────────────────────────────────────────────────────────────────────────────
@@ -81,6 +85,15 @@ class NotChecked(RuntimeError):
 def git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
                           text=True, encoding="utf-8", errors="replace").stdout
+
+
+def entry(file: str, line: int, text: str) -> dict:
+    """One line to check, WHOLE. A line too long to send is refused, never cut: a cut line would be
+    counted as checked while its tail never reached the matcher."""
+    if len(text) > MAX_LINE_CHARS:
+        raise NotChecked(f"{file}:{line} is a {len(text)}-character line, longer than the {MAX_LINE_CHARS} the check "
+                         "sends — exclude the file with a pathspec or break the line")
+    return {"file": file, "line": line, "text": text}
 
 
 def parse_diff(diff: str) -> list[dict]:
@@ -106,7 +119,7 @@ def parse_diff(diff: str) -> list[dict]:
                 new_left -= 1
                 text = raw[1:]
                 if path is not None and text.strip():
-                    out.append({"file": path, "line": line, "text": text[:MAX_TEXT]})
+                    out.append(entry(path, line, text))
                 line += 1
                 continue
             if raw.startswith(" ") and old_left > 0 and new_left > 0:
@@ -141,7 +154,16 @@ def collect_diff(root: Path, base: str, paths: list[str] | None = None) -> list[
     # checkout and on a push (before → after) that is exactly the change; only ADDED lines are read.
     diff = git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--find-renames", base, "HEAD",
                "--", *(paths or []))
-    return parse_diff(diff)
+    out = parse_diff(diff)
+    # The NEW paths, independently of textual hunks: a pure rename, a new empty file and a new binary
+    # file carry no `---`/`+++` header, so the patch alone would never name them.
+    seen = {e["file"] for e in out if e["line"] == 0}
+    for rel in git(root, "diff", "--no-color", "--no-ext-diff", "--name-only", "-z", "--find-renames",
+                   "--diff-filter=ACR", base, "HEAD", "--", *(paths or [])).split("\0"):
+        if rel and rel not in seen:
+            seen.add(rel)
+            out.append(entry(rel, 0, rel))
+    return out
 
 
 def collect_tree(root: Path, paths: list[str] | None = None) -> list[dict]:
@@ -149,25 +171,42 @@ def collect_tree(root: Path, paths: list[str] | None = None) -> list[dict]:
     for rel in git(root, "ls-files", "-z", "--", *(paths or [])).split("\0"):
         if not rel:
             continue
-        out.append({"file": rel, "line": 0, "text": rel})
+        out.append(entry(rel, 0, rel))
         p = root / rel
+        if not p.is_file():
+            continue
+        # Read incrementally and WHOLE, whatever the size: a large text file is checked like any other.
         try:
-            if not p.is_file() or p.stat().st_size > MAX_FILE_BYTES:
-                continue
-            data = p.read_bytes()
-        except OSError:
-            continue
-        if b"\0" in data[:8192]:
-            continue
-        for i, text in enumerate(data.decode("utf-8", "replace").splitlines(), start=1):
-            if text.strip():
-                out.append({"file": rel, "line": i, "text": text[:MAX_TEXT]})
+            with p.open("rb") as fh:
+                if b"\0" in fh.read(8192):
+                    continue                                  # binary: its path is checked above
+                fh.seek(0)
+                for i, raw in enumerate(fh, start=1):
+                    text = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    if text.strip():
+                        out.append(entry(rel, i, text))
+        except OSError as exc:
+            raise NotChecked(f"{rel} could not be read ({type(exc).__name__})") from exc
     return out
 
 
-def chunks(lines: list[dict], size: int | None = None) -> list[list[dict]]:
-    size = size or CHUNK_LINES
-    return [lines[i:i + size] for i in range(0, len(lines), size)] or []
+def chunks(lines: list[dict], size: int | None = None, chars: int | None = None) -> list[list[dict]]:
+    """At most ``size`` lines and ``chars`` characters of text per request; a single longer line
+    goes in a request of its own."""
+    size, chars = size or CHUNK_LINES, chars or CHUNK_CHARS
+    out: list[list[dict]] = []
+    cur: list[dict] = []
+    used = 0
+    for item in lines:
+        n = len(item.get("text") or "")
+        if cur and (len(cur) >= size or used + n > chars):
+            out.append(cur)
+            cur, used = [], 0
+        cur.append(item)
+        used += n
+    if cur:
+        out.append(cur)
+    return out
 
 
 # ── MCP over HTTP (the ledger's client, cut to what this needs) ──────────────────────────────
@@ -295,22 +334,33 @@ def submit_and_wait(mesh: Mesh, repo: str, sha: str, run: str, parts: list[list[
         ids.append(nid)
     answers: dict[str, dict] = {}
     deadline = time.monotonic() + ANSWER_TIMEOUT_S
-    while len(answers) < len(ids):
-        for nid in ids:
-            if nid in answers:
-                continue
-            text = mesh.call("get", {"path": f"@{NAMESPACE}/{nid}"}).strip()
-            try:
-                content = (json.loads(text) or {}).get("content") or {}
-            except json.JSONDecodeError:
-                content = {}
-            if status_of(content) not in ("Requested", ""):
-                answers[nid] = content
-        if len(answers) < len(ids):
-            if time.monotonic() > deadline:
-                raise NotChecked(f"no answer within {ANSWER_TIMEOUT_S:g}s — is the name-check watcher installed "
-                                 "on the CRM-owning instance?")
-            time.sleep(POLL_S)
+    try:
+        while len(answers) < len(ids):
+            for nid in ids:
+                if nid in answers:
+                    continue
+                text = mesh.call("get", {"path": f"@{NAMESPACE}/{nid}"}).strip()
+                try:
+                    content = (json.loads(text) or {}).get("content") or {}
+                except json.JSONDecodeError:
+                    content = {}
+                if status_of(content) not in ("Requested", ""):
+                    answers[nid] = content
+            if len(answers) < len(ids):
+                if time.monotonic() > deadline:
+                    raise NotChecked(f"no answer within {ANSWER_TIMEOUT_S:g}s — is the name-check watcher installed "
+                                     "on the CRM-owning instance?")
+                time.sleep(POLL_S)
+    except NotChecked as exc:
+        # A later read failing or timing out must not discard what the chunks that DID answer found:
+        # annotate them now and carry their hits (and any rejection) on the refusal.
+        done = [answers[n] for n in ids if n in answers]
+        try:
+            verdict, hits = report(done)
+            failed = verdict == "Fail"
+        except NotChecked as partial:
+            hits, failed = partial.hits, partial.failed
+        raise NotChecked(str(exc), hits, failed) from exc
     return [answers[n] for n in ids]
 
 
@@ -358,9 +408,16 @@ def report(answers: list[dict], say=None) -> tuple[str, list[dict]]:
     say = say or print
     hits: list[dict] = []
     renumber: dict[tuple[int, str], str] = {}
+    # A `Fail` is enforced by its STATUS: an empty or missing `hits` array only means there are no
+    # positions to annotate, never that the instance's rejection may read as a pass.
+    rejected_without_detail = 0
+    rejected = False
     for i, a in enumerate(answers):
         if status_of(a) != "Fail":
             continue
+        rejected = True
+        if not a.get("hits"):
+            rejected_without_detail += 1
         for h in a.get("hits") or []:
             key = (i, str(h.get("term")))
             if key not in renumber:
@@ -375,12 +432,15 @@ def report(answers: list[dict], say=None) -> tuple[str, list[dict]]:
         else:
             say(f"::error file={esc(f)},line={line},col={col}::A client of ours is named here: {what}. "
                 "Replace it with a neutral placeholder (AGENTS.md, 'Confidential terms').")
+    if rejected_without_detail:
+        say(f"::error::The instance answered Fail for {rejected_without_detail} request(s) without naming where — the "
+            f"positions are on the request node(s) under {NAMESPACE} on the CRM-owning instance.")
     if any(status_of(a) not in ("Pass", "Fail") for a in answers):
-        raise NotChecked(unchecked_message(answers), hits)
-    return ("Fail" if hits else "Pass"), hits
+        raise NotChecked(unchecked_message(answers), hits, rejected)
+    return ("Fail" if rejected else "Pass"), hits
 
 
-def summary(status: str, hits: list[dict], lines: int, reason: str | None = None) -> str:
+def summary(status: str, hits: list[dict], lines: int, reason: str | None = None, failed: bool = False) -> str:
     out = ["## No client names", ""]
     if status == "Pass":
         out.append(f"✅ {lines} line(s) checked against the CRM on the CRM-owning instance; no client named.")
@@ -388,10 +448,12 @@ def summary(status: str, hits: list[dict], lines: int, reason: str | None = None
         clients = len({h['term'] for h in hits})
         out.append(f"❌ {len(hits)} hit(s) naming {clients} client(s) in {lines} line(s). Terms are masked; "
                    "the CRM decides who is a client.")
+        if not hits:
+            out.append("The instance rejected the change without naming where; the positions are on the request node(s).")
     else:
         out.append(f"⛔ Not checked: {cell(reason)}. An unchecked diff is not a clean one.")
-        if hits:
-            out += ["", f"❌ The part that WAS checked has {len(hits)} hit(s). Terms are masked."]
+        if hits or failed:
+            out += ["", f"❌ The part that WAS checked was rejected ({len(hits)} hit(s)). Terms are masked."]
     if hits:
         out += ["", "| File | Line | Col | Term | Kind |", "|---|---|---|---|---|"]
         out += [f"| {cell(h.get('file'))} | {cell(h.get('line'))} | {cell(h.get('column'))} | {cell(h['term'])} | {kind_of(h)} |"
@@ -438,10 +500,10 @@ def main(argv: list[str]) -> int:
         level = "warning" if lenient else "error"
         print(f"::{level}::No client names — NOT CHECKED: {esc_data(str(exc))}")
         if step_summary:
-            Path(step_summary).open("a").write(summary("NotChecked", exc.hits, len(lines), str(exc)))
-        # A HIT in the part that was checked fails exactly as it would alone: `--unchecked warn`
-        # forgives "not checked", never a known client name. Only --report-only forgives a hit.
-        if exc.hits and not a.report_only:
+            Path(step_summary).open("a").write(summary("NotChecked", exc.hits, len(lines), str(exc), exc.failed))
+        # A HIT (or a rejection) in the part that was checked fails exactly as it would alone:
+        # `--unchecked warn` forgives "not checked", never a known client name. Only --report-only forgives a hit.
+        if exc.failed and not a.report_only:
             print(f"No client names: Fail — {len(exc.hits)} hit(s) in the part that was checked.")
             return 1
         return 0 if lenient else 1
@@ -458,7 +520,7 @@ def self_test() -> int:
     import tempfile
 
     store: dict[str, dict] = {}
-    flags = {"answer": True, "not_checked": False, "rpc_error": False}
+    flags = {"answer": True, "not_checked": False, "rpc_error": False, "get_error_file": None}
     term = re.compile(r"(?<![A-Za-z0-9])zorblax(?![a-z0-9])", re.I)
 
     class H(BaseHTTPRequestHandler):
@@ -495,6 +557,9 @@ def self_test() -> int:
             else:
                 path = args["path"].lstrip("@")
                 c = store.get(path)
+                if c is not None and any(l["file"] == flags["get_error_file"] for l in c.get("lines") or []):
+                    return self._send({"jsonrpc": "2.0", "id": rid,
+                                       "error": {"code": -32603, "message": "read failed"}})
                 if c is None:
                     text = "Not found"
                 else:
@@ -532,6 +597,32 @@ def self_test() -> int:
           and parse_diff("--- a/o.md\n+++ b/p.md\n")[0]["file"] == "p.md")
     check("diff: a deleted file contributes nothing", parse_diff("--- a/x\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n") == [])
     check("chunks split at the size", [len(c) for c in chunks([{}] * 5, 2)] == [2, 2, 1])
+    check("chunks split at the text budget too; an over-budget line goes alone",
+          [len(c) for c in chunks([{"text": "a" * 4}, {"text": "b" * 4}, {"text": "c" * 9}, {"text": "d"}], 10, 8)]
+          == [2, 1, 1])
+    long_line = "x" * 4500 + " zorblax"
+    check("🚨 a long line is sent WHOLE: a name past character 2,000 reaches the matcher",
+          parse_diff(f"--- a/m.js\n+++ b/m.js\n@@ -1 +1 @@\n-a\n+{long_line}\n")[0]["text"] == long_line)
+    global MAX_LINE_CHARS
+    saved_max, MAX_LINE_CHARS = MAX_LINE_CHARS, 10
+    try:
+        parse_diff("--- a/m.js\n+++ b/m.js\n@@ -1 +1 @@\n-a\n+" + "y" * 11 + "\n")
+        refused = False
+    except NotChecked as exc:
+        refused = "m.js:1" in str(exc) and "y" * 11 not in str(exc)
+    MAX_LINE_CHARS = saved_max
+    check("🚨 a line longer than the limit is NOT CHECKED (never cut), naming file:line and not its text", refused)
+    said_fail: list[str] = []
+    check("🚨 a Fail with an EMPTY hits array is a Fail, never a Pass",
+          report([{"status": "Fail", "hits": []}], said_fail.append)[0] == "Fail"
+          and report([{"status": 3}], said_fail.append)[0] == "Fail"
+          and any("without naming where" in x for x in said_fail))
+    try:
+        report([{"status": "Fail"}, {"status": "NotChecked"}], said_fail.append)
+        carried = False
+    except NotChecked as exc:
+        carried = exc.failed and not exc.hits
+    check("🚨 …and a hit-less Fail beside a NotChecked chunk is carried as a rejection", carried)
 
     # A file that EMBEDS a unified diff: its added lines start `+++ `/`--- ` once git prefixes them.
     embedded = ("diff --git a/doc.md b/doc.md\n--- a/doc.md\n+++ b/doc.md\n@@ -5,2 +5,4 @@\n"
@@ -672,7 +763,37 @@ def self_test() -> int:
         rc, out = run(ok_env, "--base", "HEAD~1", "--unchecked", "warn")
         check("🚨 --unchecked warn: a hit in one chunk FAILS though another chunk was not checked",
               rc == 1 and "file=b.md,line=3" in out and "::warning::" in out and "ground truth empty" not in out)
-        CHUNK_LINES, flags["not_checked_file"] = saved_chunk, None
+        flags["not_checked_file"], flags["get_error_file"] = None, "c.md"
+        rc, out = run(ok_env, "--base", "HEAD~1", "--unchecked", "warn")
+        check("🚨 a READ failure after another chunk answered keeps that chunk's hit: annotated, and it FAILS",
+              rc == 1 and "file=b.md,line=3" in out and "JSON-RPC error -32603" in out and "read failed" not in out)
+        flags["get_error_file"] = None
+        CHUNK_LINES = saved_chunk
+
+        # Paths with no textual hunk: a pure rename, a new EMPTY file and a new BINARY file.
+        (r / "c.md").write_text("plain\n")
+        (r / "b.md").write_text("new text\n")
+        subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(r), "commit", "-qm", "clean again"], check=True)
+        subprocess.run(["git", "-C", str(r), "mv", "c.md", "zorblax-renamed.md"], check=True)
+        (r / "zorblax-empty.txt").write_text("")
+        (r / "zorblax.bin").write_bytes(b"\0\1\2binary")
+        subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(r), "commit", "-qm", "paths only"], check=True)
+        got = {e["file"] for e in collect_diff(r, "HEAD~1") if e["line"] == 0}
+        check("🚨 a pure rename, a new empty file and a new binary file are each checked by PATH",
+              {"zorblax-renamed.md", "zorblax-empty.txt", "zorblax.bin"} <= got)
+        rc, out = run(ok_env, "--base", "HEAD~1")
+        check("…and a change of only such paths FAILS on them",
+              rc == 1 and "file=zorblax-renamed.md::The path names" in out and "file=zorblax.bin::The path names" in out
+              and "file=zorblax-empty.txt::The path names" in out)
+
+        # A tracked text file larger than any old size cap is read whole in a whole-tree check.
+        (r / "big.txt").write_text(("filler line\n" * 200_000) + "tail zorblax\n")
+        subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(r), "commit", "-qm", "big"], check=True)
+        check("🚨 a large text file is read WHOLE in a whole-tree check (the name on its last line is sent)",
+              any(e["file"] == "big.txt" and e["line"] == 200_001 and "zorblax" in e["text"] for e in collect_tree(r)))
     srv.shutdown()
     print(f"\n{'FAILED' if failures else 'OK'}: {len(failures)} failure(s)")
     return 1 if failures else 0

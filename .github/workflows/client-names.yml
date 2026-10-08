@@ -43,6 +43,25 @@ permissions:
   contents: read
 
 jobs:
+  # 🚨 The change's OWN checker is unreviewed code, so its self-test runs in a job of its own: no
+  # secret, no workspace and no runner shared with the job that hands the reviewed checker the token.
+  # Run inside that job, it could rewrite the reviewed checker on disk before the next step ran it
+  # with NAME_CHECK_TOKEN. A GitHub-hosted runner (not MW_RUNNER) is a fresh VM per job, so nothing
+  # it leaves behind reaches another job.
+  own-checker-self-test:
+    name: "No client names: this change's checker proves itself (no secret)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github/scripts/check-client-names.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
+    - name: Prove this change's own checker (fake instance, synthetic term)
+      if: ${{ hashFiles('.github/scripts/check-client-names.py') != '' }}
+      run: python3 .github/scripts/check-client-names.py --self-test
+
   client-names:
     name: "No client names"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
@@ -105,9 +124,6 @@ jobs:
       env:
         CHECKER: ${{ steps.checker.outputs.path }}
       run: python3 "$CHECKER" --self-test
-    - name: Prove this change's own checker too (no secret in reach)
-      if: ${{ hashFiles('.github/scripts/check-client-names.py') != '' }}
-      run: python3 .github/scripts/check-client-names.py --self-test
     - name: No client names in what this change adds
       env:
         CHECKER: ${{ steps.checker.outputs.path }}
