@@ -31,11 +31,13 @@ public enum HorizontalAlignment
     End,
 
     /// <summary>
-    /// Stretches each child across the container's cross axis (<c>align-items: stretch</c>). This is
-    /// the default for a vertical <see cref="StackControl"/>: a child is as wide as its column, so a
-    /// markdown table wider than the column wraps or scrolls inside it instead of being clipped.
-    /// Serialised by NAME, so it reaches the client's own <c>Stretch</c> member. On the main axis of
-    /// a horizontal stack it behaves as start.
+    /// Stretches each child across the container's cross axis (<c>align-items: stretch</c>): in a
+    /// vertical <see cref="StackControl"/> every child is as wide as the column. An explicit opt-in —
+    /// a stack's unset alignment stays the client default (start). Use it where a child has no width
+    /// of its own to fall back on, e.g. a markdown body whose table is wider than the column, which
+    /// under start alignment takes the table's max-content width and is clipped (#6036). Serialised
+    /// by NAME, so it reaches the client's own <c>Stretch</c> member. On the main axis of a horizontal
+    /// stack it behaves as start.
     /// </summary>
     Stretch
 }
