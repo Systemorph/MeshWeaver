@@ -104,8 +104,10 @@ COMBOS=(
   # above omits the overlay, and the overlay is what names `ingress.tlsSecret` — so when the chart
   # learned to refuse a tlsSecret with no issuer, every fresh `memex-local up` died at the helm step
   # and this gate stayed green (MeshWeaver#6019). The overlay is rendered as shipped: its
-  # __PLACEHOLDER__ secrets are plain strings to helm. Both modes, because both are installed.
-  "memex-local as installed: defaults + the generated overlay (registry consumer)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/homebrew/share/values.local.yaml"
+  # __PLACEHOLDER__ secrets are plain strings to helm. Both modes, because both are installed: registry
+  # mode layers ~/.memex-local/registry.yaml (fixture: the shape write_registry_file writes), and
+  # self-registry mode layers the tracked share/values.local.self-registry.yaml.
+  "memex-local as installed: defaults + registry file + the generated overlay (registry consumer)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/aks/scripts/testdata/values.memex-local-registry.yaml:deploy/homebrew/share/values.local.yaml"
   "memex-local as installed: defaults + self-registry + the generated overlay|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml:deploy/homebrew/share/values.local.self-registry.yaml:deploy/homebrew/share/values.local.yaml"
   # A record-driven Provision of a MIRROR-CONSUMING instance (MeshWeaver#3353): the only combination
   # that switches on the pull secret, SelfUpdate__Registry and the chart-created PVCs. A fixture, not
