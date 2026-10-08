@@ -251,12 +251,18 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         Output.WriteLine($"live fingerprint at {CommitA[..8]}: {adoptedFingerprint}");
         StageBundle("widget-a.zip", adoptedFingerprint);
 
-        var seeded = await PrebuiltAssemblySeeder.SeedDetailed(
-                Mesh, TypePath, TestAssemblyBytes(), pdbBytes: null,
-                frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                logger: null, dependencies: null, sourceFingerprint: adoptedFingerprint)
-            .Should().Within(TestTimeouts.WriteConvergence).Emit("a seed completes either way",
-                cancellationToken);
+        // 🚨 Seeded as SYSTEM, as the shipped-bundle adopter runs it (ShippedPrebuiltBundles wraps
+        // its adoption in RunAsSystem): the Space is one-way synced, so
+        // its content — the NodeType definition included — is written by System alone, whatever
+        // grant the harness user holds (#5140).
+        PrebuiltAssemblySeeder.SeedOutcome seeded;
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem())
+            seeded = await PrebuiltAssemblySeeder.SeedDetailed(
+                    Mesh, TypePath, TestAssemblyBytes(), pdbBytes: null,
+                    frameworkMvid: PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                    logger: null, dependencies: null, sourceFingerprint: adoptedFingerprint)
+                .Should().Within(TestTimeouts.WriteConvergence).Emit("a seed completes either way",
+                    cancellationToken);
         Output.WriteLine($"seed outcome: {seeded}");
         var adopted = await DefinitionWhen(d => d.BuildProvenance is BuildProvenance.AdoptedVerified,
             cancellationToken);

@@ -357,6 +357,16 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // 🚨 The grants probe could not answer: say NOTHING. Neither "ownerless" nor "the
                 // store disagrees" is known — fail closed to no diagnosis, as this always did.
                 { GrantPaths: null } => null,
+                // 🚨 A SYSTEM-OWNED partition that still carries grants: no role writes its CONTENT
+                // (the fold caps Create/Update/Delete there, #5140), so a denied content write is the
+                // rule working, not the store disagreeing with the fold. Without this branch a
+                // leftover Admin's refusal was diagnosed below as a #4061 disagreement and told to
+                // report a bug. Satellites keep their own rules and fall through.
+                { Ownerless: false, SystemOwned: true } when IsContentPath(nodePath) =>
+                    $"'{partition}' is SYSTEM-OWNED: it has a one-way '{partition}/_GitSync', so its "
+                    + "content is its repository's projection and only the sync writes it — an edit "
+                    + "made here would be overwritten by the next sync, whatever grant you hold. "
+                    + "Change it through a pull request to that repository.",
                 // 🚨 A CONFIGURED (static) grant is a grant: the partition is owned, and its grant is
                 // not in the store, so the durable-vs-fold disagreement check has nothing to compare.
                 // Silent — exactly what the pre-#5904 early return answered.
@@ -542,6 +552,12 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
         var slash = normalized.IndexOf('/');
         return slash < 0 ? normalized : normalized[..slash];
     }
+
+    /// <summary>A CONTENT path — no <c>_</c>-prefixed segment — the shape the fold's
+    /// repository-owned cap applies to (<c>PermissionEvaluator.ObserveRepositoryOwnedContent</c>).</summary>
+    private static bool IsContentPath(string? path)
+        => !string.IsNullOrEmpty(path)
+           && !path.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(s => s.StartsWith('_'));
 
     /// <summary>
     /// Identity for the operation — explicit request identity first
