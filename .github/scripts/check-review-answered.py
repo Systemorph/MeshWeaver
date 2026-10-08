@@ -350,8 +350,11 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         # so this condition could only be released by a person's waiver; until one came, the lock settle
         # and the floor stamp sat red, main published, sealed and tagged nothing, and every portal held
         # each module behind its newest prebuilt (Governance 0.10 installed, 0.9.16 serving, 2026-10-08).
+        # 🚨 Only on the reviewer's TERMINAL refusal — never before it has answered: a pass released on
+        # the `opened` evaluation could merge before a late thread arrives, and a thread that opens after
+        # the merge can block nothing (#6318 review). No answer yet stays "not landed".
         generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
-        if generated:
+        if generated and any(k == "refused" for k, _ in kinds):
             notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
         elif run is not None:
             # Checked BEFORE the waiver: it is the governed exit and needs nobody, and when both
@@ -2312,9 +2315,9 @@ def self_test() -> int:
     # person's lock-only PR, and on an App PR carrying one hand-written file, stays RED (refused).
     LOCK_REFUSAL = ("Copilot wasn't able to review any files in this pull request. Check if the **Files changed** "
                     "in this pull request are included in [default exclusions](https://docs.github.com).")
-    def verdict_case(name, want_green, pr, files, commits, comments=(), want_refused=None):
+    def verdict_case(name, want_green, pr, files, commits, comments=(), want_refused=None, reviews=None):
         nonlocal failures
-        v = evaluate(pr, [_review(LOCK_REFUSAL)], list(comments), NO_WAIVER, None, (), files, commits)
+        v = evaluate(pr, [_review(LOCK_REFUSAL)] if reviews is None else reviews, list(comments), NO_WAIVER, None, (), files, commits)
         ok = v.green == want_green and (want_refused is None or bool(v.refused) == want_refused)
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} verdict: {name:51} green={v.green} refused={bool(v.refused)}")
@@ -2326,6 +2329,8 @@ def self_test() -> int:
     verdict_case("NEGATIVE CONTROL: App PR, files unread -> RED", False, gpr(), None, None, want_refused=True)
     verdict_case("a generated PR's reviewer thread still needs a reply -> RED", False, dict(gpr(), review_comments=1),
                  LOCKS, BOT_COMMITS, comments=[_comment(1)])
+    verdict_case("NEGATIVE CONTROL: settle PR, reviewer not answered yet -> RED", False, gpr(), LOCKS, BOT_COMMITS,
+                 want_refused=False, reviews=[])
     v = stage_readiness(_pr(0), [], [], "garbage", T0, 60)
     ok = (not v.ready) and v.mode == "unreadable"
     failures += 0 if ok else 1

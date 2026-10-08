@@ -202,9 +202,12 @@ other, a generated-only DRAFT is held as a draft, and for any pull request the A
 fallback clock keys on the PULL REQUEST's creation, not the head.
 
 **The required verdict agrees (Plugins #3044).** `Automatic review answered` now consults the same
-`generated_only` rule: for a generated-only App pull request, condition 1 ("the review landed") is
-NOT OWED, and the log says `NOT OWED: … — nothing to review (generated_only)`. Every thread the
-reviewer did open still needs a person's reply, and a draft is still held. Until this, the reviewer
+`generated_only` rule. For a generated-only App pull request, condition 1 ("the review landed") is
+NOT OWED once the reviewer has answered with its terminal REFUSAL, and the log says
+`NOT OWED: … — nothing to review (generated_only)`. It is never released before the reviewer has
+answered: a pass on the `opened` evaluation could merge before a late thread arrives, and a thread
+that opens after the merge can block nothing. Every thread the reviewer did open still needs a
+person's reply, and a draft is still held. Until this, the reviewer
 REFUSED every lock-only pull request ("Copilot wasn't able to review any files in this pull request"
 — locks are in its default exclusions), so the verdict was `RED — UNREVIEWABLE` and only a person's
 `review-waived` label let a settle or a floor stamp merge. Measured 2026-10-08 on Plugins: settle PR
