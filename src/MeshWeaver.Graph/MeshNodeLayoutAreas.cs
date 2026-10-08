@@ -441,7 +441,11 @@ public static class MeshNodeLayoutAreas
 
         // The markdown body is a DIRECT child of the outer stack — agents, tests and the document
         // export locate it there — bound to a projection of the node, hidden while there is none.
+        // STRETCH, explicitly (#6036): the body has no width of its own, so under the stack's default
+        // start alignment one table wider than the column made the body as wide as the table and the
+        // pane clipped it with no scrollbar. Its siblings are already width:100%, so only the body moves.
         var outer = Controls.Stack.WithWidth("100%")
+            .WithHorizontalAlignment(HorizontalAlignment.Stretch)
             .WithView(content)
             .WithView(OverviewLayoutArea.BuildMarkdownBodyTemplate(host));
 

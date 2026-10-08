@@ -93,11 +93,41 @@ Every `With*` method returns a **new** `StackControl` instance — the stack is 
 | `WithOrientation(orientation)` | Layout axis | `Orientation.Vertical` (default), `Orientation.Horizontal` |
 | `WithVerticalGap(gap)` | Space between items on the vertical axis | `"8px"`, `"1rem"`, `"16px"` |
 | `WithHorizontalGap(gap)` | Space between items on the horizontal axis | `"8px"`, `"1rem"`, `"16px"` |
-| `WithHorizontalAlignment(align)` | Cross-axis or main-axis horizontal alignment | `"start"`, `"center"`, `"end"` |
+| `WithHorizontalAlignment(align)` | Cross-axis (vertical stack) or main-axis (horizontal stack) horizontal alignment. Unset means start; `Stretch` is an explicit opt-in — see below | `"start"`, `"center"`, `"end"`, `HorizontalAlignment.Stretch` |
 | `WithVerticalAlignment(align)` | Cross-axis or main-axis vertical alignment | `"start"`, `"center"`, `"end"` |
 | `WithWidth(width)` | Explicit stack width | `"300px"`, `"100%"` |
 | `WithHeight(height)` | Explicit stack height | `"200px"`, `"100%"` |
 | `WithWrap(wrap)` | Allow items to wrap onto the next row/column | `true`, `false` |
+
+---
+
+# Cross-Axis Alignment: Stretch Is an Explicit Opt-In
+
+A vertical stack aligns its children to the START of the cross axis when nothing is set: each child
+is as wide as its own content. That is right for a lone button or a logo, and it is the default.
+
+It is wrong for content that has **no width of its own**, and the case that bites is a markdown body
+holding a table wider than the column. The body then takes the table's full `max-content` width, and
+the pane clips it at the right edge with no scrollbar (#6036 — a CRM offer page measured 3,211 px
+inside a 980 px column). For such a column, ask for `HorizontalAlignment.Stretch`
+(`align-items: stretch`): every child is as wide as the column, and the table wraps or scrolls inside it.
+
+```csharp
+Controls.Stack
+    .WithWidth("100%")
+    .WithHorizontalAlignment(HorizontalAlignment.Stretch)
+    .WithView(Controls.Markdown(body))
+```
+
+The framework does this itself on its markdown page columns — the node page's outer column
+(`MeshNodeLayoutAreas.BuildDetailsTemplate`) and the Markdown node's overview container
+(`MarkdownOverviewLayoutArea.BuildOverview`). Every other stack keeps start alignment, so no existing
+layout shifts.
+
+On a horizontal stack `HorizontalAlignment` is the main axis (`justify-content`), where `Stretch`
+behaves as start. The value is serialised by name, and the Blazor client parses it case-insensitively
+into Fluent UI's own `HorizontalAlignment.Stretch`, so `HorizontalAlignment.Stretch` and the string
+`"stretch"` mean the same thing.
 
 ---
 
@@ -180,7 +210,7 @@ The underlying `LayoutStackSkin` record maps directly to the `With*` methods abo
 | Property | Type | Default |
 |---|---|---|
 | `Orientation` | `object?` | `Orientation.Vertical` |
-| `HorizontalAlignment` | `object?` | `null` |
+| `HorizontalAlignment` | `object?` | `null` (the client renders start) |
 | `VerticalAlignment` | `object?` | `null` |
 | `HorizontalGap` | `object?` | `null` |
 | `VerticalGap` | `object?` | `null` |
