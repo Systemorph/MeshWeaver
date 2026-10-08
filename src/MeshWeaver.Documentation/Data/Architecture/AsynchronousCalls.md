@@ -1108,8 +1108,13 @@ workspace.GetMeshNodeStream(path)
   enforces `Permission.Update` via the `[RequiresPermission(Update)]` pipeline (a denial posts
   a `DeliveryFailure(Unauthorized)`), merges the diff against its OWN current state, **stamps
   auditing** (`LastModified`/`LastModifiedBy`), **persists durably**, and acks. `UpdateRemote`
-  drives the caller's terminal emission off that owner response, so a subsequent read-after-write
-  sees the commit. An RLS denial surfaces as `UnauthorizedAccessException`; a
+  drives the caller's terminal emission off that owner response, so the commit is DURABLE when
+  the terminal arrives. 🚨 It is not yet necessarily on your MIRROR: `GetMeshNodeStream(path)`
+  replays what the owner's last ECHO put there, a separate delivery that can land after the ack, so
+  a read-back waits for the state it wrote, never takes the first emission (see "No lag holds for
+  a reader, NOT for a read that follows YOUR OWN write" in
+  [CQRS and Content Access](/Doc/Architecture/CqrsAndContentAccess); #4559 and #6059 each read the
+  value from before an acknowledged write that way). An RLS denial surfaces as `UnauthorizedAccessException`; a
   deserialization/validation rejection surfaces as `MeshNodeStreamException`. 🚨 **The terminal is
   the owner's verdict and nothing weaker (#2661)** — a bound expiring is not a commit, so a busy
   owner makes the caller *wait* rather than be told "saved" optimistically; a verdict arriving after
