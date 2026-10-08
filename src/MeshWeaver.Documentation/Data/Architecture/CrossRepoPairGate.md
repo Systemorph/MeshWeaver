@@ -962,7 +962,9 @@ Four changes answer it, none of them a longer wait (the 42 minutes and every cap
    FIFO place — and with the request now waiting for core's own suites, that gap is longer. So every
    new candidate run's `admission` cancels the candidate runs whose requesting core run has
    COMPLETED (`scripts/core-candidate-reap.py`, also MeshWeaver.Plugins#3187; an unreadable status is never a reap). Its first live
-   pass, at 17:43Z, cancelled 5 of 12 live candidate runs.
+   pass, at 17:43Z, cancelled 5 of 12 live candidate runs. 🚨 **"Completed" turned out to be the
+   wrong test** — it is what made the gate livelock under load; the rule is now "superseded or
+   answered" (next section).
 
 **Build-once, measured** (the same candidate as #6320, `cd3eb48d9e` against `3fc485cadf`, 8 legs and 46
 suites; before = run 37809289143, after = run 37818559621 on MeshWeaver.Plugins#3187's branch):
@@ -979,11 +981,69 @@ suites; before = run 37809289143, after = run 37818559621 on MeshWeaver.Plugins#
 So build-once trades about 8 minutes of latency on an idle pool for a third fewer runner-minutes,
 and those runner-minutes are what a congested pool is short of.
 
-🚨 **The remedy for a timeout changed with (4).** "Re-run this job once that run has finished" reads a
-verdict only if the candidate was still measuring. A candidate whose core run has completed stands
-down, so after a timeout either re-run the waiter AT ONCE (the core run is live again and the
-candidate keeps measuring), or re-run `Dependent suites (request)`, which requests a fresh candidate
-under a new key. The no-verdict step says both.
+### A late verdict still decides — no human step (the 2026-10-08 livelock)
+
+**The defect.** The waiter holds a runner and a 42-minute window. Under load a candidate's dind legs
+wait longer than that for a runner, so the waiter gives up first ("No verdict in time") and the core
+run COMPLETES. Every Plugins-side "is anyone still waiting?" check read *completed* as *nobody*: the
+legs stood down when they finally got a runner, the reaper cancelled the run, and the Verdict job
+wrote "nobody reads this verdict". So under load **no verdict was ever accepted** — every core PR
+stayed red until someone re-ran jobs by hand, and each re-run met the same queue. Measured
+2026-10-08: core run 37841893441 (#6337) — the waiter failed at 20:21Z; Plugins runs 37844107216 and
+37843796980 got their control leg's runner later, found the core run `completed failure` and
+abandoned; 11 core PRs red, no core merge after 21:12Z. Raising the 42 minutes only moves the cliff.
+
+**The fix: a verdict that arrives after the waiter gave up re-runs the waiter.** One rule decides who
+still reads a candidate's verdict — MeshWeaver.Plugins `scripts/core-candidate-requester.py`
+(`classify`), shared by the legs, the reaper and the Verdict job:
+
+| state | when | legs | reaper | when the verdict lands |
+|---|---|---|---|---|
+| waiting | the core run is not completed | measure | keep | the waiter reads it itself |
+| **resumable** | the run completed, its waiter failed on `No verdict in time`, the PR is open and its head is still this run's head, and the request job's attempt is still the one that minted this key | **measure** | **keep** | **the Verdict job re-runs that waiter job** |
+| answered | the waiter read a verdict (green, or a red decision) | stand down | reap | nothing |
+| superseded | run cancelled; PR closed, merged or moved on; request re-issued under a new key | stand down | reap | nothing |
+| unknown | anything unreadable | measure | keep | nothing |
+
+After publishing `refs/core-candidate/<key>`, Plugins' `Verdict for core` job mints the
+`meshweaver` App token with `actions: write` on this repository and nothing else, and — when the
+request is RESUMABLE — calls `POST /actions/jobs/<waiter>/rerun`. That re-runs the waiter and its
+dependent, `Consolidate test results`. It then reads the run back: a POST that returned is not a
+re-run. On the re-run the waiter's first poll finds the verdict, because the request job's outputs
+(key, candidate, base) are kept from the attempt that minted them. It validates the verdict as
+always and decides. If the core run is still finishing its other jobs (a re-run needs a completed
+run), the Verdict job waits for it, bounded at 20 minutes. Past that bound it goes RED and names the
+job to re-run.
+
+What this keeps:
+
+* **Silence is red.** Nothing is posted onto core's commit. The waiter's red stands until a
+  verdict exists, and `resume` refuses to re-run anything unless the ref is published. A candidate
+  that never answers leaves core red, exactly as before.
+* **Plugins still cannot green-wash core.** A re-run executes core's own waiter, which reads the
+  verdict bound to its key, candidate (the PR's merge commit) and base, and the Plugins commit it
+  names. The one write Plugins makes into core is "run your own job again".
+* **A superseded head is ignored.** A run cancelled by a newer push, a PR that moved on or closed,
+  and a key replaced by a re-issued request are never re-run, and their legs stand down.
+* **No skip-trapdoor and no new bound.** The 42-minute window and every 45-minute cap stand; the re-run
+  is a new attempt with its own cap.
+
+The reaper also runs only for a core-requested run (`repository_dispatch`, which always runs Plugins'
+default branch). A hand `workflow_dispatch` of an unmerged branch once ran a reaper with that branch's
+rules and cancelled live candidates (flagged on MeshWeaver.Plugins#3187).
+
+The rule's self-test (`core-candidate-requester.py --self-test`, run in the scope job and before every
+resume) pins the four cases: a verdict before the deadline (nothing re-run), a verdict after the
+waiter gave up (exactly the waiter re-run, also when the run is still finishing), no verdict ever
+(refused, red), and a superseded head (ignored, legs stand down). A negative control flips
+RESUMABLE to SUPERSEDED by changing one input. On core's side, `await-dependent-verdict.py
+--self-test` pins that a re-run's first look returns an already-published verdict without waiting
+an interval.
+
+**The remedy for a timeout is therefore none.** The no-verdict step says the gate turns itself green
+or red when the verdict lands. A person acts only when no candidate run is live for the key — for
+example one cancelled by hand. Then re-run `Dependent suites (request)` to request a fresh candidate
+under a new key.
 
 ### Proven on the incident (2026-10-08)
 
