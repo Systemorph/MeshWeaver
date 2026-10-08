@@ -359,19 +359,19 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **Core dispatches ONE thing to a plugin repository: an ADVISORY request to test a CANDIDATE**
-  (policy `core-merge-never-blocked`, which superseded `dependent-suites-gate` — the register carries when).
-  `Dependent suites (MeshWeaver.Plugins, advisory)` in `dotnet-test.yml` runs on a PR labelled
-  `dependent-suites` or declaring `Pairs-with: Systemorph/MeshWeaver.Plugins#<n>` (then with that
-  PR's head — Doc/Architecture/PairedChangeSets), sends `core-candidate-suites`, and reports the
-  verdict Plugins writes at `refs/core-candidate/<key>`. It is NOT a `needs:` of `Consolidate test
-  results` and blocks nothing: MeshWeaver#5807 sat four hours green in the queue and was ejected on
-  a 42-minute silence, which is why. No Plugins verdict decides a platform roll any more (policy
-  `platform-module-deploy-separate`): main-cd `arm` arms on the PLATFORM verdict — that run's
-  compatibility ladder plus the control instance RUNNING the set (`platform-deploy-control-first`;
-  Doc/Architecture/PlatformAndModuleDeploy). Plugins' poller still runs its suites against each
-  promoted pair; that verdict reports and decides nothing. The release wave is still memex's;
-  `PlatformReleaseNotifyGuard.DispatchLedger` admits the one PR-side sender.
+- **Core dispatches ONE thing to a plugin repository: a REQUIRED request to test a CANDIDATE**
+  (policy `dependent-suites-affected-gate`, which superseded `core-merge-never-blocked` — the register
+  carries when). `Dependent suites (MeshWeaver.Plugins)` in `dotnet-test.yml` runs on EVERY non-fork,
+  non-Dependabot PR, sends `core-candidate-suites` (and a second request at a declared counterpart's
+  head), reads the verdicts Plugins writes at `refs/core-candidate/<key>`, and `Consolidate test
+  results` NEEDS it. Plugins selects PER REALM only what the diff reaches (edges printed, unreached
+  realms named), REFUSES (red) rather than running everything when it cannot tell, and reports each
+  realm's conclusion. A measured break merges only by `Breaks-plugins: <realms> — <what> — counterpart
+  Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>` with that counterpart green
+  against the same candidate and the semver bump in the diff
+  (`.github/scripts/check-plugins-break-declaration.py`). Fork/Dependabot: printed NOT MEASURED. The
+  fleet's arming still reads the PLATFORM verdict (`platform-module-deploy-separate`); the release
+  wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits the one PR-side sender.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
   its `ApiReadLedger` enumerates the reads on that side of it (the dependent-suites verdict is one).

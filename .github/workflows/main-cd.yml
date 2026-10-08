@@ -2564,10 +2564,10 @@ jobs:
           retention-days: 30
 
   # ────────── ARM THE FLEET: ONE PROMOTION GATE, ON THE PLATFORM VERDICT ──────────
-  # Policies `core-merge-never-blocked`, `build-latest-green`, `one-promotion-gate`,
+  # Policies `dependent-suites-affected-gate` (the PR-side wait), `build-latest-green`, `one-promotion-gate`,
   # `platform-deploy-control-first` and `platform-module-deploy-separate`
   # (Doc/Architecture/PolicyNotProse; design: Doc/Architecture/PlatformAndModuleDeploy). Core merges
-  # on its own checks; every CI consumer builds against the newest PROMOTED set; and a set is ARMED
+  # on its own checks plus the affected-only Plugins verdict; every CI consumer builds against the newest PROMOTED set; and a set is ARMED
   # for the fleet — `memex-portal-ai:<version>` (what SelfUpdateHostedService rolls to, pattern
   # `3.0.0-ci*`), the `<line>-latest` pointers, and the signed release event — on the PLATFORM
   # verdict alone (`.github/scripts/arm-promoted-set.py judge`):
