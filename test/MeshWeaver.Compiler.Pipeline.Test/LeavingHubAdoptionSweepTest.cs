@@ -214,6 +214,50 @@ public class LeavingHubAdoptionSweepTest(ITestOutputHelper output) : MonolithMes
                 "the live hub's adoption lands on the shared record");
     }
 
+    /// <summary>
+    /// MeshWeaver#6060 — the leaving arm above, pinned at the END of teardown instead of its start.
+    ///
+    /// <para><c>Dispose()</c> only BEGINS a hub's teardown, so the arm above asked the seeder at a
+    /// moment that depends on how fast the teardown runs: usually the hub's service provider was
+    /// still alive, and the seeder's closed-type-set gate — which ran BEFORE the leaving check and
+    /// eagerly, at call time — resolved from it without harm. When the teardown had already
+    /// finished, the same call threw <see cref="ObjectDisposedException"/> synchronously out of
+    /// <c>Seed</c> (measured on a clean main: 1 of 2 local runs). Joining
+    /// <see cref="IMessageHub.DisposalCompleted"/> first makes that the ONLY state this arm can
+    /// observe, so the ordering defect fails every run instead of some.</para>
+    ///
+    /// <para>The answer is the same as for a hub that has just begun leaving: "not adopted", as an
+    /// emission — never a throw, and never a resolve from a provider the hub no longer owns. The
+    /// control arm is the live hub of the first test, which adopts against the same kind of
+    /// record.</para>
+    /// </summary>
+    [Fact]
+    public async Task AHubWhoseTeardownHasFinished_AnswersNotAdopted_WithoutTouchingItsProvider()
+    {
+        const string typePath = "type/DisposedSweepType";
+        await CreateLiveType(typePath);
+        var bytes = BundleBytes();
+
+        var gone = SweepHub("gone");
+        var disposed = gone.DisposalCompleted;
+        gone.Dispose();
+        await disposed.Should().Within(20.Seconds())
+            .Complete("the sweep hub's teardown runs to its end — the state the seeder must survive");
+
+        IObservable<bool>? seed = null;
+        Action build = () => seed = Seed(gone, typePath, bytes, fingerprint: null);
+        build.Should().NotThrow("building the seed must not resolve from the disposed hub's provider");
+
+        var adopted = await seed!
+            .Should().Within(20.Seconds())
+            .Emit("a hub whose teardown has finished answers 'not adopted' — it never faults the pass");
+        adopted.Should().BeFalse("nothing is adopted on a hub that has left");
+
+        await Mesh.GetMeshNodeStream(typePath).Where(Touched)
+            .Should()
+            .NotEmit(3.Seconds(), "a hub that has left writes nothing on the shared NodeType");
+    }
+
     [Fact]
     public async Task ABundleWhoseFingerprintDisagreesWithTheLiveSource_IsDeclinedBeforeItWrites()
     {
