@@ -132,13 +132,13 @@ When you've changed source that isn't in any pushed tag, build straight into Col
 >
 > Two consequences worth stating, because each presented as something else when they were missed
 > (#2367): **the login UI is compiled INTO the image** (it is shell, not a pack — a portal serving
-> 404 on `/login` is running an image built before the move, and the fix is to rebuild), while
-> **the view packs are NOT** — `DefaultViews`/`GraphViews` left the image in #2169 Phase B2 and
-> arrive only as registry bundles, which the boot reconcile installs because both declare
-> `preInstalled`. A portal missing them renders every control as its `ToString()`, and the Plugin
-> Catalog that would repair it is itself one of the missing views. `memex-local up`/`update` verify
-> both and refuse to report success otherwise; `memex-local verify` asks the same question of a
-> running install at any time.
+> 404 on `/login` is running an image built before the move, and the fix is to rebuild). View
+> rendering needs both the module assemblies and the catalog packages. The image can ship module
+> DLLs under `/app/modules` (as measured for Graph and EntityViews in #6025), while the
+> `DefaultViews`/`GraphViews`/`EntityViews` packages may be installed by boot reconcile. A portal
+> missing a renderer can show controls as their `ToString()`, and the Plugin Catalog UI may itself
+> be unusable. `memex-local up`/`update` verify the files and the running process's `[ModuleLoad]`
+> report; `memex-local verify` repeats that check on a running install.
 
 ```bash
 # 1. Publish a native arm64 container image straight into Colima's Docker store.
@@ -474,7 +474,7 @@ The result: every device trusts the cert out of the box (no mkcert CA install), 
 | `instance up` fails `409 — Instance id '<id>' is already registered` | An instance id is claimed **globally** on the registry, and dropping the instance's database does not release it. Use `memex-local instance down --id <id>` (which releases the claim and restarts the registry) before re-running, or pick a new id. |
 | A plugin install fails with `NodeType(s) not registered: <Other>/<Type>` | The package depends on another that is not installed yet. The default install orders by the manifest's `requires`; a package that depends on something **outside** the granted set cannot be ordered against and will fail. Grant the dependency too (§16). |
 | Instance pod OOMs mid-install (`OutOfMemoryException`, often surfacing inside Npgsql) and the remaining packages never install | A first boot compiles every default-installed plugin's node types back to back, and each compile **retains** its collectible ALC. `memex-local` sizes the instance pod 3cpu/6Gi for this; a smaller pod dies partway. Installing fewer packages by default (a narrower `InstallByDefault`) is the other lever. |
-| **Every control renders as debug text** — `NamedAreaControl { Id = , Style = , … }` instead of UI | The **view packs are not installed**. `DefaultViews`/`GraphViews` left the image in #2169 Phase B2 and arrive only as registry bundles; without them nothing has a view and the control falls back to its `ToString()`. 🚨 The documented repair — Settings ▸ Administration ▸ Plugin Catalog — is *itself* rendered by the missing views, so the portal cannot repair itself through its own UI. Diagnose from outside: `memex-local verify`. Both packs declare `preInstalled`, so the boot reconcile installs them from your checkout on every boot; if it did not, `memex-local logs --no-follow --tail 400 \| grep DefaultInstall` says why (a source name that matches no grant, an unreadable repo, a platform floor). (#2367) |
+| **Every control renders as debug text** — `NamedAreaControl { Id = , Style = , … }` instead of UI | A view renderer is not active. Diagnose from outside with `memex-local verify`: it checks both image modules under `/app/modules` and Store-landed modules under `Modules__Root/modules`, then confirms that the running process loaded Views, Graph and EntityViews. If a DLL is loaded, do not treat an empty `/data/modules` as a missing pack (#6025). If a required package did not install, `memex-local logs --no-follow --tail 400 \| grep DefaultInstall` identifies the boot reconcile failure. The Plugin Catalog UI may itself need the missing view, so inspect from the CLI first. (#2367) |
 | **`/login` 404s** — no way to sign in at all | The login pages are Blazor pages compiled **into** the image (`MeshWeaver.Plugins/src/Memex.Portal.Gui/Pages/`), so this is an image built before the GUI move (#2293), not a missing package. Rebuild: `memex-local update --build`, with the plugins checkout on `main`. (#2367) |
 
 **Verify end-to-end** that the portal is *usable*, not merely answering:
@@ -484,8 +484,14 @@ memex-local verify
 # Asserts three things and exits non-zero, naming a remedy, if any fails:
 #   • the portal SERVES        — an HTTP status in the serving range (a 503 is not "reachable")
 #   • /login is ROUTED         — there is a way to sign in
-#   • the view packs are there — MeshWeaver.Blazor.Views + MeshWeaver.Blazor.Graph
+#   • the view packs are installed and loaded — Views + Graph + EntityViews
 ```
+
+The on-disk probe checks both landed bundles under `Modules__Root/modules` and image modules
+under `/app/modules`, since `Modules__Root=/data` does not move modules already shipped in the
+image. The boot `[ModuleLoad]` report then confirms that the running portal actually loaded all
+three packs. A loaded image pack must not be reported as missing just because `/data/modules`
+does not contain its DLL (#6025).
 
 🚨 `up` and `update` run this for you and refuse to report success without it. The check it replaced
 curl'd `/` and printed "Portal reachable" whenever **curl** exited 0 — so a 503, a 404 and a portal

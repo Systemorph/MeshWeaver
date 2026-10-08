@@ -927,13 +927,16 @@ uninstall_launchd() {
 readonly VIEW_PACK_MODULES="MeshWeaver.Blazor.Views MeshWeaver.Blazor.Graph MeshWeaver.Blazor.EntityViews"
 
 # One in-pod probe answering the whole of check 3: for each module, is it resolvable at all — landed
-# under <Modules:Root>/modules/<name>[@<generation>]/<name>.dll, or shipped in the image's own app
-# closure — and is a restart pending? Emits parseable lines so the caller never re-execs.
+# under <Modules:Root>/modules/<name>[@<generation>]/<name>.dll, shipped under /app/modules,
+# or in the image's app closure — and is a restart pending? Emits parseable lines so the caller
+# never re-execs. Modules:Root can be /data while image modules remain under /app/modules.
 probe_view_packs() {
   kubectl -n "$NAMESPACE" exec "deploy/$PORTAL_DEPLOYMENT" -- sh -c '
     root="${Modules__Root:-/app}"
     for m in $1; do
-      if ls "$root"/modules/*/"$m".dll >/dev/null 2>&1 || [ -f "/app/$m.dll" ]; then
+      if ls "$root"/modules/*/"$m".dll >/dev/null 2>&1 \
+        || ls /app/modules/*/"$m".dll >/dev/null 2>&1 \
+        || [ -f "/app/$m.dll" ]; then
         echo "module=$m present"
       else
         echo "module=$m missing"
