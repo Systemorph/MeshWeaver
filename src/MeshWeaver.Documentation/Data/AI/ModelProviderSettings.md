@@ -1,6 +1,6 @@
 ---
 Name: AI Model Provider Settings
-Description: "Settings → Models UX: per-provider-type layout, model lists for API providers, and delegating Claude Code / GitHub Copilot to their CLI login."
+Description: "Where a user wires AI in today (the Providers app's ProviderSetup view, the /Provider/AiModels catalog, /login in the chat composer), plus the original Settings → Models design it replaced."
 ---
 
 > **The model-provider docs at a glance:** [Model Providers](/Doc/Architecture/ModelProviders) — the architectural pattern · [Provider Configuration](/Doc/AI/ProviderConfiguration) — framework config & chat-client factories · [Model Provider Setup](/Doc/AI/ModelProviderSetup) — operational setup & troubleshooting · [Model Provider Settings](/Doc/AI/ModelProviderSettings) — the settings UI. **This page: the settings UI.**
@@ -8,15 +8,15 @@ Description: "Settings → Models UX: per-provider-type layout, model lists for 
 
 # AI Model Provider Settings
 
-The **Settings → Models** page is the user's single destination for wiring AI into Memex — adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot. This document is the actionable implementation spec: it identifies the exact files to touch, the behavioral seams to introduce, and the testing approach.
+> **Current state first.** The **Settings → Models** tab this page was written to specify (`ModelsSettingsTab`) **no longer exists**. Today a user wires AI in three places: provider keys in the Providers app's **ProviderSetup** view, models in the `/Provider/AiModels` catalog, and a CLI harness login through **`/login`** in the chat composer. *What is wired* below names the code. Everything from *Two provider kinds* through the *Scope note* is the **original design, kept as history**: its card layouts, diagrams and state machine describe a UI that is not served. The AI engine code named on this page lives in **MeshWeaver.Plugins**, not in this repository.
+
+This page began as the implementation spec for a single **Settings → Models** destination: adding API keys, enabling specific models, and connecting CLI-based providers like Claude Code and GitHub Copilot.
 
 > **Setting up models (admin or user)?** This page is the *UI design spec*. For the operational how-to — provider/model mesh nodes, the system/space/user layers, which query goes where in a user's namespace, the open-weight tier choices, and the install-time config gaps — read **[Setting Up Model Providers](/Doc/AI/ModelProviderSetup)**.
 
 ---
 
-## Two provider kinds, two different UIs
-
-> **Status:** the sections below are the original design. Its UI surface moved: keys are entered in the Providers app's ProviderSetup view and CLI login runs from the chat composer's `/login` — see *What is wired*. The AI engine code named on this page lives in **MeshWeaver.Plugins**, not in this repository.
+## Two provider kinds, two different UIs *(original design — historical)*
 
 The fundamental insight driving this design: API providers and CLI providers need **completely different layouts**. Rendering both as a key/endpoint form is wrong.
 
@@ -78,7 +78,7 @@ The fundamental insight driving this design: API providers and CLI providers nee
 
 ## What is wired
 
-**This design has shipped** — the sections below describe the code as it stands, not pending work.
+**What is served today.** The original design shipped and was later replaced; these bullets describe the code as it stands on MeshWeaver.Plugins `main`.
 
 - The catalog chain registers all providers in `MemexConfiguration` via `.AddAnthropic().AddAzureFoundry().AddAzureOpenAI().AddOpenAI().AddClaudeCode().AddCopilot()`, each gated by its `Features:Ai:Providers:*` / `Features:Ai:Clis:*` flag.
 - **Where a user enters provider keys today** is the Providers app's **ProviderSetup** view (MeshWeaver.Plugins `Providers/ProvidersApp/Source/ProviderSetupAreas.cs`; its rules live in the pure `ProviderSetup.cs`, tested by `Providers/ProvidersApp/Test/ProviderSetupTests.cs`). The AI menu's **Models** entry links the scope-tabbed model catalog at `/Provider/AiModels` (`AiCatalogLayoutAreas.ModelsArea`). The settings tab this page originally specified, `ModelsSettingsTab` with its `BuildCliCard`, **no longer exists** in either repository.
@@ -229,7 +229,7 @@ Three test scenarios:
 
 ## Scope note
 
-What shipped is **Phase 1**: per-user CLI Connect plus the Models-tab rework — the UI and the CLI login backend. The `ProviderKind` layout split was the quick visible win; the CLI login backend (`ConnectSessionManager` + strategies) was the substantive part.
+*(Historical.)* What originally shipped was **Phase 1**: per-user CLI Connect plus the Models-tab rework, meaning the UI and the CLI login backend. The Models tab has since been removed; the CLI login backend remains and is driven from `/login`. The `ProviderKind` layout split was the quick visible win; the CLI login backend (`ConnectSessionManager` + strategies) was the substantive part.
 
 ---
 
