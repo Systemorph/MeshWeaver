@@ -116,6 +116,8 @@ config:
     Logging__LogLevel__Default: "Debug"
 
 # ---- Portal Ingress (TLS via ingress-nginx — LocalColimaMac.md §5/§6) -------
+# `tlsSecret` is created by `memex-local up` with mkcert; its `clusterIssuer: "none"` comes from the
+# tracked layer share/values.local.defaults.yaml, so installs whose overlay predates it get it too.
 ingress:
   enabled: true
   host: "memex.localhost"

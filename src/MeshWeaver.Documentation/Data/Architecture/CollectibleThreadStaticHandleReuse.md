@@ -321,7 +321,9 @@ read.
   alternate signal stack. The fault registers exist only in the dump.
 - 🚨 **The dump is gone.** `DOTNET_DbgMiniDumpName` writes to the `memex-dumps` **emptyDir**, which dies
   with the pod, and the 13:09Z roll replaced the pod. With rolls this frequent, a production dump
-  survives for hours at most; reading one needs a copy taken before the next roll.
+  survives for hours at most; reading one needs a copy taken before the next roll. (Since then dumps
+  go to the `/data` claim and outlive the pod, from each instance's next Reconcile:
+  [Debugging Native Crashes](../DebuggingNativeCrashes) → "Production: where a dump lands".)
 
 **Not established:** that this crash is this mechanism. It is compatible with it (a young thread with
 no managed frame, a null-based read) and with others.
