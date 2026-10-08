@@ -7,7 +7,24 @@ metadata:
     app.kubernetes.io/name: "{{ .Chart.Name }}"
     app.kubernetes.io/component: "memex-portal"
     app.kubernetes.io/instance: "{{ .Release.Name }}"
+{{- /* 🚨 TWO HALVES, and together they mean NO config.memex_portal key is dropped silently.
+
+       1. The LITERAL keys (memex.portalConfigData, below): every key this chart knows, with its
+          default, transform and comment. A key listed there renders exactly as it always did.
+       2. The PASS-THROUGH (memex.portalConfigPassThrough, _portal-config-passthrough.tpl): every
+          OTHER config.memex_portal key with a value is rendered verbatim after them.
+
+       Before the second half existed, a key a Deployment record set (extraPortalConfig) but this
+       file did not list reached NO container while helm reported success — the #1925 class, and
+       the reason Memex#689 (Hosting__PrBabysitter__Relay) had to be reverted as inert (#693). The
+       pass-through reads which keys half 1 RENDERED, so it can never emit a duplicate data key and
+       a listed key's own default or transform always wins. What it cannot deliver it REFUSES, by
+       name, at render time: see the helper. */}}
 data:
+{{- $literalData := include "memex.portalConfigData" . }}
+{{- $literalData }}
+{{- include "memex.portalConfigPassThrough" (dict "root" . "literal" $literalData) }}
+{{- define "memex.portalConfigData" }}
   MEMEX_HOST: "{{ .Values.config.memex_portal.MEMEX_HOST }}"
   MEMEX_PORT: "{{ .Values.config.memex_portal.MEMEX_PORT }}"
   MEMEX_USERNAME: "{{ .Values.config.memex_portal.MEMEX_USERNAME }}"
@@ -589,9 +606,11 @@ data:
   {{- if (.Values.config.memex_portal.OpenRouterEU__Models__15 | default "" | trim) }}
   OpenRouterEU__Models__15: "{{ .Values.config.memex_portal.OpenRouterEU__Models__15 | trim }}"
   {{- end }}
-  # 🚨 A values key this template omits reaches NO container, with no error anywhere: the
-  # ConfigMap names every key explicitly, there is no catch-all range over config.memex_portal,
-  # and the Deployment's only env path is envFrom on this ConfigMap. Both keys below were set in
+  # 🚨 A values key this template omitted used to reach NO container, with no error anywhere: the
+  # ConfigMap named every key explicitly, there was no catch-all over config.memex_portal, and the
+  # Deployment's only env path is envFrom on this ConfigMap. (The pass-through at the top of this
+  # file now delivers such a key verbatim — but WITHOUT a default, so a key whose consumer cannot
+  # take a missing or raw value still needs its own line here.) Both keys below were set in
   # values.aks.yaml and rendered by nothing (#1925) — SelfUpdate__MinRollInterval is the restart
   # BUDGET from #1780, which AGENTS.md documents as the fix for restart churn and which sat inert;
   # its predecessor SelfUpdate__PollInterval had the identical defect until #1778.
@@ -782,8 +801,8 @@ data:
   # ---- The control plane's model-spending automation: one opt-OUT switch each -----------------
   # (MeshWeaver.Plugins Hosting/AutomationSwitches.md). Every one defaults ON in code, so the only
   # value worth carrying is an explicit "false" — and until these lines existed a record's
-  # extraPortalConfig setting one reached NO container (this ConfigMap names every key; there is no
-  # catch-all): measured 2026-10-07 on memex, Hosting__Coordinator__Enabled=false and
+  # extraPortalConfig setting one reached NO container (this ConfigMap named every key; there was no
+  # catch-all until the pass-through at the top of this file): measured 2026-10-07 on memex, Hosting__Coordinator__Enabled=false and
   # Hosting__StuckDetector__Enabled=false sat on the record while both kept running model rounds.
   #   Coordinator__Enabled                    the fleet coordinator's rounds (Hosting/Coordinator/_Thread/fleet-coordinator)
   #   StuckDetector__Enabled                  the stuck detector's pass, its coordinator wakes and heavy escalations
@@ -1417,3 +1436,4 @@ data:
   # Independent of each other: Teams posting does not widen mail sending, nor the reverse.
   Email__AgentSend: "{{ .Values.config.memex_portal.Email__AgentSend | default "" }}"
   Teams__AgentSend: "{{ .Values.config.memex_portal.Teams__AgentSend | default "" }}"
+{{- end }}

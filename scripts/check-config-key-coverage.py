@@ -9,6 +9,16 @@ does not match the reviewed overlay. #2203 was the worst shape — all twelve `O
 keys were declared and rendered by nothing, and a re-render would have dropped the two models that
 were live, leaving no OpenRouter models at all.
 
+THE PASS-THROUGH (config.memex_portal only). The portal ConfigMap now renders every config.memex_portal
+key its literal half does not name VERBATIM, through `memex.portalConfigPassThrough`
+(templates/memex-portal/_portal-config-passthrough.tpl). When the chart being checked defines AND
+includes that helper, a memex_portal key with a non-blank scalar value is DELIVERED and passes here
+(printed as a note). What the pass-through cannot deliver is still a miss, with the reason: a blank
+value (renders nothing), and the shapes the render itself refuses — a map/list, a case-twin of a chart
+key, an invalid ConfigMap key, a Modules__Required__N slot outside the literal block. Against a chart
+without the helper the check is exactly the naming check it always was. The migration and postgres
+blocks have no pass-through.
+
 MATCH ON THE RENDERED ConfigMap KEY NAME, not the values path. A ConfigMap/Secret data key
 `Foo__Bar` may be rendered from ANY values path — e.g.
 `Hosting__Operator__Enabled: "{{ (.Values.hostingOperator).enabled }}"` renders the data key
@@ -99,17 +109,62 @@ def load_allow(path: str | None) -> set[str]:
     return out
 
 
-def declared_keys(overlay_path: str) -> dict[str, list[str]]:
-    """{block: [keys]} declared under `config.{block}` in one overlay. Missing blocks omitted."""
+def declared_keys(overlay_path: str) -> dict[str, dict[str, object]]:
+    """{block: {key: value}} declared under `config.{block}` in one overlay. Missing blocks omitted."""
     with open(overlay_path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     config = data.get("config") or {}
-    out: dict[str, list[str]] = {}
+    out: dict[str, dict[str, object]] = {}
     for block in CONFIG_BLOCKS:
         section = config.get(block)
         if isinstance(section, dict):
-            out[block] = [str(k) for k in section.keys()]
+            out[block] = {str(k): v for k, v in section.items()}
     return out
+
+
+# The portal ConfigMap's PASS-THROUGH (deploy/helm/templates/memex-portal/_portal-config-passthrough.tpl):
+# every config.memex_portal key the literal half does not name is rendered VERBATIM after it, so such
+# a key is DELIVERED, not dropped. Recognised only when BOTH halves of the wiring are present in the
+# chart being checked — the helper's define and config.yaml's include — so an older chart (or one
+# that removed it) is checked by naming exactly as before.
+PASSTHROUGH_BLOCK = "memex_portal"
+PASSTHROUGH_DEFINE = 'define "memex.portalConfigPassThrough"'
+PASSTHROUGH_INCLUDE = 'include "memex.portalConfigPassThrough"'
+
+
+def passthrough_wired(template_dir: str) -> bool:
+    """Whether the chart under `template_dir` defines AND includes the portal pass-through."""
+    defined = included = False
+    for path in glob.glob(os.path.join(template_dir, "**", "*"), recursive=True):
+        if not os.path.isfile(path) or not path.endswith((".yaml", ".yml", ".tpl")):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        defined = defined or PASSTHROUGH_DEFINE in text
+        included = included or PASSTHROUGH_INCLUDE in text
+    return defined and included
+
+
+def passthrough_verdict(key: str, value: object, rendered: set[str]) -> str | None:
+    """Why the pass-through does NOT deliver this memex_portal key, or None when it does.
+
+    Mirrors the helper's own rules: blank/null renders nothing; a map or list, a case-twin of a
+    rendered key, an invalid ConfigMap key and a Modules__Required__N slot outside the literal block
+    are REFUSED by the render (helm fails, naming the key) — reported here so the overlay's author
+    hears it at review rather than at deploy.
+    """
+    if value is None or (not isinstance(value, (dict, list)) and str(value).strip() == ""):
+        return "blank - the pass-through renders nothing for it"
+    if isinstance(value, (dict, list)):
+        return "a map/list - the render REFUSES it (an env var carries one string)"
+    folded = {r.lower(): r for r in rendered}
+    if key.lower() in folded:
+        return f"differs only by case from {folded[key.lower()]} - the render REFUSES it"
+    if not re.match(r"^[-._a-zA-Z0-9]+$", key):
+        return "not a valid ConfigMap key - the render REFUSES it"
+    if key.lower().startswith("modules__required__"):
+        return "a boot-module slot outside the literal 0..19 block - the render REFUSES it"
+    return None
 
 
 def main() -> int:
@@ -139,6 +194,8 @@ def main() -> int:
         return _die("no overlays found (deployments/aks/*/values.*.public.yaml)")
 
     rendered = rendered_key_names(template_dir)
+    wired = passthrough_wired(template_dir)
+    passed_through: list[str] = []
     allow = load_allow(args.allow)
     allow_hit: set[str] = set()
     total_declared = 0
@@ -148,28 +205,40 @@ def main() -> int:
     print(f"config-key-coverage: overlays = {len(overlays)}"
           + (f", allow-list = {len(allow)} entr{'y' if len(allow)==1 else 'ies'}" if args.allow else "")
           + "\n")
+    print(f"config-key-coverage: portal pass-through wired = {wired}"
+          + (" (a config.memex_portal key with a value is delivered even when no template names it)" if wired else "")
+          + "\n")
 
     for overlay in overlays:
         env = env_of(overlay)
         blocks = declared_keys(overlay)
         declared = sum(len(v) for v in blocks.values())
         total_declared += declared
-        misses: list[tuple[str, str, bool]] = []  # (block, key, allowed)
+        misses: list[tuple[str, str, bool, str | None]] = []  # (block, key, allowed, why)
         for block, keys in blocks.items():
-            for key in keys:
+            for key, value in keys.items():
                 if key not in rendered:
+                    why = None
+                    if block == PASSTHROUGH_BLOCK and wired:
+                        why = passthrough_verdict(key, value, rendered)
+                        if why is None:
+                            passed_through.append(f"{env}: config.{block}.{key}")
+                            continue
                     token = f"{env}\tconfig.{block}.{key}"
                     allowed = token in allow
                     if allowed:
                         allow_hit.add(token)
                     else:
-                        new_misses.append(f"{env}: config.{block}.{key}")
-                    misses.append((block, key, allowed))
+                        new_misses.append(f"{env}: config.{block}.{key}" + (f" ({why})" if why else ""))
+                    misses.append((block, key, allowed, why))
         status = "OK" if not misses else f"rendered-nowhere {len(misses)}"
         print(f"  [{env}] {os.path.basename(overlay)}  (declared {declared})  ->  {status}")
-        for block, key, allowed in misses:
-            tag = "allowed (pre-existing debt)" if allowed else "NEW - reaches no container"
+        for block, key, allowed, why in misses:
+            tag = "allowed (pre-existing debt)" if allowed else "NEW - reaches no container" + (f": {why}" if why else "")
             print(f"      {'.' if allowed else 'x'} config.{block}.{key}  - {tag}")
+
+    for p in passed_through:
+        print(f"  note: {p} - named by no template, delivered verbatim by the portal pass-through")
 
     stale = sorted(allow - allow_hit)
     print(f"\nconfig-key-coverage: declared {total_declared} key(s); "

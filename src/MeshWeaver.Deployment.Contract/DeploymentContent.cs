@@ -643,8 +643,12 @@ public record DeploymentContent
 
     /// <summary>
     /// The advanced rung: portal configuration keys (<c>Section__Key</c>) beyond the typed surface,
-    /// rendered verbatim under the portal config. A key the chart's ConfigMap does not list never
-    /// reaches a container — the typed properties above are the ones it is known to read.
+    /// rendered verbatim under the portal config. Every key here reaches the container: one the
+    /// chart's ConfigMap names renders through its own line (its default or transform applies), and
+    /// one it does not name renders through the ConfigMap's pass-through. A key the pass-through
+    /// cannot deliver — a case-twin of a chart key, a blank value, a <c>Modules__Required__N</c> slot
+    /// outside the chart's literal block — is refused by the render or renders nothing; it is never
+    /// dropped while helm reports success (Doc/Architecture/DeploymentEnvLayers, "The pass-through").
     /// </summary>
     [Description("Extra portal configuration (Section__Key = value)")]
     public ImmutableSortedDictionary<string, string> ExtraPortalConfig { get; init; }

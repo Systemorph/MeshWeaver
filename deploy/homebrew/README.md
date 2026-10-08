@@ -187,12 +187,13 @@ PVC** so data survives — exactly the "survives reboot" property the doc emphas
 ## Full logging (verbose) — and what is **not** touched
 
 `LocalColimaMac.md` wants logs turned up locally. The chart's portal `ConfigMap`
-is a **fixed allow-list** (it does not pass arbitrary `config.memex_portal` keys),
-and the chart templates are source-of-truth — we never edit them. So the verbose
-level is applied **two complementary ways**:
+passes a `config.memex_portal` key it does not name through verbatim, so the
+overlay's level reaches the pod — but `memex-local` also honours `MEMEX_LOG_LEVEL`
+at run time, without a re-render. So the verbose level is applied **two
+complementary ways**:
 
 1. **Declared in the overlay** (`config.memex_portal.Logging__LogLevel__Default:
-   "Debug"`) for visibility / intent.
+   "Debug"`) — rendered into the ConfigMap by the chart's pass-through.
 2. **Applied as a deployment-config override** by `apply_logging()` after every
    Helm upgrade: `kubectl set env deployment/memex-portal-deployment
    Logging__LogLevel__Default=$MEMEX_LOG_LEVEL`. A container `env` entry **wins

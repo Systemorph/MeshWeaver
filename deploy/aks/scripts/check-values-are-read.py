@@ -16,7 +16,9 @@ import yaml
 
 # `.Values.config.<component>.<KEY>` — the ONLY shape the chart uses to read a config key.
 # check-values-are-read.sh asserts that up front (no `range` over a config section, no
-# `index .Values.config …`), so a key absent from this set is read by nothing, full stop.
+# `index .Values.config …`), so a key absent from this set is read by nothing — with ONE
+# exception the .sh proves wired before it says so: config.memex_portal's pass-through
+# (PASSTHROUGH_SECTION below), which delivers that section's un-named keys verbatim.
 #
 # The optional `)` is not cosmetic: the chart also writes the nil-safe form
 # `(.Values.config.memex_portal).Deployment__Orleans__Clustering` (secrets.yaml, the migration
@@ -50,7 +52,15 @@ if not read_keys:
     )
     sys.exit(1)
 
+# The section whose un-named keys the chart's pass-through delivers verbatim (the portal
+# ConfigMap's memex.portalConfigPassThrough), or "" when the caller could not prove that helper is
+# wired. Set ONLY by check-values-are-read.sh, which asserts both halves of the wiring first.
+PASSTHROUGH_SECTION = os.environ.get("PASSTHROUGH_SECTION", "").strip()
+# The pass-through REFUSES this family outside the literal block rather than delivering it.
+PASSTHROUGH_REFUSED_PREFIX = "modules__required__"
+
 findings: list[str] = []
+passed_through: list[str] = []
 examined = 0
 
 for path in values_paths:
@@ -81,6 +91,18 @@ for path in values_paths:
             if (comp, key) in read_keys:
                 continue
             elsewhere = sorted(c for c in components_read if (c, key) in read_keys)
+            if (comp == PASSTHROUGH_SECTION and not elsewhere
+                    and not str(key).lower().startswith(PASSTHROUGH_REFUSED_PREFIX)):
+                # Not named by any template, but DELIVERED: the pass-through renders it verbatim.
+                # (A key another section names is still reported as mis-nested below — the
+                # pass-through would hand it to the portal, not to the container that reads it.)
+                value = keys[key]
+                blank = value is None or str(value).strip() == ""
+                passed_through.append(
+                    f"{path}: config.{comp}.{key} is named by no template — "
+                    + ("blank, so the pass-through renders nothing for it (the code default applies)."
+                       if blank else "delivered verbatim by the portal ConfigMap's pass-through."))
+                continue
             if elsewhere:
                 findings.append(
                     f"{path}: `config.{comp}.{key}` is read by NO template — but "
@@ -113,6 +135,9 @@ def summarise(line: str) -> None:
             fh.write(line + "\n")
 
 
+for p in passed_through:
+    print(f"  note: {p}")
+
 if findings:
     for f in findings:
         print(f"::error::{f}")
@@ -125,7 +150,8 @@ if findings:
 
 msg = (
     f"All {examined} config key(s) across {len(values_paths)} values file(s) are read by a "
-    f"template ({len(read_keys)} readable keys in the chart)."
+    f"template ({len(read_keys)} readable keys in the chart)"
+    + (f"; {len(passed_through)} of them by the portal ConfigMap's pass-through." if passed_through else ".")
 )
 print(msg)
 summarise(f"- ✅ {msg}")
