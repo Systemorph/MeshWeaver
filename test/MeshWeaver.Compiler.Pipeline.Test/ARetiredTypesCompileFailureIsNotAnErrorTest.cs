@@ -41,8 +41,8 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
         + "CS0246 Error (line 8073): The type or namespace name 'ClientContent' could not be found\n"
         + "CS0117 Error (line 459): 'CrmQueries' does not contain a definition for 'ClientType'");
 
-    private static readonly IReadOnlyList<string> Queries = ["Crm/Client/Source scope:descendants"];
-    private static readonly IReadOnlyList<string> Matched = ["Crm/Client/Source/ClientLayoutAreas"];
+    private static readonly ImmutableList<string> Queries = ImmutableList.Create("Crm/Client/Source scope:descendants");
+    private static readonly ImmutableList<string> Matched = ImmutableList.Create("Crm/Client/Source/ClientLayoutAreas");
 
     private static NodeTypeDefinition Definition(string? pendingRetirement) => new()
     {
@@ -144,7 +144,7 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
 
     private sealed class RecordingLogger : ILogger
     {
-        private readonly List<(LogLevel Level, string Message)> records = [];
+        private ImmutableList<(LogLevel Level, string Message)> records = ImmutableList<(LogLevel Level, string Message)>.Empty;
 
         public IReadOnlyList<(LogLevel Level, string Message)> Records => records;
 
@@ -154,7 +154,7 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => records.Add((logLevel, formatter(state, exception)));
+            => records = records.Add((logLevel, formatter(state, exception)));
 
         private sealed class NullScope : IDisposable
         {
