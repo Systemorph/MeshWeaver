@@ -13,6 +13,12 @@ name: No client names
 #
 # Secrets (org level): NAME_CHECK_URL — base URL of the CRM-owning instance; NAME_CHECK_TOKEN —
 # the `mw_` token of a service user whose ONLY grant is create + read on `Governance/NameChecks`.
+#
+# Each request carries this run's id (GITHUB_RUN_ID) and the full 40-character commit, and the
+# instance proves both through its own GitHub App before it reads the CRM (MeshWeaver.Plugins#2785):
+# the run must be a live run of THIS repository on that commit (or on the pull-request head the
+# commit merges), and every line must be in that commit. So the job must run inside the run it names,
+# and the App must be able to read the caller repository's Actions runs and contents.
 
 on:
   workflow_call:
@@ -46,11 +52,13 @@ jobs:
   # 🚨 The change's OWN checker is unreviewed code, so its self-test runs in a job of its own: no
   # secret, no workspace and no runner shared with the job that hands the reviewed checker the token.
   # Run inside that job, it could rewrite the reviewed checker on disk before the next step ran it
-  # with NAME_CHECK_TOKEN. A GitHub-hosted runner (not MW_RUNNER) is a fresh VM per job, so nothing
-  # it leaves behind reaches another job.
+  # with NAME_CHECK_TOKEN. Both runner pools isolate a job: a GitHub-hosted runner is a fresh VM per
+  # job, and the MW_RUNNER pool's runners are ephemeral (one job, then the pod is gone), so nothing it
+  # leaves behind reaches another job. The pool variable is the fleet's runner rule
+  # (check-reusable-workflow-runners.py): a literal hosted label would bill a private caller.
   own-checker-self-test:
     name: "No client names: this change's checker proves itself (no secret)"
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7

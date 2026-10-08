@@ -11,7 +11,11 @@ and reads back a masked verdict:
                  file (no ``--base``), each with file:line;
     2. submit    one ``Governance/NameCheck`` node per chunk under ``Governance/NameChecks``, over
                  that instance's MCP endpoint, as the build's OWN service user (a ``mw_`` token
-                 whose only grant is create + read on that namespace);
+                 whose only grant is create + read on that namespace). Each request names the
+                 repository, the full 40-character commit and the Actions run that sends it
+                 (``runId`` = ``GITHUB_RUN_ID``): the instance proves all three through its own
+                 GitHub App before it reads the CRM, so it never answers for text that is not in
+                 a live build's commit (MeshWeaver.Plugins#2785);
     3. read      each node back until the watcher there has answered: ``Pass``, ``Fail`` with
                  ``client#n`` at file:line:column, or ``NotChecked``;
     4. report    one ``::error`` annotation per hit — the masked term and the kind that matched,
@@ -22,7 +26,8 @@ and reads back a masked verdict:
 never a clean one. ``--report-only`` (private repositories) downgrades it to a warning.
 
 Inputs (environment): ``NAME_CHECK_URL`` — base URL of the CRM-owning instance;
-``NAME_CHECK_TOKEN`` — the build's ``mw_`` token. Both are secrets.
+``NAME_CHECK_TOKEN`` — the build's ``mw_`` token. Both are secrets. ``GITHUB_RUN_ID`` — set by
+GitHub Actions; without it there is nothing the instance can prove, so the check is not run.
 
     check-client-names.py --base origin/main          # a pull request
     check-client-names.py                             # the whole tree
@@ -58,6 +63,7 @@ RETRY_DELAY_S = float(os.environ.get("NAME_CHECK_RETRY_DELAY_S", "5"))
 POLL_S = float(os.environ.get("NAME_CHECK_POLL_S", "3"))
 ANSWER_TIMEOUT_S = float(os.environ.get("NAME_CHECK_TIMEOUT_S", "180"))
 STATUS_NAMES = {1: "Requested", 2: "Pass", 3: "Fail", 4: "NotChecked"}
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 # What a refused CREATE means and who fixes it. The caller's grant is an access-control change, so
 # the build never makes it: it is the governed standard `namecheck.caller.grant` on the CRM-owning
 # instance (input: the token's service identity, `svc-…`; signed by a global admin who is not the
@@ -314,7 +320,20 @@ def status_of(content: dict) -> str:
     return STATUS_NAMES.get(s, str(s)) if isinstance(s, int) else str(s)
 
 
-def submit_and_wait(mesh: Mesh, repo: str, sha: str, run: str, parts: list[list[dict]]) -> list[dict]:
+def provenance(sha: str, run_id: str | None) -> int:
+    """The run id the instance will prove, or NotChecked. The instance refuses a request without
+    a full 40-character commit or a positive ``runId`` before reading anything, so sending one would
+    only turn a clear local message into a remote ``NotChecked``. Pure."""
+    if not FULL_SHA.match(sha or ""):
+        raise NotChecked(f"HEAD is not a full 40-character commit id ({len(sha or '')} characters) — the "
+                         "instance verifies every line against that commit")
+    if not (run_id or "").isdigit() or int(run_id) <= 0:
+        raise NotChecked("GITHUB_RUN_ID is not set — the instance answers only for a live GitHub Actions run of "
+                         "this repository, which it proves through its own GitHub App, so this check runs in CI only")
+    return int(run_id)
+
+
+def submit_and_wait(mesh: Mesh, repo: str, sha: str, run_id: int, run: str, parts: list[list[dict]]) -> list[dict]:
     """Creates one node per chunk, then reads each back until answered. Returns the answered
     contents. Raises NotChecked for anything short of an answer."""
     ids = []
@@ -322,7 +341,7 @@ def submit_and_wait(mesh: Mesh, repo: str, sha: str, run: str, parts: list[list[
         nid = node_id(repo, sha, run, i)
         node = {"id": nid, "namespace": NAMESPACE, "name": f"{repo}@{sha[:12]} ({i + 1}/{len(parts)})",
                 "nodeType": NODE_TYPE,
-                "content": {"$type": CONTENT_TYPE, "repo": repo, "sha": sha, "lines": part}}
+                "content": {"$type": CONTENT_TYPE, "repo": repo, "sha": sha, "runId": run_id, "lines": part}}
         try:
             text = mesh.call("create", {"node": json.dumps(node)}).strip()
         except NotChecked as exc:
@@ -492,8 +511,9 @@ def main(argv: list[str]) -> int:
                 missing = [n for n, v in (("NAME_CHECK_URL", url), ("NAME_CHECK_TOKEN", token)) if not v]
                 raise NotChecked("missing " + ", ".join(missing) + " — the build's service user on the CRM-owning "
                                  "instance and its endpoint (Settings → Secrets → Actions)")
-            run = f"{os.environ.get('GITHUB_RUN_ID', str(int(time.time())))}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
-            answers = submit_and_wait(Mesh(url, token), a.repo, sha, run, chunks(lines))
+            run_id = provenance(sha, os.environ.get("GITHUB_RUN_ID"))
+            run = f"{run_id}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}"
+            answers = submit_and_wait(Mesh(url, token), a.repo, sha, run_id, run, chunks(lines))
             status, hits = report(answers)
     except NotChecked as exc:
         lenient = a.report_only or a.unchecked == "warn"
@@ -520,6 +540,7 @@ def self_test() -> int:
     import tempfile
 
     store: dict[str, dict] = {}
+    sent: list[dict] = []
     flags = {"answer": True, "not_checked": False, "rpc_error": False, "get_error_file": None}
     term = re.compile(r"(?<![A-Za-z0-9])zorblax(?![a-z0-9])", re.I)
 
@@ -553,6 +574,7 @@ def self_test() -> int:
             if name == "create":
                 node = json.loads(args["node"])
                 store[node["namespace"] + "/" + node["id"]] = node["content"]
+                sent.append(node["content"])
                 text = "Created: " + node["id"]
             else:
                 path = args["path"].lstrip("@")
@@ -564,7 +586,9 @@ def self_test() -> int:
                     text = "Not found"
                 else:
                     if flags["answer"] and c.get("lines"):
-                        if flags["not_checked"] or any(l["file"] == flags.get("not_checked_file") for l in c["lines"]):
+                        unproven = not (isinstance(c.get("runId"), int) and c["runId"] > 0
+                                        and FULL_SHA.match(str(c.get("sha") or "")))
+                        if unproven or flags["not_checked"] or any(l["file"] == flags.get("not_checked_file") for l in c["lines"]):
                             c = {**c, "status": "NotChecked", "reason": "ground truth empty", "lines": []}
                         else:
                             hits = [{"file": l["file"], "line": l["line"], "column": m.start() + 1,
@@ -680,7 +704,7 @@ def self_test() -> int:
 
         def run(env: dict, *extra: str) -> tuple[int, str]:
             saved = {k: os.environ.get(k) for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN", "GITHUB_STEP_SUMMARY", "GITHUB_RUN_ID")}
-            os.environ.update({"GITHUB_STEP_SUMMARY": str(r / "summary.md"), "GITHUB_RUN_ID": str(len(store))})
+            os.environ.update({"GITHUB_STEP_SUMMARY": str(r / "summary.md"), "GITHUB_RUN_ID": str(len(store) + 1)})
             for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN"):
                 os.environ.pop(k, None)
             os.environ.update(env)
@@ -705,6 +729,21 @@ def self_test() -> int:
         check("…annotated at file:line:col with the MASKED term", "file=a.md,line=2,col=13::" in out and "client#1" in out)
         check("…and the path hit is reported on the path", "file=zorblax-notes.md::The path names" in out)
         check("…and no line text is printed", "written for" not in out)
+        head = subprocess.run(["git", "-C", str(r), "rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+        check("🚨 every request carries the full 40-character commit and the run's id (the instance proves both)",
+              bool(sent) and all(c.get("sha") == head and len(c["sha"]) == 40 and isinstance(c.get("runId"), int)
+                                 and c["runId"] > 0 for c in sent))
+        before = len(sent)
+        rc, out = run({**ok_env, "GITHUB_RUN_ID": ""}, "--base", "HEAD~1")
+        check("🚨 no GITHUB_RUN_ID FAILS closed, names it, and sends nothing",
+              rc == 1 and "GITHUB_RUN_ID" in out and len(sent) == before)
+        try:
+            provenance(head[:12], "7")
+            short_refused = False
+        except NotChecked as exc:
+            short_refused = "40-character" in str(exc)
+        check("🚨 an abbreviated commit id is refused before anything is sent", short_refused)
         rc, out = run(ok_env)
         check("the whole tree is checked without --base, and fails too", rc == 1)
         rc, out = run(ok_env, "--base", "HEAD~1", "--path", "docs", "--path", ":(exclude)a.md")
