@@ -101,6 +101,8 @@ public class DeletedSourceFolderIsRetiredTest(ITestOutputHelper output) : Monoli
         result.Outcome.Should().Be(GitHubSyncService.RetiredOutcome,
             "the folder had files at the last imported commit and has none now — git deleted it, "
             + "which is a retirement, not the mistyped subdirectory #1326 refuses");
+        repoClient.ChangedPathsCalls.Should().Be(0,
+            "an empty source is classified before diff scoping, even when the client supports comparisons");
         string.Join(",", result.PrunedPaths.OrderBy(p => p, StringComparer.Ordinal))
             .Should().Be($"{space}/Guide,{space}/Menu",
                 "exactly the nodes the source imported go — the manifest is the provenance");
@@ -214,6 +216,14 @@ public class DeletedSourceFolderIsRetiredTest(ITestOutputHelper output) : Monoli
     {
         public Dictionary<string, IReadOnlyList<RepoFile>> Commits { get; } = new(StringComparer.Ordinal);
         public HashSet<string> EmptyFolders { get; } = new(StringComparer.Ordinal);
+        public int ChangedPathsCalls { get; private set; }
+
+        public IObservable<IReadOnlyList<string>?> GetChangedPaths(
+            string repositoryUrl, string baseSha, string headSha, string? subdirectory, string accessToken)
+        {
+            ChangedPathsCalls++;
+            return Observable.Return<IReadOnlyList<string>?>(["Guide.json", "Menu.json"]);
+        }
 
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
