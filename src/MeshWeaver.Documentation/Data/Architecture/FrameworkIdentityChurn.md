@@ -130,6 +130,26 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 
 ## The options, costed
 
+> **Decided: option 1, bake per live identity** (policy
+> [`bake-per-live-identity`](../PolicyNotProse)). Options 2, 3 and 4 are closed. The costing below
+> assumed an identity that moved with every merge. Under the compatibility key (policy
+> `platform-backwards-compatibility`), the identity is `c<major>e<epoch>`, so every build of one epoch
+> states the same identity. The live identity set is therefore one per epoch, and MeshWeaver.Plugins'
+> own publish-bake lane seals it on every push to its `main`. That is option 1 at a cost of one bake
+> per push, with none of the multiplier the table charges it.
+>
+> Across a declared break, a portal on the old epoch keeps the old key's publication and the
+> sealed-sync gate holds its sources there. The new key is sealed as step 3 of
+> [Deploying Across Platform Versions → The breaking path](../DeployingAcrossPlatformVersions), and
+> the self-updater does not roll a portal past a plugin that has no seal covering the target. So
+> every live identity has a seal at every point of a transition.
+>
+> Measured on 2026-10-09: memex.systemorph.com, memex.meshweaver.cloud and control.systemorph.com all
+> report `framework=c003e001` on `/health`. `bake-report` reads `baked=198` of 201 and 414 of 416, and
+> the three that are not baked are marked `previouslybroken`, not missing a bundle. memex.systemorph.com's
+> `Hosting/_GitSync` made its last attempt at 18:54Z against Plugins `main` HEAD `dcf0e4c`, one minute after that push, and found nothing held. So
+> sources no longer run days behind `main`, which was the symptom #3583 was filed on.
+
 | option | cost | what it breaks | what it leaves unfixed | wrong if |
 |---|---|---|---|---|
 | **1. Bake per live identity** | ≈ 20–47 runner-h/day *(arithmetic)* | nothing structurally | **Convergence is doubtful:** at 43 merges/day the identity moves every ≈ 33 min, while a two-level bake chain is ≈ 22 min *plus* a ≈ 48 min image build. The wake arrives for an identity already superseded — which is the 23/23 pattern above. | identity churn is reduced first. It is a multiplier on a rate that option 3 would cut ~8×. |
@@ -137,7 +157,7 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 | **3. Make the identity content-derived** | **larger than it looks** — see the falsification test: all 26 surface hashes plus the 17 MVIDs, in a targets file every host imports, needing byte-exact agreement on both sides | risks forking bake-vs-image identity during rollout — the exact failure the current design prevents | nothing, if it lands: **≥ 38 of 43** daily identity moves carry no content reason | reference assemblies carry other per-build variation. The control says they do not: only the sha varied. |
 | **4. Decouple the bake from the identity** | publish content-addressed, with identity as a compatibility *attribute* a consumer can evaluate | needs the same surface-set-in-manifest work option 2 lacks, done honestly | — | — |
 
-**What this page does not do:** pick one. Option 3 attacks the cause and today's measurement made it
+**What this page did not do, until the decision above:** pick one. Option 3 attacks the cause and today's measurement made it
 more expensive than advertised, not less necessary; option 1 is a multiplier on a rate that 5 of 43
 merges justify; option 2 should stay off the table while manifests carry no surface set.
 
@@ -149,7 +169,7 @@ A future reader should not have to reconstruct which half of this shipped.
 |---|---|
 | **The gate's three refusals are distinguishable**, and the resolved identity + its origin are logged on every path | **LANDED** (#4084). Log quality only: every refusal still exits 1, nothing is advisory, no retry, no fallback. |
 | **4b — resolve the identity from the newest SEALED set** instead of a moving tag | 🚨 **ALREADY IMPLEMENTED — it was never open**, and it does not remove the red it was expected to. Measured below (*Second correction*): the satellites resolved the newest **platform-sealed** set on the `schedule` path from at least 2026-09-10, two days before this row was first written, and a `schedule` run that did exactly that still reddened at the upstream gate. What is left on that path is the CONDITION, i.e. options 1–4. |
-| Options 1–4 above | **not started.** Roland's call. |
+| Options 1–4 above | **Decided: option 1** (policy `bake-per-live-identity`), and it is in force through the compatibility key. Options 2–4 are closed. |
 
 ### Why 4b shrank
 

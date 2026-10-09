@@ -276,6 +276,29 @@ self-updating install stays on the previous image"* for a commit no publisher ha
 > [Platform and Module Deploy → The pair tag, retired](../PlatformAndModuleDeploy).
 > The rest of this section is the record of the options as they stood.
 
+### Rebuild only on the image's own inputs
+
+The standing rule is policy [`image-rebuild-own-inputs`](../PolicyNotProse): an image is rebuilt only
+when one of its own inputs changed. Two classifiers decide it, one per repository, each owning only
+the layout it can see:
+
+| side | classifier | what it decides |
+|---|---|---|
+| MeshWeaver.Plugins (the hosts) | `scripts/portal-image-relevance.py`, run by `portal-image-rebuild.yml` | evaluates every host project's `Compile`/`Content`/`EmbeddedResource` includes, the control image's linked `Hosting/*/Source/*.cs` included, and dispatches `main-cd` with `rebuild: true` only when a changed path matches one |
+| core | `.github/scripts/core-image-relevance.py`, run by `main-cd`'s `relevance` step | skips a core commit whose every changed path since the newest published set is a test, agent configuration, repository-root prose or a standalone client |
+
+Both fail open: an empty, unreadable or possibly-truncated change list rebuilds. The core
+classifier treats a compare at GitHub's 300-file cap as possibly truncated, and lists the previous
+name of a renamed file, so a file moved out of `src/` still counts as a `src/` change. `.github/`
+stays an input, because `main-cd` reads its scripts while it builds and bakes.
+
+Measured over the Plugins lane's last 60 pushes (2026-10-08 17:28Z to 2026-10-09 18:53Z): 22
+dispatched a rebuild and 38 did not. Every one of the 22 named a host input. For example, run
+`37976049420` reported `REBUILD: 5 of 6 changed path(s) can reach the published image, first:
+Hosting/InstanceAction/Source/InstanceActionPlan.cs`, a file the control image compiles through
+`MeshWeaver.Fleet.Control`'s `SourceFolders.props`. Before this, every Plugins merge minted a
+rebuild through the pair tag.
+
 **This does not stop the rebuild loop, and stopping it needs a decision nobody has made.** It is
 tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which carries the same
 three options and the measurements below.
