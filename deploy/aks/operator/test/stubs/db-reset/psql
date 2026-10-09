@@ -31,6 +31,9 @@ touch "$state/dbs"
 has() { grep -qx "$1" "$state/dbs"; }
 quoted() { printf '%s' "$sqltext" | sed -n "s/.*$1 \"\\([a-z0-9_]*\\)\".*/\\1/p"; }
 case "$sqltext" in
+  *"datname ~ '^"*)
+    prefix="$(printf '%s' "$sqltext" | sed -n "s/.*datname ~ '^\\([a-z0-9_]*\\)_kept_.*/\\1/p")"
+    grep -E "^${prefix}_kept_[0-9]{12}\$" "$state/dbs" | sort -r | head -1 ;;
   *"count(*) FROM pg_database WHERE datname = '"*)
     name="$(printf '%s' "$sqltext" | sed -n "s/.*datname = '\\([^']*\\)'.*/\\1/p")"
     has "$name" && echo 1 || echo 0 ;;

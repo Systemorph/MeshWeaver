@@ -3305,6 +3305,33 @@ case "$_dbr_out$_dbr_log" in *NEVER-PRINTED*) bad "the password is never printed
 case "$_dbr_log" in *"PGPASSWORD=unset"*) bad "every psql got the password through the environment" "log: ${_dbr_log}" ;; *) ok "every psql got the password through the environment" ;; esac
 rm -rf "$_dbr_state"
 
+# show: reads the newest stamped kept copy back from the server — the plan's last step
+_dbr_new; _dbr keep "${DBR_ARGS[@]}" --request Ops/Actions/reset-acme-1
+echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"
+_dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -eq 0 ] && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_database=acmedb_kept_202610091200' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_until=2026-10-23T12:00Z' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_verified=true'; then
+  ok "show reads the NEWEST stamped kept copy and its retention back from the server"
+else
+  bad "show reports the newest kept copy" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+_dbr_new; _dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'did NOT keep the previous database' && ! printf '%s' "$_dbr_out" | grep -q 'kept_verified'; then
+  ok "show with no kept copy is a failed step naming that nothing was kept"
+else
+  bad "show refuses when no copy exists" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+_dbr_new; echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"; _dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q "carries no 'meshweaver-kept-copy' comment"; then
+  ok "show refuses a copy-shaped database without the kept-copy stamp"
+else
+  bad "show refuses an unstamped copy" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
 # live sessions → refused, nothing changed
 _dbr_new; echo 2 > "$_dbr_state/sessions"; _dbr keep "${DBR_ARGS[@]}"
 if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q '2 session(s) are still connected' \

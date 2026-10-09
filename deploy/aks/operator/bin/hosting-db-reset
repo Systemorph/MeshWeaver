@@ -4,6 +4,8 @@
 #                        [--request <action node path>] [--retain-days <n>]
 # hosting-db-reset purge --database <db> --kept <kept copy> --server <pg host> --user <login>
 #                        [--vault <key vault> --password-secret <vault object>] [--retain-days <n>]
+# hosting-db-reset show  --database <db> --server <pg host> --user <login>
+#                        [--vault <key vault> --password-secret <vault object>]
 #
 # Give an instance an EMPTY database without destroying the one it had (MeshWeaver.Plugins#2781,
 # policy `reset-database-keeps-a-copy`). The first-sign-in-becomes-admin rule fires only on an empty
@@ -19,6 +21,9 @@
 #        of this database (`<db>_kept_<12 digits>`), and only once it is older than the retention
 #        (default 14 days, read from its own name on the server's clock). That is the governed
 #        cleanup: its own approval-gated action, never a side effect of the reset.
+# show   READS the newest stamped kept copy of this database back from the server and reports it —
+#        the reset plan's LAST step, so the facts the mesh records sit at the end of the run's log
+#        (the part a log tail keeps) and are a reading of the server, not an echo of `keep`.
 #
 # The plan quiesces the portal (scale to 0) before `keep`; this command still refuses while any
 # session is connected, because renaming a database something is writing to is not an atomic act.
@@ -28,6 +33,7 @@
 #   kept_until=<iso>       the instant a purge may first drop it
 #   reset=completed        `keep` renamed, stamped, re-created and read both back — the ONLY success
 #   purged=<name>          `purge` dropped exactly this kept copy
+#   kept_verified=true     `show` read the kept copy (kept_database / kept_until) back from the server
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
@@ -39,9 +45,9 @@ KEPT_MARKER="meshweaver-kept-copy"
 verb="${1:-}"
 [ $# -gt 0 ] && shift
 case "$verb" in
-  keep|purge) ;;
-  "") hosting::die "missing verb — keep (rename and keep, create an empty database) or purge (drop one kept copy past its retention)" ;;
-  *)  hosting::die "unknown verb '${verb}' — keep or purge" ;;
+  keep|purge|show) ;;
+  "") hosting::die "missing verb — keep (rename and keep, create an empty database), purge (drop one kept copy past its retention) or show (read the newest kept copy back)" ;;
+  *)  hosting::die "unknown verb '${verb}' — keep, purge or show" ;;
 esac
 
 database="" server="" user="" vault="" password_secret="" request="" kept="" retain_days="14"
@@ -91,6 +97,9 @@ if hosting::dry; then
   if [ "$verb" = keep ]; then
     hosting::log "DRY-RUN would rename ${database} on ${server} to ${database}_kept_<now> (kept ${retain_days} days) and create an empty ${database}"
     hosting::say kept_database dry-run
+  elif [ "$verb" = show ]; then
+    hosting::log "DRY-RUN would read the newest kept copy of ${database} on ${server} back"
+    hosting::say kept_verified dry-run
   else
     hosting::log "DRY-RUN would drop the kept copy ${kept} on ${server} if it is older than ${retain_days} days and carries the ${KEPT_MARKER} marker"
     hosting::say purged dry-run
@@ -152,6 +161,24 @@ if [ "$verb" = purge ]; then
   gone="$(exists "$kept")" || hosting::die "${kept} was dropped but could not be read back"
   [ "$gone" = 0 ] || hosting::die "DROP DATABASE ${kept} reported success but the database is still listed"
   hosting::say purged "$kept"
+  exit 0
+fi
+
+if [ "$verb" = show ]; then
+  newest="$(q "SELECT datname FROM pg_database WHERE datname ~ '^${database}_kept_[0-9]{12}\$' ORDER BY datname DESC LIMIT 1")" \
+    || hosting::die "could not list the kept copies of ${database} on ${server}"
+  newest="$(printf '%s' "$newest" | tr -d '[:space:]')"
+  [ -n "$newest" ] || hosting::die "no kept copy of ${database} exists on ${server} — the reset did NOT keep the previous database"
+  comment="$(q "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '${newest}'")" \
+    || hosting::die "could not read the comment of ${newest}"
+  case "$comment" in
+    "${KEPT_MARKER} "*) ;;
+    *) hosting::die "${newest} carries no '${KEPT_MARKER}' comment — it is not a copy this command kept" ;;
+  esac
+  until_iso="$(printf '%s' "$comment" | sed -n 's/.*keptUntil=\([^;]*\).*/\1/p' | tr -d '[:space:]')"
+  hosting::say kept_database "$newest"
+  [ -z "$until_iso" ] || hosting::say kept_until "$until_iso"
+  hosting::say kept_verified true
   exit 0
 fi
 
