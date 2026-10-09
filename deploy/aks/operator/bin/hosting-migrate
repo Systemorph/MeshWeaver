@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # hosting-migrate --namespace <ns> --release <release> --image <registry>/<path>/memex-migration:<tag>
 # hosting-migrate --namespace <ns> [--release <release>] --tag <tag>
+# hosting-migrate --namespace <ns> [--release <release>] --current --fresh
+#
+# The third form is the database RESET's (MeshWeaver.Plugins#2781, policy
+# `reset-database-keeps-a-copy`): `--current` migrates the tag the portal Deployment RUNS (read off
+# its own image, never typed), and `--fresh` says the database this tag's Job migrated was replaced
+# by an empty one — so a Job that already SUCCEEDED for the tag is deleted and run again instead of
+# being reported. Without `--fresh` a succeeded Job is still never re-run.
 #
 # The second form is the one run.sh's interlock uses (policy `roll-migrates-first`): it knows only the
 # namespace and the TARGET TAG the plan's `set image` moves to. The release is then read off the portal
@@ -42,7 +49,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-migrate"
 
-namespace="" release="" image="" tag=""
+namespace="" release="" image="" tag="" current=0 fresh=0
 interval="${HOSTING_MIGRATE_INTERVAL:-5}" grace="${HOSTING_MIGRATE_GRACE:-120}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,12 +57,30 @@ while [ $# -gt 0 ]; do
     --release)   release="${2:-}";   shift 2 ;;
     --image)     image="${2:-}";     shift 2 ;;
     --tag)       tag="${2:-}";       shift 2 ;;
+    --current)   current=1;          shift ;;
+    --fresh)     fresh=1;            shift ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
 
 hosting::need_flag namespace "$namespace"
 hosting::safe_name namespace "$namespace"
+# --current: the tag is the one the portal RUNS, read off its own Deployment — three answers, and
+# neither a refusal nor an absence may pick a tag for it.
+if [ "$current" = 1 ]; then
+  [ -z "$image" ] && [ -z "$tag" ] \
+    || hosting::die "--current reads the tag the portal runs — it takes neither --image nor --tag"
+  hosting::probe output kubectl -n "$namespace" get deployment memex-portal-deployment \
+      -o 'jsonpath={.spec.template.spec.containers[0].image}'
+  case $? in
+    2) hosting::die_refused "deployment/memex-portal-deployment in ${namespace}, whose image names the tag to migrate" ;;
+    1) hosting::die "cannot read the image deployment/memex-portal-deployment runs in ${namespace} (${HOSTING_PROBE_ERR:-empty}) — there is no current tag to migrate" ;;
+  esac
+  running="${HOSTING_PROBE_OUT%%@*}"
+  [[ "$running" == *:* ]] || hosting::die "the portal runs '${HOSTING_PROBE_OUT}', which names no tag — there is no current tag to migrate"
+  tag="${running##*:}"
+  hosting::log "current   ${tag} (the tag deployment/memex-portal-deployment runs)"
+fi
 # Exactly ONE of --image / --tag: two answers to "which build migrates" would be one too many.
 if [ -n "$image" ] && [ -n "$tag" ]; then
   hosting::die "--image and --tag are both set — name the target ONCE (--image for a full reference, --tag to keep the release's own migration repository)"
@@ -188,10 +213,17 @@ log_tail() {
 read_job_state
 case "$job_state" in
   succeeded)
-    hosting::log "migration ${job} already SUCCEEDED for ${tag} — not run again"
-    hosting::say migration_job "$job"
-    hosting::say migration completed
-    exit 0 ;;
+    if [ "$fresh" = 1 ]; then
+      # The database this Job migrated is gone (renamed and kept by a reset): its success says
+      # nothing about the empty one, so it is deleted and run again — never reported.
+      hosting::log "migration ${job} SUCCEEDED for ${tag} against the database a reset replaced — deleting it and running it again (--fresh)"
+      hosting::do kubectl -n "$namespace" delete job "$job" --wait=true >&2
+    else
+      hosting::log "migration ${job} already SUCCEEDED for ${tag} — not run again"
+      hosting::say migration_job "$job"
+      hosting::say migration completed
+      exit 0
+    fi ;;
   failed)
     hosting::log "migration ${job} FAILED before — deleting it and running it again"
     hosting::do kubectl -n "$namespace" delete job "$job" --wait=true >&2 ;;
