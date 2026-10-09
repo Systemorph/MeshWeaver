@@ -2133,8 +2133,12 @@ public sealed class MessageHub : IMessageHub
         if (role is null)
             return;
 
-        var messageType = delivery.Message?.GetType().Name ?? "(null)";
-        if (!routerTrafficOriginReported.TryAdd($"{role}:{messageType}", 0))
+        // A NACK names nothing by its own type: every undeliverable message the router reports is
+        // one `DeliveryFailure`, so (role, type) alone kept the FIRST failed delivery per hub and
+        // printed none of it. The failed message's type is the actual subject (#5713) — it is in
+        // the dedup key, and the line carries it with its two ends and the failure reason.
+        var messageType = DescribeOriginMessage(delivery.Message);
+        if (!routerTrafficOriginReported.TryAdd($"{role}:{OriginDedupType(delivery.Message)}", 0))
             return;
 
         logger.LogError(
@@ -2159,6 +2163,37 @@ public sealed class MessageHub : IMessageHub
             messageType, role, delivery.Sender?.ToString() ?? "(none)",
             delivery.Target?.ToString() ?? "(none)", DescribeCallSite());
     }
+
+    /// <summary>The longest failure reason a NACK's origin line quotes — a reason is one sentence,
+    /// and a NACK about an oversized message must not become one.</summary>
+    private const int MaxOriginFailureReason = 300;
+
+    /// <summary>
+    /// The <c>{MessageType}</c> value of an origin line. For a <see cref="DeliveryFailure"/> it also
+    /// names the delivery the NACK is ABOUT — its message type, its two ends and the reason — since
+    /// that delivery, not the NACK, is what the reader has to find (#5713). Pure.
+    /// </summary>
+    /// <param name="message">The posted message.</param>
+    /// <returns>The type name, extended with the failed delivery for a NACK.</returns>
+    private static string DescribeOriginMessage(object? message)
+    {
+        if (message is not DeliveryFailure failure)
+            return message?.GetType().Name ?? "(null)";
+        var failed = failure.Delivery;
+        var reason = failure.Message is { Length: > 0 } text
+            ? text.Length > MaxOriginFailureReason ? text[..MaxOriginFailureReason] + "…" : text
+            : "(no reason given)";
+        return $"{nameof(DeliveryFailure)} (NACK of {failed?.Message?.GetType().Name ?? "(unknown message)"}, "
+            + $"{failed?.Sender?.ToString() ?? "(no sender)"} -> {failed?.Target?.ToString() ?? "(no target)"}: {reason})";
+    }
+
+    /// <summary>The type an origin line is de-duplicated by: the message's own, and for a NACK the
+    /// failed message's too, so one failed type cannot mute every other. Pure.</summary>
+    /// <param name="message">The posted message.</param>
+    /// <returns>The de-duplication type key.</returns>
+    private static string OriginDedupType(object? message) => message is DeliveryFailure failure
+        ? $"{nameof(DeliveryFailure)}/{failure.Delivery?.Message?.GetType().Name ?? "(unknown message)"}"
+        : message?.GetType().Name ?? "(null)";
 
     /// <summary>
     /// The frames worth printing for <see cref="ReportRouterTrafficOrigin"/>: the posting code, with

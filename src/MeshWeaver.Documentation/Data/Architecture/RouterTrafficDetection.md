@@ -493,6 +493,16 @@ runtime ORIGIN line is still the instrument.
 top so the first line is the caller. Read it as a normal stack: the first frame outside the framework
 is the site to fix.
 
+**A NACK names the delivery it is about.** When the posted message is a `DeliveryFailure`, its
+`{MessageType}` reads `DeliveryFailure (NACK of <failed type>, <sender> -> <target>: <reason>)`, and
+the once-per-hub de-duplication is keyed on the failed type as well as the role. Every undeliverable
+message is the same `DeliveryFailure`, so a line keyed and printed by that type alone kept the first
+failed delivery per hub and named none of it ([#5713](https://github.com/Systemorph/MeshWeaver/issues/5713)):
+the `sender AND target` NACK in that issue could not say which router post had failed. The NACK's call
+site (`SendDeliveryFailure`) is the innocent answering half; the post to fix is the one that sent the
+failed message, which the line now names. Pinned by
+`RouterTrafficOnNodeCreateFromTheRootHubTest.TwoNacksAboutDifferentFailedMessages_EachNameTheFailedDelivery`.
+
 The receiver-side line stays, unchanged, and is still the only one that can see a violation posted by
 another process.
 
