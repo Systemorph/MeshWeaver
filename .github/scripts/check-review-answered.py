@@ -409,7 +409,10 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             # Only when the state actually STANDS: a waived refusal is not an unreviewable pull
             # request, it is a reviewed-enough one, and saying otherwise would re-create the
             # confusion in the other direction.
-            refused += [first_line(r.get("body")) for k, r in kinds if k == "refused"]
+            # A review DID land (stale_clean), so an older refusal is history, not this state: the
+            # reader must be told "no review of this head", never "unreviewable" (#6371 review).
+            if not stale_clean:
+                refused += [first_line(r.get("body")) for k, r in kinds if k == "refused"]
 
     # 2 — is every thread the reviewer started answered? (`roots`/`unanswered` were read above)
     notes.append(f"threads opened by the automatic reviewer: {len(roots)}, answered by a person: {len(roots) - len(unanswered)}")
@@ -2008,6 +2011,11 @@ def self_test() -> int:
          _pr(0), [older_clean], [], mention=("bbbbbbbbbb", EVIDENCE),
          says=("RED — NO REVIEW OF THIS HEAD", "no review of this head", "re-requests the Copilot review"),
          never_says=("usually arrives minutes after", "RED — UNREVIEWABLE"))
+    case("EVIDENCE NEG: refusal, then a clean review of an EARLIER head -> 'no review of this head', not 'unreviewable'",
+         ("no evidence of a review of this head",), _pr(0),
+         [_review(REFUSAL_QUOTA, rid=64, at="2026-09-14T11:00:00Z"), dict(_review(rid=65), commit_id="b" * 40)], [],
+         says=("RED — NO REVIEW OF THIS HEAD", "re-requests the Copilot review"),
+         never_says=("RED — UNREVIEWABLE", "unreviewable right now", "REFUSED to review it"))
     case("EVIDENCE: an earlier clean review AND one of the current head -> green", GREEN, _pr(0),
          [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], mention=("reviewed, nothing found",))
     case("EVIDENCE NEG: the internal reviewer's clean review of the head is not Copilot's -> red", ("no evidence of a review of this head",),
