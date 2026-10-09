@@ -476,6 +476,8 @@ public static class PublishedBundleCatalogue
         var ranges = ImmutableDictionary.CreateBuilder<string, BundlePlatformRange>(StringComparer.OrdinalIgnoreCase);
         // The DECLARED modules — what an instance registers, and therefore what a record must name.
         var sealedBy = new Dictionary<string, (string Mvid, string Source)>(StringComparer.Ordinal);
+        // …and the bundle that declared each — the bytes boot adopts for it at the roll.
+        var declaredIn = new Dictionary<string, string>(StringComparer.Ordinal);
         // EVERY copy of every MeshWeaver.* assembly the sealed module bundles carry, declared or
         // riding: the first one seen per name, against which every later copy must compare equal.
         var producedBy = new Dictionary<string, SealedCopy>(StringComparer.Ordinal);
@@ -537,8 +539,8 @@ public static class PublishedBundleCatalogue
                     {
                         producedBy[name] = new SealedCopy(mvid, source, moduleBundle, isEntry);
                     }
-                    if (isEntry)
-                        sealedBy.TryAdd(name, (mvid, source));
+                    if (isEntry && sealedBy.TryAdd(name, (mvid, source)))
+                        declaredIn[name] = path;
                 }
             }
         }
@@ -550,7 +552,11 @@ public static class PublishedBundleCatalogue
                 sealedBy.Where(kv => !conflicted.Contains(kv.Key))
                     .ToImmutableDictionary(kv => kv.Key, kv => kv.Value.Mvid, StringComparer.Ordinal),
                 conflicts.ToImmutable(),
-                refusals.Count == 0 ? null : string.Join("; ", refusals)),
+                refusals.Count == 0 ? null : string.Join("; ", refusals))
+            {
+                BundlePathByModule = declaredIn.Where(kv => !conflicted.Contains(kv.Key))
+                    .ToImmutableDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
+            },
             DependencyRecords = records.ToImmutable(),
             BundleRanges = ranges.ToImmutable(),
         };

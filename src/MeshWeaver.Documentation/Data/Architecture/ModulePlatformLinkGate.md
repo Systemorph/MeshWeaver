@@ -393,6 +393,39 @@ and an unreadable seeded entry fails publication rather than disappearing from t
 Seeded entries precede same-named app-root copies, matching the module path resolver. Ordinary
 `--module` bake composition and its existing duplicate-producer checks are unchanged.
 
+**A landed module is measured against the target's surface PLUS the other installed modules as
+boot loads them AFTER the roll** (`ModuleLinkObservation.Measure`,
+`ModulePlatformSurface.WithSiblingModules`). That is the rule landing already applies, and the CD
+ladder's platform-link applies it since MeshWeaver#6347. The precedence follows what boot adopts:
+
+1. A sibling the target PUBLISHES a build of is measured by that published build. Boot adopts it
+   at the roll, so a dependent is never cleared against an API the replacement removed. The
+   replacement's bytes are extracted from its module bundle (`SealedModuleSet.BundlePathByModule`).
+2. Otherwise the sibling's landed generation is used.
+3. A module with neither contributes nothing.
+
+The sibling files sit behind the published surface and are not platform-bound, and their identities
+are read from the files, so a dependent bound above a sibling's version is a binding conflict. A
+reference to a module this instance does not carry is still a hold. A sibling that cannot be read
+makes its dependents Indeterminate, with the sibling named; the measurement never throws. Measured on
+2026-10-09: memex.systemorph.com held every build after `3.0.0-ci.10310`. Fifteen of its landed
+modules (iMessage, WhatsApp, WebSearch, Teams, OpenAI, Observability, Notifications, Mail, Edu,
+Copilot, ClaudeCode, Chat, AzureFoundry, AppleIntelligence, Anthropic) reference `MeshWeaver.AI`.
+That assembly is itself a landed module and not in the image, so measured against the image
+alone each one read "this deployment carries no such platform assembly". Pinned by
+these `ReleaseLinkGateTest` cases:
+
+- `AModuleReferencingALandedSiblingModule_Clears`, with its negative control
+  `AModuleReferencingASiblingThatIsNotLanded_HoldsTheRoll`;
+- the post-roll precedence: `ASiblingReplacedAtTheRollByABuildWithoutTheCalledApi_HoldsTheRoll` and
+  `ASiblingReplacedAtTheRollByACompatibleBuild_Clears`;
+- the sibling's file identity: `ADependentBoundAboveItsSiblingsVersion_HoldsTheRoll`;
+- totality: `AnUnreadableSibling_MakesTheDependentIndeterminate_NeverThrows`.
+
+The fix takes effect only on an instance whose RUNNING image carries it, because the gate runs on
+the instance being rolled. An instance already frozen by the false hold therefore needs one
+governed `Roll` onto a build that carries the fix.
+
 The serialized shape is:
 
 ```json
