@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hosting-verify-restore --database <db> --server <pg> [--vault <key vault> --password-secret <vault object>]
+# hosting-verify-restore --database <db> --server <pg host> --user <login> [--vault <key vault> --password-secret <vault object>]
 #
 # Read the restored database back: does it hold the tables and rows an instance needs?
 #
@@ -11,12 +11,17 @@
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-verify-restore"
+# The LOGIN is the record's declared databaseUsername, passed as --user (the user the vault object
+# AZ_POSTGRES_PASSWORD_SECRET names is the password OF — the pair hosting-kv-ensure composes the
+# connection string from). There is no built-in default: a hard-coded `memexadmin` once logged in as
+# a user the record never declared. A PGUSER set by hand is honoured when --user is not given.
 
-database="" server="" vault="" password_secret=""
+database="" server="" user="" vault="" password_secret=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --database) database="${2:-}"; shift 2 ;;
     --server)   server="${2:-}";   shift 2 ;;
+    --user)            user="${2:-}";            shift 2 ;;
     --vault)           vault="${2:-}";           shift 2 ;;
     --password-secret) password_secret="${2:-}"; shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
@@ -30,6 +35,10 @@ hosting::safe_name database "$database"
 # is reported, like every other name — hosting::pg_password checks them again for by-hand callers.
 [ -z "$vault" ] || hosting::safe_name vault "$vault"
 [ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
+# The login: --user (the record's databaseUsername), else a PGUSER set by hand — never a guess.
+pg_user="${user:-${PGUSER:-}}"
+[ -n "$pg_user" ] || hosting::die "no database login: pass --user <the record's databaseUsername> (the plan does), or export PGUSER by hand. There is no default — a guessed login authenticates as a user the record never declared."
+hosting::safe_name user "$pg_user"
 
 if hosting::dry; then
   echo "  DRY-RUN would query ${database} on ${server} for restored content"
@@ -39,7 +48,6 @@ fi
 
 # The admin password is read from the vault by NAME (Memex#132) — see hosting::pg_password.
 hosting::pg_password "$vault" "$password_secret"
-pg_user="${PGUSER:-memexadmin}"
 
 q() { PGPASSWORD="$PGPASSWORD" psql -h "$server" -U "$pg_user" -d "$database" -tAc "$1" 2>/dev/null | tr -d ' '; }
 

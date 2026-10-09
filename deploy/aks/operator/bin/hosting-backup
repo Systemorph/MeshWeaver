@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hosting-backup --database <db> --server <pg> --store-uri <uri> --object <name>
+# hosting-backup --database <db> --server <pg host> --user <login> --store-uri <uri> --object <name>
 #                [--vault <key vault> --password-secret <vault object>]
 #
 # Dump one instance's database and upload it. Reports size and digest.
@@ -21,12 +21,17 @@
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="hosting-backup"
+# The LOGIN is the record's declared databaseUsername, passed as --user (the user the vault object
+# AZ_POSTGRES_PASSWORD_SECRET names is the password OF — the pair hosting-kv-ensure composes the
+# connection string from). There is no built-in default: a hard-coded `memexadmin` once logged in as
+# a user the record never declared. A PGUSER set by hand is honoured when --user is not given.
 
-database="" server="" store_uri="" object="" vault="" password_secret=""
+database="" server="" user="" store_uri="" object="" vault="" password_secret=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --database)        database="${2:-}";        shift 2 ;;
     --server)          server="${2:-}";          shift 2 ;;
+    --user)            user="${2:-}";            shift 2 ;;
     --store-uri)       store_uri="${2:-}";       shift 2 ;;
     --object)          object="${2:-}";          shift 2 ;;
     --vault)           vault="${2:-}";           shift 2 ;;
@@ -44,6 +49,10 @@ hosting::safe_name database "$database"
 # is reported, like every other name — hosting::pg_password checks them again for by-hand callers.
 [ -z "$vault" ] || hosting::safe_name vault "$vault"
 [ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
+# The login: --user (the record's databaseUsername), else a PGUSER set by hand — never a guess.
+pg_user="${user:-${PGUSER:-}}"
+[ -n "$pg_user" ] || hosting::die "no database login: pass --user <the record's databaseUsername> (the plan does), or export PGUSER by hand. There is no default — a guessed login authenticates as a user the record never declared."
+hosting::safe_name user "$pg_user"
 
 # The object NAME is reported even though the store URI already contains it: the record needs to say
 # WHICH archive it is waiting on, and reading that back out of a URL is guesswork.
@@ -56,7 +65,6 @@ if hosting::dry; then
 fi
 
 hosting::pg_password "$vault" "$password_secret"
-pg_user="${PGUSER:-memexadmin}"
 archive="/tmp/${database}.dump"
 
 version="$(PGPASSWORD="$PGPASSWORD" psql -h "$server" -U "$pg_user" -d "$database" -tAc 'SHOW server_version' 2>/dev/null | tr -d ' ')" || true

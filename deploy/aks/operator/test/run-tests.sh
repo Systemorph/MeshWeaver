@@ -934,7 +934,7 @@ pg() {  # pg [env…] -- <command and args…>; sets $_pg_out $_pg_rc $_pg_az $_
   _pg_az="$(cat "$_pg_state/az.log" 2>/dev/null || true)"
   _pg_log="$(cat "$_pg_state/pg.log" 2>/dev/null || true)"
 }
-PG_BACKUP=(hosting-backup --database acmedb --server pg.postgres.database.azure.com --store-uri https://store.test/backups/acme-1 --object acme-1)
+PG_BACKUP=(hosting-backup --database acmedb --server pg.postgres.database.azure.com --user acmeowner --store-uri https://store.test/backups/acme-1 --object acme-1)
 PG_BY_NAME=(--vault Systemorph --password-secret memex-postgres-password)
 
 # The happy path: read by name, then dump with the value in the environment, never in an argv.
@@ -949,14 +949,38 @@ case "$_pg_first" in *"keyvault secret show"*) ok "the vault is read BEFORE pg_d
 case "$_pg_out" in *"::hosting:: size="*"::hosting:: sha256="*) ok "…and the run still reports size and sha256" ;; *) bad "reports size and sha256" "said: ${_pg_out}" ;; esac
 rm -rf "$_pg_state"
 
+# The LOGIN is the record's declared user, handed over as --user — never a built-in default. A
+# hard-coded `memexadmin` once logged every step in as a user the record never declared (the
+# memex-cloud record said `postgres`), so: the declared login reaches every client, a missing one
+# refuses BEFORE the vault is read, and `memexadmin` appears nowhere it was not passed.
+case "$_pg_log" in *"pg_dump PGPASSWORD=set argv=-h pg.postgres.database.azure.com -U acmeowner "*) ok "pg_dump logs in as the --user the plan passed" ;; *) bad "pg_dump -U is the declared user" "pg saw: ${_pg_log}" ;; esac
+rm -rf "$_pg_state"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-backup --database acmedb --server pg.postgres.database.azure.com --store-uri https://store.test/backups/acme-1 --object acme-1 "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "no --user and no PGUSER refuses (there is no default login)" || bad "no login refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"no database login"*"--user"*) ok "…naming --user" ;; *) bad "names --user" "said: ${_pg_out}" ;; esac
+[ -z "$_pg_az" ] && [ -z "$_pg_log" ] && ok "…before the vault is read or anything is dumped" || bad "refuses before reading" "az: ${_pg_az} pg: ${_pg_log}"
+case "$_pg_out$_pg_log" in *memexadmin*) bad "…and never falls back to memexadmin" "seen: ${_pg_out} ${_pg_log}" ;; *) ok "…and never falls back to memexadmin" ;; esac
+rm -rf "$_pg_state"
+pg PGUSER=handuser HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-backup --database acmedb --server pg.test --store-uri https://store.test/backups/acme-1 --object acme-1 "${PG_BY_NAME[@]}"
+case "$_pg_log" in *"-U handuser "*) ok "the control: a PGUSER exported by hand is honoured when no --user is given" ;; *) bad "by-hand PGUSER honoured" "rc ${_pg_rc}; pg saw: ${_pg_log}; said: ${_pg_out}" ;; esac
+rm -rf "$_pg_state"
+pg PGUSER=handuser HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
+case "$_pg_log" in *"-U acmeowner "*) ok "…and --user wins over a stray PGUSER" ;; *) bad "--user wins" "pg saw: ${_pg_log}" ;; esac
+rm -rf "$_pg_state"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-backup --database acmedb --server pg.test --user 'u;id' --store-uri https://store.test/backups/acme-1 --object acme-1 "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && [ -z "$_pg_log" ] && ok "a --user that is not a plain name refuses before anything runs" || bad "unsafe --user refuses" "rc ${_pg_rc}; pg saw: ${_pg_log}"
+rm -rf "$_pg_state"
+
 # Restore and verify-restore take the same two flags and make the same read.
-pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-restore --database acmedb --server pg.test --store-uri https://store.test/backups/acme-1 "${PG_BY_NAME[@]}"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-restore --database acmedb --server pg.test --user acmeowner --store-uri https://store.test/backups/acme-1 "${PG_BY_NAME[@]}"
 [ "$_pg_rc" -eq 0 ] && ok "restore with --vault/--password-secret runs pg_restore" || bad "restore by name" "exited ${_pg_rc}: ${_pg_out}"
 case "$_pg_log" in *"pg_restore PGPASSWORD=set"*) ok "…with PGPASSWORD set for pg_restore" ;; *) bad "pg_restore got the password" "pg saw: ${_pg_log}" ;; esac
+case "$_pg_log" in *"pg_restore PGPASSWORD=set argv=-h pg.test -U acmeowner "*) ok "…logging in as the --user the plan passed" ;; *) bad "pg_restore -U is the declared user" "pg saw: ${_pg_log}" ;; esac
 rm -rf "$_pg_state"
-pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-verify-restore --database acmedb --server pg.test "${PG_BY_NAME[@]}"
+pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-verify-restore --database acmedb --server pg.test --user acmeowner "${PG_BY_NAME[@]}"
 [ "$_pg_rc" -eq 0 ] && ok "verify-restore with --vault/--password-secret queries the database" || bad "verify-restore by name" "exited ${_pg_rc}: ${_pg_out}"
 case "$_pg_log" in *"psql PGPASSWORD=set"*) ok "…with PGPASSWORD set for psql" ;; *) bad "psql got the password" "pg saw: ${_pg_log}" ;; esac
+case "$_pg_log" in *"-U acmeowner"*) ok "…logging in as the --user the plan passed" ;; *) bad "psql -U is the declared user" "pg saw: ${_pg_log}" ;; esac
 rm -rf "$_pg_state"
 
 # The three refusals — each BEFORE anything is dumped, each saying which it is.
@@ -1008,7 +1032,7 @@ unset _pg_out _pg_rc _pg_az _pg_log _pg_state _pg_first
 echo
 echo "── the ::hosting:: contract the mesh parses ──────────────────────"
 emits "dry-run backup announces the object" "::hosting:: object=arch-1" \
-  env HOSTING_DRY_RUN=true hosting-backup --database d --server s --store-uri https://x/y/z --object arch-1
+  env HOSTING_DRY_RUN=true hosting-backup --database d --server s --user u --store-uri https://x/y/z --object arch-1
 emits "dry-run verify-backup does NOT claim verified" "::hosting:: verify=dry-run" \
   env HOSTING_DRY_RUN=true hosting-verify-backup --store-uri https://x/y/z
 
