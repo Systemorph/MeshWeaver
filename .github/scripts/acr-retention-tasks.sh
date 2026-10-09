@@ -17,7 +17,16 @@
 #   show     print the live definitions, decoded                      (read-only)
 #   record   overwrite the record FROM the live registry               (read-only against Azure)
 #   verify   diff live against the record; exit 1 on drift            (read-only)
-#   apply    push the record onto the registry                        (MUTATES — maintainer only)
+#   apply    push the record onto the registry                        (MUTATES — only through the
+#            governed `RegistryRetention` InstanceAction on the control instance, never a laptop)
+#   preflight  the apply interlocks alone: pause + current protection  (read-only, no Azure call)
+#
+# 🚨 THE GOVERNED PATH (MeshWeaver#3438, policy `registry-retention`). Nobody runs `apply` by hand:
+# the control instance's `RegistryRetention` action (`registryMode: verify|apply`) dispatches the
+# estate's operations lane, which signs in as the operator identity and runs THIS script from the
+# MeshWeaver checkout at the record's operator pin. `verify` is the action's read-only mode (no
+# approval); `apply` carries the registry name typed back and one mesh approval, which the lane
+# verifies before any mutating step.
 #
 # 🚨 `verify` is deliberately NOT wired into CI. It needs a credential with `Microsoft.
 # ContainerRegistry/registries/tasks/read`, which is a strictly larger grant than the AcrPull the
@@ -32,7 +41,7 @@ RECORD="$HERE/../acr-retention"
 TASKS="purge-old-images purge-old-ci-releases"
 
 usage() {
-  echo "usage: acr-retention-tasks.sh {show|record|verify|apply}" >&2
+  echo "usage: acr-retention-tasks.sh {show|record|verify|apply|preflight}" >&2
   exit 2
 }
 
@@ -335,18 +344,64 @@ print(' '.join(t['name'] for t in d['tasks'] if str(t.get('status','')).lower() 
   return 1
 }
 
+# 🚨 THE PROTECTION VERDICT MUST BE CURRENT BEFORE A PURGE IS SWITCHED ON (MeshWeaver#3438).
+#
+# The pause block is the REVIEWED half of the re-enable decision; this is the MEASURED half. A record
+# that lifts the pause was right on the day it was reviewed — the lock lane can have gone red since.
+# Measured 2026-10-09: the lock lane red on seven consecutive nightly runs while nothing in the record
+# had moved. So enabling a task additionally requires the newest COMPLETED run of the lock lane on
+# core's `main` to be a success, and recent: the purge deletes on its own clock, and what it may
+# delete is decided by the locks that run is the evidence for.
+#
+# Fails CLOSED on every unreadable answer — no runs, an API error, a malformed date — because "could
+# not ask" read as "nothing against it" is the swallow that turns a failed collection into a deletion
+# (#3859's first acceptance criterion). Applies only when the record asks to ENABLE a task: pushing a
+# window onto a disabled task deletes nothing.
+LOCK_LANE_REPO="${MW_LOCK_LANE_REPO:-Systemorph/MeshWeaver}"
+LOCK_LANE_WORKFLOW="${MW_LOCK_LANE_WORKFLOW:-lock-pinned-digests.yml}"
+LOCK_LANE_MAX_AGE_HOURS="${MW_LOCK_LANE_MAX_AGE_HOURS:-36}"
+
+assert_protection_current() {
+  local enabling runs
+  enabling=$(python3 -c "
+import json
+d = json.load(open('$RECORD/tasks.json'))
+print(' '.join(t['name'] for t in d['tasks'] if str(t.get('status','')).lower() == 'enabled'))") || return 1
+  [ -n "$enabling" ] || return 0
+  # `MW_LOCK_LANE_RUNS_FILE` is the self-test's seam: the SAME verdict code over a fixture answer.
+  if [ -n "${MW_LOCK_LANE_RUNS_FILE:-}" ]; then
+    runs=$(cat "$MW_LOCK_LANE_RUNS_FILE") || return 1
+  elif ! runs=$(curl -fsS --max-time 30 -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$LOCK_LANE_REPO/actions/workflows/$LOCK_LANE_WORKFLOW/runs?branch=main&status=completed&per_page=1"); then
+    echo "::error::REFUSING to enable $enabling: the lock lane ($LOCK_LANE_REPO $LOCK_LANE_WORKFLOW)" >&2
+    echo "  could not be read, so whether the pinned set is protected tonight is unknown." >&2
+    return 1
+  fi
+  printf '%s' "$runs" | python3 "$HERE/acr-retention-protection.py" "$enabling" "$LOCK_LANE_MAX_AGE_HOURS"
+}
+
 cmd_apply() {
   # Before the prompt, not after: a refusal the operator reads only after typing the registry name
   # teaches them the prompt is the gate.
   assert_pause_permits_enabling || return 1
+  assert_protection_current || return 1
   echo "🚨 This MUTATES shared registry infrastructure every deployment depends on."
   echo "   Registry: $REGISTRY   Tasks: $TASKS"
   echo "   Re-read Doc/Architecture/PinnedImageRetention before continuing."
-  printf '   Type the registry name to proceed: '
+  # 🚨 On the governed path there is no terminal to type into. The `RegistryRetention` action's
+  # confirmation — the registry name typed back on the action, and bound into the mesh approval the
+  # lane verifies before any mutating step — arrives as MW_ACR_APPLY_CONFIRM and is held to the SAME
+  # equality the prompt is. It is not a bypass: a wrong value aborts exactly as a wrong answer does.
   local confirm
-  read -r confirm
+  if [ -n "${MW_ACR_APPLY_CONFIRM:-}" ]; then
+    confirm="$MW_ACR_APPLY_CONFIRM"
+    echo "   confirmation supplied by the governed action: '$confirm'"
+  else
+    printf '   Type the registry name to proceed: '
+    read -r confirm
+  fi
   if [ "$confirm" != "$REGISTRY" ]; then
-    echo "aborted."
+    echo "aborted: the confirmation is not the registry name '$REGISTRY'."
     return 1
   fi
   local task
@@ -371,5 +426,9 @@ case "${1:-}" in
   record) cmd_record ;;
   verify) cmd_verify ;;
   apply)  cmd_apply ;;
+  preflight)
+    assert_pause_permits_enabling || exit 1
+    assert_protection_current || exit 1
+    echo "  preflight: nothing in the record's interlocks refuses an apply." ;;
   *)      usage ;;
 esac
