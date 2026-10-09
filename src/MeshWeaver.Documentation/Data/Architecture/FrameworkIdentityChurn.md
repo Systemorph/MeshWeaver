@@ -138,11 +138,18 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 > own publish-bake lane seals it on every push to its `main`. That is option 1 at a cost of one bake
 > per push, with none of the multiplier the table charges it.
 >
-> Across a declared break, a portal on the old epoch keeps the old key's publication and the
-> sealed-sync gate holds its sources there. The new key is sealed as step 3 of
-> [Deploying Across Platform Versions → The breaking path](../DeployingAcrossPlatformVersions), and
-> the self-updater does not roll a portal past a plugin that has no seal covering the target. So
-> every live identity has a seal at every point of a transition.
+> Two identities can be live only across a declared break: portals that have rolled run the new key,
+> and portals that have not yet rolled still run the old one. For that window the reusable
+> `node-repo-publish-bake.yml` takes `epoch-leg: previous`. A node repository calls the lane a second
+> time with that input, and the call bakes the same content against the newest break's
+> `previousEpochCeiling` (`.github/scripts/previous-epoch-ceiling.py` reads the declaration). With no
+> declared break, or once the break declares `previousEpochRetired: true`, that leg's `epoch-leg` job
+> names why and bakes nothing. A break with no ceiling is an error, never "nothing to bake". The new
+> key is still sealed as step 3 of
+> [Deploying Across Platform Versions → The breaking path](../DeployingAcrossPlatformVersions), and the
+> self-updater still does not roll a portal past a plugin with no seal covering the target. No break
+> has been declared yet (`platform-compatibility.json` reads `epoch: 1`, `breaks: []`), so the leg's
+> bake path has not run in production. Its decision is proven by the script's self-test.
 >
 > Measured on 2026-10-09: memex.systemorph.com, memex.meshweaver.cloud and control.systemorph.com all
 > report `framework=c003e001` on `/health`. `bake-report` reads `baked=198` of 201 and 414 of 416, and

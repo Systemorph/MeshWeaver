@@ -299,23 +299,28 @@ Hosting/InstanceAction/Source/InstanceActionPlan.cs`, a file the control image c
 `MeshWeaver.Fleet.Control`'s `SourceFolders.props`. Before this, every Plugins merge minted a
 rebuild through the pair tag.
 
-**This does not stop the rebuild loop, and stopping it needs a decision nobody has made.** It is
-tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which carries the same
-three options and the measurements below.
+### Historical: the options as they stood before the decision
 
-The reconciler still rebuilds the portal image whenever `MeshWeaver.Plugins` `main` has moved —
+*Everything below this heading describes the state before the decision above, and none of it is
+current. It is kept because the measurements are the evidence for the decision.*
+
+At the time, the alarm fix did not stop the rebuild loop, and stopping it needed a decision. That
+decision was tracked on [#4688](https://github.com/Systemorph/MeshWeaver/issues/4688), which carries
+the same three options and the measurements below.
+
+The reconciler then rebuilt the portal image whenever `MeshWeaver.Plugins` `main` has moved —
 so, at a mean 40 merges a day against an hourly tick, up to 24 full multi-arch builds a day, each
 publishing a `3.0.0-ci.N` and each a publication event the fleet rolls on. The measured sample of
 plugins merges driving those rebuilds is dominated by commits that cannot change the portal image
 at all: lock regeneration, i18n mirror syncs, doc and CI changes, `Merge main into <branch> — only
 generated manifest.lock files conflicted`.
 
-Core's own side of the same decision already has a relevance filter — `gate`'s `relevance` step
-skips a build when every changed path since the newest published set is image-irrelevant. The
-plugins side has **none**, and the core filter cannot supply it: when only plugins moved, core HEAD
-*is* the newest published set, the compare is empty, and `relevant` stays `true`.
+Core's own side of the same decision then had a relevance filter: `gate`'s `relevance` step skipped
+a build when every changed path since the newest published set was image-irrelevant. The plugins
+side had **none**, and the core filter could not supply it. When only plugins moved, core HEAD *was*
+the newest published set, the compare was empty, and `relevant` stayed `true`.
 
-Three ways out, none of them free:
+There were three ways out, none of them free:
 
 1. **A plugins-side relevance filter in core** — compare the published image's plugins provenance
    (recoverable from its own pair tag) against plugins HEAD, and rebuild only when a changed path

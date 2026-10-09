@@ -61,7 +61,9 @@ NOT_IMAGE = re.compile(
 
 
 def decide(paths: list[str], total: int | None) -> tuple[bool, str]:
-    paths = [p.strip() for p in paths if p.strip()]
+    # Exact names, never stripped: git permits leading/trailing spaces, and ` test/A.cs` is NOT
+    # `test/A.cs` — stripping would turn an unknown path into an excluded one (a fail-closed skip).
+    paths = [p for p in paths if p != ""]
     if not paths:
         return True, "no changed paths could be read — failing open"
     if total is None:
@@ -91,6 +93,8 @@ def self_test() -> int:
         (["src/MeshWeaver.X/Moved.cs", "test/Moved.cs"], 1, True, "rename out of src (previous name listed) ⇒ relevant"),
         (["AGENTS.md.bak"], 1, True, "a root file merely PREFIXED by a listed name ⇒ relevant (anchored match)"),
         (["clients/react-native-web/x"], 1, True, "a sibling of a listed client ⇒ relevant"),
+        ([" test/A.cs"], 1, True, "a leading space is part of the name — never stripped into test/ ⇒ relevant"),
+        (["AGENTS.md "], 1, True, "a trailing space is part of the name ⇒ relevant"),
     ]
     failed = 0
     for paths, total, expected, label in cases:
