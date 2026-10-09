@@ -859,7 +859,18 @@ public enum PackageAvailabilityKind
 public sealed record SealedModuleSet(
     ImmutableDictionary<string, string> MvidByModule,
     ImmutableArray<string> Conflicts,
-    string? Refusal);
+    string? Refusal)
+{
+    /// <summary>
+    /// Module simple name → the module bundle (<c>.module.nupkg</c>) that DECLARED it, for every
+    /// module in <see cref="MvidByModule"/> — the bytes boot adopts for that module at the roll, so
+    /// the link gate measures a dependent module against THEM rather than against the landed
+    /// generation they replace (<see cref="ModuleLinkObservation"/>). Empty when the set was not read
+    /// from a published root. An INIT property: the positional constructor is public surface.
+    /// </summary>
+    public ImmutableDictionary<string, string> BundlePathByModule { get; init; } =
+        ImmutableDictionary<string, string>.Empty;
+}
 
 /// <summary>One NodeType's dependency record inside one sealed bundle — the producer's
 /// <c>(referenced assembly → surface id)</c> pairs, exactly as the boot seeder validates them.</summary>
