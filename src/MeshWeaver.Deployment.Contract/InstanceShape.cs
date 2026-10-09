@@ -819,6 +819,20 @@ public sealed record HostingOperatorSpec
     public string? Maintainer { get; init; }
 
     /// <summary>
+    /// Whether this is a CUSTOMER instance that governs itself (policy <c>customer-instance-governance</c>).
+    /// When true, the governed actions the instance REQUESTS from its control instance are approved by
+    /// the instance's OWN global administrators, attested by the instance over its signed lane, under
+    /// the sole-maintainer rule with <see cref="Maintainer"/> as the declared maintainer. No
+    /// administrator of the control instance is required for them. The instance may request only
+    /// <c>Restart</c>, <c>Recycle</c>, <c>Logs</c> and <c>Sample</c>; rolls and every other kind stay
+    /// with the control instance (policy <c>customer-instance-requests</c>). False, the default, keeps
+    /// the control-side approval rule unchanged, which is right for every instance Systemorph manages.
+    /// The control plane reads it from the record and nothing renders it into the portal's configuration.
+    /// </summary>
+    [Description("Customer-governed: the instance's own global administrators approve the actions it requests")]
+    public bool CustomerGoverned { get; init; }
+
+    /// <summary>
     /// THE executor rule, shared by <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>
     /// and <see cref="DeploymentPortalConfig.PortalConfig"/> (so by both renderers): trimmed and
     /// case-folded to <c>Job</c> or <c>Actions</c>; null for blank, which the portal and the chart
