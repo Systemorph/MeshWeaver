@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
@@ -236,7 +236,7 @@ public static class MarkdownOverviewLayoutArea
 
     // partitionRoot: the node's partition root, when the caller holds it — the header icon inherits
     // its package mark from there (#2075 item 2). Null keeps the NodeType glyph.
-    private static UiControl BuildOverview(
+    internal static UiControl BuildOverview(
         LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader,
         MeshNode? partitionRoot = null, string? renderedHtml = null)
     {
@@ -244,7 +244,12 @@ public static class MarkdownOverviewLayoutArea
         var read = ReadMarkdownContent(node);
 
         // Markdown pages render full width (max-width: 100%), not the centered 1200px reading column.
-        var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
+        // STRETCH, explicitly (#6036): the markdown body has no width of its own, so under the stack's
+        // default start alignment a table wider than the column made the body the table's max-content
+        // width and the pane clipped it with no scrollbar. Stretched, the table wraps/scrolls in place.
+        var container = Controls.Stack.WithWidth("100%")
+            .WithHorizontalAlignment(HorizontalAlignment.Stretch)
+            .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, maxWidthOverride: "100%"));
 
         // Standard header with title/icon (skipped for @@ embeds)
         if (!hideHeader)
