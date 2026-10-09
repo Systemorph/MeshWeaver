@@ -1221,9 +1221,10 @@ internal static class NodeTypeCompilationHelpers
                     }
 
                     logger?.LogInformation(
-                        "Failed-verdict re-drive: NodeType {HubPath} is settled at {Status} with no compiled "
-                        + "assembly, and its verdict was formed under different compile inputs than the live "
-                        + "ones (stamped '{Stamped}', live '{Live}') — flipping CompilationStatus=Pending for "
+                        "Failed-verdict re-drive: NodeType {HubPath} is settled at {Status} (a last good "
+                        + "build, if it has one, keeps serving), and its verdict was formed under different "
+                        + "compile inputs or an older platform build than the live ones (stamped '{Stamped}', "
+                        + "live '{Live}') — flipping CompilationStatus=Pending for "
                         + "ONE fresh attempt ({Attempt} of {Limit} in this process). Recorded error: {Error}",
                         hubPath, def.CompilationStatus,
                         $"{def.FailedBuildInputs ?? "(never stamped)"};plat={def.FailedPlatformVersion ?? "(never stamped)"}",
@@ -3789,11 +3790,34 @@ internal static class NodeTypeCompilationHelpers
     internal static bool HasFailureFromOlderPlatform(
         NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null) =>
         def.CompilationStatus is CompilationStatus.Error
-        && !string.IsNullOrWhiteSpace(livePlatformVersion)
+        // The live build must be ORDERED (a CI run number) before it can claim to be newer than
+        // anything — including an absent stamp, which would otherwise bypass the ordering.
+        && IsOrderedPlatformBuild(livePlatformVersion)
         && def.CurrentSourceVersions is not null
         && !IsUnconvergableSourceFailure(def, nodeTypePath)
         && (string.IsNullOrWhiteSpace(def.FailedPlatformVersion)
             || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
+
+    /// <summary>
+    /// The value a FAILURE stamps as <see cref="NodeTypeDefinition.FailedPlatformVersion"/>: the live
+    /// build, or <see cref="UnknownPlatformBuild"/> when this process does not know its build. Never
+    /// the previous failure's build — a new verdict formed on an unknown build recorded as if it were
+    /// formed on an old known one could be ordered and retried by a later replica. The marker is
+    /// non-null (so it is not the legacy "unstamped" case) and unordered (so nothing retries it).
+    /// </summary>
+    internal static string FailureStamp(string? livePlatformVersion) =>
+        string.IsNullOrWhiteSpace(livePlatformVersion) ? UnknownPlatformBuild : livePlatformVersion;
+
+    /// <summary>The <see cref="NodeTypeDefinition.FailedPlatformVersion"/> of a verdict formed by a
+    /// process that did not know its own platform build. Unordered by construction.</summary>
+    internal const string UnknownPlatformBuild = "(unknown)";
+
+    /// <summary>Whether <paramref name="platformVersion"/> carries a CI run number the release order
+    /// can compare — not blank, parseable, and not the local <c>-ci.0</c> stamp.</summary>
+    internal static bool IsOrderedPlatformBuild(string? platformVersion) =>
+        !string.IsNullOrWhiteSpace(platformVersion)
+        && MeshWeaver.Plugin.Packaging.PlatformReleaseOrder.BuildOrdinal(platformVersion) is { } ordinal
+        && ordinal != 0;
 
     /// <summary>
     /// 🚨 <b>THE compile that cannot converge</b> (issue #3903) — a standing <c>Error</c> on a type
@@ -3927,7 +3951,7 @@ internal static class NodeTypeCompilationHelpers
                 FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
                 // …and the BUILD this attempt is made on, in the same write, so the older-platform
                 // trigger is false the instant it fires (one attempt per build, never a loop).
-                FailedPlatformVersion = livePlatformVersion ?? d.FailedPlatformVersion,
+                FailedPlatformVersion = FailureStamp(livePlatformVersion),
             }
         };
     }
@@ -4013,7 +4037,7 @@ internal static class NodeTypeCompilationHelpers
                 ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
                 : parkedDef.FailedBuildInputs,
             FailedPlatformVersion = formedUnderLiveInputs
-                ? LivePlatformVersion ?? parkedDef.FailedPlatformVersion
+                ? FailureStamp(LivePlatformVersion)
                 : parkedDef.FailedPlatformVersion,
             // A forced release that ends in a park is spent too (#2818): under RequirePrebuilt the
             // compile it asked for is refused by design and the park names that; a bundle that
@@ -4471,7 +4495,7 @@ internal static class NodeTypeCompilationHelpers
                 modulesHash, result?.CompiledSources ?? def.CurrentSourceVersions),
             // The BUILD the verdict was formed on — the token's fw= is the stable compatibility
             // key and cannot tell two builds apart (see HasFailureFromOlderPlatform).
-            FailedPlatformVersion = LivePlatformVersion ?? def.FailedPlatformVersion,
+            FailedPlatformVersion = FailureStamp(LivePlatformVersion),
             // Clear the consumed release-requester on failure too — the failed request is
             // done; a fresh request must re-stamp it.
             RequestedReleaseBy = null,

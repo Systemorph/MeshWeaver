@@ -70,8 +70,9 @@ public class FailureFromOlderPlatformRedriveTest
         NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(def, NewBuild, TypePath)
             .Should().BeTrue("the newer build may well ship the API the failing source needed");
 
-        var redriven = (NodeTypeDefinition)NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
-            Node(def), TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: NewBuild).Content!;
+        var redriven = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+                Node(def), TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: NewBuild)
+            .Content.Should().BeOfType<NodeTypeDefinition>().Which;
 
         redriven.CompilationStatus.Should().Be(CompilationStatus.Pending, "the retry is dispatched");
         redriven.FailedPlatformVersion.Should().Be(NewBuild,
@@ -88,9 +89,10 @@ public class FailureFromOlderPlatformRedriveTest
     [Fact]
     public void TheRetry_ThatSucceeds_ClearsTheStamp()
     {
-        var pending = (NodeTypeDefinition)NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
-            Node(FailedOn(OldBuild)), TypePath, ModulesHash, parkRegistry: null,
-            livePlatformVersion: NewBuild).Content!;
+        var pending = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+                Node(FailedOn(OldBuild)), TypePath, ModulesHash, parkRegistry: null,
+                livePlatformVersion: NewBuild)
+            .Content.Should().BeOfType<NodeTypeDefinition>().Which;
 
         var ok = NodeTypeCompilationHelpers.ApplyCompileSuccess(
             pending with { CompilationStatus = CompilationStatus.Compiling },
@@ -141,8 +143,9 @@ public class FailureFromOlderPlatformRedriveTest
         var def = FailedOn(failedBuild: null);
         NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(def, NewBuild, TypePath).Should().BeTrue();
 
-        var redriven = (NodeTypeDefinition)NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
-            Node(def), TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: NewBuild).Content!;
+        var redriven = NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+                Node(def), TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: NewBuild)
+            .Content.Should().BeOfType<NodeTypeDefinition>().Which;
         NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(
                 redriven with { CompilationStatus = CompilationStatus.Error }, NewBuild, TypePath)
             .Should().BeFalse();
@@ -161,6 +164,31 @@ public class FailureFromOlderPlatformRedriveTest
         NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
                 node, TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: live)
             .Should().BeSameAs(node);
+    }
+
+    /// <summary>The absent-stamp shortcut must not bypass the ordering: an unordered live build
+    /// cannot claim to be newer than an unstamped failure either.</summary>
+    [Theory]
+    [InlineData("3.0.0-ci.0")]
+    [InlineData("not-a-version")]
+    [InlineData("")]
+    public void AnUnstampedFailure_IsNotRetried_ByAnUnorderedLiveBuild(string live)
+    {
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(FailedOn(failedBuild: null), live, TypePath)
+            .Should().BeFalse();
+    }
+
+    /// <summary>A verdict formed by a process that did not know its build is stamped with the
+    /// unordered marker — never the previous verdict's build — so no later replica retries it.</summary>
+    [Fact]
+    public void AFailureOnAnUnknownBuild_IsStampedUnordered_AndNeverRetried()
+    {
+        NodeTypeCompilationHelpers.FailureStamp(null).Should().Be(NodeTypeCompilationHelpers.UnknownPlatformBuild);
+        NodeTypeCompilationHelpers.FailureStamp(NewBuild).Should().Be(NewBuild);
+
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(
+                FailedOn(NodeTypeCompilationHelpers.UnknownPlatformBuild), NewBuild, TypePath)
+            .Should().BeFalse("an unknown build cannot be ordered against the live one");
     }
 
     [Theory]
@@ -201,7 +229,8 @@ public class FailureFromOlderPlatformRedriveTest
         var settled = NodeTypeCompilationHelpers.ApplyGateSettle(
             FailedOn(OldBuild), "refused", formedUnderLiveInputs: true, ModulesHash);
         settled.FailedPlatformVersion.Should().Be(
-            NodeTypeCompilationHelpers.LivePlatformVersion ?? OldBuild);
+            NodeTypeCompilationHelpers.FailureStamp(NodeTypeCompilationHelpers.LivePlatformVersion),
+            "a verdict formed now records THIS build (or the unknown marker), never the previous one");
 
         var reServed = NodeTypeCompilationHelpers.ApplyGateSettle(
             FailedOn(OldBuild), reason: null, formedUnderLiveInputs: false, ModulesHash);

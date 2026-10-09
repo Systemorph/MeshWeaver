@@ -840,6 +840,12 @@ kickoff has a second trigger, `HasFailureFromOlderPlatform`:
 | a NEWER build (an older replica during a roll) | **no attempt** — two images never ping-pong a type |
 | an unordered build (a local `-ci.0`, an unparseable or unknown version) | **no attempt** |
 
+A process that does not know its own build stamps the unordered marker `(unknown)`, never the previous
+failure's build, and an absent stamp is retried only by an ORDERED live build — so neither shortcut
+bypasses the ordering. Every writer of a fresh verdict stamps it (`ApplyCompileFailure`, the gate
+settle, the contract handler's failure write-back) and every success clears it (`ApplyCompileSuccess`,
+`ApplyResolvedSuccess`, prebuilt adoption).
+
 The flip to `Pending` stamps the live build in the same write, a success clears it, and the failure
 ledger keys on the build as well as the token — so the bounds below hold for this trigger unchanged.
 `FailedPlatformVersion` is operational state exactly like `FailedBuildInputs`.
