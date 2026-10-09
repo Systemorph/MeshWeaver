@@ -75,8 +75,8 @@ public class AutomationSwitchesReachTheConfigMapGuard
             "every Hosting__*__Enabled key the portal ConfigMap renders must be listed in this guard "
             + "(RecordOnlySwitches or AlwaysRendered) so its record value is proved to reach the pod");
         listed.Except(rendered).Should().BeEmpty(
-            "a listed switch with no template line is one a record can no longer turn off — the "
-            + "ConfigMap names every key and has no catch-all");
+            "a listed switch with no template line has left the literal half of the ConfigMap — "
+            + "unlist it here once the pass-through is meant to carry it");
     }
 
     [Fact(Timeout = 120000)]
@@ -137,7 +137,25 @@ public class AutomationSwitchesReachTheConfigMapGuard
                 + "apply — rendering \"<nil>\" or \"\" would break the boolean binding");
     }
 
-    private static Dictionary<string, YamlScalarNode> RenderConfigMapData(string? overlay)
+    /// <summary>Renders the portal ConfigMap with <paramref name="overlay"/> and returns its <c>data</c>; fails the test when helm refuses.</summary>
+    internal static Dictionary<string, YamlScalarNode> RenderConfigMapData(string? overlay)
+    {
+        var (exitCode, stdout, stderr) = RenderConfigMap(overlay);
+        exitCode.Should().Be(0, $"helm template must render the chart. stderr: {stderr}");
+
+        var yaml = new YamlStream();
+        yaml.Load(new StringReader(stdout));
+        yaml.Documents.Should().HaveCount(1, "--show-only renders exactly the portal ConfigMap");
+        var root = (YamlMappingNode)yaml.Documents[0].RootNode;
+        var data = (YamlMappingNode)root.Children[new YamlScalarNode("data")];
+        return data.Children.ToDictionary(
+            kv => ((YamlScalarNode)kv.Key).Value!,
+            kv => (YamlScalarNode)kv.Value,
+            StringComparer.Ordinal);
+    }
+
+    /// <summary>Runs <c>helm template --show-only</c> on the portal ConfigMap; returns helm's exit code and both streams, whatever they are.</summary>
+    internal static (int ExitCode, string Stdout, string Stderr) RenderConfigMap(string? overlay)
     {
         var chart = ChartRoot();
         var overlayPath = overlay is null
@@ -195,19 +213,7 @@ public class AutomationSwitchesReachTheConfigMapGuard
                 // The timed overload waits for the process only; this one waits for the async
                 // readers to flush, so stdout is not read truncated.
                 process.WaitForExit();
-                var stdout = outBuffer.ToString();
-                var stderr = errBuffer.ToString();
-                process.ExitCode.Should().Be(0, $"helm template must render the chart. stderr: {stderr}");
-
-                var yaml = new YamlStream();
-                yaml.Load(new StringReader(stdout));
-                yaml.Documents.Should().HaveCount(1, "--show-only renders exactly the portal ConfigMap");
-                var root = (YamlMappingNode)yaml.Documents[0].RootNode;
-                var data = (YamlMappingNode)root.Children[new YamlScalarNode("data")];
-                return data.Children.ToDictionary(
-                    kv => ((YamlScalarNode)kv.Key).Value!,
-                    kv => (YamlScalarNode)kv.Value,
-                    StringComparer.Ordinal);
+                return (process.ExitCode, outBuffer.ToString(), errBuffer.ToString());
             }
         }
         finally

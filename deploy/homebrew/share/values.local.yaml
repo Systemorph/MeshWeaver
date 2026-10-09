@@ -17,11 +17,11 @@
 #     -f ~/.memex-local/values.local.yaml \
 #     -n memex --create-namespace
 #
-# NOTE on logging: the chart's portal ConfigMap is a fixed allow-list and the
-# chart templates are source-of-truth (we never edit them), so the verbose log
-# level declared here under config.memex_portal.Logging__LogLevel__Default is
-# ALSO applied by `memex-local up` as a deployment-config override via
-# `kubectl set env` (the override wins over envFrom). We never touch any
+# NOTE on logging: the verbose log level declared here under
+# config.memex_portal.Logging__LogLevel__Default reaches the pod through the
+# chart's ConfigMap pass-through (no template names it), and is ALSO applied by
+# `memex-local up` as a deployment-config override via `kubectl set env` (the
+# override wins over envFrom, so MEMEX_LOG_LEVEL decides at run time). We never touch any
 # committed appsettings*.json. See deploy/homebrew/README.md → "Full logging".
 # =============================================================================
 

@@ -293,6 +293,56 @@ volumes of one name is an invalid spec while two classes syncing into one Secret
 `syncedSecret` still defaults to the class's own name, and the vault coordinates fall back to the
 singular block's — a namespace's classes normally read one vault with one add-on identity.
 
+## The pass-through: layer 1 carries every key the record states
+
+Layer 1 used to carry only the keys `templates/memex-portal/config.yaml` names. A record's
+`extraPortalConfig` lands in `config.memex_portal`, so a key the template did not name reached
+**no container** while helm reported success. That is how a record could state a value no pod
+received. Three were live on 2026-10-08, measured against the Memex records:
+
+| Record | Key | What happened |
+|---|---|---|
+| `control`, `memex`, `build` | `Hosting__PrBabysitter__Relay: "false"` | set by Memex#689, reverted by Memex#693 as inert |
+| `memex` (memex.systemorph.com) | `Hosting__RecordChangeReconcile__Enabled: "false"` | Memex#690, closed: the old plane kept filing Reconciles it could not run |
+| `control` | `Ai__Router__CalibrationNode` | on the record, delivered by nothing |
+
+The cause was the template's shape: it listed keys and had no catch-all, so nothing could deliver an
+unlisted key. The guards around it (`check-values-are-read.sh`, `config-key-coverage`) read values
+files and overlays. None of them reads a record.
+
+The ConfigMap's data now has **two halves**:
+
+1. **The literal half** (`memex.portalConfigData`): every key the chart knows, with its own default,
+   trim or computed value. It renders exactly as before.
+2. **The pass-through** (`memex.portalConfigPassThrough`, `_portal-config-passthrough.tpl`): every
+   other `config.memex_portal` key, rendered verbatim as `"<value | toString | trim>"`.
+
+The pass-through decides which keys the literal half rendered by **parsing that half's output**, not
+from a list someone has to maintain. So it cannot emit a duplicate data key, and a listed key's own
+default or transform always wins. A blank or null value renders nothing, the same "only when set"
+rule the literal switches follow. Some values cannot reach the pod as written, and the render
+**refuses** those, naming the key:
+
+- a key that differs only by case from a key the literal half rendered (.NET folds env keys, so two
+  sources would race for one value);
+- a key that is not a valid ConfigMap key;
+- a map or a list;
+- a `Modules__Required__N` slot outside the literal 0..19 block. `ChartModuleSlotProblems` in
+  `MeshWeaver.Deployment.Contract` already refuses such a slot on a record at plan time, so the chart
+  agrees with that rule rather than delivering the slot.
+
+What the pass-through does **not** give a key is a default. A key whose consumer cannot take a
+missing value, such as a `TimeSpan` that aborts the host when it is blank, still needs its own literal
+line.
+
+A record change reaches the pod on the next deploy that applies the record: a `Reconcile`, or a
+`Roll`, which re-applies the record at its tag (policy `record-change-applies-itself`).
+
+Guards: `RecordConfigReachesTheConfigMapGuard` (MeshWeaver.Documentation.Test) renders the chart and
+asserts each rule above. Against the chart before the pass-through, every one of its eight cases
+fails. `check-values-are-read.sh` and `scripts/check-config-key-coverage.py` count a non-blank
+`memex_portal` key as delivered only when they find the helper both defined and included.
+
 ## Two workloads, one secret set — and the escape hatch has to reach both
 
 The portal Deployment is not the only pod that reads the environment's secrets. The **migration
