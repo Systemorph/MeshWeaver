@@ -2642,6 +2642,7 @@ jobs:
       id-token: write
       actions: read     # the promotion records are run ARTIFACTS of this workflow
       packages: write   # phase D writes the line pointers to GHCR with GITHUB_TOKEN
+      issues: write     # the ONE `fleet-unarmed` alert issue (fleet-unarmed-alert.py, MeshWeaver#6042)
     outputs:
       armed: ${{ steps.select.outputs.armed }}
       version: ${{ steps.select.outputs.v_portal }}
@@ -2694,10 +2695,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ARMED_MAX: ${{ steps.armed.outputs.max }}
+          ARMED_VERSION: ${{ steps.armed.outputs.version }}
           RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
         run: |
           set -euo pipefail
+          # --unarmed-out: every promoted set still newer than the armed one after this selection,
+          # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+            --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
         if: steps.select.outputs.armed == 'true'
@@ -2821,6 +2826,27 @@ jobs:
             .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$src" "${margs[@]}"
           done
           echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE STALL SIGNAL (MeshWeaver#6042, policy `one-promotion-gate`). Waiting and refusing are
+      # both right and both SILENT: a standing red ladder or a platform-side outage froze fleet updates
+      # while every run said `nothing to arm`. This files ONE `fleet-unarmed` issue when the OLDEST
+      # promoted set still newer than the armed one is older than FLEET_UNARMED_ALERT_HOURS — naming
+      # every unarmed set, its verdict (waiting / refused / not examined) and its run — rewrites it
+      # while the stall lasts, and closes it on the first run that finds the fleet armed again.
+      # Runs after a frozen `select` too (that reading is exactly a stall), but never after a FAILED
+      # arming write: a set `select` chose but phases C/D did not land is not armed, and must not
+      # close the issue. `select` failing before it wrote its reading leaves no file, which the
+      # script reports RED by name — never read as "armed".
+      - name: "Alert: has the promotion gate left the fleet unarmed? (ONE fleet-unarmed issue)"
+        if: ${{ !cancelled() && steps.select.outcome != 'skipped' && (steps.select.outputs.armed != 'true' || success()) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The ONE knob (default chosen with MeshWeaver#6042; the maintainer may change it here).
+          FLEET_UNARMED_ALERT_HOURS: "6"
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/fleet-unarmed-alert.py --self-test
+          python3 .github/scripts/fleet-unarmed-alert.py --reading "$RUNNER_TEMP/unarmed.json"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
   # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when
