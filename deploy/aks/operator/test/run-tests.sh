@@ -967,6 +967,11 @@ rm -rf "$_pg_state"
 pg PGUSER=handuser HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- "${PG_BACKUP[@]}" "${PG_BY_NAME[@]}"
 case "$_pg_log" in *"-U acmeowner "*) ok "…and --user wins over a stray PGUSER" ;; *) bad "--user wins" "pg saw: ${_pg_log}" ;; esac
 rm -rf "$_pg_state"
+pg PGUSER=handuser HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-backup --database acmedb --server pg.test --user '' --store-uri https://store.test/backups/acme-1 --object acme-1 "${PG_BY_NAME[@]}"
+[ "$_pg_rc" -ne 0 ] && ok "an EMPTY --user refuses even with PGUSER set (a plan that rendered no login is not a cue to fall back)" || bad "empty --user refuses" "exited 0: ${_pg_out}"
+case "$_pg_out" in *"given EMPTY"*) ok "…saying the flag was given empty" ;; *) bad "says given empty" "said: ${_pg_out}" ;; esac
+[ -z "$_pg_az" ] && [ -z "$_pg_log" ] && ok "…before the vault is read or anything runs" || bad "empty --user refuses before reading" "az: ${_pg_az} pg: ${_pg_log}"
+rm -rf "$_pg_state"
 pg HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password -- hosting-backup --database acmedb --server pg.test --user 'u;id' --store-uri https://store.test/backups/acme-1 --object acme-1 "${PG_BY_NAME[@]}"
 [ "$_pg_rc" -ne 0 ] && [ -z "$_pg_log" ] && ok "a --user that is not a plain name refuses before anything runs" || bad "unsafe --user refuses" "rc ${_pg_rc}; pg saw: ${_pg_log}"
 rm -rf "$_pg_state"
