@@ -1030,11 +1030,15 @@ public sealed class GitHubSyncService
             logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
         // Two declines, two remedies (#6111 review): a platform floor above the running
         // platform waits for a roll; an unmet `requires` waits for its dependency to load.
+        // A third: a floor not stamped for these sources waits for the stamp or the roll, and
+        // declares nothing false, so it is named apart (with its platforms as data, not prose).
         var declinedNames = declined
-            .Where(m => m.UnmetRequirement is null)
-            .Select(m => m.FloorUnverified
-                ? $"{m.Module} (floor not stamped for these sources; {m.Floor} is available)"
-                : $"{m.Module} (≥ {m.Floor})")
+            .Where(m => m.UnmetRequirement is null && !m.FloorUnverified)
+            .Select(m => $"{m.Module} (≥ {m.Floor})")
+            .ToImmutableList();
+        var unverifiedFloorNames = declined
+            .Where(m => m.FloorUnverified)
+            .Select(m => m.Module)
             .ToImmutableList();
         var unmetRequirementNames = declined
             .Where(m => m.UnmetRequirement is not null)
@@ -1050,10 +1054,12 @@ public sealed class GitHubSyncService
                 Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
             var noop = new StaticRepoImportResult(spaceId,
                 "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
-                NoOpOutcome(declinedNames.Count, unmetRequirementNames.Count))
+                NoOpOutcome(declinedNames.Count + unverifiedFloorNames.Count, unmetRequirementNames.Count))
             {
                 DeclinedModules = declinedNames,
                 UnmetRequirementModules = unmetRequirementNames,
+                UnverifiedFloorModules = unverifiedFloorNames,
+                UnverifiedFloorAvailablePlatform = unverifiedFloorNames.IsEmpty ? null : newerPlatform,
             };
             return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
         }
@@ -1134,6 +1140,9 @@ public sealed class GitHubSyncService
                                     BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
                                     DeclinedModules = declinedNames,
                                     UnmetRequirementModules = unmetRequirementNames,
+                                    UnverifiedFloorModules = unverifiedFloorNames,
+                                    UnverifiedFloorAvailablePlatform =
+                                        unverifiedFloorNames.IsEmpty ? null : newerPlatform,
                                 },
                                 snapshot.CommitSha,
                                 Hold: hold,

@@ -92,6 +92,20 @@ public sealed record StaticRepoImportResult(string Partition, string Fingerprint
     public ImmutableList<string> UnmetRequirementModules { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The modules this import did NOT write because their sources changed after their platform floor
+    /// was last stamped, while this instance runs behind a newer platform it knows of
+    /// (<c>ModuleSyncDecision.HoldUnverifiedFloors</c>). A different remedy again: the floor declares
+    /// nothing false — it is just not stamped for these sources yet — so they sync once the stamp lands
+    /// or the platform rolls forward. Each entry is the module name; the platforms are carried apart
+    /// (<see cref="UnverifiedFloorAvailablePlatform"/>). Empty when nothing was held this way.
+    /// </summary>
+    public ImmutableList<string> UnverifiedFloorModules { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>The newer platform this instance knew of when it held <see cref="UnverifiedFloorModules"/>,
+    /// or null when it held none.</summary>
+    public string? UnverifiedFloorAvailablePlatform { get; init; }
+
+    /// <summary>
     /// How many source nodes this import could NOT land — the per-file failures the
     /// <c>ImportedWithErrors</c> outcome and the activity's ⚠ lines report.
     ///

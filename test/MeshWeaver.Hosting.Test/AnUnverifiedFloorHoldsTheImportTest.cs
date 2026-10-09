@@ -104,7 +104,8 @@ public class AnUnverifiedFloorHoldsTheImportTest(ITestOutputHelper output) : Mon
             "a declined module did not land, so the baseline stays and B's files remain in the next diff");
         declined.LastSyncNote.Should().Contain(Newer);
         declined.ModuleOutcomes!.Should().Contain(m => m.Outcome == ModuleSyncOutcomeKind.Declined
-                                                     && m.FloorUnverified && m.Floor == Newer);
+                                                     && m.FloorUnverified && m.AvailablePlatform == Newer
+                                                     && m.Floor == "3.0.0-ci.10305");
 
         // ── NEGATIVE CONTROL: the same import on an instance that runs the newest platform it knows ──
         newer.Set(null);

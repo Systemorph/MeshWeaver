@@ -96,9 +96,14 @@ public sealed record ModuleSyncOutcome(
     /// <summary>
     /// True when the module was declined because its declared floor is NOT verified for the incoming
     /// sources (<see cref="ModuleSyncDecision.HoldUnverifiedFloors"/>) while this instance runs behind
-    /// a newer platform; <see cref="Floor"/> then names that newer platform. False otherwise.
+    /// a newer platform (<see cref="AvailablePlatform"/>). <see cref="Floor"/> stays the module's
+    /// DECLARED floor, which such a module does not exceed. False otherwise.
     /// </summary>
     public bool FloorUnverified { get; init; }
+
+    /// <summary>The newer platform this instance knew of when it held a module on an unverified floor
+    /// (<see cref="FloorUnverified"/>); null otherwise.</summary>
+    public string? AvailablePlatform { get; init; }
 }
 
 /// <summary>
@@ -356,8 +361,9 @@ public static class ModuleSyncDecision
                 return outcome with
                 {
                     Outcome = ModuleSyncOutcomeKind.Declined,
-                    Floor = newerPlatform,
+                    Floor = reading.Floor,
                     FloorUnverified = true,
+                    AvailablePlatform = newerPlatform,
                     Reason = $"module '{outcome.Module}' changed after its platform floor was last stamped "
                              + $"(it declares {reading.Floor ?? "no floor"}, stamped for content "
                              + $"{reading.Witness?.ContentHash} verified on {reading.Witness?.VerifiedOn ?? "an unknown set"}; "

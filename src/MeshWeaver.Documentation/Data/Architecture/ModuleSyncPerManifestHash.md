@@ -56,7 +56,7 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
 | 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged; the image's OWN copy is judged at the version its `module.seed.json` stamp states — see below) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
-| 2b | the module's floor is **not stamped for these sources** — its `mesh-floor.lock` witness records a `contentHash` other than the incoming content's (`ModuleFloorWitness.ContentHash`, the stamp's own rule) — **and** this instance knows a platform newer than it runs (`INewerPlatformReading`, the self-update's newest recorded tag) (`ModuleSyncDecision.HoldUnverifiedFloors`) | **Declined** — `FloorUnverified` on the outcome, `Floor` names the newer platform, the reason names both hashes, the stale floor and both platforms | nothing for that module; its siblings sync |
+| 2b | the module's floor is **not stamped for these sources** — its `mesh-floor.lock` witness records a `contentHash` other than the incoming content's (`ModuleFloorWitness.ContentHash`, the stamp's own rule) — **and** this instance knows a platform newer than it runs (`INewerPlatformReading`, the self-update's newest recorded tag) (`ModuleSyncDecision.HoldUnverifiedFloors`) | **Declined** — `FloorUnverified` on the outcome, `Floor` keeps the declared floor, `AvailablePlatform` names the newer platform, the reason names both hashes, the stale floor and both platforms | nothing for that module; its siblings sync |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
 
 ### A floor nobody stamped for these sources (rule 2b)
@@ -76,9 +76,15 @@ vouches for, and the import now recomputes that hash for the incoming tree exact
 the package's files by raw-byte sha256 (all but `manifest.lock`, `.DS_Store` and the top-level
 witness), the out-of-folder entries `manifest.lock` records (a mixed package's `src/` project), and
 `index.json` hashed without its `minMeshVersion` value as Python's `json.dumps(sort_keys=True,
-ensure_ascii=False)` writes it. Pinned against the node repository's own witnesses
-(`ModuleFloorWitnessTest`: two real packages copied byte for byte, 76 of 76 matching at Plugins
-`0b8f8754`, 23 detected pending at `73e5065d` — `Hosting` among them).
+ensure_ascii=False)` writes it. `ModuleFloorWitnessTest` pins it against the node repository's own
+witnesses: two real packages copied byte for byte, plus a synthetic package hashed by the Python rule.
+An offline sweep of the same rule, which is not part of the suite, matched 76 of 76 witnesses at
+Plugins `0b8f8754` and detected 23 pending packages at `73e5065d`, `Hosting` among them.
+
+A held module is reported apart from a floor decline. Its declared floor stays in `Floor` (it is not
+above the running platform), the newer platform is in `AvailablePlatform`, and the activity and the
+settings tab name it with their own message (`activity.gitsync.modulesFloorUnverified`,
+`ui.gitSync.modulesFloorUnverified`).
 
 What a stale floor holds, and what it does not:
 

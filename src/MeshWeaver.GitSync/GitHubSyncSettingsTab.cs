@@ -593,7 +593,7 @@ public static class GitHubSyncSettingsTab
             // Policy module-sync-per-manifest-hash — per MODULE: which modules were declined (a
             // declared platform floor above the running one), and which were unchanged by their
             // manifest hash. A declined module never held its siblings, so it is named, not the Space.
-            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined).ToList()
+            cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined && !m.FloorUnverified).ToList()
                 is { Count: > 0 } declinedModules
                 ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesDeclined", locale,
                     new Dictionary<string, object>
@@ -601,6 +601,19 @@ public static class GitHubSyncSettingsTab
                         ["count"] = declinedModules.Count,
                         ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
                         ["modules"] = string.Join(", ", declinedModules.Select(m => $"{m.Module} (≥ {m.Floor})")),
+                    }))
+                : null,
+            // A module held because its floor is not stamped for these sources declares NO newer
+            // platform, so it is never listed as "≥ floor" — it waits for the stamp or the roll.
+            cfg.ModuleOutcomes?.Where(m => m.FloorUnverified).ToList()
+                is { Count: > 0 } unverifiedFloorModules
+                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesFloorUnverified", locale,
+                    new Dictionary<string, object>
+                    {
+                        ["count"] = unverifiedFloorModules.Count,
+                        ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
+                        ["available"] = unverifiedFloorModules[0].AvailablePlatform ?? "?",
+                        ["modules"] = string.Join(", ", unverifiedFloorModules.Select(m => m.Module)),
                     }))
                 : null,
             cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Unchanged).ToList()

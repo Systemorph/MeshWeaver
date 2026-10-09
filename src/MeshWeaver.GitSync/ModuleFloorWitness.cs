@@ -35,8 +35,10 @@ public sealed record FloorWitness(string? ContentHash, string? VerifiedOn);
 /// <c>index.json</c> hashed WITHOUT its <c>minMeshVersion</c> value (Python <c>json.dumps(…,
 /// sort_keys=True, ensure_ascii=False)</c> of the node) — folded by <c>gen-manifests.py
 /// module_version</c>. Equal ⇒ the declared floor is verified for these sources; different ⇒ the
-/// sources moved after the last stamp and the floor is NOT a fact. Pinned against 76 real packages
-/// in <c>ModuleFloorWitnessTest</c>.</para>
+/// sources moved after the last stamp and the floor is NOT a fact. <c>ModuleFloorWitnessTest</c> pins it
+/// against two real packages copied byte for byte from MeshWeaver.Plugins and a synthetic one hashed by
+/// the Python rule; separately, an offline sweep of the same rule (not part of the suite) matched 76 of
+/// 76 witnesses at Plugins <c>0b8f8754</c>.</para>
 ///
 /// <para>Total and tolerant: anything it cannot read (no witness, no lock, no package folder in the
 /// lock, unparsable JSON) answers <c>null</c> — "not judged" — and the import behaves exactly as it did

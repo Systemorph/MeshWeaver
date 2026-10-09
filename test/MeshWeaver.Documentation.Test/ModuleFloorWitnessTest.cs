@@ -161,7 +161,9 @@ public class ModuleFloorWitnessTest
 
         outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
         outcome.FloorUnverified.Should().BeTrue();
-        outcome.Floor.Should().Be(Newer);
+        outcome.Floor.Should().Be("3.0.0-ci.10305",
+            "the outcome keeps the DECLARED floor — the module does not claim a newer platform");
+        outcome.AvailablePlatform.Should().Be(Newer);
         outcome.Reason.Should().Contain("3.0.0-ci.10305").And.Contain(Running).And.Contain(Newer)
             .And.Contain("705673bfc0b02ea1").And.Contain("7d2bb1d8c1b7b21f");
         ModuleSyncDecision.Recorded([outcome])["Hosting"].Should().Be("a052a49965a441ce",
@@ -189,6 +191,25 @@ public class ModuleFloorWitnessTest
         outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Declined);
         outcome.FloorUnverified.Should().BeFalse();
         outcome.Floor.Should().Be("3.0.0-ci.10317");
+    }
+
+    /// <summary>The activity names an unverified-floor hold with its OWN localized message and the
+    /// platforms as arguments — never as a floor decline.</summary>
+    [Fact]
+    public void TheActivityNamesAnUnverifiedFloorHold_ApartFromAFloorDecline()
+    {
+        var result = new MeshWeaver.Graph.StaticRepoImportResult("Hosting", "manifest:Hosting=eba9", "Declined")
+        {
+            UnverifiedFloorModules = ["Hosting"],
+            UnverifiedFloorAvailablePlatform = Newer,
+        };
+
+        var line = GitHubActivityExtensions.ModulesFloorUnverifiedLine(result);
+        line.Should().NotBeNull();
+        line!.Message.Should().Contain("Hosting").And.Contain(Newer).And.Contain("stamped");
+        GitHubActivityExtensions.ModulesFloorUnverifiedLine(
+                new MeshWeaver.Graph.StaticRepoImportResult("Hosting", "x", "Skipped"))
+            .Should().BeNull("an import that held nothing this way says nothing about it");
     }
 
     /// <summary>A reading nothing can verify (no witness) is not judged — as before the rule.</summary>
