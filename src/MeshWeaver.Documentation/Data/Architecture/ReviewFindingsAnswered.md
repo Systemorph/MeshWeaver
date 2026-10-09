@@ -507,7 +507,7 @@ the same copy of the predicate. That job publishes `lane / Automatic review answ
 **not** required — the ruleset requires the first job, `Automatic review answered`, by name. The
 two must agree on every pull request; a disagreement is a defect in the lane.
 
-What is still owed, and is not an agent's to do:
+**Historical — the rollout below is complete; see "The rollout is complete".** The plan, as it was staged:
 
 | step | the act | owner |
 |---|---|---|
@@ -519,14 +519,14 @@ Its staged pipeline (`node-repo-stage-gate.yml`) holds the heavy legs until the 
 been answered, **but only when the stage gate runs with `review-before-suites`**. On Plugins it runs
 with that off: the suites start in parallel with the review, and the gate's own log says "merging and
 arming still require the review landed and every thread answered". Arming does: the steward's
-`PrArming` checks it. A **merge** does not, because nothing in Plugins' classic protection reads the
-answer.
+`PrArming` checks it. Before step 3 a **merge** did not, because nothing in Plugins' classic protection
+read the answer; it does now.
 
 Measured over the 25 most recent merges on 2026-10-08, two merged with Copilot findings unanswered:
 - #3115: one thread on head `0c60ab5bbc`, merged by hand 54 minutes after the review;
 - #2962: four threads.
 
-Step 1 (the lane) is already landed. For Plugins, steps 2 and 3 of the table above go like this:
+For Plugins, steps 2 and 3 of the table above went like this (done):
 - **Step 2** has two parts, in this order:
   - its roster row lands here as `pending:`;
   - then its `review-answered.yml` caller lands observe-only. The caller floats `@main` with
@@ -552,10 +552,11 @@ to protection. So no repository was left with a required context that never repo
 | MeshWeaver.Education | ruleset `19153714` | yes | Education#392 |
 
 Two things the rollout found, worth knowing before the next adopter:
-- **Every satellite's `scripts/check-shared-lanes.py` classifies an unknown lane as source-building.**
-  It then demands `platform-ref`, so the caller's own `Nothing pins the platform` / policy gate goes
-  red. The caller PR must also add `node-repo-review-answered.yml` to `SCRIPT_ONLY_LANES`, with
-  self-test cases for both directions.
+- **A satellite that carries `scripts/check-shared-lanes.py` classifies an unknown lane as
+  source-building** (Reinsurance, Crm, SocialMedia and Manufacturing do; Education carries no such
+  script). It then demands `platform-ref`, so the caller's own `Nothing pins the platform` / policy
+  gate goes red. In those repositories the caller PR must also add `node-repo-review-answered.yml` to
+  `SCRIPT_ONLY_LANES`, with self-test cases for both directions.
 - **There is no legacy context to carry, so no shim job is needed.** The shim-job route in
   [Renaming A Required Check](../RenamingARequiredCheck) exists for a rename. Here the context is
   new, and the only rule is ordering: the context is published first, then made required.

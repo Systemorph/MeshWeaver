@@ -170,10 +170,10 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: inherit
-      # ── Automatic review answered (MeshWeaver#4776) — LANDED and required. Outside core and Plugins nothing in
-      # this repository's protection reads the answer, so pull requests merged past unanswered Copilot findings
-      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml; the context
-      # joins protection only after `review-answered / Automatic review answered` is seen published here.
+      # ── Automatic review answered (MeshWeaver#4776) — LANDED and REQUIRED. Before it, nothing in this
+      # repository's protection read the answer, so pull requests merged past unanswered Copilot findings
+      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml. The caller's
+      # own PR published `review-answered / Automatic review answered` before the context was made required.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml
@@ -228,10 +228,10 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: inherit
-      # ── Automatic review answered (MeshWeaver#4776) — LANDED and required. Outside core and Plugins nothing in
-      # this repository's protection reads the answer, so pull requests merged past unanswered Copilot findings
-      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml; the context
-      # joins protection only after `review-answered / Automatic review answered` is seen published here.
+      # ── Automatic review answered (MeshWeaver#4776) — LANDED and REQUIRED. Before it, nothing in this
+      # repository's protection read the answer, so pull requests merged past unanswered Copilot findings
+      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml. The caller's
+      # own PR published `review-answered / Automatic review answered` before the context was made required.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml
@@ -293,10 +293,10 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: inherit
-      # ── Automatic review answered (MeshWeaver#4776) — LANDED and required. Outside core and Plugins nothing in
-      # this repository's protection reads the answer, so pull requests merged past unanswered Copilot findings
-      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml; the context
-      # joins protection only after `review-answered / Automatic review answered` is seen published here.
+      # ── Automatic review answered (MeshWeaver#4776) — LANDED and REQUIRED. Before it, nothing in this
+      # repository's protection read the answer, so pull requests merged past unanswered Copilot findings
+      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml. The caller's
+      # own PR published `review-answered / Automatic review answered` before the context was made required.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml
@@ -347,10 +347,10 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: {contents: read}
-      # ── Automatic review answered (MeshWeaver#4776) — LANDED and required. Outside core and Plugins nothing in
-      # this repository's protection reads the answer, so pull requests merged past unanswered Copilot findings
-      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml; the context
-      # joins protection only after `review-answered / Automatic review answered` is seen published here.
+      # ── Automatic review answered (MeshWeaver#4776) — LANDED and REQUIRED. Before it, nothing in this
+      # repository's protection read the answer, so pull requests merged past unanswered Copilot findings
+      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml. The caller's
+      # own PR published `review-answered / Automatic review answered` before the context was made required.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml
@@ -405,10 +405,10 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: inherit
-      # ── Automatic review answered (MeshWeaver#4776) — LANDED and required. Outside core and Plugins nothing in
-      # this repository's protection reads the answer, so pull requests merged past unanswered Copilot findings
-      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml; the context
-      # joins protection only after `review-answered / Automatic review answered` is seen published here.
+      # ── Automatic review answered (MeshWeaver#4776) — LANDED and REQUIRED. Before it, nothing in this
+      # repository's protection read the answer, so pull requests merged past unanswered Copilot findings
+      # (55 of 120 sampled merges fleet-wide, #4776). Same caller as Plugins' review-answered.yml. The caller's
+      # own PR published `review-answered / Automatic review answered` before the context was made required.
       - workflow: review-answered.yml
         job: review-answered
         lane: node-repo-review-answered.yml
