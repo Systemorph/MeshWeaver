@@ -209,6 +209,12 @@ bundle in the registry while reporting a full inventory.
 
 ## 5. What is missing to derive this from mesh data — [#4066](https://github.com/Systemorph/MeshWeaver/issues/4066)'s half, precisely
 
+🗂️ **What the CD build PUBLISHES is now mesh data** (policy `image-closure-as-mesh-data`): every
+`memex-portal-ai` image it builds is recorded as an `ImageClosure` node keyed by its digest, read
+through a coverage statement in which an absent record is NOT MEASURED —
+[An Image's Closure, as Mesh Data](../ImageClosureAsMeshData). That is one input to §5.1, not its
+answer: it records what this CD built, not what the registry holds.
+
 ### 5.1 Nothing enumerates what the registry HOLDS — and this is the largest gap
 
 A protected set is the thing you keep. **The deletable set is its complement over the registry's

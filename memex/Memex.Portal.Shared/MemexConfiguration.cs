@@ -16,6 +16,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.ControlLane;
+using MeshWeaver.Graph.ImageClosures;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Persistence;
@@ -818,6 +819,11 @@ public static class MemexConfiguration
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
                 .AddWebhookInbox()
+                // An image's closure as mesh data (#4066, policy image-closure-as-mesh-data): the
+                // ImageClosure node type, and the ingest that turns the CD build's signed record into
+                // Admin/ImageClosures/{repository}-{digest}. Registered everywhere, armed only where
+                // WebhookInbox:Targets lists Admin/ImageClosures WITH a SecretConfigKey.
+                .AddImageClosures()
                 // Secrets a global admin may ENTER in the portal instead of an operator minting
                 // them in a vault (Doc/Architecture/InstanceSecrets). Each slot is a key the code
                 // below READS: the self-updater's signing key (GENERATED at /Admin/Settings/ControlLane,
