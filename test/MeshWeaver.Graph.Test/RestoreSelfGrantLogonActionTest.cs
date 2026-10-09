@@ -64,20 +64,6 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
-    /// <summary>Waits until the query index the action reads agrees with the store, so the case
-    /// tests the action and not index lag.</summary>
-    private Task AwaitIndexedAssignments(string user, int count, CancellationToken ct) =>
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => Access.RunAsSystem(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{user}/_Access nodeType:{RestoreSelfGrantLogonAction.AssignmentNodeType}"))
-                .Where(c => c.ChangeType == QueryChangeType.Initial)
-                .Select(c => c.Items.Count())
-                .Take(1)))
-            .Where(n => n == count)
-            .FirstAsync()
-            .Timeout(TestTimeouts.Convergence)
-            .Await(ct);
-
     /// <summary>Removes the self-grant from the STORE — the state the affected account was found in
     /// (the grant write never landed). A mesh delete is refused here, rightly: the last-admin
     /// invariant protects a home from losing its only administrator through the front door.</summary>
@@ -86,7 +72,6 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
         await AwaitGrant(user, g => g is not null, ct);
         await Storage.DeleteAsync(GrantPath(user), ct);
         await AwaitGrant(user, g => g is null, ct);
-        await AwaitIndexedAssignments(user, 0, ct);
     }
 
     private Task Run(string userPath, AccessContext identity, CancellationToken ct) =>
@@ -114,7 +99,6 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
         node!.MainNode.Should().Be(user, "the grant is scoped to the user's own partition and nothing wider");
 
         // Idempotent: a second logon finds it and writes nothing (create, never upsert — no fault).
-        await AwaitIndexedAssignments(user, 1, ct);
         await Run(user, Person(user), ct);
         (await StoredGrant(user).Timeout(TestTimeouts.Convergence).Await(ct))!.Roles.Should().HaveCount(1);
     }
@@ -144,7 +128,6 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
         };
         await Access.RunAsSystem(() => MeshService.CreateNode(denied))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        await AwaitIndexedAssignments(user, 1, ct);
 
         await Run(user, Person(user), ct);
 
@@ -154,6 +137,39 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
             .Timeout(TestTimeouts.Convergence).Await(ct);
         deny!.ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions)!.Roles.Should().ContainSingle()
             .Which.Denied.Should().BeTrue("the deny itself is untouched");
+    }
+
+    /// <summary>
+    /// The index-lag race: a deny written straight to the STORE, which the query index has not seen,
+    /// must still stop the restore — the "nothing names them" check reads the store, never the index.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ADenyTheIndexHasNotSeenYet_StillStopsTheRestore()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string user = "selfgrant-lagging-deny";
+        await CreateUserAsync(user, ct);
+        await RemoveGrantAsync(user, ct);
+
+        var denied = new MeshNode($"{user}_Revoked", $"{user}/_Access")
+        {
+            NodeType = RestoreSelfGrantLogonAction.AssignmentNodeType,
+            Name = $"{user} Access (revoked)",
+            MainNode = user,
+            Content = new AccessAssignment
+            {
+                AccessObject = user,
+                DisplayName = user,
+                Roles = [new RoleAssignment { Role = Role.Admin.Id, Denied = true }],
+            },
+        };
+        await Storage.Write(denied, Mesh.JsonSerializerOptions)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        await Run(user, Person(user), ct);
+
+        (await StoredGrant(user).Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull(
+            "a deny in the store is a decision even before the query index has caught up with it");
     }
 
     [Fact(Timeout = 120_000)]
@@ -169,6 +185,22 @@ public class RestoreSelfGrantLogonActionTest(ITestOutputHelper output) : Monolit
 
         (await StoredGrant(owner).Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeNull(
             "negative control: the restore is authorized by the caller BEING the home's owner");
+    }
+
+    [Fact]
+    public void IdentityKindFlags_AreNeverEligible_WhateverTheirId()
+    {
+        RestoreSelfGrantLogonAction.IsEligiblePerson(Person("alice") with { IsVirtual = true }).Should().BeFalse();
+        RestoreSelfGrantLogonAction.IsEligiblePerson(Person("alice") with { IsHub = true }).Should().BeFalse();
+        RestoreSelfGrantLogonAction.IsEligiblePerson(Person("alice") with { IsService = true }).Should().BeFalse();
+    }
+
+    [Fact]
+    public void NoDeclaredActionCanSortAheadOfTheRepair()
+    {
+        var declared = new PinMigrationLogonAction("aaa-first", new LogonAction { Order = int.MinValue });
+        declared.Order.Should().BeGreaterThan(new RestoreSelfGrantLogonAction().Order,
+            "the first slot is reserved: a declaration at int.MinValue, tied and alphabetically earlier, still runs after");
     }
 
     [Theory]

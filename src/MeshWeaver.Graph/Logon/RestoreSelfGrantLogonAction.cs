@@ -40,7 +40,13 @@ namespace MeshWeaver.Graph.Logon;
 /// Every restore is logged at Warning, naming the user and the path — access appearing silently is
 /// its own bug class.</para>
 ///
-/// <para><b>EveryLogon</b>, with a cheap "nothing to do": one anchored query of the user's own
+/// <para><b>The "nothing names them" check reads the AUTHORITATIVE store</b> (<see cref="ReadAssignments"/>),
+/// never the query index, whose negative can lag a write: a deny written seconds ago must still stop
+/// the restore. A deny that lands in the instant between that read and the create cannot widen access
+/// either — the permission fold subtracts a scope's denied roles from its granted ones, so an Admin
+/// deny beside the restored Admin grant still wins.</para>
+///
+/// <para><b>EveryLogon</b>, with a cheap "nothing to do": one listing of the user's own
 /// <c>_Access</c> namespace, which holds the self-grant on every healthy account.</para>
 /// </summary>
 public sealed class RestoreSelfGrantLogonAction : ILogonAction
@@ -51,9 +57,14 @@ public sealed class RestoreSelfGrantLogonAction : ILogonAction
     /// <inheritdoc />
     public LogonActionMode Mode => LogonActionMode.EveryLogon;
 
-    /// <summary>First of all: every action that writes into the user's home as the user (default
-    /// apps, the Inbox tile) needs the grant this restores.</summary>
-    public int Order => -1000;
+    /// <summary>The first slot of every logon run, reserved for this repair: every action that writes
+    /// into the user's home as the user (default apps, the Inbox tile, a declared pin migration)
+    /// needs the grant it restores. Data-declared actions are clamped above it
+    /// (<see cref="PinMigrationLogonAction.Order"/>), so no declaration can sort ahead.</summary>
+    internal const int ReservedOrder = int.MinValue;
+
+    /// <inheritdoc />
+    public int Order => ReservedOrder;
 
     /// <summary>Bound on each read. A slow store costs this logon's check — it runs again on the
     /// next one — never the logon.</summary>
@@ -79,13 +90,42 @@ public sealed class RestoreSelfGrantLogonAction : ILogonAction
 
     /// <summary>
     /// Whether <paramref name="identity"/> may have its home's self-grant restored at all — a real,
-    /// signed-in person, never System, Anonymous/Public or a service principal. Pure.
+    /// signed-in person: never a virtual, hub or service identity (by the context's own kind flags),
+    /// and never System, Anonymous/Public or a service principal by id. Pure.
     /// </summary>
     internal static bool IsEligiblePerson(AccessContext identity) =>
-        WellKnownUsers.IsAuthenticated(identity.ObjectId)
+        // The identity-KIND flags first: a virtual, hub or service identity is not a person, whatever
+        // its object id happens to look like.
+        !identity.IsVirtual
+        && !identity.IsHub
+        && !identity.IsService
+        && WellKnownUsers.IsAuthenticated(identity.ObjectId)
         && !string.Equals(identity.ObjectId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
         && !ServiceIdentity.IsServiceObjectId(identity.ObjectId)
         && !identity.ObjectId.Contains('/');
+
+    /// <summary>
+    /// The assignments in the user's own <c>_Access</c> namespace, read from the AUTHORITATIVE store
+    /// (<see cref="IStorageAdapter"/>) — never the query index, whose negative can lag a write by
+    /// minutes. A freshly written deny that the index has not seen yet must still stop the restore.
+    /// A store that cannot list or read faults the read, and the action is retried at the next logon.
+    /// </summary>
+    internal static IObservable<IReadOnlyList<MeshNode>> ReadAssignments(IMessageHub hub, string userId)
+    {
+        var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var options = hub.JsonSerializerOptions;
+        return storage.ListChildPaths($"{userId}/_Access")
+            .Take(1)
+            .SelectMany(listing => listing.NodePaths
+                .Select(path => storage.Read(path, options).Take(1).DefaultIfEmpty())
+                .Concat()
+                .Where(node => node is not null
+                               && string.Equals(node.NodeType, AssignmentNodeType, StringComparison.OrdinalIgnoreCase))
+                .Select(node => node!)
+                .ToList())
+            .Select(nodes => (IReadOnlyList<MeshNode>)nodes.ToArray())
+            .Timeout(ReadBound);
+    }
 
     /// <inheritdoc />
     public IObservable<LogonActionOutcome> Run(LogonActionContext context)
@@ -105,18 +145,17 @@ public sealed class RestoreSelfGrantLogonAction : ILogonAction
 
         var options = hub.JsonSerializerOptions;
 
-        // The reads run as System: a user without the grant cannot read their own _Access, and an
-        // RLS-filtered read answers EMPTY, not denied — read as the user, every healthy account
-        // would look broken and every broken one would look the same as an absent one.
-        IObservable<IReadOnlyList<MeshNode>> Read(string query) =>
+        // The home is read as System: a user without the grant cannot rely on reading even their own
+        // partition root through RLS.
+        IObservable<IReadOnlyList<MeshNode>> Query(string query) =>
             access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Where(change => change.ChangeType == QueryChangeType.Initial)
                 .Select(change => (IReadOnlyList<MeshNode>)change.Items.ToArray())
                 .Take(1))
                 .Timeout(ReadBound);
 
-        return Read($"path:{userId}")
-            .Zip(Read($"namespace:{userId}/_Access nodeType:{AssignmentNodeType}"), (home, grants) => (home, grants))
+        return Query($"path:{userId}")
+            .Zip(ReadAssignments(hub, userId), (home, grants) => (home, grants))
             .SelectMany(read =>
             {
                 // AUTHORIZE (2/2): the home is a User node at exactly the identity's path.
@@ -141,7 +180,7 @@ public sealed class RestoreSelfGrantLogonAction : ILogonAction
                     .Select(_ => LogonActionOutcome.Nothing)
                     .Catch((Exception exception) =>
                     {
-                        if (exception.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        if (exception.IsNodeAlreadyExists())
                             return Observable.Return(LogonActionOutcome.Nothing);
                         logger?.LogWarning(exception,
                             "[RestoreSelfGrant] Could not restore the self-grant of '{User}' at {Path}",

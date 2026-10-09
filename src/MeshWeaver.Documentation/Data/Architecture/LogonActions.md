@@ -197,7 +197,7 @@ write was lost stayed broken for good (MeshWeaver#5225). So it follows
 - **Audited:** every restore logs `[RestoreSelfGrant] Restored the missing self-grant of '{user}'
   at {path} …` at Warning, and the grant row's `createdBy` is `system-security`.
 
-Its cheap check is one anchored query of the user's own `_Access` namespace.
+Its cheap check is one listing of the user's own `_Access` namespace, read from the **authoritative store**, never the query index: a deny written seconds ago must still stop it. A deny landing between that read and the create cannot widen access either, because the permission fold subtracts a scope's denied roles from its granted ones. It holds the **reserved first slot** (`int.MinValue`): a data-declared action's order is clamped above it, so nothing that writes into the home as the user can run before the grant is back.
 
 ---
 
