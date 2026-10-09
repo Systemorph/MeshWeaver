@@ -11,6 +11,7 @@
         "containers": [
           {
             "name": "memex-portal",
+            "image": "meshweaver.azurecr.io/memex-portal-ai:3.1.10400",
             "envFrom": [
               {
                 "configMapRef": {

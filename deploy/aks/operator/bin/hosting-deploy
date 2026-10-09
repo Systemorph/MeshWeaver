@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hosting-deploy --namespace <ns> --release <name> --database <db> --values <file> [--vault <name>] [--image <ref>]
+# hosting-deploy --namespace <ns> --release <name> --database <db> --values <file> [--vault <name> [--vault-keys K1,K2,…]] [--image <ref>]
 #
 # Install (or upgrade) the portal release for ONE instance.
 #
@@ -43,7 +43,7 @@ HOSTING_CMD="hosting-deploy"
 
 CHART="${HOSTING_CHART:-/opt/hosting/chart}"
 
-namespace="" release="" database="" values="" image="" vault=""
+namespace="" release="" database="" values="" image="" vault="" declared_keys=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --namespace)   namespace="${2:-}";   shift 2 ;;
@@ -52,6 +52,7 @@ while [ $# -gt 0 ]; do
     --values)      values="${2:-}";      shift 2 ;;
     --image)       image="${2:-}";       shift 2 ;;
     --vault)       vault="${2:-}";       shift 2 ;;
+    --vault-keys)  declared_keys="${2:-}";  shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -63,6 +64,13 @@ hosting::safe_name namespace "$namespace"
 hosting::safe_name release "$release"
 hosting::safe_name database "$database"
 [ -z "$vault" ] || hosting::safe_name vault "$vault"
+# The record's DECLARED vaultValuesKeys (policy `one-values-half-per-release`): env-key names, comma
+# separated. Only meaningful with --vault, and a plain list of names — it reaches python argv.
+if [ -n "$declared_keys" ]; then
+  [ -n "$vault" ] || hosting::die "--vault-keys names the keys of a values half, but no --vault was given to read it from"
+  [[ "$declared_keys" =~ ^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$ ]] \
+    || hosting::die "--vault-keys '${declared_keys}' is not a comma-separated list of env-key names — refusing to interpolate it"
+fi
 
 [ -d "$CHART" ] || hosting::die "no chart at ${CHART}. It is baked into the operator image (COPY helm/ /opt/hosting/chart) precisely so a run cannot deploy a chart nobody reviewed — an image built without it is broken, not degraded."
 # 🚨 THE VALUES FILE IS RENDERED FROM THE DEPLOYMENT RECORD (HelmValues in the Hosting plugin)
@@ -320,6 +328,22 @@ if [ -n "$vault" ]; then
     || hosting::die "the values half helm-values-${release} in Key Vault ${vault} carries STRUCTURE — top-level key(s):${structural}. The half holds secret families only (secrets, parameters, pgbackrest); structure lives on the Deployment record. Layered first, a structural list the record's render omits DEPLOYS beside the record's own wiring (memex 2026-09-25: Job memex-migration-62 invalid, duplicate volume \"kv-secrets\"), and a structural map supplies every leaf the render does not name. Refused before helm, nothing changed. Remedy: a governed HelmRelease action for ${release} with helmAction: capture — it re-stores the half filtered to its families and keeps the previous version as the rollback. Before capturing, confirm every leaf the half alone supplies is inert or declared on the record (Memex#295)."
   [ "$families" -gt 0 ] \
     || hosting::die "the values half helm-values-${release} in Key Vault ${vault} holds none of the families (secrets, parameters, pgbackrest) — a record that declares vaultValuesKeys needs the chart's Secrets fed from it, so this half would deploy no secrets at all (MeshWeaver#3780). Re-run the HelmRelease capture for this release."
+  # 🚨 EXACTLY THE DECLARED KEYS (policy `one-values-half-per-release`, MeshWeaver#4685). The families
+  # check above stops STRUCTURE; it cannot stop a secret family that feeds a key the record never
+  # declared — a `config` leaf captured into the half (Systemorph/Memex#295) or a secret nobody
+  # reviews — nor notice a declared key the half no longer holds (the chart then renders it from its
+  # in-cluster default, the #3780 shape one key at a time). When the plan passes the record's
+  # vaultValuesKeys, the half must feed exactly those: key NAMES only, never a value.
+  if [ -n "$declared_keys" ]; then
+    half_diff="$(hosting::values_half check "$vault_values" --keys "$declared_keys")"; half_rc=$?
+    case "$half_rc" in
+      0) hosting::log "vault     helm-values-${release} feeds exactly the record's $(tr ',' '\n' <<< "$declared_keys" | wc -l | tr -d ' ') declared key(s)"
+         hosting::say vault_values_keys exact ;;
+      3) hosting::say vault_values_keys mismatch
+         hosting::die "the values half helm-values-${release} in Key Vault ${vault} does not hold EXACTLY the record's vaultValuesKeys — $(tr '\n' ';' <<< "$half_diff"). Refused before helm, nothing changed (policy one-values-half-per-release). An UNDECLARED key is fed to the pod by nothing anyone reviews: a governed Provision or Repair of this record re-stores the half filtered to the declared keys (hosting-kv-ensure --values-half --vault-keys; the previous version stays in the vault as the rollback). A MISSING key cannot be invented: put it in the half, or drop it from the record's vaultValuesKeys." ;;
+      *) hosting::die "the values half helm-values-${release} in Key Vault ${vault} could not be checked against the record's vaultValuesKeys (rc ${half_rc}) — refused rather than layered unchecked." ;;
+    esac
+  fi
   hosting::log "vault     helm-values-${release} ($(wc -c < "$vault_values") bytes, families only) — layered FIRST; the record's render wins on every key it declares"
   hosting::say vault_values_bytes "$(wc -c < "$vault_values" | tr -d ' ')"
 fi

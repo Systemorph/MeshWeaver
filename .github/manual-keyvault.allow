@@ -15,7 +15,7 @@ deploy/aks/operator/bin/hosting-kv-purge  — teardown verb: deletes an instance
 
 # Governed provisioning verbs that still run as hosting-operator.
 deploy/aks/operator/bin/_common.sh  — TRANSITIONAL: hosting::pg_password reads the server admin password to compose connection strings
-deploy/aks/operator/bin/hosting-kv-ensure  — TRANSITIONAL: the admin-password read for the connection string (existence is checked with `list`)
+deploy/aks/operator/bin/hosting-kv-ensure  — TRANSITIONAL: the admin-password read for the connection string (existence is checked with `list`), and the download of an existing helm-values-<release> to filter it to the record's declared keys (policy one-values-half-per-release)
 deploy/aks/operator/bin/hosting-kv-copy  — TRANSITIONAL: copyFrom reads the source value to write the per-prefix copy
 deploy/aks/operator/bin/hosting-kv-rotate  — TRANSITIONAL: reads the vaulted registry key to compare before rotating
 deploy/aks/operator/bin/hosting-registry-register  — TRANSITIONAL: reads the held instance key and the bootstrap key to call the registry

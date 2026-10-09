@@ -151,6 +151,31 @@ else
   fail=1
 fi
 
+# ---- 1b. THE DECLARED VALUES HALF (policy one-values-half-per-release) ------
+# With the record's facts the placeholder half carries EVERY declared key (the deploy's own third
+# source, exactly as hosting-deploy admits it), and the proof must still hold over all of them.
+echo "case: the placeholder half in the record's declared shape is proved inert"
+printf '%s\n' '{"record":"Deployments/t","vaultValuesKeys":["Ai__KeyProtection__MasterKey","Anthropic__ApiKey","ConnectionStrings__memex","ConnectionStrings__orleans","MEMEX_PASSWORD","OpenRouter__ApiKey"]}' > "$WORK/record.json"
+out="$(python3 "$RENDER" --chart "$CHART" --namespace check --release rel --out "$WORK/declared.yaml" -f "$BASE" -f "$FIXTURE" --record "$WORK/record.json" 2>&1)"; rc=$?
+expect_pass "exit code" "$out" "$rc"
+for leaf in Ai__KeyProtection__MasterKey Anthropic__ApiKey memex_postgres_password OpenRouter__ApiKey; do
+  case "$out" in
+    *"secrets.memex_portal.$leaf"*) echo "  ok   the placeholder half carries declared $leaf" ;;
+    *) echo "::error::the declared key $leaf was not placed in the placeholder half:"; printf '%s\n' "$out" | sed 's/^/    /'; fail=1 ;;
+  esac
+done
+case "$out" in *"Placeholder independence PROVED"*) echo "  ok   …and the proof holds over the declared shape" ;;
+  *) echo "::error::no independence proof over the declared shape"; fail=1 ;; esac
+# NEGATIVE CONTROL for 1b: a chart that templates a declared NON-connection key into the ConfigMap
+# must go red — otherwise the declared keys above were placed somewhere the proof never looks.
+poison="$(poisoned_chart leak-declared templates/memex-portal/config.yaml \
+  '  DriftTestLeakedDeclared: {{ .Values.secrets.memex_portal.Anthropic__ApiKey | quote }}')"
+out="$(python3 "$RENDER" --chart "$poison" --namespace check --release rel --out "$WORK/declared-p.yaml" -f "$BASE" -f "$FIXTURE" --record "$WORK/record.json" 2>&1)"; rc=$?
+expect_red "a leaked DECLARED key" "$out" "$rc" "DriftTestLeakedDeclared"
+printf 'not json' > "$WORK/record-bad.json"
+out="$(python3 "$RENDER" --chart "$CHART" --namespace check --release rel --out "$WORK/declared-b.yaml" -f "$BASE" -f "$FIXTURE" --record "$WORK/record-bad.json" 2>&1)"; rc=$?
+expect_red "unreadable record facts" "$out" "$rc" "unreadable"
+
 # ---- 2. NEGATIVE CONTROL: the placeholder reaching a compared VALUE --------
 # The realistic regression: somebody templates a connection string into memex-portal-config, and
 # from then on the drift report compares the cluster against a value this check invented. The

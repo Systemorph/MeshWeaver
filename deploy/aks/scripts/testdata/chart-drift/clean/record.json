@@ -1,0 +1,7 @@
+{
+  "record": "Deployments/example",
+  "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+  "updatePolicy": "Continuous",
+  "updatePattern": "3.*",
+  "pinnedImageTag": null
+}

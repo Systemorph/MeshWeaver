@@ -22,7 +22,22 @@ to be re-derived by hand every run — 13 owned-but-retired out of 36 cluster-on
 Arguments, in order:
   desired.yaml  live-configmap.json  live-deployment.json  expect-patch.json
   live-poddisruptionbudgets.json  live-scaledobjects.json  live-envfrom-source-keys.txt
-  release-manifest.yaml
+  release-manifest.yaml  record.json
+
+🖼️ THE PORTAL IMAGE IS COMPARED AGAINST THE DEPLOYMENT RECORD, NOT AGAINST THE CHART (MeshWeaver#4685,
+policy `chart-drift-compares-image-to-record`). The chart's `image:` is never what runs: a
+record-driven deploy passes the image explicitly, and between deploys the self-updater owns the
+field. So a D-vs-L image comparison would report noise on every run, and what nobody compared was
+the question that matters — "does the cluster run a tag the record ALLOWS?" (#4640 measured one
+that did not, for ~7 hours). `record.json` is the record's own statement of that, written by
+the lane from the committed record: `{"record", "imageRepository", "updatePolicy", "updatePattern",
+"pinnedImageTag"}`. A pinned tag must match EXACTLY; otherwise the running tag must match the
+`updatePattern` glob (`3.*` covers `3.0.0-ci.<run>` and the SemVer `3.1.<run>` alike, and a
+`3.0.0-ci*` pattern correctly reports a `3.1.<run>` build as off-record). A digest-only reference,
+a different repository, or a record that states neither pin nor pattern are findings too — "could
+not be tested against the record" must never read as "matches the record". Only tag-level facts are
+printed: the repository, the tag and the pattern — all public — never a value from any Secret.
+The policy file is REQUIRED for the same reason the release manifest is.
 
 The envFrom file is `secret/<name><TAB>key` and `configmap/<name><TAB>key` lines — the NAMES of the
 keys every OTHER envFrom source supplies (memex-portal-config is fetched in full separately), and
@@ -42,7 +57,7 @@ deletions": a checker that answers "everything cluster-only survives" because it
 manifest is a gate that passed on missing input.
 Exit 0 = no drift, 1 = drift or the comparison could not be made.
 """
-import json, os, sys, yaml
+import fnmatch, json, os, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
 live_pdb_path, live_so_path = sys.argv[5:7]
@@ -72,6 +87,23 @@ if not os.path.exists(manifest_path):
     print(f"::error::the release manifest '{manifest_path}' does not exist. It is the output of "
           f"{MANIFEST_HINT} and it is a required input, not an optional one — see above. Treating "
           f"as FAILURE.")
+    sys.exit(1)
+
+POLICY_HINT = ("the record's image policy — {record, imageRepository, updatePolicy, updatePattern, "
+               "pinnedImageTag}, written by chart-drift-record.py from the committed Deployment record")
+policy_path = sys.argv[9] if len(sys.argv) > 9 else ""
+if not policy_path or not os.path.exists(policy_path):
+    print(f"::error::no image policy was passed ('{policy_path}'; {POLICY_HINT}). Without it the "
+          f"portal's running image cannot be tested against what its record allows, and reporting "
+          f"nothing about the image would read as 'the image matches' (MeshWeaver#4685). Treating "
+          f"as FAILURE.")
+    sys.exit(1)
+try:
+    record_facts = json.load(open(policy_path))
+    if not isinstance(record_facts, dict):
+        raise ValueError("not a JSON object")
+except Exception as e:  # noqa: BLE001 — named and fatal, never swallowed
+    print(f"::error::the image policy '{policy_path}' is unreadable ({e}). Treating as FAILURE.")
     sys.exit(1)
 
 findings, comparisons = [], 0
@@ -548,6 +580,62 @@ if paused is not None:
             f"autoscaling (`kubectl annotate scaledobject memex-portal-scaler "
             f"autoscaling.keda.sh/paused-replicas-`)")
 
+# 6. the portal IMAGE against the deployment RECORD (MeshWeaver#4685) — see the module docstring for
+# why this is the record's pattern and not the chart's `image:`.
+def split_image(ref):
+    """`repo:tag`, `repo@sha256:…` or `repo:tag@sha256:…` → (repo, tag-or-None, digest-or-None).
+    A registry PORT (`host:5000/repo`) is not a tag: the tag is the part after the LAST colon of
+    the final path segment."""
+    ref = (ref or "").strip()
+    digest = None
+    if "@" in ref:
+        ref, digest = ref.split("@", 1)
+    head, _, last = ref.rpartition("/")
+    tag = None
+    if ":" in last:
+        last, tag = last.split(":", 1)
+    return (f"{head}/{last}" if head else last), (tag or None), digest
+
+def norm_repo(r):
+    return (r or "").strip().rstrip("/").lower()
+
+record = (record_facts.get("record") or "").strip() or "<unnamed record>"
+pin = (record_facts.get("pinnedImageTag") or "").strip()
+pattern = (record_facts.get("updatePattern") or "").strip()
+want_repo = (record_facts.get("imageRepository") or "").strip()
+live_repo, live_tag, live_digest = split_image(l_c.get("image"))
+comparisons += 1
+if not (l_c.get("image") or "").strip():
+    finding("OFF-RECORD", "image (memex-portal)",
+            f"the live container names no image at all — nothing to test against {record}")
+elif live_tag is None:
+    finding("OFF-RECORD", "image tag (memex-portal)",
+            f"live '{live_repo}@{(live_digest or '')[:19]}…' runs by DIGEST only, so its tag cannot be "
+            f"tested against {record} (pin {pin or '—'}, pattern {pattern or '—'}). A digest-only "
+            f"reference is not 'on record'; deploy by tag")
+elif pin:
+    if live_tag != pin:
+        finding("OFF-RECORD", "image tag (memex-portal)",
+                f"live '{live_tag}' vs {record} pinnedImageTag '{pin}' — the cluster runs a tag its "
+                f"record does not pin. A Roll/Reconcile of the record resolves it; a hand "
+                f"`set image` is how it arises")
+elif pattern:
+    if not fnmatch.fnmatchcase(live_tag, pattern):
+        finding("OFF-RECORD", "image tag (memex-portal)",
+                f"live '{live_tag}' does not match {record} updatePattern '{pattern}' "
+                f"(updatePolicy {record_facts.get('updatePolicy') or '—'}) — the cluster runs a tag "
+                f"no update the record allows would have chosen. A Roll of the record resolves it")
+else:
+    finding("OFF-RECORD", "image tag (memex-portal)",
+            f"{record} states neither pinnedImageTag nor updatePattern, so which tag the cluster "
+            f"should run is declared nowhere — live '{live_tag}' cannot be on record. Declare one on "
+            f"the record")
+if want_repo:
+    comparisons += 1
+    if norm_repo(live_repo) != norm_repo(want_repo):
+        finding("OFF-RECORD", "image repository (memex-portal)",
+                f"live '{live_repo}' vs {record} imageRepository '{want_repo}'")
+
 # ---- verdict ---------------------------------------------------------------
 # The evidence assertion: a run that compared (almost) nothing must not read as a pass.
 MIN = 25
@@ -563,7 +651,7 @@ if not findings:
 
 # Worst first. COLLIDES and SHADOWS are live-wrong RIGHT NOW; the rest are hygiene that a deploy
 # will not resolve either way. Ranking them the other way round is what made this report unreadable.
-order = {"COLLIDES": 0, "SHADOWS": 1, "CLUSTER-ONLY": 2, "CHART-ONLY": 3, "DIFFERS": 4}
+order = {"COLLIDES": 0, "SHADOWS": 1, "OFF-RECORD": 2, "CLUSTER-ONLY": 3, "CHART-ONLY": 4, "DIFFERS": 5}
 for kind, what, detail in sorted(findings, key=lambda f: (order[f[0]], f[1])):
     print(f"::error::{kind:<12} {what}")
     if detail:
@@ -587,6 +675,9 @@ print("🚨 COLLIDES     → LIVE NON-DETERMINISM, fix first. Delete the inline 
 print("                 feeds the key through envFrom. Adding it to the chart does NOT clear it.")
 print("🚨 SHADOWS      → the chart's value is dead. Put the intended value in the chart, THEN delete")
 print("                 the inline entry — either step alone leaves the pod on the inline value.")
+print("OFF-RECORD    → the portal runs an image its Deployment RECORD does not allow (not pinned,")
+print("                 not matching updatePattern, digest-only, or another repository). A")
+print("                 governed Roll/Reconcile of the record resolves it; never a hand `set image`.")
 print("CLUSTER-ONLY  → TWO halves, and the finding says which. NEVER-OWNED (not in the release")
 print("                 manifest): a `helm upgrade` does NOT drop it (measured); the risk is that it")
 print("                 lives in no committed source. Move it onto the Deployment record + chart,")
