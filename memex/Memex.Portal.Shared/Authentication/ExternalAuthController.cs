@@ -92,6 +92,10 @@ public class ExternalAuthController : ControllerBase
         foreach (var roleClaim in externalClaims.Where(c => c.Type == ClaimTypes.Role))
             claims.Add(roleClaim);
 
+        // Which provider, and (for Entra) which object/tenant — the approval step-up decides its
+        // ladder rung and pins the step-up token's subject from these (Doc/Architecture/ApprovalStepUp).
+        claims.AddRange(StepUpClaims.ForSession(provider, externalClaims, DateTimeOffset.UtcNow));
+
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         var principal = new ClaimsPrincipal(identity);
 

@@ -791,6 +791,17 @@ public static class DeploymentPortalConfig
             Set("Authentication__Google__ClientId", signIn.GoogleClientId);
             Set("Authentication__LinkedIn__ClientId", signIn.LinkedInClientId);
             Set("Authentication__Apple__ClientId", signIn.AppleClientId);
+            if (signIn.StepUp is { } stepUp)
+            {
+                SetBool("Authentication__StepUp__Enabled", stepUp.Enabled);
+                Set("Authentication__StepUp__Entra__AuthenticationContext", stepUp.EntraAuthenticationContext);
+                Set("Authentication__StepUp__Entra__TenantId", stepUp.EntraTenantId);
+                SetBool("Authentication__StepUp__Entra__RequireAmr", stepUp.EntraRequireAmr);
+                Set("Authentication__StepUp__Entra__PhishingResistantAmr", stepUp.EntraPhishingResistantAmr);
+                Set("Authentication__StepUp__MaxAuthAgeSeconds", stepUp.MaxAuthAgeSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Set("Authentication__StepUp__ReceiptLifetimeSeconds", stepUp.ReceiptLifetimeSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                SetBool("Authentication__StepUp__AllowTotpFallback", stepUp.AllowTotpFallback);
+            }
         }
         Set("Social__LinkedIn__ClientId", d.SocialLinkedInClientId);
 

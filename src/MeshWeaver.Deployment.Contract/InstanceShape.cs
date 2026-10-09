@@ -666,6 +666,57 @@ public sealed record SignInSpec
     /// <summary>Apple sign-in client id.</summary>
     [Description("Apple client id")]
     public string? AppleClientId { get; init; }
+
+    /// <summary>
+    /// Approval step-up — every approval needs a fresh, phishing-resistant authentication.
+    /// Null renders nothing and step-up stays OFF (see <c>Doc/Architecture/ApprovalStepUp</c>).
+    /// </summary>
+    [Description("Approval step-up")]
+    public StepUpSpec? StepUp { get; init; }
+}
+
+/// <summary>
+/// Approval step-up, rendered to <c>Authentication__StepUp__*</c>. Every field is optional and an
+/// unstated one renders nothing, so the portal default applies — and the default of
+/// <see cref="Enabled"/> is OFF: nothing changes until a record declares it. Declare
+/// <see cref="EntraAuthenticationContext"/> BEFORE switching <see cref="Enabled"/> on, or every
+/// Microsoft-account approval is refused as "not configured" (fail closed, by design). The tenant
+/// admin's half — the authentication context and its Conditional Access policy — is listed on
+/// <c>Doc/Architecture/ApprovalStepUp</c>.
+/// </summary>
+public sealed record StepUpSpec
+{
+    /// <summary>Every approval requires a step-up receipt.</summary>
+    [Description("Require step-up on every approval")]
+    public bool? Enabled { get; init; }
+
+    /// <summary>The Conditional Access authentication context id (<c>c1</c>…<c>c99</c>) requested for Microsoft accounts.</summary>
+    [Description("Entra authentication context id (c1–c99)")]
+    public string? EntraAuthenticationContext { get; init; }
+
+    /// <summary>The tenant step-up tokens must come from; required when the sign-in tenant is multi-tenant.</summary>
+    [Description("Entra step-up tenant id — blank means the sign-in tenant")]
+    public string? EntraTenantId { get; init; }
+
+    /// <summary>Refuse a step-up token without an <c>amr</c> claim.</summary>
+    [Description("Require an amr claim")]
+    public bool? EntraRequireAmr { get; init; }
+
+    /// <summary>Comma-separated <c>amr</c> values that count as phishing-resistant.</summary>
+    [Description("Phishing-resistant amr values (comma-separated)")]
+    public string? EntraPhishingResistantAmr { get; init; }
+
+    /// <summary>Maximum age of the authentication when it arrives, in seconds (default 120).</summary>
+    [Description("Maximum authentication age, seconds")]
+    public int? MaxAuthAgeSeconds { get; init; }
+
+    /// <summary>How long a receipt stays consumable, in seconds (default 300).</summary>
+    [Description("Receipt lifetime, seconds")]
+    public int? ReceiptLifetimeSeconds { get; init; }
+
+    /// <summary>Whether the TOTP rung exists (default true).</summary>
+    [Description("Allow the TOTP fallback")]
+    public bool? AllowTotpFallback { get; init; }
 }
 
 /// <summary>

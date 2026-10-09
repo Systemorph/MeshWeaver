@@ -88,6 +88,9 @@ public static class GraphConfigurationExtensions
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate
                 .AddEmailType()
                 .AddEaCredentialType()
+                // Approval step-up receipts + their consumption markers, and IStepUpService —
+                // Doc/Architecture/ApprovalStepUp.
+                .AddStepUpTypes()
                 .AddInstanceSecretType()
                 .AddTeamsConversationType()
                 .AddGraphSubscriptionType()
