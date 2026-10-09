@@ -86,10 +86,13 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
             .Timeout(TimeSpan.FromSeconds(120))
             .Await(cancellationToken);
 
-    private async Task<WebApplication> StartBundleHost(IPublicationArtifacts? artifacts, CancellationToken cancellationToken)
+    private async Task<WebApplication> StartBundleHost(
+        IPublicationArtifacts? artifacts, CancellationToken cancellationToken, string? artifactRegistry = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
+        if (artifactRegistry is not null)
+            builder.Configuration[PluginBundleClient.ArtifactRegistryConfigKey] = artifactRegistry;
         builder.Services.AddSingleton<IMessageHub>(Mesh);
         builder.Services.AddSingleton(new InstanceRegistryAuthenticator(
             Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));
@@ -150,6 +153,45 @@ public class PluginBundleIndexArtifactTest(ITestOutputHelper output) : MonolithM
         artifacts.Keys.Should().Contain(PlainPackage);
         artifacts[PlainPackage].Should().BeNull(
             "AddPluginCatalog registers NoPublicationArtifacts, which records nothing");
+    }
+
+    private static async Task<JsonElement?> ArtifactRegistryInIndex(WebApplication app, string key)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, PluginBundleEndpoints.RoutePrefix + "/index.json");
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {key}");
+        using var response = await app.GetTestClient().SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return json.RootElement.TryGetProperty("artifactRegistry", out var value) ? value.Clone() : null;
+    }
+
+    /// <summary>
+    /// MeshWeaver#4123 — the index states the registry's OWN artifact-registry declaration, from its
+    /// config (the chart renders it from <c>registry.host</c>): the one host besides the registry's
+    /// own to which a consumer presents its key. Unconfigured, it is null — and the consumer then
+    /// takes the HTTP route for every off-host artifact (the negative control).
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheIndexStatesTheRegistrysOwnArtifactRegistry_AndNullWhenUndeclared()
+    {
+        await InstallPackage(PlainPackage, TestContext.Current.CancellationToken);
+        var key = await RegisterInstance($"{Source}/*");
+
+        var declared = await StartBundleHost(null, TestContext.Current.CancellationToken, " cr.example.test ");
+        await using (declared)
+        {
+            var value = await ArtifactRegistryInIndex(declared, key);
+            value.Should().NotBeNull("the field is on the index");
+            value!.Value.GetString().Should().Be("cr.example.test", "the configured declaration, trimmed");
+        }
+
+        var undeclared = await StartBundleHost(null, TestContext.Current.CancellationToken);
+        await using (undeclared)
+        {
+            var value = await ArtifactRegistryInIndex(undeclared, key);
+            (value is null || value.Value.ValueKind == JsonValueKind.Null).Should().BeTrue(
+                "a registry with no declaration states none — never a guessed host");
+        }
     }
 
     [Fact]

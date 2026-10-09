@@ -295,8 +295,10 @@ Detection on a fleet-registry instance still needs the instance key presented to
 `cr.meshweaver.cloud`, and `SelfUpdateRegistryCredential` is unchanged: the pairing is a
 **declaration** (`SelfUpdate:RegistryValidationUrl`), never host resemblance, and an absent
 declaration refuses. #4094 made the declaration possible; the config-repo declaration on the build instance and
-the SME client instance is step 3 above. What #4123 adds — *design, recorded here; not implemented in this change,
-which was scoped to P3b* — is **who writes it**:
+the SME client instance is step 3 above. What #4123 adds is **who writes it** — decided and built
+(policy `registry-trust-one-declaration`; the working rule is on
+[Self-Update Registry Credential](../SelfUpdateRegistryCredential) → "One declaration, derived on the
+control instance"). The design as it was recorded before the decision:
 
 - **Derive at render time, on the control instance.** `HelmValues` (MeshWeaver.Plugins) already
   derives `selfUpdate.registry` from the image host. The same render can derive
@@ -318,8 +320,9 @@ which was scoped to P3b* — is **who writes it**:
   `SelfUpdate:Registry`: the control instance pulls its image from ACR and still adopts
   bundles sealed on `cr.meshweaver.cloud`, so a rule tied to the image registry would refuse its
   every bundle and turn adoption into boot-time compiles. Scope: core (`PluginBundleClient`, the
-  index shape) plus the registry's index endpoint — a scope call the maintainer has not made, and
-  the reason #4123 stays open past this change.
+  index shape) plus the registry's index endpoint — built as `PluginBundleClient.ArtifactKeyTarget`
+  and the index's `artifactRegistry`; an undeclared host is never contacted and the bytes come over
+  the registry's HTTP route.
 
 **An alternative that would retire both issues — recorded, not taken.** Detection could move to the
 control plane altogether: every instance already reports its `platformVersion` and `updatePolicy`
