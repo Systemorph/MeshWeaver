@@ -56,6 +56,17 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
+        // Azure Repos (MeshWeaver#5248, policy azure-repos-push-only): the client tenant's app
+        // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
+        // AzureDevOps:ClientId (identifiers, not secrets); the instance's workload identity is
+        // federated to it. Unset ⇒ an Azure Repos export is refused by name.
+        services.AddOptions<AzureDevOpsOptions>()
+            .Configure<IConfiguration>((options, configuration) =>
+                configuration.GetSection(AzureDevOpsOptions.ConfigSection).Bind(options));
+        services.AddSingleton(sp => new AzureReposTokenService(
+            sp.GetRequiredService<IoPoolRegistry>(),
+            sp.GetRequiredService<IOptions<AzureDevOpsOptions>>(),
+            sp.GetService<ILogger<AzureReposTokenService>>()));
         // Framework-release broadcaster (memex is the broadcast hub): fans a platform release out
         // to the node-repo satellites as repository_dispatch, authenticated with the App above.
         // The subscriber set is either INJECTED by the caller or read from the

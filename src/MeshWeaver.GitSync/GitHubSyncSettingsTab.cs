@@ -164,6 +164,12 @@ public static class GitHubSyncSettingsTab
             .StartWith((UiControl?)Controls.Html(
                 "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Loading repository settings…</p>")));
 
+        // Which hosting service the URL names (MeshWeaver#5248) — derived from the URL, live, so the
+        // line follows an edit of the Repository URL above.
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
+            .Select(cfg => (UiControl?)ProviderLine(h, cfg))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+
         // ── 3. Sync + re-import ───────────────────────────────────────────────
         // Every long-running GitHub op runs as an ACTIVITY (Doc/Architecture/ActivityControlPlane):
         // the click calls the unified hub extension, which creates an activity + returns its path;
@@ -308,6 +314,28 @@ public static class GitHubSyncSettingsTab
             " (one-time browser approval; authorize for the org whose repos you'll sync).</span></div>");
     }
 
+    // ── Provider (MeshWeaver#5248) ──
+
+    /// <summary>
+    /// One line naming the hosting service a source syncs with, derived from its repository URL
+    /// (<see cref="GitRepositoryProvider.Classify"/>). An Azure Repos source says it is push-only
+    /// (policy <c>azure-repos-push-only</c>). Nothing when no URL is set yet.
+    /// </summary>
+    internal static UiControl ProviderLine(LayoutAreaHost host, GitHubSyncConfig? config)
+    {
+        if (config?.RepositoryUrl is not { Length: > 0 } url)
+            return Controls.Stack.WithWidth("100%");
+        return Controls.Markdown(host.Localize(ProviderKey(url)));
+    }
+
+    /// <summary>The localization key of <see cref="ProviderLine"/> for a repository URL.</summary>
+    internal static string ProviderKey(string repositoryUrl) => GitRepositoryProvider.Classify(repositoryUrl) switch
+    {
+        GitRepositoryProvider.AzureRepos => "ui.gitSync.provider.AzureRepos",
+        GitRepositoryProvider.GitHub => "ui.gitSync.provider.GitHub",
+        _ => "ui.gitSync.provider.Git",
+    };
+
     // ── Sync buttons (direction-aware, shared by the primary + additional sources) ──
 
     /// <summary>
@@ -356,6 +384,7 @@ public static class GitHubSyncSettingsTab
                 $"<div style=\"font-weight:600;\">{Esc(node.Name ?? sourceId)}</div>"));
             source = source.WithView(
                 MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
+            source = source.WithView(ProviderLine(host, config));
             source = source.WithView(BuildSyncButtons(
                 spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional));
             source = source.WithView(Controls.Button(host.Localize("ui.removeSource"))
