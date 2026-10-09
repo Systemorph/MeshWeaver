@@ -117,7 +117,7 @@ public sealed record ModuleSyncOutcome(
 ///   <item><description><b>Declined</b> — the module declares a platform floor above the running
 ///   platform (<see cref="PlatformFloor.Evaluate"/> — the ONE floor decision every package consumer
 ///   uses, policy <c>package-min-mesh-version</c>; an unknown, unreadable or unordered version on
-///   either side, or a local <c>-ci.0</c> build, is accepted, never declined). The ONE per-module decline:
+///   either side, or a local <c>-dev</c> source build, is accepted, never declined). The ONE per-module decline:
 ///   the module's paths are neither written nor pruned, the reason names both versions, and it
 ///   holds NO sibling module.</description></item>
 ///   <item><description><b>Unchanged</b> — the incoming <c>moduleVersion</c> equals the one this
@@ -170,7 +170,7 @@ public static class ModuleSyncDecision
         // 🚨 The ONE floor decision every package consumer uses (PlatformFloor — policy
         // package-min-mesh-version): only a floor comparable with the running platform and strictly
         // above it declines; an unreadable or unordered floor, an unknown running version or a
-        // local -ci.0 build proceeds (advisory), which is what keeps an rc or clean floor from
+        // local -dev source build proceeds (advisory), which is what keeps an rc or clean floor from
         // holding a ci build (the 2026-09-07 trap).
         var floorVerdict = PlatformFloor.Evaluate(module.Floor, runningPlatformVersion);
         if (floorVerdict.IsHeld)
