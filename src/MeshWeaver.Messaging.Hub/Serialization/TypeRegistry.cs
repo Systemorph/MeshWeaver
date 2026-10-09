@@ -48,6 +48,7 @@ internal class TypeRegistry : ITypeRegistry
         typeof(Address),
         typeof(HeartBeatEvent),
         typeof(DeliveryFailure),
+        typeof(RequestProgress),
         typeof(DisposeRequest)
     ];
 

@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -509,5 +510,122 @@ public class WideDeleteUnboundedFanOutTest(ITestOutputHelper output)
             $"an availability failure must not reach the caller as a permission denial, got {reported.GetType().Name}");
         reported.Message.Should().NotContain("Unexpected error",
             "the leaf's refusal is classified — the caller is told what it was");
+    }
+}
+
+/// <summary>
+/// The CALLER's half of issue #3392: a recursive delete that keeps removing rows must not lose its
+/// reply because it outlived the caller's request deadline.
+///
+/// <para>Production shape (memex, governed request
+/// <c>rbuergi/Requests/crm-5219-prune-retired-client-type</c>): the delete of the retired NodeType
+/// <c>Crm/Client</c> — several hundred <c>_Activity/compile-*</c> satellites under it — was still
+/// removing leaves when its caller's 60 s <c>RequestTimeout</c> expired. The caller failed with
+/// <c>No response received … DeleteNodeRequest → portal/nodeops-…</c>; the delete then finished, and
+/// <c>Crm/Client</c> was gone. #3392 had already turned the SERVER's commit bound into a no-progress
+/// watchdog; the caller's deadline was still a total-duration cap, so the two disagreed about what
+/// "too long" means and the reply of every delete larger than the cap reached nobody.</para>
+///
+/// <para>Here the caller's deadline is 3 s and the delete takes about 8 s on a serialised write
+/// lane (160 leaves × 50 ms), removing a leaf every 50 ms. The handler reports its progress to the
+/// caller (<c>RequestProgress</c>), the deadline measures silence rather than duration, and
+/// the reply arrives. The negative control stalls the store mid-delete: the caller's deadline still
+/// fires, a few seconds after the last removal, so silence is still refused.</para>
+/// </summary>
+public class LongDeleteKeepsItsCallerTest(ITestOutputHelper output)
+    : WideDeleteOnASerialisedWriteLaneTestBase(output)
+{
+    /// <summary>The caller's deadline, shorter than every server-side bound of the negative control.</summary>
+    internal static readonly TimeSpan CallerDeadline = TimeSpan.FromSeconds(3);
+
+    /// <inheritdoc />
+    protected override int FanOutConcurrency => 8;
+
+    private IMessageHub ShortDeadlineClient()
+        => GetClient(c => ConfigureClient(c).WithRequestTimeout(CallerDeadline));
+
+    /// <summary>A recursive delete posted from <paramref name="client"/> to the node-operation hub.</summary>
+    internal static IObservable<IMessageDelivery<DeleteNodeResponse>> Delete(IMessageHub client, string path)
+        => client.Observe(
+            new DeleteNodeRequest(path) { Recursive = true, ConfirmWarnings = true },
+            o => o.WithTarget(client.NodeOperationTarget()));
+
+    [Fact]
+    public async Task ADeleteThatOutlivesTheCallersDeadline_WhileProgressing_StillAnswersTheCaller()
+    {
+        var rootPath = await SeedWideTree("outlives-caller");
+        var client = ShortDeadlineClient();
+
+        var startedAt = DateTime.UtcNow;
+        var reply = await Delete(client, rootPath).Should().Within(90.Seconds()).Emit(
+            "a delete that keeps removing rows must reach its caller however long it takes");
+        var elapsed = DateTime.UtcNow - startedAt;
+
+        reply.Message.Success.Should().BeTrue(reply.Message.Error ?? "the delete must succeed");
+        elapsed.Should().BeGreaterThan(CallerDeadline,
+            "the test only discriminates if the delete really outlived the caller's deadline — "
+            + $"it took {elapsed.TotalSeconds:0.0}s against {CallerDeadline.TotalSeconds:0}s");
+        (await Storage.Inner.ListDescendantPaths(rootPath).Should().Within(10.Seconds()).Emit())
+            .Should().BeEmpty("every leaf must be gone");
+        (await Storage.Inner.Exists(rootPath).Should().Within(10.Seconds()).Emit())
+            .Should().BeFalse("the root must be gone");
+    }
+
+}
+
+/// <summary>
+/// Negative control for <see cref="LongDeleteKeepsItsCallerTest"/>: progress keeps a caller's
+/// deadline open only while there IS progress. The store stalls mid-delete and the server-side bounds
+/// are far longer than the caller's (30 s operation budget, 25 s per cascade leaf), so the only thing
+/// that can end the wait within seconds is the caller's own deadline — and it must, counted from the
+/// last progress report.
+/// </summary>
+public class StalledDeleteStillTimesItsCallerOutTest(ITestOutputHelper output)
+    : WideDeleteOnASerialisedWriteLaneTestBase(output)
+{
+    /// <inheritdoc />
+    protected override int FanOutConcurrency => 8;
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).ConfigureServices(services =>
+            // Registered after the base's options, so this is the one resolved. Derived from the
+            // caller's deadline, so the ordering the test depends on cannot drift.
+            services.AddSingleton(new MeshOperationOptions
+            {
+                Timeout = LongDeleteKeepsItsCallerTest.CallerDeadline * 10,
+                CascadeFanOutConcurrency = FanOutConcurrency
+            }));
+
+    [Fact]
+    public async Task ADeleteThatStopsProgressing_StillTimesTheCallerOut()
+    {
+        var rootPath = await SeedWideTree("stalls-caller");
+        // The store takes the 41st delete and never answers: no removal, so no progress, after it.
+        Storage.StallAfterDeletes = 40;
+        var client = GetClient(c => ConfigureClient(c)
+            .WithRequestTimeout(LongDeleteKeepsItsCallerTest.CallerDeadline));
+
+        // Either terminal is recorded, so a server reply that beats the caller's deadline fails the
+        // assertion below by name instead of leaving the wait to run out.
+        var outcome = new AsyncSubject<object>();
+        using var deleting = LongDeleteKeepsItsCallerTest.Delete(client, rootPath).Subscribe(
+            reply =>
+            {
+                outcome.OnNext(reply.Message);
+                outcome.OnCompleted();
+            },
+            ex =>
+            {
+                outcome.OnNext(ex);
+                outcome.OnCompleted();
+            });
+
+        var reported = await outcome.Should().Within(20.Seconds()).Emit(
+            "progress keeps the caller's deadline open only while there IS progress — silence must "
+            + "still be refused, and the server's own bounds are 25 s and more");
+        reported.Should().BeOfType<TimeoutException>(
+            "the caller's own deadline is what ends the wait once removals stop");
+        ((TimeoutException)reported).Message.Should().Contain("No response received");
     }
 }
