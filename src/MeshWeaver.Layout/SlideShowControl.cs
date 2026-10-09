@@ -23,9 +23,10 @@ public record SlideFrame(string Html, string? Background);
 ///   <item><b>Href mode</b> (no frames — the original behavior): an invisible keyboard driver;
 ///     each key navigates to the matching href via the framework's standard navigation.</item>
 /// </list>
-/// Keys in both modes: Right/Down/PageDown/Space/Enter → next · Left/Up/PageUp → prev ·
-/// Home → first · End → last · <b>Esc</b> → <see cref="ExitHref"/> (a real navigation in both
-/// modes). A <c>null</c> href makes that key a no-op in href mode.
+/// Present keys (frames and href mode alike, <see cref="PageMode"/> false): Right/Down/PageDown/Space/Enter
+/// → next · Left/Up/PageUp → prev · Home → first · End → last · <b>Esc</b> →
+/// <see cref="ExitHref"/> (a real navigation in both modes). A <c>null</c> href makes that key a
+/// no-op in href mode. Page mode binds a reduced set — see below.
 /// <para><b>Page mode</b> (<see cref="PageMode"/>): the same driver inside an ORDINARY page — a
 /// slide's normal view with its presenter bar — rather than a full-screen presentation. Only the
 /// slide keys are bound there (see <see cref="PageMode"/>); every other key keeps its page meaning.</para>
