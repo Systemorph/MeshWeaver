@@ -68,9 +68,10 @@ public sealed record ImageClosureCoverage
     }
 
     /// <summary>
-    /// Reads the records for <paramref name="expected"/> as System — one <c>scope:children</c> listing of
-    /// <see cref="ImageClosureNodes.Root"/> — and states the coverage. A listing that trails the store can
-    /// only report an image as NOT MEASURED, the loud direction; it can never manufacture a record.
+    /// Reads the records for <paramref name="expected"/> as System — one query over exactly the expected
+    /// paths (<c>path:a|b|c</c>), so the read's cost is bounded by the question, not by history — and
+    /// states the coverage. An index that trails the store can only report an image as NOT MEASURED,
+    /// the loud direction; it can never manufacture a record.
     /// </summary>
     /// <param name="hub">The hub whose mesh holds the records.</param>
     /// <param name="expected">The images the reader needs.</param>
@@ -80,7 +81,11 @@ public sealed record ImageClosureCoverage
         var access = hub.ServiceProvider.GetService<AccessService>();
         if (expected.Count == 0)
             return Observable.Return(Of(expected, []));
-        var query = $"path:{ImageClosureNodes.Root} scope:children nodeType:{ImageClosureNodes.NodeType}";
+        // ONLY the expected paths (`path:a|b|c`), never the whole namespace: records accumulate one per
+        // built image and are ~360 KB each, so a namespace listing grows without bound and would
+        // eventually be truncated — reporting a present image as NOT MEASURED.
+        var paths = expected.Select(e => ImageClosureNodes.PathOf(e.Repository, e.Digest)).Distinct(StringComparer.Ordinal);
+        var query = $"path:{string.Join('|', paths)} nodeType:{ImageClosureNodes.NodeType}";
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query)).Take(1))
             .Select(change => Of(expected, change.Items
                 .Select(n => n.ContentAs<ImageClosure>(hub.JsonSerializerOptions))

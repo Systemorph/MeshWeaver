@@ -122,14 +122,32 @@ public static partial class ImageClosureRecord
         public string? PlatformVersion { get; init; }
         public string? FrameworkIdentity { get; init; }
         public string? RunUrl { get; init; }
-        public ImmutableList<ImageClosurePlatform>? Platforms { get; init; }
+        public ImmutableList<WirePlatform?>? Platforms { get; init; }
+    }
+
+    // Every member nullable on purpose: valid JSON can say `null` for any of them (a null platform,
+    // a null files list, a null file), and the parser must REFUSE that shape, never dereference it.
+    private sealed record WirePlatform
+    {
+        public string? Rid { get; init; }
+        public int? FileCount { get; init; }
+        public string? ManifestSha256 { get; init; }
+        public ImmutableList<WireFile?>? Files { get; init; }
+    }
+
+    private sealed record WireFile
+    {
+        public string? Path { get; init; }
+        public string? Sha256 { get; init; }
+        public long? Bytes { get; init; }
     }
 
     /// <summary>
     /// Parses and validates a delivered body. Returns the closure, or null with <paramref name="why"/>
     /// naming the refusal: not an <see cref="EventName"/> record, a digest that is not the identity
     /// shape, no platform, a platform whose <see cref="ImageClosurePlatform.FileCount"/> disagrees with
-    /// its file list, a malformed hash, or two platforms with one runtime identifier.
+    /// its file list, a null platform / file list / file, a missing or malformed manifest or file hash,
+    /// a missing size, or two platforms with one runtime identifier.
     /// </summary>
     /// <param name="body">The raw delivered JSON.</param>
     /// <param name="recordedAt">The receive time to stamp.</param>
@@ -167,29 +185,53 @@ public static partial class ImageClosureRecord
             why = $"digest '{wire.Digest}' is not sha256:<64 lowercase hex> — the record's identity IS the digest";
             return null;
         }
-        var platforms = wire.Platforms ?? ImmutableList<ImageClosurePlatform>.Empty;
-        if (platforms.Count == 0)
+        var wirePlatforms = wire.Platforms ?? ImmutableList<WirePlatform?>.Empty;
+        if (wirePlatforms.Count == 0)
         {
             why = "no platform — a closure of nothing is not a closure";
             return null;
         }
-        foreach (var p in platforms)
+        var platforms = ImmutableList.CreateBuilder<ImageClosurePlatform>();
+        foreach (var p in wirePlatforms)
         {
-            if (string.IsNullOrWhiteSpace(p.Rid))
+            if (p is null || string.IsNullOrWhiteSpace(p.Rid))
             {
-                why = "a platform names no runtime identifier";
+                why = "a platform is null or names no runtime identifier";
                 return null;
             }
-            if (p.FileCount <= 0 || p.FileCount != p.Files.Count)
+            if (p.ManifestSha256 is null || !Sha256Shape().IsMatch(p.ManifestSha256))
             {
-                why = $"platform {p.Rid} states fileCount {p.FileCount} but carries {p.Files.Count} file(s) — a truncated record must never read as a smaller closure";
+                why = $"platform {p.Rid} carries no surface-manifest hash or a malformed one ('{p.ManifestSha256}')";
                 return null;
             }
-            if (p.Files.FirstOrDefault(f => string.IsNullOrWhiteSpace(f.Path) || !Sha256Shape().IsMatch(f.Sha256)) is { } bad)
+            if (p.Files is null)
             {
-                why = $"platform {p.Rid} carries a file with no path or a malformed sha256 ('{bad.Path}')";
+                why = $"platform {p.Rid} carries no file list";
                 return null;
             }
+            if (p.FileCount is not { } count || count <= 0 || count != p.Files.Count)
+            {
+                why = $"platform {p.Rid} states fileCount {p.FileCount?.ToString() ?? "<none>"} but carries {p.Files.Count} file(s) — a truncated record must never read as a smaller closure";
+                return null;
+            }
+            var files = ImmutableList.CreateBuilder<ImageClosureFile>();
+            foreach (var f in p.Files)
+            {
+                if (f is null || string.IsNullOrWhiteSpace(f.Path) || f.Sha256 is null || !Sha256Shape().IsMatch(f.Sha256)
+                    || f.Bytes is not { } bytes || bytes < 0)
+                {
+                    why = $"platform {p.Rid} carries a null file, or one with no path, a malformed sha256 or no size ('{f?.Path}')";
+                    return null;
+                }
+                files.Add(new ImageClosureFile { Path = f.Path, Sha256 = f.Sha256, Bytes = bytes });
+            }
+            platforms.Add(new ImageClosurePlatform
+            {
+                Rid = p.Rid.Trim(),
+                FileCount = count,
+                ManifestSha256 = p.ManifestSha256,
+                Files = files.ToImmutable(),
+            });
         }
         if (platforms.GroupBy(p => p.Rid, StringComparer.Ordinal).FirstOrDefault(g => g.Count() > 1) is { } dup)
         {

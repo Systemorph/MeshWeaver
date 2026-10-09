@@ -56,8 +56,10 @@ instance, or outside the reader's reach all look like "no row". So
 * `AllMeasured` true only when `M > 0` and every one was read — zero asked is not a verdict.
 
 A gate that depends on the data prints the `Statement` with its verdict and treats NOT MEASURED as
-red. The listing is one `scope:children` query (a set read, the valid use of a query): an index that
-trails the store can only report an image as NOT MEASURED — the loud direction — never invent one.
+red. The read is ONE query over exactly the expected paths (`path:a|b|c`), never a listing of the
+whole namespace: records accumulate one per built image (~360 KB each), so a namespace listing would
+grow without bound and eventually truncate into a false NOT MEASURED. An index that trails the store
+can only report an image as NOT MEASURED — the loud direction — never invent one.
 
 ## What it does not do
 
