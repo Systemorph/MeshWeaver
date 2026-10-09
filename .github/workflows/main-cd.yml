@@ -888,16 +888,17 @@ jobs:
           SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -uo pipefail
-          # Paths that PROVABLY enter no published image: the standalone clients (a Python LAN
-          # gateway and the Expo app — neither is COPY'd by any Dockerfile in the set). A merge
-          # touching ONLY these must not cost a ~20-minute five-image build and a fleet roll.
-          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare —
-          # publishes as today. The only way to skip is a POSITIVE finding that every changed
-          # file since the newest PUBLISHED set matches the list. Diffing against the newest
-          # published set (not HEAD^) is what keeps the reconciler stable: a skipped tip differs
-          # from the last set only by irrelevant files, so the reconcile branch skips it too
-          # instead of "healing" it back into a build every tick.
-          IRRELEVANT='^clients/(react-native|voice-gateway)/'
+          # Policy `image-rebuild-own-inputs`: an image is rebuilt only when one of ITS inputs
+          # changed. The classifier is `.github/scripts/core-image-relevance.py` — the not-image
+          # list, each entry with its reason, and a self-test run on every PR. MeshWeaver.Plugins
+          # answers the same question for the host side and dispatches `rebuild: true` (#4688).
+          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare, a
+          # compare at GitHub's 300-file cap (the list may be truncated) — publishes. The only way
+          # to skip is a POSITIVE finding that every changed file since the newest PUBLISHED set
+          # is outside every image's inputs. Diffing against the newest published set (not HEAD^)
+          # is what keeps the reconciler stable: a skipped tip differs from the last set only by
+          # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
+          # into a build every tick.
           relevant=true
           # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
           # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
@@ -910,9 +911,18 @@ jobs:
           if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
             base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha || true)
             if [ -n "$base" ]; then
-              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' || true)
-              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE "$IRRELEVANT"; then
-                relevant=false
+              cmp="${RUNNER_TEMP:-/tmp}/relevance-compare.json"
+              if gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" > "$cmp"; then
+                changed="${RUNNER_TEMP:-/tmp}/relevance-changed.txt"
+                # The PREVIOUS name of a renamed file is listed too: a file renamed out of src/
+                # changed src/.
+                jq -r '.files[] | .filename, (.previous_filename // empty)' "$cmp" > "$changed" || : > "$changed"
+                total=$(jq -r '.files | length' "$cmp" || true)
+                verdict=$(python3 .github/scripts/core-image-relevance.py --changed "$changed" ${total:+--total "$total"} || echo "relevant=true")
+                printf '%s\n' "$verdict"
+                if [ "$(printf '%s\n' "$verdict" | tail -1)" = "relevant=false" ]; then
+                  relevant=false
+                fi
               fi
             fi
           fi
@@ -1004,7 +1014,7 @@ jobs:
             if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
             elif [ "$RELEVANT" = "false" ]; then
-              decision false "⏭️ Only image-irrelevant paths (standalone clients) changed since the newest published set — no image build for \`$SHORT\`"
+              decision false "⏭️ Only paths outside every image's inputs (tests, agent config, root prose, standalone clients — policy \`image-rebuild-own-inputs\`) changed since the newest published set — no image build for \`$SHORT\`"
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
@@ -1421,10 +1431,14 @@ jobs:
           # moves — and that number gets published.
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
@@ -1723,10 +1737,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           # Refuse rather than invent — same as the portal leg. An empty version becomes `:` or
@@ -1825,10 +1843,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           if [ -z "$VERSION" ]; then
@@ -2276,10 +2298,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
