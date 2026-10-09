@@ -167,8 +167,9 @@ password to `pwd`, so neither passes.
 
 `GET /auth/step-up?target={path}&binding={hash}[&target=…&binding=…]&returnUrl={local}`
 
-1. Signed in, step-up enabled, the account signed in through the `Microsoft` scheme (the cookie's
-   `idp` claim). A session from before the `idp` claim existed is asked to sign in again — the
+1. Signed in, step-up enabled, the account signed in through the `Microsoft` scheme — the session's
+   `mw_idp` claim, set from the sign-in TICKET the challenged scheme produced, never from the
+   callback route. A session from before that claim existed is asked to sign in again — the
    provider is never guessed.
 2. The pending step-up — state, nonce, the targets, the return URL, the user, ten minutes — is
    stored SERVER-side at `Auth/_StepUpPending/{handle}` (System-only); the browser carries only the
@@ -238,7 +239,7 @@ receipt is required on top of it, never instead of it.
 | Piece | State |
 |---|---|
 | receipt, seal, consumption, verdict, node types | core — this design's first change |
-| Entra rung, `idp`/`oid`/`tid` on the session cookie, record keys | core — first change |
+| Entra rung, `mw_idp`/`mw_oid`/`mw_tid`/`mw_auth_time` on the session cookie, record keys | core — first change |
 | passkey rung | core — second change |
 | TOTP rung | core — third change |
 | consumers | MeshWeaver.Plugins — after the core contract is in a sealed set |
