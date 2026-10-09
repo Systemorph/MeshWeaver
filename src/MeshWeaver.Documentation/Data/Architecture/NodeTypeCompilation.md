@@ -818,6 +818,32 @@ LIVE inputs differ from that stamp:
 | The stamp is `null` (a failure from before this field, or an `Error` baked into a node file) | one fresh attempt — the migration |
 | The source set has not been established yet (`CurrentSourceVersions` unwritten) | **no attempt — it WAITS**: "not known yet" is not "no sources", and a compile driven from a set nobody established forms a verdict from evidence the mesh does not have |
 
+### A failure formed on an older platform BUILD
+
+The `fw=` half of that token is the platform **compatibility key** (`c003e001`), which is stable
+across every build of one major and epoch. So the "new framework" row above does NOT fire on an
+ordinary platform build: an additive change — a new framework type the failing source already uses —
+moves nothing in the token. And the token re-drive excludes every type that still holds a last good
+build, which the framework-stale kickoff does not reach either while the key is unchanged. Measured
+on the control instance: `Hosting/ApprovalInbox` failed on `3.0.0-ci.10300` with `CS0246
+ClickProgress` and kept serving its morning build on the replica running the build that ships
+`ClickProgress`, until someone pressed Compile.
+
+So a failure ALSO records the platform build it was formed on, `NodeTypeDefinition.FailedPlatformVersion`
+(`ApplyCompileFailure`, and a gate refusal formed under the live inputs), and the same owner-side
+kickoff has a second trigger, `HasFailureFromOlderPlatform`:
+
+| The standing `Error` was formed on… | Effect on this replica |
+|---|---|
+| an OLDER build than the one running (or the stamp is `null`) | one fresh attempt; the last good build, if any, keeps serving until it succeeds |
+| THIS build | **no attempt** — settled |
+| a NEWER build (an older replica during a roll) | **no attempt** — two images never ping-pong a type |
+| an unordered build (a local `-ci.0`, an unparseable or unknown version) | **no attempt** |
+
+The flip to `Pending` stamps the live build in the same write, a success clears it, and the failure
+ledger keys on the build as well as the token — so the bounds below hold for this trigger unchanged.
+`FailedPlatformVersion` is operational state exactly like `FailedBuildInputs`.
+
 It is bounded three ways, and the first is the one that does the work:
 
 1. **Structural.** The flip to `Pending` writes the live token **in the same update**, so the trigger
