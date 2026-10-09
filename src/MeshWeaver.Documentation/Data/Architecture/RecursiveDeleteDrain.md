@@ -254,6 +254,57 @@ diagnosis yet — and the caps are half a connection budget (16 reads + 1 write 
 source's `MaxPoolSize=50`, see [Controlled I/O Pooling](../ControlledIoPooling)), so spending the
 headroom needs a reason, not a symptom.
 
+### The reading on the producing portal, 2026-10-09 — the backlog was the delete's own
+
+The 2026-09-16 reading was not taken on a portal that produced an occurrence. This one was. On the
+control instance (pod `…-cfb58787b-b6klj`, image `3.0.0-ci.10310`) two bulk deletes failed 45 minutes
+apart, and each failure line carries the write-pool reading for its own stage:
+
+| delete | removed before the abort | `pg:Postgres` waiting at the timeout | admissions ≥ 1 s in the stage |
+|---|---:|---:|---:|
+| `Marketing` (13:38:58Z) | 1,383 | 219 | 1,325 |
+| `SocialMedia` (14:24:07Z) | 1,060 | 764 | 1,031 |
+
+The failing leaves were themselves leaves of the delete: in the `SocialMedia` burst the governed
+`Logs` read `Ops/Actions/logs-sevM-a4315-20261009-q1` landed **194 `[DeleteNode:commit] … made no
+progress for 25s — 0 of 1 planned` lines inside one second**, every one under `SocialMedia/`. So the
+"unrelated writes from every other partition" mechanism above was not the cause here. The queue was
+the operation's own leaf writes.
+
+**Why the cascade queued itself.** `HierarchicalPathDeletion` fans every sibling set out with an
+unbounded `Merge`, and the levels nest, so the commit posted one leaf delete per planned path **at
+once**. Each leaf re-enters `HandleDeleteNodeRequest` at its own hub, opens its **own** commit stage
+(a no-progress watchdog that starts when that hub takes the request), and ends in one write on the
+one cap-1 pool. A leaf at position 700 in that queue waits about 700 pooled writes. Its own watchdog
+sees nothing move for its whole budget while the cascade it belongs to is removing rows steadily.
+Then that leaf's timeout fails the whole delete. This is the same queue-versus-running confusion as
+the routing gauge in #5703. The pre-flight had been capped for this reason all along
+(`PreValidateFanOutConcurrency`), and the commit had not.
+
+**The fix (#6351).** The commit's per-leaf legs share **one admission lane** for the whole tree,
+`HierarchicalPathDeletion.DeleteSubtreeBounded`, sized by `MeshOperationOptions.CascadeFanOutConcurrency`
+(64 by default, the pre-flight's value). The lane is shared because a per-level cap does not hold:
+nested levels multiply. Ordering is unchanged. A node is admitted only after its descendants
+complete, unrelated branches still progress independently, and the first failing leg still fails the
+traversal. A leg still queued when the traversal fails or is disposed never starts its delete. With
+64 in flight, a leaf waits behind at most 64 of its siblings' writes, which is about a second at the
+measured ~20 ms per pooled write. No budget, cap or retry changed.
+
+**A second defect on the same line.** The cascade wraps a failed leaf in an
+`InvalidOperationException` to name the path, and the root read that wrapper's type as the reason:
+`ValidationFailed` plus an `Unexpected error:` prefix. `MeshService.DeleteNode` maps that to an
+`UnauthorizedAccessException`. So the delete-space script reported an availability failure as a
+permission denial (`---> System.UnauthorizedAccessException: Unexpected error: Delete failed for
+'SocialMedia/PostsHub/Source/PostsHubLayoutAreas': … exceeded 25s timeout in stage 'commit'`). The
+wrapper now carries the leaf's own `NodeDeletionRejectionReason`, and the root reports that reason.
+
+**Pinned by** `WideDeleteBoundedFanOutTest` / `WideDeleteUnboundedFanOutTest` (Graph.Test). The test
+uses a 160-leaf root over a storage adapter that serves deletes one at a time at 50 ms, which models
+the cap-1 pool, against a 2.5 s leaf budget. Bounded, the delete succeeds and the store is empty.
+Unbounded, the negative control reproduces the production line, and with the reason carry disabled
+it reproduces the `UnauthorizedAccessException`. The lane itself is pinned by
+`HierarchicalPathDeletionTests` (`Bounded_lane_*`, plus an unbounded negative control).
+
 ### What the commit timeout now says
 
 The reading that decides this is free at the moment the watchdog fires — `IoPoolRegistry` is

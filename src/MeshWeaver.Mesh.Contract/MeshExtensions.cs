@@ -3483,6 +3483,19 @@ public static class MeshExtensions
     private const string DeletedPathsDataKey = "DeletedPaths";
 
     /// <summary>
+    /// <see cref="Exception.Data"/> key carrying the <see cref="NodeDeletionRejectionReason"/> a
+    /// cascade LEAF answered with, when its own delete failed (issue #6351). The cascade wraps the
+    /// leaf's refusal in an <see cref="InvalidOperationException"/> to name the path, and without
+    /// this the root read that wrapper's TYPE as the reason: a leaf that answered
+    /// <see cref="NodeDeletionRejectionReason.Unavailable"/> (its commit stage ran out of time) was
+    /// reported upward as <see cref="NodeDeletionRejectionReason.ValidationFailed"/> with an
+    /// "Unexpected error:" prefix, which <c>MeshService.DeleteNode</c> then surfaces as an
+    /// <see cref="UnauthorizedAccessException"/> — an availability failure presented to the caller
+    /// as a permission denial.
+    /// </summary>
+    private const string CascadeLeafRejectionDataKey = "CascadeLeafRejection";
+
+    /// <summary>
     /// A stage-naming <c>Timeout</c>. The factory runs ONLY when the timeout fires, so it can
     /// report state accumulated up to that moment (which descendants went silent, which paths were
     /// already deleted) — the whole point being that the single error log can say WHERE the delete
@@ -4339,7 +4352,14 @@ public static class MeshExtensions
                     // that partial mutation stays a LOUD error until the day it can no
                     // longer happen (the commit now runs under the system identity after
                     // up-front authorization, so this leg is a canary, not a code path).
-                    var isUnauthorized = dfxReason == NodeDeletionRejectionReason.Unauthorized;
+                    // A cascade leaf's own verdict (#6351), when the fault is a leaf that refused.
+                    // Unknown says nothing, so it is treated as absent and the type-based mapping
+                    // below decides, exactly as before.
+                    var leafReason = ex.Data[CascadeLeafRejectionDataKey] is NodeDeletionRejectionReason lr
+                                     && lr != NodeDeletionRejectionReason.Unknown
+                        ? (NodeDeletionRejectionReason?)lr
+                        : null;
+                    var isUnauthorized = (dfxReason ?? leafReason) == NodeDeletionRejectionReason.Unauthorized;
                     // 🚨 A CANCELLATION IS NOT A FAULT — and with nothing deleted it is not even an
                     // inconsistency (#2182). The delete pipeline composes under tokens that fire on
                     // ordinary teardown (a cleaned-up parent partition cascading into its `_Access`
@@ -4479,9 +4499,11 @@ public static class MeshExtensions
                                 ? cancelledMessage
                                 : (isNotFound
                                     ? $"Node not found at path '{path}'"
-                                    : (isUnauthorized
+                                    : (isUnauthorized || leafReason is not null
                                         // Already legible ("Access denied: user 'x' lacks Delete
-                                        // permission on 'y'") — no "Unexpected error:" prefix.
+                                        // permission on 'y'"; "Delete failed for 'x': …" naming a
+                                        // leaf's own classified refusal) — no "Unexpected error:"
+                                        // prefix, which would misdescribe a classified outcome.
                                         ? ex.Message
                                         : $"Unexpected error: {ex.Message}"))),
                         isTimeout || isCancelled
@@ -4492,6 +4514,7 @@ public static class MeshExtensions
                             // content was judged. A cancellation decided nothing either (#2182).
                             ? NodeDeletionRejectionReason.Unavailable
                             : (dfxReason
+                                ?? leafReason
                                 ?? (isNotFound
                                     ? NodeDeletionRejectionReason.NodeNotFound
                                     : (ex is InvalidOperationException
@@ -4815,11 +4838,19 @@ public static class MeshExtensions
         // pipeline rather than only the one an incident happened to name.
         var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
         var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        // 🚨 ONE LANE FOR EVERY LEAF OF THE CASCADE (#6351). Unbounded, the bottom-up walk posted
+        // a leaf delete per planned path at once, every one of them ended in a write on the cap-1
+        // `pg:{provider}` pool, and the leaves at the back of that self-made queue tripped their own
+        // no-progress watchdogs while the cascade was progressing — failing the whole delete
+        // (`[DeleteNode] unexpected path=Marketing partial-deleted=1383`, 219 behind the cap).
+        var fanOutConcurrency = (meshHub.ServiceProvider.GetService<MeshOperationOptions>()
+            ?? new MeshOperationOptions()).CascadeFanOutConcurrency;
 
-        return HierarchicalPathDeletion.DeleteSubtree(
+        return HierarchicalPathDeletion.DeleteSubtreeBounded(
             rootPath,
             descendantPaths.Remove(rootPath),
-            path =>
+            maxConcurrentDeletes: fanOutConcurrency,
+            deleteOne: path =>
             {
                 if (string.Equals(path, rootPath, StringComparison.OrdinalIgnoreCase))
                 {
@@ -4941,8 +4972,13 @@ public static class MeshExtensions
                         }
                         var failResp = delivery.Message as DeleteNodeResponse;
                         var reason = failResp?.Error ?? "Unknown error";
-                        return Observable.Throw<string>(new InvalidOperationException(
-                            $"Delete failed for '{path}': {reason}"));
+                        var leafFailure = new InvalidOperationException(
+                            $"Delete failed for '{path}': {reason}");
+                        // The leaf's OWN verdict rides up with the wrapper, so the root reports
+                        // what the leaf said — not what the wrapper's type suggests (#6351).
+                        if (failResp is not null)
+                            leafFailure.Data[CascadeLeafRejectionDataKey] = failResp.RejectionReason;
+                        return Observable.Throw<string>(leafFailure);
                     })
                     // 🚨 THE LEAF VANISHED WHILE THE CASCADE WAS IN FLIGHT — #4680, the commit half
                     // of the same fact the pre-flight now settles. The plan is a snapshot, so a

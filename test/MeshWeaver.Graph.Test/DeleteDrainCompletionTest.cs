@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -50,6 +51,16 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
     /// </summary>
     public int? StallAfterDeletes { get; set; }
 
+    /// <summary>
+    /// When true, deletes under <see cref="LatencyRoot"/> are served ONE AT A TIME, each taking
+    /// <see cref="DeleteLatency"/> — the cap-1 <c>pg:{provider}</c> write pool every production
+    /// commit ends on (issue #6351). A delete that arrives while others are queued waits for all of
+    /// them, so a burst of N simultaneous leaf commits makes the last one wait N × latency.
+    /// </summary>
+    public bool SerializeDeletes { get; set; }
+
+    private long _laneFreeAtTicks;
+
     private int _deletesServed;
 
     private int _injected;
@@ -81,6 +92,23 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
             // Rx, never Task.Delay: this is the SUBJECT's latency, not the test waiting for
             // propagation. It is what makes a drain that is removing rows steadily still take
             // longer than the operation budget.
+            if (SerializeDeletes && DeleteLatency > TimeSpan.Zero)
+            {
+                // Reserve the next slot on a single virtual lane: this delete starts when the one
+                // ahead of it finishes. A lock-free reservation, not a gate — nothing waits on it;
+                // the Timer below is the subject's latency.
+                var now = DateTime.UtcNow.Ticks;
+                long reservedEnd;
+                long seen;
+                do
+                {
+                    seen = Interlocked.Read(ref _laneFreeAtTicks);
+                    reservedEnd = Math.Max(now, seen) + DeleteLatency.Ticks;
+                }
+                while (Interlocked.CompareExchange(ref _laneFreeAtTicks, reservedEnd, seen) != seen);
+                return Observable.Timer(TimeSpan.FromTicks(reservedEnd - now)).SelectMany(_ => operation);
+            }
+
             return DeleteLatency > TimeSpan.Zero
                 ? Observable.Timer(DeleteLatency).SelectMany(_ => operation)
                 : operation;
@@ -347,5 +375,139 @@ public class DeleteDrainVerifiesTheRootTest(ITestOutputHelper output) : Monolith
 
         var raw = Mesh.ServiceProvider.GetRawStorageAdapter<InMemoryStorageAdapter>()!;
         return (raw, rootPath, created);
+    }
+}
+
+/// <summary>
+/// Issue #6351 — a WIDE recursive delete whose leaf commits all end on ONE serialised write lane.
+///
+/// <para>Production shape (control portal, 2026-10-09 13:38:58Z): the 1,383-path <c>Marketing</c>
+/// delete failed with <c>[DeleteNode:commit] the bottom-up delete of 'Marketing/_Activity/dacd7d46'
+/// made no progress for 25s — 0 of 1 planned path(s) removed … pg:Postgres(cap 1) 219 waiting</c>.
+/// The cascade posted every leaf at once, every leaf's commit queued on the cap-1 write pool, and a
+/// leaf at the back of that queue tripped its OWN no-progress watchdog while the cascade was
+/// removing rows steadily. The backlog was the operation's own.</para>
+///
+/// <para>Here: a root with <see cref="Leaves"/> direct children, each delete served one at a time
+/// at <see cref="PerDeleteLatency"/>, so the whole lane takes about 8 s against a 2.5 s leaf
+/// budget. With the cascade's fan-out bounded the delete succeeds; the negative control
+/// (<see cref="WideDeleteUnboundedFanOutTest"/>) runs the same tree unbounded and reproduces the
+/// production failure.</para>
+/// </summary>
+public abstract class WideDeleteOnASerialisedWriteLaneTestBase(ITestOutputHelper output)
+    : MonolithMeshTestBase(output)
+{
+    /// <summary>Direct children of the deleted root — the wide level that floods the lane.</summary>
+    protected const int Leaves = 160;
+
+    /// <summary>One pooled write; 160 of them serialised take 8 s, past the 2.5 s leaf budget.</summary>
+    protected static readonly TimeSpan PerDeleteLatency = TimeSpan.FromMilliseconds(50);
+
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
+
+    /// <summary>The storage adapter, exposed so a test can assert against the store of record.</summary>
+    private protected readonly LatentDeleteStorageAdapter Storage = new(new InMemoryStorageAdapter());
+
+    /// <summary>The commit fan-out bound this run is configured with.</summary>
+    protected abstract int FanOutConcurrency { get; }
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IStorageAdapter>(Storage);
+            services.AddSingleton(new MeshOperationOptions
+            {
+                Timeout = Budget,
+                CascadeFanOutConcurrency = FanOutConcurrency
+            });
+            return services;
+        }));
+
+    /// <summary>Seeds the wide tree and arms the serialised lane under it.</summary>
+    protected async Task<string> SeedWideTree(string rootId)
+    {
+        var rootPath = $"{TestPartition}/{rootId}";
+        await NodeFactory.CreateNode(
+                new MeshNode(rootId, TestPartition) { Name = rootId, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        var options = new JsonSerializerOptions();
+        // Straight into the store of record: the plan is enumerated from storage and every leaf's
+        // own hub reads its node from there, so the leaves need no create round-trip each.
+        await Enumerable.Range(0, Leaves)
+            .Select(i => Storage.Inner.Write(
+                new MeshNode($"leaf{i:D3}", rootPath) { Name = $"leaf{i:D3}", NodeType = "Markdown" },
+                options))
+            .Merge()
+            .ToList()
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        Storage.LatencyRoot = rootPath;
+        Storage.DeleteLatency = PerDeleteLatency;
+        Storage.SerializeDeletes = true;
+        return rootPath;
+    }
+}
+
+/// <summary>The fix: the commit keeps at most 8 leaves in flight, so no leaf waits past its budget.</summary>
+public class WideDeleteBoundedFanOutTest(ITestOutputHelper output)
+    : WideDeleteOnASerialisedWriteLaneTestBase(output)
+{
+    /// <inheritdoc />
+    protected override int FanOutConcurrency => 8;
+
+    [Fact]
+    public async Task AWideDelete_OnASerialisedWriteLane_Succeeds_AndRemovesEveryLeaf()
+    {
+        var rootPath = await SeedWideTree("wide-bounded");
+
+        var deleted = await NodeFactory.DeleteNode(rootPath).Should().Within(90.Seconds()).Emit(
+            "a cascade that keeps removing rows must not be failed by a leaf queued behind its own "
+            + "siblings' writes");
+        deleted.Should().BeTrue();
+
+        (await Storage.Inner.ListDescendantPaths(rootPath).Should().Within(10.Seconds()).Emit())
+            .Should().BeEmpty("every leaf must be gone");
+        (await Storage.Inner.Exists(rootPath).Should().Within(10.Seconds()).Emit())
+            .Should().BeFalse("the root must be gone");
+    }
+}
+
+/// <summary>
+/// Negative control: the same tree with the commit fan-out unbounded — the shape before #6351's fix.
+/// Every leaf's write lands on the lane at once and the leaves at the back fail their own watchdog,
+/// which is the production failure.
+/// </summary>
+public class WideDeleteUnboundedFanOutTest(ITestOutputHelper output)
+    : WideDeleteOnASerialisedWriteLaneTestBase(output)
+{
+    /// <inheritdoc />
+    protected override int FanOutConcurrency => int.MaxValue;
+
+    [Fact]
+    public async Task AWideDelete_Unbounded_FailsALeafOnItsOwnSiblingsBacklog()
+    {
+        var rootPath = await SeedWideTree("wide-unbounded");
+
+        var failure = new AsyncSubject<Exception>();
+        using var deleting = NodeFactory.DeleteNode(rootPath).Subscribe(
+            _ => { },
+            ex =>
+            {
+                failure.OnNext(ex);
+                failure.OnCompleted();
+            });
+
+        var reported = await failure.Should().Within(90.Seconds()).Emit(
+            "unbounded, the leaves queue behind each other on the one lane and one of them times out");
+        reported.Message.Should().Contain("made no progress",
+            "the failure must be the leaf's own commit watchdog — the production line");
+
+        // The leaf's verdict was "unavailable" (its commit ran out of time). Production surfaced it
+        // as `UnauthorizedAccessException: Unexpected error: Delete failed for …` because the root
+        // read the cascade wrapper's TYPE as the reason (ValidationFailed → access denied).
+        (reported is UnauthorizedAccessException).Should().BeFalse(
+            $"an availability failure must not reach the caller as a permission denial, got {reported.GetType().Name}");
+        reported.Message.Should().NotContain("Unexpected error",
+            "the leaf's refusal is classified — the caller is told what it was");
     }
 }
