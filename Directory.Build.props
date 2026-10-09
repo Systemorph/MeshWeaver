@@ -79,60 +79,38 @@
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
     <!-- Suppress FluentAssertions license warning for open source project -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
-    <!-- Maintained platform version — the ONE number, set centrally here. It names the NEXT
-         release: the line is 3.0.0, every continuous build is 3.0.0-ci.<run>, and the release
-         itself is the clean 3.0.0 — not a rebuild, a PROMOTION of a sealed continuous set
-         (release.yml retags the promoted images and copies the release marker when the tag v3.0.0
-         is pushed; Doc/Architecture/ReleaseProcess). Override at build time with
-         -p:PlatformVersion= only for experiments; CI builds are COMMIT-DETERMINISTIC (issue #1660
-         WS3 — see the InformationalVersion note below), and NodeType cache invalidation keys on the
-         commit identity, not on a per-build stamp.
+    <!-- Maintained platform LINE — the ONE number a human owns, set centrally here. Policy
+         `platform-semver-versioning` (Doc/Architecture/PlatformVersioning, Doc/Architecture/PolicyNotProse).
 
-         🚨 THE SCHEME HAS EXACTLY TWO SHAPES AND NO OTHERS (maintainer, 2026-09-07: "we will then
-         not introduce the rc line anymore" / "let's just use version numbers -ci for temp then
-         without -ci for final version"):
+         🚨 THE SCHEME. Every platform build CD publishes from main is a plain SemVer release
 
-             X.Y.Z-ci.<n>   every continuous / temporary build
-             X.Y.Z          the release — no pre-release label at all
+             <major>.<minor>.<run>        e.g. 3.1.10340
 
-         So THIS PROPERTY CARRIES NO LABEL, ever — no rc, no preview, no beta, no labelled line —
-         and `-ci.<n>` is the CHANNEL MARKER, never a version. The rule is not prose here:
-         PlatformVersionSchemeGuard (test/MeshWeaver.Documentation.Test) evaluates this property and
-         the composed $(Version) through real MSBuild on every PR and reds if either leaves the two
-         shapes. The release is cut only when every open issue is closed (maintainer, 2026-09-05);
-         until then main keeps producing 3.0.0-ci.<n> sets, and the day v3.0.0 is tagged release.yml
-         opens the PR that moves this number to 3.1.0.
+         where <major>.<minor> come from THIS property and <run> is main-cd's GITHUB_RUN_NUMBER,
+         handed in explicitly as -p:PlatformBuildNumber=<run> (main-cd.yml). No pre-release label, no
+         channel word. The patch is the monotonic CD run number, so the builds minted before the
+         change (`3.0.0-ci.<run>`, still in the registries and still running somewhere) and the builds
+         minted after it are ONE lineage: PlatformReleaseOrder reads the run number out of either, and
+         SemVer gives the same answer across the boundary (3.0.0-ci.<n> < 3.1.<n+1>).
 
-         ORDERING, which the self-updater (VersionSelect) relies on. 🚨 It is NOT SemVer any more
-         (#3542): candidates are ranked by the SEALED-PUBLICATION LINEAGE — the ci.<n> run number
-         defined below — and the version string decides only where BOTH sides lack one, i.e. between
-         official releases (a release is a PROMOTION and carries no run number of its own).
+         So this property names a LINE and its patch is ALWAYS 0: `3.1.0` means "the 3.1 line". The
+         minor moves only by a merged pull request that edits it (release.yml opens the next-line one);
+         the major only on a declared break. PlatformVersionSchemeGuard (test/MeshWeaver.Documentation.Test)
+         evaluates this property and the composed $(Version) through real MSBuild and reds on any other
+         shape.
 
-             SemVer would say:  3.0.0-ci.7900 < 3.0.0-preview1 < 3.0.0-rc9.ci.7818 < 3.0.0-rc13 < 3.0.0 < 3.1.0-ci.1
-             Lineage says:      7818 < 7900 < … , whatever line each one is LABELLED with.
+         Why the line is 3.1 and not 3.0: a plain `3.0.<n>` already meant something to every reader the
+         fleet runs — a clean 3.0.x is a PROMOTION with no run number (PlatformReleaseOrder.SemVerEraStart
+         is 3.1). Starting the run-numbered patch on 3.1 is what lets readers that are already deployed
+         order the new builds correctly without a second roll.
 
-         🚨 Why it had to change, twice over. SemVer §11.4 compares pre-release identifiers as TEXT
-         ("ci" < "preview1" < "rc"), so every 3.0.0-rc* image still in ACR outranked every clean-line
-         build — and worse, a MISLABELLED line outranked everything for ever. Both happened: ten sets
-         published as 3.1.0-ci.7832…7841 while this file briefly read 3.1.0 on 2026-09-05, and on
-         2026-09-07 BOTH AKS portals rolled themselves onto 3.1.0-ci.7841 (three days behind) and then
-         could not leave, because nothing is ever newer than the highest-sorting tag. Ranking by the
-         run number makes such a slip harmless while its tags are still in the registry.
-         Doc/Architecture/SelfUpdateTargetSelection has the whole rule, including why an official
-         release is still compared by version.
-
-         The rc line, kept because the release marker and bake identity notes elsewhere cite these
-         versions: rc3 2026-08-16 · rc4 never tagged (its packages would have shipped the fourteen
-         driver DLLs being retired, #1882) · rc5 2026-08-19, tagged tree could not boot
-         (Modules:Assemblies listed removed DLLs; #1901) · rc6 2026-08-20, first bootable release
-         whose module bundles carry their own closures (#1914/#1919/#1923) · rc7 2026-08-22, the
-         Blazor view packs and Speech leave the app closure (#2018/#2021/#2028) · rc8 2026-08-29,
-         the registry shelf accepts modules for newer platforms (#2069/#2068) · rc9–rc13
-         2026-08-30/31, the plugin build CLI (#2834–#2858); rc10–rc13 were tagged while this read
-         rc9, and "rc13" sorts below "rc2", so nuget.org listed rc9 as the newest for the whole
-         run. NuGet publication is retired: in-mesh source compiles against the IMAGE, never against
-         a feed (Doc/Architecture/PluginPackaging); the packages on nuget.org stay as history. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
+         A build that is NOT main-cd's — a pull-request run, a local build, a satellite lane building core
+         from source — publishes no platform version, and its $(Version) says so: `<major>.<minor>.0-dev`
+         (PlatformReleaseOrder reads the `dev` label as run 0: a source build, never ordered against a
+         publication). The unverified edge channel spells its own tag in edge-images.yml
+         (`<major>.<minor>.0-edge.<run>`). The retired rc line and the `-ci.<run>` notation are READ by
+         every consumer and minted by nothing; Doc/Architecture/ReleaseProcess keeps their history. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
     <!-- 🚨 THE COMPATIBILITY EPOCH — policy `platform-backwards-compatibility`
          (Doc/Architecture/PolicyNotProse). Compiled NodeType and module bytes are keyed on
          c<major:D3>e<epoch:D3> (MeshWeaver.Compiler.PlatformCompatibility.KeyOf), NOT on a per-build
@@ -249,87 +227,66 @@
            Code="MW1026"
            Text="Container publish for RuntimeIdentifier '$(_MeshWeaverFailedLegRid)' reported success but produced NO image — CreateNewImage set no Manifest/Config/Digest. That task logs a swallowed cancellation as the bare warning 'The operation was canceled.' and still returns true, so the true fault is the warning IMMEDIATELY ABOVE this error, not this target. In CI it is a stalled connect (Microsoft.NET.Build.Containers hard-codes SocketsHttpHandler.ConnectTimeout=30s and drops the inner TimeoutException, so no host is logged): check the base registry '$(ContainerBaseRegistry)/$(ContainerBaseName):$(ContainerBaseTag)' and the output registry '$(ContainerRegistry)/$(ContainerRepository)', and look for a ~30 s gap in the timestamps before the warning. Do NOT respond by dropping a RID, disabling the image index, wrapping the publish in a retry, or suppressing this error — see issue #1026." />
   </Target>
-  <!-- Two version channels — CONTINUOUS (CI) vs RELEASED (the promotion):
-       • RELEASED  (-p:PublicRelease=true): clean $(PlatformVersion), e.g. 3.0.0. Nothing BUILDS
-         with this flag any more — release.yml promotes an already-built continuous set by
-         retagging it (the bytes are the ci build's); the flag survives for local experiments.
-         The tag v$(PlatformVersion) is what the promotion keys on and what data-sync
-         (DataSyncSetup.md §3) pulls content from once a release exists.
-       • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
-         3.0.0-ci.7900, so continuous images are DISTINGUISHABLE from the release and a
-         local-deploy build always carries a build number.
-       🚨 $(Version) — the run-numbered string — feeds NuGet package versions and Docker image
+  <!-- Three version shapes, and which build gets which (policy `platform-semver-versioning`):
+       • A main CD BUILD (-p:PlatformBuildNumber=<run>, passed only by main-cd.yml):
+         <major>.<minor>.<run>, e.g. 3.1.10340 — a real release version, monotonic per build.
+       • RELEASED (-p:PublicRelease=true): the clean line $(PlatformVersion), e.g. 3.1.0. Nothing
+         BUILDS with this flag — release.yml PROMOTES an already-built set by adding the clean tag
+         (the bytes are that build's); the flag survives for local experiments.
+       • ANY OTHER BUILD (pull-request runs, local dev, a satellite lane compiling core from
+         source): <major>.<minor>.0-dev. It publishes no platform version, so its version says so
+         instead of borrowing another workflow's run counter.
+       🚨 $(Version) — the publishable string — feeds NuGet package versions and Docker image
        tags ONLY. It must NOT reach any COMPILED attribute: under CIRun every compiled input is
        COMMIT-DETERMINISTIC (issue #1660 WS3), so two CI builds of the same commit — the
        Build-and-Test run that bakes NodeType assemblies and the main-cd run that builds the
        image — produce ABI-identical assemblies and share one framework identity
        (NodeTypeCompilationHelpers.FrameworkVersion; see the 🚨 note on InformationalVersion
-       below). The runtime still shows the run-numbered version: the container publish injects
+       below). The runtime still shows the build's version: the container publish injects
        $(Version) as the MESHWEAVER_PLATFORM_VERSION environment variable (see
        Memex.Portal.Distributed.csproj), which rides the image CONFIG, not the assemblies.
        🚨 A direct -p:Version=… overrides the PUBLISHABLE string and NOTHING ELSE (#3022). It used
        to disable this WHOLE PropertyGroup — including the three compiled attributes below — and
-       that turned the escape hatch into a silent violation of the rule stated two lines up. CD
-       passes -p:Version= to the portal publish (so the image reports its own build, #2555), and
-       from the moment that landed (2026-09-01) every core assembly inside memex-portal-ai carried
-       AssemblyInformationalVersion `3.0.0-rc9.ci.<run>+<sha>` while the same assembly inside
-       mw-plugin-test — published from the same commit WITHOUT -p:Version= — carried
-       `3.0.0-rc9+<sha>`. A compiled attribute is part of the reference assembly, so ALL 25 shared
-       canonical surface hashes differed, the two images resolved different framework identities,
-       and every CD bake was published to an address no portal asks for: INERT, exactly #1814's
-       shape. See Doc/Architecture/BakeIdentityMismatch. The split below is what makes the rule
-       above true: the publishable string is guarded, the compiled attributes never are. -->
+       that turned the escape hatch into a silent violation of the rule stated two lines up: every
+       core assembly inside memex-portal-ai carried a run-numbered InformationalVersion while the
+       same assembly inside mw-plugin-test carried the bare line, ALL 25 shared canonical surface
+       hashes differed, and every CD bake was published to an address no portal asks for
+       (Doc/Architecture/BakeIdentityMismatch). The split below is what makes the rule true: the
+       publishable string is guarded, the compiled attributes never are. -->
   <!-- Pure functions of $(PlatformVersion). OUTSIDE the guard below, because the COMPILED
        attributes derive from them and must not vary with whether a caller supplied -p:Version=. -->
   <PropertyGroup>
-    <!-- Numeric version core: PlatformVersion with any pre-release label stripped (3.0.0 → 3.0.0;
-         a hypothetical 3.0.0-x → 3.0.0). $(PlatformVersion) never carries one (two shapes, see
-         above), so the strip is purely defensive against a -p:PlatformVersion= experiment: it keeps
-         AssemblyVersion/FileVersion a valid four-part number whatever a caller supplies. -->
+    <!-- Numeric version core: PlatformVersion with any pre-release label stripped. $(PlatformVersion)
+         never carries one (PlatformVersionSchemeGuard), so the strip is purely defensive against a
+         -p:PlatformVersion= experiment: it keeps FileVersion a valid four-part number. -->
     <_VersionDash>$(PlatformVersion.IndexOf('-'))</_VersionDash>
     <_VersionNumeric Condition="'$(_VersionDash)' == '-1'">$(PlatformVersion)</_VersionNumeric>
     <_VersionNumeric Condition="'$(_VersionDash)' != '-1'">$(PlatformVersion.Substring(0, $(_VersionDash)))</_VersionNumeric>
-    <!-- 🚨 THE ci SEPARATOR IS A LITERAL '-', UNCONDITIONALLY, and there is no property for it.
-         This used to be a `_CiSep` that chose '.' when $(PlatformVersion) carried a label, so a
-         labelled line composed `3.0.0-rc9.ci.<n>` instead of the invalid `3.0.0-rc9-ci.<n>`. That
-         property existed for ONE purpose — supporting a labelled line — and a labelled line is now
-         forbidden (see the PlatformVersion note above; maintainer, 2026-09-07). Keeping the branch
-         would leave the MINTER able to emit the retired shape the moment someone reintroduced a
-         label, which is exactly how the shape comes back quietly.
-
-         🚨 MINTING one shape is NOT the same as READING one. The rc-line images minted with '.ci.'
-         are still addressable in ACR/GHCR and an install can be running one, so every consumer that
-         parses the build number back OUT of a version must keep accepting BOTH separators,
-         `[.-]ci.<n>` — PlatformReleaseOrder.BuildOrdinal, VersionSelect, edge-images.yml, and
-         MeshWeaver.Plugins' check-platform-pins.py. A reader narrowed to '-ci.' reads a retired tag
-         as carrying NO run number, which promotes it into the promotion-ranked half of the self-
-         updater's order: #3542's freeze, rebuilt by a tidy-up. Do not break a reader to simplify a
-         minter. Doc/Architecture/ReleaseProcess §1 states the split. -->
+    <!-- <major> and <minor> of the line — the two numbers a build version shares with it. -->
+    <_PlatformMajor>$(_VersionNumeric.Split('.')[0])</_PlatformMajor>
+    <_PlatformMinor>$(_VersionNumeric.Split('.')[1])</_PlatformMinor>
+    <!-- 🚨 MINTING one shape is NOT the same as READING one. Every tag the retired notations minted
+         (`3.0.0-ci.<n>`, `3.0.0-rc9.ci.<n>`) is still addressable in ACR/GHCR and an install can be
+         running one, so every consumer that parses the run number back OUT of a version keeps
+         accepting them — PlatformReleaseOrder.BuildOrdinal, VersionSelect, platform-version.py,
+         resolve-platform.py, and MeshWeaver.Plugins' readers. A reader narrowed to the new shape
+         reads an old tag as carrying NO run number, which promotes it into the promotion-ranked
+         half of the self-updater's order: #3542's freeze, rebuilt by a tidy-up. Do not break a
+         reader to simplify the minter. Doc/Architecture/PlatformVersioning states the split. -->
   </PropertyGroup>
   <!-- THE PUBLISHABLE STRING — NuGet package version, Docker image tag, and the
        MESHWEAVER_PLATFORM_VERSION a running portal reports. This group, and only this group, is
        what -p:Version= replaces. -->
   <PropertyGroup Condition="'$(Version)' == ''">
-    <!-- Fallback build number for the .ci.N suffix when CIRun is set OFF GitHub Actions (no
-         $(GITHUB_RUN_NUMBER)): seconds-since-midnight / 2 (~2s granularity) so such packages are
-         still distinguishable. LOCAL DEV: a STABLE 0. Feeds ONLY _CiBuildNumber → $(Version) —
-         never a compiled attribute (FileVersion is pinned below; see the channel note above). -->
-    <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
-    <_BuildNumber Condition="'$(CIRun)' == 'true'">$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
-    <_BuildNumber Condition="'$(CIRun)' != 'true'">0</_BuildNumber>
-    <!-- 🔴 MONOTONIC build number for the .ci.N pre-release suffix (and thus the image tag). The
-         self-updater (ReleaseStrategy.md) picks the NEWEST version off the registry, so the .ci.N
-         number MUST increase build-over-build — the seconds-since-midnight $(_BuildNumber) above
-         RESETS at midnight and would make a morning build sort BELOW the previous evening's. Use the
-         GitHub Actions run number ($(GITHUB_RUN_NUMBER), monotonic per workflow) when present; fall
-         back to the seconds value off-GHA; 0 locally. AssemblyVersion below keeps the bounded
-         seconds value (it only needs to change per build for the copy heuristic, not be monotonic,
-         and its UInt16 components can't hold an ever-growing run number). -->
-    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' != ''">$(GITHUB_RUN_NUMBER)</_CiBuildNumber>
-    <_CiBuildNumber Condition="'$(CIRun)' == 'true' and '$(GITHUB_RUN_NUMBER)' == ''">$(_BuildNumber)</_CiBuildNumber>
-    <_CiBuildNumber Condition="'$(CIRun)' != 'true'">0</_CiBuildNumber>
+    <!-- 🔴 The patch of a main CD build is main-cd's GITHUB_RUN_NUMBER, handed in BY NAME. It is
+         never read implicitly from the environment: every workflow has its own GITHUB_RUN_NUMBER,
+         and a pull-request run that minted <major>.<minor>.<its own run> would produce a clean
+         release version from the wrong counter — one that could outrank or collide with a real
+         build. Only a positive integer counts; anything else falls to the `-dev` shape. -->
+    <_PlatformBuildNumberValid Condition="'$(PlatformBuildNumber)' != '' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(PlatformBuildNumber)', '^[1-9][0-9]*$'))">true</_PlatformBuildNumberValid>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
-    <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)-ci.$(_CiBuildNumber)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true' and '$(_PlatformBuildNumberValid)' == 'true'">$(_PlatformMajor).$(_PlatformMinor).$(PlatformBuildNumber)</Version>
+    <Version Condition="'$(PublicRelease)' != 'true' and '$(_PlatformBuildNumberValid)' != 'true'">$(_PlatformMajor).$(_PlatformMinor).0-dev</Version>
   </PropertyGroup>
   <!-- 🚨 THE COMPILED VERSION ATTRIBUTES — UNCONDITIONAL, and deliberately so (#3022). These end
        up inside every emitted assembly (and therefore inside its REFERENCE assembly, which is what
@@ -371,7 +328,7 @@
          full bake runs ONCE per commit, on CI; pods adopt. -->
     <InformationalVersion Condition="'$(CIRun)' == 'true'">$(PlatformVersion)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
-    <!-- 🔴 AssemblyVersion is STABLE within a line ($(_VersionNumeric).0, i.e. 3.0.0.0) — it is the
+    <!-- 🔴 AssemblyVersion is STABLE within a line ($(_VersionNumeric).0, i.e. 3.1.0.0) — it is the
          RUNTIME ASSEMBLY-BINDING identity, so it
          MUST be identical across every assembly in a coherent build. `_BuildNumber` is
          seconds-since-midnight/2 evaluated PER PROJECT at MSBuild time, so a time-based
@@ -386,8 +343,15 @@
          to nudge MSBuild's CopyToOutputDirectory heuristic on incremental test builds — but local
          builds always had 0 there anyway, and CI builds from clean, so the heuristic never
          actually relied on it.) NodeType ABI identity is FrameworkVersion (commit under CIRun,
-         Graph MVID locally) and the self-updater keys on the image tag (ci.N) — neither uses
-         AssemblyVersion or FileVersion. -->
+         Graph MVID locally) and the self-updater keys on the image tag's run number — neither uses
+         AssemblyVersion or FileVersion.
+         It moves with the line (3.0.0.0 → 3.1.0.0 at the SemVer minter, policy
+         `platform-semver-versioning`), by design: a plugin compiled against 3.0.0.0 binds on 3.1.0.0
+         (roll-forward, PlatformBinding.MayBind), and one compiled against 3.1.0.0 meeting a 3.0
+         portal is a BindingConflict — declined loudly, which is the floor the ladder already
+         enforces. MeshWeaver.Plugins and MeshWeaver.SocialMedia re-derive their own AssemblyVersion
+         from THIS expression (src/Directory.Build.props, VerifyAssemblyVersionMatchesPlatform), so
+         changing its shape is a paired change in those repositories. -->
     <AssemblyVersion>$(_VersionNumeric).0</AssemblyVersion>
     <FileVersion>$(_VersionNumeric).0</FileVersion>
   </PropertyGroup>

@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# hosting-db-reset keep  --database <db> --server <pg host> --user <login>
+#                        [--vault <key vault> --password-secret <vault object>]
+#                        [--request <action node path>] [--retain-days <n>]
+# hosting-db-reset purge --database <db> --kept <kept copy> --server <pg host> --user <login>
+#                        [--vault <key vault> --password-secret <vault object>] [--retain-days <n>]
+# hosting-db-reset show  --database <db> --server <pg host> --user <login>
+#                        [--vault <key vault> --password-secret <vault object>]
+#
+# Give an instance an EMPTY database without destroying the one it had (MeshWeaver.Plugins#2781,
+# policy `reset-database-keeps-a-copy`). The first-sign-in-becomes-admin rule fires only on an empty
+# user table, so a reinstall that must prove it starts from an empty database — and until this
+# existed that was a person's `az postgres flexible-server db delete` on their own credential.
+#
+# keep   RENAMES the live database to `<db>_kept_<yyyymmddhhmm>` (the server's UTC clock), stamps
+#        the kept copy with a COMMENT naming what it is, when it was kept, until when it is retained
+#        and which request kept it, and CREATES an empty `<db>` with the old one's owner, encoding
+#        and collation. It NEVER drops anything. A failure after the rename puts the old name back
+#        before it exits, so the instance is never left without the database it had.
+# purge  DROPS one kept copy — and only one this command made (its COMMENT carries the marker), only
+#        of this database (`<db>_kept_<12 digits>`), and only once it is older than the retention
+#        (default 14 days, read from its own name on the server's clock). That is the governed
+#        cleanup: its own approval-gated action, never a side effect of the reset.
+# show   READS the newest stamped kept copy of this database back from the server and reports it —
+#        the reset plan's LAST step, so the facts the mesh records sit at the end of the run's log
+#        (the part a log tail keeps) and are a reading of the server, not an echo of `keep`.
+#
+# The plan quiesces the portal (scale to 0) before `keep`; this command still refuses while any
+# session is connected, because renaming a database something is writing to is not an atomic act.
+#
+# Output contract (the ::hosting:: lines the mesh reads):
+#   kept_database=<name>   the copy `keep` made (or `dry-run`)
+#   kept_until=<iso>       the instant a purge may first drop it
+#   reset=completed        `keep` renamed, stamped, re-created and read both back — the ONLY success
+#   purged=<name>          `purge` dropped exactly this kept copy
+#   kept_verified=true     `show` read the kept copy (kept_database / kept_until) back from the server
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-db-reset"
+
+# The marker every kept copy's COMMENT starts with. `purge` drops nothing that does not carry it.
+KEPT_MARKER="meshweaver-kept-copy"
+
+verb="${1:-}"
+[ $# -gt 0 ] && shift
+case "$verb" in
+  keep|purge|show) ;;
+  "") hosting::die "missing verb — keep (rename and keep, create an empty database), purge (drop one kept copy past its retention) or show (read the newest kept copy back)" ;;
+  *)  hosting::die "unknown verb '${verb}' — keep, purge or show" ;;
+esac
+
+database="" server="" user="" vault="" password_secret="" request="" kept="" retain_days="14"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --database)        database="${2:-}";        shift 2 ;;
+    --server)          server="${2:-}";          shift 2 ;;
+    --user)            user="${2:-}"; user_given=1; shift 2 ;;
+    --vault)           vault="${2:-}";           shift 2 ;;
+    --password-secret) password_secret="${2:-}"; shift 2 ;;
+    --request)         request="${2:-}";         shift 2 ;;
+    --kept)            kept="${2:-}";            shift 2 ;;
+    --retain-days)     retain_days="${2:-}";     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag database "$database"
+hosting::need_flag server "$server"
+# A Postgres identifier the commands below double-quote: lower-case letters, digits and underscore
+# only, so nothing in it can close the quote — and short enough that `_kept_<12 digits>` (18 more)
+# still fits Postgres' 63-byte limit, which would otherwise TRUNCATE the kept name silently.
+[[ "$database" =~ ^[a-z_][a-z0-9_]*$ ]] \
+  || hosting::die "database '${database}' is not a plain lower-case Postgres name (a-z, 0-9, _) — refusing to interpolate it into SQL"
+[ "${#database}" -le 45 ] \
+  || hosting::die "database '${database}' is longer than 45 characters — its kept name '<db>_kept_<yyyymmddhhmm>' would exceed Postgres' 63-byte identifier limit and be truncated"
+hosting::safe_host server "$server"
+[ -z "$vault" ] || hosting::safe_name vault "$vault"
+[ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
+[[ "$retain_days" =~ ^[0-9]+$ ]] && [ "$retain_days" -ge 1 ] \
+  || hosting::die "--retain-days '${retain_days}' is not a whole number of days ≥ 1"
+# The request path is carried into a COMMENT: a node path's own characters only, never a quote.
+[ -z "$request" ] || [[ "$request" =~ ^[A-Za-z0-9][A-Za-z0-9/._-]*$ ]] \
+  || hosting::die "--request '${request}' is not a plain node path — refusing to write it into SQL"
+[ "${user_given:-0}" = 0 ] || [ -n "$user" ] || hosting::die "--user was given EMPTY: the plan rendered no login (the record states no databaseUsername). Refusing rather than falling back to PGUSER."
+pg_user="${user:-${PGUSER:-}}"
+[ -n "$pg_user" ] || hosting::die "no database login: pass --user <the record's databaseUsername> (the plan does), or export PGUSER by hand. There is no default."
+hosting::safe_name user "$pg_user"
+
+if [ "$verb" = purge ]; then
+  hosting::need_flag kept "$kept"
+  [[ "$kept" =~ ^${database}_kept_[0-9]{12}$ ]] \
+    || hosting::die "--kept '${kept}' is not a kept copy of ${database} ('${database}_kept_<yyyymmddhhmm>') — purge drops nothing else"
+fi
+
+if hosting::dry; then
+  if [ "$verb" = keep ]; then
+    hosting::log "DRY-RUN would rename ${database} on ${server} to ${database}_kept_<now> (kept ${retain_days} days) and create an empty ${database}"
+    hosting::say kept_database dry-run
+  elif [ "$verb" = show ]; then
+    hosting::log "DRY-RUN would read the newest kept copy of ${database} on ${server} back"
+    hosting::say kept_verified dry-run
+  else
+    hosting::log "DRY-RUN would drop the kept copy ${kept} on ${server} if it is older than ${retain_days} days and carries the ${KEPT_MARKER} marker"
+    hosting::say purged dry-run
+  fi
+  exit 0
+fi
+
+# The admin password is read from the vault by NAME (Memex#132) — see hosting::pg_password.
+hosting::pg_password "$vault" "$password_secret"
+
+# One query against the maintenance database; prints the single value, trimmed. A failed query is
+# a FAILED query (non-zero), never an empty answer — the callers below branch on the status.
+q() { psql -h "$server" -U "$pg_user" -d postgres -v ON_ERROR_STOP=1 -tAc "$1"; }
+# A MUTATION: narrated (to stderr, like hosting::do) with the SQL only — PGPASSWORD reaches psql
+# through the environment hosting::pg_password exported, never an argv a narration could print.
+# A dry run never gets here (it exits above, before the vault is read).
+sql() { printf '  + psql -h %s -U %s -d postgres -c %s\n' "$server" "$pg_user" "$1" >&2; q "$1"; }
+
+exists() {  # exists <db> → prints 1 or 0; non-zero when the server could not be asked
+  local answer
+  answer="$(q "SELECT count(*) FROM pg_database WHERE datname = '$1'")" || return 1
+  answer="$(printf '%s' "$answer" | tr -d '[:space:]')"
+  [ "$answer" = 0 ] || [ "$answer" = 1 ] || return 1
+  printf '%s' "$answer"
+}
+
+sessions() {  # sessions <db> → prints the count of OTHER sessions connected to it
+  local answer
+  answer="$(q "SELECT count(*) FROM pg_stat_activity WHERE datname = '$1' AND pid <> pg_backend_pid()")" || return 1
+  answer="$(printf '%s' "$answer" | tr -d '[:space:]')"
+  [[ "$answer" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$answer"
+}
+
+if [ "$verb" = purge ]; then
+  present="$(exists "$kept")" || hosting::die "could not ask ${server} whether ${kept} exists — nothing was dropped"
+  [ "$present" = 1 ] || hosting::die "${kept} does not exist on ${server} — nothing to purge"
+  comment="$(q "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '${kept}'")" \
+    || hosting::die "could not read the comment of ${kept} — nothing was dropped"
+  case "$comment" in
+    "${KEPT_MARKER} "*) ;;
+    *) hosting::die "${kept} carries no '${KEPT_MARKER}' comment, so this command did not keep it — refusing to drop a database it cannot prove is a kept copy" ;;
+  esac
+  # The age is the server's clock against the stamp in the NAME — the one fact a later rename of
+  # the comment cannot move. A copy younger than the retention is refused, naming when it may go.
+  stamp="${kept##*_kept_}"
+  # `to_timestamp(…)::timestamp` is the stamp's own wall-clock digits (it was written in UTC), so it
+  # is compared with the server's UTC wall clock — never with a session time zone.
+  due="$(q "SELECT CASE WHEN to_timestamp('${stamp}', 'YYYYMMDDHH24MI')::timestamp + interval '${retain_days} days' <= (now() AT TIME ZONE 'UTC') THEN 'due' ELSE to_char(to_timestamp('${stamp}', 'YYYYMMDDHH24MI')::timestamp + interval '${retain_days} days', 'YYYY-MM-DD\"T\"HH24:MI\"Z\"') END")" \
+    || hosting::die "could not compute the age of ${kept} on ${server} — nothing was dropped"
+  due="$(printf '%s' "$due" | tr -d '[:space:]')"
+  [ -n "$due" ] || hosting::die "the server returned no age for ${kept} — nothing was dropped"
+  [ "$due" = due ] \
+    || hosting::die "${kept} is retained ${retain_days} days after it was kept — it may be purged from ${due}, not before (policy reset-database-keeps-a-copy)"
+  active="$(sessions "$kept")" || hosting::die "could not count the sessions on ${kept} — nothing was dropped"
+  [ "$active" = 0 ] || hosting::die "${active} session(s) are connected to ${kept} — someone is reading the kept copy; refusing to drop it under them"
+  hosting::log "dropping the kept copy ${kept} (${comment})"
+  sql "DROP DATABASE \"${kept}\"" >/dev/null || hosting::die "DROP DATABASE ${kept} failed — the kept copy is still there"
+  gone="$(exists "$kept")" || hosting::die "${kept} was dropped but could not be read back"
+  [ "$gone" = 0 ] || hosting::die "DROP DATABASE ${kept} reported success but the database is still listed"
+  hosting::say purged "$kept"
+  exit 0
+fi
+
+if [ "$verb" = show ]; then
+  newest="$(q "SELECT datname FROM pg_database WHERE datname ~ '^${database}_kept_[0-9]{12}\$' ORDER BY datname DESC LIMIT 1")" \
+    || hosting::die "could not list the kept copies of ${database} on ${server}"
+  newest="$(printf '%s' "$newest" | tr -d '[:space:]')"
+  [ -n "$newest" ] || hosting::die "no kept copy of ${database} exists on ${server} — the reset did NOT keep the previous database"
+  comment="$(q "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = '${newest}'")" \
+    || hosting::die "could not read the comment of ${newest}"
+  case "$comment" in
+    "${KEPT_MARKER} "*) ;;
+    *) hosting::die "${newest} carries no '${KEPT_MARKER}' comment — it is not a copy this command kept" ;;
+  esac
+  until_iso="$(printf '%s' "$comment" | sed -n 's/.*keptUntil=\([^;]*\).*/\1/p' | tr -d '[:space:]')"
+  hosting::say kept_database "$newest"
+  [ -z "$until_iso" ] || hosting::say kept_until "$until_iso"
+  hosting::say kept_verified true
+  exit 0
+fi
+
+# ── keep ───────────────────────────────────────────────────────────────────────────────────────
+present="$(exists "$database")" || hosting::die "could not ask ${server} whether ${database} exists — nothing was changed"
+[ "$present" = 1 ] || hosting::die "${database} does not exist on ${server} — there is nothing to keep, and a reset never creates a database it did not first keep a copy of"
+active="$(sessions "$database")" || hosting::die "could not count the sessions on ${database} — nothing was changed"
+[ "$active" = 0 ] \
+  || hosting::die "${active} session(s) are still connected to ${database}. The plan quiesces the portal (scale to 0) before this step; if connections remain something else is using the database, and a rename under it is not atomic. Refusing — nothing was changed."
+
+now="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYYMMDDHH24MI')")" || hosting::die "could not read the server's clock — nothing was changed"
+now="$(printf '%s' "$now" | tr -d '[:space:]')"
+[[ "$now" =~ ^[0-9]{12}$ ]] || hosting::die "the server's clock answered '${now}', not yyyymmddhhmm — nothing was changed"
+kept="${database}_kept_${now}"
+until_iso="$(q "SELECT to_char(now() AT TIME ZONE 'UTC' + interval '${retain_days} days', 'YYYY-MM-DD\"T\"HH24:MI\"Z\"')")" \
+  || hosting::die "could not compute the retention instant — nothing was changed"
+until_iso="$(printf '%s' "$until_iso" | tr -d '[:space:]')"
+kept_at="$(q "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI\"Z\"')")" || hosting::die "could not read the server's clock — nothing was changed"
+kept_at="$(printf '%s' "$kept_at" | tr -d '[:space:]')"
+
+clash="$(exists "$kept")" || hosting::die "could not ask ${server} whether ${kept} exists — nothing was changed"
+[ "$clash" = 0 ] || hosting::die "${kept} already exists — a reset in the same minute; nothing was changed, re-run in a minute"
+
+# What the empty database is re-created WITH — the old one's own owner, encoding and collation, so
+# the migration meets the database the instance always had, only empty.
+shape="$(q "SELECT pg_get_userbyid(datdba) || '|' || pg_encoding_to_char(encoding) || '|' || datcollate || '|' || datctype FROM pg_database WHERE datname = '${database}'")" \
+  || hosting::die "could not read the owner, encoding and collation of ${database} — nothing was changed"
+shape="$(printf '%s' "$shape" | tr -d '\r\n')"
+IFS='|' read -r owner encoding collate ctype <<< "$shape"
+for part in owner encoding collate ctype; do
+  value="${!part}"
+  [[ "$value" =~ ^[A-Za-z0-9_.@-]+$ ]] || hosting::die "${database}'s ${part} reads '${value}', not a plain name — refusing to build CREATE DATABASE from it; nothing was changed"
+done
+
+hosting::log "keeping ${database} as ${kept} (retained until ${until_iso}), then creating an empty ${database} (owner ${owner}, ${encoding}, ${collate})"
+sql "ALTER DATABASE \"${database}\" RENAME TO \"${kept}\"" >/dev/null \
+  || hosting::die "ALTER DATABASE ${database} RENAME TO ${kept} failed — nothing was changed"
+
+# From here on the instance's database is under the kept name: every failure puts it back first.
+restore_name() {
+  hosting::log "putting ${kept} back as ${database}"
+  sql "ALTER DATABASE \"${kept}\" RENAME TO \"${database}\"" >/dev/null \
+    || hosting::die "$1 — AND renaming ${kept} back to ${database} FAILED: the instance's data is intact under ${kept}; rename it back by hand before the portal is scaled up"
+  hosting::die "$1 — ${kept} was renamed back to ${database}; nothing was changed"
+}
+
+sql "COMMENT ON DATABASE \"${kept}\" IS '${KEPT_MARKER} of ${database}; keptAt=${kept_at}; keptUntil=${until_iso}; request=${request:-unstated}'" >/dev/null \
+  || restore_name "COMMENT ON DATABASE ${kept} failed"
+sql "CREATE DATABASE \"${database}\" WITH OWNER \"${owner}\" TEMPLATE template0 ENCODING '${encoding}' LC_COLLATE '${collate}' LC_CTYPE '${ctype}'" >/dev/null \
+  || restore_name "CREATE DATABASE ${database} failed"
+
+# Read both back: the kept copy is there under its new name, the new database is there and empty.
+kept_present="$(exists "$kept")" || hosting::die "${kept} could not be read back after the reset"
+[ "$kept_present" = 1 ] || hosting::die "${kept} is NOT listed after the rename — refusing to report a kept copy that cannot be read back"
+fresh="$(psql -h "$server" -U "$pg_user" -d "$database" -v ON_ERROR_STOP=1 -tAc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')")" \
+  || hosting::die "the new ${database} could not be queried after it was created (the kept copy ${kept} is intact)"
+fresh="$(printf '%s' "$fresh" | tr -d '[:space:]')"
+[ "$fresh" = 0 ] || hosting::die "the new ${database} holds ${fresh} table(s) — it was not created empty (the kept copy ${kept} is intact)"
+
+hosting::say kept_database "$kept"
+hosting::say kept_until "$until_iso"
+hosting::say reset completed
+hosting::log "reset: ${database} is empty; the previous database is kept as ${kept} until ${until_iso}"

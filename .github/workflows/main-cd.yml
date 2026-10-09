@@ -1381,9 +1381,10 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # The VERSION (3.0.0-ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
-      # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
-      # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
+      # The VERSION (<major>.<minor>.<run#>, e.g. 3.1.10340) is what each install's self-updater
+      # (ReleaseStrategy.md) compares to decide a rollout — so it MUST be the monotonic $(Version)
+      # (Directory.Build.props mints the patch from -p:PlatformBuildNumber=$GITHUB_RUN_NUMBER, which
+      # only this workflow passes; policy platform-semver-versioning). -getProperty:Version prints the computed
       # version without building; CIRun=true so it matches the version baked into the binaries below.
       #
       # 🚨 IT IS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS A TAG. As a TAG it is not applied
@@ -1419,7 +1420,13 @@ jobs:
           # file: a regex keeps returning a plausible, well-formed, WRONG number after the definition
           # moves — and that number gets published.
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
+          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
           # which is the failure where a tag exists and points at the wrong thing.
           if [ -z "$VERSION" ]; then
@@ -1709,13 +1716,19 @@ jobs:
       # BELOW Latest; a migration that can never run surfaces only at the deploy that needs it.
       #
       # Both jobs run inside ONE workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
-      # 3.0.0-ci.<n> tag — is identical across the legs by construction.
+      # <major>.<minor>.<run> tag — is identical across the legs by construction.
       - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
+          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           # Refuse rather than invent — same as the portal leg. An empty version becomes `:` or
           # `latest` downstream, which is the failure where a tag exists and points at the wrong thing.
           if [ -z "$VERSION" ]; then
@@ -1745,6 +1758,7 @@ jobs:
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:MeshWeaverRoot=${{ github.workspace }}
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
@@ -1810,7 +1824,13 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
+          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           if [ -z "$VERSION" ]; then
             echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
             exit 1
@@ -2249,13 +2269,19 @@ jobs:
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
-      # run, so the 3.0.0-ci.<n> tag matches the portal/migration images by construction.
+      # run, so the <major>.<minor>.<run> tag matches the portal/migration images by construction.
       - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
+          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       - name: Ensure Azure CLI
@@ -2341,6 +2367,7 @@ jobs:
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
           -p:MeshWeaverModuleLibrariesRoot=${{ steps.shelf.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}
@@ -2615,6 +2642,7 @@ jobs:
       id-token: write
       actions: read     # the promotion records are run ARTIFACTS of this workflow
       packages: write   # phase D writes the line pointers to GHCR with GITHUB_TOKEN
+      issues: write     # the ONE `fleet-unarmed` alert issue (fleet-unarmed-alert.py, MeshWeaver#6042)
     outputs:
       armed: ${{ steps.select.outputs.armed }}
       version: ${{ steps.select.outputs.v_portal }}
@@ -2667,10 +2695,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ARMED_MAX: ${{ steps.armed.outputs.max }}
+          ARMED_VERSION: ${{ steps.armed.outputs.version }}
           RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
         run: |
           set -euo pipefail
+          # --unarmed-out: every promoted set still newer than the armed one after this selection,
+          # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+            --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
         if: steps.select.outputs.armed == 'true'
@@ -2794,6 +2826,27 @@ jobs:
             .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$src" "${margs[@]}"
           done
           echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE STALL SIGNAL (MeshWeaver#6042, policy `one-promotion-gate`). Waiting and refusing are
+      # both right and both SILENT: a standing red ladder or a platform-side outage froze fleet updates
+      # while every run said `nothing to arm`. This files ONE `fleet-unarmed` issue when the OLDEST
+      # promoted set still newer than the armed one is older than FLEET_UNARMED_ALERT_HOURS — naming
+      # every unarmed set, its verdict (waiting / refused / not examined) and its run — rewrites it
+      # while the stall lasts, and closes it on the first run that finds the fleet armed again.
+      # Runs after a frozen `select` too (that reading is exactly a stall), but never after a FAILED
+      # arming write: a set `select` chose but phases C/D did not land is not armed, and must not
+      # close the issue. `select` failing before it wrote its reading leaves no file, which the
+      # script reports RED by name — never read as "armed".
+      - name: "Alert: has the promotion gate left the fleet unarmed? (ONE fleet-unarmed issue)"
+        if: ${{ !cancelled() && steps.select.outcome != 'skipped' && (steps.select.outputs.armed != 'true' || success()) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The ONE knob (default chosen with MeshWeaver#6042; the maintainer may change it here).
+          FLEET_UNARMED_ALERT_HOURS: "6"
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/fleet-unarmed-alert.py --self-test
+          python3 .github/scripts/fleet-unarmed-alert.py --reading "$RUNNER_TEMP/unarmed.json"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
   # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when
