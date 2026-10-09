@@ -79,6 +79,27 @@ outside any completion check by construction — that is the tombstone's job
 (`RecentlyDeletedRegistry`), not the drain's. The drain's contract is narrower and now true: at the
 moment it answered, storage held nothing at or under the root.
 
+### Every write route an owner uses honours the tombstone — the post-commit flush included
+
+A per-node hub keeps holding the pre-delete node until its `DisposeRequest` lands, so a write that
+reaches it in that window commits against a node the store no longer has. Three routes make such a
+commit durable, and all three must drop it while the tombstone is live: the persistence sampler's
+`SaveMeshNodeRequest` handler, the dispose-flush, and `StoragePostCommitFlush` — the durable write
+behind every `GetMeshNodeStream(p).Update`. The last one used to skip the check. Its storage write
+is an upsert, and `UpdateRemote` answers the writer optimistically, so an update that committed at
+the owner after the delete removed the row wrote the row straight back, after the delete had
+answered `removed=true`. Measured: an update racing the delete of a live install record left the
+record in storage in 7 of 40 rounds. In CI that showed up as `Plugins/{id}` outliving its deleted
+partition (`InstallRecordFollowsItsPartitionTest`) and outliving a confirmed uninstall
+(`PackageUninstallTest`). In both, the boot repair pass's install-record migration was updating the
+record the delete removed.
+
+The flush now refuses such a write. It checks when the write is issued, not when the flush is
+built: the delete marks its tombstones before it removes a row (`RunDeletePass`), so a write issued
+after the removal always sees the mark. The refusal is a fault, which NACKs the patch, so the writer
+learns that its update did not land. A node created again after its delete supersedes the tombstone
+(`RecentlyDeletedRegistry.Supersede`), so updates of the new node flush as usual.
+
 ## 3. The stage bound is a NO-PROGRESS watchdog, not a duration cap
 
 Every stage of the delete is bounded by `TimeoutAtStage`, which is `Observable.Timeout` — an
@@ -361,6 +382,13 @@ innocent. Pinned by `IoPoolQueueReadingCoversAcceptedWorkTest`, whose fourth cas
 mesh: a delete that removes plan + 1 while outliving its operation budget must SUCCEED, a root put
 back once must be drained by a follow-up pass so that success means it is gone, and a root that
 survives every pass must FAIL naming itself.
+
+`UpdateNeverResurrectsADeletedNodeTest` (MeshWeaver.Graph.Test) pins the post-commit flush
+deterministically. A flush that arrives after the delete is refused and the node stays gone, while
+a flush of a live node and a flush of a node created again after its delete both persist. Reverted,
+the first case fails. `InstallRecordUpdateRacingDeleteTest` (Memex.Portal.Shared.Test) races the
+install-record migration's update against the record's delete for 40 rounds and allows no record
+to survive. Reverted, it fails with survivors.
 
 `DeleteCommitTimeoutNamesWhatIsStuckTest` pins what a stalled commit SAYS — the paths the plan still
 owes, by name. `DeletePreflightNamesTheSilentDescendantTest` pins §4: a subtree whose middle
