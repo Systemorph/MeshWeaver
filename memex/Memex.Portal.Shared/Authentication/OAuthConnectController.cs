@@ -380,7 +380,7 @@ public class OAuthConnectController(
                 // days surprises users who connect once and come back months later.
                 // Refresh-token flow isn't implemented yet; until it is, default to
                 // 1 year. Bump if needed via TokenLifetime below.
-                var label = $"OAuth: {request.client_id}";
+                var label = $"{ApiTokenService.OAuthLabelPrefix}{request.client_id}";
 
                 return tokens.CreateToken(
                         userId: entry.UserId,
