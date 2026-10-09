@@ -52,6 +52,25 @@ public static class PlatformReleaseOrder
     private static readonly string[] ChannelLabels = ["ci", "edge"];
 
     /// <summary>
+    /// 🚨 <b>The label of a build that publishes NO platform version</b> — a local source build, a
+    /// pull-request run, a satellite lane compiling core from source: <c>&lt;major&gt;.&lt;minor&gt;.0-dev</c>
+    /// (<c>Directory.Build.props</c>, policy <c>platform-semver-versioning</c>). Read as run
+    /// <c>0</c>, the same reading the retired local stamp <c>-ci.0</c> had, so every caller that
+    /// treats ordinal 0 as "a source build, never ordered against a publication"
+    /// (<c>PlatformFloor</c>, <c>PlatformCompatibility.ProducerIsNewer</c>,
+    /// <c>NodeTypeCompilationHelpers.IsOrderedPlatformBuild</c>) keeps its meaning without a second
+    /// spelling to recognise.
+    /// </summary>
+    public const string SourceBuildLabel = "dev";
+
+    /// <summary>
+    /// True when <paramref name="version"/> is a SOURCE build — <c>X.Y.Z-dev</c>, or the retired
+    /// local stamp <c>X.Y.Z-ci.0</c> — i.e. a build that was never published and is never ordered
+    /// against one. Its <see cref="BuildOrdinal"/> is <c>0</c>.
+    /// </summary>
+    public static bool IsSourceBuild(string? version) => BuildOrdinal(version) == 0;
+
+    /// <summary>
     /// 🚨 <b>The first line of the SemVer notation</b> — policy <c>platform-semver-versioning</c>
     /// (<c>Doc/Architecture/PlatformVersioning</c>). From this <c>major.minor</c> on, a continuous
     /// build is published as a PLAIN SemVer version <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>
@@ -80,6 +99,8 @@ public static class PlatformReleaseOrder
     /// <item><c>3.0.0-rc9.ci.7824</c> → <c>7824</c></item>
     /// <item><c>3.0.0-edge.7977</c> → <c>7977</c></item>
     /// <item><c>3.0.0-ci.7977+build.638</c> → <c>7977</c> (build metadata is not part of ordering)</item>
+    /// <item><c>3.1.0-dev</c> → <c>0</c> — a source build (<see cref="SourceBuildLabel"/>), never
+    /// ordered against a publication.</item>
     /// <item><c>3.0.0</c> → <c>null</c> — an official release is a PROMOTION, a retag of one already
     /// sealed continuous set, so its lineage lives on the sibling tag it was cut from and cannot be
     /// read off the tag at all.</item>
@@ -93,6 +114,10 @@ public static class PlatformReleaseOrder
     {
         if (!TrySplit(version, out _, out var preRelease))
             return null;
+
+        // A source build (`3.1.0-dev`) carries no publication — run 0, as the retired `-ci.0` stamp.
+        if (preRelease is [var only] && string.Equals(only, SourceBuildLabel, StringComparison.OrdinalIgnoreCase))
+            return 0;
 
         for (var i = 0; i < preRelease.Length - 1; i++)
             if (ChannelLabels.Contains(preRelease[i], StringComparer.OrdinalIgnoreCase)
@@ -140,8 +165,8 @@ public static class PlatformReleaseOrder
         // 🚨 A ZERO patch is NOT a build of the notation: `3.1.0`, `4.0.0`, `999.0.0` are what a
         // declared FLOOR ("needs the 3.1 line") and a deliberately cut release look like, and they
         // must keep being compared by their numeric core. A CD run number is never 0; the local
-        // source-build stamp of the new notation is `<major>.<minor>.0-ci.0` (Directory.Build.props),
-        // which the channel-label loop above already reads as ordinal 0.
+        // source-build stamp of the new notation is `<major>.<minor>.0-dev` (Directory.Build.props),
+        // which BuildOrdinal reads as ordinal 0 before it gets here.
         var patch = long.Parse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture);
         return patch > 0 ? patch : null;
     }

@@ -17,7 +17,7 @@ public static class PlatformFloorKind
 
     /// <summary>
     /// The floor could NOT be ordered against the running platform — an unreadable floor, an
-    /// unknown running version, a local source build (<c>-ci.0</c>), or two shapes that share no
+    /// unknown running version, a source build (<c>-dev</c>, or the retired <c>-ci.0</c>), or two shapes that share no
     /// order (an <c>rc</c> label against a <c>ci</c> build). Proceeds, and the reason is logged as
     /// advisory: a comparison nobody could make must never hold a portal (the 2026-09-07 trap,
     /// <c>Doc/Architecture/ModuleAdoptionPolicy</c> R2).
@@ -104,7 +104,7 @@ public static class PlatformFloor
         var floorOrdinal = PlatformReleaseOrder.BuildOrdinal(floor);
         var runningOrdinal = PlatformReleaseOrder.BuildOrdinal(running);
         if (floorOrdinal == 0 || runningOrdinal == 0)
-            return Advisory("a -ci.0 version is a local source build, not a publication, and is not "
+            return Advisory("a source build (-dev) is not a publication, and is not "
                             + "ordered against a published build");
 
         int comparison;

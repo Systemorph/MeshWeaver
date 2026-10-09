@@ -38,15 +38,16 @@ and the version mechanics in
 | | CONTINUOUS (steady-state) | OFFICIAL (a release) |
 |---|---|---|
 | **Trigger** | merge to `main` | push an **annotated** tag `v<major>.<minor>.<patch>` on a promoted, sealed commit |
-| **Version** | `3.0.0-ci.<run#>` (build-numbered, monotonic from `$GITHUB_RUN_NUMBER`) | clean `3.0.0` — **the same bytes**, retagged |
+| **Version** | `3.1.<run#>` — a plain SemVer release per build, the patch is main-cd's `$GITHUB_RUN_NUMBER` (policy `platform-semver-versioning`; retired notation `3.0.0-ci.<run#>` is still READ) | clean `3.1.0` — **the same bytes**, retagged |
 | **Workflow** | `main-cd.yml` (after `MeshWeaver Build and Test` passes) | `release.yml` |
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | ACR retag + GHCR mirror, by digest |
 | **Bake / seal** | ✅ platform content, sealed under the compatibility key `c<major>e<epoch>`; the Plugins re-seal is an independent follow-up that never gates the platform | ✅ inherited — `_releases/<clean>` copies the key marker |
 | **NuGet** | ❌ never | ❌ **retired** (last publish `3.0.0-rc13`) |
-| **Rollout** | an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.0.0-ci*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
+| **Rollout** | an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
 
-So: **merge to main = build + bake + seal + deploy; tag = promote.** There is no rc line: the
-continuous builds ARE the pre-releases, and `PlatformVersion` always names the next clean release.
+So: **merge to main = build + bake + seal + deploy; tag = promote.** There is no rc line and no
+channel word: every main build is a release version `<major>.<minor>.<run>`, and `PlatformVersion`
+names the LINE (`3.1.0`). A build that publishes nothing (PR, local) is `<major>.<minor>.0-dev`.
 
 > 📅 **2026-09-12 — what a merge to `main` sets in motion downstream, corrected.** (1) `main-cd.yml`
 > has no deploy job: it builds, promotes, bakes, seals and POSTs ONE signed `platform-build` to the
@@ -59,15 +60,14 @@ continuous builds ARE the pre-releases, and `PlatformVersion` always names the n
 > identity therefore arrives with the next daily run, not minutes after the merge. Turning the wave
 > on is a MAJOR-bump procedure. Full reference: `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` through the mesh MCP).
 
-🚨 **Self-update takes clean releases by default** (maintainer, 2026-09-08: *"by default we will not
-upgrade as long as no version without `-ci…` is labelled"*). A `-ci.<n>` build is rolled onto only
-under `Continuous` + a `pattern` on `Admin/UpdatePolicy` — a glob over the tag, `3.0.1-ci*` — and
-`Continuous` with no pattern IS `Stable` (the poller warns once, naming the pattern to set). A
-pattern admits exactly the line it names: `3.0.0-ci*` never selects `3.0.1`, so following a line
-ends by itself when the next release is tagged. **Fleet today: every Systemorph-operated instance carries
-`Continuous` + `3.0.0-ci*`; change it the day `3.0.1` is tagged.** The `-latest` pointers (`3-latest`,
-`3.0-latest`, `3.0.1-latest`) are a fresh install's STARTING image and never a self-update
-candidate. Full rule: [ReleaseProcess.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md)
+🚨 **Self-update takes clean releases by default.** A run-numbered build (`3.1.<run>`, or a retired
+`3.0.0-ci.<run>`) is rolled onto only under `Continuous` + a `pattern` on `Admin/UpdatePolicy` — a
+glob over the tag — and `Continuous` with no pattern IS `Stable` (the poller warns once, naming the
+pattern to set). Stable never takes a run-numbered build even though it carries no label
+(`VersionSelect.PickTargets`). **Fleet today: every Systemorph-operated instance carries
+`Continuous` + `3.*`**, which admits both notations; candidates are ranked by run number. A record
+left on the retired `3.0.0-ci*` admits no new build and freezes silently. The `-latest` pointers
+(`3-latest`, `3.1-latest`) are a fresh install's STARTING image and never a self-update candidate. Full rule: [ReleaseProcess.md](../../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseProcess.md)
 → "Which build an install takes".
 
 🚨 **THE LADDER — policy `platform-backwards-compatibility`.** Platform builds are backwards
@@ -216,7 +216,7 @@ gh api "repos/Systemorph/MeshWeaver/actions/runs?branch=main&per_page=3" \
 #    builds multi-arch portal-ai + migration + mw-plugin-test, promotes <version>;<sha>;main to ACR,
 #    bakes + seals the platform content and the Plugins modules, and notifies the control instance.
 # 3. Every OTHER install whose Admin/UpdatePolicy is Continuous + a pattern admitting the tag
-#    (3.0.0-ci*) self-updates from ACR on the next publication EVENT (no action). Stable installs
+#    (3.*) self-updates from ACR on the next publication EVENT (no action). Stable installs
 #    (the default) wait for the clean release.
 ```
 
@@ -275,7 +275,7 @@ complete image set, and publishes only when it does not — bounded at 3 attempt
 
 - **To kick CD by hand: `gh workflow run main-cd.yml --ref main`.**
 - It heals **HEAD, not the commit that failed** — deliberately: re-publishing older code would mint
-  a higher `-ci.<n>` for it and roll every install *backwards*.
+  a higher run number for it and roll every install *backwards*.
 - **Publication is all-or-nothing**: each leg pushes only a non-selectable `staging-<sha>-<run_id>`
   tag, and the `promote` job applies the real tags only after every leg succeeds, ending with
   `memex-portal-ai:<version>` — the single write the self-updater acts on.
@@ -325,7 +325,7 @@ Two mechanisms, both live:
   `Admin/UpdatePolicy` (default **Stable** — clean tags only, i.e. what `release.yml` promoted),
   lists ACR tags, walks the eligible ones newest-first and takes the first one whose set is SEALED
   for its identity (`VersionSelect.SelectCandidates` + `ReleaseAvailability`), then patches its own
-  Deployment in-pod. `Continuous` + `pattern` (e.g. `3.0.0-ci*`) makes that line's `-ci.<n>` builds
+  Deployment in-pod. `Continuous` + `pattern` (e.g. `3.*`) makes that major's run-numbered builds
   eligible; `Continuous` without a pattern is `Stable`.
 
 Confirm a roll-out — the RUNNING version per instance is on the Fleet Console (`/Hosting/Console`
@@ -378,4 +378,4 @@ same is a delivery question, not an activation one. Full reference:
 - `.github/workflows/base-image-acr.yml` — the hand-authored multi-arch base, on demand.
 - `.github/scripts/check-image-set.sh` / `check-release-availability.sh` / `publish-bake-bundles.sh`
   — the set, the seal, the marker; `release.yml` reuses the first two verbatim.
-- `Directory.Build.props` — `PlatformVersion` + the `-ci.<n>` monotonic build-number logic.
+- `Directory.Build.props` — `PlatformVersion` (the line) + the `<major>.<minor>.<run>` composition from `-p:PlatformBuildNumber` (main-cd only).

@@ -18,7 +18,7 @@ name: Release (promote a sealed set)
 #   1. refuses anything else — a lightweight tag, a pre-release version (the rc line is closed), a
 #      tag whose commit carries a different PlatformVersion, a commit main-cd never promoted, a set
 #      whose content bake is not sealed, a release with no committed release-notes page;
-#   2. copies the release marker  _releases/<ci-version> → _releases/<clean>  on every artifact
+#   2. copies the release marker  _releases/<build-version> → _releases/<clean>  on every artifact
 #      store, so the gates that ask "which framework identity is release 3.0.0?" get the answer the
 #      continuous build recorded (publish-bake-bundles.sh; Doc/Architecture/ReleaseGates);
 #   3. retags the promoted images  <short-sha> → <clean>  in ACR, memex-portal-ai LAST — the same
@@ -35,7 +35,15 @@ name: Release (promote a sealed set)
 # Stable installs learn about the clean tag on their next check (a later continuous build's inbox
 # event, a startup pass, or the 6 h retry backstop) — this lane posts no platform-build fact of its
 # own, because the receiver's pin updater would turn a clean version into a Plugins pin PR its own
-# validator refuses (`check-platform-pins.py` requires the `ci.<n>` build number).
+# validator refuses (a pin needs a run-numbered build, `<major>.<minor>.<run>`).
+#
+# 🚨 Policy `platform-semver-versioning` (Doc/Architecture/PlatformVersioning §6 decision 2): every
+# main CD build is already a release version `<major>.<minor>.<run>`, so this lane renames nothing.
+# It adds the clean `<major>.<minor>.0` to the build main-cd published for the tagged commit and
+# opens the next-line pull request. It moves NO `-latest` pointer for such a build: CD's arm already
+# moved `<major>-latest`/`<major>.<minor>-latest` to that build or past it, so a move here could only
+# move them backwards. Sets of the retired `<line>-ci.<run>` notation are still promotable and keep
+# their old pointer behaviour.
 
 on:
   push:
@@ -118,7 +126,7 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::$TAG is not a clean release version. The rc line is closed (2026-09-05): a release is v<major>.<minor>.<patch> and nothing else — continuous builds are already the pre-releases (<version>-ci.<n>)."
+            echo "::error::$TAG is not a clean release version: a release is v<major>.<minor>.<patch> and nothing else (policy platform-semver-versioning)."
             exit 1
           fi
           if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]; then
@@ -184,7 +192,7 @@ jobs:
           tags=$(jq -r --arg s "$SHORT" '
                    [ .[] | select(.tags != null)
                      | select(any(.tags[]; . == $s or test("^staging-" + $s + "-[0-9]+$")))
-                     | select(any(.tags[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+[-.]ci\\.[0-9]+$"))) ]
+                     | select(any(.tags[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+[-.]ci\\.[0-9]+$") or test("^[0-9]+\\.[0-9]+\\.[1-9][0-9]*$"))) ]
                    | .[].tags[]' "$RUNNER_TEMP/portal-manifests.json")
           if [ -z "$tags" ]; then
             tags=$(jq -r --arg s "$SHORT" '.[] | select(.tags != null) | select(any(.tags[]; . == $s)) | .tags[]' \
@@ -194,14 +202,25 @@ jobs:
             echo "::error::memex-portal-ai carries no image tagged $SHORT — main-cd has not promoted this commit. Wait for its run (or \`gh workflow run main-cd.yml --ref main\` when the commit is main's HEAD), confirm \`Plugins: bake + seal\` succeeded, then push the tag again."
             exit 1
           fi
-          CI_VERSION=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+[-.]ci\.[0-9]+$' <<<"$tags" | sort -V | tail -1 || true)
+          # The BUILD version the set was armed under, in either notation (policy
+          # `platform-semver-versioning`): `<major>.<minor>.<run>`, or the retired `<line>-ci.<run>`.
+          # The newest PUBLICATION wins — ordered by run number through the one shell-facing reader,
+          # never by `sort -V`, which ranks notations rather than publications.
+          CI_VERSION=""; best=-1
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            n=$(python3 .github/scripts/platform-version.py ordinal "$t") || continue
+            if [ "$n" -gt "$best" ]; then best=$n; CI_VERSION=$t; fi
+          done <<<"$tags"
           if [ -z "$CI_VERSION" ]; then
             echo "::error::memex-portal-ai:$SHORT carries no continuous version tag (tags on that digest: $(tr '\n' ' ' <<<"$tags")) — promote's Phase C never armed a release for this commit. Nothing sealed can be promoted from it."
             exit 1
           fi
+          IFS=. read -r REL_MAJOR REL_MINOR _ <<<"$VERSION"
           case "$CI_VERSION" in
             "$VERSION-ci."*) ;;
-            *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a $VERSION-ci.<n> build. Either it was built under a different PlatformVersion than the tag claims, or it predates the two-shape scheme (a retired '<line>-<label>.ci.<n>' set — see Doc/Architecture/ReleaseProcess §1), which cannot be promoted under a clean tag. Tag a commit built on the $VERSION line."; exit 1 ;;
+            "$REL_MAJOR.$REL_MINOR."[1-9]*) ;;
+            *) echo "::error::the promoted set for $SHORT is $CI_VERSION, not a build of the $REL_MAJOR.$REL_MINOR line ($REL_MAJOR.$REL_MINOR.<run>, or the retired $VERSION-ci.<run>). It was built under a different PlatformVersion than the tag claims. Tag a commit built on the $VERSION line."; exit 1 ;;
           esac
           # The `<core>-p<plugins>` pair tag is RETIRED (policy `platform-module-deploy-separate`): a
           # set promoted after the retirement carries none, and the host commit lives in the run's
@@ -324,6 +343,7 @@ jobs:
         env:
           SHORT: ${{ steps.rel.outputs.short }}
           VERSION: ${{ steps.rel.outputs.version }}
+          CI_VERSION: ${{ steps.set.outputs.ci_version }}
         run: |
           set -euo pipefail
           for repo in memex-migration mw-plugin-test; do
@@ -332,14 +352,16 @@ jobs:
           done
           echo "→ memex-portal-ai: $VERSION  (arming Stable self-updaters)"
           docker buildx imagetools create --tag "$ACR/memex-portal-ai:$VERSION" "$ACR/memex-portal-ai:$SHORT"
-          # The line pointers move with an official release too — same rule as CD's Phase D.
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          # The line pointers move with a release of a RETIRED-notation set only (same rule as CD's
+          # Phase D then). A `<major>.<minor>.<run>` set was armed by CD, which already moved the
+          # pointers to it or past it — a move here could only move them backwards.
+          line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
           for repo in memex-migration memex-portal-ai; do
             args=(); for t in $(line_tags "$VERSION"); do args+=(--tag "$ACR/$repo:$t"); done
-            docker buildx imagetools create "${args[@]}" "$ACR/$repo:$SHORT"
+            [ "${#args[@]}" -eq 0 ] || docker buildx imagetools create "${args[@]}" "$ACR/$repo:$SHORT"
           done
           {
-            echo "### Released \`$VERSION\` = \`$SHORT\` (continuous ${{ steps.set.outputs.ci_version }})"
+            echo "### Released \`$VERSION\` = \`$SHORT\` (build ${{ steps.set.outputs.ci_version }})"
             echo "- memex-portal-ai, memex-migration, mw-plugin-test retagged \`$VERSION\` in ACR"
             echo "- release marker \`_releases/$VERSION\` written on every artifact store"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -356,10 +378,11 @@ jobs:
         env:
           SHORT: ${{ steps.rel.outputs.short }}
           VERSION: ${{ steps.rel.outputs.version }}
+          CI_VERSION: ${{ steps.set.outputs.ci_version }}
         run: |
           set -euo pipefail
           NS=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          line_tags() { local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v"; }
+          line_tags() { case "$CI_VERSION" in *-ci.*) local v="${1%%-*}"; local maj="${v%%.*}"; local min="${v%.*}"; printf '%s-latest %s-latest %s-latest' "$maj" "$min" "$v";; esac; }
           for repo in memex-migration mw-plugin-test memex-portal-ai; do
             extra=()
             case "$repo" in memex-migration|memex-portal-ai) for t in $(line_tags "$VERSION"); do extra+=(--tag "ghcr.io/$NS/$repo:$t"); done;; esac
@@ -369,7 +392,7 @@ jobs:
               "${extra[@]}" \
               "$ACR/$repo:$SHORT"
           done
-          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest; portal + migration also $(line_tags "$VERSION"))" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest${CI_VERSION:+; line pointers: }$(line_tags "$VERSION"))" >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Publish the GitHub Release from the committed notes"
         env:
@@ -480,7 +503,7 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           ## Summary
 
-          \`v$VERSION\` is released (promoted from the sealed continuous set for \`${{ needs.release.outputs.sha }}\`). This moves \`PlatformVersion\` to \`$NEXT\`, so the next continuous build is \`$NEXT-ci.<n>\` and sorts above the release.
+          \`v$VERSION\` is released (promoted from the sealed build for \`${{ needs.release.outputs.sha }}\`). This moves \`PlatformVersion\` to \`$NEXT\`, so the next main CD build is \`${NEXT%.0}.<run>\` and sorts above the release (policy \`platform-semver-versioning\`).
 
           Opened by \`release.yml\` — the bump that used to be forgotten (rc6, rc10–rc13). No What's New entry: the line change itself was announced with the release.
 

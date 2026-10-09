@@ -2,13 +2,13 @@ name: Edge images (unverified)
 
 # The EDGE channel — the "any" side of the Admin/UpdatePolicy "Only update to CI-verified (green)
 # builds" toggle. It builds + pushes portal/migration images WITHOUT the test-green gate, tagged with
-# an `edge` SemVer pre-release label (e.g. `3.0.0-edge.<run>`) plus the moving `edge` tag. An install
+# an `edge` SemVer pre-release label (e.g. `3.1.0-edge.<run>`) plus the moving `edge` tag. An install
 # with RequireCiGreen=false (bleeding-edge / pre-merge testing) self-updates to these; a green-only
 # install (the default) ignores them — VersionSelect.IsEdge skips the `edge` label.
 #
 # The published version is BAKED (-p:Version), not just tagged, so a running edge install reports an
 # `-edge.<n>` InformationalVersion and compares correctly against newer edge builds (not against the
-# green `-ci.<n>` channel). Directory.Build.props honours -p:Version as the override escape-hatch.
+# green `<major>.<minor>.<run>` builds). Directory.Build.props honours -p:Version as the override escape-hatch.
 #
 # Trigger is MANUAL by default so it costs nothing per merge — publish an edge build when you want one.
 # Uncomment `push` to make the edge channel CONTINUOUS (publishes on every main commit; ~2x build cost).
@@ -58,24 +58,25 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # Compute the green continuous version, then swap the channel label `ci` → `edge` so the result
-      # parses as an `edge` SemVer pre-release (VersionSelect.IsEdge). $(Version) comes from THIS tree,
-      # which can only mint the clean `3.0.0-ci.N` shape (Doc/Architecture/ReleaseProcess §1), so the
-      # second substitution is the live one. The first (`.ci.` → `.edge.`, the retired
-      # `3.0.0-rc1.ci.N` shape) is kept as harmless tolerance — it costs nothing and it is the same
-      # both-separators reading every consumer of a run number does. Falls back to appending if there
-      # is no ci segment at all.
+      # The edge version is spelled HERE, from the platform LINE, and never derived from $(Version):
+      # $(Version) is a main CD build (<major>.<minor>.<run>) only when main-cd passes its run
+      # number, and `<major>.<minor>.0-dev` everywhere else (policy `platform-semver-versioning`,
+      # Doc/Architecture/PlatformVersioning). An edge build is an UNVERIFIED pre-release of its line:
+      # `<major>.<minor>.0-edge.<run>` — it sorts below every release of the line in SemVer, and its
+      # run number rides the `edge` label (PlatformReleaseOrder.ChannelLabels, VersionSelect.IsEdge).
       - name: Compute edge version
         id: vars
         run: |
           set -euo pipefail
-          VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
-          EDGE_VERSION="${VERSION/.ci./.edge.}"          # retired: 3.0.0-rc1.ci.N -> 3.0.0-rc1.edge.N
-          EDGE_VERSION="${EDGE_VERSION/-ci./-edge.}"      # minted:  3.0.0-ci.N     -> 3.0.0-edge.N
-          [ "$EDGE_VERSION" = "$VERSION" ] && EDGE_VERSION="${VERSION}-edge.${GITHUB_RUN_NUMBER}"
+          LINE=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
+            -getProperty:PlatformVersion -nologo | tr -d '[:space:]')
+          if ! [[ "$LINE" =~ ^([0-9]+)\.([0-9]+)\.0$ ]]; then
+            echo "::error::PlatformVersion is '$LINE', not a <major>.<minor>.0 line. Refusing to invent an edge version."
+            exit 1
+          fi
+          EDGE_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.0-edge.${GITHUB_RUN_NUMBER}"
           echo "version=$EDGE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Computed edge version: $EDGE_VERSION (from $VERSION, run #$GITHUB_RUN_NUMBER)"
+          echo "Computed edge version: $EDGE_VERSION (line $LINE, run #$GITHUB_RUN_NUMBER)"
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
