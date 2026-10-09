@@ -1608,6 +1608,40 @@ jobs:
           for d in "${dirs[@]}"; do
             .github/scripts/check-platform-reference-set.sh "$d" .github/workflows/main-cd.yml
           done
+      # 🗂️ THE CLOSURE THE STEP ABOVE JUST ASSERTED, WRITTEN DOWN (#4066, policy
+      # `image-closure-as-mesh-data`, Doc/Architecture/ImageClosureAsMeshData). The same publish
+      # directories, AFTER the assertion passed, so the record is what was asserted — never a
+      # re-derivation. Keyed by the image DIGEST (a retag or a promotion never changes it). This job
+      # only BUILDS the record; `image-closure-record` delivers it to the control instance, outside
+      # the delivery verdict, so a control-side outage can never stop an image from shipping.
+      - name: Record the asserted closure (keyed by the image digest)
+        env:
+          STAGING: ${{ needs.gate.outputs.staging_tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          CORE_SHA: ${{ needs.gate.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          root=plugins-repo/src/Memex.Portal.Distributed/bin/Release
+          mapfile -t dirs < <(find "$root" -type f -name meshweaver-surface.manifest -path '*/publish/*' -exec dirname {} \; | sort -u)
+          [ "${#dirs[@]}" -gt 0 ] || { echo "::error::no publish output to record — the assertion above found some, so the layout changed between two steps"; exit 1; }
+          digest=$(docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai:$STAGING" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          mkdir -p "$RUNNER_TEMP/image-closure"
+          python3 .github/scripts/image-closure-record.py build \
+            --repository memex-portal-ai --digest "$digest" --tag "$STAGING" \
+            --platform-commit "$CORE_SHA" --platform-version "$VERSION" --run-url "$RUN_URL" \
+            "${dirs[@]}" > "$RUNNER_TEMP/image-closure/image-closure.json"
+          python3 - "$RUNNER_TEMP/image-closure/image-closure.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(f"recorded {r['repository']}@{r['digest']}: " + ", ".join(f"{p['rid']} {p['fileCount']} file(s)" for p in r['platforms']))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-closure
+          path: ${{ runner.temp }}/image-closure/image-closure.json
+          if-no-files-found: error
+          retention-days: 30
 
   # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY (Doc/Architecture/ContainerRegistryInMemex),
   # in a job of its own with a budget of its own. Still the staging tag only: a name no consumer
@@ -1663,6 +1697,66 @@ jobs:
           .github/scripts/mirror-image-to-registry.sh
           "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
           "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
+
+  # 🗂️ THE IMAGE'S CLOSURE, DELIVERED AS MESH DATA (#4066, policy `image-closure-as-mesh-data`,
+  # Doc/Architecture/ImageClosureAsMeshData). `portal-image` built the record from the bytes its
+  # reference-set assertion accepted; this job signs it and POSTs it to the control instance's inbox
+  # target `Admin/ImageClosures`, where `ImageClosureIngest` verifies it again and writes
+  # `Admin/ImageClosures/memex-portal-ai-<digest>`.
+  #
+  # 🚨 OUTSIDE THE DELIVERY VERDICT, deliberately (the control lane's shape): nothing `promote` or
+  # `delivery-verdict` needs waits on this, so a control-side outage cannot stop an image shipping —
+  # but it is RED when the record was not ACCEPTED VERIFIED, naming the cause, never green-by-skip.
+  # No new secret: the control plane's inbox URL and HMAC (`vars.CONTROL_WEBHOOK_URL`,
+  # `secrets.CONTROL_WEBHOOK_SECRET`) are already asserted by `preflight`; the target is the same
+  # host's `/api/hooks/Admin/ImageClosures`.
+  image-closure-record:
+    name: "Record portal-ai's closure as mesh data (control instance)"
+    needs: [preflight, gate, portal-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: image-closure
+          path: ${{ runner.temp }}/image-closure
+      - name: "POST the signed closure record; require ACCEPTED + VERIFIED"
+        env:
+          CONTROL_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          case "$CONTROL_URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of the control plane's Hosting/PlatformBuilds inbox — refusing to derive a target from it"; exit 1 ;;
+          esac
+          URL="${CONTROL_URL%/api/hooks/*}/api/hooks/Admin/ImageClosures"
+          BODY_FILE="$RUNNER_TEMP/image-closure/image-closure.json"
+          [ -s "$BODY_FILE" ] || { echo "::error::the image-closure artifact is empty — portal-image recorded nothing"; exit 1; }
+          SIG=$(openssl dgst -sha256 -hmac "$SECRET" -hex < "$BODY_FILE" | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/closure-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $SIG" \
+            --data-binary "@$BODY_FILE") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/closure-resp" || true; echo
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/closure-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              if [ "$verdict" != "verified" ]; then
+                echo "::error::the control instance STORED the closure record but did not VERIFY its signature (signature: '${verdict:-<none>}') — ImageClosureIngest refuses to arm without a secret, so nothing will be recorded. Declare the target WITH WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on the control record."
+                exit 1
+              fi
+              echo "- closure record for \`memex-portal-ai\` ACCEPTED, signature verified, at \`${URL%/api/hooks/*}\` — ingested as \`Admin/ImageClosures/memex-portal-ai-<digest>\`" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control instance at all (DNS/TLS/connection) — the closure record was NOT delivered; the image itself is unaffected"; exit 1 ;;
+            401) echo "::error::the control instance REFUSED the signature (401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical"; exit 1 ;;
+            404) echo "::error::the control instance does not allowlist the inbox target Admin/ImageClosures (404). Add a WebhookInbox slot to the control record: target 'Admin/ImageClosures', secretConfigKey 'Hosting:PlatformWebhookSecret' (renders WebhookInbox__Targets__N and __SecretConfigKey), then Reconcile — and the control image must carry ImageClosureIngest (#4066)."; exit 1 ;;
+            413) echo "::error::the closure record exceeds the inbox cap (413) — image-closure-record.py should have refused it first; read its size"; exit 1 ;;
+            500) echo "::error::the control instance declares a SecretConfigKey for Admin/ImageClosures that resolves to nothing (500, SecretUnavailable) — provision Hosting:PlatformWebhookSecret there"; exit 1 ;;
+            *)   echo "::error::the control instance refused the closure record (HTTP $code)"; exit 1 ;;
+          esac
 
   migration-image:
     name: "Build + push migration image"
