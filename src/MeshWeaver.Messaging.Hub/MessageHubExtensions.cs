@@ -143,6 +143,29 @@ public static class MessageHubExtensions
     }
 
     /// <summary>
+    /// Tells the hub awaiting <paramref name="request"/>'s reply that the work is still advancing
+    /// (<see cref="RequestProgress"/>), which restarts that request's deadline: its
+    /// <c>RequestTimeout</c> then measures silence, not total duration.
+    ///
+    /// <para>For a handler whose work is sized by the caller's data and reports its own progress —
+    /// the recursive delete, whose server-side bound is already a no-progress watchdog. Report real
+    /// progress only (a removal, an answered leg), never on a timer: a progress report sent while
+    /// nothing advances would turn the caller's deadline into no deadline.</para>
+    ///
+    /// <para>Sent only when the request carries <see cref="PostOptions.AcceptsProgress"/>; a caller
+    /// that does not understand the type would take it for the reply.</para>
+    /// </summary>
+    /// <param name="hub">The hub handling the request — it posts the report.</param>
+    /// <param name="request">The awaited request delivery.</param>
+    /// <param name="stage">What advanced — diagnostic only, recorded on the request's trail.</param>
+    public static void ReportRequestProgress(this IMessageHub hub, IMessageDelivery request, string? stage = null)
+    {
+        if (!request.Properties.ContainsKey(PostOptions.AcceptsProgress) || request.Sender is null)
+            return;
+        hub.Post(new RequestProgress(stage), o => o.ResponseFor(request));
+    }
+
+    /// <summary>
     /// Appends a routing-configuration lambda to the hub configuration. The lambda
     /// is applied to the hub's <see cref="RouteConfiguration"/> at build time,
     /// letting callers register address routes and handlers.
