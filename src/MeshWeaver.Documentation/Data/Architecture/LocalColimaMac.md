@@ -88,6 +88,20 @@ Start Colima with the Docker runtime **and** Kubernetes (k3s) enabled, sized for
 colima start --kubernetes --cpu 8 --memory 16
 ```
 
+### Host sizing
+
+The VM and the local model both take host RAM, and nothing else checks it for you (#6024):
+
+| configuration | VM (`MEMEX_COLIMA_MEM`) | local model | host RAM, at least |
+|---|---|---|---|
+| default — portal, Postgres, observability, chat on qwen3.6 | 16 GiB | qwen3.6, ~23 GB, on the host GPU | **48 GB** |
+| no local chat model (`MEMEX_OLLAMA_MODEL=none`, or a hosted provider) | 16 GiB | none | **24 GB** |
+| smallest that boots | 8 GiB | none | **16 GB** — measured: the first boot's install peaks above 6 GiB in the portal pod and is OOM-killed once before the restart completes it; a rolling restart can exhaust 8 GiB again while the old pod drains |
+
+Only the last row is measured; the first two are that arithmetic — VM + about 6 GB for macOS + the model — rounded up, not a soak test. `up` pulls the model `MEMEX_OLLAMA_MODEL` names
+(default `qwen3.6`) and aliases it as `qwen3.6-code`, the id the portal is configured with; set a
+smaller tool-capable model on a smaller host, or `none` to skip the pull.
+
 This brings up a single arm64 VM running both a Docker daemon and a k3s cluster. The key reason to enable k3s *with the Docker runtime* (rather than containerd) is that **k3s then shares Colima's Docker image store** — so an image you build and `docker tag` locally is immediately visible to the cluster's `IfNotPresent` pull policy, with **no registry push**. That is what makes the build loop in §4 fast.
 
 `colima start` writes a kubeconfig context; verify:
