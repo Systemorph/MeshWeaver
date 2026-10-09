@@ -37,6 +37,14 @@ public sealed class PluginBundleClient
     /// <summary>The bundle route prefix on the registry instance.</summary>
     public const string RoutePrefix = "/api/plugins/bundles";
 
+    /// <summary>
+    /// The registry-side configuration key naming the OCI host this registry pushes its bundle
+    /// artifacts to — served as the index's <see cref="BundleIndex.ArtifactRegistry"/>
+    /// (MeshWeaver#4123). The chart renders it from the instance's own <c>registry.host</c> when the
+    /// instance hosts a registry, so the declaration is the registry record's, made once.
+    /// </summary>
+    public const string ArtifactRegistryConfigKey = "PluginBundles:ArtifactRegistry";
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
@@ -121,7 +129,21 @@ public sealed class PluginBundleClient
     /// exists so a decline can name the lane: without it an arm64 install can only be told "not
     /// adoptable" and #1728 stays invisible, which is precisely how it stayed invisible.</param>
     public sealed record BundleIndex(
-        string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles, string? Architecture = null);
+        string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles, string? Architecture = null)
+    {
+        /// <summary>
+        /// 🚨 The OCI registry host THIS registry declares as its artifact registry — the one host,
+        /// besides its own, to which a consumer presents the instance key it holds for this
+        /// registry (MeshWeaver#4123, <see cref="ArtifactKeyTarget"/>). Index-level and written by
+        /// the registry itself (its own <c>registry.host</c>, rendered into its config), never by a
+        /// publisher: a bundle entry's <see cref="BundleRef.Artifact"/> names where the bytes ARE,
+        /// and that alone never earns the key. Null from a registry that declares none — every
+        /// artifact on another host then takes the HTTP bundle route instead, keyless toward it.
+        /// An INIT property, not a fourth primary-constructor parameter: adding one replaces a
+        /// public record's constructor signature and is a binary break across the fleet.
+        /// </summary>
+        public string? ArtifactRegistry { get; init; }
+    }
 
     /// <summary>One servable bundle.</summary>
     /// <param name="Plugin">The plugin/package id.</param>
@@ -299,7 +321,7 @@ public sealed class PluginBundleClient
                         + "instance, and this is not one of them");
                 }
 
-                return Download(pluginId, bundle)
+                return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Miss(pluginId, result.Kind, result.Reason)
                         : SeedAll(pluginId, result.Bytes));
@@ -340,7 +362,7 @@ public sealed class PluginBundleClient
                     return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
                 }
                 var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
-                return Download(pluginId, bundle)
+                return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
                         : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger)));
@@ -561,7 +583,7 @@ public sealed class PluginBundleClient
                             "Module '{Module}' of {Plugin}: {Reason}",
                             moduleName, pluginId, verdict.Reason);
                         var advertised = bundle!;
-                        return Download(pluginId, advertised)
+                        return Download(pluginId, advertised, index)
                             .SelectMany(result => result.Bytes is null
                                 ? Miss(pluginId, result.Kind, result.Reason)
                                     .Select(_ => decided with
@@ -812,10 +834,61 @@ public sealed class PluginBundleClient
     /// index names an <see cref="BundleRef.Artifact"/>, from the registry's HTTP bundle route
     /// otherwise — the pre-artifact path, byte for byte.
     /// </summary>
-    private IObservable<FetchResult> Download(string pluginId, BundleRef bundle) =>
-        bundle.Artifact is { Length: > 0 } artifact
-            ? DownloadArtifact(pluginId, bundle.Version, artifact)
-            : DownloadOverHttp(pluginId, bundle.Version);
+    private IObservable<FetchResult> Download(string pluginId, BundleRef bundle, BundleIndex index)
+    {
+        if (bundle.Artifact is not { Length: > 0 } artifact)
+            return DownloadOverHttp(pluginId, bundle.Version);
+        if (ArtifactKeyTarget(_registryUrl, index.ArtifactRegistry, artifact) is { } refusal)
+        {
+            // Decided BEFORE any request: the instance key never travels to a host this registry
+            // did not declare. The bytes are still the registry's to serve, over its own HTTP route
+            // — which is where they came from before artifacts existed — so nothing that adopts
+            // today stops adopting.
+            _logger?.LogInformation(
+                "Bundle for {Plugin}@{Version}: {Refusal} — taking {Registry}'s HTTP bundle route instead",
+                pluginId, bundle.Version, refusal, _registryUrl);
+            return DownloadOverHttp(pluginId, bundle.Version);
+        }
+        return DownloadArtifact(pluginId, bundle.Version, artifact);
+    }
+
+    /// <summary>
+    /// 🚨 ONE TRUST RULE for the instance key (MeshWeaver#4123): the key held for registry mount
+    /// <paramref name="registryUrl"/> is presented to an artifact's OCI host only when that host IS
+    /// the mount's own host, or the mount's index DECLARES it (<paramref name="declaredArtifactRegistry"/>,
+    /// <see cref="BundleIndex.ArtifactRegistry"/>). The declaration is the registry's — the party
+    /// whose key it is — never the bundle entry's, which a publisher writes: before this, the
+    /// client presented the key to whatever host a catalog entry named. The self-updater already
+    /// refused an undeclared validator (#4094); this brings the bundle client to the same rule.
+    /// Whole-host, case-insensitive; a reference that does not parse is not a target. Returns null
+    /// when the key may go, else the sentence naming why not. Pure.
+    /// </summary>
+    internal static string? ArtifactKeyTarget(string registryUrl, string? declaredArtifactRegistry, string artifact)
+    {
+        if (!OciReference.TryParse(artifact, out var reference) || reference is null)
+            return $"the advertised artifact '{artifact}' is not an OCI reference";
+        var host = BareHost(reference.Registry);
+        var own = Uri.TryCreate(registryUrl, UriKind.Absolute, out var mount) ? mount.Authority : null;
+        if (host.Length > 0 && string.Equals(host, own, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var declared = BareHost(declaredArtifactRegistry);
+        if (host.Length > 0 && declared.Length > 0 && string.Equals(host, declared, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return declared.Length == 0
+            ? $"the artifact is on '{host}', which is not {registryUrl}'s own host and that registry declares no artifact registry, so this instance's key is not presented there"
+            : $"the artifact is on '{host}', but {registryUrl} declares '{declared}' as its artifact registry, so this instance's key is not presented there";
+    }
+
+    /// <summary>A registry host as written in a reference or a declaration — scheme and path dropped, never userinfo-stripped (a host carrying userinfo matches nothing). Pure.</summary>
+    private static string BareHost(string? value)
+    {
+        var v = (value ?? "").Trim();
+        var scheme = v.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0) v = v[(scheme + 3)..];
+        var slash = v.IndexOf('/');
+        if (slash >= 0) v = v[..slash];
+        return v;
+    }
 
     /// <summary>
     /// The artifact path (<c>Doc/Architecture/PluginBundlesInTheRegistry</c>): the manifest by
