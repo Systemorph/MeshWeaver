@@ -58,6 +58,54 @@ public sealed class ContentDegradationRegistry
     private readonly ConcurrentDictionary<string, ContentDegradation> byNodeType =
         new(StringComparer.Ordinal);
 
+    // 1 while this replica's boot registration window is open — see DeferWarningsUntilRegistrationSettles.
+    private int warningsDeferred;
+
+    /// <summary>
+    /// 🚨 <b>Opens the boot registration window (Systemorph/MeshWeaver.Plugins#2799).</b> Until
+    /// <see cref="SettleDeferredWarnings"/> is called, a read seam that degrades still RECORDS the
+    /// degradation here — so <c>/health</c>'s <c>content-types</c> names it exactly as before — but
+    /// does not log the "stayed an untyped JsonElement" warning at the read: that sentence is a
+    /// verdict, and during the window it cannot be decided yet.
+    ///
+    /// <para>Measured on memex-cloud (pod <c>884964bb7-6gv59</c>, 2026-10-09): 132 of 134 such lines
+    /// were written at 19:48:37.3, half a second BEFORE the pre-warmer even started (19:48:37.8),
+    /// by boot-time readers (standing watches on <c>Ops/Status/*</c>, a <c>Posts</c> query) of
+    /// dynamic types whose assemblies were all on the replica (<c>alreadyBaked=414</c>,
+    /// <c>compiled=0</c>). Those types register on this replica only when the registration-only
+    /// pass reaches them (<see cref="DynamicContentTypeRegistrar"/>), and every reader then
+    /// re-types on its own (the late re-type). So the line asserted "consumers will fail" for reads
+    /// that were about to be cured, and the burst was one per roll on every portal.</para>
+    ///
+    /// <para>Called by <see cref="DynamicContentTypeRegistrationHostedService"/> — and only on a
+    /// host that runs that pass: a host without it never opens the window, so every read there
+    /// warns at the read, as it always did (every test host included).</para>
+    /// </summary>
+    public void DeferWarningsUntilRegistrationSettles() => Volatile.Write(ref warningsDeferred, 1);
+
+    /// <summary>Whether the boot registration window is open: a degraded read records and defers
+    /// its warning to <see cref="SettleDeferredWarnings"/>.</summary>
+    public bool WarningsDeferred => Volatile.Read(ref warningsDeferred) != 0;
+
+    /// <summary>
+    /// Closes the boot registration window and returns the degradations whose warning must now be
+    /// written: every recorded one whose content type is STILL unresolvable
+    /// (<see cref="Unresolved"/>). A type the pass registered is dropped — its readers were re-typed
+    /// — and nothing that stayed untyped is: a deferred warning is re-timed to the moment the
+    /// verdict is decidable, never dropped. Returns empty when the window was not open, so a second
+    /// call cannot repeat the warnings.
+    ///
+    /// <para>No read is lost to the race with a concurrent seam: the seam records BEFORE it asks
+    /// <see cref="WarningsDeferred"/>, so a read that still saw the window open is already in the
+    /// snapshot taken after it closed, and one that saw it closed warns itself.</para>
+    /// </summary>
+    /// <param name="contentTypes">The mesh-wide content-type registry, or <c>null</c> (then every
+    /// recorded degradation is unresolved — see <see cref="Unresolved"/>).</param>
+    public ImmutableList<ContentDegradation> SettleDeferredWarnings(IMeshContentTypeRegistry? contentTypes) =>
+        Interlocked.Exchange(ref warningsDeferred, 0) == 0
+            ? ImmutableList<ContentDegradation>.Empty
+            : Unresolved(contentTypes);
+
     /// <summary>Records one degraded read.</summary>
     /// <param name="nodeType">The node's NodeType.</param>
     /// <param name="nodePath">The node path.</param>

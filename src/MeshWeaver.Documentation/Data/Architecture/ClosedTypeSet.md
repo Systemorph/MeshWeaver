@@ -1,7 +1,7 @@
 ---
 Name: Closed Type Set
 Category: Architecture
-Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the four places it acts, what it deliberately does not change, and why the control instance needs it.
+Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the five places it acts, what it deliberately does not change, and why the control instance needs it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
 ---
 
@@ -60,6 +60,16 @@ container environment variable, next to the module that registers its types.
    row itself (its Compile button, a release request, a self-heal kick) skips on-demand adoption and
    is **parked** at `Error` with the closed-set reason instead of reaching Roslyn — and, unlike the
    prebuilt gate, is never *held* on a build the row already carries.
+
+5. **Registry bundle adoption** — `PluginBundleClient.Adopt`, the install-time fetch from the plugin
+   registry. A closed mesh fetches **nothing** and records the attempt as `NothingToAdopt`, naming
+   the switch. It used to download each bundle, have every assembly answered `NotSeeded` by the
+   seeder (3, above), and record "adopted 0/N" — a **miss** — although nothing compiles in its
+   place. On the control instance that held `/health`'s `bundle_adoption` at Degraded for good
+   (measured 2026-10-09: 27 attempts, 0 adopted, 14 misses, every one a `NOT SEEDED:
+   Mesh:ClosedTypeSet=true` line). Pinned by `ClosedTypeSetBundleAdoptionIsNotAMissTest`, with
+   `OpenTypeSetBundleAdoptionControlTest` as the open-mesh control that does fetch and does record
+   the miss.
 
 Every surface reports one sentence, `ClosedTypeSet.RefusalFor(type, instance)`.
 

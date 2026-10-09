@@ -190,7 +190,9 @@ which `AddDynamicTypePreWarming` registers beside the pre-warmer.
 all mean the compile queue has drained and the adopted bundles have landed. So no probe meets an
 adopted-but-not-yet-loadable bundle. Nothing gates on the pass: a replica serves while it runs.
 
-**What, per dynamic type**, in path order:
+**What, per dynamic type**, in path order — except that the types a read on this replica has
+already degraded go first (`DynamicContentTypeRegistrar.OrderForRegistration`): their readers are
+waiting on exactly this registration, every other type is registered for a read that may never come.
 
 | step | what it reads | what it skips on, named |
 |---|---|---|
@@ -230,6 +232,47 @@ probe now builds through `TryGetHostedHub` and returns the fault to its caller. 
 `Faulted`, and the static sweep names it at Error. Pinned by
 `AFaultedRegistrationProbeIsNotADeclarationTest`, which fails on the old probe with
 `found DeclaresNoContentType`.
+
+## The boot registration window
+
+The pass cannot start before the bake barrier, and the readers do not wait for it. One boot, timed
+end to end (memex-cloud pod `884964bb7-6gv59`, 2026-10-09, read through governed `Logs` actions):
+
+| instant (UTC) | event |
+|---|---|
+| 19:48:37.3 | 132 of the boot's 134 "stayed an untyped JsonElement" lines: a `Posts` query and the standing watches on `Ops/Status/*` and `Ops/Watch/fleet-watch` |
+| 19:48:37.8 | `DynamicTypePreWarmer: starting background warm-up` — half a second *after* those reads |
+| 19:50:21 | warm-up complete: `compiled=0 alreadyBaked=414` |
+| 19:52:50 | the registration-only pass is done |
+
+So the burst had nothing to do with compiling, and registering each type "as the pre-warmer finds it
+already built" cannot remove it either: the reads come before the pre-warmer starts. What the line
+asserted at the read — *"consumers will fail"* — was not yet decidable. The pass registered those
+types minutes later and every reader re-typed by itself.
+
+**The window.** `DynamicContentTypeRegistrationHostedService` opens it when it is constructed. The
+host resolves every hosted service before it starts any, so the window is open before the first
+boot reader. While it is open, the two read seams in `MeshNodeStreamCache` still **record** every
+degraded read in `ContentDegradationRegistry`, so `/health`'s `content-types` names it exactly as
+before. They do not log the warning. When the pass ends (completed, faulted, or switched off),
+`ContentDegradationRegistry.SettleDeferredWarnings` closes the window and returns every recorded type
+that is **still** untyped. The service writes one warning per such type, with the same wording, the
+same `MeshNodeContentDegradedException` marker, and the count and window of the reads it stands for.
+A type the pass registered is never warned, because its readers were cured. A type it did not
+register is warned once, at the moment that is known. Nothing is dropped: the seam records before it
+asks whether the window is open, so a read racing the close is either in the settle's snapshot or
+warns itself.
+
+A host that does not run the pass never opens the window, and every read there warns at the read, as
+before. That includes every test host, so the CI untyped-content gate is unaffected.
+
+**Pinned by** `BootRegistrationWindowDefersUntypedWarningsTest` (MeshWeaver.Hosting.Test). Its
+negative control is the same read with no window, which warns at the read.
+
+**Acceptance on a portal:** after the roll that carries this, the boot-window count of
+`|~ "(?i)stayed an untyped JsonElement"` per replica drops to the types the pass could not register,
+which are the ones its own Warning names. The pre-change count was ≈130 per boot on memex-cloud and
+the same shape on memex.
 
 ## What this does not establish
 
