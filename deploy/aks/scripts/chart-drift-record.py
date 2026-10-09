@@ -75,9 +75,17 @@ def main():
     for f in IMAGE_FIELDS:
         v = c.get(f)
         facts[f] = v.strip() if isinstance(v, str) and v.strip() else None
-    keys = c.get("vaultValuesKeys") or []
-    facts["vaultValuesKeys"] = sorted({str(k).strip() for k in keys if str(k).strip()}) \
-        if isinstance(keys, list) else []
+    # A declaration that is present but not a list of names is MALFORMED, never "no keys": read as
+    # empty it would let the render prove an empty values-half shape and pass on an invalid record.
+    keys = c.get("vaultValuesKeys")
+    if keys is None:
+        keys = []
+    if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+        print(f"::error::{record} declares vaultValuesKeys as {type(keys).__name__} "
+              f"{'' if isinstance(keys, list) else '(not a list)'}— it must be a list of key names. "
+              f"Refusing rather than reading a malformed declaration as 'no values half'.")
+        return 1
+    facts["vaultValuesKeys"] = sorted({k.strip() for k in keys if k.strip()})
     with open(a.out, "w") as out:
         json.dump(facts, out, indent=2)
         out.write("\n")

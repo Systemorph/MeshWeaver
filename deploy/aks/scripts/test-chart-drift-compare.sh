@@ -413,6 +413,16 @@ image_verdict "a tag other than the pin (pattern would allow)" off p-pin.json  l
 image_verdict "a digest-only reference"                      off   p-any.json  l-digest.json
 image_verdict "another repository"                           off   p-any.json  l-repo.json
 image_verdict "a record with neither pin nor pattern"        off   p-none.json l-semver.json
+# The updater's pattern contract (UpdateChannelPattern): case-INSENSITIVE, `?` is one character,
+# and a bracket is a LITERAL, never a class — fnmatch would read `3.[01]*` as a class and admit 3.1.x.
+policy p-upper.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*-CI*\"}"
+policy p-qmark.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.1.1040?\"}"
+policy p-class.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.[01]*\"}"
+policy p-pinup.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"pinnedImageTag\":\"3.0.0-CI.10148\"}"
+image_verdict "a pattern differing only in letter case"      clean p-upper.json l-ci.json
+image_verdict "'?' as exactly one character"                 clean p-qmark.json l-semver.json
+image_verdict "a bracket is literal, not a character class"  off   p-class.json l-semver.json
+image_verdict "a pin differing only in letter case"          clean p-pinup.json l-ci.json
 # A registry PORT is not a tag: `localhost:5000/…:3.1.10400` must be read as tag 3.1.10400, repo
 # localhost:5000/memex-portal-ai — so it is OFF-RECORD only for the repository, never the tag.
 o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/p-any.json" "$TMPI/l-port.json")"
@@ -445,6 +455,13 @@ if python3 "$POL" --records "$TMPR/one" --namespace ns1 --release rel1 --out "$T
   echo "  ok   the owning record's image fields and declared key NAMES, and nothing else, are written"
 else
   echo "::error::the image policy was not the owning record's four fields:"; cat "$TMPR/p.json" 2>/dev/null; fail=1
+fi
+mkdir -p "$TMPR/bad"
+printf '%s\n' '{"id":"a","content":{"namespace":"ns1","helmRelease":"rel1","updatePattern":"3.*","vaultValuesKeys":"MEMEX_PASSWORD"}}' > "$TMPR/bad/a.json"
+if python3 "$POL" --records "$TMPR/bad" --namespace ns1 --release rel1 --out "$TMPR/r.json" >/dev/null; then
+  echo "::error::a non-list vaultValuesKeys must fail closed — it exited 0"; fail=1
+else
+  echo "  ok   a malformed (non-list) vaultValuesKeys → fails RED, never read as 'no keys'"
 fi
 for d in two none; do
   if python3 "$POL" --records "$TMPR/$d" --namespace ns1 --release rel1 --out "$TMPR/q.json" >/dev/null; then

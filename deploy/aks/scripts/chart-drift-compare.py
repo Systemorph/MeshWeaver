@@ -57,7 +57,7 @@ deletions": a checker that answers "everything cluster-only survives" because it
 manifest is a gate that passed on missing input.
 Exit 0 = no drift, 1 = drift or the comparison could not be made.
 """
-import fnmatch, json, os, sys, yaml
+import json, os, re, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
 live_pdb_path, live_so_path = sys.argv[5:7]
@@ -599,6 +599,21 @@ def split_image(ref):
 def norm_repo(r):
     return (r or "").strip().rstrip("/").lower()
 
+def update_pattern_matches(pattern, tag):
+    """The self-updater's OWN `updatePattern` contract (src/MeshWeaver.Hosting/SelfUpdate/
+    UpdateChannelPattern.cs): `*` any run, `?` exactly one, EVERYTHING else literal (no bracket
+    classes), the whole tag, case-INSENSITIVE because registries are. A second, looser glob here
+    would let Chart Drift admit a tag the updater refuses, or flag one it admits."""
+    glob = (pattern or "").strip()
+    if not glob or not tag:
+        return False
+    regex = "^" + re.escape(glob).replace(r"\*", ".*").replace(r"\?", ".") + "$"
+    return re.match(regex, tag, re.IGNORECASE) is not None
+
+def same_tag(a, b):
+    """A pinned tag against the live one, case-insensitively — the same rule the pattern uses."""
+    return (a or "").strip().lower() == (b or "").strip().lower()
+
 record = (record_facts.get("record") or "").strip() or "<unnamed record>"
 pin = (record_facts.get("pinnedImageTag") or "").strip()
 pattern = (record_facts.get("updatePattern") or "").strip()
@@ -614,13 +629,13 @@ elif live_tag is None:
             f"tested against {record} (pin {pin or '—'}, pattern {pattern or '—'}). A digest-only "
             f"reference is not 'on record'; deploy by tag")
 elif pin:
-    if live_tag != pin:
+    if not same_tag(live_tag, pin):
         finding("OFF-RECORD", "image tag (memex-portal)",
                 f"live '{live_tag}' vs {record} pinnedImageTag '{pin}' — the cluster runs a tag its "
                 f"record does not pin. A Roll/Reconcile of the record resolves it; a hand "
                 f"`set image` is how it arises")
 elif pattern:
-    if not fnmatch.fnmatchcase(live_tag, pattern):
+    if not update_pattern_matches(pattern, live_tag):
         finding("OFF-RECORD", "image tag (memex-portal)",
                 f"live '{live_tag}' does not match {record} updatePattern '{pattern}' "
                 f"(updatePolicy {record_facts.get('updatePolicy') or '—'}) — the cluster runs a tag "
