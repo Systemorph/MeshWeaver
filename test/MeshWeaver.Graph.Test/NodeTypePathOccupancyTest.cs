@@ -423,6 +423,15 @@ public class NodeTypePathOccupancyTest(ITestOutputHelper output) : MonolithMeshT
     /// answered <c>Unknown</c> — measured in a full-project run of this suite. Since #5011 a write
     /// refused as ShuttingDown is re-driven to the next activation instead of answered, so the
     /// repair must land.
+    ///
+    /// <para>🚨 <b>This is the END-TO-END repro the issue named as its close condition, not the
+    /// deterministic pin.</b> Whether the second write lands inside the teardown depends on timing,
+    /// so this fact can stay green without the re-drive. The re-drive itself is pinned
+    /// deterministically in <c>MeshWeaver.FaultInjection.Test</c> (<c>FleetWatchFreezeTests</c>:
+    /// the owner is held lingering in its stop by <c>mesh.Linger(…)</c>, and the write must be
+    /// re-driven past it — #5011's case, which failed with exactly this <c>Unknown … Rejecting now</c>
+    /// before the fix). What this fact adds is that the real retype → recycle → repair sequence
+    /// never answers a reason unrelated to the rule.</para>
     /// </summary>
     [Fact(Timeout = 180000)]
     public async Task Upsert_RepairIssuedStraightAfterAStrandingRetype_Lands()

@@ -316,12 +316,13 @@ public class HierarchicalPathDeletionTests
 
     /// <summary>Two branches of ten gated leaves each: a per-LEVEL cap could not hold this tree to
     /// three, because each branch's sibling merge would take three of its own.</summary>
-    private static readonly string[] TwoWideBranches = Enumerable.Range(0, 10)
+    private static readonly ImmutableArray<string> TwoWideBranches = Enumerable.Range(0, 10)
         .SelectMany(i => new[] { $"root/a/{i}", $"root/b/{i}" })
         .Concat(new[] { "root/a", "root/b" })
-        .ToArray();
+        .ToImmutableArray();
 
-    private static string[] GatedLeaves => TwoWideBranches.Where(p => p.Count(c => c == '/') == 2).ToArray();
+    private static readonly ImmutableArray<string> GatedLeaves =
+        TwoWideBranches.Where(p => p.Count(c => c == '/') == 2).ToImmutableArray();
 
     [Fact]
     public async Task Bounded_lane_holds_the_whole_tree_to_N_legs_in_flight()
@@ -338,14 +339,14 @@ public class HierarchicalPathDeletionTests
             .Should().BeFalse("no fourth leg starts while three hold the lane — across BOTH branches");
 
         // Release whatever is running, one at a time; the lane refills to three each time.
-        var released = new HashSet<string>();
+        var released = ImmutableHashSet<string>.Empty;
         while (released.Count < GatedLeaves.Length)
         {
             string? next = null;
             SpinWait.SpinUntil(() => (next = fake.Started.FirstOrDefault(
                     p => GatedLeaves.Contains(p) && !released.Contains(p))) is not null,
                 TimeSpan.FromSeconds(2)).Should().BeTrue("the lane admits the next leaf after a release");
-            released.Add(next!);
+            released = released.Add(next!);
             fake.Release(next!);
             (fake.Started.Count(p => GatedLeaves.Contains(p)) - fake.Completed.Count(p => GatedLeaves.Contains(p)))
                 .Should().BeLessThanOrEqualTo(3, "never more than three legs in flight");
