@@ -26,6 +26,9 @@ public record SlideFrame(string Html, string? Background);
 /// Keys in both modes: Right/Down/PageDown/Space/Enter → next · Left/Up/PageUp → prev ·
 /// Home → first · End → last · <b>Esc</b> → <see cref="ExitHref"/> (a real navigation in both
 /// modes). A <c>null</c> href makes that key a no-op in href mode.
+/// <para><b>Page mode</b> (<see cref="PageMode"/>): the same driver inside an ORDINARY page — a
+/// slide's normal view with its presenter bar — rather than a full-screen presentation. Only the
+/// slide keys are bound there (see <see cref="PageMode"/>); every other key keeps its page meaning.</para>
 /// </summary>
 public record SlideShowControl()
     : UiControl<SlideShowControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
@@ -69,4 +72,16 @@ public record SlideShowControl()
     /// same slide — without a navigation. Null leaves the address bar alone.
     /// </summary>
     public string? UrlTemplate { get; init; }
+
+    /// <summary>
+    /// True when the driver sits inside an ordinary page (a slide's normal view) rather than a
+    /// full-screen presentation. The page keeps the keys it owns, so only ←/→, ↑/↓ and
+    /// PageUp/PageDown move between slides: Space, Enter, Home, End and Esc are NOT bound (they
+    /// scroll, activate the focused button, or leave a dialog), a key pressed with Alt, Ctrl or
+    /// Meta is left to the browser (Alt+← is Back), a key another control already handled is left
+    /// alone, and focus inside an input, textarea, select, contenteditable, editor (Monaco) or an
+    /// arrow-key widget (tree, menu, listbox, grid, tablist, slider) never moves the slide. Present
+    /// mode (false, the default) keeps its full PowerPoint key set unchanged.
+    /// </summary>
+    public bool PageMode { get; init; }
 }

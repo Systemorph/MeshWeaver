@@ -111,4 +111,32 @@ public class SlideShowControlTest(ITestOutputHelper output) : HubTestBase(output
         back.NextHref.Should().Be("/d/Present?i=1");
         back.ExitHref.Should().Be("/d");
     }
+
+    /// <summary>
+    /// Page mode (#5494) is what tells a client the driver sits in a slide's ORDINARY view, where
+    /// Space, Enter, Home, End and Esc keep their page meaning. A client that never sees the flag
+    /// falls back to the full Present key set and would swallow Space and Enter on a normal page,
+    /// so the flag must reach the wire — and its absence must stay the Present-mode default.
+    /// </summary>
+    [Fact]
+    public void Page_mode_reaches_the_wire_and_defaults_to_present_mode()
+    {
+        var options = GetClient().JsonSerializerOptions;
+        var page = new SlideShowControl { PreviousHref = "/d/S1", NextHref = "/d/S3", PageMode = true };
+
+        var json = JsonSerializer.Serialize<UiControl>(page, options);
+        Output.WriteLine(json);
+
+        json.Should().Contain("\"pageMode\":true",
+            because: "the client binds only the slide keys when — and only when — it reads this flag");
+        JsonSerializer.Deserialize<UiControl>(json, options)
+            .Should().BeOfType<SlideShowControl>().Subject.PageMode.Should().BeTrue();
+
+        // Negative control: a Present-mode driver never carries the flag, so an existing producer's
+        // payload — and every href-only client reading it — is unchanged.
+        var present = JsonSerializer.Serialize<UiControl>(
+            new SlideShowControl { NextHref = "/d/Present?i=1", ExitHref = "/d" }, options);
+        present.Should().NotContain("pageMode",
+            because: "Present mode is the default and must not change one byte of its wire shape");
+    }
 }
