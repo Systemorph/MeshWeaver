@@ -653,6 +653,34 @@ public record LayoutAreaHost : IDisposable
         if (GetControl(request.Message.Area) is not UiControl { ClickAction: not null } control)
             return AcceptUserAction(request);
 
+        // 🚨 IDEMPOTENT: a click on a control whose previous click is still running JOINS that run —
+        // the action is never invoked twice for one (area, row, payload) while the first is in flight,
+        // whatever the client's own guard did (a second tab of the circuit, a retried delivery, a
+        // client without a pending state). The joined receipt gets the first click's outcome.
+        var key = ClickKey(request.Message);
+        if (runningClicks.TryGetValue(key, out var running))
+        {
+            running.Join(request);
+            return request.Processed();
+        }
+
+        var session = new ClickSession(this, key, ClickProgressArea(request.Message), ++clickSequence, logger,
+            settled =>
+            {
+                if (runningClicks.TryGetValue(settled.Key, out var current) && ReferenceEquals(current, settled))
+                    runningClicks = runningClicks.Remove(settled.Key);
+                pendingClickActions.Remove(settled);
+            });
+        runningClicks = runningClicks.SetItem(key, session);
+        // 🚨 The session is OWNED BY THIS HOST, not by the clicked area. A click's own write
+        // routinely re-renders the page and clears the area that held the button (an approval
+        // removes the Approve section) — possibly before the write's confirmation arrives; an
+        // area-owned subscription would be disposed right there and the receipt would never be
+        // sent, stranding the button in its pending state. Host-owned, it is released when the
+        // stream (and with it the page) goes away, and dropped from the set as soon as it settles.
+        pendingClickActions.Add(session);
+        session.Start(request);
+
         IObservable<System.Reactive.Unit> completion;
         try
         {
@@ -662,36 +690,55 @@ public record LayoutAreaHost : IDisposable
             completion = control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
                 {
-                    Row = request.Message.Row
+                    Row = request.Message.Row,
+                    Session = session,
                 }
             ) ?? Observable.Return(System.Reactive.Unit.Default);
         }
         catch (Exception ex)
         {
-            FailClick(ex, request);
+            session.FailSynchronously(ex);
             return request.Processed();
         }
 
         // Exactly one answer per click: onError and onCompleted are mutually exclusive, and values
-        // are ignored — only the terminal signal means anything.
-        //
-        // 🚨 The subscription is OWNED BY THIS HOST, not by the clicked area. A click's own write
-        // routinely re-renders the page and clears the area that held the button (an approval
-        // removes the Approve section) — possibly before the write's confirmation arrives; an
-        // area-owned subscription would be disposed right there and the receipt would never be
-        // sent, stranding the button in its pending state. Host-owned, it is released when the
-        // stream (and with it the page) goes away, and dropped from the set as soon as it settles.
-        var subscription = new SingleAssignmentDisposable();
-        pendingClickActions.Add(subscription);
-        subscription.Disposable = completion.Subscribe(
-            _ => { },
-            ex => { FailClick(ex, request); pendingClickActions.Remove(subscription); },
-            () => { AcceptUserAction(request); pendingClickActions.Remove(subscription); });
+        // are ignored — only the terminal signal means anything (ClickSession.RunAction).
+        session.RunAction(completion);
         return request.Processed();
     }
 
     /// <summary>
-    /// The click actions still running (see <see cref="OnClick"/>), disposed with this host. A
+    /// The dedupe key of a click: its area, the row it was raised in, and its payload — two pins on
+    /// one map (same area, different payload) or two rows of one template (same area, different row)
+    /// are different clicks; the same button pressed twice is one.
+    /// </summary>
+    private string ClickKey(ClickedEvent click)
+    {
+        var row = click.Row is null ? "" : SerializeForKey(click.Row);
+        var payload = click.Payload is null ? "" : SerializeForKey(click.Payload);
+        return click.Area + "\u001f" + row + "\u001f" + payload;
+    }
+
+    private string SerializeForKey(object value)
+    {
+        try { return JsonSerializer.Serialize(value, Hub.JsonSerializerOptions); }
+        catch (NotSupportedException) { return value.GetType().FullName ?? string.Empty; }
+    }
+
+    /// <summary>
+    /// The area a click's <see cref="ClickProgress"/> is written for: the clicked area, qualified by the
+    /// row for a row-scoped control that knows one (<see cref="ClickProgress.RowArea"/>), so one row's busy
+    /// state never disables every row of the template.
+    /// </summary>
+    private static string ClickProgressArea(ClickedEvent click)
+        => ClickProgress.RowArea(click.Area, click.Row);
+
+    /// <summary>The clicks still running, by <see cref="ClickKey"/>. Mutated only on the stream hub's action block.</summary>
+    private ImmutableDictionary<string, ClickSession> runningClicks = ImmutableDictionary<string, ClickSession>.Empty;
+    private int clickSequence;
+
+    /// <summary>
+    /// The click sessions still running (see <see cref="OnClick"/>), disposed with this host. A
     /// settled one removes itself, so the set holds only what is actually pending.
     /// </summary>
     private readonly CompositeDisposable pendingClickActions = new();
@@ -745,22 +792,6 @@ public record LayoutAreaHost : IDisposable
     {
         Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
         return request.Processed();
-    }
-
-    /// <summary>
-    /// A click action that threw, or whose reactive completion errored: reported with the area and
-    /// hub it belongs to, then refused to the clicking client — whose button leaves its pending state
-    /// and shows the refusal (<c>UserActionSubmission</c>'s <c>onRefused</c>). This is the ONE surface
-    /// a click-time fault reaches the person through; a handler composes its one-off reads into the
-    /// observable it returns (<c>WithReactiveClickAction</c>) rather than subscribing them itself
-    /// with no error arm, where a fault would be rethrown on whatever thread produced it.
-    /// </summary>
-    private void FailClick(Exception exception, IMessageDelivery<ClickedEvent> request)
-    {
-        logger.LogWarning(exception,
-            "Click action on area {Area} of {Hub} failed — refused to the client: {Message}",
-            request.Message.Area, Hub.Address, exception.Message);
-        Hub.Post(new DeliveryFailure(request, exception.Message), o => o.ResponseFor(request));
     }
 
     private Task FailRequest(Exception? exception, IMessageDelivery request)
