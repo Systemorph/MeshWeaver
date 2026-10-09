@@ -13,6 +13,11 @@ candidate from source, re-runs only what failed at the candidate's first parent,
 verdict as a commit message at `refs/core-candidate/<key>`. This script polls that ref over REST
 (never GraphQL — AGENTS.md), once a minute, and exits with the verdict.
 
+🔁 A LATE VERDICT STILL DECIDES. When this window closes without a verdict the job is red — and when
+the candidate answers later, MeshWeaver.Plugins re-runs this job (scripts/core-candidate-requester.py
+there), whose first look finds the verdict (Doc/Architecture/CrossRepoPairGate § "A late verdict
+still decides").
+
 🚨 IT NEVER PASSES ON SILENCE. No ref by the deadline → RED ("the dependent did not answer"). A
 verdict for a different key, candidate or base → RED (it is about something else). A malformed
 verdict → RED. The only green is `conclusion: success` for exactly this key, candidate and base.
@@ -293,6 +298,31 @@ def self_test() -> int:
         _get = lambda path, token: next(calls)
         v, _ = poll(K, "t", deadline=time.time() + 5, interval=0, quiet=True)
         check("a transient 500 is retried, then the verdict is read from the ref's commit message", v == good, str(v))
+        # 🔁 A RE-RUN (MeshWeaver.Plugins re-runs this job when its verdict lands after the window):
+        # the verdict is ALREADY published, so the first look must return it — not after an interval.
+        # `time.sleep` is replaced by a recorder, so a regression that waits before its first look
+        # FAILS this check at once instead of sleeping the job into its cap.
+        _get = lambda path, token: (200, {"object": {"sha": "s"}}) if "/ref/" in path else (200, {"message": json.dumps(good)})
+        slept: list[float] = []
+        real_sleep = time.sleep
+        time.sleep = slept.append
+        try:
+            v, _ = poll(K, "t", deadline=time.time() + 5, interval=1, quiet=True)
+        finally:
+            time.sleep = real_sleep
+        check("a re-run finds an already-published verdict on its FIRST look (no interval waited)",
+              v == good and slept == [], f"{v}, sleeps requested: {slept}")
+        # Negative control: the recorder DOES see a wait when the first look finds nothing.
+        looks = iter([(404, None), (200, {"object": {"sha": "s"}}), (200, {"message": json.dumps(good)})])
+        _get = lambda path, token: next(looks)
+        slept.clear()
+        time.sleep = slept.append
+        try:
+            v, _ = poll(K, "t", deadline=time.time() + 5, interval=1, quiet=True)
+        finally:
+            time.sleep = real_sleep
+        check("negative control: a first look that finds nothing IS followed by a recorded wait",
+              v == good and slept == [1], f"{v}, sleeps requested: {slept}")
         _get = lambda path, token: (200, {"object": {"sha": "s"}}) if "/ref/" in path else (200, {"message": "not json"})
         v, _ = poll(K, "t", deadline=time.time() + 5, interval=0, quiet=True)
         check("an unparseable message comes back as a malformed verdict, which validate reds",
