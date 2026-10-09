@@ -49,6 +49,13 @@ public record RowContext
     public string? Path { get; init; }
 
     /// <summary>
+    /// The row's stable identity within its collection, when the client knows one — a data grid sets
+    /// it from <see cref="DataGrid.DataGridControl.RowKey"/>. Keys the row's click state
+    /// (<see cref="ClickProgress.RowArea"/>), so one row's busy state and Cancel never land on another row.
+    /// </summary>
+    public string? Key { get; init; }
+
+    /// <summary>
     /// The row's node path: <see cref="Path"/> when set, otherwise the string <c>path</c> property of
     /// <see cref="Value"/> (a serialized <c>MeshNode</c>, or any row record that carries one);
     /// null when the row is not a node.

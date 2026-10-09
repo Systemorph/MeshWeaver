@@ -119,6 +119,27 @@ public record DataGridControl(object Data)
     /// The currently selected items; typically bound to a reactive property so the host can track selections.
     /// </summary>
     public object? SelectedItems { get; init; }
+    /// <summary>
+    /// The row property whose value identifies a row in the selection (e.g. <c>"path"</c>, <c>"id"</c>) —
+    /// set by <see cref="WithRowSelection"/>. With it, a client renders a selection column: one
+    /// checkbox per row plus a header select-all / clear-all checkbox (<c>Doc/GUI/DataGrid → "Row selection"</c>).
+    /// </summary>
+    public object? SelectionKey { get; init; }
+    /// <summary>
+    /// The row property whose non-empty value makes that row NOT selectable and IS the reason shown as
+    /// the disabled checkbox's tooltip. Rows with no value are selectable. Null: every row is selectable.
+    /// </summary>
+    public object? SelectionDisabledReason { get; init; }
+    /// <summary>
+    /// The row property that identifies a row (camelCase, as serialized). A client view carries its value
+    /// as <see cref="RowContext.Key"/> on every row-scoped click, so each row's click state is its own.
+    /// Set by <see cref="WithRowSelection"/>, or alone with <see cref="WithRowKey"/>.
+    /// </summary>
+    public object? RowKey { get; init; }
+
+    /// <summary>Returns a copy whose rows are identified by <paramref name="keyProperty"/> (see <see cref="RowKey"/>).</summary>
+    /// <param name="keyProperty">The row property identifying a row.</param>
+    public DataGridControl WithRowKey(string keyProperty) => This with { RowKey = keyProperty };
     
     // Pagination
     /// <summary>
@@ -208,6 +229,31 @@ public record DataGridControl(object Data)
     /// <summary>Returns a copy of the control with <paramref name="selectionMode"/> as the row-selection mode.</summary>
     /// <param name="selectionMode">The selection mode (e.g. <c>"Single"</c>, <c>"Multiple"</c>).</param>
     public DataGridControl WithSelectionMode(object selectionMode) => This with { SelectionMode = selectionMode };
+    /// <summary>
+    /// Turns on first-class, data-bound MULTI-row selection: the client renders a selection column
+    /// (a checkbox per row, a header checkbox that selects every selectable row or clears the
+    /// selection), and writes the selected row keys into the data section under
+    /// <paramref name="selectionDataId"/> as a <see cref="DataGridSelectionState"/>. A row whose
+    /// <paramref name="disabledReasonProperty"/> is non-empty renders a disabled checkbox with that
+    /// text as its tooltip and is never selected by select-all.
+    /// <para>Seed the id when rendering (<see cref="DataGridSelectionExtensions.SeedRowSelection"/>) and
+    /// read it in the bulk action's click handler with
+    /// <see cref="DataGridSelectionExtensions.SelectedRowKeys"/> — then re-check it against the rows you
+    /// act on (<see cref="DataGridRowSelection.Prune{T}"/>): a selection is the viewer's claim, not a grant.</para>
+    /// </summary>
+    /// <param name="selectionDataId">Data id the selection is bound to (one per grid).</param>
+    /// <param name="keyProperty">The row property identifying a row (camelCase, as serialized).</param>
+    /// <param name="disabledReasonProperty">The row property carrying why a row is not selectable; null if every row is.</param>
+    public DataGridControl WithRowSelection(string selectionDataId, string keyProperty, string? disabledReasonProperty = null)
+        => This with
+        {
+            SelectionMode = DataGridRowSelection.Multiple,
+            SelectedItems = new JsonPointerReference(LayoutAreaReference.GetDataPointer(selectionDataId)),
+            SelectionKey = keyProperty,
+            RowKey = keyProperty,
+            SelectionDisabledReason = disabledReasonProperty,
+        };
+
     /// <summary>Returns a copy of the control with <paramref name="selectedItems"/> as the selected-items binding.</summary>
     /// <param name="selectedItems">The selected items value or binding.</param>
     public DataGridControl WithSelectedItems(object selectedItems) => This with { SelectedItems = selectedItems };
