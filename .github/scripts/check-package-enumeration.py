@@ -33,13 +33,15 @@ a pure function of the top-level directory NAMES under `root`, and its own `main
 through it. That is the one thing the guard can call without knowing how each repo spells its walk
 (a comprehension in five, `is_course_dir` in Education).
 
-🚨 A caller that does not expose it YET is NAMED — `NOT compared` on a `::warning::` line — and does
-not fail. Adoption is one PR per satellite; red-on-absence before they land would red every
-satellite's required `validate` context for a condition none of them can fix without that PR (the
-fleet-wide-red shape). The flip to red is a change to THIS file once every caller exposes the
-function, never a date. Everything else is RED: a missing or unloadable validate-repos.py, a
-`package_dirs` that raises or returns a non-list, a `main()` that does not call `package_dirs` or
-also walks the tree itself (`iterdir()`), an unloadable canonical, and any disagreement.
+🚨 A caller that does not expose it is RED. Until every satellite had adopted, an absent function was
+only NAMED (`NOT compared`, a `::warning::`): red-on-absence before the adoption PRs landed would have
+reddened every satellite's required `validate` context for a condition none of them could fix without
+that PR (the fleet-wide-red shape). The flip came once every caller of the shared validate lane exposed
+the function — MeshWeaver.Education#391 was the last — so a NEW node repo now adopts it on day one,
+and one that drops it is told so instead of going uncompared. Everything else was always RED: a
+missing or unloadable validate-repos.py, a `package_dirs` that raises or returns a non-list, a
+`main()` that does not call `package_dirs` or also walks the tree itself (`iterdir()`), an unloadable
+canonical, and any disagreement.
 
 No network, no credential: two files and directory listings, so it runs on fork PRs too.
 
@@ -151,11 +153,11 @@ def check(root: Path, canonical_path: Path, say) -> int:
 
     package_dirs = getattr(validator, "package_dirs", None)
     if not callable(package_dirs):
-        say("::warning::package enumeration NOT compared: scripts/validate-repos.py exposes no "
+        say("::error::package enumeration cannot be compared: scripts/validate-repos.py exposes no "
             "package_dirs(root), so this repo's second enumerator cannot be called "
-            "(MeshWeaver#4774). Adopt: define package_dirs(root) — SKIP plus the dot-directory rule "
-            "— and enumerate through it in main().")
-        return 0
+            "(MeshWeaver#4774). Define package_dirs(root) — SKIP plus the dot-directory rule — and "
+            "enumerate through it in main(); every node repo of the fleet already does.")
+        return 1
 
     delegation = main_delegates(root / "scripts" / "validate-repos.py")
     if delegation:
@@ -270,8 +272,8 @@ def self_test(canonical_path: Path) -> int:
          run({vr: VALIDATE_AGREEING},
              ["Alpha"], '{"skip": ["scripts", "src", "legacy"], "hashModuleSources": false}\n'),
          "legacy")
-    case("a caller with no package_dirs is NAMED, not failed", 0,
-         run({vr: 'SKIP = {"scripts"}\n'}, ["Alpha"], cfg), "NOT compared")
+    case("a caller with no package_dirs FAILS", 1,
+         run({vr: 'SKIP = {"scripts"}\n'}, ["Alpha"], cfg), "exposes no package_dirs")
     case("a missing validate-repos.py FAILS", 1, run({}, ["Alpha"], cfg), "does not exist")
     case("a package_dirs that raises FAILS", 1,
          run({vr: "def package_dirs(root):\n    raise RuntimeError('boom')\n" + MAIN_OK},

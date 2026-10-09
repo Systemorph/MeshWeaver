@@ -440,7 +440,7 @@ instance on the first run: MeshWeaver.Plugins skipped `dist` in both of its SKIP
 the `gen-manifests.config.json` the canonical actually reads — equal declarations, a divergent
 verdict. A repo that adopts deletes its `check-skip-sets.py`; the platform guard supersedes it.
 
-🚨 **The ordering.** A caller whose `validate-repos.py` has no `package_dirs` yet is NAMED
+🚨 **The ordering.** Until every caller had adopted, a caller whose `validate-repos.py` had no `package_dirs` was NAMED
 (`::warning::package enumeration NOT compared`) and not failed — reddening it first would red every
 satellite's required `validate` context for a condition none of them can fix without their own PR,
 the fleet-wide-red shape a dated guard already produced here. Everything else is red: a missing or
@@ -449,7 +449,10 @@ unloadable `validate-repos.py`, a `package_dirs` that raises or returns anything
 an untouched `root.iterdir()` walk would otherwise pass while the gate still disagreed), a missing
 config, any disagreement.
 The flip of the absent case to red is a change to the guard once every caller has adopted, never a
-date. Canonical first, repos adopt, guard tightens when it can only pass.
+date. Canonical first, repos adopt, guard tightens when it can only pass. **It has now tightened.**
+Every caller of the shared validate lane exposes `package_dirs` (Crm, FundReporting, Manufacturing,
+Reinsurance, SocialMedia, Plugins, and Education last, in MeshWeaver.Education#391), so an absent
+function is `::error::… exposes no package_dirs(root)`. A new node repo adopts it on day one.
 
 Adoption is one commit per repo — add the config, drop the vendored copy, give `validate-repos.py`
 its `package_dirs(root)`, retire `check-skip-sets.py`, and pass `centralized-gen-manifests: true` to
