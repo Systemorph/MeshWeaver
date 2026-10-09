@@ -30,6 +30,9 @@ permissions:
   issues: read
   pull-requests: read
 
+# A scheduled lane has no pull request to turn red, so its state lives in ONE standing issue that
+# `report` opens or updates when a run could not check, and closes when a run checks again — the
+# same sentinel pattern chart-drift.yml uses (.github/scripts/sentinel-issue.py). Counts only.
 concurrency:
   group: issue-text-names
   cancel-in-progress: false
@@ -73,3 +76,59 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           SINCE_HOURS: ${{ inputs.since-hours || '26' }}
         run: python3 .github/scripts/scan-issue-text-names.py --repo "${{ github.repository }}" --since-hours "$SINCE_HOURS"
+
+  report:
+    name: Publish the standing state
+    needs: [preflight, scan]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: issue-text-names-report
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RESULT_PRE: ${{ needs.preflight.result }}
+          RESULT_SCAN: ${{ needs.scan.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: issue-text-names-sentinel
+        run: |
+          set -euo pipefail
+          LOOKUP=$(python3 .github/scripts/sentinel-issue.py find --repo "$REPO" --label "$LABEL" \
+                     --ensure-label --color "d93f0b" \
+                     --description "The ONE standing issue issue-text-names.yml updates in place — do not remove")
+          NUM=$(printf '%s' "$LOOKUP" | jq -r '.number // empty')
+          ISSUE_STATE=$(printf '%s' "$LOOKUP" | jq -r '.state // empty')
+          if [ "$RESULT_PRE" = "success" ] && [ "$RESULT_SCAN" = "success" ]; then
+            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "open" ]; then
+              gh api "repos/$REPO/issues/$NUM/comments" --silent \
+                -f body="The issue-text name scan checked again as of $RUN_URL — closing. It reopens on the next run that cannot check."
+              gh api -X PATCH "repos/$REPO/issues/$NUM" -f state=closed --silent
+              echo "closed #$NUM"
+            else
+              echo "Checked, and no tracking issue open. Nothing to do."
+            fi
+            exit 0
+          fi
+          # Not checked: the scan never reports a finding here (findings are filed privately on the
+          # CRM-owning instance), only that it could not check — loud, in one place.
+          TITLE="Issue-text name scan: the last run could NOT check (preflight=${RESULT_PRE}, scan=${RESULT_SCAN})"
+          BODY=$(printf '**State: not checked** — last run %s ([run](%s)).\n\njob results: preflight=%s scan=%s\n\nThe run log names why (a missing input, an unreachable or refusing CRM-owning instance, or a NotChecked answer). Findings are never reported here — they are filed privately on that instance.\n\n---\nMaintained automatically by `.github/workflows/issue-text-names.yml`; closed automatically when a run checks again.\n' \
+            "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_URL" "$RESULT_PRE" "$RESULT_SCAN")
+          if [ -n "$NUM" ]; then
+            gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" -f state=open --silent
+            echo "updated #$NUM (was $ISSUE_STATE)"
+          else
+            NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '.number')
+            echo "opened #$NEW"
+            python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
+          fi

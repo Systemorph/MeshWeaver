@@ -167,7 +167,9 @@ def gh_list(path: str, token: str) -> list[dict]:
 
 def collect(repo: str, since: str, token: str, lister=gh_list) -> list[dict]:
     """Every line of every item updated since ``since`` (ISO-8601 Z): issues and pull requests (title +
-    body), issue comments, review comments, and the reviews of every pull request in the window.
+    body), issue comments, review comments, and EVERY non-blank review body of every pull request
+    updated in the window. A review's ``submitted_at`` does not move when its body is edited, so
+    filtering on it would miss an edited review; the pull request's own ``updated_at`` does.
     ``lister`` is the REST listing, a parameter so the self-test runs with no network."""
     q = urllib.parse.quote(since)
     out: list[dict] = []
@@ -182,7 +184,7 @@ def collect(repo: str, since: str, token: str, lister=gh_list) -> list[dict]:
         if "pull_request" not in it:
             continue
         for r in lister(f"repos/{repo}/pulls/{it['number']}/reviews?per_page=100", token):
-            if (r.get("body") or "").strip() and (r.get("submitted_at") or "") >= since:
+            if (r.get("body") or "").strip():
                 out += lines_of(f"pulls/{it['number']}/reviews/{r['id']}", None, r.get("body"))
     return out
 
@@ -426,8 +428,10 @@ def self_test() -> int:
         raise AssertionError(path)
 
     refs = sorted({l["file"] for l in collect("o/r", "2026-10-09T00:00:00Z", "t", fake)})
-    check("collect: issues, PRs, issue comments, review comments and in-window review bodies — every author",
-          refs == ["issues/7", "issues/8", "issues/comments/70", "pulls/8/reviews/81", "pulls/comments/80"])
+    check("collect: issues, PRs, issue comments, review comments and every non-blank review body of an updated PR",
+          refs == ["issues/7", "issues/8", "issues/comments/70", "pulls/8/reviews/81", "pulls/8/reviews/83", "pulls/comments/80"])
+    check("🚨 collect: a review SUBMITTED before the window (its body possibly edited since) is still scanned",
+          "pulls/8/reviews/83" in refs)
     check("collect: reviews are listed only for pull requests", not any("pulls/7/" in a for a in asked))
 
     mesh = Mesh(url, "mw_test")
