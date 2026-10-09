@@ -7,13 +7,10 @@ namespace MeshWeaver.Mesh;
 ///
 /// <para>Bind to the RUNNING platform's assembly whenever it is the SAME or a HIGHER version than
 /// the one compiled against: never a hard link to the exact version, never a private copy because
-/// the requested version is lower. <c>AssemblyVersion</c> is pinned per MAJOR (<c>3.0.0.0</c> for
-/// every 3.x build, policy <c>platform-semver-versioning</c>), so within a major every plugin binds
-/// and the version half decides only ACROSS a major: a plugin compiled against <c>3.0.0.0</c> binds on
-/// a platform stamped <c>4.0.0.0</c>, while a reference to a HIGHER version than the running one means
-/// the plugin needs a newer platform and is declined loudly by the caller, naming both versions.
-/// Within a major, a plugin built for a newer platform is declined by its floor
-/// (<c>PlatformFloor</c>, <c>PlatformCompatibility.ProducerIsNewer</c>), not by binding.</para>
+/// the requested version is lower. A plugin compiled against <c>3.0.0.0</c> binds on a platform
+/// stamped <c>3.1.0.0</c> (a minor bump of <c>$(PlatformVersion)</c> moves <c>AssemblyVersion</c>).
+/// A reference to a HIGHER version than the running one means the plugin needs a newer platform —
+/// its floor is not met — and is declined loudly by the caller, naming both versions.</para>
 ///
 /// <para>Lives here, below both the module link probe (<see cref="ModulePlatformLink"/>, this
 /// assembly) and the compile toolchain (<c>MeshWeaver.Compiler.PlatformCompatibility.MayBind</c>

@@ -328,8 +328,8 @@
          full bake runs ONCE per commit, on CI; pods adopt. -->
     <InformationalVersion Condition="'$(CIRun)' == 'true'">$(PlatformVersion)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
-    <!-- 🔴 AssemblyVersion is STABLE within a MAJOR ($(_PlatformMajor).0.0.0, i.e. 3.0.0.0) — it is
-         the RUNTIME ASSEMBLY-BINDING identity, so it
+    <!-- 🔴 AssemblyVersion is STABLE within a line ($(_VersionNumeric).0, i.e. 3.1.0.0) — it is the
+         RUNTIME ASSEMBLY-BINDING identity, so it
          MUST be identical across every assembly in a coherent build. `_BuildNumber` is
          seconds-since-midnight/2 evaluated PER PROJECT at MSBuild time, so a time-based
          AssemblyVersion drifts a few seconds (→ a different number) between projects built in the
@@ -345,16 +345,14 @@
          actually relied on it.) NodeType ABI identity is FrameworkVersion (commit under CIRun,
          Graph MVID locally) and the self-updater keys on the image tag's run number — neither uses
          AssemblyVersion or FileVersion.
-         🚨 WHY THE MAJOR ALONE, NOT THE LINE (policy `platform-semver-versioning`). A minor bump
-         (3.0 → 3.1) is a COMPATIBLE change by definition, and module and NodeType bytes compiled on
-         one build are adopted by every other build of the same compatibility key (c<major>e<epoch>,
-         policy `platform-backwards-compatibility`) — including an OLDER portal still rolling. The
-         default load context refuses a reference to MeshWeaver.X, Version=3.1.0.0 when the process
-         carries 3.0.0.0, so a line-derived AssemblyVersion would make every bundle sealed on 3.1
-         unloadable on a lagging 3.0 portal: a binding break smuggled in by a number. Within a major
-         the binding identity therefore never moves; FileVersion and InformationalVersion name the
-         line. -->
-    <AssemblyVersion>$(_PlatformMajor).0.0.0</AssemblyVersion>
+         It moves with the line (3.0.0.0 → 3.1.0.0 at the SemVer minter, policy
+         `platform-semver-versioning`), by design: a plugin compiled against 3.0.0.0 binds on 3.1.0.0
+         (roll-forward, PlatformBinding.MayBind), and one compiled against 3.1.0.0 meeting a 3.0
+         portal is a BindingConflict — declined loudly, which is the floor the ladder already
+         enforces. MeshWeaver.Plugins and MeshWeaver.SocialMedia re-derive their own AssemblyVersion
+         from THIS expression (src/Directory.Build.props, VerifyAssemblyVersionMatchesPlatform), so
+         changing its shape is a paired change in those repositories. -->
+    <AssemblyVersion>$(_VersionNumeric).0</AssemblyVersion>
     <FileVersion>$(_VersionNumeric).0</FileVersion>
   </PropertyGroup>
   <ItemGroup>

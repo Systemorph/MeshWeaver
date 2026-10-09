@@ -78,8 +78,13 @@ Two other choices were considered and rejected:
   the readers; memex-cloud (`3.0.0-ci.10148`) and pearl did not, and were already not rolling for an
   unrelated reason. The control lane's own lag check (`SelfUpdateRouting.RollInsteadOfRestart`, Plugins
   step 2) reads both notations and opens a roll to control's newest seen tag on a restart-pending.
-- **Binding identity.** `AssemblyVersion` stays `<major>.0.0.0` across the minor bump, so a module
-  sealed on a 3.1 build still loads on a lagging 3.0 portal of the same compatibility key.
+- **Binding identity.** `AssemblyVersion` moves `3.0.0.0` → `3.1.0.0` with the line, as designed
+  (`PlatformBinding.MayBind`): every module compiled against `3.0.0.0` binds on a 3.1 portal by
+  roll-forward, and a module compiled on a 3.1 build meeting a lagging 3.0 portal is declined loudly
+  as a binding conflict — the same answer its floor gives. MeshWeaver.Plugins and
+  MeshWeaver.SocialMedia derive their AssemblyVersion from the platform's PlatformVersion, so they
+  follow without a change of their own. (Pinning it per major was tried in review and rejected: it
+  changes the expression those repositories verify, turning a version bump into a paired change.)
 - **The release.** `release.yml` promotes a `<major>.<minor>.<run>` build by adding `<major>.<minor>.0`,
   moves no pointer for it, and still promotes a retired-notation set the old way.
 
@@ -110,7 +115,7 @@ this change teaches the place both notations. "Owed" means a later step of the m
 
 | place | role | status |
 |---|---|---|
-| `Directory.Build.props` `PlatformVersion` = `3.1.0`; `Version` = `<major>.<minor>.$(PlatformBuildNumber)` / `<major>.<minor>.0-dev`; `AssemblyVersion` = `<major>.0.0.0` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here | **handled** (step 4) |
+| `Directory.Build.props` `PlatformVersion` = `3.1.0`; `Version` = `<major>.<minor>.$(PlatformBuildNumber)` / `<major>.<minor>.0-dev` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here | **handled** (step 4) |
 | `.github/workflows/main-cd.yml` (4 × `-getProperty:Version`) | **P**: passes `-p:PlatformBuildNumber=$GITHUB_RUN_NUMBER` and asserts `<major>.<minor>.<run>` before tagging | **handled** (step 4) |
 | `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the scheme guard: line, main build, release, `-dev`, binding identity | **handled** (step 4) |
 | `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` `SourceBuildLabel` | **R**: `-dev` reads as run 0 (the retired `-ci.0` did) | **handled** (step 4) |
@@ -226,7 +231,7 @@ that verdict is easy to misread.
   main CD build composes `<major>.<minor>.<run>`; `-p:PublicRelease=true` composes the line; a CIRun
   build WITHOUT `-p:PlatformBuildNumber` (a pull-request run) and a local build compose
   `<major>.<minor>.0-dev`; an invalid build number never mints a release version; no composition
-  contains `ci`; `AssemblyVersion` is `<major>.0.0.0`. Its control arm reintroduces a labelled line
+  contains `ci`. Its control arm reintroduces a labelled line
   and a non-zero patch and requires both to be rejected.
 - `PlatformReleaseOrderTest.TheFirstSemVerBuild_OutranksEveryOldNotationSet` (step 4): the real
   boundary pair `3.0.0-ci.10330` / `3.1.10331` for `IsNewer`, `Newest`, SemVer, `PlatformFloor` in

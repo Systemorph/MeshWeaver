@@ -55,7 +55,7 @@ public class PlatformVersionSchemeGuard
     /// <summary>A build that publishes no platform version: <c>&lt;major&gt;.&lt;minor&gt;.0-dev</c>.</summary>
     private static readonly Regex Source = new(@"^\d+\.\d+\.0-dev$", RegexOptions.Compiled);
 
-    private static readonly ImmutableArray<string> Probed = ["PlatformVersion", "Version", "AssemblyVersion"];
+    private static readonly ImmutableArray<string> Probed = ["PlatformVersion", "Version"];
 
     /// <summary>
     /// <c>PlatformVersion</c> — the one maintained number — is a line: no label, patch 0. A label
@@ -122,19 +122,6 @@ public class PlatformVersionSchemeGuard
     {
         var composed = Evaluate("-p:CIRun=true", $"-p:PlatformBuildNumber={buildNumber}")["Version"];
         Assert.True(Source.IsMatch(composed), $"PlatformBuildNumber={buildNumber} composed '{composed}'.");
-    }
-
-    /// <summary>
-    /// 🚨 The binding identity stays <c>&lt;major&gt;.0.0.0</c> across a minor bump: module bytes
-    /// sealed on a 3.1 build are adopted by a lagging 3.0 portal (same compatibility key), and the
-    /// default load context refuses a reference to a HIGHER assembly version than it carries.
-    /// </summary>
-    [Fact]
-    public void TheAssemblyVersionIsTheMajorAlone()
-    {
-        var probed = Evaluate("-p:CIRun=true", "-p:PlatformBuildNumber=10340");
-        var major = probed["PlatformVersion"].Split('.')[0];
-        Assert.Equal($"{major}.0.0.0", probed["AssemblyVersion"]);
     }
 
     /// <summary>

@@ -58,9 +58,9 @@ Four rules, not observations:
   through real MSBuild on every pull request and reds on any other shape.
 - 🚨 **The minor moves by a merged pull request, the major only on a declared break.** In practice
   the minor moves with the next-line pull request `release.yml` opens after a release. The run number
-  keeps increasing across a bump, so the order is unaffected. The binding identity
-  (`AssemblyVersion`) stays `<major>.0.0.0` across a minor bump, so module bytes sealed on a newer
-  minor still load on a lagging portal of the same compatibility key.
+  keeps increasing across a bump, so the order is unaffected. `AssemblyVersion` follows the line
+  (`<major>.<minor>.0.0`); a module compiled on a newer line is declined by a lagging portal as a
+  binding conflict, which is what its floor says anyway.
 - 🚨 **The release is still a PROMOTION, never a rebuild.** `release.yml` adds `<major>.<minor>.0` to
   bytes that already shipped as `<major>.<minor>.<run>` and passed promote, bake and seal, and
   compiles nothing (§3). Stable installs follow those clean tags only; a run-numbered build carries no
@@ -245,21 +245,22 @@ possible at all:
 
 | | How invoked | `Version` / image tag | `AssemblyVersion` | `FileVersion` | `InformationalVersion` |
 |---|---|---|---|---|---|
-| **main CD build** | `-p:CIRun=true -p:PlatformBuildNumber=<run>` | `3.1.<run>` | `3.0.0.0` | `3.1.0.0` | `3.1.0+<sha>` |
-| **RELEASED** | `-p:PublicRelease=true` | `3.1.0` | `3.0.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
-| **any other build** | *(default)* | `3.1.0-dev` | `3.0.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun`, else `3.1.0-dev` |
+| **main CD build** | `-p:CIRun=true -p:PlatformBuildNumber=<run>` | `3.1.<run>` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` |
+| **RELEASED** | `-p:PublicRelease=true` | `3.1.0` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
+| **any other build** | *(default)* | `3.1.0-dev` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun`, else `3.1.0-dev` |
 
 - **Nothing builds under `PublicRelease` any more.** The flag survives for local experiments; a
   release is a main build retagged, so the bytes inside a `3.1.0` image report the `3.1.<run>`
   build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is deliberate: the
   release *is* that build.
-- **`AssemblyVersion` is STABLE within a MAJOR** (`3.0.0.0`) — the runtime assembly-binding
+- **`AssemblyVersion` is STABLE within a line** (`3.1.0.0`) — the runtime assembly-binding
   identity, identical across every assembly in one build. A per-project time-based number once
   made `Memex.Database.Migration` bind to `MeshWeaver.Documentation, Version=3.0.0.280` while the
   packaged DLL carried another number (#143); binding identity must not depend on wall-clock
-  time. It does NOT move with the minor: module and NodeType bytes sealed on a 3.1 build are adopted
-  by a lagging 3.0 portal of the same compatibility key, and the default load context refuses a
-  reference to a higher assembly version than it carries.
+  time. It moves with the line (`3.0.0.0` → `3.1.0.0` at the SemVer minter): a plugin compiled
+  against `3.0.0.0` binds on `3.1.0.0` (roll-forward), and one compiled against `3.1.0.0` meeting a
+  3.0 portal is declined loudly as a binding conflict. MeshWeaver.Plugins and
+  MeshWeaver.SocialMedia derive their own AssemblyVersion from the platform's PlatformVersion.
 - **`FileVersion` is pinned** for the same reason `InformationalVersion` is: both are *compiled*
   attributes, and CI compile inputs are **commit-deterministic**
   ([#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3) so two CI builds of one

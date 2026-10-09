@@ -75,10 +75,8 @@ Ordering is `PlatformReleaseOrder` (the run ordinal: the patch of `<major>.<mino
 `ci.<n>` of a retired tag); a clean release against a run-numbered build is unordered and therefore
 never a "newer" reading.
 
-**Binding.** `AssemblyVersion` is pinned per MAJOR (`3.0.0.0` for every 3.x build, policy
-`platform-semver-versioning`), so a minor bump moves no binding identity and the version half below
-decides only across a major. A plugin/NodeType assembly compiled against platform `3.0.0.0` binds on
-a platform stamped `4.0.0.0`: `PlatformBinding.MayBind(compiledAgainst, running)` is `running >= compiledAgainst`,
+**Binding.** A plugin/NodeType assembly compiled against platform `3.0.0.0` binds on a platform
+stamped `3.1.0.0`: `PlatformBinding.MayBind(compiledAgainst, running)` is `running >= compiledAgainst`,
 applied by the module link probe (`ModulePlatformLink`: lower ⇒ linkable with an advisory, higher ⇒
 `BindingConflict`, i.e. floor not met), and the NodeType load context and `ModulesAssemblyLoadContext`
 resolve every platform name through the default context (TPA roll-forward) — never a private copy,
