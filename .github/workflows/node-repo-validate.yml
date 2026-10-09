@@ -662,8 +662,8 @@ jobs:
       # a rule in no declaration, so equal declarations over different enumerations were green.
       # This calls both enumerators — on the checkout and on a fixture holding every declared name
       # plus a probe dot-directory — and compares what they RETURN. A caller whose validate-repos.py
-      # exposes no `package_dirs(root)` yet is NAMED (`NOT compared`), not failed: the flip to red
-      # is a change to the guard once every satellite has adopted, never a date. The guard's
+      # exposes no `package_dirs(root)` is RED: every caller adopted it (Education#391 was the last),
+      # so the warning-only grace period is over. The guard's
       # self-test runs against the canonical fetched above, so a guard that cannot fail never runs.
       - name: "The package-enumeration guard can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
