@@ -111,6 +111,7 @@ API = "https://api.github.com"
 WORKFLOW = "main-cd.yml"
 RECORD_ARTIFACT = "promotion-record"
 RUNS_EXAMINED = 40
+UNARMED_MAX_PAGES = 5   # the fleet-unarmed reading pages up to 200 runs back to the armed cursor
 RECORD_KEYS = ("run_number", "core_sha", "base", "plugins_sha", "short", "plugins_short", "staging",
                "v_portal", "v_migration", "v_plugin", "key")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -367,13 +368,32 @@ def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
 
 
 def read_records(get: Callable[..., tuple[int, object]], core_token: str,
-                 above: int = 0, log: Callable[[str], None] = print) -> list[dict]:
-    """Promotion records of main-cd runs on main numbered ABOVE `above`, newest first."""
-    code, page = get(f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch=main&per_page={RUNS_EXAMINED}", core_token)
-    if code != 200 or not isinstance(page, dict):
-        raise RuntimeError(f"cannot list {WORKFLOW} runs (HTTP {code}) — refusing to decide on nothing")
+                 above: int = 0, log: Callable[[str], None] = print, max_pages: int = 1,
+                 coverage: dict | None = None) -> list[dict]:
+    """Promotion records of main-cd runs on main numbered ABOVE `above`, newest first.
+
+    A page is RUNS_EXAMINED RUNS, not promotions: hourly reconcile ticks promote nothing and still
+    fill it. With `max_pages` > 1 the listing pages on until it reaches a run at or below `above`
+    (the armed cursor), the runs run out, or the cap — so a still-unarmed promotion cannot age out of
+    the window and read as "armed" (Copilot on MeshWeaver#6367). `coverage`, when given, receives
+    `reached` (the listing got down to the cursor) and `floor_at` (the oldest run's `created_at`)."""
+    runs: list[dict] = []
+    reached = False
+    for page_no in range(1, max(1, max_pages) + 1):
+        url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch=main&per_page={RUNS_EXAMINED}"
+        code, page = get(url + (f"&page={page_no}" if page_no > 1 else ""), core_token)
+        if code != 200 or not isinstance(page, dict):
+            raise RuntimeError(f"cannot list {WORKFLOW} runs (HTTP {code}, page {page_no}) — refusing to decide on nothing")
+        batch = [r for r in page.get("workflow_runs", []) if isinstance(r, dict)]
+        runs.extend(batch)
+        if any(int(r.get("run_number", 0)) <= above for r in batch) or len(batch) < RUNS_EXAMINED:
+            reached = True
+            break
+    if coverage is not None:
+        coverage["reached"] = reached
+        coverage["floor_at"] = str(runs[-1].get("created_at") or "") if runs else ""
     out: list[dict] = []
-    for run in page.get("workflow_runs", []):
+    for run in runs:
         number = int(run.get("run_number", 0))
         if number <= above:
             continue
@@ -400,6 +420,10 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
             continue
         rec["run_url"] = run.get("html_url", "")
         rec["run_id"] = run.get("id")
+        # WHEN the set was promoted: `promote` itself uploads the record, so the artifact's
+        # `created_at` is the promotion time (the run's creation is the fallback). The fleet-unarmed
+        # alert clocks a stall from it (fleet-unarmed-alert.py, MeshWeaver#6042).
+        rec["promoted_at"] = str(found[0].get("created_at") or run.get("created_at") or "")
         out.append(rec)
     out.sort(key=lambda r: int(r["run_number"]), reverse=True)
     return out
@@ -623,6 +647,25 @@ def select(records: list[dict], ladders: dict[int, str | None], control: dict, a
         lines.append(f"RESUME: {resume} was armed but its sequence never completed — re-arming it")
         return hit, lines
     return None, lines
+
+
+def unarmed_sets(records: list[dict], ladders: dict[int, str | None], control: dict, cursor: int) -> list[dict]:
+    """Every promoted set NEWER than `cursor` (the newest armed run number, after this run's own
+    arming), newest first, each with its platform verdict — the reading fleet-unarmed-alert.py
+    clocks a stall from (MeshWeaver#6042). Pure. A set whose ladder `select` did not read (outside
+    the ten newest it judges) is `not examined`, never guessed into `waiting`."""
+    out: list[dict] = []
+    for rec in records:
+        n = int(rec["run_number"])
+        if n <= cursor:
+            continue
+        if n in ladders:
+            state, text = judge(rec, ladders[n], control)
+        else:
+            state, text = "not examined", "older than the ten newest promoted sets `select` judges"
+        out.append({"v_portal": rec["v_portal"], "run_number": n, "core_sha": rec["core_sha"], "state": state,
+                    "sentence": text, "run_url": rec.get("run_url", ""), "promoted_at": rec.get("promoted_at", "")})
+    return out
 
 
 def control_lag(given: list[dict] | dict | None, control: dict, now: float, bound_minutes: int) -> tuple[str, str]:
@@ -1109,6 +1152,29 @@ def self_test() -> int:
           [r["run_number"] for r in got] == [9460], str(got))
     check("read_records never reads a run at or below the armed set",
           not any("runs/0/" in u for u in seen), str(seen))
+    # A page is 40 RUNS, not 40 promotions (Copilot on MeshWeaver#6367): page 1 full of promotion-free
+    # reconcile ticks must not hide the unarmed promotion on page 2 from the fleet-unarmed reading.
+    base_url = f"repos/{CORE}/actions/workflows/{WORKFLOW}/runs?branch=main&per_page={RUNS_EXAMINED}"
+    ticks = [{"id": 1000 + i, "run_number": 9600 - i, "html_url": "t", "created_at": "2026-10-09T10:00:00Z"}
+             for i in range(RUNS_EXAMINED)]
+    paged = {base_url: (200, {"workflow_runs": ticks}),
+             base_url + "&page=2": (200, {"workflow_runs": [
+                 {"id": 2, "run_number": 9460, "html_url": "u2", "created_at": "2026-10-08T00:00:00Z"},
+                 {"id": 0, "run_number": 9400, "html_url": "u0", "created_at": "2026-10-07T00:00:00Z"}]}),
+             f"repos/{CORE}/actions/runs/2/artifacts?name={RECORD_ARTIFACT}":
+                 (200, {"artifacts": [{"name": RECORD_ARTIFACT, "archive_download_url": "dl2",
+                                       "created_at": "2026-10-08T00:05:00Z"}]}),
+             "dl2": (200, blob.getvalue())}
+    pfake = lambda url, token, raw=False: paged.get(url, (200, {"artifacts": []}) if "/artifacts" in url else (404, None))  # noqa: E731
+    cov: dict = {}
+    got = read_records(pfake, "t", above=9405, log=lambda _l: None, max_pages=UNARMED_MAX_PAGES, coverage=cov)
+    check("read_records pages past promotion-free ticks down to the armed cursor (the promotion on page 2 is kept)",
+          [r["run_number"] for r in got] == [9460] and cov.get("reached") is True
+          and got[0]["promoted_at"] == "2026-10-08T00:05:00Z", f"{got} {cov}")
+    cov = {}
+    got = read_records(pfake, "t", above=9405, log=lambda _l: None, max_pages=1, coverage=cov)
+    check("negative control: ONE page loses that promotion and SAYS the window did not reach the cursor",
+          got == [] and cov.get("reached") is False and cov.get("floor_at") == "2026-10-09T10:00:00Z", f"{got} {cov}")
     # the bundle base — the newest ARMED set
     live = [  # the shape measured on memex-portal-ai, 2026-09-28
         {"tags": ["3-latest", "3.0-latest", "3.0.0-ci.9538", "3.0.0-latest", "b9fe5ed", "b9fe5ed-pb7390a0", "main"]},
@@ -1178,6 +1244,15 @@ def self_test() -> int:
         check("control-first: a non-version is RED", False)
     except ValueError:
         check("control-first: a version that is not X.Y.Z-ci.N is RED, never a guess", True)
+    # the fleet-unarmed reading (MeshWeaver#6042): every set newer than the cursor, each its OWN verdict
+    ua = unarmed_sets(records, {9461: "failure", 9460: None}, ctl(), 9459)
+    check("unarmed_sets: every set newer than the armed one, newest first, each with its own verdict",
+          [(u["run_number"], u["state"]) for u in ua] == [(9461, "refused"), (9460, "waiting")], str(ua))
+    ua = unarmed_sets(records, {9461: None}, ctl(), 9459)
+    check("unarmed_sets: a set whose ladder was never read is `not examined`, never guessed `waiting`",
+          ua[-1]["run_number"] == 9460 and ua[-1]["state"] == "not examined", str(ua))
+    check("unarmed_sets: nothing newer than the cursor is an empty reading (negative control)",
+          unarmed_sets(records, {}, ctl(), 9461) == [])
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -1214,6 +1289,10 @@ def main() -> int:
     ap.add_argument("--override", default="", help="arm exactly this set name, platform verdict or not")
     ap.add_argument("--resume", default="",
                     help="the newest armed set whose arming never completed; re-armed when nothing newer is green")
+    ap.add_argument("--armed-version", default="", help="select: the newest ARMED set's name, for --unarmed-out")
+    ap.add_argument("--unarmed-out", type=Path, default=None,
+                    help="select: write every promoted set newer than the armed one, with its verdict "
+                         "(read by fleet-unarmed-alert.py)")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
@@ -1319,7 +1398,11 @@ def main() -> int:
         return 0
     try:
         above = 0 if a.override else (a.armed_max - 1 if a.resume else a.armed_max)
-        records = read_records(http_get, core_token, above=above)
+        # The alert's reading must reach the armed cursor, so it pages on (bounded) past the
+        # promotion-free reconcile ticks; an override names one set and needs no window.
+        coverage: dict = {}
+        records = read_records(http_get, core_token, above=above, coverage=coverage,
+                               max_pages=UNARMED_MAX_PAGES if a.unarmed_out is not None and not a.override else 1)
     except RuntimeError as e:
         print(f"::error::{e}")
         return 1
@@ -1359,6 +1442,17 @@ def main() -> int:
     for line in lines:
         print(line)
     write_outputs(rec, lines)
+    if a.unarmed_out is not None:
+        # Written BEFORE a frozen exit, so the alert reads the very verdicts this run decided on.
+        cursor = int(rec["run_number"]) if rec else a.armed_max
+        a.unarmed_out.write_text(json.dumps({
+            "armed": rec["v_portal"] if rec else (a.armed_version or f"ci.{a.armed_max}"),
+            "armed_run": cursor,
+            # False when the bounded listing never got down to the armed cursor: the list below is
+            # then a FLOOR, and the alert clocks the stall from `window_floor_at` at least.
+            "window_complete": bool(coverage.get("reached")) or a.override != "",
+            "window_floor_at": coverage.get("floor_at", ""),
+            "unarmed": unarmed_sets(records, ladders, control, cursor)}, indent=1))
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
     if frozen:
         print(f"::error title=Fleet delivery frozen on control::{frozen}")
