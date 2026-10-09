@@ -411,7 +411,50 @@ public class NodeTypePathOccupancyTest(ITestOutputHelper output) : MonolithMeshT
         // — measured once in a full-project run and not in the isolated one, i.e. a timing race in
         // the TEST, not a verdict about the product. The repair route itself is pinned where it
         // belongs, by DanglingNodeTypeUpdateTest.AnUpdate_RetypingADanglingNodeToATypeThatResolves_
-        // IsAllowed, on a node that is not mid-rebind.
+        // IsAllowed, on a node that is not mid-rebind. The race ITSELF is pinned by the next fact.
+    }
+
+    /// <summary>
+    /// 🚨 <b>The repair that races the stranding retype's recycle</b> (#6034). A full-node upsert
+    /// naming a type that resolves is the only repair route for a mistyped node, so the retype that
+    /// strands a node and the retype that repairs it can land back to back. The second arrives while
+    /// <c>NodeTypeRebindWatcher</c> (#1104) is disposing the hub the first retype bound, and was
+    /// refused with <c>Hub … is shutting down (RunLevel=DisposeHostedHubs) … Rejecting now</c>,
+    /// answered <c>Unknown</c> — measured in a full-project run of this suite. Since #5011 a write
+    /// refused as ShuttingDown is re-driven to the next activation instead of answered, so the
+    /// repair must land.
+    ///
+    /// <para>🚨 <b>This is the END-TO-END repro the issue named as its close condition, not the
+    /// deterministic pin.</b> Whether the second write lands inside the teardown depends on timing,
+    /// so this fact can stay green without the re-drive. The re-drive itself is pinned
+    /// deterministically in <c>MeshWeaver.FaultInjection.Test</c> (<c>FleetWatchFreezeTests</c>:
+    /// the owner is held lingering in its stop by <c>mesh.Linger(…)</c>, and the write must be
+    /// re-driven past it — #5011's case, which failed with exactly this <c>Unknown … Rejecting now</c>
+    /// before the fix). What this fact adds is that the real retype → recycle → repair sequence
+    /// never answers a reason unrelated to the rule.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Upsert_RepairIssuedStraightAfterAStrandingRetype_Lands()
+    {
+        var occupant = Occupant(NewId());
+        await MeshService.CreateNode(occupant).Take(1)
+            .Should().Within(60.Seconds()).Emit("the occupant must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var id = NewId();
+        await MeshService.CreateNode(Instance(id, "Markdown")).Take(1)
+            .Should().Within(60.Seconds()).Emit("the node to strand must exist first",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var stranded = await Upsert(Instance(id, occupant.Path), allowUnresolvable: true);
+        stranded.Success.Should().BeTrue($"the stranding retype must land. Error was: {stranded.Error}");
+
+        // Straight after — no wait for the rebind recycle to finish, which is the whole point.
+        var repaired = await Upsert(Instance(id, "Markdown"), allowUnresolvable: false);
+        repaired.Success.Should().BeTrue(
+            "a repair that races the recycle must be re-driven to the next activation, never "
+            + $"refused for a reason unrelated to the rule. Error was: {repaired.Error}");
+        repaired.Node!.NodeType.Should().Be("Markdown");
     }
 
     private async Task<CreateOrUpdateNodeResponse> Upsert(MeshNode node, bool allowUnresolvable)

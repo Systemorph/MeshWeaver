@@ -98,6 +98,36 @@ public sealed record MeshOperationOptions
     private readonly double minNestingFraction = 0.5;
 
     /// <summary>
+    /// How many per-node delete legs a recursive delete's COMMIT keeps in flight at once, across the
+    /// whole subtree. Defaults to 64, the same runaway-fan-out stop the delete pre-flight uses. Must
+    /// be at least 1.
+    ///
+    /// <para><b>Why a commit needs one</b> (issue #6351). Every leaf commit re-enters the delete
+    /// handler at its own per-node hub and ends in ONE write on the process-wide cap-1
+    /// <c>pg:{provider}</c> write pool, and each leaf's own commit stage is a no-progress watchdog
+    /// that starts when its hub takes the request. Unbounded, a 1,383-path subtree queued about a
+    /// thousand of its own leaf writes on that one pool at once, so the leaves at the back of the
+    /// queue made "no progress" for their whole budget while the cascade was removing rows steadily
+    /// — and one such leaf failed the delete. With the lane bounded, a leaf waits behind at most
+    /// this many of its siblings' writes, which at the measured ~20 ms per pooled write is about a
+    /// second, not the budget.</para>
+    ///
+    /// <para>This is a concurrency STOP, not a budget: it changes how many legs run together, never
+    /// how long any of them may take, and no bound on this ladder depends on it.</para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
+    public int CascadeFanOutConcurrency
+    {
+        get => cascadeFanOutConcurrency;
+        init => cascadeFanOutConcurrency = value >= 1
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value,
+                "CascadeFanOutConcurrency must be at least 1 (issue #6351).");
+    }
+
+    private readonly int cascadeFanOutConcurrency = 64;
+
+    /// <summary>
     /// <b>Rung 2 — work that runs INSIDE another operation's bounded stage.</b> Two shapes on the
     /// delete path: ONE LEG of the pre-flight <c>ValidateDeleteRequest</c> fan-out, as the caller
     /// bounds it, and a cascade leg re-entering <c>HandleDeleteNodeRequest</c> from within the
