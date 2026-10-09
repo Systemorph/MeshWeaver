@@ -494,8 +494,11 @@ top so the first line is the caller. Read it as a normal stack: the first frame 
 is the site to fix.
 
 **A NACK names the delivery it is about.** When the posted message is a `DeliveryFailure`, its
-`{MessageType}` reads `DeliveryFailure (NACK of <failed type>, <sender> -> <target>: <reason>)`, and
-the once-per-hub de-duplication is keyed on the failed type as well as the role. Every undeliverable
+`{MessageType}` reads `DeliveryFailure (NACK of <failed type>, <sender> -> <target>: "<reason>")`, and
+the once-per-hub de-duplication is keyed on the failed type as well as the role. A delivery that
+reached the routing service is already packaged, so the failed type is read from its `RawJson`
+payload's `$type`. The reason is JSON-quoted, because a router failure carries an exception message
+whose line breaks would otherwise forge a continuation record in the log pipeline. Every undeliverable
 message is the same `DeliveryFailure`, so a line keyed and printed by that type alone kept the first
 failed delivery per hub and named none of it ([#5713](https://github.com/Systemorph/MeshWeaver/issues/5713)):
 the `sender AND target` NACK in that issue could not say which router post had failed. The NACK's call

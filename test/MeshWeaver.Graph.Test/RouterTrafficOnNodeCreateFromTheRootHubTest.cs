@@ -674,13 +674,17 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
         var client = GetClient();
         var first = new MessageDelivery<RouterOriginProbe>(
             Mesh.Address, client.Address, new RouterOriginProbe(), Mesh.JsonSerializerOptions);
+        // The production shape: a delivery that reached the routing service is already PACKAGED, so
+        // the router's own NACK carries a RawJson body whose CLR type names nothing.
         var second = new MessageDelivery<SecondFailedProbe>(
-            Mesh.Address, client.Address, new SecondFailedProbe(), Mesh.JsonSerializerOptions);
+            Mesh.Address, client.Address, new SecondFailedProbe(), Mesh.JsonSerializerOptions).Package();
+        second.Message.Should().BeOfType<RawJson>(
+            "the second NACK must exercise the packaged shape the router actually reports");
 
         // 🚨 Posted FROM the router on purpose: the violating shape is this test's subject, and the
         // origin report is made synchronously inside Post, so it is recorded when Post returns.
         Mesh.Post(new DeliveryFailure(first, "probe reason one"), o => o.WithTarget(client.Address));
-        Mesh.Post(new DeliveryFailure(second, "probe reason two"), o => o.WithTarget(client.Address));
+        Mesh.Post(new DeliveryFailure(second, "probe reason two\nforged: record"), o => o.WithTarget(client.Address));
 
         DumpReports();
         var nacks = Origins()
@@ -695,7 +699,11 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
         nacks.Should().ContainSingle(r => r.MessageType.Contains(nameof(SecondFailedProbe), StringComparison.Ordinal)
                                            && r.MessageType.Contains("probe reason two", StringComparison.Ordinal)
                                            && r.MessageType.Contains(client.Address.ToString(), StringComparison.Ordinal),
-            "and the failed delivery's ends, so the reader can find the post that failed");
+            "and the failed delivery's ends, so the reader can find the post that failed — the "
+            + "packaged NACK names the payload's $type, not RawJson");
+        nacks.Should().OnlyContain(r => !r.MessageType.Contains('\n') && !r.MessageType.Contains('\r'),
+            "a reason carrying a line break must be escaped, or it forges a continuation record in "
+            + "the log pipeline");
     }
 
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>

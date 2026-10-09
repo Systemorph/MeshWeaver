@@ -2180,10 +2180,13 @@ public sealed class MessageHub : IMessageHub
         if (message is not DeliveryFailure failure)
             return message?.GetType().Name ?? "(null)";
         var failed = failure.Delivery;
+        // 🚨 Quoted, not interpolated raw: a router failure appends the exception's message, which
+        // can carry CR/LF, and an embedded newline forges a continuation record in the log pipeline
+        // (DeliveryPayloadBounds.Quote). Capped first, so the bound is on the reason, not the escape.
         var reason = failure.Message is { Length: > 0 } text
-            ? text.Length > MaxOriginFailureReason ? text[..MaxOriginFailureReason] + "…" : text
+            ? DeliveryPayloadBounds.Quote(text.Length > MaxOriginFailureReason ? text[..MaxOriginFailureReason] + "…" : text)
             : "(no reason given)";
-        return $"{nameof(DeliveryFailure)} (NACK of {failed?.Message?.GetType().Name ?? "(unknown message)"}, "
+        return $"{nameof(DeliveryFailure)} (NACK of {FailedMessageType(failed)}, "
             + $"{failed?.Sender?.ToString() ?? "(no sender)"} -> {failed?.Target?.ToString() ?? "(no target)"}: {reason})";
     }
 
@@ -2192,8 +2195,50 @@ public sealed class MessageHub : IMessageHub
     /// <param name="message">The posted message.</param>
     /// <returns>The de-duplication type key.</returns>
     private static string OriginDedupType(object? message) => message is DeliveryFailure failure
-        ? $"{nameof(DeliveryFailure)}/{failure.Delivery?.Message?.GetType().Name ?? "(unknown message)"}"
+        ? $"{nameof(DeliveryFailure)}/{FailedMessageType(failure.Delivery)}"
         : message?.GetType().Name ?? "(null)";
+
+    /// <summary>
+    /// The type of the message a NACK is about. A delivery that reached the routing service is
+    /// already PACKAGED, so the router's own NACKs carry a <see cref="RawJson"/> body and its CLR
+    /// type names nothing; the original type is the payload's <c>$type</c> discriminator. Read with
+    /// a forward-only reader that stops at the first top-level <c>$type</c> — never a DOM of a
+    /// payload that may be large. Pure.
+    /// </summary>
+    /// <param name="failed">The delivery that failed.</param>
+    /// <returns>The failed message's type name, or a named placeholder when it cannot be read.</returns>
+    private static string FailedMessageType(IMessageDelivery? failed) => failed?.Message switch
+    {
+        null => "(unknown message)",
+        RawJson { Content: { } content } => PackagedType(content),
+        var typed => typed.GetType().Name,
+    };
+
+    private static string PackagedType(string content)
+    {
+        var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(content));
+        try
+        {
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+                return "RawJson (not an object)";
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                var isType = reader.ValueTextEquals("$type");
+                if (!reader.Read())
+                    break;
+                if (isType && reader.TokenType == JsonTokenType.String)
+                    return reader.GetString() ?? "RawJson (empty $type)";
+                reader.Skip();
+            }
+            return "RawJson (no $type)";
+        }
+        catch (JsonException)
+        {
+            // Not a fault being hidden: this names a diagnostic, and a payload that is not JSON is
+            // reported as exactly that instead of losing the whole origin line.
+            return "RawJson (not JSON)";
+        }
+    }
 
     /// <summary>
     /// The frames worth printing for <see cref="ReportRouterTrafficOrigin"/>: the posting code, with
