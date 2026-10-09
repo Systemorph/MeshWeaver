@@ -215,9 +215,25 @@ Two rules hold it now, and they are deliberately not the same rule:
 
 The second rule is what covers the combination the first deliberately does not claim: a `linux-arm64`
 host against a `linux-x64` extraction is unmeasured, so it is not refused on an assumption about
-RIDs — it falls to the classification, which needs none. What is still owed is an execution mode that
-works off-Linux at all (running the generated project inside the tester image, the way CI does); until
-that exists, the honest local split is *compile here, execute in the container*.
+RIDs — it falls to the classification, which needs none.
+
+### The contract: compile anywhere, execute on Linux
+
+Policy [`node-tests-compile-only-off-linux`](../PolicyNotProse) settles what used to be listed here
+as owed (#5080, ask 2): **off Linux, the harness is compile-only, and that is the contract — not a
+gap.** No off-Linux execution mode is planned: no host-built reference set, no container runner
+inside `run-node-tests.py`. On macOS (or any non-Linux host):
+
+- `compile-check.py` is the local answer for *does it compile* — and it is a full answer there;
+- `run-node-tests.py` against an `image`-shaped set refuses up front with exit **3**, naming the set
+  and the host, exactly as the table above says — that refusal is the supported behaviour, not an
+  error to work around;
+- the suites EXECUTE in CI (inside the tester image) or on a Linux host. To run them by hand before a
+  push, run the harness inside the tester image yourself — the same image CI uses.
+
+So a local macOS loop that is green means *it compiles*, and says nothing about whether the suites
+pass; the refusal's own text says so, which is why the contract can be honest without an execution
+mode behind it.
 
 ## See also
 
