@@ -357,27 +357,21 @@ print(' '.join(t['name'] for t in d['tasks'] if str(t.get('status','')).lower() 
 # not ask" read as "nothing against it" is the swallow that turns a failed collection into a deletion
 # (#3859's first acceptance criterion). Applies only when the record asks to ENABLE a task: pushing a
 # window onto a disabled task deletes nothing.
-LOCK_LANE_REPO="${MW_LOCK_LANE_REPO:-Systemorph/MeshWeaver}"
-LOCK_LANE_WORKFLOW="${MW_LOCK_LANE_WORKFLOW:-lock-pinned-digests.yml}"
-LOCK_LANE_MAX_AGE_HOURS="${MW_LOCK_LANE_MAX_AGE_HOURS:-36}"
-
+#
+# 🚨 THE EVIDENCE IS NOT THE CALLER'S TO CHOOSE (review of #6379). Which workflow's runs count, in which
+# repository, and how old a green may be are FIXED POLICY CONSTANTS inside acr-retention-protection.py,
+# which also fetches the answer itself. Nothing here reads an environment variable, an argument or a
+# file for any of them: an override would let whoever runs `apply` point the interlock at a green
+# workflow of their choosing, or a fixture, and switch the purge on behind a red lock lane. The
+# self-test exercises the verdict through its own in-process seam, never through this path.
 assert_protection_current() {
-  local enabling runs
+  local enabling
   enabling=$(python3 -c "
 import json
 d = json.load(open('$RECORD/tasks.json'))
 print(' '.join(t['name'] for t in d['tasks'] if str(t.get('status','')).lower() == 'enabled'))") || return 1
   [ -n "$enabling" ] || return 0
-  # `MW_LOCK_LANE_RUNS_FILE` is the self-test's seam: the SAME verdict code over a fixture answer.
-  if [ -n "${MW_LOCK_LANE_RUNS_FILE:-}" ]; then
-    runs=$(cat "$MW_LOCK_LANE_RUNS_FILE") || return 1
-  elif ! runs=$(curl -fsS --max-time 30 -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/$LOCK_LANE_REPO/actions/workflows/$LOCK_LANE_WORKFLOW/runs?branch=main&status=completed&per_page=1"); then
-    echo "::error::REFUSING to enable $enabling: the lock lane ($LOCK_LANE_REPO $LOCK_LANE_WORKFLOW)" >&2
-    echo "  could not be read, so whether the pinned set is protected tonight is unknown." >&2
-    return 1
-  fi
-  printf '%s' "$runs" | python3 "$HERE/acr-retention-protection.py" "$enabling" "$LOCK_LANE_MAX_AGE_HOURS"
+  python3 "$HERE/acr-retention-protection.py" --check "$enabling"
 }
 
 cmd_apply() {
