@@ -1,0 +1,20 @@
+{
+  "files": {
+    "AzureBlob/index.json": "649d81c9b5233cf28be968d07921a939f8f769751d28574262ee00b9ec67f64a",
+    "AzureBlob/mesh-floor.lock": "167b6f4a22618e7de7ac1094ef3348b6bb5e19e73ba27cdb3f859ffe82e335be",
+    "src/MeshWeaver.Azure.Blob/ArticleConfigurationExtensions.cs": "a682c72a926e053f2bc02309ffd6ecf803b36687ae173cacb207878f3c566237",
+    "src/MeshWeaver.Azure.Blob/AzureBlobModuleAttribute.cs": "ac01e049445e9e54a87c9447db2f0261351b30f2ddf9f68ef160a0d0ae447c9e",
+    "src/MeshWeaver.Azure.Blob/AzureBlobStreamProvider.cs": "de06d8242ceda810ec29c5bae8f6fa21a84ef1d9e8fdac5f6160f83af7eea5af",
+    "src/MeshWeaver.Azure.Blob/BlobAssemblyStore.cs": "d79c448fc8c17ed320278146d7a479d4d77dbdf69d268a498a2af705273b80fc",
+    "src/MeshWeaver.Azure.Blob/BlobAssemblyStoreExtensions.cs": "a8d58dcda652f9a437ccc0c38f91e4324fa9508a0580160a7bffe10411734fc1",
+    "src/MeshWeaver.Azure.Blob/BlobInstanceStore.cs": "112a6662cdb1dc7b81b3c1f38789f1b11283895de0c91b9b67f6b0616a2dda68",
+    "src/MeshWeaver.Azure.Blob/BlobNuGetPackageCache.cs": "8989298b08e948482ce5114e6c5a3079e90b8ab93baecccc0d49e597d5cbdc15",
+    "src/MeshWeaver.Azure.Blob/BlobNuGetPackageCacheExtensions.cs": "d03caeb4d89eecc2f4de12e8307fbc8b1c55bc33740b32c8683df3a4becd2f2d",
+    "src/MeshWeaver.Azure.Blob/MeshWeaver.Azure.Blob.csproj": "da197a735ea3b609ef71f48e7fa00d88b79623610af50e070d217d8fe841501f"
+  },
+  "module": "AzureBlob",
+  "moduleVersion": "c81a92328ccf6721",
+  "schema": "mw-manifest/1",
+  "sourceCommit": "056cde4f2de5b00a875126f9b41ce03aa928f43d",
+  "version": "1.0.9"
+}

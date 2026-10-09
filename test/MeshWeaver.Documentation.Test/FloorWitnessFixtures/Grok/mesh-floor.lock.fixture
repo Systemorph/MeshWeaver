@@ -1,0 +1,6 @@
+{
+  "contentHash": "6f5a1e1a7fa1fc84",
+  "evidence": "Plugin Catalog CI https://github.com/Systemorph/MeshWeaver.Plugins/actions/runs/37153029954 (push to main @ 82f8b7c168156dac1a8c988bb4ca040bbe211f46) compiled and tested every package on 3.0.0-ci.9887",
+  "schema": "mw-mesh-floor/1",
+  "verifiedOn": "3.0.0-ci.9887"
+}
