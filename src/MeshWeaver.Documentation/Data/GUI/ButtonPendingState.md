@@ -76,9 +76,9 @@ called ([CQRS](/Doc/Architecture/CqrsAndContentAccess)).
 
 ## Cancel is a property write
 
-A client's Cancel writes `requested: true` at `ClickProgress.CancelPointerFor(area)` — the
-`ClickCancellation` the owner seeded with the click's session number, so a stale request can never
-cancel the next click. The owner watches it, exactly as an activity's control plane watches
+A client's Cancel writes `requestedSession: <ClickProgress.Session>` at
+`ClickProgress.CancelPointerFor(area)` — the session number of the click it is SHOWING, carried by the
+request itself, so a Cancel delayed past the next click names the old session and is ignored. The owner watches it, exactly as an activity's control plane watches
 `RequestedStatus` ([Activity Control Plane](/Doc/Architecture/ActivityControlPlane)): no verb message.
 On Cancel the owner disposes the action's pipeline (a reactive action is therefore always
 cancellable), trips the token, runs the `OnCancel` handlers as the clicker, refuses a still-open
@@ -89,7 +89,12 @@ reports Cancelled.
 
 While a click runs, a second `ClickedEvent` for the same **area, row and payload** joins it: the
 action is not invoked again, and the duplicate's receipt gets the first click's outcome. Two pins on
-one map (same area, different payload) or two rows of one template are different clicks. The window
+one map (same area, different payload) or two rows of one template are different clicks — and
+each row needs its own state: a row-scoped click is keyed by the row's `Key` (a grid sets it from
+`DataGridControl.RowKey` / `WithRowKey`), path, pointer or index. A row known only by its value has
+none, so while a click runs on such a control a click on another of its rows is **refused**
+("Another action on this control is still running", `click.busyElsewhere`) rather than sharing — and
+overwriting — the running click's state. The window
 is the click's own lifetime — once it settled, the next click is a new one; an action that must be
 idempotent across clicks (an approval that may only happen once) still says so in its own state, as
 the domain owner's watcher does. The session is per layout-area stream, so two viewers each get

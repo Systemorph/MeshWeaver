@@ -34,6 +34,7 @@
   "common.working": "Working…",
   "click.cancel": "Cancel",
   "click.cancelling": "Cancelling…",
+  "click.busyElsewhere": "Another action on this control is still running",
   "click.cancelled": "Cancelled",
   "click.failed": "Failed: {0}",
   "common.copy": "Copy",

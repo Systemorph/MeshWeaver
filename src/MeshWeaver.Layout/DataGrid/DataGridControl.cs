@@ -130,6 +130,16 @@ public record DataGridControl(object Data)
     /// the disabled checkbox's tooltip. Rows with no value are selectable. Null: every row is selectable.
     /// </summary>
     public object? SelectionDisabledReason { get; init; }
+    /// <summary>
+    /// The row property that identifies a row (camelCase, as serialized). A client view carries its value
+    /// as <see cref="RowContext.Key"/> on every row-scoped click, so each row's click state is its own.
+    /// Set by <see cref="WithRowSelection"/>, or alone with <see cref="WithRowKey"/>.
+    /// </summary>
+    public object? RowKey { get; init; }
+
+    /// <summary>Returns a copy whose rows are identified by <paramref name="keyProperty"/> (see <see cref="RowKey"/>).</summary>
+    /// <param name="keyProperty">The row property identifying a row.</param>
+    public DataGridControl WithRowKey(string keyProperty) => This with { RowKey = keyProperty };
     
     // Pagination
     /// <summary>
@@ -240,6 +250,7 @@ public record DataGridControl(object Data)
             SelectionMode = DataGridRowSelection.Multiple,
             SelectedItems = new JsonPointerReference(LayoutAreaReference.GetDataPointer(selectionDataId)),
             SelectionKey = keyProperty,
+            RowKey = keyProperty,
             SelectionDisabledReason = disabledReasonProperty,
         };
 

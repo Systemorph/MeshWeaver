@@ -664,7 +664,20 @@ public record LayoutAreaHost : IDisposable
             return request.Processed();
         }
 
-        var session = new ClickSession(this, key, ClickProgressArea(request.Message), ++clickSequence, logger,
+        // A DIFFERENT click (another row known only by its value, another payload) whose state would
+        // land on the same progress area as one still running is refused, not run: running it would
+        // overwrite the running click's busy state and let one Cancel reach the other.
+        var progressArea = ClickProgressArea(request.Message);
+        if (runningClicks.Values.FirstOrDefault(s => s.ProgressArea == progressArea) is not null)
+        {
+            logger.LogInformation(
+                "Click on {Area} of {Hub} refused: another click on the same control is still running",
+                request.Message.Area, Hub.Address);
+            Hub.Post(new DeliveryFailure(request, this.Localize("click.busyElsewhere")), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        var session = new ClickSession(this, key, progressArea, ++clickSequence, logger,
             settled =>
             {
                 if (runningClicks.TryGetValue(settled.Key, out var current) && ReferenceEquals(current, settled))

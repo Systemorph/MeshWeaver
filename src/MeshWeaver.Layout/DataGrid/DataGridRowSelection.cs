@@ -133,12 +133,17 @@ public static class DataGridSelectionExtensions
     /// <summary>
     /// Seeds the selection data id with an empty selection — call it where the grid is RENDERED, so a
     /// bulk action's one-off read has a value even before the viewer ticks anything
-    /// (<c>Doc/GUI/ButtonPendingState</c> → "The id the click reads must be SEEDED").
+    /// (<c>Doc/GUI/ButtonPendingState</c> → "The id the click reads must be SEEDED"). Seeds ONCE per
+    /// layout-area session: a re-render (a data refresh, an unrelated update) must not clear the rows
+    /// the viewer has ticked.
     /// </summary>
     /// <param name="host">The rendering host.</param>
     /// <param name="selectionDataId">The id passed to <see cref="DataGridControl.WithRowSelection"/>.</param>
     public static void SeedRowSelection(this LayoutAreaHost host, string selectionDataId)
-        => host.UpdateData(selectionDataId, new DataGridSelectionState());
+    {
+        if (host.TryMarkEditStateInitialized("rowSelection:" + selectionDataId))
+            host.UpdateData(selectionDataId, new DataGridSelectionState());
+    }
 
     /// <summary>
     /// The live selection of the grid bound to <paramref name="selectionDataId"/> — for a view that shows

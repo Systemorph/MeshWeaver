@@ -274,7 +274,7 @@ data section.
 
 ```csharp
 const string selectionId = "inboxSelection";     // one per grid; no '/' in the id
-host.SeedRowSelection(selectionId);               // where the grid is RENDERED
+host.SeedRowSelection(selectionId);               // where the grid is RENDERED — seeds once per session, a re-render keeps the ticks
 
 Controls.Stack
     .WithView(new DataGridControl(rows)
@@ -291,6 +291,7 @@ Controls.Stack
 |---|---|
 | row checkbox | toggles that row's key in the selection; a row whose `disabledReasonProperty` is non-empty renders **disabled**, with the reason as its tooltip, and can never be ticked |
 | header checkbox | unchecked → selects every **selectable** row; indeterminate or checked → clears the selection. "All" means all *selectable* rows, so a grid with blocked rows still reaches the checked state |
+| `RowKey` | set by `WithRowSelection` (or alone with `WithRowKey(property)`): the client carries each row's key value as `RowContext.Key` on a row-scoped click, so every row's busy state and Cancel are its own |
 | `DataGridSelectionState` | what the client writes under the data id: `{ keys: [...] }`, in selection order |
 | `ctx.SelectedRowKeys(id)` | the selection as it stands at the click — a one-off read to **return** from the click handler |
 | `host.RowSelection(id)` | the live selection — for a "3 selected" label or a bulk button's `Disabled` binding |

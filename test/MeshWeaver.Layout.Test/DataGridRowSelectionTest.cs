@@ -31,7 +31,7 @@ public class DataGridRowSelectionTest(ITestOutputHelper output) : HubTestBase(ou
 
     private sealed record Row(string Path, string Title, string? Blocked);
 
-    private static readonly Row[] Rows =
+    private static readonly ImmutableArray<Row> Rows =
     [
         new("a/1", "First", null),
         new("a/2", "Second", "You requested this yourself"),

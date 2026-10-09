@@ -72,10 +72,13 @@ internal sealed class ClickSession : IDisposable
     internal void Start(IMessageDelivery<ClickedEvent> request)
     {
         receipts = receipts.Add(request);
-        host.UpdateData(ClickProgress.CancelDataId(ProgressArea), new ClickCancellation { Session = sequence });
+        progress = progress with { Session = sequence };
+        host.UpdateData(ClickProgress.CancelDataId(ProgressArea), new ClickCancellation());
         Write();
         subscriptions.Add(host.GetDataStream<ClickCancellation>(ClickProgress.CancelDataId(ProgressArea))
-            .Where(c => c is { Requested: true } && c.Session == sequence)
+            // The client names the session it cancels: a Cancel written for an EARLIER click and
+            // delivered after this one seeded the request is not this click's Cancel.
+            .Where(c => c?.RequestedSession == sequence)
             .Take(1)
             .Subscribe(
                 _ => OnHub(Cancel),

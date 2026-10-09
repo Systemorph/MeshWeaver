@@ -100,6 +100,35 @@ public class ClickBusyStateTest(ITestOutputHelper output) : HubTestBase(output)
         Volatile.Read(ref runOnceInvocations).Should().Be(2, "after settling, the dedupe window is closed and the action runs again");
     }
 
+    /// <summary>
+    /// Two rows known only by their VALUE share one click state; a click on the second while the
+    /// first runs is refused (and does not run), never allowed to overwrite the running click's state.
+    /// Control: a row carrying its own <see cref="RowContext.Key"/> gets its own state and runs.
+    /// </summary>
+    [HubFact]
+    public async Task AClickOnAnotherKeylessRowWhileOneRunsIsRefusedNotRun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stream = await OpenStream(RunOnceArea);
+        var rowA = new RowContext { Value = new { title = "A" } };
+        var rowB = new RowContext { Value = new { title = "B" } };
+
+        var first = Click(stream, RunOnceArea, rowA);
+        await Progress(stream, RunOnceArea).Should().Within(10.Seconds()).Match(p => p is { Running: true }, "row A runs", ct);
+        var other = Click(stream, RunOnceArea, rowB);
+        (await other.Should().Within(10.Seconds()).Emit("refused", ct)).Should().Be("Another action on this control is still running");
+        Volatile.Read(ref runOnceInvocations).Should().Be(1, "the refused click must not run");
+
+        var keyed = Click(stream, RunOnceArea, new RowContext { Value = new { title = "C" }, Key = "c" });
+        await Progress(stream, ClickProgress.RowArea(RunOnceArea, new RowContext { Key = "c" })).Should().Within(10.Seconds())
+            .Match(p => p is { Running: true }, "a keyed row has its own click state and runs", ct);
+        Volatile.Read(ref runOnceInvocations).Should().Be(2);
+
+        runOnceWork.OnCompleted();
+        await first.Should().Within(10.Seconds()).Emit("row A settles", ct);
+        await keyed.Should().Within(10.Seconds()).Emit("row C settles", ct);
+    }
+
     [HubFact]
     public async Task TheBusyStateCarriesTheActionsStatusLine()
     {
@@ -131,7 +160,11 @@ public class ClickBusyStateTest(ITestOutputHelper output) : HubTestBase(output)
         // What a client's Cancel button does: one property write, never a verb message.
         await stream.GetDataStream<JsonElement>(new JsonPointerReference(ClickProgress.CancelPointerFor(CancelArea)))
             .Should().Within(10.Seconds()).Match(e => e.ValueKind == JsonValueKind.Object, "the owner seeded the cancel request", ct);
-        stream.UpdatePointer(true, ClickProgress.CancelPointerFor(CancelArea), new JsonPointerReference("requested"));
+        var running = await Progress(stream, CancelArea).Should().Within(10.Seconds()).Match(p => p is { Running: true }, "running", ct);
+        // A stale Cancel for an earlier session is ignored (negative control for the session stamp).
+        stream.UpdatePointer(running!.Session - 1, ClickProgress.CancelPointerFor(CancelArea), new JsonPointerReference("requestedSession"));
+        await cancelHandlerRan.Should().NotEmit(300.Milliseconds(), "a Cancel naming another session is not this click's Cancel", ct);
+        stream.UpdatePointer(running.Session, ClickProgress.CancelPointerFor(CancelArea), new JsonPointerReference("requestedSession"));
 
         await cancelHandlerRan.Should().Within(10.Seconds()).Emit("Cancel runs the action's cancel handlers", ct);
         await tokenTripped.Should().Within(10.Seconds()).Emit("Cancel trips ctx.CancellationToken", ct);
@@ -172,10 +205,10 @@ public class ClickBusyStateTest(ITestOutputHelper output) : HubTestBase(output)
     // ── harness ──────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Submits a click; the subject emits null when accepted, the refusal sentence when refused.</summary>
-    private static ReplaySubject<string?> Click(ISynchronizationStream<JsonElement> stream, string area)
+    private static ReplaySubject<string?> Click(ISynchronizationStream<JsonElement> stream, string area, RowContext? row = null)
     {
         var answer = new ReplaySubject<string?>(1);
-        stream.SubmitUserAction(new ClickedEvent(area, stream.StreamId), actingUser: null,
+        stream.SubmitUserAction(new ClickedEvent(area, stream.StreamId) { Row = row }, actingUser: null,
             onRefused: sentence => answer.OnNext(sentence), onAccepted: () => answer.OnNext(null));
         return answer;
     }

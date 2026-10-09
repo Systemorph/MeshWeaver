@@ -34,6 +34,7 @@
   "common.working": "Wird ausgeführt…",
   "click.cancel": "Abbrechen",
   "click.cancelling": "Wird abgebrochen…",
+  "click.busyElsewhere": "Eine andere Aktion dieses Elements läuft noch",
   "click.cancelled": "Abgebrochen",
   "click.failed": "Fehlgeschlagen: {0}",
   "common.copy": "Kopieren",

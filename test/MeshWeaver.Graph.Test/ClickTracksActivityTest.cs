@@ -95,7 +95,7 @@ public class ClickTracksActivityTest(ITestOutputHelper output) : MonolithMeshTes
         (await activity.Should().Within(TestTimeouts.Convergence).Match(a => a is not null, "the activity exists", ct))!
             .RequestedStatus.Should().BeNull("negative control: nobody asked to cancel yet");
 
-        stream.UpdatePointer(true, ClickProgress.CancelPointerFor(StartArea), new JsonPointerReference("requested"));
+        stream.UpdatePointer(busy.Session, ClickProgress.CancelPointerFor(StartArea), new JsonPointerReference("requestedSession"));
 
         await activity.Should().Within(TestTimeouts.Convergence).Match(
             a => a is { RequestedStatus: ActivityStatus.Cancelled },

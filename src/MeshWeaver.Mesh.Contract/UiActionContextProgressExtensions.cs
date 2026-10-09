@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -28,12 +29,17 @@ public static class UiActionContextProgressExtensions
     public static void TrackActivity(this UiActionContext context, string activityPath)
     {
         var hub = context.Host.Hub;
-        context.OnCancel(() => hub.CancelActivity(activityPath));
+        // A cancel write that is refused or fails would otherwise leave the click "Cancelling…" forever,
+        // waiting for a Cancelled the activity will never report: it fails the click instead.
+        var cancelFailed = new Subject<ClickProgress>();
+        context.OnCancel(() => hub.CancelActivity(activityPath,
+            error => cancelFailed.OnError(new InvalidOperationException(error))));
         context.Track(
             context.Host.Workspace.GetMeshNodeStream(activityPath)
                 .Select(node => node.ContentAs<ActivityLog>(hub.JsonSerializerOptions))
                 .Where(log => log is not null)
-                .Select(log => FromActivity(context.Host, activityPath, log!)),
+                .Select(log => FromActivity(context.Host, activityPath, log!))
+                .Merge(cancelFailed),
             followThroughCancel: true);
     }
 
