@@ -394,7 +394,7 @@ image_verdict() {  # image_verdict <description> <expect: clean|off> <policy-fil
     else echo "::error::$1 — expected OFF-RECORD, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
   fi
 }
-R=meshweaver.azurecr.io/memex-portal-ai
+R=cr.example.test/portal-fixture
 policy p-any.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*\"}"
 policy p-ci.json    "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.0.0-ci*\"}"
 policy p-pin.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*\",\"pinnedImageTag\":\"3.1.10400\"}"
@@ -404,7 +404,7 @@ live_with_image l-ci.json     "$R:3.0.0-ci.10148"
 live_with_image l-other.json  "$R:3.1.10399"
 live_with_image l-digest.json "$R@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 live_with_image l-repo.json   "example.azurecr.io/other-portal:3.1.10400"
-live_with_image l-port.json   "localhost:5000/memex-portal-ai:3.1.10400"
+live_with_image l-port.json   "localhost:5000/portal-fixture:3.1.10400"
 image_verdict "SemVer tag under pattern 3.*"                 clean p-any.json  l-semver.json
 image_verdict "old -ci tag under pattern 3.*"                clean p-any.json  l-ci.json
 image_verdict "SemVer tag under a 3.0.0-ci* pattern"         off   p-ci.json   l-semver.json
@@ -424,7 +424,7 @@ image_verdict "'?' as exactly one character"                 clean p-qmark.json 
 image_verdict "a bracket is literal, not a character class"  off   p-class.json l-semver.json
 image_verdict "a pin differing only in letter case"          clean p-pinup.json l-ci.json
 # A registry PORT is not a tag: `localhost:5000/…:3.1.10400` must be read as tag 3.1.10400, repo
-# localhost:5000/memex-portal-ai — so it is OFF-RECORD only for the repository, never the tag.
+# localhost:5000/portal-fixture — so it is OFF-RECORD only for the repository, never the tag.
 o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/p-any.json" "$TMPI/l-port.json")"
 if echo "$o" | grep -qE '^::error::OFF-RECORD +image repository' && ! echo "$o" | grep -qE '^::error::OFF-RECORD +image tag'; then
   echo "  ok   a registry port is not mistaken for a tag"

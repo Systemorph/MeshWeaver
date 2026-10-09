@@ -1,6 +1,6 @@
 {
   "record": "Deployments/example",
-  "imageRepository": "meshweaver.azurecr.io/memex-portal-ai",
+  "imageRepository": "cr.example.test/portal-fixture",
   "updatePolicy": "Continuous",
   "updatePattern": "3.1.*",
   "pinnedImageTag": null
