@@ -888,16 +888,17 @@ jobs:
           SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -uo pipefail
-          # Paths that PROVABLY enter no published image: the standalone clients (a Python LAN
-          # gateway and the Expo app — neither is COPY'd by any Dockerfile in the set). A merge
-          # touching ONLY these must not cost a ~20-minute five-image build and a fleet roll.
-          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare —
-          # publishes as today. The only way to skip is a POSITIVE finding that every changed
-          # file since the newest PUBLISHED set matches the list. Diffing against the newest
-          # published set (not HEAD^) is what keeps the reconciler stable: a skipped tip differs
-          # from the last set only by irrelevant files, so the reconcile branch skips it too
-          # instead of "healing" it back into a build every tick.
-          IRRELEVANT='^clients/(react-native|voice-gateway)/'
+          # Policy `image-rebuild-own-inputs`: an image is rebuilt only when one of ITS inputs
+          # changed. The classifier is `.github/scripts/core-image-relevance.py` — the not-image
+          # list, each entry with its reason, and a self-test run on every PR. MeshWeaver.Plugins
+          # answers the same question for the host side and dispatches `rebuild: true` (#4688).
+          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare, a
+          # compare at GitHub's 300-file cap (the list may be truncated) — publishes. The only way
+          # to skip is a POSITIVE finding that every changed file since the newest PUBLISHED set
+          # is outside every image's inputs. Diffing against the newest published set (not HEAD^)
+          # is what keeps the reconciler stable: a skipped tip differs from the last set only by
+          # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
+          # into a build every tick.
           relevant=true
           # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
           # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
@@ -910,9 +911,18 @@ jobs:
           if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
             base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha || true)
             if [ -n "$base" ]; then
-              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' || true)
-              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE "$IRRELEVANT"; then
-                relevant=false
+              cmp="${RUNNER_TEMP:-/tmp}/relevance-compare.json"
+              if gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" > "$cmp"; then
+                changed="${RUNNER_TEMP:-/tmp}/relevance-changed.txt"
+                # The PREVIOUS name of a renamed file is listed too: a file renamed out of src/
+                # changed src/.
+                jq -r '.files[] | .filename, (.previous_filename // empty)' "$cmp" > "$changed" || : > "$changed"
+                total=$(jq -r '.files | length' "$cmp" || true)
+                verdict=$(python3 .github/scripts/core-image-relevance.py --changed "$changed" ${total:+--total "$total"} || echo "relevant=true")
+                printf '%s\n' "$verdict"
+                if [ "$(printf '%s\n' "$verdict" | tail -1)" = "relevant=false" ]; then
+                  relevant=false
+                fi
               fi
             fi
           fi
@@ -1004,7 +1014,7 @@ jobs:
             if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
             elif [ "$RELEVANT" = "false" ]; then
-              decision false "⏭️ Only image-irrelevant paths (standalone clients) changed since the newest published set — no image build for \`$SHORT\`"
+              decision false "⏭️ Only paths outside every image's inputs (tests, agent config, root prose, standalone clients — policy \`image-rebuild-own-inputs\`) changed since the newest published set — no image build for \`$SHORT\`"
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
@@ -1381,9 +1391,10 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # The VERSION (3.0.0-ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
-      # compares to decide a rollout — so it MUST be the monotonic $(Version) (Directory.Build.props
-      # derives the .ci.<n> suffix from $GITHUB_RUN_NUMBER). -getProperty:Version prints the computed
+      # The VERSION (<major>.<minor>.<run#>, e.g. 3.1.10340) is what each install's self-updater
+      # (ReleaseStrategy.md) compares to decide a rollout — so it MUST be the monotonic $(Version)
+      # (Directory.Build.props mints the patch from -p:PlatformBuildNumber=$GITHUB_RUN_NUMBER, which
+      # only this workflow passes; policy platform-semver-versioning). -getProperty:Version prints the computed
       # version without building; CIRun=true so it matches the version baked into the binaries below.
       #
       # 🚨 IT IS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS A TAG. As a TAG it is not applied
@@ -1419,7 +1430,17 @@ jobs:
           # file: a regex keeps returning a plausible, well-formed, WRONG number after the definition
           # moves — and that number gets published.
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
           # which is the failure where a tag exists and points at the wrong thing.
           if [ -z "$VERSION" ]; then
@@ -1608,6 +1629,40 @@ jobs:
           for d in "${dirs[@]}"; do
             .github/scripts/check-platform-reference-set.sh "$d" .github/workflows/main-cd.yml
           done
+      # 🗂️ THE CLOSURE THE STEP ABOVE JUST ASSERTED, WRITTEN DOWN (#4066, policy
+      # `image-closure-as-mesh-data`, Doc/Architecture/ImageClosureAsMeshData). The same publish
+      # directories, AFTER the assertion passed, so the record is what was asserted — never a
+      # re-derivation. Keyed by the image DIGEST (a retag or a promotion never changes it). This job
+      # only BUILDS the record; `image-closure-record` delivers it to the control instance, outside
+      # the delivery verdict, so a control-side outage can never stop an image from shipping.
+      - name: Record the asserted closure (keyed by the image digest)
+        env:
+          STAGING: ${{ needs.gate.outputs.staging_tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          CORE_SHA: ${{ needs.gate.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          root=plugins-repo/src/Memex.Portal.Distributed/bin/Release
+          mapfile -t dirs < <(find "$root" -type f -name meshweaver-surface.manifest -path '*/publish/*' -exec dirname {} \; | sort -u)
+          [ "${#dirs[@]}" -gt 0 ] || { echo "::error::no publish output to record — the assertion above found some, so the layout changed between two steps"; exit 1; }
+          digest=$(docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai:$STAGING" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          mkdir -p "$RUNNER_TEMP/image-closure"
+          python3 .github/scripts/image-closure-record.py build \
+            --repository memex-portal-ai --digest "$digest" --tag "$STAGING" \
+            --platform-commit "$CORE_SHA" --platform-version "$VERSION" --run-url "$RUN_URL" \
+            "${dirs[@]}" > "$RUNNER_TEMP/image-closure/image-closure.json"
+          python3 - "$RUNNER_TEMP/image-closure/image-closure.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          print(f"recorded {r['repository']}@{r['digest']}: " + ", ".join(f"{p['rid']} {p['fileCount']} file(s)" for p in r['platforms']))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-closure
+          path: ${{ runner.temp }}/image-closure/image-closure.json
+          if-no-files-found: error
+          retention-days: 30
 
   # 🚨 THE SAME MANIFEST, TO THE FLEET'S OWN REGISTRY (Doc/Architecture/ContainerRegistryInMemex),
   # in a job of its own with a budget of its own. Still the staging tag only: a name no consumer
@@ -1664,6 +1719,66 @@ jobs:
           "${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
           "${{ env.REGISTRY }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}"
 
+  # 🗂️ THE IMAGE'S CLOSURE, DELIVERED AS MESH DATA (#4066, policy `image-closure-as-mesh-data`,
+  # Doc/Architecture/ImageClosureAsMeshData). `portal-image` built the record from the bytes its
+  # reference-set assertion accepted; this job signs it and POSTs it to the control instance's inbox
+  # target `Admin/ImageClosures`, where `ImageClosureIngest` verifies it again and writes
+  # `Admin/ImageClosures/memex-portal-ai-<digest>`.
+  #
+  # 🚨 OUTSIDE THE DELIVERY VERDICT, deliberately (the control lane's shape): nothing `promote` or
+  # `delivery-verdict` needs waits on this, so a control-side outage cannot stop an image shipping —
+  # but it is RED when the record was not ACCEPTED VERIFIED, naming the cause, never green-by-skip.
+  # No new secret: the control plane's inbox URL and HMAC (`vars.CONTROL_WEBHOOK_URL`,
+  # `secrets.CONTROL_WEBHOOK_SECRET`) are already asserted by `preflight`; the target is the same
+  # host's `/api/hooks/Admin/ImageClosures`.
+  image-closure-record:
+    name: "Record portal-ai's closure as mesh data (control instance)"
+    needs: [preflight, gate, portal-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: image-closure
+          path: ${{ runner.temp }}/image-closure
+      - name: "POST the signed closure record; require ACCEPTED + VERIFIED"
+        env:
+          CONTROL_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          case "$CONTROL_URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of the control plane's Hosting/PlatformBuilds inbox — refusing to derive a target from it"; exit 1 ;;
+          esac
+          URL="${CONTROL_URL%/api/hooks/*}/api/hooks/Admin/ImageClosures"
+          BODY_FILE="$RUNNER_TEMP/image-closure/image-closure.json"
+          [ -s "$BODY_FILE" ] || { echo "::error::the image-closure artifact is empty — portal-image recorded nothing"; exit 1; }
+          SIG=$(openssl dgst -sha256 -hmac "$SECRET" -hex < "$BODY_FILE" | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/closure-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $SIG" \
+            --data-binary "@$BODY_FILE") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/closure-resp" || true; echo
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/closure-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              if [ "$verdict" != "verified" ]; then
+                echo "::error::the control instance STORED the closure record but did not VERIFY its signature (signature: '${verdict:-<none>}') — ImageClosureIngest refuses to arm without a secret, so nothing will be recorded. Declare the target WITH WebhookInbox__Targets__N__SecretConfigKey=Hosting:PlatformWebhookSecret on the control record."
+                exit 1
+              fi
+              echo "- closure record for \`memex-portal-ai\` ACCEPTED, signature verified, at \`${URL%/api/hooks/*}\` — ingested as \`Admin/ImageClosures/memex-portal-ai-<digest>\`" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control instance at all (DNS/TLS/connection) — the closure record was NOT delivered; the image itself is unaffected"; exit 1 ;;
+            401) echo "::error::the control instance REFUSED the signature (401): secrets.CONTROL_WEBHOOK_SECRET and that instance's Hosting:PlatformWebhookSecret are not byte-identical"; exit 1 ;;
+            404) echo "::error::the control instance does not allowlist the inbox target Admin/ImageClosures (404). Add a WebhookInbox slot to the control record: target 'Admin/ImageClosures', secretConfigKey 'Hosting:PlatformWebhookSecret' (renders WebhookInbox__Targets__N and __SecretConfigKey), then Reconcile — and the control image must carry ImageClosureIngest (#4066)."; exit 1 ;;
+            413) echo "::error::the closure record exceeds the inbox cap (413) — image-closure-record.py should have refused it first; read its size"; exit 1 ;;
+            500) echo "::error::the control instance declares a SecretConfigKey for Admin/ImageClosures that resolves to nothing (500, SecretUnavailable) — provision Hosting:PlatformWebhookSecret there"; exit 1 ;;
+            *)   echo "::error::the control instance refused the closure record (HTTP $code)"; exit 1 ;;
+          esac
+
   migration-image:
     name: "Build + push migration image"
     needs: gate
@@ -1709,13 +1824,23 @@ jobs:
       # BELOW Latest; a migration that can never run surfaces only at the deploy that needs it.
       #
       # Both jobs run inside ONE workflow run, so GITHUB_RUN_NUMBER — and therefore the computed
-      # 3.0.0-ci.<n> tag — is identical across the legs by construction.
+      # <major>.<minor>.<run> tag — is identical across the legs by construction.
       - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           # Refuse rather than invent — same as the portal leg. An empty version becomes `:` or
           # `latest` downstream, which is the failure where a tag exists and points at the wrong thing.
           if [ -z "$VERSION" ]; then
@@ -1745,6 +1870,7 @@ jobs:
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:MeshWeaverRoot=${{ github.workspace }}
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
@@ -1810,7 +1936,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           if [ -z "$VERSION" ]; then
             echo "::error::could not resolve Version from the platform checkout. Refusing to invent one."
             exit 1
@@ -2249,13 +2385,23 @@ jobs:
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
-      # run, so the 3.0.0-ci.<n> tag matches the portal/migration images by construction.
+      # run, so the <major>.<minor>.<run> tag matches the portal/migration images by construction.
       - name: Compute image version
         id: vars
         run: |
           set -euo pipefail
           VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
       - name: Ensure Azure CLI
@@ -2341,6 +2487,7 @@ jobs:
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
           -p:MeshWeaverModuleLibrariesRoot=${{ steps.shelf.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}
@@ -2615,6 +2762,7 @@ jobs:
       id-token: write
       actions: read     # the promotion records are run ARTIFACTS of this workflow
       packages: write   # phase D writes the line pointers to GHCR with GITHUB_TOKEN
+      issues: write     # the ONE `fleet-unarmed` alert issue (fleet-unarmed-alert.py, MeshWeaver#6042)
     outputs:
       armed: ${{ steps.select.outputs.armed }}
       version: ${{ steps.select.outputs.v_portal }}
@@ -2667,10 +2815,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ARMED_MAX: ${{ steps.armed.outputs.max }}
+          ARMED_VERSION: ${{ steps.armed.outputs.version }}
           RESUME: ${{ steps.armed.outputs.complete == 'false' && steps.armed.outputs.version || '' }}
         run: |
           set -euo pipefail
+          # --unarmed-out: every promoted set still newer than the armed one after this selection,
+          # with its verdict — the reading the fleet-unarmed alert (last step) clocks a stall from.
           python3 .github/scripts/arm-promoted-set.py select --armed-max "$ARMED_MAX" \
+            --armed-version "$ARMED_VERSION" --unarmed-out "$RUNNER_TEMP/unarmed.json" \
             ${OVERRIDE:+--override "$OVERRIDE"} ${RESUME:+--resume "$RESUME"}
       - name: ACR login
         if: steps.select.outputs.armed == 'true'
@@ -2794,6 +2946,27 @@ jobs:
             .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$src" "${margs[@]}"
           done
           echo "- line pointers moved: memex-migration + memex-portal-ai → $(line_tags "$V_PORTAL") (ACR + GHCR + ${{ env.REGISTRY }})" >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 THE STALL SIGNAL (MeshWeaver#6042, policy `one-promotion-gate`). Waiting and refusing are
+      # both right and both SILENT: a standing red ladder or a platform-side outage froze fleet updates
+      # while every run said `nothing to arm`. This files ONE `fleet-unarmed` issue when the OLDEST
+      # promoted set still newer than the armed one is older than FLEET_UNARMED_ALERT_HOURS — naming
+      # every unarmed set, its verdict (waiting / refused / not examined) and its run — rewrites it
+      # while the stall lasts, and closes it on the first run that finds the fleet armed again.
+      # Runs after a frozen `select` too (that reading is exactly a stall), but never after a FAILED
+      # arming write: a set `select` chose but phases C/D did not land is not armed, and must not
+      # close the issue. `select` failing before it wrote its reading leaves no file, which the
+      # script reports RED by name — never read as "armed".
+      - name: "Alert: has the promotion gate left the fleet unarmed? (ONE fleet-unarmed issue)"
+        if: ${{ !cancelled() && steps.select.outcome != 'skipped' && (steps.select.outputs.armed != 'true' || success()) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The ONE knob (default chosen with MeshWeaver#6042; the maintainer may change it here).
+          FLEET_UNARMED_ALERT_HOURS: "6"
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/fleet-unarmed-alert.py --self-test
+          python3 .github/scripts/fleet-unarmed-alert.py --reading "$RUNNER_TEMP/unarmed.json"
 
   # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
   # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when
@@ -4853,7 +5026,10 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    needs: [preflight, gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
+    # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
+    # direct need here its red would be an unattended job and never a durable alert.
+    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that
@@ -4922,6 +5098,7 @@ jobs:
           * an IMAGE job / promote / verify-images: no complete image set was published. Publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set.
           * arm: the FLEET is frozen on control (policy control-first-never-silent) when its ::error reads 'FLEET DELIVERY FROZEN ON CONTROL' - every image is published, but control has run none of the builds it was given for longer than the platformLagBoundMinutes bound, so control-first offers the fleet nothing. The error names control's running commit, the first build it missed and control's OWN self-update verdict (its /health self_update line); the open control-lag issue carries the same reading. The remedy is control's roll, never an arm override.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
+          * image-closure-record: every image IS published - what failed is recording portal-ai's closure as mesh data on the control instance (#4066, Doc/Architecture/ImageClosureAsMeshData). Read the job's ::error:: line: a 404 means the control record does not yet allowlist the inbox target Admin/ImageClosures with secretConfigKey Hosting:PlatformWebhookSecret; a 401 a secret mismatch; an unverified 2xx a target declared without a secret key. No image and no publication is missing.
           * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 
           The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause.${compat}"

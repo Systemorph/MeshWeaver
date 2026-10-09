@@ -86,6 +86,25 @@ public class FailureFromOlderPlatformRedriveTest
             .Should().BeFalse("one attempt per build — never a loop on a same-build failure");
     }
 
+    /// <summary>
+    /// 🚨 Across the minter cut-over (policy <c>platform-semver-versioning</c>): a failure formed on
+    /// the last <c>3.0.0-ci.&lt;n&gt;</c> build is retried once on the first <c>3.1.&lt;n+1&gt;</c>
+    /// build, and never the other way round — the run number decides, whichever notation each wears.
+    /// </summary>
+    [Fact]
+    public void AFailureFromTheLastOldNotationBuild_IsRetriedOnce_OnTheFirstSemVerBuild()
+    {
+        const string LastOld = "3.0.0-ci.10330";
+        const string FirstNew = "3.1.10331";
+
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(FailedOn(LastOld), FirstNew, TypePath)
+            .Should().BeTrue("3.1.10331 was published after 3.0.0-ci.10330");
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(FailedOn(FirstNew), LastOld, TypePath)
+            .Should().BeFalse("an older replica never retries a failure formed on a newer build");
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(FailedOn(FirstNew), FirstNew, TypePath)
+            .Should().BeFalse("one attempt per build");
+    }
+
     [Fact]
     public void TheRetry_ThatSucceeds_ClearsTheStamp()
     {
@@ -154,7 +173,8 @@ public class FailureFromOlderPlatformRedriveTest
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    [InlineData("3.0.0-ci.0")] // a local build is unordered against every CI build
+    [InlineData("3.0.0-ci.0")] // the retired local stamp is unordered against every CI build
+    [InlineData("3.1.0-dev")]  // so is the source-build stamp of the SemVer minter
     public void AnUnknownOrUnorderedLiveBuild_NeverRetries(string? live)
     {
         NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(FailedOn(OldBuild), live, TypePath)
@@ -170,6 +190,7 @@ public class FailureFromOlderPlatformRedriveTest
     /// cannot claim to be newer than an unstamped failure either.</summary>
     [Theory]
     [InlineData("3.0.0-ci.0")]
+    [InlineData("3.1.0-dev")]
     [InlineData("not-a-version")]
     [InlineData("")]
     public void AnUnstampedFailure_IsNotRetried_ByAnUnorderedLiveBuild(string live)

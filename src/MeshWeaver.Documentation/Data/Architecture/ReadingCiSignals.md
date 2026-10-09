@@ -1537,6 +1537,19 @@ there.** Every one of their newest `Retry known transients` runs declined on its
 with that same sentence and then `exit 0`, so the shell steward never looked at the rest; and
 MeshWeaver.Plugins' steward declined **22 jobs in one run** (`35245934949`, 16:21Z) the same way.
 
+**A transient that kills the BUILD is two failed jobs, not one (#6364).** On 2026-10-09 main's
+`Build solution (once)` died in `dotnet restore` — every request to `api.nuget.org` answered
+`Connection reset by peer` until NuGet's own retries ran out (`error NU1301 … from remote source
+'https://api.nuget.org/…'`). Nothing compiled, main settled red, and CD built nothing. Core's steward
+declined it for two reasons: no signature named the NuGet feed, and `Consolidate test results` was red
+too — with `The test matrix concluded 'skipped'`, because the shards never ran — and under the
+EVERY-job rule that echo blocked the retry on its own. The steward now carries a NuGet signature
+(the feed's own hostname, NU1301 or a failed package download; a missing package, NU1101/NU1102, and
+any other feed do not match) and a separate CONSEQUENTIAL class for that Consolidate line. A
+consequential red is accepted beside a named transient, never counted AS one, so it cannot cause a
+retry alone; and only `skipped` qualifies, because a shard that failed or was cancelled makes the
+matrix `failure`/`cancelled` and is judged on its own log.
+
 ### What `/actions/jobs/<id>/logs` actually serves
 
 Read straight from REST — 30 failed jobs across MeshWeaver.Plugins, .Crm, .Reinsurance, .SocialMedia

@@ -397,6 +397,20 @@ on:
         required: false
         type: string
         default: 'main'
+      epoch-leg:
+        description: >-
+          Which live framework identity this call bakes for (policy bake-per-live-identity).
+          `current` (the default) is the lane as it always was. `previous` bakes the SAME content
+          against the previous compatibility epoch's last build — the newest declared break's
+          `previousEpochCeiling` in core's platform-compatibility.json — so a portal that has not
+          rolled across a break still gets a publication under its own key. With no declared break
+          (or the break declares `previousEpochRetired: true`) the `previous` leg has nothing to
+          bake: the `epoch-leg` job says so and the bake job does not run. A caller adds ONE more
+          call of this lane with `epoch-leg: previous`, both digests empty (the leg resolves its
+          own set) and otherwise the same inputs as its normal call.
+        required: false
+        type: string
+        default: 'current'
       scripts-ref:
         description: >-
           The Systemorph/MeshWeaver ref this lane's OWN helper scripts are fetched at (the guards,
@@ -567,8 +581,78 @@ on:
         required: false
 
 jobs:
+  # ─────────── Which live identity this call bakes for (policy bake-per-live-identity) ───────────
+  # The steady state has ONE live identity per compatibility epoch, and the `current` leg bakes it.
+  # Across a declared break a portal that has not rolled still runs the old key; the `previous` leg
+  # bakes for it against the break's `previousEpochCeiling`. The decision is read from the
+  # DECLARATION (core's platform-compatibility.json at scripts-ref), never derived from a replica's
+  # report. A `previous` leg with nothing to bake ends here, by name, and `publish-bake` does not run;
+  # an unreadable declaration or a break with no ceiling is RED, never "nothing to bake".
+  epoch-leg:
+    name: "Which live framework identity this call bakes for"
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.leg.outputs.run }}
+      ceiling: ${{ steps.leg.outputs.ceiling }}
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - name: "Decide the leg"
+        id: leg
+        env:
+          LEG: ${{ inputs.epoch-leg }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          PLATFORM_DIGEST: ${{ inputs.platform-image-digest }}
+          ALLOW_UNPINNED: ${{ inputs.allow-unpinned }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$LEG" in
+            current)
+              { echo "run=true"; echo "ceiling="; } >> "$GITHUB_OUTPUT"
+              echo "### epoch leg: current — the newest sealed set (or the caller's pin), as always" >> "$GITHUB_STEP_SUMMARY"
+              exit 0 ;;
+            previous) ;;
+            *) echo "::error::epoch-leg '$LEG' is neither 'current' nor 'previous'"; exit 1 ;;
+          esac
+          # The previous leg resolves its OWN set (the ceiling); a pin or a dispatch payload would name
+          # the current epoch's image and publish the wrong key under the previous leg's name.
+          if [ -n "${IMAGE_DIGEST:-}" ] || [ -n "${PLATFORM_DIGEST:-}" ]; then
+            echo "::error::epoch-leg 'previous' resolves the previous epoch's ceiling itself — pass image-digest and platform-image-digest EMPTY on this call (got '${IMAGE_DIGEST:-}' / '${PLATFORM_DIGEST:-}')"
+            exit 1
+          fi
+          if [ "${ALLOW_UNPINNED:-false}" = "true" ]; then
+            echo "::error::epoch-leg 'previous' cannot follow tags verbatim (allow-unpinned) — the tags name the CURRENT epoch; drop allow-unpinned on this call so the leg resolves the declared ceiling"
+            exit 1
+          fi
+          if [ "${EVENT_NAME:-}" = "repository_dispatch" ]; then
+            { echo "run=false"; echo "ceiling="; } >> "$GITHUB_OUTPUT"
+            echo "### epoch leg: previous — not run on a repository_dispatch (its payload names the CURRENT epoch's image); the next push or schedule bakes the previous epoch" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the declaration has no ref to be read at"; exit 1; }
+          SCRIPT="$RUNNER_TEMP/previous-epoch-ceiling.py"; DECL="$RUNNER_TEMP/platform-compatibility.json"
+          "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" ".github/scripts/previous-epoch-ceiling.py" > "$SCRIPT" \
+            || { echo "::error::could not fetch previous-epoch-ceiling.py at $SCRIPTS_REF"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" "src/MeshWeaver.Compiler/platform-compatibility.json" > "$DECL" \
+            || { echo "::error::could not fetch platform-compatibility.json at $SCRIPTS_REF"; exit 1; }
+          python3 "$SCRIPT" --self-test
+          OUT="$RUNNER_TEMP/leg.txt"
+          python3 "$SCRIPT" --declaration "$DECL" > "$OUT"
+          cat "$OUT"
+          grep -E '^(run|ceiling)=' "$OUT" >> "$GITHUB_OUTPUT"
+          echo "### epoch leg: previous — $(sed -n 's/^reason=//p' "$OUT")" >> "$GITHUB_STEP_SUMMARY"
+
   publish-bake:
     name: Bake + publish NodeType assemblies to portal storage
+    needs: epoch-leg
+    # A `previous` leg with no previous epoch to serve ends at `epoch-leg`, which names why in its
+    # summary. That is a decision about whether there is anything to bake, read from the
+    # declaration — never a skip on a missing input (those stay RED in the preflight below).
+    if: needs.epoch-leg.outputs.run == 'true'
     runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
     # 🚨 A LITERAL, never an input: the fleet cap is 45 minutes for every job (check-workflow-timeouts.py
     # refuses an expression here because a caller-supplied bound cannot be proven by reading the file).
@@ -795,7 +879,10 @@ jobs:
           # freeze the caller's own jobs honour. Empty in the normal state; the ONE value read from
           # `vars` in this lane, because a freeze is an incident instruction that must not be
           # overridable by a caller that forgot to pass it on.
-          FREEZE: ${{ vars.MW_PLATFORM_REF }}
+          # The previous-epoch leg (policy bake-per-live-identity) freezes on the declared ceiling of
+          # the old epoch; the current leg's ceiling output is empty, so it honours the caller's
+          # incident freeze exactly as before.
+          FREEZE: ${{ needs.epoch-leg.outputs.ceiling || vars.MW_PLATFORM_REF }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           RELEASED_VERSION: ${{ github.event.client_payload.version }}

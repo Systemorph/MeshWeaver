@@ -1236,6 +1236,88 @@ def run_bake_version_cases(root, case) -> None:
     case("a FAILING az surfaces az's own message", "az login" in log, f"log={log}")
 
 
+# ── the image-version steps: the predicate that gates every image tag ─────────────────────────
+# Policy `platform-semver-versioning`. Four jobs (portal, migration, control, tester) each carry a
+# step `id: vars` named "Compute image version" that asks MSBuild for $(Version) and REFUSES to
+# publish anything but this run's build version. Its first shape refused an older TARGET's
+# `<line>-ci.<this run>` and stopped every image leg of main-cd #10351, so the whole matrix is
+# executed here against EVERY copy, through a stub `dotnet` that answers what MSBuild would.
+IMAGE_VERSION_STEP_NAME = "Compute image version"
+IMAGE_VERSION_RUN = "10351"
+
+DOTNET_STUB = """#!/bin/bash
+# Answers `dotnet msbuild … -getProperty:Version …` with the case's version; refuses anything else.
+case " $* " in
+  *" msbuild "*"-getProperty:Version"*) printf '%s\\n' "$STUB_VERSION" ;;
+  *) echo "unexpected dotnet call: $*" >&2; exit 97 ;;
+esac
+"""
+
+
+def image_version_steps(root: Path) -> list[tuple[str, str]]:
+    import yaml
+
+    doc = yaml.safe_load((root / WORKFLOW).read_text())
+    found = []
+    for job_name, job in (doc.get("jobs") or {}).items():
+        for step in job.get("steps") or []:
+            if isinstance(step, dict) and step.get("name") == IMAGE_VERSION_STEP_NAME and step.get("id") == "vars":
+                body = step.get("run") or ""
+                if "${{" in body:
+                    die(f"`{job_name}`'s `{IMAGE_VERSION_STEP_NAME}` grew a ${{{{ }}}} expression this harness cannot supply")
+                found.append((job_name, body))
+    return found
+
+
+def run_image_version_step(body: str, version: str) -> tuple[int, str, str]:
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        binp = tmp / "bin"
+        binp.mkdir()
+        (binp / "dotnet").write_text(DOTNET_STUB)
+        (binp / "dotnet").chmod(0o755)
+        out = tmp / "github_output"
+        out.touch()
+        e = dict(os.environ)
+        e["PATH"] = f"{binp}:{e['PATH']}"
+        e["GITHUB_OUTPUT"] = str(out)
+        e["GITHUB_RUN_NUMBER"] = IMAGE_VERSION_RUN
+        e["STUB_VERSION"] = version
+        p = subprocess.run(["bash", "-c", body], env=e, capture_output=True, text=True)
+        return p.returncode, out.read_text(), p.stdout + p.stderr
+
+
+def run_image_version_cases(root, case) -> None:
+    steps = image_version_steps(root)
+    jobs = sorted(name for name, _ in steps)
+    case("every image leg carries the version step (portal, migration, control, tester)",
+         len(steps) == 4, f"found {jobs}")
+    accepted = [f"3.1.{IMAGE_VERSION_RUN}", f"3.0.0-ci.{IMAGE_VERSION_RUN}"]
+    refused = ["3.1.0-dev", "", f"3.0.0-ci.{int(IMAGE_VERSION_RUN) - 1}", f"3.1.{int(IMAGE_VERSION_RUN) - 1}",
+               f"3.1.{IMAGE_VERSION_RUN}-dev", "3.1.0"]
+    for job_name, body in steps:
+        if "-getProperty:Version" not in body or "PlatformBuildNumber" not in body:
+            case(f"{job_name}: the step still asks MSBuild for $(Version) with the run number", False, body)
+            continue
+        for v in accepted:
+            rc, outputs, log = run_image_version_step(body, v)
+            case(f"{job_name}: accepts {v!r} (this run's build)", rc == 0 and f"version={v}\n" in outputs, f"rc={rc} out={outputs!r} {log}")
+        for v in refused:
+            rc, outputs, log = run_image_version_step(body, v)
+            case(f"{job_name}: refuses {v!r}", rc != 0 and "version=" not in outputs, f"rc={rc} out={outputs!r} {log}")
+    # 🚨 CONTROL ARM — proof these cases can fail: the predicate as it first shipped (the SemVer
+    # shape alone) must REFUSE the older target's `<line>-ci.<this run>`. If it does not, the
+    # accepted-case above is not measuring the clause that fixed #10351.
+    if steps:
+        _, body = steps[0]
+        legacy = r' || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$'
+        mutated = body.replace(legacy, "")
+        case("control arm: the mutation actually removes the legacy clause", mutated != body, "clause text not found")
+        rc, outputs, log = run_image_version_step(mutated, f"3.0.0-ci.{IMAGE_VERSION_RUN}")
+        case("control arm: without the legacy clause the older target's build is refused (the #10351 failure)",
+             rc != 0 and "version=" not in outputs, f"rc={rc} out={outputs!r} {log}")
+
+
 def separation_problems(workflow_text: str) -> list[str]:
     """🚨 Policy `platform-module-deploy-separate` + `platform-deploy-control-first`, held structurally.
 
@@ -1697,6 +1779,10 @@ def main() -> int:
     print()
     print("── control webhook preflight guard ──")
     run_control_webhook_cases(root, case)
+
+    print()
+    print(f"── steps `{IMAGE_VERSION_STEP_NAME}` (every image leg) ──")
+    run_image_version_cases(root, case)
 
     print()
     if failures:

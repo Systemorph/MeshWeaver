@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# A stand-in psql for hosting-db-reset's tests (MeshWeaver.Plugins#2781). It plays ONE Flexible
+# Server from files in $HOSTING_DBR_STATE and records every invocation (PGPASSWORD set/unset, never
+# the value) in $HOSTING_DBR_STATE/pg.log:
+#   dbs          the databases that exist, one per line
+#   sessions     what pg_stat_activity counts for any database (default 0)
+#   comment-<db> the COMMENT of <db>
+#   due          what the purge's age query answers: `due`, or the instant it becomes due
+#   fail-on      a substring: the first statement containing it fails (exit 1), nothing changes
+#   tables       the user tables the NEW database answers (default 0)
+# The clock is fixed: now = 2026-10-09 12:00 UTC, retained until 2026-10-23 12:00 UTC.
+# Not a mock of Postgres: it asserts nothing about SQL semantics — only which statements the script
+# issues, in which order, and what it does when one of them fails.
+set -uo pipefail
+state="${HOSTING_DBR_STATE:?the psql stub needs HOSTING_DBR_STATE}"
+sqltext="" db=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -tAc|-c) sqltext="${args[$((i + 1))]}" ;;
+    -d)      db="${args[$((i + 1))]}" ;;
+  esac
+done
+printf 'psql PGPASSWORD=%s db=%s sql=%s\n' "$([ -n "${PGPASSWORD:-}" ] && echo set || echo unset)" "$db" "$sqltext" >> "$state/pg.log"
+fail_on="$(cat "$state/fail-on" 2>/dev/null || true)"
+if [ -n "$fail_on" ] && [[ "$sqltext" == *"$fail_on"* ]]; then
+  : > "$state/fail-on"
+  echo "ERROR:  stub refused: ${fail_on}" >&2; exit 1
+fi
+touch "$state/dbs"
+has() { grep -qx "$1" "$state/dbs"; }
+quoted() { printf '%s' "$sqltext" | sed -n "s/.*$1 \"\\([a-z0-9_]*\\)\".*/\\1/p"; }
+case "$sqltext" in
+  *"datname ~ '^"*)
+    prefix="$(printf '%s' "$sqltext" | sed -n "s/.*datname ~ '^\\([a-z0-9_]*\\)_kept_.*/\\1/p")"
+    grep -E "^${prefix}_kept_[0-9]{12}\$" "$state/dbs" | sort -r | head -1 ;;
+  *"count(*) FROM pg_database WHERE datname = '"*)
+    name="$(printf '%s' "$sqltext" | sed -n "s/.*datname = '\\([^']*\\)'.*/\\1/p")"
+    has "$name" && echo 1 || echo 0 ;;
+  *pg_stat_activity*) cat "$state/sessions" 2>/dev/null || echo 0 ;;
+  *"CASE WHEN to_timestamp"*) cat "$state/due" 2>/dev/null || echo due ;;
+  *"+ interval"*"YYYY-MM-DD"*) echo "2026-10-23T12:00Z" ;;
+  *"'YYYYMMDDHH24MI')"*) echo "202610091200" ;;
+  *"'YYYY-MM-DD"*) echo "2026-10-09T12:00Z" ;;
+  *"pg_get_userbyid(datdba)"*) echo "acmeowner|UTF8|en_US.utf8|en_US.utf8" ;;
+  *shobj_description*)
+    name="$(printf '%s' "$sqltext" | sed -n "s/.*datname = '\\([^']*\\)'.*/\\1/p")"
+    cat "$state/comment-$name" 2>/dev/null || echo "" ;;
+  "ALTER DATABASE "*" RENAME TO "*)
+    from="$(printf '%s' "$sqltext" | sed -n 's/^ALTER DATABASE "\([a-z0-9_]*\)" RENAME TO.*/\1/p')"
+    to="$(quoted 'RENAME TO')"
+    has "$from" || { echo "ERROR:  database \"${from}\" does not exist" >&2; exit 1; }
+    grep -vx "$from" "$state/dbs" > "$state/dbs.new"; echo "$to" >> "$state/dbs.new"; mv "$state/dbs.new" "$state/dbs"
+    echo "ALTER DATABASE" ;;
+  "COMMENT ON DATABASE "*)
+    name="$(quoted 'COMMENT ON DATABASE')"
+    printf '%s' "$sqltext" | sed -n "s/.* IS '\\(.*\\)'\$/\\1/p" > "$state/comment-$name"
+    echo "COMMENT" ;;
+  "CREATE DATABASE "*)
+    name="$(quoted 'CREATE DATABASE')"
+    has "$name" && { echo "ERROR:  database \"${name}\" already exists" >&2; exit 1; }
+    echo "$name" >> "$state/dbs"; echo "CREATE DATABASE" ;;
+  "DROP DATABASE "*)
+    name="$(quoted 'DROP DATABASE')"
+    grep -vx "$name" "$state/dbs" > "$state/dbs.new"; mv "$state/dbs.new" "$state/dbs"; echo "DROP DATABASE" ;;
+  *information_schema.tables*) cat "$state/tables" 2>/dev/null || echo 0 ;;
+  *) echo "psql stub: unexpected statement: ${sqltext}" >&2; exit 1 ;;
+esac
+exit 0

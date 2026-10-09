@@ -153,7 +153,7 @@ A client that speaks OAuth — claude.ai connectors, Claude Desktop, Claude Code
 | Record | Path | Contents | Lifetime | Readable by |
 |---|---|---|---|---|
 | Authorization code | `Admin/OAuthCode/{hashPrefix}` | The SHA-256 hash of the code (never the code), the user's id/name/email, `client_id`, `redirect_uri`, the PKCE challenge, the creation time | 5 minutes, and deleted the moment it is exchanged; expired rows are swept on the next `/authorize` | System-managed rows in the `Admin` partition — a platform admin's grant, nobody else's (see [Access Control → The Admin partition](/Doc/Architecture/AccessControl)). Excluded from search, create menus and autocomplete. |
-| Access token | `{userId}/ApiToken/{hashPrefix}` | The SHA-256 hash of the token (never the token), owner identity, the label `OAuth: {client_id}`, created/expires/last-used stamps, a diagnostic copy of the roles at mint time | 1 year, or until revoked, deleted, or evicted by the per-client bound | The owner, in their own partition — the same row the API Tokens settings tab lists |
+| Access token | `{userId}/ApiToken/{hashPrefix}` | The SHA-256 hash of the token (never the token), owner identity, the label `OAuth: {client_id}`, created/expires/last-used stamps, a diagnostic copy of the roles at mint time | 1 year, or 30 days without use (policy [`oauth-idle-expiry`](/Doc/Architecture/PolicyNotProse)), or until revoked, deleted, or evicted by the per-client bound | The owner, in their own partition — the same row the API Tokens settings tab lists |
 | Token index | `ApiToken/{hashPrefix}` | The hash and the path of the token row | Follows its token row: written with it, deleted with it (revocation, expiry sweep, supersede) | Written and deleted under the System identity; the `ApiToken` partition is separately gated and ordinary users hold no grant on it |
 | Client registration | — | nothing | — | — |
 
@@ -162,6 +162,12 @@ Two things are deliberately **not** stored: the raw code and the raw token exist
 ### Nothing is per-process — a multi-replica portal needs no affinity
 
 Every record above is written to and read from the shared store directly, on every replica: `/authorize` on one pod and `/token` on the other exchange the same code, and a token minted by one pod validates on the other on the first request. The MCP transport itself is stateless (no per-pod session table), and the cookie-protection keys are shared across replicas, so a two-replica deployment needs no sticky routing for `/token`, `/register` or `/mcp`. The regression controls for both halves are two-instance tests over one store: `OAuthCodeStoreTest.TwoStoreInstances_GenerateOnOne_ExchangeOnOther` and `TokenMintedOnOneReplicaValidatesOnAnotherTest`.
+
+### An unused OAuth token expires after 30 days
+
+A token the exchange minted (label `OAuth: {client_id}`) expires once nobody has used it for **30 days**, counted from its `LastUsedAt` stamp, or from its creation if it was never used (policy [`oauth-idle-expiry`](/Doc/Architecture/PolicyNotProse)). Validation refuses it with a `401` and logs `API token validation failed at oauth-idle-expired … (OAuth token unused since …)`. The user's next token mint sweeps the row away, together with any token whose `ExpiresAt` has passed. A client in use stamps `LastUsedAt` on validation (at most every five minutes), so it never comes near the bound; an idle client simply re-authorizes.
+
+**Why idle and not a narrower supersede key.** The per-client bound below keys on `client_id`, and a loopback client such as Claude Code derives its `client_id` from a redirect URI whose port varies per machine, and again whenever its stored port is taken. Each such re-registration opened a new slot that no supersede could reach, and left the previous one-year token live: one user measured ten OAuth-minted tokens over seven distinct client ids. Keying supersession on `client_name` instead would have made the sibling-eviction problem of #5074 worse. An idle expiry ends the accumulation, only ever removes credentials, and leaves tokens a person minted by hand (no `OAuth:` label) alone.
 
 ### A bounded number of live credentials per client — and why the bound is not one
 
