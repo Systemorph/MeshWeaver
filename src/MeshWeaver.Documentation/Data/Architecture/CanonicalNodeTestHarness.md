@@ -217,23 +217,27 @@ The second rule is what covers the combination the first deliberately does not c
 host against a `linux-x64` extraction is unmeasured, so it is not refused on an assumption about
 RIDs — it falls to the classification, which needs none.
 
-### The contract: compile anywhere, execute on Linux
+### The contract: compile anywhere; an image set executes on Linux
 
 Policy [`node-tests-compile-only-off-linux`](../PolicyNotProse) settles what used to be listed here
-as owed (#5080, ask 2): **off Linux, the harness is compile-only, and that is the contract — not a
-gap.** No off-Linux execution mode is planned: no host-built reference set, no container runner
-inside `run-node-tests.py`. On macOS (or any non-Linux host):
+as owed (#5080, ask 2). **With the image-shaped reference set, which is what CI and `--latest` use,
+the harness is compile-only off Linux, and that is the contract, not a gap.** No off-Linux mode is
+planned for that set, and no in-harness container runner. Concretely:
 
-- `compile-check.py` is the local answer for *does it compile* — and it is a full answer there;
-- `run-node-tests.py` against an `image`-shaped set refuses up front with exit **3**, naming the set
-  and the host, exactly as the table above says — that refusal is the supported behaviour, not an
-  error to work around;
-- the suites EXECUTE in CI (inside the tester image) or on a Linux host. To run them by hand before a
-  push, run the harness inside the tester image yourself — the same image CI uses.
+- **`compile-check.py` answers "does it compile" on any host**, and there it is a complete answer.
+- **`run-node-tests.py` refuses an `image`-shaped set on a non-Linux host up front**, with exit
+  **3**, naming the set and the host, as the table above says. That refusal is the supported
+  behaviour, not an error to work around.
+- **A host-built sibling set (`source-build`) is unaffected.** That is a core checkout built on this
+  machine, which reference discovery labels `source-build`. Its assemblies are native to the host,
+  so it executes on macOS and Windows as well, and the self-test keeps that path working.
+- **The gate executes the suites on Linux, on the composed host**: the portal image's `/app` with
+  the tester CLI mounted beside it (`node-repo-gate.yml`, "the one place the tester is started").
+  To run the image set by hand before a push, use a Linux host or that same composed container.
 
-So a local macOS loop that is green means *it compiles*, and says nothing about whether the suites
-pass; the refusal's own text says so, which is why the contract can be honest without an execution
-mode behind it.
+So a local macOS loop against the image set that is green means *it compiles*. It says nothing
+about whether the suites pass. The refusal's own text says so, which is why the contract can be
+honest without an execution mode behind it.
 
 ## See also
 
