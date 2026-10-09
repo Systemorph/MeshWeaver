@@ -2,7 +2,7 @@ namespace MeshWeaver.Hosting;
 
 /// <summary>
 /// The file operations the published-bundle share walk performs, in ONE place, so the walk's IO is
-/// a countable, injectable edge (<c>Doc/Architecture/PrebuiltAdoptionShareWalk</c>).
+/// a countable, injectable edge (<c>Doc/Architecture/CiContentBake</c> → "The published-root walk").
 ///
 /// <para><b>Why it exists.</b> The published root lives on a shared network volume (on AKS the
 /// Azure Files <c>/data</c> share), where every one of these calls is a round-trip. The adoption

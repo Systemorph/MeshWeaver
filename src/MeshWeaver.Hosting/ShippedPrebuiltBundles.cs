@@ -481,7 +481,7 @@ public static class ShippedPrebuiltBundles
     /// <param name="IdentitiesListed">Identity directories listed (one listing each).</param>
     /// <param name="SourcesRead">Source publications READ — only the ones the walk still needed.</param>
     /// <param name="SourcesTaken">Sources whose publication was taken from another identity.</param>
-    internal sealed record FallbackWalk(List<string> Bundles, int IdentitiesListed, int SourcesRead, int SourcesTaken);
+    internal sealed record FallbackWalk(ImmutableList<string> Bundles, int IdentitiesListed, int SourcesRead, int SourcesTaken);
 
     /// <summary>
     /// 🚨 THE CROSS-IDENTITY WALK, costed by what it still NEEDS (<c>Doc/Architecture/CiContentBake</c>
@@ -518,7 +518,7 @@ public static class ShippedPrebuiltBundles
     {
         var bundles = new List<string>();
         if (candidates.Count == 0)
-            return new FallbackWalk(bundles, 0, 0, 0);
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
         var started = DateTimeOffset.UtcNow;
         cancellationToken.ThrowIfCancellationRequested();
         ImmutableHashSet<string> onDisk;
@@ -533,7 +533,7 @@ public static class ShippedPrebuiltBundles
         }
         catch (DirectoryNotFoundException)
         {
-            return new FallbackWalk(bundles, 0, 0, 0);
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -542,7 +542,7 @@ public static class ShippedPrebuiltBundles
             logger?.LogWarning(ex,
                 "ShippedPrebuiltBundles: could not list {Root} — no publication is taken from another "
                 + "identity on this pass; the sweep compiles whatever stays uncovered", publishedRoot);
-            return new FallbackWalk(bundles, 0, 0, 0);
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
         }
         var taken = new HashSet<string>(sealedHere, StringComparer.OrdinalIgnoreCase);
         int listedIdentities = 0, sourcesRead = 0, sourcesTaken = 0;
@@ -600,7 +600,7 @@ public static class ShippedPrebuiltBundles
             + "newer identity had supplied), {Taken} taken — in {Elapsed}",
             publishedRoot, candidates.Count, listedIdentities, sourcesRead, sourcesTaken,
             DateTimeOffset.UtcNow - started);
-        return new FallbackWalk(bundles, listedIdentities, sourcesRead, sourcesTaken);
+        return new FallbackWalk(bundles.ToImmutableList(), listedIdentities, sourcesRead, sourcesTaken);
     }
 
     /// <summary>
