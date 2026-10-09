@@ -151,9 +151,11 @@ happily to a loaded `18.1.0.0`, a request for `18.1.0.0` against a loaded `16.3.
 `FileLoadException`. A symmetric equality check would red every portal whose image is a patch
 ahead of a module's build — which is the ordinary state of the fleet between waves — and the gate
 would be switched off. The check refuses only what the loader refuses, and *reports* the rest.
-`AssemblyVersion` is pinned per line (`3.0.0.0` across the whole 3.0 line), so for `MeshWeaver.*`
-the comparison is a no-op today and starts deciding when a module built on the next line meets an
-image on this one — which is exactly a bind the loader would refuse.
+`AssemblyVersion` is pinned per MAJOR (`3.0.0.0` across every 3.x line, policy
+`platform-semver-versioning`), so for `MeshWeaver.*` the comparison is a no-op within a major and
+starts deciding when a module built on the next MAJOR meets an image on this one — which is exactly
+a bind the loader would refuse. Within a major, a module built for a newer platform is held by its
+floor, never by binding.
 
 **Both directions of the incident.** The probe runs on the *same* code (`ModulePlatformLink.Check`)
 at every call site, and the new state is honoured at each: **(i) the roll candidate** —

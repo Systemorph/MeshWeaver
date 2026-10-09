@@ -392,7 +392,8 @@ jobs:
               "${extra[@]}" \
               "$ACR/$repo:$SHORT"
           done
-          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest${CI_VERSION:+; line pointers: }$(line_tags "$VERSION"))" >> "$GITHUB_STEP_SUMMARY"
+          pointers=$(line_tags "$VERSION")
+          echo "- mirrored to ghcr.io/$NS/{memex-portal-ai,memex-migration,mw-plugin-test}:$VERSION (+ latest${pointers:+; line pointers: $pointers})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Publish the GitHub Release from the committed notes"
         env:

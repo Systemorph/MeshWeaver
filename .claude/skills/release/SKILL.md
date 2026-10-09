@@ -295,18 +295,20 @@ az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
 
 ```bash
 # 0. Pick the commit: on main, its CD run SEALED (preconditions above), PlatformVersion == the tag.
-grep -m1 '<PlatformVersion Condition' Directory.Build.props          # e.g. 3.0.0
+grep -m1 '<PlatformVersion Condition' Directory.Build.props          # e.g. 3.1.0 — use THIS value below
 # 1. Make sure the notes page is committed at that commit — WITH the Security section: both OWASP
 #    ZAP verdict lines and a disposition per WARN (section above):
-#    src/MeshWeaver.Documentation/Data/ReleaseNotes/3_0_0.md   (flat — never <version>/index.md)
+#    src/MeshWeaver.Documentation/Data/ReleaseNotes/3_1_0.md   (flat — never <version>/index.md)
 # 2. Tag it ANNOTATED and push — this is the whole release (maintainer: only once every open
-#    issue is closed):
-git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0
-#    → release.yml: resolves the sealed set for <sha> → asserts complete + sealed → writes
-#      _releases/3.0.0 → retags memex-migration, mw-plugin-test, memex-portal-ai (last) → mirrors
-#      to GHCR → publishes the GitHub Release → opens "release: PlatformVersion 3.0.0 → 3.1.0".
-# 3. Merge that bump PR the same day. Until it merges, continuous builds sort BELOW the release.
-gh api "repos/Systemorph/MeshWeaver/pulls?state=open&head=Systemorph:release/open-3.1.0-line" --jq '.[].html_url'
+#    issue is closed). The tag MUST equal PlatformVersion at <sha>; release.yml refuses otherwise:
+git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
+#    → release.yml: resolves the 3.1.<run> build for <sha> → asserts complete + sealed → writes
+#      _releases/3.1.0 → retags memex-migration, mw-plugin-test, memex-portal-ai (last) → mirrors
+#      to GHCR (no line pointer moves: CD already moved them) → publishes the GitHub Release →
+#      opens "release: PlatformVersion 3.1.0 → 3.2.0".
+# 3. Merge that bump PR. Main builds keep sorting ABOVE the release either way (3.1.<run> > 3.1.0);
+#    the bump only lets Stable see the NEXT clean release.
+gh api "repos/Systemorph/MeshWeaver/pulls?state=open&head=Systemorph:release/open-3.2.0-line" --jq '.[].html_url'
 ```
 
 What the lane REFUSES, each with a red step naming the fix: a non-clean version (`v3.0.0-rc14`),

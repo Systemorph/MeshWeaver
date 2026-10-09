@@ -104,7 +104,7 @@ public static class PlatformFloor
         var floorOrdinal = PlatformReleaseOrder.BuildOrdinal(floor);
         var runningOrdinal = PlatformReleaseOrder.BuildOrdinal(running);
         if (floorOrdinal == 0 || runningOrdinal == 0)
-            return Advisory("a source build (-dev) is not a publication, and is not "
+            return Advisory("a source build (-dev, or the retired -ci.0) is not a publication, and is not "
                             + "ordered against a published build");
 
         int comparison;

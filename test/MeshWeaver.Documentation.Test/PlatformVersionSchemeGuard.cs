@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -54,7 +55,7 @@ public class PlatformVersionSchemeGuard
     /// <summary>A build that publishes no platform version: <c>&lt;major&gt;.&lt;minor&gt;.0-dev</c>.</summary>
     private static readonly Regex Source = new(@"^\d+\.\d+\.0-dev$", RegexOptions.Compiled);
 
-    private static readonly string[] Probed = ["PlatformVersion", "Version", "AssemblyVersion"];
+    private static readonly ImmutableArray<string> Probed = ["PlatformVersion", "Version", "AssemblyVersion"];
 
     /// <summary>
     /// <c>PlatformVersion</c> — the one maintained number — is a line: no label, patch 0. A label

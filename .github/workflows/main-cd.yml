@@ -1758,6 +1758,7 @@ jobs:
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:MeshWeaverRoot=${{ github.workspace }}
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:ContainerRegistry=${{ env.ACR }}
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
@@ -2366,6 +2367,7 @@ jobs:
           -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
           -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
           -p:CIRun=true
+          -p:Version=${{ steps.vars.outputs.version }}
           -p:MeshWeaverRazorGeneratorRoot=${{ steps.razor.outputs.root }}
           -p:MeshWeaverModuleLibrariesRoot=${{ steps.shelf.outputs.root }}
           -p:ContainerRegistry=${{ env.ACR }}

@@ -71,11 +71,14 @@ The one rule, `PlatformCompatibility.DeclineReason(producedKey, floor, ceiling, 
 **same key AND floor ≤ running ≤ ceiling ⇒ adopt and bind to the running platform; anything else ⇒
 declined LOUDLY, both versions named.** There is no other version gate. An absent floor is "unknown
 producer = older" — accepted, so every record written before the field existed stays adoptable.
-Ordering is `PlatformReleaseOrder` (the `ci.<n>` run ordinal); a release against a continuous build is
-unordered and therefore never a "newer" reading.
+Ordering is `PlatformReleaseOrder` (the run ordinal: the patch of `<major>.<minor>.<run>`, or the
+`ci.<n>` of a retired tag); a clean release against a run-numbered build is unordered and therefore
+never a "newer" reading.
 
-**Binding.** A plugin/NodeType assembly compiled against platform `3.0.0.0` binds on a platform
-stamped `3.1.0.0`: `PlatformBinding.MayBind(compiledAgainst, running)` is `running >= compiledAgainst`,
+**Binding.** `AssemblyVersion` is pinned per MAJOR (`3.0.0.0` for every 3.x build, policy
+`platform-semver-versioning`), so a minor bump moves no binding identity and the version half below
+decides only across a major. A plugin/NodeType assembly compiled against platform `3.0.0.0` binds on
+a platform stamped `4.0.0.0`: `PlatformBinding.MayBind(compiledAgainst, running)` is `running >= compiledAgainst`,
 applied by the module link probe (`ModulePlatformLink`: lower ⇒ linkable with an advisory, higher ⇒
 `BindingConflict`, i.e. floor not met), and the NodeType load context and `ModulesAssemblyLoadContext`
 resolve every platform name through the default context (TPA roll-forward) — never a private copy,

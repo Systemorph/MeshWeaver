@@ -162,7 +162,7 @@ load context and executed. The static column may never be greener than the runti
 | virtual member added | — | Linkable | runs |
 | renamed with an `[Obsolete]` forwarder under the old signature | — | Linkable | runs |
 | type moved to another assembly behind `[TypeForwardedTo]` | forwarder followed | Linkable | runs |
-| minor version bump (3.0.0.0 → 3.1.0.0) | version half: roll-forward | Linkable + advisory | runs |
+| minor version bump (3.0 → 3.1 line) | none: `AssemblyVersion` stays `3.0.0.0` across a major (policy `platform-semver-versioning`) | Linkable | runs |
 | **added overload — source side** | *not a binary break* | Linkable | runs; the plugin's **rebuild** (rung 3) hits CS0419 on a parameterless `<see cref>` — fix: spell the cref with its parameter list |
 | **behaviour change behind an unchanged signature** | **nothing static can** | Linkable | runs — differently |
 
