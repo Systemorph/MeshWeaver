@@ -29,6 +29,10 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class NodeTypeOffSwitchesSurviveTheWireTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <summary>Every case only reads the mesh's immutable serializer options and writes no mesh
+    /// state, so one boot serves the whole class.</summary>
+    protected override bool ShareMeshAcrossTests => true;
+
     /// <summary>The trap, kept on purpose: an <c>= true</c> flag with no write override.</summary>
     public sealed record TrapShaped
     {
