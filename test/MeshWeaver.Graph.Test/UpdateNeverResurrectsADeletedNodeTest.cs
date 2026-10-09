@@ -70,7 +70,8 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
         var refusal = await failure.Should().Within(10.Seconds()).Emit(
             "a flush of a node deleted after the update committed must be refused, so the writer "
             + "hears its update did not land");
-        refusal.Message.Should().Contain("delete wins");
+        refusal.Should().BeOfType<NodeDeletedUpdateRefusedException>(
+            "the refusal is typed, so the patch handler NACKs it as NotFound instead of Unknown");
 
         (await Exists(node.Path)).Should().BeFalse(
             "a delete that answered removed=true must not be undone by an update that committed "

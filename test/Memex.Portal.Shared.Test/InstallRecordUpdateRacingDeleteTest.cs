@@ -6,6 +6,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -59,7 +60,25 @@ public class InstallRecordUpdateRacingDeleteTest(ITestOutputHelper output) : Mon
                     .Update<PackageManifest>(PackageAutoUpdateMigration.Migrated))
                 .Take(1)
                 .Select(_ => "applied")
-                .Catch((Exception ex) => Observable.Return($"refused: {ex.GetType().Name}"))
+                // Only the refusals an update racing a delete can legitimately get are absorbed, and
+                // each says the node is gone: the owner's NotFound NACK (the post-commit flush's
+                // refusal arrives as exactly this), a routing NotFound (the update reached the address
+                // after the node had vanished), and the owner's absent-node reply, which today still
+                // arrives UNCLASSIFIED (Unknown, "No node found at …") for the path under test. Every
+                // classified fault other than NotFound — access denied, an unreachable owner, a
+                // deserialization or validation failure, a conflict — propagates and fails the test,
+                // as does any other exception type, so a broken setup cannot pass as "no survivors".
+                .Catch((Exception ex) => ex switch
+                {
+                    MeshNodeStreamException { Error.Code: MeshNodeErrorCode.NotFound } =>
+                        Observable.Return("refused: owner NotFound"),
+                    MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Unknown } mse
+                        when string.Equals(mse.Error.Path, path, StringComparison.OrdinalIgnoreCase) =>
+                        Observable.Return("refused: owner Unknown"),
+                    DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound } =>
+                        Observable.Return("refused: routing NotFound"),
+                    _ => Observable.Throw<string>(ex),
+                })
                 .Replay();
             using var inFlight = update.Connect();
 
@@ -69,6 +88,8 @@ public class InstallRecordUpdateRacingDeleteTest(ITestOutputHelper output) : Mon
             var survived = await storage.Exists(path).FirstAsync()
                 .Timeout(TestTimeouts.Convergence).Await(ct);
             Output.WriteLine($"round {i}: removed={removed} update={outcome} survived={survived}");
+            removed.Should().BeTrue(
+                "the premise of every round: the record existed and THIS delete removed it");
             if (survived)
                 survivors++;
         }

@@ -92,7 +92,8 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
         // Checked INSIDE the deferred write — when the write is issued, not when the flush is built —
         // because the delete marks its tombstones BEFORE it removes a row (RunDeletePass), so a write
         // issued after the removal always sees the mark. A FAULT, not an empty success: the commit is
-        // NACKed with this sentence and the writer hears that its update did not land; the claim is
+        // NACKed as NotFound (NodeDeletedUpdateRefusedException) and the writer hears that its update
+        // did not land; the claim is
         // released by the Finally below, and the sampler that then becomes the writer of record drops
         // the same write against the same tombstone. A genuine re-create supersedes the tombstone
         // (SubtreeDeletionGuardStorageAdapter → RecentlyDeletedRegistry.Supersede), so updates of a
@@ -100,10 +101,7 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
         var tombstones = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
 
         return Observable.Defer(() => tombstones?.IsRecentlyDeleted(node.Path) == true
-                ? Observable.Throw<MeshNode?>(new InvalidOperationException(
-                    $"Update of '{node.Path}' was not persisted: the node was deleted after this update "
-                    + "committed at its owner, and a delete wins — writing it would re-create the row the "
-                    + "delete just removed."))
+                ? Observable.Throw<MeshNode?>(new NodeDeletedUpdateRefusedException(node.Path))
                 : storage.WriteAndPublishUpdated(node, hub.JsonSerializerOptions, changeFeed))
             .Do(
                 saved =>
