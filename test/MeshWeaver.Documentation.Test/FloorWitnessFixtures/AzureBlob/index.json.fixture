@@ -1,0 +1,26 @@
+{
+  "$type": "MeshNode",
+  "id": "AzureBlob",
+  "namespace": "",
+  "path": "AzureBlob",
+  "mainNode": "AzureBlob",
+  "name": "Azure Blob Storage",
+  "description": "Blob-backed content collections, NodeType assembly cache and NuGet package cache on Azure Storage.",
+  "nodeType": "Store/Plugin",
+  "category": "Developer Tools",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><rect width='48' height='48' rx='10' fill='#0078d4'/><path d='M31 20a7 7 0 0 0-13.7-1.9A5.5 5.5 0 0 0 18 29h12.5a4.5 4.5 0 0 0 .5-9z' fill='#e8f4fd'/><rect x='14' y='33' width='20' height='3' rx='1.5' fill='#9cd0f5'/></svg>",
+  "state": "Active",
+  "content": {
+    "$type": "PluginContent",
+    "description": "Blob-backed content collections, NodeType assembly cache and NuGet package cache on Azure Storage.",
+    "body": "# ☁️ Azure Blob Storage\n\n**The mesh on Azure Storage — for the deployments that want it, and nobody else's image.**\n\nThree blob-backed backends in one module: the `AzureBlob` content-collection source type, the versioned NodeType assembly cache (`BlobAssemblyStore`, cross-replica consistent), and the persistent NuGet package cache.\n\n## What ships\n\n- **`AzureBlob` stream provider** — point any content collection at a container (`SourceType: AzureBlob`, `ContainerName`, optional `ClientName`).\n- **Blob assembly cache** — the NodeType compile cache shared across replicas, keyed by framework identity.\n- **Blob NuGet cache** — resolved packages persist across restarts.\n\nA deployment on the filesystem backend — a PVC, a local volume — carries none of the Azure SDK. That is the point.\n\n## Contents\n\n@@(\"area/Search\")",
+    "module": "MeshWeaver.Azure.Blob",
+    "preInstalled": true,
+    "requires": [
+      "Store@^1.0.0"
+    ],
+    "minMeshVersion": "3.0.0-ci.9917",
+    "version": null,
+    "tier": "free"
+  }
+}

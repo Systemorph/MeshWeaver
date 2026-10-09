@@ -1,0 +1,31 @@
+{
+  "$type": "MeshNode",
+  "id": "Grok",
+  "namespace": "",
+  "path": "Grok",
+  "mainNode": "Grok",
+  "name": "Grok Build",
+  "description": "Run your chats on the Grok Build CLI with your own Grok account — installed into your picker only.",
+  "nodeType": "Store/Plugin",
+  "category": "AI",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' data-mw-mark='official'><rect width='20' height='20' rx='4' fill='#000'/><g stroke='#fff' stroke-width='1.5' stroke-linecap='round'><line x1='5' y1='5' x2='15' y2='15'/><line x1='15' y1='5' x2='9.5' y2='10.5'/></g></svg>",
+  "state": "Active",
+  "content": {
+    "$type": "PluginContent",
+    "requires": [
+      "Store@^1.0.0",
+      "Acp@^1.0.0",
+      "AI@^1.13.0"
+    ],
+    "entryPoint": "AI/AiThreads",
+    "hostedIn": "AI/AiThreads",
+    "extensionSlot": "harness",
+    "description": "The Grok Build execution harness for MeshWeaver chat, driven over the Agent Client Protocol. Installing places the harness in YOUR chat picker (localized to {you}/Harness/Grok) — it never appears for users who haven't opted in. The harness implementation ships with the ACP Agents package (module MeshWeaver.AI.Acp); this plugin is the per-user opt-in. The Grok Build CLI itself must be installed beside the portal.",
+    "minMeshVersion": "3.0.0-ci.9887",
+    "body": "<div style='background:linear-gradient(135deg,#000,#2a2a2a);border-radius:16px;padding:clamp(28px,5vw,60px);color:#f5f5f5;margin:4px 0 26px'><div style='font-size:clamp(11px,1.2vw,14px);letter-spacing:.2em;text-transform:uppercase;color:#e7e7e7;font-weight:700'>Execution harness &middot; your own Grok account</div><div style='font-size:clamp(28px,4.6vw,50px);font-weight:800;line-height:1.1;margin-top:10px'>Run your chats on <span style='color:#e7e7e7'>Grok Build</span></div><div style='font-size:clamp(15px,1.9vw,21px);color:#f5f5f5;opacity:.9;margin-top:14px;max-width:660px;line-height:1.5'>Pick <b>Grok Build</b> as the harness in any thread and the round runs on `grok` (Grok Build CLI) over the Agent Client Protocol &mdash; the mesh tools, nodes and context you already have, driven by a different engine.</div></div>\n\n## What installing does\n\nInstalling places the harness in **your** chat picker only — it lands at `{you}/Harness/Grok`.\nIt never appears for users who haven't opted in: there is no shared key and nothing is billed to the mesh.\n\n1. **Get the plugin** — the harness appears in your thread's harness picker.\n2. **Pick it in a thread**, then run **`/login`** to sign in with your Grok account (a device code you confirm in the browser) or paste an xAI API key.\n3. **Chat as usual** — same threads, same tools, same mesh content.\n\nUninstalling removes it from your picker again; threads that had selected it fall back to the\nstandard MeshWeaver agent path, so nothing breaks and no history is lost.\n\n## Good to know\n\n- It is a **harness**, not an agent: it changes *what executes the round*, not which agent you talk to.\n- Each thread is **one Grok Build session**: every round resumes it, so the agent keeps the thread's context\n  and tool results itself. Every tool the agent runs shows up in the thread as a tool call.\n- The agent speaks the **Agent Client Protocol**; the harness that drives it is shared by every ACP agent and\n  ships with the **ACP Agents** package: @@(\"Acp/AgentClientProtocol\").\n- Nothing is shared. Your account, your login, your picker.\n\n## Contents\n\n@@(\"area/Search\")\n",
+    "preInstalled": true,
+    "personalInstall": true,
+    "version": "1.1",
+    "tier": "pro"
+  }
+}

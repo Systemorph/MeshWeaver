@@ -44,6 +44,29 @@ public sealed record ModuleReading(string Module, string Root, string? ModuleVer
     /// record's primary-constructor arity is public surface.
     /// </summary>
     public ImmutableList<string> Requires { get; init; } = [];
+
+    /// <summary>
+    /// The module root's floor witness (<c>mesh-floor.lock</c>, <see cref="ModuleFloorWitness"/>), or
+    /// null when the tree carries none. An INIT property, for the same reason as <see cref="Requires"/>.
+    /// </summary>
+    public FloorWitness? Witness { get; init; }
+
+    /// <summary>
+    /// The package content hash of the INCOMING sources, recomputed the way the witness's
+    /// <c>contentHash</c> was (<see cref="ModuleFloorWitness.ContentHash"/>), or null when it cannot be.
+    /// </summary>
+    public string? IncomingContentHash { get; init; }
+
+    /// <summary>
+    /// 🚨 Whether the declared <see cref="Floor"/> is a FACT about these sources: true when the
+    /// witness vouches for exactly the incoming content, false when the sources moved after the last
+    /// stamp (the floor is the previous sources' floor), null when that cannot be told — no witness, or
+    /// a hash that could not be computed — which no rule reads as either answer.
+    /// </summary>
+    public bool? FloorVerified =>
+        Witness?.ContentHash is { Length: > 0 } stamped && IncomingContentHash is { Length: > 0 } incoming
+            ? string.Equals(stamped, incoming, StringComparison.Ordinal)
+            : null;
 }
 
 /// <summary>
@@ -69,6 +92,13 @@ public sealed record ModuleSyncOutcome(
     /// dependency floor rather than a platform floor (MeshWeaver#6067 follow-up); null otherwise.
     /// </summary>
     public string? UnmetRequirement { get; init; }
+
+    /// <summary>
+    /// True when the module was declined because its declared floor is NOT verified for the incoming
+    /// sources (<see cref="ModuleSyncDecision.HoldUnverifiedFloors"/>) while this instance runs behind
+    /// a newer platform; <see cref="Floor"/> then names that newer platform. False otherwise.
+    /// </summary>
+    public bool FloorUnverified { get; init; }
 }
 
 /// <summary>
@@ -261,11 +291,96 @@ public static class ModuleSyncDecision
     /// any depth), its <c>moduleVersion</c>, and the declared floor from the module root's
     /// <c>index.json</c> (<c>content.minMeshVersion</c>). Pure and tolerant: an unparsable manifest
     /// still names its module (its folder) with no hash, so it syncs — it is never skipped as
-    /// unchanged on a reading that failed.
+    /// unchanged on a reading that failed. Text-only overload: every file's bytes are its UTF-8 text.
     /// </summary>
     /// <param name="files">The tree's files as (Space-relative path, text content).</param>
     /// <returns>The modules, ordinal by root.</returns>
     public static ImmutableList<ModuleReading> Read(IEnumerable<(string Path, string Content)> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        return Read(files.Select(f => new RepoFile(f.Path, f.Content)));
+    }
+
+    /// <summary>
+    /// 🚨 <b>A floor nobody stamped for these sources is not a floor — on an instance that is BEHIND
+    /// (policy <c>package-min-mesh-version</c>; <c>Doc/Architecture/ModuleSyncPerManifestHash</c>).</b>
+    /// Every <see cref="ModuleSyncOutcomeKind.Synced"/> outcome whose reading's declared floor is NOT
+    /// verified for the incoming sources (<see cref="ModuleReading.FloorVerified"/> is false — the
+    /// witness vouches for different content: the sources moved after the last stamp) becomes
+    /// <see cref="ModuleSyncOutcomeKind.Declined"/> when this instance knows a NEWER platform than the
+    /// one it runs (<paramref name="newerPlatform"/>). The sources were written against main, which may
+    /// need any platform up to that newer one — core API they compile against, or a renderer only a
+    /// newer image ships — and the stale floor cannot say which. The declined module keeps serving its
+    /// last good build, its baseline stays, and the next import after the stamp or after the roll
+    /// judges it again.
+    ///
+    /// <para><b>Measured 2026-10-09 on memex.systemorph.com</b> (running 3.0.0-ci.10310, 3.0.0-ci.10319
+    /// available): MeshWeaver.Plugins@73e5065d carried the approvals inbox on the data-bound row
+    /// selection (Plugins#3214) while <c>Hosting</c> still declared <c>3.0.0-ci.10305</c>, the floor of
+    /// its previous sources. The import synced it; the 3.0.0-ci.10310 image had no renderer for the
+    /// selection, and nothing in the inbox could be selected. The stamp for exactly that content was
+    /// <c>3.0.0-ci.10317</c>.</para>
+    ///
+    /// <para><b>What it does NOT hold</b> (policy <c>sources-sync-on-push</c> — never wait for a green or
+    /// sealed build): an instance that runs the newest platform it knows of, or that knows of none
+    /// (<paramref name="newerPlatform"/> null), takes every push as before; a verified floor
+    /// (<see cref="ModuleReading.FloorVerified"/> true) is judged by <see cref="Decide"/> alone; and a
+    /// reading that cannot be verified either way (null — no witness, a hash that could not be
+    /// computed) is not judged. Unchanged and already-declined outcomes pass through. Pure.</para>
+    /// </summary>
+    /// <param name="outcomes">The outcomes <see cref="Decide"/> (and the requirement rule) produced.</param>
+    /// <param name="incoming">The readings they were decided from.</param>
+    /// <param name="runningPlatformVersion">The platform this instance runs, for the reason.</param>
+    /// <param name="newerPlatform">A platform NEWER than the running one that this instance knows is
+    /// available, or null when it runs the newest it knows of (or cannot tell).</param>
+    /// <returns>The outcomes, with every unverified floor held on a lagging instance.</returns>
+    public static ImmutableList<ModuleSyncOutcome> HoldUnverifiedFloors(
+        IReadOnlyList<ModuleSyncOutcome> outcomes,
+        IReadOnlyList<ModuleReading> incoming,
+        string? runningPlatformVersion,
+        string? newerPlatform)
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+        ArgumentNullException.ThrowIfNull(incoming);
+        if (string.IsNullOrWhiteSpace(newerPlatform))
+            return [.. outcomes];
+        return outcomes.Select(outcome =>
+            {
+                if (outcome.Outcome != ModuleSyncOutcomeKind.Synced)
+                    return outcome;
+                var reading = incoming.FirstOrDefault(m =>
+                    string.Equals(m.Module, outcome.Module, StringComparison.Ordinal)
+                    && string.Equals(m.Root, outcome.Root, StringComparison.Ordinal));
+                if (reading is null || reading.FloorVerified != false)
+                    return outcome;
+                return outcome with
+                {
+                    Outcome = ModuleSyncOutcomeKind.Declined,
+                    Floor = newerPlatform,
+                    FloorUnverified = true,
+                    Reason = $"module '{outcome.Module}' changed after its platform floor was last stamped "
+                             + $"(it declares {reading.Floor ?? "no floor"}, stamped for content "
+                             + $"{reading.Witness?.ContentHash} verified on {reading.Witness?.VerifiedOn ?? "an unknown set"}; "
+                             + $"the incoming content is {reading.IncomingContentHash}), so that floor says nothing "
+                             + "about these sources — and this instance runs "
+                             + $"{runningPlatformVersion ?? "an unknown platform"} while {newerPlatform} is available. "
+                             + "Its sources are not written and its NodeTypes keep serving their last good build "
+                             + "until the floor is stamped for them or the platform rolls forward; every other "
+                             + "module syncs (policy package-min-mesh-version)",
+                };
+            })
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// Reads every module an incoming tree states (see the text overload), and for each one also its
+    /// floor witness (<c>mesh-floor.lock</c>) and the content hash of the incoming sources
+    /// (<see cref="ModuleFloorWitness.ContentHash"/>) — what <see cref="HoldUnverifiedFloors"/> reads
+    /// to tell a stamped floor from a stale one. A binary file contributes its raw bytes.
+    /// </summary>
+    /// <param name="files">The tree's files, Space-relative.</param>
+    /// <returns>The modules, ordinal by root.</returns>
+    public static ImmutableList<ModuleReading> Read(IEnumerable<RepoFile> files)
     {
         ArgumentNullException.ThrowIfNull(files);
         var all = files.ToList();
@@ -286,14 +401,32 @@ public static class ModuleSyncDecision
                 var indexPath = root.Length == 0 ? "index.json" : root + "/index.json";
                 var index = byPath.GetValueOrDefault(indexPath);
                 var floor = index is { } floorJson ? ParseFloor(floorJson) : null;
+                var witnessPath = root.Length == 0
+                    ? ModuleFloorWitness.FileName
+                    : root + "/" + ModuleFloorWitness.FileName;
+                var witness = byPath.GetValueOrDefault(witnessPath) is { } witnessJson
+                    ? ModuleFloorWitness.Parse(witnessJson)
+                    : null;
                 return new ModuleReading(name, root, version, floor)
                 {
                     Requires = index is { } requiresJson ? ParseRequires(requiresJson) : [],
+                    Witness = witness,
+                    IncomingContentHash = witness is null
+                        ? null
+                        : ModuleFloorWitness.ContentHash(FilesUnder(all, root), f.Content),
                 };
             })
             .OrderBy(m => m.Root, StringComparer.Ordinal)
             .ToImmutableList();
     }
+
+    /// <summary>The files under a module root, root-relative, with their raw bytes (a text file's
+    /// bytes are its UTF-8 encoding — the transports decode strictly, so that round-trips).</summary>
+    private static IEnumerable<(string Path, byte[] Bytes)> FilesUnder(IReadOnlyList<RepoFile> files, string root)
+        => files
+            .Where(f => root.Length == 0 || f.Path.StartsWith(root + "/", StringComparison.Ordinal))
+            .Select(f => (root.Length == 0 ? f.Path : f.Path[(root.Length + 1)..],
+                f.Binary ?? System.Text.Encoding.UTF8.GetBytes(f.Content)));
 
     /// <summary>
     /// The manifest hashes an import may RECORD once it concluded: every module that synced or was

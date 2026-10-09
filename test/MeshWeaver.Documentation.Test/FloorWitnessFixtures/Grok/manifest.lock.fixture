@@ -1,0 +1,12 @@
+{
+  "files": {
+    "Grok/Harness/Grok.json": "363c0e5adaf41061c085146730aa52a0a5c916e33613e2607f4f12d862a113eb",
+    "Grok/index.json": "b92bbecf1ab39096280010d4e8ddee060656f80f0de75d88b8ef34beff9a5fe8",
+    "Grok/mesh-floor.lock": "c953c8f2341fc930ed8b9f5b25ea0a29ebff8e24610e3fd739ee40d044c273c5"
+  },
+  "module": "Grok",
+  "moduleVersion": "e8f16c263ddc6976",
+  "schema": "mw-manifest/1",
+  "sourceCommit": "37fc57dbf0ae78435b96229eed46fe8d3ac1f978",
+  "version": "1.1.3"
+}
