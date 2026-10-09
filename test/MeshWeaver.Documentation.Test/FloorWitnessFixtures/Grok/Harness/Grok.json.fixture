@@ -1,0 +1,21 @@
+{
+  "$type": "MeshNode",
+  "id": "Grok",
+  "namespace": "Grok/Harness",
+  "path": "Grok/Harness/Grok",
+  "mainNode": "Grok/Harness/Grok",
+  "name": "Grok Build",
+  "description": "Runs the Grok Build CLI under your own Grok account.",
+  "nodeType": "Harness",
+  "state": "Active",
+  "content": {
+    "$type": "Harness",
+    "id": "Grok",
+    "displayName": "Grok Build",
+    "description": "Runs the Grok Build CLI under your own Grok account.",
+    "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><rect width='20' height='20' rx='4' fill='#000'/><g stroke='#fff' stroke-width='1.5' stroke-linecap='round'><line x1='5' y1='5' x2='15' y2='15'/><line x1='15' y1='5' x2='9.5' y2='10.5'/></g></svg>",
+    "order": 5,
+    "supportsAgentSelection": false,
+    "requiresInstall": true
+  }
+}

@@ -838,7 +838,35 @@ public static class GitHubActivityExtensions
             ctx.Log(modulesDeclined);
         if (ModulesRequirementUnmetLine(result) is { } requirementUnmet)
             ctx.Log(requirementUnmet);
+        if (ModulesFloorUnverifiedLine(result) is { } floorUnverified)
+            ctx.Log(floorUnverified);
         ctx.Log(ImportedLine(result, commitish));
+    }
+
+    /// <summary>
+    /// The modules this import did not write because their sources changed after their platform floor
+    /// was last stamped while this instance runs behind a newer platform it knows of
+    /// (<c>ModuleSyncDecision.HoldUnverifiedFloors</c>). Named apart from
+    /// <see cref="ModulesDeclinedLine"/>: these modules declare no newer floor, they have none stamped
+    /// for these sources yet, so the stamp OR the roll releases them. Warning, in the viewer's language,
+    /// with the platforms as arguments.
+    /// </summary>
+    internal static LogMessage? ModulesFloorUnverifiedLine(StaticRepoImportResult result)
+    {
+        if (result.UnverifiedFloorModules.Count == 0)
+            return null;
+        var modules = string.Join(", ", result.UnverifiedFloorModules);
+        var running = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?";
+        var available = result.UnverifiedFloorAvailablePlatform ?? "?";
+        return new LogMessage(
+                $"⛔ {result.UnverifiedFloorModules.Count} module(s) not written — their sources changed after "
+                + $"their platform floor was last stamped, and this instance runs {running} while {available} "
+                + $"is available: {modules}. Modules not listed here are not held by this; these sync once "
+                + "their floor is stamped or this instance's platform is rolled forward.",
+                LogLevel.Warning)
+            .WithKey("activity.gitsync.modulesFloorUnverified",
+                ("count", result.UnverifiedFloorModules.Count), ("running", running),
+                ("available", available), ("modules", modules));
     }
 
     /// <summary>

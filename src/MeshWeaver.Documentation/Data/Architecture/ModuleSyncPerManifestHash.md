@@ -56,7 +56,51 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
 | 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged; the image's OWN copy is judged at the version its `module.seed.json` stamp states — see below) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
 | 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
+| 2b | the module's floor is **not stamped for these sources** — its `mesh-floor.lock` witness records a `contentHash` other than the incoming content's (`ModuleFloorWitness.ContentHash`, the stamp's own rule) — **and** this instance knows a platform newer than it runs (`INewerPlatformReading`, the self-update's newest recorded tag) (`ModuleSyncDecision.HoldUnverifiedFloors`) | **Declined** — `FloorUnverified` on the outcome, `Floor` keeps the declared floor, `AvailablePlatform` names the newer platform, the reason names both hashes, the stale floor and both platforms | nothing for that module; its siblings sync |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
+
+### A floor nobody stamped for these sources (rule 2b)
+
+A package's floor is **stamped after** the commit that changes its sources: main's green run stamps
+it, and until that stamp lands every package whose sources moved still declares the floor of its
+PREVIOUS sources ([PackageFloors](https://github.com/Systemorph/MeshWeaver.Plugins/blob/main/Hosting/PackageFloors.md)).
+So rule 1 judged a floor that said nothing about what it let through. Measured 2026-10-09 on
+memex.systemorph.com (running `3.0.0-ci.10310`, `3.0.0-ci.10319` available): MeshWeaver.Plugins
+`73e5065d` carried the approvals inbox on the data-bound row selection (Plugins#3214) while `Hosting`
+still declared `3.0.0-ci.10305`; the import synced it at 12:07Z, the `3.0.0-ci.10310` image had no
+renderer for the selection, and nothing in `Hosting/Approvals` could be selected. The stamp for exactly
+that content, at 11:57Z, was `3.0.0-ci.10317` — but `73e5065d` predates the stamp commit.
+
+The witness (`<Package>/mesh-floor.lock`, `contentHash` + `verifiedOn`) says which sources its floor
+vouches for, and the import now recomputes that hash for the incoming tree exactly as the stamp did:
+the package's files by raw-byte sha256 (all but `manifest.lock`, `.DS_Store` and the top-level
+witness), the out-of-folder entries `manifest.lock` records (a mixed package's `src/` project), and
+`index.json` hashed without its `minMeshVersion` value as Python's `json.dumps(sort_keys=True,
+ensure_ascii=False)` writes it. `ModuleFloorWitnessTest` pins it against the node repository's own
+witnesses: two real packages copied byte for byte, plus a synthetic package hashed by the Python rule.
+An offline sweep of the same rule, which is not part of the suite, matched 76 of 76 witnesses at
+Plugins `0b8f8754` and detected 23 pending packages at `73e5065d`, `Hosting` among them.
+
+A held module is reported apart from a floor decline. Its declared floor stays in `Floor` (it is not
+above the running platform), the newer platform is in `AvailablePlatform`, and the activity and the
+settings tab name it with their own message (`activity.gitsync.modulesFloorUnverified`,
+`ui.gitSync.modulesFloorUnverified`).
+
+What a stale floor holds, and what it does not:
+
+- **A lagging instance** — one whose self-update has recorded a newer platform tag, whether its roll
+  onto it is available or held — does not take the module. Its NodeTypes keep serving their last good
+  build, the baseline stays, and the next import judges again: after the stamp lands (rule 1 then
+  reads a true floor) or after the platform rolls (the instance is no longer behind).
+- **An instance on the newest platform it knows of** (or one that cannot tell) takes every push, as
+  before — policy `sources-sync-on-push`: nothing waits for a stamp, a seal or a green build there.
+- **A floor the witness verifies** is judged by rule 1 alone, and a reading nothing can verify (no
+  witness, a hash that cannot be computed) is not judged.
+
+What it still cannot see: a source that needs a renderer only an image NEWER than the newest one the
+instance knows of ships. The instance on the newest platform takes it, and renders it without that
+renderer until its next roll; only a floor that names the first image carrying the renderer closes
+that, which is the stamp's job in the node repository.
 
 - **A declined module is the ONE per-module decline**, and it holds no sibling. Its paths are neither
   written nor pruned, and the Space's commit baseline stays put, the same rule a partially held Space

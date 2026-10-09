@@ -33,4 +33,11 @@
     <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ModuleFloorWitnessTest: real MeshWeaver.Plugins packages copied byte for byte, so the floor
+         witness hash is pinned against the node repository's OWN stamp. The .fixture suffix keeps
+         them invisible to anything that scans the tree for index.json / manifest.lock. -->
+    <None Include="FloorWitnessFixtures\**\*.fixture" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

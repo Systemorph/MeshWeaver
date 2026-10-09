@@ -50,6 +50,10 @@ public static class SelfUpdateConfiguration
             // Admin/UpdatePolicy, and a candidate with no verdict clears nothing.
             // Platform-neutral (a policy read plus, where a runner exists, file-system + process IO).
             services.AddSingleton<ComboVerificationGate>();
+            // 🚨 GitSync's "is this instance behind?" (ModuleSyncDecision.HoldUnverifiedFloors): a
+            // lagging instance does not take sources whose platform floor was not stamped for them.
+            // Platform-neutral (a policy read), so registered beside the gates.
+            services.TryAddSingleton<MeshWeaver.GitSync.INewerPlatformReading, NewerPlatformFromUpdatePolicy>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
             // baked into the image and a SelfUpdate__* value in the configmap silently did nothing —
             // the failure mode where an operator sets a knob, sees no effect, and concludes

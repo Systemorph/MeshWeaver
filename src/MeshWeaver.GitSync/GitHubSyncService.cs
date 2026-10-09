@@ -846,6 +846,26 @@ public sealed class GitHubSyncService
                 })
             : Observable.Return(ImmutableDictionary<string, LoadedPackageModule>.Empty);
 
+    /// <summary>
+    /// A platform NEWER than the running one that this instance knows is available
+    /// (<see cref="INewerPlatformReading"/>), or null — on a mesh that registers no reading, and on one
+    /// whose reading FAULTS, said at Warning: an import must not stop because the self-update state
+    /// could not be read, and null holds nothing, which is exactly the behaviour before the
+    /// unverified-floor rule existed. The reading bounds its own reads.
+    /// </summary>
+    private IObservable<string?> NewerPlatformNow()
+        => hub.ServiceProvider.GetService<INewerPlatformReading>() is { } reading
+            ? reading.NewerPlatform(hub).Take(1)
+                .DefaultIfEmpty(null)
+                .Catch((Exception exception) =>
+                {
+                    logger?.LogWarning(exception,
+                        "[ModuleSync] whether a newer platform is available could not be read — this import "
+                        + "holds no module on an unverified floor");
+                    return Observable.Return<string?>(null);
+                })
+            : Observable.Return<string?>(null);
+
     private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> FetchAndImport(
         string repoUrl, string commitish, string? subdirectory, string token, string spaceId,
         SyncIgnore ignore, Action<string, LogLevel>? progress = null, ImportConflictPolicy? policy = null,
@@ -856,7 +876,8 @@ public sealed class GitHubSyncService
         // package whose declared dependency floor the loaded build does not meet is declined below
         // instead of having its sources compiled against that build.
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token)
-            .SelectMany(fetched => LoadedPackageModulesNow().Select(loaded => (Snapshot: fetched, Loaded: loaded)))
+            .SelectMany(fetched => LoadedPackageModulesNow().SelectMany(loaded => NewerPlatformNow()
+                .Select(newer => (Snapshot: fetched, Loaded: loaded, NewerPlatform: newer))))
             .SelectMany(read =>
         {
             var snapshot = read.Snapshot;
@@ -882,8 +903,8 @@ public sealed class GitHubSyncService
                         ? RetireDeletedSource(spaceId, snapshot.CommitSha, subdirectory, progress)
                         : RefuseEmptySnapshot(repoUrl, snapshot, subdirectory, spaceId, progress));
             }
-            return ImportSnapshot(repoUrl, snapshot, read.Loaded, subdirectory, token, spaceId, ignore,
-                progress, policy, baseSha, heldModuleVersions);
+            return ImportSnapshot(repoUrl, snapshot, read.Loaded, read.NewerPlatform, subdirectory, token,
+                spaceId, ignore, progress, policy, baseSha, heldModuleVersions);
         });
     }
 
@@ -974,7 +995,7 @@ public sealed class GitHubSyncService
     /// <summary>Imports a fetched, non-empty (or subdirectory-less) snapshot — the ordinary path.</summary>
     private IObservable<(StaticRepoImportResult Result, string CommitSha, BundleHoldDecision Hold, ImmutableList<ModuleSyncOutcome> Modules)> ImportSnapshot(
         string repoUrl, RepoSnapshot snapshot, ImmutableDictionary<string, LoadedPackageModule> loaded,
-        string? subdirectory, string token, string spaceId, SyncIgnore ignore,
+        string? newerPlatform, string? subdirectory, string token, string spaceId, SyncIgnore ignore,
         Action<string, LogLevel>? progress, ImportConflictPolicy? policy, string? baseSha,
         IReadOnlyDictionary<string, string>? heldModuleVersions)
     {
@@ -985,15 +1006,22 @@ public sealed class GitHubSyncService
         // a platform floor above the running one is the ONE decline — its paths are neither
         // written nor pruned, and no sibling waits for it. A tree with no manifest.lock states no
         // module and imports exactly as before.
-        var readings = ModuleSyncDecision.Read(snapshot.Files.Select(f => (f.Path, f.Content)));
-        var modules = ModuleSyncDecision.DeclineUnmetRequirements(
-            ModuleSyncDecision.Decide(
+        // 🚨 …and a floor nobody stamped for THESE sources is no floor on an instance that is
+        // behind (ModuleSyncDecision.HoldUnverifiedFloors — memex.systemorph.com 2026-10-09).
+        var readings = ModuleSyncDecision.Read(snapshot.Files);
+        var running = PrebuiltAdoptionPolicy.RunningPlatformVersion;
+        var modules = ModuleSyncDecision.HoldUnverifiedFloors(
+            ModuleSyncDecision.DeclineUnmetRequirements(
+                ModuleSyncDecision.Decide(
+                    readings,
+                    heldModuleVersions,
+                    running,
+                    reconcile: policy is { Force: true } or { Reconcile: true }),
                 readings,
-                heldModuleVersions,
-                PrebuiltAdoptionPolicy.RunningPlatformVersion,
-                reconcile: policy is { Force: true } or { Reconcile: true }),
+                loaded),
             readings,
-            loaded);
+            running,
+            newerPlatform);
         var notWritten = modules
             .Where(m => m.Outcome is ModuleSyncOutcomeKind.Unchanged or ModuleSyncOutcomeKind.Declined)
             .ToList();
@@ -1002,9 +1030,15 @@ public sealed class GitHubSyncService
             logger?.LogWarning("[ModuleSync] {Space}: {Reason}", spaceId, decline.Reason);
         // Two declines, two remedies (#6111 review): a platform floor above the running
         // platform waits for a roll; an unmet `requires` waits for its dependency to load.
+        // A third: a floor not stamped for these sources waits for the stamp or the roll, and
+        // declares nothing false, so it is named apart (with its platforms as data, not prose).
         var declinedNames = declined
-            .Where(m => m.UnmetRequirement is null)
+            .Where(m => m.UnmetRequirement is null && !m.FloorUnverified)
             .Select(m => $"{m.Module} (≥ {m.Floor})")
+            .ToImmutableList();
+        var unverifiedFloorNames = declined
+            .Where(m => m.FloorUnverified)
+            .Select(m => m.Module)
             .ToImmutableList();
         var unmetRequirementNames = declined
             .Where(m => m.UnmetRequirement is not null)
@@ -1020,10 +1054,12 @@ public sealed class GitHubSyncService
                 Short(snapshot.CommitSha), string.Join("; ", notWritten.Select(m => m.Reason)));
             var noop = new StaticRepoImportResult(spaceId,
                 "manifest:" + string.Join(",", notWritten.Select(m => $"{m.Module}={m.IncomingVersion}")),
-                NoOpOutcome(declinedNames.Count, unmetRequirementNames.Count))
+                NoOpOutcome(declinedNames.Count + unverifiedFloorNames.Count, unmetRequirementNames.Count))
             {
                 DeclinedModules = declinedNames,
                 UnmetRequirementModules = unmetRequirementNames,
+                UnverifiedFloorModules = unverifiedFloorNames,
+                UnverifiedFloorAvailablePlatform = unverifiedFloorNames.IsEmpty ? null : newerPlatform,
             };
             return Observable.Return((noop, snapshot.CommitSha, BundleHoldDecision.Nothing, modules));
         }
@@ -1104,6 +1140,9 @@ public sealed class GitHubSyncService
                                     BundleHeldNodeTypePaths = [.. hold.Held.Select(h => h.Path)],
                                     DeclinedModules = declinedNames,
                                     UnmetRequirementModules = unmetRequirementNames,
+                                    UnverifiedFloorModules = unverifiedFloorNames,
+                                    UnverifiedFloorAvailablePlatform =
+                                        unverifiedFloorNames.IsEmpty ? null : newerPlatform,
                                 },
                                 snapshot.CommitSha,
                                 Hold: hold,
