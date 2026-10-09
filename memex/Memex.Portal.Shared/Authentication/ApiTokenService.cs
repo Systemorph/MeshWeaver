@@ -123,6 +123,29 @@ internal class ApiTokenService(
     public IObservable<TokenCreationResult> CreateToken(
         string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt = null)
     {
+        // 🚨 The OAuth label namespace is RESERVED: it is what makes a token subject to the idle
+        // rule (OAuthTokenLifetime), so a hand-minted token may not wear it — only
+        // CreateOAuthToken, the exchange's own surface, mints into it.
+        if (OAuthTokenLifetime.IsReservedLabel(label))
+            return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                $"A token label may not start with '{OAuthTokenLifetime.LabelPrefix.Trim()}' — that prefix "
+                + "is reserved for tokens the OAuth sign-in issues. Choose another label."));
+        return CreateTokenCore(userId, userName, userEmail, label, expiresAt);
+    }
+
+    /// <summary>
+    /// Mints the token the OAuth exchange issues to <paramref name="clientId"/>, labelled
+    /// <c>OAuth: {clientId}</c> (<see cref="OAuthTokenLifetime.LabelFor"/>) — the one surface allowed
+    /// to mint into the reserved OAuth label namespace, and therefore the one whose tokens are
+    /// subject to the idle rule.
+    /// </summary>
+    internal IObservable<TokenCreationResult> CreateOAuthToken(
+        string userId, string userName, string userEmail, string clientId, DateTimeOffset? expiresAt)
+        => CreateTokenCore(userId, userName, userEmail, OAuthTokenLifetime.LabelFor(clientId), expiresAt);
+
+    private IObservable<TokenCreationResult> CreateTokenCore(
+        string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt)
+    {
         // 🚨 A person's surfaces never mint for a SERVICE principal. A service's tokens are issued
         // only through CreateServiceToken, which reads the service's record in the Admin partition
         // first — a token minted here for a `svc-…` id would carry no identity path, so revoking
@@ -327,7 +350,7 @@ internal class ApiTokenService(
     /// <para>
     /// 🚨 The predicate is deliberately narrow: a token is swept ONLY when <see cref="Validate"/>
     /// already refuses it — its <see cref="ApiToken.ExpiresAt"/> is in the PAST, or it is an
-    /// OAuth-minted token past <see cref="OAuthIdleLifetime"/> without use
+    /// OAuth-minted token past <see cref="OAuthTokenLifetime.IdleLifetime"/> without use
     /// (<see cref="IsIdleOAuthToken"/>). A token a person minted by hand with no expiry is never
     /// touched, however long it sits unused. Deleting a live credential is the one failure mode
     /// this must not have.
@@ -391,36 +414,13 @@ internal class ApiTokenService(
     }
 
     /// <summary>
-    /// The label every OAuth-minted token carries: <c>OAuth: {client_id}</c>
-    /// (<see cref="OAuthConnectController"/>). It is the one property that tells a token the OAuth
-    /// exchange issued from one a person minted by hand, and the idle rule below applies only to it.
+    /// True when <paramref name="token"/> was minted by the OAuth exchange and has gone unused past
+    /// <see cref="OAuthTokenLifetime.IdleLifetime"/>. Validation refuses such a token and the expiry
+    /// sweep deletes it, exactly like one whose <see cref="ApiToken.ExpiresAt"/> has passed. The rule
+    /// itself is <see cref="OAuthTokenLifetime"/>, shared with <see cref="ApiTokenVerdict"/> so every
+    /// validator refuses the same token.
     /// </summary>
-    internal const string OAuthLabelPrefix = "OAuth: ";
-
-    /// <summary>
-    /// How long an OAuth-minted token may go unused before it expires (Plugins#2772).
-    ///
-    /// <para><b>Why idle, and why only OAuth.</b> Supersession keys on <c>client_id</c>, which a
-    /// loopback client derives from its redirect URI — so a client that re-registers on a new port
-    /// (one per machine, or whenever its stored port is taken) gets a fresh slot, and the previous
-    /// year-long token stays live with nothing able to reach it. Expiring an OAuth token after a
-    /// stretch of disuse ends that accumulation without touching the supersede key, so it cannot
-    /// make sibling-eviction (MeshWeaver#5074) worse, and it only ever removes credentials. A client
-    /// that is still in use stamps <see cref="ApiToken.LastUsedAt"/> on every validation (throttled
-    /// to <see cref="LastUsedStampInterval"/>), so it never comes near the bound; an idle one
-    /// re-authorizes interactively. A token a person minted by hand is never touched by this rule.</para>
-    /// </summary>
-    internal static readonly TimeSpan OAuthIdleLifetime = TimeSpan.FromDays(30);
-
-    /// <summary>
-    /// True when <paramref name="token"/> was minted by the OAuth exchange and has not been used
-    /// for longer than <see cref="OAuthIdleLifetime"/> — measured from its last use, or from its
-    /// creation when it was never used. Validation refuses such a token and the expiry sweep
-    /// deletes it, exactly like one whose <see cref="ApiToken.ExpiresAt"/> has passed.
-    /// </summary>
-    internal static bool IsIdleOAuthToken(ApiToken token, DateTimeOffset now) =>
-        token.Label.StartsWith(OAuthLabelPrefix, StringComparison.Ordinal)
-        && now - (token.LastUsedAt ?? token.CreatedAt) > OAuthIdleLifetime;
+    internal static bool IsIdleOAuthToken(ApiToken token, DateTimeOffset now) => OAuthTokenLifetime.IsIdle(token, now);
 
     /// <summary>
     /// Deletes the global <c>ApiToken/{hashPrefix}</c> index entry under the well-known System
@@ -837,7 +837,7 @@ internal class ApiTokenService(
                 "expired", hashPrefix, elapsed.ElapsedMilliseconds, apiToken.ExpiresAt.Value);
             return TokenValidationResult.Invalid("Token expired");
         }
-        if (IsIdleOAuthToken(apiToken, DateTimeOffset.UtcNow))
+        if (OAuthTokenLifetime.IsIdle(apiToken, DateTimeOffset.UtcNow))
         {
             logger.LogWarning(
                 "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms (OAuth token unused since {LastUse})",
