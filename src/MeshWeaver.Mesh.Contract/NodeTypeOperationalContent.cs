@@ -152,6 +152,10 @@ public static class NodeTypeOperationalContent
         // happened to match this deployment's live inputs would SUPPRESS the one automatic retry a
         // never-compiled failure gets. Stripped on export, preserved from the live node on import.
         "failedBuildInputs",
+        // The platform BUILD the standing failure was formed on — failedBuildInputs' fw= half is
+        // the stable compatibility key, so this is what lets a newer build retry it once. An
+        // authored value naming a future build would suppress that retry, exactly as above.
+        "failedPlatformVersion",
         // #3903 — the declared source queries that matched NOTHING when the standing failure was
         // recorded. Operational for the same reason failedBuildInputs is: it is a measurement of
         // THIS mesh's content (which nodes a query matches here), so an authored copy would assert

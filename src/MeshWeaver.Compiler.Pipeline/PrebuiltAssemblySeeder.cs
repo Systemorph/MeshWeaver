@@ -1342,6 +1342,7 @@ public static class PrebuiltAssemblySeeder
                             // ApplyCompileSuccess does. A token left behind would describe a
                             // verdict this node no longer holds.
                             FailedBuildInputs = null,
+                            FailedPlatformVersion = null,
                             // 🚨 The source snapshot is stamped BY THE OWNER, not here
                             // (#1834). The producer's own ticks are meaningless on this
                             // mesh (the bake writes zeros), so adoption asserts "these

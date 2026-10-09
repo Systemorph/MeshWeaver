@@ -327,7 +327,12 @@ internal static class NodeTypeContractHandler
                             {
                                 DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
                                 CompilationStatus = CompilationStatus.Error,
-                                CompilationError = response.Error ?? "Compilation failed"
+                                CompilationError = response.Error ?? "Compilation failed",
+                                // A fresh failure verdict, formed on THIS build — stamped like
+                                // ApplyCompileFailure, so it is never read as a legacy unstamped
+                                // one and retried at once.
+                                FailedPlatformVersion = NodeTypeCompilationHelpers.FailureStamp(
+                                    NodeTypeCompilationHelpers.LivePlatformVersion),
                             }
                         };
                     })
@@ -792,6 +797,8 @@ internal static class NodeTypeContractHandler
             CompiledPlatformVersion = freshCompile
                 ? NodeTypeCompilationHelpers.LivePlatformVersion
                 : def.CompiledPlatformVersion,
+            // Settled Ok: the failure verdict, and the build it was formed on, are gone.
+            FailedPlatformVersion = null,
         };
 
 

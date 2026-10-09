@@ -1012,6 +1012,29 @@ public record NodeTypeDefinition
     public string? FailedBuildInputs { get; init; }
 
     /// <summary>
+    /// 🚨 The PLATFORM BUILD (<c>PlatformBuildInfo.PlatformVersion</c>, build metadata stripped, e.g.
+    /// <c>3.0.0-ci.10300</c>) of the process that formed the standing failure verdict — the half of
+    /// "what was this failure formed under" that <see cref="FailedBuildInputs"/> can no longer carry.
+    ///
+    /// <para><b>Why a second stamp.</b> The <c>fw=</c> part of <see cref="FailedBuildInputs"/> is the
+    /// platform COMPATIBILITY KEY (<c>c003e001</c>), which is deliberately STABLE across every build of
+    /// one major and epoch. So a type that failed because its sources needed an API the producing
+    /// build did not have yet (an additive platform change: <c>CS0246</c>/<c>CS1061</c> on a new
+    /// framework type) keeps the SAME token on the build that adds the API — and was never retried
+    /// there: it kept serving its last good build, or nothing, until a person pressed Compile.</para>
+    ///
+    /// <para><b>The rule it enables.</b> A failure formed on an OLDER platform build than the one now
+    /// running earns exactly ONE automatic attempt on this build (the re-drive stamps this field with
+    /// the live build in the same write that flips to Pending). A failure formed on THIS build, or on
+    /// a NEWER one (an older replica during a roll), is never retried by it — so a mixed-replica roll
+    /// cannot ping-pong a type between two images. <c>null</c> = not recorded (every failure stamped
+    /// before this field existed): treated as older, i.e. one attempt, then stamped.</para>
+    ///
+    /// <para>🚨 Runtime state, cleared by every success; never author it into a node file.</para>
+    /// </summary>
+    public string? FailedPlatformVersion { get; init; }
+
+    /// <summary>
     /// 🚨 The DECLARED SOURCE QUERIES that matched NOTHING when the standing failure verdict was
     /// formed — the durable answer to "why does this compile name symbols nobody can find?"
     /// (issue #3903).
