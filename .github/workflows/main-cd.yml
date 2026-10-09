@@ -1958,11 +1958,17 @@ jobs:
             echo "::notice::memex-control carries no version tag yet — this is the FIRST control image, so leg (c) (previous image against this run's migrated database) is not applicable. Every later run resolves a previous version and must pass it."
             echo "args=--first-run" >> "$GITHUB_OUTPUT"
           fi
+      # `--postgres` names the ACR copy of pgvector (the fleet's Docker Hub mirror, `az acr import`ed
+      # once — Memex deployments/aks/ci-runners, the image the runner sets' shared Postgres runs),
+      # never the script's laptop default `pgvector/pgvector:pg17`: this job is already logged in to
+      # ACR, and the anonymous Docker Hub pull is rate-limited per egress IP of the hosted runner
+      # pool (Doc/Architecture/DockerHubInCi) — a red on the delivery path no commit could cure.
       - name: Acceptance — (a) empty DB, (b) broken NodeType row, (c) N−1 on the migrated DB
         run: >
           bash .github/scripts/control-image-acceptance.sh
           --control "${{ env.ACR }}/memex-control:${{ env.STAGING }}"
           --migration "${{ env.ACR }}/memex-migration:${{ env.STAGING }}"
+          --postgres "${{ env.ACR }}/dockerhub/pgvector/pgvector:pg17"
           ${{ steps.previous.outputs.args }}
 
   # Tags the accepted image — `memex-control:<sha>`, `:main` — on ACR and the
