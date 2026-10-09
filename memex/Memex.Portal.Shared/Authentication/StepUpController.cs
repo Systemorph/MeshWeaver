@@ -1,4 +1,3 @@
-using System.Net;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
@@ -33,7 +32,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// </summary>
 [Authorize]
 [Route(BasePath)]
-public sealed class StepUpController(
+public sealed partial class StepUpController(
     IConfiguration configuration,
     IHttpClientFactory httpFactory,
     IDataProtectionProvider dataProtection,
@@ -67,12 +66,14 @@ public sealed class StepUpController(
     /// <param name="targets">The action paths (repeatable, paired with <paramref name="bindings"/>).</param>
     /// <param name="bindings">The hashes approved, one per target.</param>
     /// <param name="returnUrl">Where to come back to; sanitised to a local URL.</param>
-    /// <returns>A redirect, or a page explaining the refusal.</returns>
+    /// <param name="ct">Cancels the wait on the factor read, not the read.</param>
+    /// <returns>A redirect, the passkey/TOTP page, or a page explaining the refusal.</returns>
     [HttpGet("")]
-    public IActionResult Start(
+    public async Task<IActionResult> Start(
         [FromQuery(Name = "target")] string[]? targets,
         [FromQuery(Name = "binding")] string[]? bindings,
-        [FromQuery] string? returnUrl)
+        [FromQuery] string? returnUrl,
+        CancellationToken ct = default)
     {
         var safeReturn = ReturnUrlPolicy.Sanitize(returnUrl);
         var userId = access.Context?.ObjectId;
@@ -83,8 +84,17 @@ public sealed class StepUpController(
             return Refusal(safeReturn, access.Localize("stepUp.refused.targets"));
 
         var options = StepUpOptions.From(configuration);
+        var provider = StepUpClaims.ProviderOf(User);
+        var isMicrosoft = string.Equals(provider, StepUpClaims.MicrosoftProvider, StringComparison.OrdinalIgnoreCase);
+        StepUpFactors? factors = null;
+        if (options.Enabled && !string.IsNullOrEmpty(provider) && !isMicrosoft)
+        {
+            var read = await ReadFactors(userId, ct);
+            if (!read.Answered) return Failure(safeReturn, "unavailable");
+            factors = read.Factors;
+        }
         var entra = Entra();
-        var rung = StepUpLadder.Decide(StepUpClaims.ProviderOf(User), options, entra.IsConfigured && entra.TenantIsSpecific);
+        var rung = StepUpLadder.Decide(provider, options, entra.IsConfigured && entra.TenantIsSpecific, factors);
         logger.LogInformation("Step-up start for {User}: rung {Rung}, {Count} target(s)", userId, rung, pairs.Count);
 
         switch (rung)
@@ -95,13 +105,31 @@ public sealed class StepUpController(
                 return Refusal(safeReturn, access.Localize("stepUp.refused.unknownSession"));
             case StepUpRung.RefuseNotConfigured:
                 return Refusal(safeReturn, access.Localize("stepUp.refused.notConfigured"));
+            case StepUpRung.Enroll:
+                return Page(StepUpPages.EnrollNeeded(Texts(),
+                    EnrollPath + "?returnUrl=" + Uri.EscapeDataString(Request.Path + Request.QueryString)));
             case StepUpRung.Entra:
+            case StepUpRung.Passkey:
+            case StepUpRung.Totp:
                 break;
             default:
-                return Refusal(safeReturn, access.Localize("stepUp.refused.provider", StepUpClaims.ProviderOf(User)));
+                return Refusal(safeReturn, access.Localize("stepUp.refused.provider", provider));
         }
 
         var pending = new Pending(StepUpSeal.NewId(), StepUpSeal.NewId(), userId, pairs, safeReturn);
+        WritePending(pending);
+        if (rung == StepUpRung.Passkey)
+            return Page(StepUpPages.Passkey(Texts(), EnrollPath + "?returnUrl=" + Uri.EscapeDataString(safeReturn)));
+        if (rung == StepUpRung.Totp)
+            return Page(StepUpPages.Totp(Texts(), "/" + BasePath + "/" + TotpVerifyAction,
+                EnrollPath + "?returnUrl=" + Uri.EscapeDataString(safeReturn)));
+
+        var loginHint = User.FindFirst("email")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
+        return Redirect(entra.AuthorizeUrl(pending.State, pending.Nonce, CallbackUri, loginHint, options.EntraAuthenticationContext!));
+    }
+
+    /// <summary>Seals the pending step-up into its cookie (ten minutes, this route only).</summary>
+    private void WritePending(Pending pending) =>
         Response.Cookies.Append(PendingCookie, Protector().Protect(JsonSerializer.Serialize(pending), DateTimeOffset.UtcNow + PendingLifetime),
             new CookieOptions
             {
@@ -112,9 +140,6 @@ public sealed class StepUpController(
                 MaxAge = PendingLifetime,
                 Path = "/" + BasePath,
             });
-        var loginHint = User.FindFirst("email")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
-        return Redirect(entra.AuthorizeUrl(pending.State, pending.Nonce, CallbackUri, loginHint, options.EntraAuthenticationContext!));
-    }
 
     /// <summary>Completes the Entra rung: redeems the code, checks the token, mints and stamps the receipt.</summary>
     /// <param name="code">The authorization code.</param>
@@ -173,16 +198,26 @@ public sealed class StepUpController(
             logger.LogWarning("Step-up for {User} refused at '{Reason}'", userId, outcome.Check.Reason);
             return Failure(pending.ReturnUrl, outcome.Check.Reason ?? "exchange");
         }
-        return Redirect(EaConsentController.WithOutcome(ReturnUrlPolicy.Sanitize(pending.ReturnUrl), "stepUp=done"));
+        return Redirect(SuccessUrl(pending, outcome.Receipt));
     }
 
-    /// <summary>Mints the receipt (as System, inside the service) and stamps it onto every target as the approver.</summary>
+    /// <summary>The Entra rung's mint: the token's <c>auth_time</c> and evidence.</summary>
     private IObservable<StepUpReceipt> MintAndStamp(IMessageHub hub, string userId, EntraStepUpCheck check, IReadOnlyList<StepUpTarget> targets)
+        => MintAndStamp(hub, userId, StepUpMethod.Entra, check.AuthenticatedAt, check.Evidence, targets);
+
+    /// <summary>
+    /// Mints the receipt (as System, inside the service) and stamps it onto every target as the
+    /// approver. A factor-enrolment target (<c>Auth/_StepUpFactors/…</c>) is never stamped — it is a
+    /// System-only node, and the enrolment endpoint consumes the receipt itself, from the return URL.
+    /// </summary>
+    private IObservable<StepUpReceipt> MintAndStamp(IMessageHub hub, string userId, string method,
+        DateTimeOffset authenticatedAt, string? evidence, IReadOnlyList<StepUpTarget> targets)
     {
         var stepUp = hub.ServiceProvider.GetRequiredService<IStepUpService>();
         var workspace = hub.GetWorkspace();
-        return stepUp.Mint(userId, StepUpMethod.Entra, targets, check.AuthenticatedAt, check.Evidence)
+        return stepUp.Mint(userId, method, targets, authenticatedAt, evidence)
             .SelectMany(receipt => targets
+                .Where(t => !IsEnrollmentTarget(t))
                 .Select(t => t.ActionPath).Distinct(StringComparer.Ordinal)
                 .Select(path => workspace.GetMeshNodeStream(path)
                     .Update(node => node with { Content = StepUpPaths.Stamp(node.Content, userId, receipt.Id, hub.JsonSerializerOptions) })
@@ -193,6 +228,18 @@ public sealed class StepUpController(
                 .LastAsync()
                 .Select(_ => receipt));
     }
+
+    /// <summary>A target that authorizes enrolling another factor rather than an approval.</summary>
+    internal static bool IsEnrollmentTarget(StepUpTarget target) =>
+        target.ActionPath.StartsWith(StepUpPaths.FactorsNamespace + "/", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Where a successful step-up returns: the page with <c>stepUp=done</c> — and, when it covered a
+    /// factor enrolment, the receipt id the enrolment endpoint consumes.
+    /// </summary>
+    private static string SuccessUrl(Pending pending, StepUpReceipt receipt) =>
+        EaConsentController.WithOutcome(ReturnUrlPolicy.Sanitize(pending.ReturnUrl),
+            pending.Targets.Any(IsEnrollmentTarget) ? "stepUp=done&stepUpReceipt=" + receipt.Id : "stepUp=done");
 
     /// <summary>Pairs the repeated <c>target</c>/<c>binding</c> parameters; null when they do not pair.</summary>
     internal static IReadOnlyList<StepUpTarget>? Pair(string[]? targets, string[]? bindings)
@@ -244,23 +291,14 @@ public sealed class StepUpController(
     private ContentResult Failure(string returnUrl, string reason) =>
         Refusal(returnUrl, access.Localize("stepUp.failed", access.Localize("stepUp.reason." + reason)));
 
-    /// <summary>
-    /// The one page this flow renders itself: a refusal or failure, localized, with a way back. It is
-    /// outside the Blazor shell by necessity (the IdP round trip is a full-page navigation), so it is
-    /// deliberately minimal — a heading, one sentence, one link.
-    /// </summary>
-    private ContentResult Refusal(string returnUrl, string message)
-    {
-        var html = new StringBuilder()
-            .Append("<!doctype html><html lang=\"").Append(WebUtility.HtmlEncode(access.ViewerLocale())).Append("\"><head><meta charset=\"utf-8\">")
-            .Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>")
-            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</title></head>")
-            .Append("<body style=\"font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem\">")
-            .Append("<h1>").Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</h1>")
-            .Append("<p>").Append(WebUtility.HtmlEncode(message)).Append("</p>")
-            .Append("<p><a href=\"").Append(WebUtility.HtmlEncode(ReturnUrlPolicy.Sanitize(returnUrl))).Append("\">")
-            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.back"))).Append("</a></p>")
-            .Append("</body></html>");
-        return new ContentResult { Content = html.ToString(), ContentType = "text/html; charset=utf-8", StatusCode = StatusCodes.Status403Forbidden };
-    }
+    /// <summary>A refusal or failure — localized, with a way back (<see cref="StepUpPages.Message"/>).</summary>
+    private ContentResult Refusal(string returnUrl, string message) =>
+        Page(StepUpPages.Message(Texts(), message, ReturnUrlPolicy.Sanitize(returnUrl)), StatusCodes.Status403Forbidden);
+
+    /// <summary>One of the step-up pages as the response.</summary>
+    private static ContentResult Page(string html, int status = StatusCodes.Status200OK) =>
+        new() { Content = html, ContentType = "text/html; charset=utf-8", StatusCode = status };
+
+    /// <summary>The viewer's language and catalog for a page.</summary>
+    private StepUpPageTexts Texts() => new(access.ViewerLocale(), key => access.Localize(key));
 }

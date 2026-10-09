@@ -40,17 +40,27 @@ public static class StepUpNodeTypes
                 ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<StepUpConsumption>())
+            },
+            new MeshNode(StepUpPaths.FactorsNodeType)
+            {
+                Name = "Step-up factors",
+                Icon = "/static/NodeTypeIcons/key.svg",
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<StepUpFactors>())
             });
         // Every hub must know the discriminators, not only the per-node hubs above (#2729): a
         // reader elsewhere whose TypeRegistry lacks them gets a raw JsonElement — a silent null.
         builder.ConfigureHub(config => config
             .WithType<StepUpReceipt>(nameof(StepUpReceipt))
-            .WithType<StepUpConsumption>(nameof(StepUpConsumption)));
-        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType);
+            .WithType<StepUpConsumption>(nameof(StepUpConsumption))
+            .WithType<StepUpFactors>(nameof(StepUpFactors)));
+        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType, StepUpPaths.FactorsNodeType);
         builder.ConfigureServices(s =>
         {
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ReceiptNodeType));
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ConsumptionNodeType));
+            s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.FactorsNodeType));
             s.TryAddSingleton<IStepUpService, StepUpService>();
             return s;
         });

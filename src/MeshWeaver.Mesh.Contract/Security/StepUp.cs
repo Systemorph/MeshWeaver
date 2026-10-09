@@ -117,6 +117,68 @@ public sealed record StepUpConsumption
 }
 
 /// <summary>
+/// One passkey a user enrolled for the portal's own step-up — public material only: the credential
+/// id, the COSE public key, the signature counter, the authenticator model. Never a secret.
+/// </summary>
+public sealed record PasskeyCredential
+{
+    /// <summary>The credential id, base64url.</summary>
+    public string CredentialId { get; init; } = "";
+
+    /// <summary>The COSE-encoded public key, base64.</summary>
+    public string PublicKey { get; init; } = "";
+
+    /// <summary>The WebAuthn user handle the credential was created for, base64url.</summary>
+    public string UserHandle { get; init; } = "";
+
+    /// <summary>The last signature counter seen; a counter that does not move forward is refused.</summary>
+    public uint SignCount { get; init; }
+
+    /// <summary>The authenticator model (AAGUID).</summary>
+    public Guid AaGuid { get; init; }
+
+    /// <summary>When it was enrolled.</summary>
+    public DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>When it last confirmed a step-up.</summary>
+    public DateTimeOffset? LastUsedAt { get; init; }
+}
+
+/// <summary>
+/// A user's portal-held step-up factors, at <c>Auth/_StepUpFactors/{user}/factors</c> — written as
+/// System only. Entra accounts do not need one (Entra holds their passkeys); every other account
+/// steps up with a passkey from here, or — only where no passkey is possible — with TOTP.
+/// </summary>
+public sealed record StepUpFactors
+{
+    /// <summary>Always <see cref="StepUpPaths.FactorsId"/>.</summary>
+    [Key]
+    [Browsable(false)]
+    public string Id { get; init; } = StepUpPaths.FactorsId;
+
+    /// <summary>The owner's mesh user id.</summary>
+    public string UserId { get; init; } = "";
+
+    /// <summary>Enrolled passkeys.</summary>
+    public ImmutableList<PasskeyCredential> Passkeys { get; init; } = [];
+
+    /// <summary>The TOTP secret, protected by <c>IProviderKeyProtector</c> — never stored in the clear.</summary>
+    [Browsable(false)]
+    public string? TotpSecretProtected { get; init; }
+
+    /// <summary>When TOTP was confirmed with a first valid code; null ⇒ not enrolled.</summary>
+    public DateTimeOffset? TotpConfirmedAt { get; init; }
+
+    /// <summary>The last TOTP time step accepted — each step is accepted once.</summary>
+    [Browsable(false)]
+    public long LastTotpStep { get; init; }
+
+    /// <summary>SHA-256 hashes (hex) of the unused one-time recovery codes.</summary>
+    [Browsable(false)]
+    public ImmutableList<string> RecoveryCodeHashes { get; init; } = [];
+}
+
+/// <summary>
 /// The outcome of checking a step-up receipt — the <c>Outcome</c> of a <see cref="StepUpVerdict"/>.
 /// Only <see cref="Accepted"/> and <see cref="NotRequired"/> let an approval proceed; every other
 /// value PARKS it. Unknown values never count.
@@ -351,6 +413,28 @@ public static class StepUpPaths
 
     /// <summary>Namespace of consumption markers.</summary>
     public const string ConsumptionNamespace = "Auth/_StepUpUse";
+
+    /// <summary>NodeType of a user's portal-held step-up factors (passkeys, TOTP).</summary>
+    public const string FactorsNodeType = "StepUpFactors";
+
+    /// <summary>Namespace of factor nodes; each user has their own sub-namespace holding ONE node.</summary>
+    public const string FactorsNamespace = "Auth/_StepUpFactors";
+
+    /// <summary>Id of the one factors node in a user's factor namespace.</summary>
+    public const string FactorsId = "factors";
+
+    /// <summary>The binding a step-up for ENROLLING another factor carries.</summary>
+    public const string EnrollBinding = "enroll";
+
+    /// <summary>The namespace holding <paramref name="userId"/>'s factors node — listed (<c>scope:children</c>) to learn whether it exists.</summary>
+    /// <param name="userId">The user.</param>
+    /// <returns>The namespace.</returns>
+    public static string FactorsNamespaceOf(string userId) => FactorsNamespace + "/" + userId;
+
+    /// <summary>The path of <paramref name="userId"/>'s factors node.</summary>
+    /// <param name="userId">The user.</param>
+    /// <returns>The node path.</returns>
+    public static string Factors(string userId) => FactorsNamespaceOf(userId) + "/" + FactorsId;
 
     /// <summary>
     /// The content property a step-up endpoint stamps on each target node: a map
