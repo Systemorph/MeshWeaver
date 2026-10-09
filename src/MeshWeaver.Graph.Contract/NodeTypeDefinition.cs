@@ -243,6 +243,17 @@ public record NodeTypeDefinition
     /// <para>🚨 An instance of such a type cannot be restored to an earlier version and does not
     /// appear in point-in-time restores — that is the point, not a side effect.</para>
     /// </summary>
+    /// <remarks>
+    /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.Never"/> is required, for the
+    /// same reason as on <see cref="IncludeGlobalTypes"/>: an explicit <c>false</c> equals
+    /// <c>default(bool)</c>, so the hub's <c>WhenWritingDefault</c> policy dropped it from every
+    /// write and the reader re-applied the <c>true</c> initializer. A type that declared
+    /// <c>"keepsHistory": false</c> in its committed JSON therefore kept history once it had
+    /// passed through an import. <c>true</c> was always written, so a type that never declared
+    /// the flag serialises exactly as before.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool KeepsHistory { get; init; } = true;
 
     /// <summary>
