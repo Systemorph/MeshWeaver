@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -429,7 +430,7 @@ public abstract class WideDeleteOnASerialisedWriteLaneTestBase(ITestOutputHelper
         var rootPath = $"{TestPartition}/{rootId}";
         await NodeFactory.CreateNode(
                 new MeshNode(rootId, TestPartition) { Name = rootId, NodeType = "Markdown" })
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit();
         var options = new JsonSerializerOptions();
         // Straight into the store of record: the plan is enumerated from storage and every leaf's
         // own hub reads its node from there, so the leaves need no create round-trip each.
@@ -439,7 +440,7 @@ public abstract class WideDeleteOnASerialisedWriteLaneTestBase(ITestOutputHelper
                 options))
             .Merge()
             .ToList()
-            .Should().Within(30.Seconds()).Emit();
+            .Should().Within(TestTimeouts.Convergence).Emit();
         Storage.LatencyRoot = rootPath;
         Storage.DeleteLatency = PerDeleteLatency;
         Storage.SerializeDeletes = true;

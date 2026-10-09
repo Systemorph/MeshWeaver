@@ -135,7 +135,9 @@ public static class HierarchicalPathDeletion
             // comes from the leg's subscriber, exactly as in the unbounded overload.
             var admissions = new Subject<IObservable<Unit>>();
             var admit = Subject.Synchronize(admissions);
-            var lane = admissions.MergeBounded(maxConcurrentDeletes).Subscribe(_ => { });
+            // The inners are materialized, so the lane cannot fault by construction; were it ever to,
+            // the fault goes to the traversal's subscriber rather than vanishing.
+            var lane = admissions.MergeBounded(maxConcurrentDeletes).Subscribe(_ => { }, observer.OnError);
             // Set the moment the traversal FAILS or is disposed, before anything is torn down.
             // Tearing down cancels the running legs, and a cancelled leg frees its slot at once —
             // so without this the lane would admit the next queued leg in the middle of the
