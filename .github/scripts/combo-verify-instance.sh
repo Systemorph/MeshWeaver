@@ -18,8 +18,12 @@
 # Inputs, all environment. A missing one is a PREFLIGHT failure in the workflow, never a skip here.
 #   INSTANCE_NAME   the instance's name, for the summary and the artifact names
 #   BASE_URL        e.g. https://memex.systemorph.com  (no trailing slash)
-#   INSTANCE_KEY    mwi_… — the instance-registry key. Reads roll-target + combo.
-#   ADMIN_TOKEN     mw_…  — an API token of a GLOBAL ADMIN on that instance. Lands the verdict.
+#   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN
+#                   set by the runner when the job holds `id-token: write`. The run's OWN identity
+#                   is the only credential: a GitHub Actions OIDC token minted per call with
+#                   audience = BASE_URL, which the instance verifies against GitHub's JWKS and
+#                   resolves to its `Admin/_BuildPrincipal/systemorph--meshweaver` node (grant
+#                   `verify:combo`). No key and no token is stored anywhere (#3848).
 #   ACR             e.g. meshweaver.azurecr.io
 #   SOURCES         space-separated name=url pairs for --source
 #   GITHUB_TOKEN    read access to the module repositories
@@ -32,6 +36,33 @@ set -euo pipefail
 fail() { echo "::error::[$INSTANCE_NAME] $*"; exit 1; }
 note() { echo "[$INSTANCE_NAME] $*"; }
 
+# ── 0. The run's own identity — minted per call, never stored ──────────────────────────────────
+# 🚨 Minted FRESH for every request, never once per script. The token lives for minutes and the
+# verification in step 3 can run for most of GATE_TIMEOUT, so a token minted up front would be
+# expired by the time the verdict is landed — and the landing is the one call that must not fail.
+#
+# The AUDIENCE is the instance's own base URL. The portal accepts a build token only for an audience
+# it declares (`Plugins:Registry:BuildPrincipalAudience`), so a token minted for one instance cannot
+# be replayed at another.
+[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] \
+  || fail "no GitHub Actions OIDC token can be requested (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN unset). The job must hold 'permissions: id-token: write' — the run's own identity is the ONLY credential this lander uses."
+
+mint_token() {
+  local body value
+  body=$(curl -sS --fail-with-body --connect-timeout 15 --max-time 60 \
+    -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+    "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "$BASE_URL" '$a | @uri')") \
+    || fail "the runner refused an OIDC token for audience $BASE_URL: $(head -c 300 <<<"${body:-}")"
+  value=$(jq -r '.value // ""' <<<"$body")
+  [ -n "$value" ] || fail "the runner's OIDC answer carried no token for audience $BASE_URL"
+  echo "::add-mask::$value"
+  TOKEN=$value
+}
+
+# What a 401 from the instance means, said once. The instance does not tell a refused caller WHICH
+# half is missing, so both provisioning acts are named. Neither is a secret in this repository.
+unauthorized_hint="The instance did not accept this run's identity. On $BASE_URL BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $BASE_URL (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
+
 out_dir=${GITHUB_WORKSPACE:-$PWD}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 
@@ -40,8 +71,10 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 # gate answers: ReleaseAvailabilityService already walks the completeness rule and names the release
 # this environment would actually take. Re-deriving it here would be a second rule.
 roll=$out_dir/combo-rolltarget-$INSTANCE_NAME.json
+mint_token
 roll_code=$(curl -sS -o "$roll" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
-  -H "Authorization: Bearer $INSTANCE_KEY" "$BASE_URL/api/plugins/roll-target") || roll_code=000
+  -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/roll-target") || roll_code=000
+[ "$roll_code" != "401" ] || fail "GET $BASE_URL/api/plugins/roll-target -> HTTP 401. $unauthorized_hint"
 [ "$roll_code" = "200" ] \
   || fail "GET $BASE_URL/api/plugins/roll-target -> HTTP $roll_code. $(head -c 400 "$roll")"
 
@@ -60,8 +93,10 @@ note "candidate=$CANDIDATE (currently on $CURRENT)"
 
 # ── 2. What does the instance actually run? ────────────────────────────────────────────────────
 combo=$out_dir/combo-$INSTANCE_NAME.json
+mint_token
 combo_code=$(curl -sS -o "$combo" -w '%{http_code}' --connect-timeout 15 --max-time 180 \
-  -H "Authorization: Bearer $INSTANCE_KEY" "$BASE_URL/api/plugins/combo") || combo_code=000
+  -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/combo") || combo_code=000
+[ "$combo_code" != "401" ] || fail "GET $BASE_URL/api/plugins/combo -> HTTP 401. $unauthorized_hint"
 if [ "$combo_code" != "200" ]; then
   fail "GET $BASE_URL/api/plugins/combo -> HTTP $combo_code. $(head -c 400 "$combo") ::: A 404 here means the instance runs a portal image from before #3544 added the route — roll it to an image that serves /api/plugins/combo first. There is deliberately NO fallback: the only other source (Hosting/ModuleInventory) drops readAt, isComplete, caveats and the per-module sync detail, so a verdict derived from it would be about something other than this instance's real module set."
 fi
@@ -99,50 +134,26 @@ set -e
 KIND=$(jq -r '.verdict' <"$verdict")
 note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"
 
-# ── 4. LAND it. Read-merge-write, mirroring UpdatePolicyNodeType.RecordVerification exactly. ───
-# 🚨 An RFC 7396 merge patch REPLACES an array wholesale, so the whole list has to be sent. The
-# merge rule is not invented here — upsert by candidateTag (case-insensitive), newest first, capped
-# at MaxRecordedVerifications = 8 — it is the one RecordVerification applies in-process.
-policy=$out_dir/combo-policy-$INSTANCE_NAME.json
-get_code=$(curl -sS -o "$policy" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
-  -X POST "$BASE_URL/api/mesh/get" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"path":"Admin/UpdatePolicy"}') || get_code=000
-[ "$get_code" = "200" ] \
-  || fail "POST $BASE_URL/api/mesh/get Admin/UpdatePolicy -> HTTP $get_code. $(head -c 400 "$policy")"
-# 🚨 The mesh API ships its OWN failures with HTTP 200 — the body is the verdict, not the status.
-# ("Not found: Admin/UpdatePolicy" and "Error: …" are plain strings, so they are not objects.)
-if ! jq -e 'type == "object"' >/dev/null <"$policy"; then
-  fail "reading Admin/UpdatePolicy did not return a node: $(head -c 400 "$policy")"
-fi
-# 🚨 …and it has TWO node shapes. When the node's NodeType carries a recorded compile error the
-# body is {"node": {…}, "compilationError": "…"} instead of the bare node. Reading
-# `.content.comboVerifications` off the wrapper yields null, and null merges as an EMPTY list —
-# which would silently DELETE the up-to-eight verdicts already recorded on that instance and
-# replace them with this one. Unwrap, and then assert the field is readable.
-jq -e '(.node // .) | has("content")' >/dev/null <"$policy" \
-  || fail "Admin/UpdatePolicy has no readable content — refusing to merge, because a null here would replace the instance's recorded verdicts with an empty list: $(head -c 400 "$policy")"
-
-request=$out_dir/combo-patch-$INSTANCE_NAME.json
-jq -n --slurpfile p "$policy" --slurpfile v "$verdict" '
-  ($v[0].candidateTag // "" | ascii_downcase) as $tag
-  | (($p[0] | (.node // .) | .content.comboVerifications // [])
-      | map(select((.candidateTag // "" | ascii_downcase) != $tag)))
-    + [$v[0]]
-  | sort_by(.verifiedAt) | reverse | .[0:8]
-  | { path: "Admin/UpdatePolicy", fields: ({ content: { comboVerifications: . } } | tojson) }
-' >"$request"
-
-patched=$out_dir/combo-patched-$INSTANCE_NAME.txt
-patch_code=$(curl -sS -o "$patched" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
-  -X POST "$BASE_URL/api/mesh/patch" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d "@$request") || patch_code=000
-[ "$patch_code" = "200" ] \
-  || fail "POST $BASE_URL/api/mesh/patch -> HTTP $patch_code. $(head -c 400 "$patched")"
-grep -q 'Patched:' "$patched" \
-  || fail "the verdict did not land on Admin/UpdatePolicy: $(head -c 400 "$patched")"
-note "landed: $(head -c 200 "$patched")"
+# ── 4. LAND it — through the instance's own recording route, as the run's own identity. ──────
+# POST /api/plugins/combo-verification takes the ComboVerification the tool wrote (serialized with
+# the very options the endpoint reads it with) and records it through
+# UpdatePolicyNodeType.RecordVerification — upsert by candidateTag, newest first, capped — so the
+# merge rule exists ONCE, in the portal, and this script no longer re-implements it over a raw mesh
+# patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
+# this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
+landed=$out_dir/combo-landed-$INSTANCE_NAME.json
+mint_token
+land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
+  -X POST "$BASE_URL/api/plugins/combo-verification" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary "@$verdict") || land_code=000
+[ "$land_code" != "401" ] \
+  || fail "POST $BASE_URL/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
+[ "$land_code" = "200" ] \
+  || fail "POST $BASE_URL/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(head -c 400 "$landed")"
+jq -e '.recorded == true' >/dev/null <"$landed" \
+  || fail "the instance answered 200 but did not confirm the verdict was recorded: $(head -c 400 "$landed")"
+note "landed: $(head -c 200 "$landed")"
 
 {
   # shellcheck disable=SC2016  # the backticks are MARKDOWN for the step summary, not a subshell

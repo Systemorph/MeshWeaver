@@ -15,8 +15,9 @@
 # applied the update anyway. The gate built to prevent a MissingMethodException-at-boot roll was
 # never once consulted with data.
 #
-# 🚨 WHY THIS IS ITS OWN WORKFLOW AND NOT A JOB IN main-cd.yml. The preflight below fails RED until
-# an operator provisions the per-instance credentials, which is the correct state and the whole
+# 🚨 WHY THIS IS ITS OWN WORKFLOW AND NOT A JOB IN main-cd.yml. A verify job fails RED until
+# each instance accepts this run's identity (its declared build-principal audience and its
+# Admin/_BuildPrincipal node — Doc/Architecture/ComboGateWiring), which is the correct state and the whole
 # point of the no-skip-trapdoor rule — but a red inside main-cd would sit on the workflow that
 # publishes the fleet's images and would be read as "delivery failed". Here the red says exactly
 # what it is, and image delivery is untouched.
@@ -99,8 +100,9 @@ jobs:
       # instances exist is derived two steps below, not declared.
       #
       # 🚨 WHAT IS ASSERTED HERE IS EXACTLY WHAT IS NEEDED TO REACH THE DERIVATION, AND NOTHING
-      # ELSE. The two `COMBO_VERIFY_*` credential maps are asserted in `roster`, after the roster
-      # exists; the module-source map is derived from deployment records, not configured here.
+      # ELSE. The per-instance credential maps that used to be asserted in `roster` no longer exist
+      # (#3848: each instance is reached as this run's own OIDC identity); the module-source map is
+      # derived from deployment records, not configured here.
       # Measured over this workflow's whole history: because they were asserted HERE, every run died
       # one step above the derivation and the derivation had NEVER ONCE EXECUTED in CI — so the
       # lane's red named absent inputs while the state that has to change first (whatever the
@@ -118,9 +120,8 @@ jobs:
       # defeats the reorder — only `AZURE_*` and `FLEET_READER_*` pass the reachability test.
       #
       # This is NOT a skip-trapdoor and nothing here became conditional: no `if:` asks whether a
-      # secret is set, no step carries `continue-on-error:`, both maps are still asserted
-      # unconditionally in the same `preflight` job, and an absent map still reds by NAME. Only the
-      # ORDER moved. `check-combo-verify.py` executes both blocks' real shell over the scenarios
+      # secret is set, no step carries `continue-on-error:`, and the roster is still asserted
+      # unconditionally in the same `preflight` job. `check-combo-verify.py` executes both blocks' real shell over the scenarios
       # below and fails if either stops being able to say no.
       - name: Every external input, or a red build naming what to provision
         id: assert
@@ -183,19 +184,19 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/derive-combo-instances.py --discover
 
-      # STEP TWO OF TWO. The roster now exists, so this asks whether the two credential MAPS are
-      # present and whether every instance the fleet ACTUALLY has carries both. It also requires the
-      # source map derived from DeploymentContent.PluginRepos to reach this step intact. A name
-      # missing from either credential map would otherwise fail deep inside verification wearing an
-      # HTTP 401 that names no secret — the shape that made an absent MW_REGISTRY_KEY read as a
-      # script bug (Reinsurance#128).
-      - name: Every derived instance has credentials and registry sources
+      # STEP TWO OF TWO. The roster now exists, so this asks whether it is a real, non-empty roster
+      # and whether the source map derived from DeploymentContent.PluginRepos reached this step
+      # intact. 🚨 There is NO credential to assert any more (#3848): the verify job authenticates to
+      # each instance as THIS RUN — a GitHub Actions OIDC token minted per call, audience = the
+      # instance's base URL — which the instance resolves to its Admin/_BuildPrincipal node. What
+      # used to be two hand-issued secret maps (an mwi_ key and a global-admin mw_ token per
+      # instance, neither readable back) is now provisioning ON the instance, and a missing half
+      # surfaces in the verify job as a 401 whose message names both halves for that instance.
+      - name: Every derived instance and its registry sources
         id: roster
         env:
           INSTANCES: ${{ steps.derive.outputs.instances }}
           SOURCES: ${{ steps.derive.outputs.sources }}
-          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
-          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
         run: |
           set -euo pipefail
           # DERIVED is not VALID, and an absent output is not an empty fleet. A malformed or empty
@@ -220,38 +221,13 @@ jobs:
             exit 1
           fi
 
-          # 🚨 THE TWO CREDENTIAL MAPS ARE ASSERTED HERE, not in the step above, and only now that
-          # the roster exists — see that step's comment. Both are SPENT rather than fetched, so an
-          # operator sent to mint them before the fleet's installations are known spends an
-          # irreversible credential against a roster that may not be derivable at all. The
-          # per-instance loop below would already red on an absent map by naming its first instance;
-          # these two lines carry the PROVISIONING guidance that names what to mint and why it
-          # cannot be read back, so no information moved out of the preflight — only its order.
-          absent=()
-          [ -n "${COMBO_VERIFY_KEYS:-}" ]   || absent+=("secrets.COMBO_VERIFY_KEYS      JSON object {instance name: mwi_… instance-registry key}, one entry per instance in the roster printed above — the roster is DERIVED from the fleet's deployment overlays, never listed, so the names come from it and not from a variable. 🚨 ISSUED, never recovered: InstanceKeys persists Hash(raw) alone, so an existing key cannot be read back — issue a NEW one per instance, additive and separately revocable, and never a rotation of a key something else is using")
-          [ -n "${COMBO_VERIFY_TOKENS:-}" ] || absent+=("secrets.COMBO_VERIFY_TOKENS    JSON object {instance name: mw_… API token of a GLOBAL ADMIN on that instance}, one per instance in the roster above, like the keys. Removable only by the diff that moves .github/scripts/combo-verify-instance.sh off POST /api/mesh/patch and onto /api/plugins/combo-verification, and only once the verify:combo grant (#3891) exists per instance")
-          if [ ${#absent[@]} -gt 0 ]; then
-            echo "::error::the roster derived cleanly, so these inputs are now the only thing missing — provision the following, then re-run:"
-            for a in "${absent[@]}"; do echo "  • $a"; done
-            echo "Until then EVERY self-update in the fleet rolls UNVERIFIED (issue #3544): the" >&2
-            echo "portal's combo gate has no verdict to consult and applies the update anyway." >&2
-            exit 1
-          fi
-
-          for key_name in $(jq -r '.[].name' <<<"$INSTANCES"); do
-            jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_KEYS" \
-              || { echo "::error::secrets.COMBO_VERIFY_KEYS has no mwi_ key for instance '$key_name'. The fleet declares that installation; issue it a key (it cannot be read back — InstanceKeys stores Hash(raw) alone) and add it to the map."; exit 1; }
-            jq -e --arg n "$key_name" '.[$n] | type == "string" and length > 0' >/dev/null <<<"$COMBO_VERIFY_TOKENS" \
-              || { echo "::error::secrets.COMBO_VERIFY_TOKENS has no mw_ admin token for instance '$key_name'. The fleet declares that installation; the verdict is landed with POST /api/mesh/patch, which needs a global admin on it."; exit 1; }
-          done
-
           count=$(jq -r 'length' <<<"$INSTANCES")
           {
             echo "instances=$(jq -c '.' <<<"$INSTANCES")"
             echo "count=$count"
             echo "sources=$SOURCES"
           } >>"$GITHUB_OUTPUT"
-          echo "Every derived instance carries both credentials; $count instance(s) will be verified."
+          echo "Roster and sources derived; $count instance(s) will be verified, each as this run's own identity."
 
   verify:
     name: "Verify ${{ matrix.instance.name }} against its roll target"
@@ -303,20 +279,13 @@ jobs:
         env:
           INSTANCE_NAME: ${{ matrix.instance.name }}
           BASE_URL: ${{ matrix.instance.baseUrl }}
-          COMBO_VERIFY_KEYS: ${{ secrets.COMBO_VERIFY_KEYS }}
-          COMBO_VERIFY_TOKENS: ${{ secrets.COMBO_VERIFY_TOKENS }}
           SOURCES: ${{ needs.preflight.outputs.sources }}
           GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
           WORK_ROOT: ${{ runner.temp }}/combo
         run: |
           set -euo pipefail
-          INSTANCE_KEY=$(jq -r --arg n "$INSTANCE_NAME" '.[$n]' <<<"$COMBO_VERIFY_KEYS")
-          ADMIN_TOKEN=$(jq -r --arg n "$INSTANCE_NAME" '.[$n]' <<<"$COMBO_VERIFY_TOKENS")
-          # Never echoed, but a value pulled out of a JSON secret is no longer masked by the
-          # runner, so mask the extracted halves explicitly.
-          echo "::add-mask::$INSTANCE_KEY"
-          echo "::add-mask::$ADMIN_TOKEN"
-          export INSTANCE_KEY ADMIN_TOKEN
+          # 🚨 No credential is passed: the lander mints this run's own OIDC token per call
+          # (the workflow holds `id-token: write`), audience = BASE_URL.
           bash .github/scripts/combo-verify-instance.sh
 
       - name: Keep the work root of a failed verification
