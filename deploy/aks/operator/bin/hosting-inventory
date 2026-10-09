@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# hosting-inventory --database <db> --server <pg host> --user <login> [--vault <key vault> --password-secret <vault object>]
+#
+# COUNT the nodes an instance's database holds — per partition schema, the rows of <schema>.mesh_nodes
+# and of each satellite table that schema carries (activities, user_activities, threads, access, code,
+# annotations) — and report it as ONE machine line the control plane lands on the InstanceAction node
+# (MeshWeaver.Plugins Hosting/InstanceAction, kind `Inventory`):
+#
+#   ::hosting:: inventory=<base64 of {"database","server","readAt","schemaCount","nodes","rows",
+#                                      "schemas":[{"schema","nodes","rows","tables":{"<table>":<n>}}]}>
+#   ::hosting:: inventory_schemas=<n>
+#   ::hosting:: inventory_nodes=<n>
+#
+# 🚨 STRICTLY READ-ONLY, and enforced by the SERVER, not by this script's good intentions: the session
+# is opened with `default_transaction_read_only=on` (PGOPTIONS) AND the one query runs inside
+# `BEGIN TRANSACTION READ ONLY`. Postgres then refuses any write the SQL could attempt, so a defect in
+# the query can fail the read — never change the data. No temp table, no function created, no lock
+# beyond the ACCESS SHARE a count takes.
+#
+# 🚨 THE DENOMINATOR IS THE ANSWER'S HALF. `schemas[]` names every schema that was READ — every schema
+# holding a base table named `mesh_nodes`, discovered from pg_catalog (which lists tables whatever the
+# login's privileges, unlike information_schema, which silently hides the ones it may not read). A
+# table the login may not count FAILS the whole read with Postgres's own message: a partial census
+# reported as a whole one is the false negative this exists to prevent. Counts are EXACT (count(*)),
+# never the planner's reltuples estimate.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-inventory"
+
+database="" server="" user="" vault="" password_secret=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --database)        database="${2:-}";        shift 2 ;;
+    --server)          server="${2:-}";          shift 2 ;;
+    --user)            user="${2:-}"; user_given=1; shift 2 ;;
+    --vault)           vault="${2:-}";           shift 2 ;;
+    --password-secret) password_secret="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag database "$database"
+hosting::need_flag server "$server"
+hosting::safe_name database "$database"
+hosting::safe_host server "$server"
+[ -z "$vault" ] || hosting::safe_name vault "$vault"
+[ -z "$password_secret" ] || hosting::safe_name password-secret "$password_secret"
+# The login: --user (the record's databaseUsername), else a PGUSER set by hand — never a guess. A
+# --user GIVEN empty is a plan that rendered no login, never a cue to fall back to PGUSER.
+[ "${user_given:-0}" = 0 ] || [ -n "$user" ] || hosting::die "--user was given EMPTY: the plan rendered no login (the record states no databaseUsername). Refusing rather than falling back to PGUSER."
+pg_user="${user:-${PGUSER:-}}"
+[ -n "$pg_user" ] || hosting::die "no database login: pass --user <the record's databaseUsername> (the plan does), or export PGUSER by hand. There is no default — a guessed login authenticates as a user the record never declared."
+hosting::safe_name user "$pg_user"
+
+hosting::step "Count the nodes"
+if hosting::dry; then
+  echo "  DRY-RUN would count <schema>.mesh_nodes and its satellite tables in ${database} on ${server}, read-only"
+  hosting::say inventory dry-run
+  exit 0
+fi
+
+# The admin password is read from the vault by NAME (Memex#132) — see hosting::pg_password.
+hosting::pg_password "$vault" "$password_secret"
+
+# One read-only transaction, one statement. Each table is counted through query_to_xml, the only way
+# plain SQL runs a count over a table named at run time WITHOUT creating a function (which a read-only
+# transaction would refuse anyway). Every identifier goes through format('%I'), so a schema name is
+# never interpolated as SQL.
+sql="$(cat <<'SQL'
+BEGIN TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '600s';
+WITH partition_schema AS (
+  SELECT n.oid, n.nspname AS schema
+  FROM pg_catalog.pg_namespace n
+  JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = 'mesh_nodes' AND c.relkind IN ('r', 'p')
+), counted_table AS (
+  SELECT s.schema, c.relname AS name,
+         (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.%I', s.schema, c.relname), false, true, '')))[1]::text::bigint AS n
+  FROM partition_schema s
+  JOIN pg_catalog.pg_class c ON c.relnamespace = s.oid AND c.relkind IN ('r', 'p')
+   AND c.relname IN ('mesh_nodes', 'activities', 'user_activities', 'threads', 'access', 'code', 'annotations')
+), per_schema AS (
+  SELECT schema,
+         COALESCE(max(n) FILTER (WHERE name = 'mesh_nodes'), 0) AS nodes,
+         sum(n) AS rows,
+         json_object_agg(name, n ORDER BY name) AS tables
+  FROM counted_table GROUP BY schema
+)
+SELECT json_build_object(
+  'database', current_database(),
+  'server', :'server',
+  'readAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  'schemaCount', (SELECT count(*) FROM per_schema),
+  'nodes', COALESCE((SELECT sum(nodes) FROM per_schema), 0),
+  'rows', COALESCE((SELECT sum(rows) FROM per_schema), 0),
+  'schemas', COALESCE((SELECT json_agg(json_build_object('schema', schema, 'nodes', nodes, 'rows', rows, 'tables', tables) ORDER BY schema) FROM per_schema), '[]'::json));
+COMMIT;
+SQL
+)"
+
+errfile="$(mktemp)"
+fact="$(printf '%s\n' "$sql" | PGPASSWORD="$PGPASSWORD" PGOPTIONS="-c default_transaction_read_only=on" \
+  psql -X -q -tA -v ON_ERROR_STOP=1 -v server="$server" -h "$server" -U "$pg_user" -d "$database" -f - 2>"$errfile")"; rc=$?
+err="$(head -3 "$errfile")"; rm -f "$errfile"
+[ "$rc" -eq 0 ] || hosting::die "the read-only count of ${database} on ${server} failed (psql exit ${rc}). Nothing was changed — the session was read-only. psql said: ${err:-nothing}"
+# The answer is ONE JSON object line; anything else is not an inventory, and silence is never "empty".
+fact="$(printf '%s' "$fact" | tr -d '\r' | grep '^{' | head -1)"
+case "$fact" in
+  '{'*'"schemas"'*'}') ;;
+  *) hosting::die "the count of ${database} on ${server} returned no inventory object — refusing to report an empty database from silence. psql said: ${err:-nothing}" ;;
+esac
+
+schemas="$(printf '%s' "$fact" | sed -n 's/.*"schemaCount" *: *\([0-9][0-9]*\).*/\1/p')"
+nodes="$(printf '%s' "$fact" | sed -n 's/.*"schemaCount" *: *[0-9]*, *"nodes" *: *\([0-9][0-9]*\).*/\1/p')"
+hosting::log "read ${schemas:-?} partition schema(s) of ${database} on ${server}: ${nodes:-?} node(s) in mesh_nodes"
+hosting::say inventory "$(printf '%s' "$fact" | base64 | tr -d '\n')"
+hosting::say inventory_schemas "${schemas:-0}"
+hosting::say inventory_nodes "${nodes:-0}"
