@@ -4,6 +4,7 @@ using System;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Payments;
 using Xunit;
 
@@ -62,6 +63,57 @@ public class PaymentProviderContractTest
         error.Should().BeOfType<NotSupportedException>(
             "asking anyway is an error, never a silence a caller could read as 'still opening'");
         error!.Message.Should().Contain("Older", "the refusal names the provider");
+    }
+
+    /// <summary>
+    /// The governed endpoint members (Plugins#1881) are default-implemented: a provider written
+    /// before them keeps compiling, offers no endpoint task, and both calls ANSWER NotSupported —
+    /// never a throw, never a silence.
+    /// </summary>
+    [Fact]
+    public void AProviderThatDoesNotOptIn_ManagesNoEndpoint_AndAnswersNotSupported()
+    {
+        IPaymentProvider provider = new OlderProvider();
+        provider.ManagesDeliveryEndpoints.Should().BeFalse();
+        var request = new PaymentEndpointRequest
+        {
+            Url = "https://portal.example/api/hooks/Store/Payments",
+            Owner = "https://portal.example",
+            RequestPath = "Admin/Maintenance/ensure",
+            Execute = true,
+            ConfirmedMode = "test",
+        };
+
+        PaymentEndpointChange? ensured = null, removed = null;
+        using (provider.EnsureDeliveryEndpoint(request).Subscribe(c => ensured = c)) { }
+        using (provider.RemoveDeliveryEndpoint(request).Subscribe(c => removed = c)) { }
+
+        ensured!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
+        ensured.Refusal!.English.Should().Contain("Older", "the refusal names the provider");
+        ensured.Refusal.Key.Should().Be(IPaymentProvider.EnsureNotSupportedKey, "the refusal is keyed for the viewer's language");
+        ensured.DisclosedSecret.Should().BeNull();
+        removed!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
+        removed.Refusal!.Key.Should().Be(IPaymentProvider.RemoveNotSupportedKey,
+            "the two defaults are two different refusals, each with its own remedy");
+    }
+
+    /// <summary>A printed change never carries the signing secret; the negative control shows the field is set.</summary>
+    [Fact]
+    public void APrintedChange_MasksTheDisclosedSecret()
+    {
+        var change = new PaymentEndpointChange
+        {
+            Outcome = PaymentEndpointOutcome.Created,
+            EndpointId = "we_1",
+            DisclosedSecret = "whsec_abc123",
+        };
+        change.DisclosedSecret.Should().Be("whsec_abc123", "negative control: the secret IS on the record");
+        change.ToString().Should().NotContain("whsec_abc123").And.Contain("(redacted)").And.Contain("we_1");
+
+        // Serialized, the secret is ABSENT — persisted, posted or logged JSON carries none.
+        var json = System.Text.Json.JsonSerializer.Serialize(change);
+        json.Should().NotContain("whsec_abc123").And.NotContain(nameof(PaymentEndpointChange.DisclosedSecret))
+            .And.Contain("we_1", "negative control: the rest of the change IS serialized");
     }
 
     [Fact]

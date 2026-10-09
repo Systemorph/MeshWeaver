@@ -57,6 +57,7 @@ processor mandatory on portals that sell nothing.
 | `OffersBillingPortal` / `OpenBillingPortal(PaymentBillingPortalRequest)` | can the subscriber be sent to the processor's own hosted billing page (card, invoices, cancel) — and where; defaults to *no portal*, so an older provider still compiles |
 | `ReadDelivery(signature, body, now)` | verify a webhook delivery **and** parse it, in one answer |
 | `DescribeDeliveryPath(hookUrl)` | can the processor actually reach this portal? |
+| `ManagesDeliveryEndpoints` / `EnsureDeliveryEndpoint(PaymentEndpointRequest)` / `RemoveDeliveryEndpoint(PaymentEndpointRequest)` | may this portal register, extend or remove its OWN delivery endpoint at the processor — the governed write behind a broken delivery path; defaults to *not supported*, so an older provider still compiles |
 | `SecretSettingName` / `WebhookSecretSettingName` / `DeliverySignatureHeader` | the names an operator finding has to quote |
 
 `PaymentMetadata` holds the keys a checkout stamps and the delivery reader looks for
@@ -103,6 +104,36 @@ endpoint" is what left a portal taking money and fulfilling nothing for days
 ([Plugins#1109](https://github.com/Systemorph/MeshWeaver.Plugins/issues/1109)). So `ReadProblem` and
 `Truncated` are carried separately from `Endpoints`, and a caller that cannot tell must say so
 rather than report health.
+
+### Registering the delivery endpoint is a governed write
+
+`DescribeDeliveryPath` only READS. The write that repairs what it finds is a separate pair of
+members, called only from a governed task a global admin triggers (policy
+[`payment-endpoint-governed-task`](../PolicyNotProse); the Store's `EnsurePaymentEndpoint` /
+`DeregisterPaymentEndpoint` maintenance tasks, MeshWeaver.Plugins#1881):
+
+- **The request carries no free values.** `PaymentEndpointRequest.Url` is this instance's own hook
+  URL and `Events` the provider's own required set (an immutable array); the caller composes both
+  from configuration, never from a field typed on a node. `Owner` and `RequestPath` go into the
+  endpoint's metadata, which is what later lets a run recognise its own endpoint and what
+  `RemoveDeliveryEndpoint` restricts itself to. `Execute` false (the default) is a dry run;
+  `ConfirmedMode` must repeat the account mode for an executed run; `IdempotencyKey` is recorded on
+  the request node BEFORE the create is sent, so a retried run cannot create a second endpoint.
+- **The answer is an outcome, never a fault.** `PaymentEndpointChange.Outcome` is an OPEN vocabulary
+  (`PaymentEndpointOutcome`: `WouldCreate`/`Created`, `WouldAddEvents`/`EventsAdded`,
+  `AlreadyComplete`, `SecretNotRecovered`, `WouldRemove`/`Removed`/`NothingToRemove`, `Refused`,
+  `NotSupported`); a caller reports a word it does not know verbatim and as a failure, never as a
+  known one. `Refusal` is a `LocalizableText`: the two defaults carry their own catalog keys
+  (`payments.endpoint.ensureNotSupported`, `payments.endpoint.removeNotSupported`), each naming its
+  own manual remedy.
+- **Additive only.** An ensure never removes an event, changes a URL, or disables or re-enables an
+  endpoint; a processor that replaces an endpoint's event list on update is sent the current events
+  plus the missing ones. A removal deletes only endpoints whose metadata names this instance.
+- **The secret crosses ONE boundary, once.** Only `Created` discloses a signing secret
+  (`DisclosedSecret`). It is `[JsonIgnore]` — absent from every serialized form — and masked in
+  `ToString`. The caller shows it once to the person who ran the task and writes it nowhere: not to
+  a node, an activity, a log line or an exception message. Whoever holds it can forge a completed
+  checkout.
 
 ## Absence is a modelled state
 
