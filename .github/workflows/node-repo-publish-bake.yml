@@ -590,7 +590,7 @@ jobs:
   # an unreadable declaration or a break with no ceiling is RED, never "nothing to bake".
   epoch-leg:
     name: "Which live framework identity this call bakes for"
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
