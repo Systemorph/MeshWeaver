@@ -337,12 +337,112 @@ public class ReleaseLinkGateTest : IDisposable
         Assert.Contains(SiblingCoreName, blocker.Reason!, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 POST-ROLL, not pre-roll: when the target publishes a replacement for the sibling, boot
+    /// adopts THAT build at the roll, so the dependent is measured against it — and here the
+    /// replacement removed the TYPE the dependent calls (the release gate is a type-level verdict). The landed sibling still has it; measuring
+    /// against the landed bytes would clear a roll that throws at the first call. Held.
+    /// </summary>
+    [Fact]
+    public void ASiblingReplacedAtTheRollByABuildWithoutTheCalledApi_HoldsTheRoll()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity),
+            sealedModule: (SiblingCoreName, SiblingCore(withoutHello: true)));
+        var siblingBytes = SiblingCore();
+        var sibling = Land(SiblingCoreName, siblingBytes);
+        var user = Land(SiblingUserName, SiblingUser(siblingBytes));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false) { ModuleName = SiblingCoreName, LandedModulePath = sibling },
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]);
+
+        Assert.False(verdict.IsUpdatable);
+        var blocker = Assert.Single(verdict.Blockers);
+        Assert.Equal("User", blocker.Package);
+        Assert.Contains("SiblingCore.Api", blocker.Reason!, StringComparison.Ordinal);
+    }
+
+    /// <summary>The same replacement that KEEPS the called API clears — the measurement reads the
+    /// published bytes, not merely "a replacement exists".</summary>
+    [Fact]
+    public void ASiblingReplacedAtTheRollByACompatibleBuild_Clears()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity),
+            sealedModule: (SiblingCoreName, SiblingCore()));
+        var siblingBytes = SiblingCore();
+        var user = Land(SiblingUserName, SiblingUser(siblingBytes));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Views", "Views", HasContent: false) { ModuleName = SiblingCoreName },
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]);
+
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+    }
+
+    /// <summary>A sibling's identity is read from its FILE even on a published (declared) surface, so
+    /// a dependent bound ABOVE the sibling's version is a binding conflict — the roll is held, never
+    /// cleared on type names alone.</summary>
+    [Fact]
+    public void ADependentBoundAboveItsSiblingsVersion_HoldsTheRoll()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity));
+        var siblingV1 = SiblingCore(version: "1.0.0.0");
+        var sibling = Land(SiblingCoreName, siblingV1);
+        var user = Land(SiblingUserName, SiblingUser(SiblingCore(version: "2.0.0.0")));
+
+        var surface = ModulePlatformSurface.FromJson(ThisPlatformSurface(Identity)).WithSiblingModules([sibling]);
+        Assert.Equal(new System.Version(1, 0, 0, 0), surface.IdentityOf(SiblingCoreName)?.Version);
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Core", "Core", HasContent: false) { ModuleName = SiblingCoreName, LandedModulePath = sibling },
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]);
+
+        Assert.False(verdict.IsUpdatable);
+        Assert.Contains("2.0.0.0", Assert.Single(verdict.Blockers).Reason!, StringComparison.Ordinal);
+    }
+
+    /// <summary>A sibling whose landed generation vanished mid-measurement makes its dependent
+    /// Indeterminate, named — never an exception out of the measurement.</summary>
+    [Fact]
+    public void AnUnreadableSibling_MakesTheDependentIndeterminate_NeverThrows()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity));
+        var siblingBytes = SiblingCore();
+        var sibling = Land(SiblingCoreName, siblingBytes);
+        var user = Land(SiblingUserName, SiblingUser(siblingBytes));
+        Directory.Delete(Path.GetDirectoryName(sibling)!, recursive: true);
+
+        var observation = PublishedBundleCatalogue.Read(published, Version);
+        var links = ModuleLinkObservation.Measure(observation.Artifacts,
+        [
+            new RequiredPackage("Core", "Core", HasContent: false) { ModuleName = SiblingCoreName, LandedModulePath = sibling },
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]).ModuleLinks;
+
+        var userLink = Assert.Contains("User", links);
+        Assert.Equal(ModuleLinkState.Indeterminate, userLink.State);
+        Assert.Contains(SiblingCoreName, userLink.Detail!, StringComparison.Ordinal);
+    }
+
     private const string SiblingCoreName = "MeshWeaver.Test.LinkGateSiblingCore";
     private const string SiblingUserName = "MeshWeaver.Test.LinkGateSiblingUser";
 
-    private static byte[] SiblingCore() => ModulePlatformSurfaceJsonTest.Emit(SiblingCoreName, """
-        namespace SiblingCore { public static class Api { public static string Hello() => "hi"; } }
-        """);
+    private static byte[] SiblingCore(bool withoutHello = false, string version = "1.0.0.0")
+        => ModulePlatformSurfaceJsonTest.Emit(SiblingCoreName, $$"""
+            [assembly: System.Reflection.AssemblyVersion("{{version}}")]
+            namespace SiblingCore
+            {
+                {{(withoutHello
+                    ? "public static class Replacement { public static string Bye() => \"bye\"; }"
+                    : "public static class Api { public static string Hello() => \"hi\"; }")}}
+            }
+            """);
 
     private static byte[] SiblingUser(byte[] siblingCore)
     {
