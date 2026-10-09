@@ -184,6 +184,39 @@ exactly that promoted set without a verdict — for an incident, recorded in the
 that has no promotion record is refused, never substituted. A single instance is still forced with
 a `Roll` `Hosting/InstanceAction`, not here.
 
+### A stalled gate files ONE `fleet-unarmed` issue
+
+Waiting and refusing are both correct and both silent: a standing red ladder, or a platform-side
+outage, used to freeze fleet updates while every main-cd run stayed green with `nothing to arm`
+(MeshWeaver#6042). `arming_frozen` turns exactly one such case red: control behind past its bound
+with nothing armed (policy `control-first-never-silent`). The other stalls now have their own signal.
+
+- **What is read.** `arm-promoted-set.py select --unarmed-out` writes every promoted set still NEWER
+  than the armed one after this run's selection. Each set carries its own verdict: `waiting`,
+  `refused`, or `not examined` (older than the ten sets `select` judges). It also carries its run
+  link and its promotion time, which is the record artifact's `created_at`.
+- **The rule.** The fleet is STALE when the OLDEST of those sets was promoted more than
+  `FLEET_UNARMED_ALERT_HOURS` ago. The value is set literally in the `arm` job's last step and
+  defaults to **6**. The clock runs from the oldest unarmed set, never the newest: a new set every
+  ~20 minutes would reset a newest-set clock, and the stall would never fire. A missing or
+  non-positive threshold is RED, never a silent default.
+- **The alert.** `fleet-unarmed-alert.py` keeps ONE GitHub issue, labelled `fleet-unarmed`, in core,
+  following the `ci-main-red` ledger's ownership rule. It touches only an issue that carries the
+  label, the exact title and the hidden mark, AND whose author is the Actions bot. When stale, it
+  files the issue, or rewrites the body to the current table. It comments only when the reading
+  changed, never once per tick. On the first run that finds the fleet armed again, it comments
+  `armed again` and closes the issue. Duplicates fold into the oldest.
+- **When it runs.** The alert is the `arm` job's last step, so it runs on every main-cd run,
+  including the hourly reconcile. It also runs after a frozen `select`. It never runs after a
+  failed arming write (phases C/D), because a set chosen but not written is not armed. The `arm`
+  job stays green on a stale reading (a `::warning::` names it): the delivery did succeed, and the
+  issue is the alarm.
+
+Both defaults (6 h; a ledger issue rather than the control instance's triage inbox) were chosen
+when the alert shipped, and the maintainer may change either. The proofs are
+`fleet-unarmed-alert.py --self-test` and the `unarmed_sets` cases of `arm-promoted-set.py
+--self-test`, run in main-cd's `arm` job and in the PR build.
+
 ### Instances roll only from armed tags — verified
 
 - `SelfUpdateHostedService` rolls to the newest version-shaped tag of `memex-portal-ai`; the fleet's

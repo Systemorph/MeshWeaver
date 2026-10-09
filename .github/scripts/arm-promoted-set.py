@@ -400,6 +400,10 @@ def read_records(get: Callable[..., tuple[int, object]], core_token: str,
             continue
         rec["run_url"] = run.get("html_url", "")
         rec["run_id"] = run.get("id")
+        # WHEN the set was promoted: `promote` itself uploads the record, so the artifact's
+        # `created_at` is the promotion time (the run's creation is the fallback). The fleet-unarmed
+        # alert clocks a stall from it (fleet-unarmed-alert.py, MeshWeaver#6042).
+        rec["promoted_at"] = str(found[0].get("created_at") or run.get("created_at") or "")
         out.append(rec)
     out.sort(key=lambda r: int(r["run_number"]), reverse=True)
     return out
@@ -623,6 +627,25 @@ def select(records: list[dict], ladders: dict[int, str | None], control: dict, a
         lines.append(f"RESUME: {resume} was armed but its sequence never completed — re-arming it")
         return hit, lines
     return None, lines
+
+
+def unarmed_sets(records: list[dict], ladders: dict[int, str | None], control: dict, cursor: int) -> list[dict]:
+    """Every promoted set NEWER than `cursor` (the newest armed run number, after this run's own
+    arming), newest first, each with its platform verdict — the reading fleet-unarmed-alert.py
+    clocks a stall from (MeshWeaver#6042). Pure. A set whose ladder `select` did not read (outside
+    the ten newest it judges) is `not examined`, never guessed into `waiting`."""
+    out: list[dict] = []
+    for rec in records:
+        n = int(rec["run_number"])
+        if n <= cursor:
+            continue
+        if n in ladders:
+            state, text = judge(rec, ladders[n], control)
+        else:
+            state, text = "not examined", "older than the ten newest promoted sets `select` judges"
+        out.append({"v_portal": rec["v_portal"], "run_number": n, "core_sha": rec["core_sha"], "state": state,
+                    "sentence": text, "run_url": rec.get("run_url", ""), "promoted_at": rec.get("promoted_at", "")})
+    return out
 
 
 def control_lag(given: list[dict] | dict | None, control: dict, now: float, bound_minutes: int) -> tuple[str, str]:
@@ -1178,6 +1201,15 @@ def self_test() -> int:
         check("control-first: a non-version is RED", False)
     except ValueError:
         check("control-first: a version that is not X.Y.Z-ci.N is RED, never a guess", True)
+    # the fleet-unarmed reading (MeshWeaver#6042): every set newer than the cursor, each its OWN verdict
+    ua = unarmed_sets(records, {9461: "failure", 9460: None}, ctl(), 9459)
+    check("unarmed_sets: every set newer than the armed one, newest first, each with its own verdict",
+          [(u["run_number"], u["state"]) for u in ua] == [(9461, "refused"), (9460, "waiting")], str(ua))
+    ua = unarmed_sets(records, {9461: None}, ctl(), 9459)
+    check("unarmed_sets: a set whose ladder was never read is `not examined`, never guessed `waiting`",
+          ua[-1]["run_number"] == 9460 and ua[-1]["state"] == "not examined", str(ua))
+    check("unarmed_sets: nothing newer than the cursor is an empty reading (negative control)",
+          unarmed_sets(records, {}, ctl(), 9461) == [])
     print(f"arm-promoted-set self-test: {failures} failure(s)")
     return 1 if failures else 0
 
@@ -1214,6 +1246,10 @@ def main() -> int:
     ap.add_argument("--override", default="", help="arm exactly this set name, platform verdict or not")
     ap.add_argument("--resume", default="",
                     help="the newest armed set whose arming never completed; re-armed when nothing newer is green")
+    ap.add_argument("--armed-version", default="", help="select: the newest ARMED set's name, for --unarmed-out")
+    ap.add_argument("--unarmed-out", type=Path, default=None,
+                    help="select: write every promoted set newer than the armed one, with its verdict "
+                         "(read by fleet-unarmed-alert.py)")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
@@ -1359,6 +1395,13 @@ def main() -> int:
     for line in lines:
         print(line)
     write_outputs(rec, lines)
+    if a.unarmed_out is not None:
+        # Written BEFORE a frozen exit, so the alert reads the very verdicts this run decided on.
+        cursor = int(rec["run_number"]) if rec else a.armed_max
+        a.unarmed_out.write_text(json.dumps({
+            "armed": rec["v_portal"] if rec else (a.armed_version or f"ci.{a.armed_max}"),
+            "armed_run": cursor,
+            "unarmed": unarmed_sets(records, ladders, control, cursor)}, indent=1))
     print(f"ARM {rec['v_portal']} ({rec['key']})" if rec else "nothing to arm")
     if frozen:
         print(f"::error title=Fleet delivery frozen on control::{frozen}")
