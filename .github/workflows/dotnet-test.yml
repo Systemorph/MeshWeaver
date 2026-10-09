@@ -2578,6 +2578,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
+    # The fleet-unarmed alert main-cd's `arm` job runs (MeshWeaver#6042): stale opens ONE issue,
+    # fresh closes it, refused and waiting sets are named apart, the threshold is a bound and not a
+    # default, and it only ever touches an issue it opened. Proven here so a PR that breaks it is red
+    # before the first production `arm` run reads it.
+    - name: "The fleet-unarmed alert can say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/fleet-unarmed-alert.py --self-test
+
     # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
     # copy live on our own infra instead of in GitHub Actions storage (maintainer, 2026-09-17: "we
     # still incur cost for github actions … please see that it goes to 0"). Core owns the script and
