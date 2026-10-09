@@ -106,6 +106,14 @@ exemption is the already-green-tree reuse path, as for every gate on that check)
   `ModuleLinkOptions.WithMembers` — the ONE probe the boot, landing and roll gates use, with its member
   half switched on. `--judge-from` scopes it to what a core pull request can move: a reference into an
   assembly only the portal host ships (from MeshWeaver.Plugins) is reported unchecked, not refused.
+- **The set's sibling modules are part of the surface.** Each bundle is measured against the
+  platform's files FIRST and then the other modules of the same set, which is what the landing
+  measures it against (the application closure plus every landed module, landed in dependency
+  order). A module may reference another MODULE: the AI module references
+  `MeshWeaver.Markdown.Collaboration`, which ships as the Essentials bundle and not in the image.
+  Measured against the image alone, that reference was refused as "no such platform assembly" as
+  soon as the image stopped carrying the sibling (MeshWeaver.Plugins#2970). A reference to a module
+  the set does NOT carry is still red (`PlatformLinkSiblingModulesTest`, with its negative control).
 - **Credentials:** none — the run's own token reads this public repository's artifacts, so fork pull
   requests run it too.
 
