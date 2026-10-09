@@ -17,7 +17,8 @@ namespace MeshWeaver.Mesh.Security;
 /// again". The store read carries no such hop (Doc/Architecture/TokenValidationHotPath).</para>
 ///
 /// <para>Three outcomes, never collapsed (issue #637): a SUCCESS; a DEFINITIVE negative (format,
-/// not found, hash mismatch, revoked, expired, service identity refused) via
+/// not found, hash mismatch, revoked, expired or idle-expired (<see cref="OAuthTokenLifetime"/>),
+/// service identity refused) via
 /// <see cref="ValidateTokenResponse.Fail"/>; and UNAVAILABLE — a read that faulted or did not
 /// answer within <see cref="ReadBound"/> — via <see cref="ValidateTokenResponse.Unavailable"/>,
 /// which callers answer as retryable and never as an invalid token.</para>
@@ -87,6 +88,10 @@ public static class ApiTokenVerdict
             return Observable.Return(ValidateTokenResponse.Fail("Token revoked"));
         if (apiToken.ExpiresAt is { } expiresAt && expiresAt < DateTimeOffset.UtcNow)
             return Observable.Return(ValidateTokenResponse.Fail("Token expired"));
+        // The same idle rule the HTTP authentication handler applies (OAuthTokenLifetime): a token
+        // refused there must not authenticate through this verdict instead.
+        if (OAuthTokenLifetime.IsIdle(apiToken, DateTimeOffset.UtcNow))
+            return Observable.Return(ValidateTokenResponse.Fail("OAuth token expired after being unused"));
 
         // Diagnostic only — no permission decision reads the mint-time roles (see ApiToken.Roles).
         var response = ValidateTokenResponse.Ok(apiToken.UserId, apiToken.UserName, apiToken.UserEmail, apiToken.Roles);
