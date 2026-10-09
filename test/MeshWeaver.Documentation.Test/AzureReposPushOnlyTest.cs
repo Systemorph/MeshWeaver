@@ -70,7 +70,8 @@ public class AzureReposPushOnlyTest
         var refusal = AzureReposPushPolicy.RefuseExport(
             new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = direction });
         refusal.Should().NotBeNull();
-        refusal!.Should().Contain("push-only").And.Contain("Export-only").And.Contain(direction.ToString());
+        refusal!.Key.Should().Be("gitsync.azure.exportNotExportOnly");
+        refusal.Render(null).Should().Contain("push-only").And.Contain("Export-only").And.Contain(direction.ToString());
     }
 
     [Fact]
@@ -89,17 +90,135 @@ public class AzureReposPushOnlyTest
             .Should().BeNull("the negative control: the push-only rule must not touch GitHub sources");
 
     [Theory]
-    [InlineData("Re-import")]
-    [InlineData("Import")]
-    [InlineData("Check branch")]
-    [InlineData("Branch head lookup")]
-    public void EveryInboundOperation_OnAzureRepos_IsRefusedByName(string operation)
+    [InlineData(AzureReposPushPolicy.InboundOperation.Reimport, "Re-import")]
+    [InlineData(AzureReposPushPolicy.InboundOperation.Import, "Import")]
+    [InlineData(AzureReposPushPolicy.InboundOperation.CheckBranch, "Check branch")]
+    [InlineData(AzureReposPushPolicy.InboundOperation.BranchHead, "Branch head lookup")]
+    [InlineData(AzureReposPushPolicy.InboundOperation.PullRequest, "Pull requests")]
+    public void EveryInboundOperation_OnAzureRepos_IsRefusedByName(string operation, string englishLead)
     {
         var refusal = AzureReposPushPolicy.RefuseInbound(AzureUrl, operation);
         refusal.Should().NotBeNull();
-        refusal!.Should().StartWith(operation).And.Contain("push-only").And.Contain(AzureUrl);
+        refusal!.Render(null).Should().StartWith(englishLead).And.Contain("push-only").And.Contain(AzureUrl);
         AzureReposPushPolicy.RefuseInbound(GitHubUrl, operation).Should().BeNull(
             "the negative control: inbound GitHub operations are untouched");
+    }
+
+    // ── Guard ORDER — the sequences GitHubSyncService runs (review #6377) ─────
+
+    [Theory]
+    [InlineData(SyncDirection.ImportOnly)]
+    [InlineData(SyncDirection.Bidirectional)]
+    public void TheExportGuard_RunsTheAzureRuleBeforeTheDirectionRule(SyncDirection direction)
+    {
+        // An Azure source declared ImportOnly matches BOTH rules; the provider's refusal must win,
+        // or the user is told "change to Bidirectional" — which Azure would refuse next.
+        var refusal = AzureReposPushPolicy.ExportGuard(
+            new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = direction });
+        refusal!.Key.Should().Be("gitsync.azure.exportNotExportOnly");
+    }
+
+    [Fact]
+    public void TheExportGuard_StillAppliesTheDirectionRuleToGitHub()
+    {
+        // Negative control: the generic rule is not lost behind the provider rule.
+        AzureReposPushPolicy.ExportGuard(
+                new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ImportOnly })!
+            .Key.Should().Be("gitsync.direction.importOnlyNoExport");
+        AzureReposPushPolicy.ExportGuard(
+                new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.Bidirectional })
+            .Should().BeNull();
+        AzureReposPushPolicy.ExportGuard(
+                new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.ExportOnly })
+            .Should().BeNull("a correctly declared Azure source exports");
+    }
+
+    [Theory]
+    [InlineData(SyncDirection.ExportOnly)]
+    [InlineData(SyncDirection.Bidirectional)]
+    [InlineData(SyncDirection.ImportOnly)]
+    public void TheReimportGuard_RunsTheAzureRuleBeforeTheDirectionRule(SyncDirection direction)
+    {
+        // An Azure source correctly declared ExportOnly matches BOTH rules on re-import; the
+        // provider's refusal must win, or the user is told to switch to Import-only.
+        AzureReposPushPolicy.ReimportGuard(
+                new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = direction })!
+            .Key.Should().Be("gitsync.azure.inbound.reimport");
+    }
+
+    [Fact]
+    public void TheReimportGuard_StillAppliesTheDirectionRuleToGitHub()
+    {
+        AzureReposPushPolicy.ReimportGuard(
+                new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ExportOnly })!
+            .Key.Should().Be("gitsync.direction.exportOnlyNoImport");
+        AzureReposPushPolicy.ReimportGuard(
+                new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.Bidirectional })
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void TheService_RunsTheGuardSequences_NotItsOwnChecks()
+    {
+        // The sequences above are only the service's behaviour if the service calls THEM. Pin it on
+        // the source: SyncToGitHub and the re-import call the guards and carry no direction check of
+        // their own that could run first.
+        var source = System.IO.File.ReadAllText(System.IO.Path.Combine(
+            RepoRoot(), "src", "MeshWeaver.GitSync", "GitHubSyncService.cs"));
+        source.Should().Contain("AzureReposPushPolicy.ExportGuard(config)");
+        source.Should().Contain("AzureReposPushPolicy.ReimportGuard(config)");
+        source.Contains("config.Direction == SyncDirection.ImportOnly", StringComparison.Ordinal)
+            .Should().BeFalse("an inline import-only check in the service would bypass the guard order");
+        source.Contains("if (config.Direction == SyncDirection.ExportOnly)", StringComparison.Ordinal)
+            .Should().BeFalse("an inline export-only check in the service would bypass the guard order");
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("repository root (MeshWeaver.slnx) not found");
+    }
+
+    // ── Localization of every refusal ────────────────────────────────────────
+
+    [Theory]
+    [InlineData("gitsync.azure.exportNotExportOnly")]
+    [InlineData("gitsync.azure.inbound.import")]
+    [InlineData("gitsync.azure.inbound.reimport")]
+    [InlineData("gitsync.azure.inbound.checkBranch")]
+    [InlineData("gitsync.azure.inbound.branchHead")]
+    [InlineData("gitsync.azure.inbound.pullRequest")]
+    [InlineData("gitsync.azure.identityNotDeclared")]
+    [InlineData("gitsync.azure.noWorkloadIdentity")]
+    [InlineData("gitsync.azure.notRegistered")]
+    [InlineData("gitsync.direction.importOnlyNoExport")]
+    [InlineData("gitsync.direction.exportOnlyNoImport")]
+    [InlineData("ui.gitSync.pullRequestsNotOffered")]
+    public void EveryRefusal_RendersInEnglishAndGerman(string key)
+    {
+        var refusal = GitSyncRefusal.Of(key, ("url", AzureUrl), ("direction", "Bidirectional"), ("variable", "X"));
+        var en = refusal.Render("en");
+        var de = refusal.Render("de");
+        en.Should().NotBe(key, "the key must be in the English catalog");
+        de.Should().NotBe(key, "the key must be in the German catalog");
+        de.Should().NotBe(en, "the German entry must be a translation, not the English text");
+        en.Should().NotContain("{url}").And.NotContain("{direction}").And.NotContain("{variable}");
+    }
+
+    [Fact]
+    public void ARefusalException_RendersForTheViewer_AndAnyOtherExceptionKeepsItsMessage()
+    {
+        var refusal = AzureReposPushPolicy.RefuseInbound(AzureUrl, AzureReposPushPolicy.InboundOperation.Reimport)!;
+        var ex = refusal.ToException();
+        ex.Message.Should().Be(refusal.Render(null));
+        GitSyncRefusalException.Localize(ex, "de").Should().Be(refusal.Render("de"));
+        GitSyncRefusalException.Localize(new InvalidOperationException("upstream"), "de").Should().Be("upstream");
+
+        var entry = refusal.ToLogMessage(Microsoft.Extensions.Logging.LogLevel.Error);
+        entry.MessageKey.Should().Be("gitsync.azure.inbound.reimport");
+        entry.Message.Should().Be(refusal.Render(null));
     }
 
     // ── Credential ───────────────────────────────────────────────────────────
@@ -153,7 +272,8 @@ public class AzureReposPushOnlyTest
         AzureDevOpsOptions? seen = null;
         var service = new AzureReposTokenService(pools,
             Options.Create(new AzureDevOpsOptions { TenantId = "client-tenant", ClientId = "client-app" }),
-            credentialFactory: declared => { seen = declared; return credential; });
+            credentialFactory: declared => { seen = declared; return credential; },
+            environment: WithProjectedToken);
 
         service.IsConfigured.Should().BeTrue();
         var token = await service.GetToken().Await(TestContext.Current.CancellationToken);
@@ -183,7 +303,31 @@ public class AzureReposPushOnlyTest
             .FirstAsync()
             .Await(TestContext.Current.CancellationToken);
         error.Message.Should().Contain("AzureDevOps:TenantId").And.Contain("AzureDevOps:ClientId");
+        ((GitSyncRefusalException)error).Refusal.Key.Should().Be("gitsync.azure.identityNotDeclared");
     }
+
+    [Fact]
+    public async Task ADeclaredIdentity_WithoutAProjectedWorkloadToken_IsRefusedByName_AndRequestsNoToken()
+    {
+        using var pools = new IoPoolRegistry(new IoPoolOptions());
+        var credential = new RecordingCredential("never");
+        var service = new AzureReposTokenService(pools,
+            Options.Create(new AzureDevOpsOptions { TenantId = "client-tenant", ClientId = "client-app" }),
+            credentialFactory: _ => credential,
+            environment: _ => null);   // the pod was not armed by the workload-identity webhook
+
+        var error = await service.GetToken().Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
+            .Select(n => n.Exception!)
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+        ((GitSyncRefusalException)error).Refusal.Key.Should().Be("gitsync.azure.noWorkloadIdentity");
+        error.Message.Should().Contain(AzureReposTokenService.FederatedTokenFileVariable);
+        credential.Requests.Should().BeEmpty("no token exchange is attempted without a projected token");
+    }
+
+    private static string? WithProjectedToken(string name)
+        => name == AzureReposTokenService.FederatedTokenFileVariable ? "/var/run/secrets/azure/tokens/azure-identity-token" : null;
 
     [Theory]
     [InlineData("https://dev.azure.com/partnerre/Memex/_git/content", "ui.gitSync.provider.AzureRepos")]

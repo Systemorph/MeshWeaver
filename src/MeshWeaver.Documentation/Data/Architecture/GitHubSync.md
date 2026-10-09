@@ -113,7 +113,7 @@ name, would need a migration of every stored `$type` and could break code CI nev
 | Import / update to latest / re-import at a commit | ✗ refused by name — nothing is read from the repository |
 | Check branch / branch-head lookup | ✗ refused by name |
 | Webhooks (Azure DevOps service hooks), branch reconcile, sealed-publication reconcile | not consulted — every inbound path already skips `ExportOnly` sources |
-| Pull requests | not offered |
+| Pull requests | not offered — the settings tab shows a notice instead of the draft button, and every `PullRequestService` operation refuses an Azure Repos source |
 | Create the repository if missing | not done — the repository must exist; a missing one fails the clone with git's own message |
 
 A refusal is an error with a message, never a silent skip: `AzureReposPushPolicy.RefuseExport` and
@@ -137,10 +137,28 @@ Both values are identifiers, not secrets. On the client's side:
 1. Create (or reuse) an app registration in the client tenant.
 2. Add a federated credential for the instance's AKS workload identity: the cluster's OIDC issuer and
    the portal's service account as subject.
-3. Add that registration to the Azure DevOps organisation as a user, with Contribute on the target
-   repository.
+3. Add that registration to the Azure DevOps organisation as a user, and grant it these **repository
+   permissions** on the target repository. Azure DevOps controls each one separately, and the push
+   needs all of them:
+   - **Read** — the push clones the repository and fetches the target branch before it writes.
+   - **Contribute** — to push the sync commit.
+   - **Create branch** — only when the target branch may not exist yet and *Create the branch if it
+     doesn't exist* is on (the default). To avoid granting it, pre-create the branch and turn that
+     setting off; a missing branch is then refused by name.
 
-When either key is absent the export is refused, naming both keys (`AzureReposTokenService`). The
+   The repository itself must exist: GitSync does not create Azure Repos repositories, whatever
+   *Create the repository* says.
+
+**Prerequisite on the instance: the portal pod must carry a workload-identity token.** The AKS
+workload-identity webhook projects the service-account token (`AZURE_FEDERATED_TOKEN_FILE`) only into a
+pod labelled `azure.workload.identity/use: "true"`. Today the chart sets that label when the deployment
+record declares `selfUpdate.azureClientId`. Declaring only the two `AzureDevOps` keys does not arm it,
+and the export is then refused by name (`gitsync.azure.noWorkloadIdentity`), never with the SDK's
+generic error. The self-update client id the webhook injects does not interfere: the Azure DevOps
+exchange uses the declared tenant and client id, presented with the same projected token.
+
+When either key is absent the export is refused, naming both keys (`AzureReposTokenService`). Every
+refusal on this path is a catalog key rendered in the viewer's language (`GitSyncRefusal`). The
 token travels to `git` as an `Authorization: Bearer` header set through git's `GIT_CONFIG_*`
 environment, so it never appears in argv or in `.git/config` (`GitCredentials.ForRemote`). Commits are
 authored as `MeshWeaver <noreply@meshweaver.cloud>`.

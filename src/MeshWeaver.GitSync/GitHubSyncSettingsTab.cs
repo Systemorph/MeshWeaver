@@ -226,27 +226,14 @@ public static class GitHubSyncSettingsTab
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
         stack = stack.WithView(Section("Pull request"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
-            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
-            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>"));
-
-        // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
-        // the editor at that node by stashing its path in the PrPathId data id.
-        stack = stack.WithView(Controls.Button(host.Localize("ui.draftPrWithAi"))
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
-                prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
-                    prNode =>
-                    {
-                        ctx.Host.UpdateData(PrPathId, prNode.Path);
-                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
-                    },
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
+        // Policy azure-repos-push-only (MeshWeaver#5248): an Azure Repos source is offered NO pull
+        // request — the draft button is replaced by a notice, live, so it follows an edit of the URL.
+        // PullRequestService refuses the same operations server-side.
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
+            .Select(cfg => GitRepositoryProvider.IsAzureRepos(cfg?.RepositoryUrl)
+                ? (UiControl?)Controls.Markdown(h.Localize("ui.gitSync.pullRequestsNotOffered"))
+                : (UiControl?)BuildDraftPullRequest(host, prService, spacePath))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // The PR editor + status, bound to the draft path the button stashes. Re-renders whenever
         // PrPathId changes (a new draft) — the node-content editor itself live-binds to the node
@@ -263,6 +250,35 @@ public static class GitHubSyncSettingsTab
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         return stack;
+    }
+
+    /// <summary>The pull-request draft row (description + "Draft pull request" button) for a
+    /// provider that supports pull requests.</summary>
+    private static UiControl BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
+    {
+        var section = Controls.Stack.WithWidth("100%");
+        section = section.WithView(Controls.Html(
+            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
+            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>"));
+
+        // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
+        // the editor at that node by stashing its path in the PrPathId data id.
+        section = section.WithView(Controls.Button(host.Localize("ui.draftPrWithAi"))
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
+                prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
+                    prNode =>
+                    {
+                        ctx.Host.UpdateData(PrPathId, prNode.Path);
+                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
+                    },
+                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                return Task.CompletedTask;
+            }));
+        return section;
     }
 
     // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
@@ -284,7 +300,7 @@ public static class GitHubSyncSettingsTab
                     // credential re-emits null and the body flips to "Not connected" on its own.
                     creds.Delete(userId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             return body;
@@ -395,7 +411,7 @@ public static class GitHubSyncSettingsTab
                     // and the removed source disappears on its own.
                     sync.RemoveSyncSource(spacePath, sourceId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             stack = stack.WithView(source);
@@ -430,7 +446,7 @@ public static class GitHubSyncSettingsTab
                     sync.AddSyncSource(spacePath, name).Subscribe(
                         node => ctx.Host.UpdateData(ResultId,
                             Ok($"Sync source '{name}' added — configure its repository and direction above.")),
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -462,7 +478,7 @@ public static class GitHubSyncSettingsTab
                     // Runs as an activity (progress + cancel via the panel above).
                     ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
                             onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -523,7 +539,7 @@ public static class GitHubSyncSettingsTab
                 // Runs as an activity (progress + cancel shown in the Sync section's activity panel).
                 ctx.Host.Hub.OpenPullRequestOnGitHub(spacePath, prPath, userId,
                         onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
@@ -534,7 +550,7 @@ public static class GitHubSyncSettingsTab
                 ctx.Host.UpdateData(ResultId, Pending("Asking GitHub for the pull-request status…"));
                 prService.AskStatus(spacePath, prPath, userId).Subscribe(
                     info => ctx.Host.UpdateData(ResultId, Ok($"GitHub reports this pull request is {info.Status}.")),
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         stack = stack.WithView(actions);
