@@ -39,6 +39,11 @@ readonly TLS_SECRET="memex-portal-tls"          # ingress TLS secret name (§5)
 readonly HOST_PORT="${MEMEX_PORT:-8443}"        # unprivileged host port (§6/§7)
 readonly COLIMA_CPU="${MEMEX_COLIMA_CPU:-8}"    # VM sizing (§2)
 readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-16}"   # VM sizing (§2)
+# The model `up` pulls and aliases as `qwen3.6-code` — the id the portal's OpenAICompatible__Models__0
+# names (share/values.local.yaml). qwen3.6 is ~23 GB and needs a host with RAM to spare beside the VM
+# (§2 "Host sizing"); a smaller host sets a smaller tool-capable model, or `none` to skip the pull
+# entirely (#6024). The small e2e model (qwen-small) is always pulled — it is ~400 MB.
+readonly OLLAMA_MODEL="${MEMEX_OLLAMA_MODEL:-qwen3.6}"
 # The chart's portal/migration containers hardcode these image refs with
 # imagePullPolicy: IfNotPresent (deploy/helm/.../deployment.yaml). Both the
 # local-build and ACR-pull paths retag onto these names so k3s finds them (§3).
@@ -798,7 +803,7 @@ apply_logging() {
 # §10 — host-native Ollama wired into the cluster by name (ollama:11434)
 # ---------------------------------------------------------------------------
 setup_ollama() {
-  step "Wiring host-native Ollama (Metal GPU) — model qwen3.6 (§10)"
+  step "Wiring host-native Ollama (Metal GPU) — model ${OLLAMA_MODEL} as qwen3.6-code (§10)"
   if ! curl -fsS "http://127.0.0.1:11434/api/version" >/dev/null 2>&1; then
     info "Starting 'ollama serve' bound to 0.0.0.0:11434 (so the VM can reach it)"
     OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve >"$LOCAL_HOME/ollama.log" 2>&1 &
@@ -811,8 +816,12 @@ setup_ollama() {
   else
     info "ollama already serving on :11434"
   fi
-  ollama pull qwen3.6
-  ollama cp qwen3.6 qwen3.6-code 2>/dev/null || info "model alias qwen3.6-code already exists"
+  if [ "$OLLAMA_MODEL" = "none" ]; then
+    info "MEMEX_OLLAMA_MODEL=none — not pulling a chat model; the portal's qwen3.6-code will not answer until you alias one"
+  else
+    ollama pull "$OLLAMA_MODEL"
+    ollama cp "$OLLAMA_MODEL" qwen3.6-code 2>/dev/null || info "model alias qwen3.6-code already exists"
+  fi
   # Small CPU-friendly model (~400MB) the e2e portal selects ('qwen-small' — see e2e_deploy), so
   # a real chat round runs on any host/CI without the 23GB GPU qwen3.6.
   ollama pull qwen2.5:0.5b
@@ -2438,7 +2447,11 @@ ENV OVERRIDES:
                        needed in registry mode — a brew install works standalone).
   MEMEX_CHART_DIR      Explicit chart dir (defaults to \$MEMEX_REPO/deploy/helm).
   MEMEX_LOG_LEVEL      Verbose log level (default: Debug; use Trace for max).
-  MEMEX_COLIMA_CPU / MEMEX_COLIMA_MEM   VM sizing (default 8 / 16).
+  MEMEX_COLIMA_CPU / MEMEX_COLIMA_MEM   VM sizing (default 8 / 16). Host RAM needed: the VM
+                       size plus ~6 GB for macOS, plus the local model (qwen3.6 ~23 GB) —
+                       about 48 GB with the defaults. See LocalColimaMac §2 "Host sizing".
+  MEMEX_OLLAMA_MODEL   Ollama model 'up' pulls and aliases as qwen3.6-code (default
+                       qwen3.6, ~23 GB); 'none' skips the pull on a small host.
   MEMEX_PORT           Host port for the forward (default 8443).
   MEMEX_LOCAL_HOME     State dir (default ~/.memex-local).
 

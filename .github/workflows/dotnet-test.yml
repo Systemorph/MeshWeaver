@@ -4796,7 +4796,13 @@ jobs:
   #
   # `needs: [collect-results]` is the whole graph: `Consolidate test results` `needs:` every other job,
   # runs `always()`, and carries an explicit fail step per dependency — so `failure()` here is "some
-  # gate failed" and `success()` is "every gate passed", with nothing between them to reason about.
+  # gate failed" and `needs.collect-results.result == 'success'` is "every gate passed".
+  # 🚨 NOT `success()` for the green half (#5896): on a push to main the PR-only gates (Required CI
+  # inputs, Cross-repo pair, Interface additions, …) are SKIPPED ancestors, and an implicit or
+  # explicit `success()` reads a skipped ancestor as not-success — so the green job was skipped on
+  # every green main run and the ledger never closed (measured: run 37959092776, `Consolidate test
+  # results` success, `main is green: close the ledger` skipped). Same shape as the `test` job's
+  # `needs.build.result` condition above.
   #
   # 🚨 STATICALLY PR-UNREACHABLE, and the order of the `if:` terms is load-bearing:
   # `github.event_name != 'pull_request'` comes FIRST so check-pr-secret-preflight.py proves from the
@@ -4835,7 +4841,7 @@ jobs:
   ci-green:
     name: "main is green: close the ledger"
     needs: [collect-results]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && success()
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !cancelled() && needs.collect-results.result == 'success'
     permissions:
       contents: read
       issues: write
