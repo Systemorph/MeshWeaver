@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
@@ -83,6 +86,93 @@ public static class HierarchicalPathDeletion
                 ex.Data["DeletedPaths"] = (IReadOnlyList<string>)deleted.ToImmutable();
                 return Observable.Throw<IReadOnlyList<string>>(ex);
             });
+    }
+
+    /// <summary>
+    /// <see cref="DeleteSubtree"/> with at most <paramref name="maxConcurrentDeletes"/> <paramref name="deleteOne"/> legs in
+    /// flight across the WHOLE tree at once.
+    ///
+    /// <para><b>Why the bound is global, not per level</b> (issue #6351). The traversal fans every
+    /// sibling set out with an unbounded <c>Merge</c>, and the levels nest, so a wide subtree
+    /// subscribes one leg per leaf simultaneously: the 1,383-path <c>Marketing</c> delete on the
+    /// control portal (2026-10-09 13:38:58Z) put every one of its leaf commits on the process-wide
+    /// cap-1 <c>pg:Postgres</c> write pool at the same instant — 219 waiting there at the timeout,
+    /// 1,325 admissions waiting at least a second inside the one stage, and 764 waiting for the
+    /// 1,060-path <c>SocialMedia</c> delete 45 minutes later. Each leaf's OWN no-progress watchdog
+    /// started when its hub took the request, so a leaf queued behind hundreds of its siblings'
+    /// writes made "no progress" for its whole budget while the cascade it belonged to was
+    /// removing rows steadily, and the leaf's timeout failed the whole delete. The backlog was the
+    /// operation's own. A per-level cap would not stop that, because nested levels multiply; one
+    /// lane shared by every leg does.</para>
+    ///
+    /// <para><b>Ordering and failure are unchanged.</b> A node is still admitted only once all its
+    /// descendants have completed, unrelated branches still progress independently, and the first
+    /// failing leg still fails the traversal and cancels every running and queued leg — a queued leg
+    /// whose subscriber has gone never starts. The lane cannot deadlock: a leg waits for nothing but
+    /// its own delete, and a parent is admitted only after its children have released their
+    /// slots.</para>
+    /// </summary>
+    /// <param name="rootPath">The subtree root. Added to the path set if absent.</param>
+    /// <param name="descendantPaths">Strict descendants of <paramref name="rootPath"/>.</param>
+    /// <param name="deleteOne">Per-node delete delegate, as for the unbounded overload.</param>
+    /// <param name="maxConcurrentDeletes">Most <paramref name="deleteOne"/> legs subscribed at once,
+    /// across the whole tree; at least 1.</param>
+    /// <returns>As for the unbounded overload.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxConcurrentDeletes"/> is
+    /// less than 1.</exception>
+    public static IObservable<IReadOnlyList<string>> DeleteSubtreeBounded(
+        string rootPath,
+        IEnumerable<string> descendantPaths,
+        Func<string, IObservable<string>> deleteOne,
+        int maxConcurrentDeletes)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxConcurrentDeletes, 1);
+        return Observable.Create<IReadOnlyList<string>>(observer =>
+        {
+            // ONE admission lane for every leg of this traversal. Its inners never fault — each
+            // leg's outcome is MATERIALIZED and handed to that leg's own subscriber — so one failed
+            // leg cannot terminate the lane under its siblings; the traversal's own fail-fast still
+            // comes from the leg's subscriber, exactly as in the unbounded overload.
+            var admissions = new Subject<IObservable<Unit>>();
+            var admit = Subject.Synchronize(admissions);
+            // The inners are materialized, so the lane cannot fault by construction; were it ever to,
+            // the fault goes to the traversal's subscriber rather than vanishing.
+            var lane = admissions.MergeBounded(maxConcurrentDeletes).Subscribe(_ => { }, observer.OnError);
+            // Set the moment the traversal FAILS or is disposed, before anything is torn down.
+            // Tearing down cancels the running legs, and a cancelled leg frees its slot at once —
+            // so without this the lane would admit the next queued leg in the middle of the
+            // teardown, before that leg's own subscriber had been disposed.
+            var stopped = new BooleanDisposable();
+
+            IObservable<string> Admitted(string path) => Observable.Create<string>(legObserver =>
+            {
+                var released = new BooleanDisposable();
+                var cancel = new AsyncSubject<Unit>();
+                admit.OnNext(Observable
+                    .Defer(() => stopped.IsDisposed || released.IsDisposed
+                        // Its subscriber is gone (a sibling failed, or the traversal was
+                        // disposed) before a slot came free: the leg never starts.
+                        ? Observable.Empty<string>()
+                        : deleteOne(path))
+                    .TakeUntil(cancel)
+                    .Materialize()
+                    .Do(n => n.Accept(legObserver))
+                    .Select(_ => Unit.Default));
+                return Disposable.Create(() =>
+                {
+                    released.Dispose();
+                    cancel.OnNext(Unit.Default);
+                    cancel.OnCompleted();
+                });
+            });
+
+            var traversal = DeleteSubtree(rootPath, descendantPaths, Admitted)
+                .Do(_ => { }, _ => stopped.Dispose())
+                .Subscribe(observer);
+            // Disposed in this order: stop admitting, then tear the traversal and the lane down.
+            return new CompositeDisposable(
+                stopped, traversal, lane, Disposable.Create(admissions.OnCompleted));
+        });
     }
 
     private static IObservable<string> DeleteSubtreeImpl(
