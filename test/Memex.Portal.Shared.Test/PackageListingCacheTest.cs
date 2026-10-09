@@ -233,6 +233,34 @@ public class PackageListingCacheTest
         Assert.Equal(3, reads);
     }
 
+    /// <summary>
+    /// ONE subscription per revalidation (review of #6389): every request that finds the entry
+    /// expired while the re-read is in flight answers from the held listing WITHOUT subscribing to
+    /// the re-read. Measured by its terminal: when the stalled re-read finally faults, the failure is
+    /// logged once — not once per request that saw the expiry, which is what one retained observer
+    /// per request looked like.
+    /// </summary>
+    [Fact]
+    public async Task ManyRequestsDuringOneStalledReRead_HoldOneSubscription()
+    {
+        var ticks = 0L;
+        var log = new CapturingLogger<PackageListingCache>();
+        var cache = new PackageListingCache(Window, () => ticks, log);
+        var reads = 0;
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        ticks += StopwatchTicks(Window) * 2;
+        var reRead = new Subject<IReadOnlyList<PackageManifest>>();
+        for (var request = 0; request < 5; request++)
+            await Listing(Wrap(cache, new FakeSource(_ => { reads++; return reRead; })));
+        Assert.Equal(2, reads);
+
+        reRead.OnError(new InvalidOperationException("GitHub said no"));
+
+        Assert.Single(log.Lines(Microsoft.Extensions.Logging.LogLevel.Warning),
+            l => l.Contains("revalidating", StringComparison.Ordinal));
+    }
+
     /// <summary>A green build that lands WHILE a re-read is in flight: that read started before the
     /// merge, so its answer is served but stays stale — the next request reads again.</summary>
     [Fact]

@@ -194,9 +194,12 @@ public sealed class PackageListingCache : IDisposable
         return Observable.Defer(() =>
         {
             if (!held.TryGetValue(key, out var current))
-                return Read(key, produce);
+                return Read(key, produce, out _);
 
-            if (!current.Evicted && Elapsed(current.ReadAt) <= Window)
+            // Fresh = read inside the window AND no green build of its repository since the read
+            // STARTED. The generation is compared here, at serve time, so a read that lands after an
+            // eviction can never be installed as fresh — landing and invalidation need no ordering.
+            if (current.Generation == generations.GetValueOrDefault(key) && Elapsed(current.ReadAt) <= Window)
                 return Observable.Return(current.Listing);
 
             Revalidate(key, produce, current);
@@ -208,10 +211,12 @@ public sealed class PackageListingCache : IDisposable
     /// otherwise. It lands in <see cref="held"/> and releases its own in-flight entry when it
     /// settles; a fault is evicted by the promise cache and reaches every waiting subscriber.</summary>
     private IObservable<IReadOnlyList<PackageManifest>> Read(
-        PackageListingKey key, Func<IObservable<IReadOnlyList<PackageManifest>>> produce)
+        PackageListingKey key, Func<IObservable<IReadOnlyList<PackageManifest>>> produce, out bool started)
     {
+        var createdHere = false;
         var shared = reads.GetOrAdd(key, k =>
         {
+            createdHere = true;
             var startedAt = ticks();
             var generation = generations.GetValueOrDefault(k);
             builtAt[k] = startedAt;
@@ -224,6 +229,7 @@ public sealed class PackageListingCache : IDisposable
                 .Replay(1)
                 .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageListingCache));
         });
+        started = createdHere;
         // Released once SETTLED, never on a subscriber's cancellation, and pair-exact — a
         // replacement a later caller (or EvictRepo) installed is never dropped.
         return shared.Do(_ => { }, () => reads.Release(key, shared));
@@ -249,7 +255,14 @@ public sealed class PackageListingCache : IDisposable
             reads.Invalidate(key);
         }
 
-        Read(key, produce).Subscribe(
+        // 🚨 ONE subscription per revalidation, made by the request that STARTED it. Every other
+        // request that finds the entry expired while that read is in flight only answers from the
+        // held listing — subscribing each of them to the replay would retain one observer per
+        // request for as long as a stalled read stalls, and log its fault once per request.
+        var revalidation = Read(key, produce, out var started);
+        if (!started)
+            return;
+        revalidation.Subscribe(
             _ => { },
             exception => logger?.LogWarning(exception,
                 "Plugin listing cache: revalidating {Repo} @ {Ref} failed — still serving the listing "
@@ -257,11 +270,11 @@ public sealed class PackageListingCache : IDisposable
                 key.RepoUrl, key.GitRef, Elapsed(current.ReadAt)));
     }
 
-    /// <summary>Records a settled read — unless a NEWER read already landed — and marks it stale
-    /// when a green build arrived while it was in flight.</summary>
+    /// <summary>Records a settled read — unless a NEWER read already landed — with the generation
+    /// it STARTED under, so a green build that arrived while it was in flight leaves it stale.</summary>
     private void Land(PackageListingKey key, IReadOnlyList<PackageManifest> listing, long startedAt, long generation)
     {
-        var landed = new HeldListing(listing, startedAt, Evicted: generations.GetValueOrDefault(key) != generation);
+        var landed = new HeldListing(listing, startedAt, generation);
         held.AddOrUpdate(key, landed, (_, existing) => existing.ReadAt > startedAt ? existing : landed);
     }
 
@@ -305,9 +318,7 @@ public sealed class PackageListingCache : IDisposable
             generations.AddOrUpdate(key, 1, (_, g) => g + 1);
             reads.Invalidate(key);
             // The held listing stays SERVABLE — answering from it while the re-read runs is the
-            // point (#4963) — but it is no longer fresh, so the next request revalidates.
-            if (held.TryGetValue(key, out var current))
-                held.TryUpdate(key, current with { Evicted = true }, current);
+            // point (#4963) — but its generation is now behind, so the next request revalidates.
             evicted++;
         }
 
@@ -327,9 +338,9 @@ public sealed class PackageListingCache : IDisposable
 
     private TimeSpan Elapsed(long since) => Stopwatch.GetElapsedTime(since, ticks());
 
-    /// <summary>A settled listing, when its read started, and whether a green build has since made
-    /// it stale.</summary>
-    private sealed record HeldListing(IReadOnlyList<PackageManifest> Listing, long ReadAt, bool Evicted);
+    /// <summary>A settled listing, when its read started, and the eviction generation it started
+    /// under — stale as soon as a green build bumps the key's generation past it.</summary>
+    private sealed record HeldListing(IReadOnlyList<PackageManifest> Listing, long ReadAt, long Generation);
 
     private static string Normalize(string repoUrl)
     {

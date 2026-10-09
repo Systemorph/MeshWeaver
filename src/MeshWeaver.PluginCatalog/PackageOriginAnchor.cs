@@ -237,27 +237,41 @@ public sealed class PackageOriginAnchor : IDisposable
 
         // Nothing held, or reuse switched off by configuration: this read waits for the listing.
         if (held is null || freshness <= TimeSpan.Zero)
-            return List();
+            return List(out _);
 
         Refresh();
         return Observable.Return(held);
     });
 
-    /// <summary>Starts (or joins) the shared listing with this anchor as its subscriber, so it runs
-    /// to completion whether or not any reader is waiting on it.</summary>
-    private void Refresh() =>
-        List().Subscribe(
+    /// <summary>Starts the shared listing with this anchor as its ONE subscriber, so it runs to
+    /// completion whether or not any reader is waiting on it. A re-listing already in flight is left
+    /// alone: subscribing every stale reader to it would retain one observer per registry request
+    /// for as long as a stalled source stalls.</summary>
+    private void Refresh()
+    {
+        var refresh = List(out var started);
+        if (!started)
+            return;
+        refresh.Subscribe(
             _ => { },
             // List never faults (every failure folds into a snapshot); a fault reaching here is an
             // ownership release at teardown, and is named rather than dropped.
             exception => logger?.LogDebug(exception, "Entitlement anchor: the background re-read ended without a snapshot"));
+    }
 
-    /// <summary>The shared listing of every configured source, folded into a snapshot.</summary>
-    private IObservable<PackageOriginSnapshot> List()
+    /// <summary>The shared listing of every configured source, folded into a snapshot;
+    /// <paramref name="started"/> says whether this call started it.</summary>
+    private IObservable<PackageOriginSnapshot> List(out bool started)
     {
-        var shared = listing.GetOrAdd(0, _ => ListSources()
-            .Replay(1)
-            .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageOriginAnchor)));
+        var createdHere = false;
+        var shared = listing.GetOrAdd(0, _ =>
+        {
+            createdHere = true;
+            return ListSources()
+                .Replay(1)
+                .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageOriginAnchor));
+        });
+        started = createdHere;
         return shared.Do(_ => { }, () => listing.Release(0, shared));
     }
 
