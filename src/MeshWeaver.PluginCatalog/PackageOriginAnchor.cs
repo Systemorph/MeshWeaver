@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -136,11 +138,22 @@ public sealed record PackageOriginSnapshot(
 /// listing may be reused before the sources are asked again, and its expiry triggers a READ, never
 /// a refusal. Conflating the two would smuggle in exactly the expiry the Store model forbids.</para>
 ///
+/// <para>🚨 <b>A request is answered from the snapshot the anchor HOLDS; it never waits for the
+/// sources to be listed again</b> (MeshWeaver#4963). Once a snapshot exists, a read past its
+/// window answers with it at once and starts ONE background re-read that replaces it when it
+/// lands. Before, every read past the window listed every source while the request waited — and
+/// measured on the fleet registry 2026-10-09 that wait was 25–60 s on every replica: 124 index and
+/// bundle requests in 110 minutes refused by the answer deadline with "Still waiting on: package
+/// origin anchor", authentication and every other stage finished in well under a second. Only the
+/// very first read (nothing held yet) waits, and concurrent first readers share that one listing.
+/// A window of zero still means "no reuse": every read then waits for its own listing, as
+/// configured.</para>
+///
 /// <para>No <c>async</c>: the sources are already <see cref="IObservable{T}"/>-shaped and their
 /// genuinely-async leaves (git, HTTP) sit behind <see cref="MeshWeaver.Mesh.Threading.IIoPool"/>
 /// inside them.</para>
 /// </summary>
-public sealed class PackageOriginAnchor
+public sealed class PackageOriginAnchor : IDisposable
 {
     /// <summary>How long an authoritative listing is reused before the sources are asked again.
     /// Config key <c>PluginCatalog:AnchorFreshnessSeconds</c>; 0 or negative disables reuse.</summary>
@@ -155,6 +168,16 @@ public sealed class PackageOriginAnchor
     private readonly Func<DateTimeOffset> clock;
     private readonly ILogger? logger;
     private PackageOriginSnapshot? last;
+
+    // The ONE listing of the sources in flight. Shared by every reader that waits on it (only the
+    // first, when nothing is held) and by the background re-read; released pair-exact when it
+    // settles, so the next read past the window starts a fresh one.
+    private readonly PromiseCache<byte, PackageOriginSnapshot> listing = new();
+
+    // The multicast connections the listing opens, owned here so disposal releases them
+    // (RootedRxConnectionRatchetGuard), delivered on one ordered lane.
+    private readonly CompositeDisposable connections = new();
+    private readonly ReleaseLane releaseLane = new();
 
     /// <summary>The DI constructor — reads the instance's configured package sources.</summary>
     /// <param name="hub">The root hub the sources are built against.</param>
@@ -197,14 +220,50 @@ public sealed class PackageOriginAnchor
     /// non-authoritative snapshot, because a throw here would turn "I could not ask" into an error
     /// the caller would have to decide something from, and the only safe decision from an error is
     /// the denial this whole change exists to remove.
+    ///
+    /// <para>🚨 Answers from the HELD snapshot whenever one exists (see the class remarks): inside
+    /// the window an authoritative one is simply reused; past it — or when the held one is not
+    /// authoritative — it is still the answer, and one shared re-read is started behind it. The
+    /// staleness this admits is the window plus one listing's duration, which a waiting reader
+    /// was served too; an absence still counts as a negative only on an
+    /// <see cref="AnchorState.Authoritative"/> snapshot.</para>
     /// </summary>
     public IObservable<PackageOriginSnapshot> Read() => Observable.Defer(() =>
     {
-        var now = clock();
-        if (Volatile.Read(ref last) is { State: AnchorState.Authoritative } fresh
-            && freshness > TimeSpan.Zero && now - fresh.ObservedAt < freshness)
-            return Observable.Return(fresh);
+        var held = Volatile.Read(ref last);
+        if (held is { State: AnchorState.Authoritative }
+            && freshness > TimeSpan.Zero && clock() - held.ObservedAt < freshness)
+            return Observable.Return(held);
 
+        // Nothing held, or reuse switched off by configuration: this read waits for the listing.
+        if (held is null || freshness <= TimeSpan.Zero)
+            return List();
+
+        Refresh();
+        return Observable.Return(held);
+    });
+
+    /// <summary>Starts (or joins) the shared listing with this anchor as its subscriber, so it runs
+    /// to completion whether or not any reader is waiting on it.</summary>
+    private void Refresh() =>
+        List().Subscribe(
+            _ => { },
+            // List never faults (every failure folds into a snapshot); a fault reaching here is an
+            // ownership release at teardown, and is named rather than dropped.
+            exception => logger?.LogDebug(exception, "Entitlement anchor: the background re-read ended without a snapshot"));
+
+    /// <summary>The shared listing of every configured source, folded into a snapshot.</summary>
+    private IObservable<PackageOriginSnapshot> List()
+    {
+        var shared = listing.GetOrAdd(0, _ => ListSources()
+            .Replay(1)
+            .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageOriginAnchor)));
+        return shared.Do(_ => { }, () => listing.Release(0, shared));
+    }
+
+    private IObservable<PackageOriginSnapshot> ListSources() => Observable.Defer(() =>
+    {
+        var now = clock();
         IReadOnlyList<ConfiguredPackageSource> configured;
         try
         {
@@ -238,6 +297,9 @@ public sealed class PackageOriginAnchor
             .Take(1)
             .Select(perSource => Observe(perSource, clock()));
     });
+
+    /// <summary>Releases the listing's multicast connection, if one is open.</summary>
+    public void Dispose() => connections.Dispose();
 
     /// <summary>Folds one read into a snapshot and remembers it.</summary>
     private PackageOriginSnapshot Observe(IList<SourceListing> perSource, DateTimeOffset now)

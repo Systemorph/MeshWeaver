@@ -72,11 +72,28 @@ public sealed class PackageListingCache : IDisposable
     /// </summary>
     public static readonly TimeSpan DefaultWindow = TimeSpan.FromMinutes(5);
 
-    private readonly PromiseCache<PackageListingKey, IReadOnlyList<PackageManifest>> promises = new();
+    // The READS in flight, one per key: concurrent callers share the single read, a fault evicts it
+    // (PromiseCache), and a settled read RELEASES its own entry (pair-exact) so the next
+    // revalidation can start a fresh one. Nothing settled is kept here — that is `held`.
+    private readonly PromiseCache<PackageListingKey, IReadOnlyList<PackageManifest>> reads = new();
 
-    // When each stored entry's factory ran, on a MONOTONIC clock — wall time steps and would forge
-    // either an immortal entry or a permanently-expired one.
+    // 🚨 The listing each key last READ, and when that read STARTED (#4963). This is what a request
+    // is answered from — including after the window has run out, while the revalidating read is in
+    // flight. Before, an expired entry was dropped and the request that found it WAITED for the
+    // re-read; measured on the fleet registry 2026-10-09, that wait outlasted the 25 s answer budget
+    // on every replica (all five source listings "running 24.9 s" in 123 deadline refusals over 110
+    // minutes), so catalog and index requests that landed in a refresh were refused for data the
+    // registry already held.
+    private readonly ConcurrentDictionary<PackageListingKey, HeldListing> held = new();
+
+    // When each key's newest read STARTED, on a MONOTONIC clock — wall time steps and would forge
+    // either an immortal entry or a permanently-expired one. The set of keys is exactly the set of
+    // listings this cache has ever read, which is what EvictRepo walks.
     private readonly ConcurrentDictionary<PackageListingKey, long> builtAt = new();
+
+    // Bumped by EvictRepo, so a read that started BEFORE a green build lands as already-stale: its
+    // answer predates the merge and must be revalidated, never served as fresh for a whole window.
+    private readonly ConcurrentDictionary<PackageListingKey, long> generations = new();
 
     // 🚨 The multicast connections this cache creates, owned HERE so the cache's own disposal
     // releases them (RootedRxConnectionRatchetGuard). A bare AutoConnect(1) would leave the handle
@@ -146,12 +163,25 @@ public sealed class PackageListingCache : IDisposable
     public static readonly TimeSpan MaximumWindow = TimeSpan.FromDays(1);
 
     /// <summary>
-    /// The listing for <paramref name="key"/> — the cached one when it is inside the window, a fresh
-    /// read otherwise. Concurrent callers share the single read.
+    /// The listing for <paramref name="key"/>. Inside the window: the held one. Past it (or after a
+    /// green build of its repository): STILL the held one, answered at once, while ONE revalidating
+    /// read runs behind it and replaces it when it lands. Only a key that has never been read makes
+    /// its caller wait — and concurrent first callers share that single read.
+    ///
+    /// <para>🚨 <b>Why stale-while-revalidate, and why it is not a looser guarantee.</b> The
+    /// listing's inputs change at the cadence of a merge, and the freshness window only says how
+    /// long a read may be reused before the source is ASKED again — it never meant "a caller must
+    /// wait for the source" (#4963). How stale an answer can be is unchanged in kind: the window
+    /// plus the duration of one read, which is what a waiting caller got too, minus the wait.</para>
+    ///
+    /// <para>🚨 <b>A failed revalidation is named, never swallowed into a fresh-looking answer.</b>
+    /// The held listing keeps being served (a transient GitHub fault must not turn a catalog that
+    /// worked a minute ago into an empty one), the fault is logged with how old the served listing
+    /// is, and the entry stays EXPIRED — so the very next request asks the source again.</para>
     /// </summary>
     /// <param name="key">What is being listed.</param>
-    /// <param name="produce">Reads the source. Invoked at most once per stored entry.</param>
-    /// <returns>The shared listing.</returns>
+    /// <param name="produce">Reads the source. Invoked at most once per read.</param>
+    /// <returns>The listing — held, or the shared first read.</returns>
     public IObservable<IReadOnlyList<PackageManifest>> Get(
         PackageListingKey key, Func<IObservable<IReadOnlyList<PackageManifest>>> produce)
     {
@@ -161,26 +191,78 @@ public sealed class PackageListingCache : IDisposable
         if (!Enabled)
             return produce();
 
-        // 🚨 The stamp is NOT removed here, and that is deliberate. Removing it in one operation
-        // and the promise in another lets a concurrent caller's FRESH entry be stripped of its
-        // stamp — and an entry with no stamp can never expire again and is invisible to
-        // EvictRepo, which walks these keys. Invalidating the promise alone is enough: the next
-        // GetOrAdd runs the factory, which OVERWRITES the stamp. The set of keys here is therefore
-        // exactly the set of listings this cache has ever held, which is what EvictRepo needs.
-        if (builtAt.TryGetValue(key, out var at) && Elapsed(at) > Window)
-            promises.Invalidate(key);
-
-        return promises.GetOrAdd(key, k =>
+        return Observable.Defer(() =>
         {
-            builtAt[k] = ticks();
-            // 🚨 Replay(1) + an OWNED AutoConnect, not the bare source. A PromiseCache entry is
-            // subscribed by every later caller, so a COLD observable would be re-run by each of them
-            // and the cache would hold a recipe rather than a result — caching nothing while looking
-            // like it worked. The connect fires on the first real subscriber; the cache's own
-            // Do-decoration deliberately does not count as one.
-            return produce().Take(1).Replay(1)
+            if (!held.TryGetValue(key, out var current))
+                return Read(key, produce);
+
+            if (!current.Evicted && Elapsed(current.ReadAt) <= Window)
+                return Observable.Return(current.Listing);
+
+            Revalidate(key, produce, current);
+            return Observable.Return(current.Listing);
+        });
+    }
+
+    /// <summary>The shared read for <paramref name="key"/>: joined when one is in flight, started
+    /// otherwise. It lands in <see cref="held"/> and releases its own in-flight entry when it
+    /// settles; a fault is evicted by the promise cache and reaches every waiting subscriber.</summary>
+    private IObservable<IReadOnlyList<PackageManifest>> Read(
+        PackageListingKey key, Func<IObservable<IReadOnlyList<PackageManifest>>> produce)
+    {
+        var shared = reads.GetOrAdd(key, k =>
+        {
+            var startedAt = ticks();
+            var generation = generations.GetValueOrDefault(k);
+            builtAt[k] = startedAt;
+            // 🚨 Replay(1) + an OWNED AutoConnect, not the bare source. The entry is subscribed by
+            // every concurrent caller, so a COLD observable would be re-run by each of them and the
+            // cache would hold a recipe rather than a result. The connect fires on the first real
+            // subscriber; the cache's own Do-decoration deliberately does not count as one.
+            return produce().Take(1)
+                .Do(listing => Land(k, listing, startedAt, generation))
+                .Replay(1)
                 .AutoConnectOwnedBy(connections, releaseLane, nameof(PackageListingCache));
         });
+        // Released once SETTLED, never on a subscriber's cancellation, and pair-exact — a
+        // replacement a later caller (or EvictRepo) installed is never dropped.
+        return shared.Do(_ => { }, () => reads.Release(key, shared));
+    }
+
+    /// <summary>Starts (or joins) the read that replaces <paramref name="current"/>, owned by this
+    /// cache rather than by the request that noticed the expiry.</summary>
+    private void Revalidate(
+        PackageListingKey key, Func<IObservable<IReadOnlyList<PackageManifest>>> produce, HeldListing current)
+    {
+        // A revalidation in flight for longer than a whole window has not answered within the time
+        // the window allows a listing to be reused, so it is NAMED and a new read is started beside
+        // it — the same re-ask the expired-entry path always made, now with no caller waiting on it.
+        if (reads.Contains(key)
+            && builtAt.TryGetValue(key, out var inFlightSince)
+            && Elapsed(inFlightSince) > Window)
+        {
+            logger?.LogWarning(
+                "Plugin listing cache: the read of {Repo} @ {Ref} started {Elapsed} ago has not "
+                + "answered within the {Window} window — asking the source again; the listing read "
+                + "{Age} ago is served meanwhile.",
+                key.RepoUrl, key.GitRef, Elapsed(inFlightSince), Window, Elapsed(current.ReadAt));
+            reads.Invalidate(key);
+        }
+
+        Read(key, produce).Subscribe(
+            _ => { },
+            exception => logger?.LogWarning(exception,
+                "Plugin listing cache: revalidating {Repo} @ {Ref} failed — still serving the listing "
+                + "read {Age} ago, and the next request asks the source again.",
+                key.RepoUrl, key.GitRef, Elapsed(current.ReadAt)));
+    }
+
+    /// <summary>Records a settled read — unless a NEWER read already landed — and marks it stale
+    /// when a green build arrived while it was in flight.</summary>
+    private void Land(PackageListingKey key, IReadOnlyList<PackageManifest> listing, long startedAt, long generation)
+    {
+        var landed = new HeldListing(listing, startedAt, Evicted: generations.GetValueOrDefault(key) != generation);
+        held.AddOrUpdate(key, landed, (_, existing) => existing.ReadAt > startedAt ? existing : landed);
     }
 
     /// <summary>
@@ -218,8 +300,14 @@ public sealed class PackageListingCache : IDisposable
         {
             if (!string.Equals(Normalize(key.RepoUrl), wanted, StringComparison.OrdinalIgnoreCase))
                 continue;
-            promises.Invalidate(key);
-            builtAt.TryRemove(key, out _);
+            // A read in flight now started before the build: forget it, so the next request starts
+            // one that can see the merge, and bump the generation so its answer lands as stale.
+            generations.AddOrUpdate(key, 1, (_, g) => g + 1);
+            reads.Invalidate(key);
+            // The held listing stays SERVABLE — answering from it while the re-read runs is the
+            // point (#4963) — but it is no longer fresh, so the next request revalidates.
+            if (held.TryGetValue(key, out var current))
+                held.TryUpdate(key, current with { Evicted = true }, current);
             evicted++;
         }
 
@@ -230,14 +318,18 @@ public sealed class PackageListingCache : IDisposable
         return evicted;
     }
 
-    /// <summary>True when a listing for <paramref name="key"/> is currently held.</summary>
+    /// <summary>True when a listing for <paramref name="key"/> is currently held or being read.</summary>
     /// <param name="key">The key to test.</param>
-    public bool Holds(PackageListingKey key) => promises.Contains(key);
+    public bool Holds(PackageListingKey key) => held.ContainsKey(key) || reads.Contains(key);
 
     /// <summary>Releases every multicast connection this cache opened.</summary>
     public void Dispose() => connections.Dispose();
 
     private TimeSpan Elapsed(long since) => Stopwatch.GetElapsedTime(since, ticks());
+
+    /// <summary>A settled listing, when its read started, and whether a green build has since made
+    /// it stale.</summary>
+    private sealed record HeldListing(IReadOnlyList<PackageManifest> Listing, long ReadAt, bool Evicted);
 
     private static string Normalize(string repoUrl)
     {
