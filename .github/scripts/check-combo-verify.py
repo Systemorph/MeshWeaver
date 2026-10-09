@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Prove the combo-verify lane's shell: the preflight can FAIL, and the verdict merge cannot lose data.
+"""Prove the combo-verify lane's shell: the preflight can FAIL, and the lander holds no credential.
 
 WHY THIS EXISTS
 ---------------
 `combo-verify.yml` is the producer half of the combo gate (MeshWeaver#3544). Its `preflight` job is
-the ONLY thing standing between "no credential was provisioned" and a lane that quietly verifies
+the ONLY thing standing between "nothing was derived" and a lane that quietly verifies
 nothing — and the whole file fires on `workflow_run` / `workflow_dispatch`, never on
 `pull_request`, so an edit to it merges on the strength of being valid YAML and first executes in
 production. That is the same blind spot `check-workflow-shell.py` was written for (#2642): CI's own
@@ -20,12 +20,12 @@ line carries the number, and `--self-test` carries how many of them a gutted pre
 🚨 THE ROSTER AND SOURCE MAP ARE DERIVED, SO THE PREFLIGHT ASSERTS IN TWO STEPS (#3848), and this
 drives both. `derive-combo-instances.py` reads the fleet's deployment overlays and records between
 them. So `assert` asks whether the inputs that come from outside the tree exist at all, and `roster`
-— which cannot run before the derivation — asks whether every instance the fleet ACTUALLY has carries
-both credentials and the derived source map arrived intact. Splitting the assertion split the
+— which cannot run before the derivation — asks whether the derivation produced a real roster and
+the derived source map arrived intact. Splitting the assertion split the
 scenarios with it:
 
 🚨 AND THE SPLIT IS BY WHETHER AN INPUT IS NEEDED TO *REACH* THE DERIVATION — not by what is knowable
-yet, and NOT by whether provisioning it is reversible. The two `COMBO_VERIFY_*` credential maps are
+yet, and NOT by whether provisioning it is reversible. The two `COMBO_VERIFY_*` credential maps (since removed, #3848) were
 asserted in `roster`, after the derivation; `SOURCES` is derived from `DeploymentContent.PluginRepos`.
 `assert` carries only `AZURE_*` (the login) and `FLEET_READER_*` (the token the derivation reads the
 records with). The workflow's own history is the argument: every run
@@ -45,7 +45,7 @@ there, and nothing else.
   2. ONLY what this repository actually      → GREEN, and this is the scenario that would have caught
      has provisioned                          the earlier mistake. Every other case starts from
                                               FULLY_PROVISIONED, which holds external inputs CONSTANT
-                                              at "present"; production varies the credential maps to
+                                              at "present"; production had the credential maps
                                               ABSENT. So the guard was green over a preflight that
                                               reddened one step above the derivation in the only
                                               configuration that matters. Spelled as production's own
@@ -63,15 +63,10 @@ there, and nothing else.
                                               🚨 A DERIVED zero paints exactly the green a DECLARED
                                               zero did, which is why this scenario did not move
                                               with the input it used to be about.
-  5. the key map absent entirely            → RED, naming secrets.COMBO_VERIFY_KEYS and carrying the
-                                              issued-never-recovered guidance. Asserted here so the
-                                              instruction to MINT arrives only once minting is useful.
-  6. the token map absent entirely          → RED, naming secrets.COMBO_VERIFY_TOKENS.
-  7. an instance with no admin token        → RED, naming the instance. Otherwise the shortfall
-                                              surfaces deep inside the verify job as an HTTP 401
-                                              that names no secret — the shape that made an absent
-                                              MW_REGISTRY_KEY read as a script bug (Reinsurance#128).
-  8. every derived instance credentialled   → GREEN, and it emits the matrix it promised.
+  5. a derived roster and source map        → GREEN, and it emits the matrix it promised. There is no
+                                              credential to assert (#3848): each instance is reached
+                                              as the run's own OIDC identity, so a missing grant is a
+                                              401 in the verify job naming both provisioning halves.
 
 🚨 It resolves each step BY ID into the parsed workflow (`jobs.preflight.steps[?id]`) and asserts a
 sentinel is present, so if a step is renamed, reordered or moved into a script this fails LOUD
@@ -79,20 +74,18 @@ instead of silently testing nothing — the "a guard whose subject moved and who
 failure mode. The step BETWEEN them is the derivation, which needs the network and has its own
 falsification (`derive-combo-instances.py --self-test`, run beside this one).
 
-PART TWO — THE VERDICT MERGE
-----------------------------
-`combo-verify-instance.sh` lands a verdict by read-merge-write, because an RFC 7396 merge patch
-replaces an array WHOLESALE. So the whole list is re-sent on every landing, and a defect in the jq
-that builds it does not fail — it silently DELETES an instance's recorded verdict history.
-
-There is a live trap: `MeshOperations.Get` has TWO node shapes. Normally the body is the bare node;
-when the node's NodeType carries a recorded compile error it is
-`{"node": {...}, "compilationError": "..."}` instead. Reading `.content.comboVerifications` off the
-wrapper yields null, null merges as an empty list, and the landing would replace up to eight
-verdicts with one. This part extracts the jq program FROM the shipped script and runs it over both
-shapes plus an instance that has no verdicts yet, asserting the rule
-`UpdatePolicyNodeType.RecordVerification` applies in-process: upsert by `candidateTag`
-(case-insensitive), newest first, capped at `MaxRecordedVerifications` = 8.
+PART TWO — THE LANDER HOLDS NOTHING (#3848)
+-------------------------------------------
+`combo-verify-instance.sh` used to read roll-target and combo with a stored `mwi_` instance key and
+land the verdict with a global admin's `mw_` token over `POST /api/mesh/patch`, re-implementing
+`UpdatePolicyNodeType.RecordVerification`'s merge in jq. Neither credential can be read back, so the
+lane sat red for a month waiting for twelve hand-issued values. It now mints this run's own GitHub
+Actions OIDC token per call (audience = the instance's base URL) and lands through
+`POST /api/plugins/combo-verification`, where the merge exists once, in the portal. This part
+asserts that shape — the token request, the audience, the recording route, the confirmed landing,
+the 401 guidance, a fresh mint before EVERY instance call — and the absence of each removed shape,
+and executes the lander once with no OIDC request URL to prove it stops red naming
+`id-token: write`. `--self-test` feeds it the old credential-holding lander and requires it to fail.
 
 Usage:
     python3 .github/scripts/check-combo-verify.py              # run both parts
@@ -104,6 +97,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -122,7 +116,7 @@ SOURCE_LOOP_LINE = 'for s in "${source_pairs[@]}"; do src_args+=(--source "$s");
 
 # One sentinel per assertion step, proving we extracted THAT block and not a neighbouring step.
 SENTINELS = {"assert": "missing=()",
-             "roster": "COMBO_VERIFY_KEYS has no mwi_ key"}
+             "roster": "the derived instance roster is not a non-empty JSON array"}
 
 FULLY_PROVISIONED = {
     "AZURE_CLIENT_ID": "cid",
@@ -130,8 +124,6 @@ FULLY_PROVISIONED = {
     "AZURE_SUBSCRIPTION_ID": "sid",
     "FLEET_READER_APP_ID": "app",
     "FLEET_READER_APP_PRIVATE_KEY": "pem",
-    "COMBO_VERIFY_KEYS": '{"memex":"mwi_a","memex-cloud":"mwi_b"}',
-    "COMBO_VERIFY_TOKENS": '{"memex":"mw_a","memex-cloud":"mw_b"}',
     "SOURCES": "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
 }
 
@@ -196,35 +188,8 @@ SCENARIOS = [
         "not a non-empty JSON array",
     ),
     (
-        # 🚨 THESE TWO MOVED HERE FROM `assert`, and that is the whole point of the reorder: the
-        # instruction to MINT an irreversible credential is now emitted only once the roster the
-        # credential is for has been derived. The message must still carry the provisioning
-        # guidance — asserting later must not mean saying less — so the expected text is the part a
-        # person acts on, not merely the secret's name.
         "roster",
-        "the key map absent entirely",
-        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_KEYS": ""},
-        1,
-        "ISSUED, never recovered",
-    ),
-    (
-        "roster",
-        "the token map absent entirely",
-        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "COMBO_VERIFY_TOKENS": ""},
-        1,
-        "secrets.COMBO_VERIFY_TOKENS",
-    ),
-    (
-        "roster",
-        "a derived instance has no admin token",
-        {**FULLY_PROVISIONED, "INSTANCES": DERIVED,
-         "COMBO_VERIFY_TOKENS": '{"memex":"mw_a"}'},
-        1,
-        "no mw_ admin token for instance 'memex-cloud'",
-    ),
-    (
-        "roster",
-        "every derived instance carries both credentials",
+        "a derived roster and source map ⇒ the matrix is emitted",
         {**FULLY_PROVISIONED, "INSTANCES": DERIVED},
         0,
         "2 instance(s) will be verified",
@@ -232,105 +197,73 @@ SCENARIOS = [
 ]
 
 
-# The jq program that builds the patch body, delimited in the shipped script by these two markers.
-MERGE_START = 'jq -n --slurpfile p "$policy" --slurpfile v "$verdict" \''
-MERGE_END = "' >\"$request\""
+# ── PART TWO: the lander reaches each instance as THIS RUN, and holds nothing (#3848) ──────────
+# What the lander must contain (each proves one property) and must NOT contain (each is the shape
+# this change removed: a stored instance key, a global admin's token, and a client-side re-
+# implementation of RecordVerification's merge over a raw mesh patch).
+LANDER_REQUIRED = {
+    "the run's OIDC token is requested from the runner": "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=",
+    "the audience is the instance's own base URL": '--arg a "$BASE_URL"',
+    "the verdict is landed through the recording route": '-X POST "$BASE_URL/api/plugins/combo-verification"',
+    "the landing is confirmed, not assumed": "jq -e '.recorded == true'",
+    "a 401 names both provisioning halves": "Admin/_BuildPrincipal/systemorph--meshweaver",
+}
+LANDER_FORBIDDEN = {
+    "an mwi_ instance key": "INSTANCE_KEY",
+    "a global admin's mw_ token": "ADMIN_TOKEN",
+    "a raw mesh patch of Admin/UpdatePolicy": "/api/mesh/patch",
+    "a client-side copy of the verdict merge": "--slurpfile p",
+}
 
 
-def read_merge_program(root: Path) -> str:
-    """The jq program the lander actually ships, read out of it rather than retyped."""
+def read_lander(root: Path) -> str:
     path = root / LANDER
     if not path.is_file():
         raise SystemExit(f"::error::{LANDER} does not exist under {root}")
-    text = path.read_text(encoding="utf-8")
-    start = text.find(MERGE_START)
-    if start < 0:
-        raise SystemExit(
-            f"::error::{LANDER}: could not find the verdict-merge jq invocation. It moved and this "
-            "guard did not — it would otherwise pass having checked nothing."
-        )
-    start += len(MERGE_START)
-    end = text.find(MERGE_END, start)
-    if end < 0:
-        raise SystemExit(
-            f"::error::{LANDER}: the verdict-merge jq program is not terminated by {MERGE_END!r}")
-    program = text[start:end]
-    if "comboVerifications" not in program or "ascii_downcase" not in program:
-        raise SystemExit(
-            f"::error::{LANDER}: the extracted jq program does not look like the verdict merge "
-            f"(no comboVerifications / no case-insensitive tag test):\n{program}"
-        )
-    return program
+    return path.read_text(encoding="utf-8")
 
 
-def existing_verdicts() -> list:
-    rows = [
-        {"candidateTag": f"3.0.0-ci.{7900 + i}", "verdict": "Green",
-         "verifiedAt": f"2026-08-0{1 + i}T00:00:00+00:00"}
-        for i in range(9)
-    ]
-    # Same tag as the incoming verdict, different case: the upsert must REPLACE it, not duplicate it.
-    rows.append({"candidateTag": "3.0.0-CI.7999", "verdict": "Red",
-                 "verifiedAt": "2026-07-01T00:00:00+00:00"})
-    return rows
-
-
-INCOMING = {"candidateTag": "3.0.0-ci.7999", "verdict": "Green",
-            "verifiedAt": "2026-09-07T12:00:00+00:00"}
-
-BARE_NODE = {"id": "UpdatePolicy",
-             "content": {"comboVerifications": existing_verdicts(), "mode": "Auto"}}
-
-# (label, the body /api/mesh/get returns, expected list length)
-NODE_SHAPES = [
-    ("the bare node", BARE_NODE, 8),
-    ("the compile-error wrapper {node, compilationError}",
-     {"node": BARE_NODE, "compilationError": "boom"}, 8),
-    ("an instance with no verdicts yet", {"id": "UpdatePolicy", "content": {"mode": "Auto"}}, 1),
-]
-
-
-def run_merge(program: str, policy: dict) -> dict:
-    with tempfile.TemporaryDirectory() as tmp:
-        pol = Path(tmp) / "policy.json"
-        ver = Path(tmp) / "verdict.json"
-        pol.write_text(json.dumps(policy))
-        ver.write_text(json.dumps(INCOMING))
-        proc = subprocess.run(
-            ["jq", "-n", "--slurpfile", "p", str(pol), "--slurpfile", "v", str(ver), program],
-            capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            raise SystemExit(f"::error::the verdict-merge jq failed: {proc.stderr}")
-        return json.loads(proc.stdout)
-
-
-def check_merge(program: str) -> int:
+def check_lander(text: str, run_it: bool = True) -> int:
+    """Static shape plus ONE executed refusal: with no OIDC request URL the lander must stop red,
+    naming `id-token: write`, before it calls anything."""
     failures = 0
-    for label, policy, want_len in NODE_SHAPES:
-        body = run_merge(program, policy)
-        rows = json.loads(body["fields"])["content"]["comboVerifications"]
-        tags = [r["candidateTag"] for r in rows]
-        lowered = [t.lower() for t in tags]
-        stamps = [r["verifiedAt"] for r in rows]
-        problems = []
-        if body.get("path") != "Admin/UpdatePolicy":
-            problems.append(f"patched {body.get('path')!r}, not Admin/UpdatePolicy")
-        if len(rows) != want_len:
-            problems.append(f"{len(rows)} verdict(s), want {want_len}")
-        if len(lowered) != len(set(lowered)):
-            problems.append(f"duplicate candidateTag after the upsert: {tags}")
-        if INCOMING["candidateTag"] not in tags:
-            problems.append("the incoming verdict is not in the list it would land")
-        if stamps != sorted(stamps, reverse=True):
-            problems.append(f"not newest-first: {stamps}")
-        if len(rows) > 8:
-            problems.append("over MaxRecordedVerifications = 8")
-        if problems:
+    for label, needle in LANDER_REQUIRED.items():
+        ok = needle in text
+        print(f"[{'PASS' if ok else 'FAIL'}] lander: {label}")
+        if not ok:
             failures += 1
-            print(f"[FAIL] merge over {label}: " + "; ".join(problems))
-            print(f"::error::the verdict merge would corrupt Admin/UpdatePolicy for {label}")
-        else:
-            print(f"[PASS] merge over {label}: {len(rows)} verdict(s), newest {tags[0]}")
+            print(f"::error::{LANDER} lost {needle!r} — {label} is no longer true")
+    for label, needle in LANDER_FORBIDDEN.items():
+        ok = needle not in text
+        print(f"[{'PASS' if ok else 'FAIL'}] lander holds no {label}")
+        if not ok:
+            failures += 1
+            print(f"::error::{LANDER} contains {needle!r} — {label} is back, which #3848 removed")
+    # Every request to the instance mints a FRESH token first: the verification between the reads
+    # and the landing can outlive a token minted once.
+    calls = len(re.findall(r"^\w+_code=\$\(curl", text, flags=re.M))
+    mints = len(re.findall(r"^mint_token\n\w+_code=\$\(curl", text, flags=re.M))
+    ok = calls >= 3 and mints == calls
+    print(f"[{'PASS' if ok else 'FAIL'}] lander mints a fresh token before each of its {calls} instance call(s)")
+    if not ok:
+        failures += 1
+        print(f"::error::{LANDER}: {mints} of {calls} instance call(s) are preceded by mint_token")
+    if run_it:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "lander.sh"
+            script.write_text(text, encoding="utf-8")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+            env.update({"INSTANCE_NAME": "probe", "BASE_URL": "http://127.0.0.1:9",
+                        "GITHUB_WORKSPACE": tmp, "GITHUB_STEP_SUMMARY": str(Path(tmp) / "s")})
+            proc = subprocess.run(["bash", str(script)], env=env, capture_output=True,
+                                  text=True, check=False)
+        out = proc.stdout + proc.stderr
+        ok = proc.returncode != 0 and "id-token: write" in out
+        print(f"[{'PASS' if ok else 'FAIL'}] lander without an OIDC request URL stops red naming id-token: write")
+        if not ok:
+            failures += 1
+            print(f"::error::the lander did not refuse a run with no OIDC identity: exit={proc.returncode}\n  {out}")
     return failures
 
 
@@ -483,21 +416,18 @@ def self_test(root: Path) -> int:
     print(f"--self-test: a gutted preflight failed {preflight_failures} scenario(s) "
           "— part one can fail.")
 
-    # The un-hardened merge: reads `.content` off the body without unwrapping `{node, ...}`. It is
-    # correct for the bare node and DELETES the history for the wrapper — the exact defect the
-    # shipped program's `(.node // .)` exists to prevent.
-    naive = ('($v[0].candidateTag // "" | ascii_downcase) as $tag '
-             '| (($p[0].content.comboVerifications // []) '
-             '| map(select((.candidateTag // "" | ascii_downcase) != $tag))) + [$v[0]] '
-             '| sort_by(.verifiedAt) | reverse | .[0:8] '
-             '| { path: "Admin/UpdatePolicy", '
-             'fields: ({ content: { comboVerifications: . } } | tojson) }')
-    merge_failures = check_merge(naive)
-    if merge_failures == 0:
-        print("::error::--self-test: a merge that never unwraps {node, compilationError} passed "
-              "every shape, so part two proves nothing about the real one.")
+    # The lander this change replaced: a stored key, an admin token and a raw mesh patch. Part two
+    # must reject it on its static shape alone.
+    old_lander = ('roll_code=$(curl -H "Authorization: Bearer $INSTANCE_KEY" x)\n'
+                  'patch_code=$(curl -X POST "$BASE_URL/api/mesh/patch" '
+                  '-H "Authorization: Bearer $ADMIN_TOKEN" -d x)\n'
+                  'jq -n --slurpfile p policy\n\n')
+    lander_failures = check_lander(old_lander, run_it=False)
+    if lander_failures == 0:
+        print("::error::--self-test: the credential-holding lander passed part two, so part two "
+              "proves nothing about the real one.")
         return 1
-    print(f"--self-test: the un-hardened merge failed {merge_failures} shape(s) — part two can fail.")
+    print(f"--self-test: the credential-holding lander failed {lander_failures} check(s) — part two can fail.")
     source_failures = check_source_split(root)
     if source_failures:
         return source_failures
@@ -515,17 +445,17 @@ def main() -> int:
     if args.self_test:
         return self_test(root)
 
-    failures = (check(read_preflight(root)) + check_merge(read_merge_program(root))
+    failures = (check(read_preflight(root)) + check_lander(read_lander(root))
                 + check_source_split(root))
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
-          f"{len(SENTINELS)} assertion step(s) + {len(NODE_SHAPES)} verdict-merge shape(s), "
+          f"{len(SENTINELS)} assertion step(s) + the lander's identity checks, "
           "0 violation(s).")
     # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
     # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is
-    # the only state in which the step it exercises is reachable. This green proves the credential
+    # the only state in which the step it exercises is reachable. This green proves the roster
     # assertion behaves GIVEN derived inputs; it says nothing about whether the live repositories
     # produce those inputs. A gate that holds a dimension constant must not let its green be read as
     # coverage of that dimension.

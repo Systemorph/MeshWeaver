@@ -122,10 +122,12 @@ must refuse) and a `NotVerifiable` fails it too — that outcome means *nothing 
 
 ### Why it is its own workflow, and why its preflight is red until provisioned
 
-The lane needs two credentials per instance that nothing in CI holds today: an `mwi_`
-instance-registry key (reads `roll-target` and `combo`) and an `mw_` API token of a **global admin**
-on that instance (lands the verdict; the token authenticates as its owner and carries no scope of
-its own). The declaration of *which* instances to verify does not exist in this repo either.
+The lane holds **no credential for any instance** (#3848). Each verify job reaches its instance as
+*the run itself*: a GitHub Actions OIDC token minted per call, audience = the instance's base URL,
+which the instance verifies against GitHub's JWKS and resolves to its
+`Admin/_BuildPrincipal/systemorph--meshweaver` node (grant `verify:combo`). What each instance must
+hold for that is in *Provisioning an instance* below. Until it holds both
+halves, that instance's verify job is red with a 401 that names them.
 
 A gate must never test its own inputs, so none of that is expressed as `continue-on-error` or
 `if: secrets.X != ''`. A `preflight` job asserts every input and fails **RED naming what to
@@ -288,18 +290,16 @@ Both credentials go in the **Actions** store of `Systemorph/MeshWeaver` and **on
 *variables* store at all). The **three** `AZURE_*` secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 `AZURE_SUBSCRIPTION_ID`) and the two `FLEET_READER_*` secrets the same preflight asserts are
 already provisioned for `main-cd`. Both the roster and module-source mapping are derived from the
-fleet's deployment files, so the two credentials below are the only per-instance inputs still
-required.
+fleet's deployment files, and there is no per-instance secret at all: what an instance needs is
+provisioned ON the instance (*Provisioning an instance* below).
 
 | Name | Kind | Value | Where it comes from |
 |---|---|---|---|
 | `SOURCES` | derived step output | space-separated `name=url`, e.g. `Plugins=https://github.com/Systemorph/MeshWeaver.Plugins` | the verifier's module-source mapping, derived from deployment-record `pluginRepos` entries with `isRegistrySource: true`; consumer registry mounts are excluded. Malformed records, conflicting URLs for one source name, or an empty union fail closed. |
-| `COMBO_VERIFY_KEYS` | secret | `{"<instance>":"mwi_…"}`, one per **derived** instance | 🚨 **ISSUED, never recovered.** An `mwi_` instance-registry key is stored hash-only (`InstanceKeys` persists `Hash(raw)`), so an existing key cannot be read back — a NEW key is issued per instance, additively, and separately revocable. |
-| `COMBO_VERIFY_TOKENS` | secret | `{"<instance>":"mw_…"}`, one per **derived** instance | an API token of a **global admin** on that instance. #3891 made this removable — see below — but the lander still uses it, so it is required until that switch lands. |
 
-🚨 **"One per instance" is now answered by the lane, not by the reader.** The preflight prints the
-derived roster before it asks for credentials, and names the instance any map is missing
-(`combo-verify.yml:215-238`). The hand-written value this page used to carry named the control instance and
+🚨 **"One per instance" is answered by the lane, not by the reader.** The preflight prints the
+derived roster, and each instance's verify job names that instance when it refuses the run's
+identity. The hand-written value this page used to carry named the control instance and
 the public instance — and the fleet's overlays declared more than that on the day it was specified, which
 is the failure mode a derivation removes rather than a tidiness argument.
 
@@ -338,24 +338,21 @@ exclusion would shrink the denominator silently.
 
 The preflight separates credentials needed to read the deployment repositories from per-instance
 credentials. The first assertion checks `AZURE_*` and `FLEET_READER_*`; once those pass, derivation
-reads the roster and source map. The next assertion checks that both derived outputs are present and
-that every roster entry has both per-instance credentials.
+reads the roster and source map. The next assertion checks that both derived outputs are present.
 
 | step | asserts | why there |
 |---|---|---|
 | `assert` | `AZURE_*`, `FLEET_READER_*` — **and nothing else** | login and repository-read credentials required to attempt derivation |
 | `derive` | — | emits non-empty roster and source outputs, or fails on an unreadable/conflicting declaration |
-| `roster` | derived `SOURCES`, `COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS` | refuses a missing source output or any instance without both credentials; the two maps are **spent, not fetched**, so minting instructions appear only after the roster is known |
+| `roster` | derived roster and `SOURCES` | refuses an empty roster (an empty matrix skips `verify`, painted green) or a missing source output. There is no credential map to assert (#3848) |
 
 Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
-carries `continue-on-error:`, both maps are still asserted unconditionally in the same `preflight`
-job, an absent map still reds by NAME and still carries the whole provisioning guidance. Only the
-ORDER moved — and the whole-map red now arrives with the derived roster printed above it, so "one
-per instance" is a list the reader can act on rather than a phrase.
+carries `continue-on-error:`, and the roster is asserted unconditionally in the same `preflight`
+job. A refused identity reds in that instance's verify job, by the instance's name.
 
 `check-combo-verify.py` executes both assertion blocks' real shell — extracted from the workflow by
-step id, never retyped — and checks that the source output is wired from derivation through the
-preflight into the verifier. Its `--self-test` removes the assertions and requires the scenarios to
+step id, never retyped — checks that the source output is wired from derivation through the
+preflight into the verifier, and checks that the lander holds no credential. Its `--self-test` removes the assertions and requires the scenarios to
 fail, so a preflight that asserts nothing cannot pass.
 
 🚨 **No count appears in that sentence on purpose.** It used to name one, and adding a scenario made it
@@ -478,17 +475,17 @@ repository. In
 
 The preflight now derives both the roster and source map before checking per-instance credentials.
 Run `36272707636` on 2026-09-26 derived five live instances — the build instance, the control instance, the public instance, an enterprise client's test
-installation (`globex-test`) and an SME client instance — then correctly stopped because the key and admin-token maps were not
-provisioned. Until those two maps cover every derived instance, the lane cannot produce a verdict.
-The derivation is not a substitute for issuing credentials and does not imply any instance was
-verified.
+installation (`globex-test`) and an SME client instance — then stopped because the key and admin-token
+maps it then required were not provisioned. Those maps no longer exist: each instance is reached as
+the run's own identity (*Provisioning an instance* below). The derivation does not imply any instance
+was verified.
 
-### The two credential maps are the whole of the CREDENTIAL prerequisite — `verify:combo` is not one
+### The duplicate-name blocker
 
-The duplicate-name blocker that preceded credential provisioning has been resolved by renaming
-an enterprise client's installation to `globex-test` (#3848). At the time, qualifying the maps by
-`repo:id` would have required credentials for an installation outside this fleet's control; the
-rename allowed the existing name-keyed credential maps to remain unambiguous.
+The duplicate-name blocker that preceded provisioning was resolved by renaming an enterprise
+client's installation to `globex-test` (#3848). Qualifying the roster by `repo:id` would have
+required a grant on an installation outside this fleet's control; the rename kept the name-keyed
+verify jobs unambiguous.
 
 ### The rename — the enterprise client's installation is `globex-test`
 
@@ -523,54 +520,40 @@ The roster the derivation then prints is five installations: the build instance,
 installation (`globex-test`) and an SME client instance. The refusal and its self-test arm stay: they guard the mechanism, and the next
 deployments repository to declare a taken name meets the same red.
 
-### Where to issue the two credentials
+### Provisioning an instance
 
-Each is issued **on the instance it is for**, by a person, and neither can be read back afterwards.
+There is nothing to issue and nothing to store in this repository (#3848). The lane used to need an
+`mwi_` instance key and a global admin's `mw_` token per instance in two Actions secrets; neither can
+be read back, so for a month the lane waited on twelve hand-issued values and every roll stayed
+UNVERIFIED. It now authenticates as the run itself, and an instance accepts that identity when it
+holds **both** of these:
 
-- **`mwi_` key.** `/api/plugins/roll-target` and `/api/plugins/combo` authenticate through
-  `InstanceRegistryAuthenticator`, which resolves the key against the **called portal's own mesh**
-  (`MeshWeaverInstance` nodes and their hash index). So the key comes from that portal's
-  **Settings ▸ Security ▸ Instances** tab (`InstancesSettingsTab`, id `MeshWeaverInstances`):
-  register a NEW entry with its own id (for example `combo-verify`), which returns the raw key once.
-  That is additive and revocable on its own. **Never use Reissue on an existing entry**: `ReissueKey`
-  replaces that entry's key, and the old one stops authenticating the moment it completes. An
-  instance id is claimed mesh-wide, so on the plugin registry instance pick an id no
-  installation uses. A registered entry is granted nothing to pull, and these two routes need no
-  grant.
-- **`mw_` token.** **Settings ▸ Security ▸ API Tokens** (`/me/Settings/ApiTokens`), minted while
-  signed in as a **global admin** of that instance (the `Admin` role in `Admin/_Access`). The token
-  carries its minter's identity, and the lander's `POST /api/mesh/patch` of `Admin/UpdatePolicy`
-  needs that grant.
+1. **The audience, as declared config.** `Plugins:Registry:BuildPrincipalAudience` = the instance's
+   own base URL (for example `https://memex.systemorph.com`), declared in the deployment record's
+   `extraPortalConfig` as `Plugins__Registry__BuildPrincipalAudience` and mirrored by its overlay.
+   With no audience configured the portal refuses every build token by design
+   (`InstanceRegistryAuthenticator.AuthenticateBuild`), because accepting any audience would trust
+   every GitHub Actions run that pointed a token at anything.
+2. **The grant, as a node.** A global admin of that instance creates
+   `Admin/_BuildPrincipal/systemorph--meshweaver`: `repository: Systemorph/MeshWeaver`, its immutable
+   `repositoryId` and `repositoryOwnerId`, `events` `workflow_run` and `workflow_dispatch` → `verify`,
+   both `eventRefs` restricted to `refs/heads/main`, and `scopes: ["verify:combo"]` and nothing else.
+   It grants reading the release inputs and recording a verdict through
+   `POST /api/plugins/combo-verification`; it cannot install, apply an update, read user content,
+   edit access or change the update policy ([Access control](../AccessControl) → Build principals).
+   Revoking it is a node write and takes effect on the next request.
 
-Both credentials go in the **Actions** store of `Systemorph/MeshWeaver` only. `combo-verify.yml` triggers on
-`workflow_run` and `workflow_dispatch`, and `check-pr-secret-preflight.py` finds no pull-request lane
-that consumes either, so the Dependabot store is not involved. The source mapping is derived from
-deployment records as described above; no `COMBO_VERIFY_SOURCES` variable is required.
+The lander mints a fresh token before **every** instance call (the verification between the reads
+and the landing can outlive a token minted once) and lands through the recording route, which merges
+by `UpdatePolicyNodeType.RecordVerification` and answers 200 only once `Admin/UpdatePolicy` carries
+the verdict — so the merge rule exists once, in the portal, instead of being re-implemented in jq
+over a raw mesh patch. A 401 from any of the three calls names both halves above for that instance;
+the portal does not tell a refused caller which half is missing.
 
-The lander does not use the
-`verify:combo` route at all: `combo-verify-instance.sh` reads `roll-target` and `combo` with the
-`mwi_` instance key and then lands the verdict by `POST /api/mesh/get` + `POST /api/mesh/patch`
-with `ADMIN_TOKEN` (steps 1–4 of that script). `/api/plugins/combo-verification` and its
-`verify:combo` grant are the *destination* of the planned migration off that admin token, not a
-precondition for the lane running.
-
-Stating it the other way round — as an earlier revision of this page did — hands an operator a
-prerequisite that does not exist and blocks the remediation that would actually work.
-
-The remaining steps are:
-
-1. **Provision both credential maps** for all five currently derived installations. A credential is
-   issued at the service that holds it, not derived. An `mwi_` key is hash-only and an `mw_` token is
-   issued once, so use NEW credentials, additive and separately revocable, and verify each against
-   its live instance before saving it.
-2. **Grant `verify:combo` to the build identity on each instance**, then **switch the lander off
-   the admin token** — dropping `COMBO_VERIFY_TOKENS` from the preflight and the job env in the
-   same diff, since an input asserted but no longer consumed is the no-skip-trapdoor rule in
-   reverse. The grant is portal data an operator provisions per instance, and it must land
-   *before* the switch: `POST /api/plugins/combo-verification` requires
-   `outcome.Build?.Allows(BuildVerbs.Verify, "combo")` (`ReleaseGateEndpoints.cs:291, :302`), which
-   an `mwi_` instance key does **not** satisfy. This step reduces the per-instance credentials from
-   two to one; it does not gate the lane.
+`check-combo-verify.py` holds this shape: it requires the token request, the audience, the recording
+route, the confirmed landing and a mint before every call, refuses any return of the instance key,
+the admin token or the raw patch, and executes the lander once without an OIDC request URL to prove
+it stops red naming `id-token: write`.
 
 ## Known boundary: the combo moves
 
