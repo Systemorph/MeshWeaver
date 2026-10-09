@@ -3245,6 +3245,9 @@ case "$_inv_sql" in *"BEGIN TRANSACTION READ ONLY;"*) ok "…and the statement r
 if printf '%s' "$_inv_sql" | grep -Eiq '\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|vacuum|reindex|cluster|copy)\b'; then
   bad "the SQL carries no write verb" "found one in: $(printf '%s' "$_inv_sql" | grep -Ei '\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|vacuum|reindex|cluster|copy)\b')"
 else ok "the SQL carries no DDL or DML verb at all"; fi
+case "$_inv_sql" in *"relname IN"*) bad "every table of a partition schema is counted, not a list of satellite names" "sql: ${_inv_sql}" ;;
+  *"NOT c.relispartition"*) ok "every table of a partition schema is counted (no name list), a partitioned table once at its parent" ;;
+  *) bad "partitions are skipped so a partitioned table counts once" "sql: ${_inv_sql}" ;; esac
 case "$_inv_log" in *"psql PGPASSWORD=set"*"-U acmeowner"*"-d acmedb"*) ok "psql logs in as the --user the plan passed, with the password from the vault" ;; *) bad "psql login" "psql saw: ${_inv_log}" ;; esac
 case "$_inv_az" in *"keyvault secret show --vault-name Systemorph --name memex-postgres-password --query value"*) ok "…read by NAME from the named vault" ;; *) bad "vault read by name" "az saw: ${_inv_az}" ;; esac
 case "$_inv_out$_inv_log$_inv_az" in *NEVER-PRINTED*) bad "the password is never printed or on an argv" "seen: ${_inv_out}" ;; *) ok "the password is never printed or on an argv" ;; esac

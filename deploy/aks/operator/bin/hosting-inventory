@@ -2,8 +2,9 @@
 # hosting-inventory --database <db> --server <pg host> --user <login> [--vault <key vault> --password-secret <vault object>]
 #
 # COUNT the nodes an instance's database holds — per partition schema, the rows of <schema>.mesh_nodes
-# and of each satellite table that schema carries (activities, user_activities, threads, access, code,
-# annotations) — and report it as ONE machine line the control plane lands on the InstanceAction node
+# and of EVERY other table that schema carries (the satellites — activities, threads, access, code,
+# annotations, notifications, storage, document parts, … and any a host or namespace maps itself) — and
+# report it as ONE machine line the control plane lands on the InstanceAction node
 # (MeshWeaver.Plugins Hosting/InstanceAction, kind `Inventory`):
 #
 #   ::hosting:: inventory=<base64 of {"database","server","readAt","schemaCount","nodes","rows",
@@ -22,7 +23,10 @@
 # login's privileges, unlike information_schema, which silently hides the ones it may not read). A
 # table the login may not count FAILS the whole read with Postgres's own message: a partial census
 # reported as a whole one is the false negative this exists to prevent. Counts are EXACT (count(*)),
-# never the planner's reltuples estimate.
+# never the planner's reltuples estimate. Every table of a partition schema is counted rather than a
+# list of satellite names: the satellite set is configurable per host and per namespace
+# (SatelliteTableMapping, PartitionDefinition.TableMappings), so a list here would silently omit the
+# ones it does not name. A partitioned table is counted once, at its parent (partitions are skipped).
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
@@ -55,7 +59,7 @@ hosting::safe_name user "$pg_user"
 
 hosting::step "Count the nodes"
 if hosting::dry; then
-  echo "  DRY-RUN would count <schema>.mesh_nodes and its satellite tables in ${database} on ${server}, read-only"
+  echo "  DRY-RUN would count <schema>.mesh_nodes and every other table of each partition schema in ${database} on ${server}, read-only"
   hosting::say inventory dry-run
   exit 0
 fi
@@ -78,8 +82,7 @@ WITH partition_schema AS (
   SELECT s.schema, c.relname AS name,
          (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.%I', s.schema, c.relname), false, true, '')))[1]::text::bigint AS n
   FROM partition_schema s
-  JOIN pg_catalog.pg_class c ON c.relnamespace = s.oid AND c.relkind IN ('r', 'p')
-   AND c.relname IN ('mesh_nodes', 'activities', 'user_activities', 'threads', 'access', 'code', 'annotations')
+  JOIN pg_catalog.pg_class c ON c.relnamespace = s.oid AND c.relkind IN ('r', 'p') AND NOT c.relispartition
 ), per_schema AS (
   SELECT schema,
          COALESCE(max(n) FILTER (WHERE name = 'mesh_nodes'), 0) AS nodes,
