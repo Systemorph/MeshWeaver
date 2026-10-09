@@ -2454,6 +2454,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
 
+    # The writer of an image's closure as mesh data (#4066, policy `image-closure-as-mesh-data`):
+    # main-cd runs it over the publish directories the reference-set assertion just accepted. Both
+    # directions offline — the record's denominator and per-file hashes, and every refusal (a
+    # tag-shaped digest, no surface manifest, an unknown platform, disagreeing identities, a body
+    # over the inbox cap) with the accepted control beside it.
+    - name: "An image's closure record carries its denominator and refuses what it cannot vouch for (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/image-closure-record.py --self-test
+
     # The lookup a standing tracking issue is found by (chart-drift.yml). It scanned the 200 newest
     # issues, so the long-lived sentinel aged out of the window and the workflow opened a fresh one
     # each time — #5049, #5491, #5844. It now filters on a dedicated label, server-side, to the last
