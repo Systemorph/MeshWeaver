@@ -311,4 +311,98 @@ public class HierarchicalPathDeletionTests
         deleted.Should().Equal("a/nt/Release/1", "a/nt", "a");
         fake.Started.Should().NotContain("a/nt/Release");
     }
+
+    // ─── One admission lane for the whole tree — issue #6351 ────────────────
+
+    /// <summary>Two branches of ten gated leaves each: a per-LEVEL cap could not hold this tree to
+    /// three, because each branch's sibling merge would take three of its own.</summary>
+    private static readonly ImmutableArray<string> TwoWideBranches = Enumerable.Range(0, 10)
+        .SelectMany(i => new[] { $"root/a/{i}", $"root/b/{i}" })
+        .Concat(new[] { "root/a", "root/b" })
+        .ToImmutableArray();
+
+    private static readonly ImmutableArray<string> GatedLeaves =
+        TwoWideBranches.Where(p => p.Count(c => c == '/') == 2).ToImmutableArray();
+
+    [Fact]
+    public async Task Bounded_lane_holds_the_whole_tree_to_N_legs_in_flight()
+    {
+        var fake = new FakeDeleter(gatedPaths: GatedLeaves);
+        var result = HierarchicalPathDeletion
+            .DeleteSubtreeBounded("root", TwoWideBranches, fake.Delete, maxConcurrentDeletes: 3)
+            .Replay();
+        using var connection = result.Connect();
+
+        SpinWait.SpinUntil(() => fake.Started.Count == 3, TimeSpan.FromSeconds(2))
+            .Should().BeTrue("three legs are admitted at once");
+        SpinWait.SpinUntil(() => fake.Started.Count > 3, TimeSpan.FromMilliseconds(300))
+            .Should().BeFalse("no fourth leg starts while three hold the lane — across BOTH branches");
+
+        // Release whatever is running, one at a time; the lane refills to three each time.
+        var released = ImmutableHashSet<string>.Empty;
+        while (released.Count < GatedLeaves.Length)
+        {
+            string? next = null;
+            SpinWait.SpinUntil(() => (next = fake.Started.FirstOrDefault(
+                    p => GatedLeaves.Contains(p) && !released.Contains(p))) is not null,
+                TimeSpan.FromSeconds(2)).Should().BeTrue("the lane admits the next leaf after a release");
+            released = released.Add(next!);
+            fake.Release(next!);
+            (fake.Started.Count(p => GatedLeaves.Contains(p)) - fake.Completed.Count(p => GatedLeaves.Contains(p)))
+                .Should().BeLessThanOrEqualTo(3, "never more than three legs in flight");
+        }
+
+        var deleted = await result.Should().Emit();
+        deleted.Should().HaveCount(TwoWideBranches.Length + 1);
+        deleted.Last().Should().Be("root", "bottom-up order is unchanged by the lane");
+    }
+
+    [Fact]
+    public void Unbounded_traversal_starts_every_leaf_at_once_negative_control()
+    {
+        // The shape before #6351: every leaf of both branches is subscribed simultaneously, which is
+        // what queued a whole subtree's writes on one cap-1 pool.
+        var fake = new FakeDeleter(gatedPaths: GatedLeaves);
+        var result = HierarchicalPathDeletion
+            .DeleteSubtree("root", TwoWideBranches, fake.Delete)
+            .Replay();
+        using var connection = result.Connect();
+
+        SpinWait.SpinUntil(() => fake.Started.Count == GatedLeaves.Length, TimeSpan.FromSeconds(2))
+            .Should().BeTrue("the unbounded overload subscribes all twenty leaves together");
+    }
+
+    [Fact]
+    public void Bounded_lane_never_starts_a_queued_leg_once_the_traversal_is_disposed()
+    {
+        var fake = new FakeDeleter(gatedPaths: GatedLeaves);
+        var connection = HierarchicalPathDeletion
+            .DeleteSubtreeBounded("root", TwoWideBranches, fake.Delete, maxConcurrentDeletes: 1)
+            .Replay()
+            .Connect();
+        SpinWait.SpinUntil(() => fake.Started.Count == 1, TimeSpan.FromSeconds(2)).Should().BeTrue();
+        var running = fake.Started.Single();
+
+        connection.Dispose();
+        fake.Release(running);
+
+        SpinWait.SpinUntil(() => fake.Started.Count > 1, TimeSpan.FromMilliseconds(300))
+            .Should().BeFalse("a leg still queued when its traversal went away must never run its delete");
+    }
+
+    [Fact]
+    public async Task Bounded_lane_still_fails_fast_and_never_deletes_the_parent()
+    {
+        var fake = new FakeDeleter(failPaths: new[] { "root/a/3" });
+
+        Func<Task> act = () => HierarchicalPathDeletion
+            .DeleteSubtreeBounded("root", TwoWideBranches, fake.Delete, maxConcurrentDeletes: 2)
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(10))
+            .Await(TestContext.Current.CancellationToken);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("*primed failure for 'root/a/3'*");
+        fake.Started.Should().NotContain("root/a");
+        fake.Started.Should().NotContain("root");
+    }
 }
