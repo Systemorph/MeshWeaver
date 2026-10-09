@@ -113,6 +113,21 @@ names actually holds `memexadmin`'s password (a Provision that composed a connec
 it once; the record naming it is not that proof), and that the operator identity holds secret `get`
 on it in the vault the record names (the same Provision exercised it).
 
+## The login is declared too: `--user` is the record's `databaseUsername`
+
+The password is read by name, and the LOGIN it belongs to is declared beside it. The three scripts
+take `--user <login>`; the plan passes the record's `databaseUsername` — the same pair
+`hosting-kv-ensure` composes a connection string from (`--db-user {databaseUsername}
+--db-password-secret "$AZ_POSTGRES_PASSWORD_SECRET"`), so a record that provisions a working portal
+declares a working dump login by construction. **There is no built-in default.** The scripts used to
+fall back to `PGUSER`, else a hard-coded `memexadmin`, so the step logged in as a user the record
+never declared — and a record whose `databaseUsername` disagreed with the object's owner
+(memex-cloud declared `postgres` while its vault object holds the server admin's password) could
+only be found on a failed run. Now: no `--user` and no hand-set `PGUSER` refuses before the vault is
+read; a hand-set `PGUSER` is honoured only when `--user` is absent; a `--user` that is not a plain
+name refuses before anything runs. The plan refuses a dump-based action whose record does not STATE
+`databaseUsername` (the derived fallback `postgres` is a guess, not a declaration).
+
 ## The chart's `secretEnvironment` block, after this
 
 `hostingOperator.secretEnvironment` and `hosting-operator-secrets.yaml` remain in the chart for a
