@@ -170,4 +170,46 @@ public interface IPaymentProvider
     /// provider cannot quietly answer the question it finds easier.</para>
     /// </summary>
     IObservable<PaymentDeliveryPath> DescribeDeliveryPath();
+
+    /// <summary>
+    /// Whether this provider can register and extend THIS instance's own delivery endpoint
+    /// (<see cref="EnsureDeliveryEndpoint"/>). Defaults to <c>false</c>, so an implementation
+    /// written before this member existed keeps compiling and simply offers no such task.
+    /// </summary>
+    bool ManagesDeliveryEndpoints => false;
+
+    /// <summary>
+    /// Creates this instance's delivery endpoint at the provider, or adds the required events an
+    /// existing one lacks — the governed, deliberately triggered write behind a broken delivery
+    /// path (policy <c>payment-endpoint-governed-task</c>). Cold; emits once and never faults: a
+    /// failed precondition or a failed call is a <see cref="PaymentEndpointOutcome.Refused"/> answer.
+    ///
+    /// <para>The provider decides what its account allows and refuses, naming why: a truncated or
+    /// unreadable listing, more than one endpoint for the URL, endpoints for other hosts in the
+    /// same account, a disabled endpoint, an unconfirmed mode. It is ADDITIVE only — it never
+    /// removes an event, changes the URL, or disables or re-enables an endpoint. Only
+    /// <see cref="PaymentEndpointOutcome.Created"/> discloses a secret
+    /// (<see cref="PaymentEndpointChange.DisclosedSecret"/>), which the caller shows once and stores
+    /// nowhere.</para>
+    ///
+    /// <para>The default answers <see cref="PaymentEndpointOutcome.NotSupported"/>.</para>
+    /// </summary>
+    IObservable<PaymentEndpointChange> EnsureDeliveryEndpoint(PaymentEndpointRequest request) =>
+        System.Reactive.Linq.Observable.Return(NotSupported(DisplayName));
+
+    /// <summary>
+    /// Removes the delivery endpoints whose metadata names this instance
+    /// (<see cref="PaymentEndpointRequest.Owner"/>) — and no other endpoint, ever. The way out of
+    /// <see cref="PaymentEndpointOutcome.SecretNotRecovered"/>, and the cleanup of an instance that
+    /// goes away. Cold; emits once and never faults. The default answers
+    /// <see cref="PaymentEndpointOutcome.NotSupported"/>.
+    /// </summary>
+    IObservable<PaymentEndpointChange> RemoveDeliveryEndpoint(PaymentEndpointRequest request) =>
+        System.Reactive.Linq.Observable.Return(NotSupported(DisplayName));
+
+    private static PaymentEndpointChange NotSupported(string displayName) => new()
+    {
+        Outcome = PaymentEndpointOutcome.NotSupported,
+        Refusal = $"{displayName} does not manage its own delivery endpoints — register the endpoint at the provider by hand.",
+    };
 }

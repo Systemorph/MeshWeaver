@@ -64,6 +64,49 @@ public class PaymentProviderContractTest
         error!.Message.Should().Contain("Older", "the refusal names the provider");
     }
 
+    /// <summary>
+    /// The governed endpoint members (Plugins#1881) are default-implemented: a provider written
+    /// before them keeps compiling, offers no endpoint task, and both calls ANSWER NotSupported —
+    /// never a throw, never a silence.
+    /// </summary>
+    [Fact]
+    public void AProviderThatDoesNotOptIn_ManagesNoEndpoint_AndAnswersNotSupported()
+    {
+        IPaymentProvider provider = new OlderProvider();
+        provider.ManagesDeliveryEndpoints.Should().BeFalse();
+        var request = new PaymentEndpointRequest
+        {
+            Url = "https://portal.example/api/hooks/Store/Payments",
+            Owner = "https://portal.example",
+            RequestPath = "Admin/Maintenance/ensure",
+            Execute = true,
+            ConfirmedMode = "test",
+        };
+
+        PaymentEndpointChange? ensured = null, removed = null;
+        using (provider.EnsureDeliveryEndpoint(request).Subscribe(c => ensured = c)) { }
+        using (provider.RemoveDeliveryEndpoint(request).Subscribe(c => removed = c)) { }
+
+        ensured!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
+        ensured.Refusal.Should().Contain("Older", "the refusal names the provider");
+        ensured.DisclosedSecret.Should().BeNull();
+        removed!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
+    }
+
+    /// <summary>A printed change never carries the signing secret; the negative control shows the field is set.</summary>
+    [Fact]
+    public void APrintedChange_MasksTheDisclosedSecret()
+    {
+        var change = new PaymentEndpointChange
+        {
+            Outcome = PaymentEndpointOutcome.Created,
+            EndpointId = "we_1",
+            DisclosedSecret = "whsec_abc123",
+        };
+        change.DisclosedSecret.Should().Be("whsec_abc123", "negative control: the secret IS on the record");
+        change.ToString().Should().NotContain("whsec_abc123").And.Contain("(redacted)").And.Contain("we_1");
+    }
+
     [Fact]
     public void APortalRequest_NamesItsSubscriber_ByCustomerOrBySubscription()
     {
