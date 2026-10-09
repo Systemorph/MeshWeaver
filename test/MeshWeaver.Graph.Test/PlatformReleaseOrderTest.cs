@@ -32,6 +32,9 @@ public class PlatformReleaseOrderTest
     [InlineData("3.0.0-edge.7977", 7977L)]
     [InlineData("3.0.0-ci.7977+build.638", 7977L)]
     [InlineData("3.0.0-ci.0", 0L)]
+    [InlineData("3.1.0-dev", 0L)]       // the SemVer minter's source-build stamp
+    [InlineData("3.1.0-DEV", 0L)]
+    [InlineData("3.1.0-dev.1", null)]   // only the bare label is a source build
     // A PROMOTION — a clean release is a retag of one sealed continuous set, so its lineage lives on
     // the sibling tag it was cut from and is not readable from the tag.
     [InlineData("3.0.0", null)]
@@ -232,7 +235,8 @@ public class PlatformReleaseOrderTest
     [InlineData("4.0.20000", 20000L, true)]
     [InlineData("3.1.0", null, false)]                  // a zero patch is a floor or a release, never a run
     [InlineData("4.0.0", null, false)]
-    [InlineData("3.1.0-ci.0", 0L, false)]               // the new notation's LOCAL source-build stamp
+    [InlineData("3.1.0-ci.0", 0L, false)]               // the retired local source-build stamp
+    [InlineData("3.1.0-dev", 0L, false)]                // the source-build stamp the minter writes
     [InlineData("3.1.0-ci.7841", 7841L, false)]         // the slip keeps its ci number
     [InlineData("3.0.0", null, false)]                  // a promotion below the boundary
     [InlineData("3.0.5", null, false)]
@@ -307,6 +311,37 @@ public class PlatformReleaseOrderTest
         Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate("3.1.0", "3.1.10050").Kind);
         Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate("3.1.0", "3.0.0-ci.9999").Kind);
         Assert.Equal(PlatformFloorKind.Advisory, PlatformFloor.Evaluate("3.1.10050", "3.1.0-ci.0").Kind);
+        Assert.Equal(PlatformFloorKind.Advisory, PlatformFloor.Evaluate("3.1.10050", "3.1.0-dev").Kind);
+        Assert.Equal(PlatformFloorKind.Advisory, PlatformFloor.Evaluate("3.1.0-dev", "3.1.10050").Kind);
+    }
+
+    /// <summary>
+    /// 🚨 <b>The actual boundary the minter flip creates</b> (policy <c>platform-semver-versioning</c>):
+    /// the newest <c>3.0.0-ci.&lt;n&gt;</c> in the registries when the minter changed, and the first
+    /// build after it. Every question the fleet asks of the pair — newer, ordered, floor, source build —
+    /// answers the same way SemVer does, so readers that compare either way agree.
+    /// </summary>
+    [Fact]
+    public void TheFirstSemVerBuild_OutranksEveryOldNotationSet()
+    {
+        const string LastOld = "3.0.0-ci.10330";
+        const string FirstNew = "3.1.10331";
+
+        Assert.True(PlatformReleaseOrder.IsNewer(FirstNew, LastOld));
+        Assert.False(PlatformReleaseOrder.IsNewer(LastOld, FirstNew));
+        Assert.True(NuGetVersionComparer.Instance.Compare(FirstNew, LastOld) > 0, "SemVer agrees with the lineage");
+        Assert.Equal(FirstNew, new[] { LastOld, "3.0.0-ci.10317", FirstNew, "3.0.0" }
+            .OrderByDescending(v => v, PlatformReleaseOrder.Newest).First());
+
+        // Floors stamped before the flip are met by the new builds; a new-notation floor holds a
+        // portal still on the old notation.
+        Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate("3.0.0-ci.10317", FirstNew).Kind);
+        Assert.Equal(PlatformFloorKind.Satisfied, PlatformFloor.Evaluate(FirstNew, FirstNew).Kind);
+        Assert.Equal(PlatformFloorKind.Held, PlatformFloor.Evaluate(FirstNew, LastOld).Kind);
+
+        Assert.False(PlatformReleaseOrder.IsSourceBuild(FirstNew));
+        Assert.True(PlatformReleaseOrder.IsSourceBuild("3.1.0-dev"));
+        Assert.True(PlatformReleaseOrder.IsSourceBuild("3.0.0-ci.0"));
     }
 
     private static IEnumerable<string[]> Permutations(string[] items) =>

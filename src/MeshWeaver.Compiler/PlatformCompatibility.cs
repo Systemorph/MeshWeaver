@@ -299,7 +299,7 @@ public static class PlatformCompatibility
         var liveOrdinal = PlatformReleaseOrder.BuildOrdinal(livePlatformVersion);
         if ((producerOrdinal is null) != (liveOrdinal is null))
             return false;
-        // `-ci.0` is the LOCAL build stamp (Directory.Build.props: no run number off CI), not a
+        // A source build (`-dev`, or the retired `-ci.0`; Directory.Build.props: off main CD) is not a
         // publication — a developer's process is never "older" than every CI bake. Unordered.
         if (producerOrdinal == 0 || liveOrdinal == 0)
             return false;
