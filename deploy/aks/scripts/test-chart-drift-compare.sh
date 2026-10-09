@@ -24,17 +24,17 @@ DATA="$SELF_DIR/testdata/chart-drift"
 CMP="$SELF_DIR/chart-drift-compare.py"
 fail=0
 
-run_case_with_manifest() {  # run_case_with_manifest <case> <release-manifest-path>
+run_case_with_manifest() {  # run_case_with_manifest <case> <release-manifest-path> [image-policy] [live-deployment]
   local case="$1"
   python3 "$CMP" \
     "$DATA/desired.yaml" \
     "$DATA/$case/live-configmap.json" \
-    "$DATA/$case/live-deployment.json" \
+    "${4:-$DATA/$case/live-deployment.json}" \
     "$DATA/$case/expect-patch.json" \
     "$DATA/$case/live-poddisruptionbudgets.json" \
     "$DATA/$case/live-scaledobjects.json" \
     "$DATA/$case/envfrom-source-keys.txt" \
-    "$2" 2>&1
+    "$2" "${3-$DATA/$case/record.json}" 2>&1
 }
 
 run_case() {
@@ -361,6 +361,116 @@ EMPTY_MANIFEST="$(mktemp)"
 : > "$EMPTY_MANIFEST"
 assert_fails_naming_manifest "a manifest file with no objects in it" "$EMPTY_MANIFEST"
 rm -f "$EMPTY_MANIFEST"
+
+# ---- 5. the portal IMAGE against the RECORD (MeshWeaver#4685) --------------
+# The chart's image is never what runs, so the comparison is the record's pin / updatePattern vs the
+# live tag. The CLEAN case (live 3.1.10400, pattern 3.*) is the negative control: it already passed
+# section 1 with zero findings, so a comparator that flagged every image would have failed there.
+# The DRIFTED case runs 3.0.0-ci.8812 under pattern 3.1.* — the #4640 shape (a tag nobody allowed).
+echo "case: image vs record"
+out="$(run_case drifted)"
+expect_class "OFF-RECORD" "image tag \\(memex-portal\\)"
+
+TMPI="$(mktemp -d)"
+policy() {  # policy <file> <json>
+  printf '%s\n' "$2" > "$TMPI/$1"
+}
+live_with_image() {  # live_with_image <file> <image-ref>
+  python3 - "$DATA/clean/live-deployment.json" "$TMPI/$1" "$2" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["spec"]["template"]["spec"]["containers"][0]["image"] = sys.argv[3]
+json.dump(d, open(sys.argv[2], "w"))
+PYEOF
+}
+image_verdict() {  # image_verdict <description> <expect: clean|off> <policy-file> <live-file>
+  local o rc
+  o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/$3" "$TMPI/$4")"; rc=$?
+  if [ "$2" = clean ]; then
+    if [ "$rc" -eq 0 ] && ! echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → on record"
+    else echo "::error::$1 — expected ON record, got rc=$rc:"; echo "$o" | grep '::error::' | sed 's/^/      /'; fail=1; fi
+  else
+    if [ "$rc" -ne 0 ] && echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → OFF-RECORD"
+    else echo "::error::$1 — expected OFF-RECORD, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
+  fi
+}
+R=cr.example.test/portal-fixture
+policy p-any.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*\"}"
+policy p-ci.json    "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.0.0-ci*\"}"
+policy p-pin.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*\",\"pinnedImageTag\":\"3.1.10400\"}"
+policy p-none.json  "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\"}"
+live_with_image l-semver.json "$R:3.1.10400"
+live_with_image l-ci.json     "$R:3.0.0-ci.10148"
+live_with_image l-other.json  "$R:3.1.10399"
+live_with_image l-digest.json "$R@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+live_with_image l-repo.json   "example.azurecr.io/other-portal:3.1.10400"
+live_with_image l-port.json   "localhost:5000/portal-fixture:3.1.10400"
+image_verdict "SemVer tag under pattern 3.*"                 clean p-any.json  l-semver.json
+image_verdict "old -ci tag under pattern 3.*"                clean p-any.json  l-ci.json
+image_verdict "SemVer tag under a 3.0.0-ci* pattern"         off   p-ci.json   l-semver.json
+image_verdict "the pinned tag itself"                        clean p-pin.json  l-semver.json
+image_verdict "a tag other than the pin (pattern would allow)" off p-pin.json  l-other.json
+image_verdict "a digest-only reference"                      off   p-any.json  l-digest.json
+image_verdict "another repository"                           off   p-any.json  l-repo.json
+image_verdict "a record with neither pin nor pattern"        off   p-none.json l-semver.json
+# The updater's pattern contract (UpdateChannelPattern): case-INSENSITIVE, `?` is one character,
+# and a bracket is a LITERAL, never a class — fnmatch would read `3.[01]*` as a class and admit 3.1.x.
+policy p-upper.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*-CI*\"}"
+policy p-qmark.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.1.1040?\"}"
+policy p-class.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.[01]*\"}"
+policy p-pinup.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"pinnedImageTag\":\"3.0.0-CI.10148\"}"
+image_verdict "a pattern differing only in letter case"      clean p-upper.json l-ci.json
+image_verdict "'?' as exactly one character"                 clean p-qmark.json l-semver.json
+image_verdict "a bracket is literal, not a character class"  off   p-class.json l-semver.json
+image_verdict "a pin differing only in letter case"          clean p-pinup.json l-ci.json
+# A registry PORT is not a tag: `localhost:5000/…:3.1.10400` must be read as tag 3.1.10400, repo
+# localhost:5000/portal-fixture — so it is OFF-RECORD only for the repository, never the tag.
+o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/p-any.json" "$TMPI/l-port.json")"
+if echo "$o" | grep -qE '^::error::OFF-RECORD +image repository' && ! echo "$o" | grep -qE '^::error::OFF-RECORD +image tag'; then
+  echo "  ok   a registry port is not mistaken for a tag"
+else
+  echo "::error::a registry-port reference was mis-split:"; echo "$o" | grep '::error::' | sed 's/^/      /'; fail=1
+fi
+# FAIL CLOSED on the policy, as on the manifest: no policy must never read as "the image matches".
+o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "")"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$o" | grep -q 'no image policy'; then
+  echo "  ok   a missing image policy fails RED and says so"
+else
+  echo "::error::a missing image policy did not fail closed (rc=$rc)"; fail=1
+fi
+rm -rf "$TMPI"
+
+# ---- 6. the policy comes from exactly ONE record ----------------------------
+echo "case: the facts of exactly ONE Deployment record"
+POL="$SELF_DIR/chart-drift-record.py"
+TMPR="$(mktemp -d)"
+mkdir -p "$TMPR/one" "$TMPR/two" "$TMPR/none"
+printf '%s\n' '{"id":"a","content":{"namespace":"ns1","helmRelease":"rel1","imageRepository":"r/p","updatePolicy":"Continuous","updatePattern":"3.*","vaultValuesKeys":["MEMEX_PASSWORD"," Anthropic__ApiKey"],"keyVaultSecrets":{"x":"must-not-be-copied"}}}' > "$TMPR/one/a.json"
+printf '%s\n' '{"id":"b","content":{"namespace":"ns2","helmRelease":"rel1","updatePattern":"9.*"}}' > "$TMPR/one/b.json"
+printf '%s\n' '{"id":"index"}' > "$TMPR/one/index.json"
+cp "$TMPR/one/a.json" "$TMPR/two/a.json"; cp "$TMPR/one/a.json" "$TMPR/two/a2.json"
+cp "$TMPR/one/b.json" "$TMPR/none/b.json"
+if python3 "$POL" --records "$TMPR/one" --namespace ns1 --release rel1 --out "$TMPR/p.json" >/dev/null \
+   && python3 -c "import json,sys; p=json.load(open(sys.argv[1])); sys.exit(0 if p=={'record':'Deployments/a','imageRepository':'r/p','updatePolicy':'Continuous','updatePattern':'3.*','pinnedImageTag':None,'vaultValuesKeys':['Anthropic__ApiKey','MEMEX_PASSWORD']} else 1)" "$TMPR/p.json"; then
+  echo "  ok   the owning record's image fields and declared key NAMES, and nothing else, are written"
+else
+  echo "::error::the image policy was not the owning record's four fields:"; cat "$TMPR/p.json" 2>/dev/null; fail=1
+fi
+mkdir -p "$TMPR/bad"
+printf '%s\n' '{"id":"a","content":{"namespace":"ns1","helmRelease":"rel1","updatePattern":"3.*","vaultValuesKeys":"MEMEX_PASSWORD"}}' > "$TMPR/bad/a.json"
+if python3 "$POL" --records "$TMPR/bad" --namespace ns1 --release rel1 --out "$TMPR/r.json" >/dev/null; then
+  echo "::error::a non-list vaultValuesKeys must fail closed — it exited 0"; fail=1
+else
+  echo "  ok   a malformed (non-list) vaultValuesKeys → fails RED, never read as 'no keys'"
+fi
+for d in two none; do
+  if python3 "$POL" --records "$TMPR/$d" --namespace ns1 --release rel1 --out "$TMPR/q.json" >/dev/null; then
+    echo "::error::'$d' owning records must fail closed — it exited 0"; fail=1
+  else
+    echo "  ok   $d owning record(s) → fails RED"
+  fi
+done
+rm -rf "$TMPR"
 
 if [ "$fail" -eq 0 ]; then
   echo ""

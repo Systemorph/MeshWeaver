@@ -143,6 +143,7 @@ owned.
 |---|---|---|
 | `COLLIDES` | inline `env:` + a ConfigMap key differing **only in case** | **already**, at random, every pod start |
 | `SHADOWS` | inline `env:` + the **same** key from **any** envFrom source | **already** — the shadowed value is dead |
+| `OFF-RECORD` | the portal runs an image its **Deployment record** does not allow — a tag other than the pin, a tag outside `updatePattern`, a digest-only reference, another repository, or a record that states neither | **already** — the cluster runs a build no governed update chose; a `Roll` of the record resolves it |
 | `CLUSTER-ONLY` | live, in no committed source | on a rebuild or restore, and at every review — **unless the release manifest still owns the key**, when the next upgrade deletes it and the finding reads `PENDING DELETION` |
 | `CHART-ONLY` | rendered, never applied | nobody is getting it today |
 | `DIFFERS` | both sides, values disagree | never resolves itself; needs a decision — except an `inline env`, which helm owns and an upgrade resets |
@@ -304,6 +305,32 @@ Both entries are now compared in full — values compared, never printed, becaus
 hold a token. It reports `DIFFERS inline env <name>`, and that class carries the one exception to
 the measurement above: **helm owns an entry it renders**, so an upgrade *does* reset that one. The
 finding says so, rather than repeating the generic "a deploy does not resolve this".
+
+## The portal image is compared against the RECORD, not the chart
+
+Policy [`chart-drift-compares-image-to-record`](../PolicyNotProse). The chart's `image:` is never what
+runs — a record-driven deploy passes the image explicitly, and between deploys the self-updater owns
+the field — so comparing it with the live Deployment would report noise on every run. The question
+nobody compared was the one that matters: **does the cluster run a tag its record allows?** On
+2026-09-17 two pods ran `3.0.0-ci.8710` and a third `3.0.0-ci.8812` while the record and the overlay
+agreed on `3.0.0-ci.8692`, for about seven hours, and nothing detected it (#4640, #4685).
+
+The lane reads the ONE committed record that owns the namespace and release (`content.namespace` +
+`content.helmRelease` under the config repository's `mesh/Deployments/`) with
+`deploy/aks/scripts/chart-drift-record.py`, and hands the comparator only its tag-level fields:
+`imageRepository`, `updatePolicy`, `updatePattern`, `pinnedImageTag`. The rule:
+
+| record states | the live portal container's image is on record when |
+|---|---|
+| `pinnedImageTag` | its tag **equals** the pin |
+| `updatePattern` only | its tag **matches** the glob — `3.*` covers `3.0.0-ci.<run>` and the SemVer `3.1.<run>` alike; a `3.0.0-ci*` pattern correctly reports a `3.1.<run>` build as off-record |
+| neither | never — which tag should run is declared nowhere, and that is the finding |
+| `imageRepository` | additionally, the repository is that one |
+
+A digest-only reference (`repo@sha256:…`) is a finding too: its tag cannot be tested, and "could not
+be tested" must never read as "matches". No owning record, or two, fails the run naming them. What
+this compares is the Deployment's pod template — what the cluster is TOLD to run; per-replica images
+mid-roll are `Ops/Status/<id>`'s `replicas[]` (`Sample`), and both readings are worth having.
 
 ## What this report does NOT prove
 
