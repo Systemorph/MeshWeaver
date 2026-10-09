@@ -380,6 +380,18 @@ public sealed class OciRegistryClient
         var realmBase = Uri.TryCreate(realm, UriKind.Absolute, out var absoluteRealm)
             ? absoluteRealm
             : new Uri(baseUri, realm);
+        // 🚨 The key goes to the token realm ONLY on the registry's own authority and scheme
+        // (MeshWeaver#4123). The realm is named by the 401 the registry answers, so an absolute realm
+        // on another host would otherwise receive `Basic user:<instance key>` — a registry the caller
+        // approved for the key could hand it to any host it names. Every realm the fleet serves is
+        // on its registry's own host (cr.meshweaver.cloud/auth, meshweaver.azurecr.io/oauth2/token),
+        // so this refuses only a redirect, and it refuses BEFORE anything is sent there.
+        if (!string.Equals(realmBase.Authority, baseUri.Authority, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(realmBase.Scheme, baseUri.Scheme, StringComparison.OrdinalIgnoreCase))
+            throw new RegistryRefusedException(
+                $"{baseUri.Authority}'s Bearer challenge names the token realm {realmBase.Scheme}://{realmBase.Authority}, "
+                + $"which is not {baseUri.Scheme}://{baseUri.Authority} itself — this installation's instance key is "
+                + "presented only at the registry's own authority, so it was not sent there.");
         var realmUri = new Uri(
             realmBase.AbsoluteUri + (realmBase.Query.Length > 0 ? "&" : "?") + string.Join('&', query));
 
