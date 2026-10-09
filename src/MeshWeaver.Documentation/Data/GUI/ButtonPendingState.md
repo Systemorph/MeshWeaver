@@ -1,7 +1,7 @@
 ---
 Name: "Buttons: Pending State & Navigate-on-Accepted"
 Category: Documentation
-Description: Every framework button with a click action shows itself pressed from the click until the owner confirms it, refuses a second click meanwhile, restores itself with the reason on failure — and can navigate the moment the click is accepted
+Description: Every framework button with a click action is busy from the click until its work settles — disabled, a status line saying what is happening, progress, Cancel, the error or the outcome — never runs twice for a double click, and can navigate the moment the click is accepted
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="8" rx="4"/><path d="M12 3v2"/><path d="M12 19v2"/></svg>
 ---
 
@@ -16,12 +16,89 @@ in the button's author.
 | Moment | Button |
 |---|---|
 | The click (synchronously, before any round trip) | disabled, a progress ring in place of its start icon, `aria-busy="true"`, tooltip **"Working…"** (`common.working`, en + de) |
-| A second click while pending | ignored — the click is submitted exactly once |
-| The owner **accepts** | restored; if the button declares `NavigateOnAccepted`, the page navigates there instantly |
-| The owner **refuses** (the action failed, or the stream was gone) | restored, and the reason is shown through the portal's error sink — never a silent reset |
+| While the click runs | still disabled; beside it the **status line** the action reports (or "Working…"), a progress bar when the action knows its fraction, and a **Cancel** button (`click.cancel`) |
+| A second click while running — this tab, another tab of the same page, a retried delivery | ignored by the client, and **joined** by the owner: the action never runs twice (see *Idempotence*) |
+| The click **settles** | re-enabled; the **outcome line** the action stated (`ctx.ReportSummary`), if any, stays beside it; with `NavigateOnAccepted` the page navigates as soon as the action is accepted |
+| The click **fails** (the action errored, or a tracked activity failed) | re-enabled, and the **reason** is shown beside it and through the portal's error sink — never a silent reset |
+| **Cancel** pressed | "Cancelling…", then re-enabled with "Cancelled" once the work stopped |
 
 A button without a click action (for example one that only carries `WithNavigateToHref`) never
-pends: it has nothing to wait for.
+pends: it has nothing to wait for. None of this needs code in the button's author — the next
+sections are for actions that have more to say.
+
+# The busy state is written by the owner
+
+The client's pressed state lasts until the receipt; the BUSY state lasts until the work settles,
+and the owner states it. When a click starts, the owner's `LayoutAreaHost` opens a click session and
+writes a `ClickProgress` into the stream's data section under `ClickProgress.DataId(area)`; a client
+binds it by `ClickProgress.PointerFor(area)` (row-scoped controls: `ClickProgress.RowArea(area, row)`).
+
+| `ClickProgress` field | Meaning |
+|---|---|
+| `Running` | true from the click until the action and everything it tracks settled — the control stays disabled |
+| `Status` | the status line, "what is happening"; null → the client's localized "Working…" |
+| `Fraction` | completed fraction in [0, 1]; null → indeterminate |
+| `Cancellable`, `Cancelling` | whether Cancel is offered / being honoured |
+| `Error` | why the click failed — shown, never swallowed |
+| `Summary` | the outcome line once settled |
+| `ActivityPath` | the activity the click is bound to, when it tracks one |
+
+The action talks to it through its context — all safe from any thread, all no-ops outside a click:
+
+```csharp
+Controls.Button(texts.ApproveSelected)
+    .WithReactiveClickAction(ctx => ctx.SelectedRowKeys(selectionId)
+        .SelectMany(keys => keys
+            .Select((key, i) => Observable.Defer(() =>
+            {
+                ctx.ReportProgress(texts.Approving(i + 1, keys.Count), (i + 1.0) / keys.Count);
+                return Approve(ctx.Host, key);                 // the write's confirmation
+            }))
+            .Concat()                                          // one at a time; Cancel disposes the rest
+            .Count()
+            .Do(n => ctx.ReportSummary(texts.Approved(n, keys.Count))))
+        .Select(_ => Unit.Default));
+```
+
+| Call | Does |
+|---|---|
+| `ctx.ReportProgress(status, fraction?)` | updates the status line and fraction |
+| `ctx.ReportSummary(text)` | sets the outcome line shown after the click settled |
+| `ctx.CancellationToken` | trips on Cancel — and only on Cancel: settling, or the viewer leaving the page, does not stop work the click started |
+| `ctx.OnCancel(handler)` | what Cancel must do beyond disposing the action's pipeline (runs on the owner, as the clicker) |
+| `ctx.Track(IObservable<ClickProgress>)` | keeps the control busy over work the click STARTED that outlives the action; an emission with `Running = false` (or completion) ends it, one with `Error` fails the click |
+| `ctx.TrackActivity(path)` (Mesh.Contract) | binds the busy state to an `ActivityLog`: its latest message is the status line, its terminal status settles the click (Failed → the error), and Cancel patches its `RequestedStatus` through `hub.CancelActivity` and waits for it to land |
+| `ctx.TrackNode(path, node => ClickProgress?)` (Mesh.Contract) | stays busy until a node says the click's effect landed — e.g. an approval click that writes `RequestedAction` stays busy until the owner's watcher has moved the request on |
+
+Strings passed in are shown as given — pass them localized (`ctx.Host.Localize(…)`). The activity
+and node trackers read through `GetMeshNodeStream(path)`, so the node must exist when they are
+called ([CQRS](/Doc/Architecture/CqrsAndContentAccess)).
+
+## Cancel is a property write
+
+A client's Cancel writes `requestedSession: <ClickProgress.Session>` at
+`ClickProgress.CancelPointerFor(area)` — the session number of the click it is SHOWING, carried by the
+request itself, so a Cancel delayed past the next click names the old session and is ignored. The owner watches it, exactly as an activity's control plane watches
+`RequestedStatus` ([Activity Control Plane](/Doc/Architecture/ActivityControlPlane)): no verb message.
+On Cancel the owner disposes the action's pipeline (a reactive action is therefore always
+cancellable), trips the token, runs the `OnCancel` handlers as the clicker, refuses a still-open
+receipt with "Cancelled", drops generic tracked sources and keeps watching an activity until it
+reports Cancelled.
+
+## Idempotence
+
+While a click runs, a second `ClickedEvent` for the same **area, row and payload** joins it: the
+action is not invoked again, and the duplicate's receipt gets the first click's outcome. Two pins on
+one map (same area, different payload) or two rows of one template are different clicks — and
+each row needs its own state: a row-scoped click is keyed by the row's `Key` (a grid sets it from
+`DataGridControl.RowKey` / `WithRowKey`), path, pointer or index. A row known only by its value has
+none, so while a click runs on such a control a click on another of its rows is **refused**
+("Another action on this control is still running", `click.busyElsewhere`) rather than sharing — and
+overwriting — the running click's state. The window
+is the click's own lifetime — once it settled, the next click is a new one; an action that must be
+idempotent across clicks (an approval that may only happen once) still says so in its own state, as
+the domain owner's watcher does. The session is per layout-area stream, so two viewers each get
+their own.
 
 # What "done" means
 
@@ -79,7 +156,7 @@ Controls.Button(host.Localize("ui.invite"))
 ```
 
 The host then owns the subscription: completion answers the click, and an error is logged with the
-area and hub (`LayoutAreaHost.FailClick`) and refused to the client, whose button leaves its pending
+area and hub (the click session's failure arm) and refused to the client, whose button leaves its pending
 state showing the reason. A helper the handler calls returns the observable too
 (`ctx => RemoveCollectionItem(ctx.Host, …)`).
 
@@ -125,8 +202,11 @@ stream.SubmitUserAction(new ClickedEvent(area, stream.StreamId), actingUser,
 ```
 
 Both callbacks run on whichever thread delivered the receipt; a view marshals back onto its own
-dispatcher (`InvokeAsync`) before touching component state. The Blazor `ButtonView` (in
-MeshWeaver.Plugins) is the reference implementation.
+dispatcher (`InvokeAsync`) before touching component state. A view also binds
+`ClickProgress.PointerFor(area)` and stays disabled while it reads `Running = true`, renders
+`Status`/`Fraction`/`Cancellable` (Cancel writes `ClickProgress.CancelPointerFor(area)`), and shows
+`Error` or `Summary` once settled. The Blazor `ButtonView` (in MeshWeaver.Plugins) is the reference
+implementation.
 
 # See also
 

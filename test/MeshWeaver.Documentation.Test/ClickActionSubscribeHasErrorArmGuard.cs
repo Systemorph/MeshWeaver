@@ -21,7 +21,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <para><b>The fix at a site.</b> RETURN the read to the click — <c>WithReactiveClickAction(ctx =&gt;
 /// read.Take(1).Do(body).Select(_ =&gt; Unit.Default))</c>. The host then owns the subscription:
 /// completion answers the click, an error is logged with the area and hub and refused to the client,
-/// whose button leaves its pending state showing the reason (<c>LayoutAreaHost.FailClick</c>,
+/// whose button leaves its pending state showing the reason (<c>ClickSession</c>'s failure arm,
 /// <c>Doc/GUI/ButtonPendingState</c>). A continuation that must run AFTER the click has been
 /// answered (a background write) keeps its own <c>.Subscribe(onNext, onError)</c> with an error arm
 /// that reports and shows the fault.</para>

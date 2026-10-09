@@ -122,6 +122,7 @@ new TemplateColumnControl(Controls.Button("View"))
 | `WithPageSizeOptions(int[])` | Available page size choices | `[5,10,25,50,100]` |
 | `WithShowHover(bool)` | Highlight row under the pointer | `true` |
 | `WithSelectionMode(string)` | Row selection mode | — |
+| `WithRowSelection(dataId, keyProperty, disabledReasonProperty?)` | Data-bound multi-row selection column — see "Row selection" below | — |
 | `WithEmptyContent(control)` | Content shown when the dataset is empty | — |
 | `WithLoading(bool)` | Show loading skeleton | `false` |
 | `WithGenerateHeader(string)` | Header generation strategy (`"Sticky"`, etc.) | `"Sticky"` |
@@ -263,6 +264,47 @@ new DataGridControl(employees)
     .Resizable(true)
     .WithShowHover(true)
 ```
+
+## Row selection
+
+A grid that feeds a bulk action ("Approve selected") declares its selection — it never builds one
+from checkbox buttons and a hand-rolled state machine. `WithRowSelection` gives the grid a
+**selection column**: a checkbox per row and a header checkbox, both bound to the layout area's
+data section.
+
+```csharp
+const string selectionId = "inboxSelection";     // one per grid; no '/' in the id
+host.SeedRowSelection(selectionId);               // where the grid is RENDERED — seeds once per session, a re-render keeps the ticks
+
+Controls.Stack
+    .WithView(new DataGridControl(rows)
+        .WithColumn(new PropertyColumnControl<string> { Property = "title" }.WithTitle(host.Localize("…")))
+        .WithRowSelection(selectionId, keyProperty: "path", disabledReasonProperty: "blockedReason"))
+    .WithView(Controls.Button(host.Localize("…approveSelected"))
+        .WithReactiveClickAction(ctx => ctx.SelectedRowKeys(selectionId)
+            .Select(keys => DataGridRowSelection.Prune(rows, keys, r => r.Path, r => r.BlockedReason))
+            .SelectMany(toApprove => ApproveAll(ctx, toApprove))      // reports progress, see below
+            .Select(_ => Unit.Default)));
+```
+
+| Piece | What it does |
+|---|---|
+| row checkbox | toggles that row's key in the selection; a row whose `disabledReasonProperty` is non-empty renders **disabled**, with the reason as its tooltip, and can never be ticked |
+| header checkbox | unchecked → selects every **selectable** row; indeterminate or checked → clears the selection. "All" means all *selectable* rows, so a grid with blocked rows still reaches the checked state |
+| `RowKey` | set by `WithRowSelection` (or alone with `WithRowKey(property)`): the client carries each row's key value as `RowContext.Key` on a row-scoped click, so every row's busy state and Cancel are its own |
+| `DataGridSelectionState` | what the client writes under the data id: `{ keys: [...] }`, in selection order |
+| `ctx.SelectedRowKeys(id)` | the selection as it stands at the click — a one-off read to **return** from the click handler |
+| `host.RowSelection(id)` | the live selection — for a "3 selected" label or a bulk button's `Disabled` binding |
+| `DataGridRowSelection.Prune` | the owner's re-check before acting: drops keys whose row is gone or no longer selectable. A selection is the viewer's claim about the rows they saw, never a grant |
+
+The rules (select-all, header state, toggle) live in ONE place, `DataGridRowSelection`, which the
+client views call and the owner re-applies, so what the header selects and what the action may act
+on cannot drift apart. The bulk button is an ordinary button: it gets the framework's busy state,
+progress line, summary and Cancel ([Buttons: Pending State](../ButtonPendingState)) — call
+`ctx.ReportProgress("Approving 3 of 7", 3 / 7.0)` as it goes and `ctx.ReportSummary(…)` at the end.
+
+> 🚨 Keep `/` out of the selection data id: a client write into a data id containing `/` does not
+> reach the owner today.
 
 ---
 

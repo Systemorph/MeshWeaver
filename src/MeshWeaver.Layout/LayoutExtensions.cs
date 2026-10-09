@@ -193,6 +193,9 @@ public static class LayoutExtensions
                 typeof(GetLayoutAreasRequest),
                 typeof(LayoutAreasResponse),
                 typeof(UserActionAccepted),
+                typeof(ClickProgress), // the busy state of a running click, written into the data section
+                typeof(ClickCancellation), // its client-written cancel request
+                typeof(MeshWeaver.Layout.DataGrid.DataGridSelectionState), // a selection column's selected keys
                 typeof(DataGridCellClick),
                 typeof(RowContext), // carried on ClickedEvent / BlurEvent, not a StreamMessage itself
                 // Non-IUiControl content/config records serialised INSIDE control state (so the reflection
