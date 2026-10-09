@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 34 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 34 (31 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 36 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 36 (33 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -203,6 +203,12 @@ jobs:
           # remedy that emits it is the Plugins half, which merges after this image is on
           # hosting-operator:main; the line moves up into the plan list once it has.
           hosting-kv-synced          Plugins#2778 — ships and is behaviour-tested; the plan half is the Plugins Reconcile SyncVaultKeys remedy
+          #
+          # hosting-inventory is the read-only node census (the Plugins `Inventory` InstanceAction): it
+          # ships and is behaviour-tested against test/stubs/inventory. Its plan step is the Plugins half,
+          # which merges after this image is on hosting-operator:main, for the same reason as
+          # hosting-migrate above; the line moves up into the plan list once it has.
+          hosting-inventory          Inventory — ships and is behaviour-tested; the plan half is the Plugins Inventory action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
