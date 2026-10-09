@@ -215,9 +215,29 @@ Two rules hold it now, and they are deliberately not the same rule:
 
 The second rule is what covers the combination the first deliberately does not claim: a `linux-arm64`
 host against a `linux-x64` extraction is unmeasured, so it is not refused on an assumption about
-RIDs — it falls to the classification, which needs none. What is still owed is an execution mode that
-works off-Linux at all (running the generated project inside the tester image, the way CI does); until
-that exists, the honest local split is *compile here, execute in the container*.
+RIDs — it falls to the classification, which needs none.
+
+### The contract: compile anywhere; an image set executes on Linux
+
+Policy [`node-tests-compile-only-off-linux`](../PolicyNotProse) settles what used to be listed here
+as owed (#5080, ask 2). **With the image-shaped reference set, which is what CI and `--latest` use,
+the harness is compile-only off Linux, and that is the contract, not a gap.** No off-Linux mode is
+planned for that set, and no in-harness container runner. Concretely:
+
+- **`compile-check.py` answers "does it compile" on any host**, and there it is a complete answer.
+- **`run-node-tests.py` refuses an `image`-shaped set on a non-Linux host up front**, with exit
+  **3**, naming the set and the host, as the table above says. That refusal is the supported
+  behaviour, not an error to work around.
+- **A host-built sibling set (`source-build`) is unaffected.** That is a core checkout built on this
+  machine, which reference discovery labels `source-build`. Its assemblies are native to the host,
+  so it executes on macOS and Windows as well, and the self-test keeps that path working.
+- **The gate executes the suites on Linux, on the composed host**: the portal image's `/app` with
+  the tester CLI mounted beside it (`node-repo-gate.yml`, "the one place the tester is started").
+  To run the image set by hand before a push, use a Linux host or that same composed container.
+
+So a local macOS loop against the image set that is green means *it compiles*. It says nothing
+about whether the suites pass. The refusal's own text says so, which is why the contract can be
+honest without an execution mode behind it.
 
 ## See also
 

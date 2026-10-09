@@ -224,6 +224,35 @@ the operation underneath it:
 In every case the question is the same, and it is not "is this long enough?" but **"if this fires
 first, whose explanation do I lose?"**
 
+## Two bounds on one operation must measure the same thing
+
+Ordering is not enough when the two bounds measure different quantities. The recursive delete's
+server-side bound became a **no-progress** watchdog (#3392): every removal restarts it, so a delete of
+any size runs as long as it keeps removing rows. The caller's `RequestTimeout` stayed a
+**total-duration** cap. The two then disagreed about what "too long" means, and the disagreement had
+no diagnosis at all: a delete larger than the cap finished, posted its reply, and nobody was waiting.
+
+Measured 2026-10-09 on memex: the governed request that deleted the retired NodeType `Crm/Client`
+(several hundred `_Activity/compile-*` satellites under it) failed at 60 s with *"No response
+received … DeleteNodeRequest → portal/nodeops-…"*, a trail ending `HANDLER_EXIT state=Processed`, and
+no `[DeleteNode]` warning or error — the leaves were still being removed after the caller gave up,
+and `Crm/Client` was gone a few seconds later.
+
+The fix makes the caller measure silence too, never a larger number:
+
+- A hub stamps `PostOptions.AcceptsProgress` on every request it awaits (`hub.Observe`).
+- A handler whose work is sized by the caller's data reports real progress —
+  `hub.ReportRequestProgress(request, stage)` posts a `RequestProgress` correlated like the reply.
+  The delete reports every answered pre-flight leg and every removal, sampled once per second.
+- The awaiting hub keeps the callback open and restarts the request's deadline
+  (`MessageHub.ApplyTimeout`). A handler that reports nothing gets exactly the old bound, and one that
+  goes quiet is timed out exactly as early as before.
+
+Report progress only when something advanced, never on a timer: a heartbeat that fires while nothing
+moves turns the caller's deadline into no deadline. A caller without the stamp (an older image during
+a roll) is never sent a report, because it would take it for the reply. The repro and its negative
+control are `LongDeleteKeepsItsCallerTest` in `test/MeshWeaver.Graph.Test`.
+
 ## Related
 
 - [Guards and unknown states](../GuardsAndUnknownStates) — a guard whose stated reason is wrong can
