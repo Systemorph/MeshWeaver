@@ -94,6 +94,27 @@ which defect — is on the second line. A diagnosis that arrives one line too la
 
 Each is a distinct first body line, so each cause arrives as its own incident naming its own cause.
 
+### …and its own EVENT ID, because a recurrence folds by SITE (#1549, second half)
+
+A distinct template gives each class its own *fingerprint* — but the incident watcher also folds
+every fingerprint of one log **site** into a single issue (`ComputeSiteFold`), and a site is part 1
+plus part 2 above: category + event id + exception type. The template is not in it. With every class on
+one category, event id `0` and no exception, the classes were still one site, so after the template
+split `NO NODE EXISTS` (2026-09-24) and `OWNING HUB REACHED NO VERDICT` (2026-09-25) still arrived on
+#1549 as "a different fingerprint of the same log site". That issue was about silent forwards, fixed by
+#1990, and these were neither.
+
+So `LogReleaseRefusal` logs each class under an event id of its own:
+`NodeTypeRecompileExtensions.ReleaseFailureEventId`, a **permanent, explicit code per class** in the 7400 range (`ReleaseFailureEventIds`), named
+`NodeTypeRelease<Class>` (the console line shows it in the bracket: `fail:
+MeshWeaver.Graph.NodeTypeRecompileExtensions[7405]` is `NodeMissing`). The codes are never the enum ordinal: a code is the identity of a
+deployed incident site, so inserting a class mid-enum must not hand it a historical class's id and
+renumber the rest. A new class takes the next unused code (append only, never reuse).
+`TheEventIdOfEveryClass_IsPinned` pins the whole mapping, so a missing, moved or reused code fails, and
+`EveryFailureClass_LogsUnderAnEventIdOfItsOwn` checks that the ids are distinct. An unlisted value takes
+`Unclassified`'s id, the same way it takes its template. The negative
+control is to remove the ids, which leaves every class on one shared id.
+
 ### Classify at the arm, never from the text
 
 🚨 **The class is decided where the exception still is.** Recovering it downstream by matching
