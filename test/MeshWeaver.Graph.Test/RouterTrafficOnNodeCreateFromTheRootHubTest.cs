@@ -70,6 +70,9 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// <summary>The control's probe: a message with no meaning beyond being WORK the router posts.</summary>
     private record RouterOriginProbe;
 
+    /// <summary>A second failed message type for the NACK test, distinct from <see cref="RouterOriginProbe"/>.</summary>
+    private record SecondFailedProbe;
+
     private readonly RouterTrafficCapture _capture = new();
 
     /// <summary>Producer → test: the client hub completes this when the probe reaches its handler.</summary>
@@ -86,12 +89,12 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureHub(c => c.WithTypes(typeof(RouterOriginProbe)));
+            .ConfigureHub(c => c.WithTypes(typeof(RouterOriginProbe), typeof(SecondFailedProbe)));
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
-            .WithTypes(typeof(RouterOriginProbe))
+            .WithTypes(typeof(RouterOriginProbe), typeof(SecondFailedProbe))
             .WithHandler<RouterOriginProbe>((_, delivery) =>
             {
                 _probeArrived.OnNext(System.Reactive.Unit.Default);
@@ -651,6 +654,56 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             "and it must be a DIFFERENT hub from the read seam — portal/reads-{meshId} registers no "
             + "handlers by design, so it has no RouteStreamMessage route and could never deliver the "
             + "owner's fan-out to the sync/{streamId} sub-hub");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A NACK's origin line names the delivery it is ABOUT (#5713).</b> Every undeliverable
+    /// message the router reports is one <see cref="DeliveryFailure"/>, so a line keyed and printed by
+    /// the NACK's own type kept the FIRST failed delivery per hub and said nothing about it: the
+    /// production sample could not name the message whose delivery failed. Two NACKs about two
+    /// different failed messages must therefore give TWO origin lines, each naming its failed type,
+    /// its ends and its reason.
+    ///
+    /// <para>Negative control: with the dedup key and the description reverted to the NACK's own
+    /// type, this records ONE line reading just <c>DeliveryFailure</c>.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void TwoNacksAboutDifferentFailedMessages_EachNameTheFailedDelivery()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var client = GetClient();
+        var first = new MessageDelivery<RouterOriginProbe>(
+            Mesh.Address, client.Address, new RouterOriginProbe(), Mesh.JsonSerializerOptions);
+        // The production shape: a delivery that reached the routing service is already PACKAGED, so
+        // the router's own NACK carries a RawJson body whose CLR type names nothing.
+        var second = new MessageDelivery<SecondFailedProbe>(
+            Mesh.Address, client.Address, new SecondFailedProbe(), Mesh.JsonSerializerOptions).Package();
+        second.Message.Should().BeOfType<RawJson>(
+            "the second NACK must exercise the packaged shape the router actually reports");
+
+        // 🚨 Posted FROM the router on purpose: the violating shape is this test's subject, and the
+        // origin report is made synchronously inside Post, so it is recorded when Post returns.
+        Mesh.Post(new DeliveryFailure(first, "probe reason one"), o => o.WithTarget(client.Address));
+        Mesh.Post(new DeliveryFailure(second, "probe reason two\nforged: record"), o => o.WithTarget(client.Address));
+
+        DumpReports();
+        var nacks = Origins()
+            .Where(r => r.MessageType.StartsWith(nameof(DeliveryFailure), StringComparison.Ordinal))
+            .ToArray();
+        nacks.Should().HaveCount(2,
+            "one failed message type must not mute the report about another: the NACK's own type is "
+            + "the same for every undeliverable message");
+        nacks.Should().ContainSingle(r => r.MessageType.Contains(nameof(RouterOriginProbe), StringComparison.Ordinal)
+                                           && r.MessageType.Contains("probe reason one", StringComparison.Ordinal),
+            "the line must name the failed message and the reason it failed");
+        nacks.Should().ContainSingle(r => r.MessageType.Contains(nameof(SecondFailedProbe), StringComparison.Ordinal)
+                                           && r.MessageType.Contains("probe reason two", StringComparison.Ordinal)
+                                           && r.MessageType.Contains(client.Address.ToString(), StringComparison.Ordinal),
+            "and the failed delivery's ends, so the reader can find the post that failed — the "
+            + "packaged NACK names the payload's $type, not RawJson");
+        nacks.Should().OnlyContain(r => !r.MessageType.Contains('\n') && !r.MessageType.Contains('\r'),
+            "a reason carrying a line break must be escaped, or it forges a continuation record in "
+            + "the log pipeline");
     }
 
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>
