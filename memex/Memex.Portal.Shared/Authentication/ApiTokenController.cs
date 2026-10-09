@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Threading;
 using MeshWeaver.Hosting.AspNetCore.Portal; // PortalApplication
 using MeshWeaver.Mesh;                  // IsGlobalAdmin
+using MeshWeaver.Mesh.Security;         // OAuthTokenLifetime
 using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -92,6 +93,12 @@ public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBa
             : null;
 
         var label = request.Label ?? "API Token";
+        // The OAuth label prefix is reserved for tokens the OAuth sign-in issues (OAuthTokenLifetime):
+        // refuse it here as a client error, before the mint refuses it as a fault.
+        if (OAuthTokenLifetime.IsReservedLabel(label))
+            return Task.FromResult<IActionResult>(BadRequest(
+                $"A token label may not start with '{OAuthTokenLifetime.LabelPrefix.Trim()}' — that prefix is "
+                + "reserved for tokens the OAuth sign-in issues."));
 
         // No await: pull IObservable up to the controller's return type. The single bridge to Task
         // happens at .ObserveCompletion(…, ct) — never Rx's .ToTask(), which resumes the awaiter
