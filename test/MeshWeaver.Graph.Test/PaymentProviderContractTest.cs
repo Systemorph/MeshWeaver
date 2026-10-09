@@ -4,6 +4,7 @@ using System;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Payments;
 using Xunit;
 
@@ -88,9 +89,12 @@ public class PaymentProviderContractTest
         using (provider.RemoveDeliveryEndpoint(request).Subscribe(c => removed = c)) { }
 
         ensured!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
-        ensured.Refusal.Should().Contain("Older", "the refusal names the provider");
+        ensured.Refusal!.English.Should().Contain("Older", "the refusal names the provider");
+        ensured.Refusal.Key.Should().Be(IPaymentProvider.EnsureNotSupportedKey, "the refusal is keyed for the viewer's language");
         ensured.DisclosedSecret.Should().BeNull();
         removed!.Outcome.Should().Be(PaymentEndpointOutcome.NotSupported);
+        removed.Refusal!.Key.Should().Be(IPaymentProvider.RemoveNotSupportedKey,
+            "the two defaults are two different refusals, each with its own remedy");
     }
 
     /// <summary>A printed change never carries the signing secret; the negative control shows the field is set.</summary>
@@ -105,6 +109,11 @@ public class PaymentProviderContractTest
         };
         change.DisclosedSecret.Should().Be("whsec_abc123", "negative control: the secret IS on the record");
         change.ToString().Should().NotContain("whsec_abc123").And.Contain("(redacted)").And.Contain("we_1");
+
+        // Serialized, the secret is ABSENT — persisted, posted or logged JSON carries none.
+        var json = System.Text.Json.JsonSerializer.Serialize(change);
+        json.Should().NotContain("whsec_abc123").And.NotContain(nameof(PaymentEndpointChange.DisclosedSecret))
+            .And.Contain("we_1", "negative control: the rest of the change IS serialized");
     }
 
     [Fact]

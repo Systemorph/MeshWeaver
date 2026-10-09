@@ -1,3 +1,7 @@
+using System.Collections.Immutable;
+using System.Text.Json.Serialization;
+using MeshWeaver.Data;
+
 namespace MeshWeaver.Payments;
 
 /// <summary>
@@ -68,7 +72,7 @@ public sealed record PaymentEndpointRequest
     public required string RequestPath { get; init; }
 
     /// <summary>The events the endpoint must carry — the provider's own required set.</summary>
-    public IReadOnlyList<string> Events { get; init; } = [];
+    public ImmutableArray<string> Events { get; init; } = [];
 
     /// <summary>False (the default) plans and writes nothing; true performs the change.</summary>
     public bool Execute { get; init; }
@@ -103,16 +107,20 @@ public sealed record PaymentEndpointChange
     public string? EndpointId { get; init; }
 
     /// <summary>The endpoints a removal touched (or would touch).</summary>
-    public IReadOnlyList<string> RemovedEndpointIds { get; init; } = [];
+    public ImmutableArray<string> RemovedEndpointIds { get; init; } = [];
 
     /// <summary>The endpoint's events after the run (or as planned).</summary>
-    public IReadOnlyList<string> Events { get; init; } = [];
+    public ImmutableArray<string> Events { get; init; } = [];
 
     /// <summary>The events the run added (or would add).</summary>
-    public IReadOnlyList<string> AddedEvents { get; init; } = [];
+    public ImmutableArray<string> AddedEvents { get; init; } = [];
 
-    /// <summary>Why nothing was written, for <see cref="PaymentEndpointOutcome.Refused"/> and <see cref="PaymentEndpointOutcome.NotSupported"/>.</summary>
-    public string? Refusal { get; init; }
+    /// <summary>
+    /// Why nothing was written, for <see cref="PaymentEndpointOutcome.Refused"/> and
+    /// <see cref="PaymentEndpointOutcome.NotSupported"/> — its English plus, where the platform
+    /// authored it, the catalog key that renders it in the viewer's language.
+    /// </summary>
+    public LocalizableText? Refusal { get; init; }
 
     /// <summary>
     /// The signing secret of a newly created endpoint — set on <see cref="PaymentEndpointOutcome.Created"/>
@@ -121,14 +129,16 @@ public sealed record PaymentEndpointChange
     /// <para>🚨 A CREDENTIAL: whoever holds it can forge a completed checkout. The caller shows it
     /// once to the person who ran the task and writes it NOWHERE — not to a node, an activity, a log
     /// line or an exception message. <see cref="ToString"/> is overridden so a record print cannot
-    /// leak it.</para>
+    /// leak it, and <see cref="JsonIgnoreAttribute"/> keeps it out of every serialized form — a
+    /// change that is persisted, posted or logged as JSON carries no secret.</para>
     /// </summary>
+    [JsonIgnore]
     public string? DisclosedSecret { get; init; }
 
     /// <summary>A print of this change with the secret masked.</summary>
     public override string ToString() =>
         $"PaymentEndpointChange {{ Outcome = {Outcome}, Mode = {Mode}, EndpointId = {EndpointId}, "
         + $"Events = [{string.Join(", ", Events)}], AddedEvents = [{string.Join(", ", AddedEvents)}], "
-        + $"RemovedEndpointIds = [{string.Join(", ", RemovedEndpointIds)}], Refusal = {Refusal}, "
+        + $"RemovedEndpointIds = [{string.Join(", ", RemovedEndpointIds)}], Refusal = {Refusal?.English}, "
         + $"DisclosedSecret = {(DisclosedSecret is null ? "null" : "(redacted)")} }}";
 }

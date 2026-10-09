@@ -1,4 +1,6 @@
 {
+  "payments.endpoint.ensureNotSupported": "{provider} kann den Zustell-Endpunkt dieser Instanz weder anlegen noch erweitern — legen Sie den Endpunkt mit allen erforderlichen Ereignissen beim Anbieter von Hand an.",
+  "payments.endpoint.removeNotSupported": "{provider} kann die Zustell-Endpunkte dieser Instanz nicht entfernen — löschen Sie sie beim Anbieter von Hand.",
   "common.new": "Neu",
   "common.edit": "Bearbeiten",
   "common.delete": "Löschen",

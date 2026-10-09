@@ -1,4 +1,6 @@
 {
+  "payments.endpoint.ensureNotSupported": "{provider} cannot register or extend this instance's delivery endpoint — add the endpoint, with every required event, at the provider by hand.",
+  "payments.endpoint.removeNotSupported": "{provider} cannot remove this instance's delivery endpoints — delete them at the provider by hand.",
   "common.new": "New",
   "common.edit": "Edit",
   "common.delete": "Delete",

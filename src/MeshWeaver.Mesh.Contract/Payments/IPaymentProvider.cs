@@ -195,7 +195,14 @@ public interface IPaymentProvider
     /// <para>The default answers <see cref="PaymentEndpointOutcome.NotSupported"/>.</para>
     /// </summary>
     IObservable<PaymentEndpointChange> EnsureDeliveryEndpoint(PaymentEndpointRequest request) =>
-        System.Reactive.Linq.Observable.Return(NotSupported(DisplayName));
+        System.Reactive.Linq.Observable.Return(new PaymentEndpointChange
+        {
+            Outcome = PaymentEndpointOutcome.NotSupported,
+            Refusal = MeshWeaver.Data.LocalizableText.Keyed(
+                $"{DisplayName} cannot register or extend this instance's delivery endpoint — add the endpoint, "
+                + "with every required event, at the provider by hand.",
+                EnsureNotSupportedKey, ("provider", DisplayName)),
+        });
 
     /// <summary>
     /// Removes the delivery endpoints whose metadata names this instance
@@ -205,11 +212,17 @@ public interface IPaymentProvider
     /// <see cref="PaymentEndpointOutcome.NotSupported"/>.
     /// </summary>
     IObservable<PaymentEndpointChange> RemoveDeliveryEndpoint(PaymentEndpointRequest request) =>
-        System.Reactive.Linq.Observable.Return(NotSupported(DisplayName));
+        System.Reactive.Linq.Observable.Return(new PaymentEndpointChange
+        {
+            Outcome = PaymentEndpointOutcome.NotSupported,
+            Refusal = MeshWeaver.Data.LocalizableText.Keyed(
+                $"{DisplayName} cannot remove this instance's delivery endpoints — delete them at the provider by hand.",
+                RemoveNotSupportedKey, ("provider", DisplayName)),
+        });
 
-    private static PaymentEndpointChange NotSupported(string displayName) => new()
-    {
-        Outcome = PaymentEndpointOutcome.NotSupported,
-        Refusal = $"{displayName} does not manage its own delivery endpoints — register the endpoint at the provider by hand.",
-    };
+    /// <summary>Catalog key of the default <see cref="EnsureDeliveryEndpoint"/> refusal (<c>{provider}</c>).</summary>
+    public const string EnsureNotSupportedKey = "payments.endpoint.ensureNotSupported";
+
+    /// <summary>Catalog key of the default <see cref="RemoveDeliveryEndpoint"/> refusal (<c>{provider}</c>).</summary>
+    public const string RemoveNotSupportedKey = "payments.endpoint.removeNotSupported";
 }
