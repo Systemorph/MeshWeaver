@@ -37,7 +37,7 @@ public static class PackagePlatformFloorGate
     /// The running platform version every catalog floor decision compares against:
     /// <see cref="PlatformBuildInfo.RunningPlatformVersion"/> — unless a TEST registered a
     /// <see cref="RunningPlatformVersionOverride"/> on the mesh (a test process is a local
-    /// <c>-ci.0</c> build, against which no floor is ordered, so without it a hold could never be
+    /// <c>-dev</c> source build, against which no floor is ordered, so without it a hold could never be
     /// exercised end to end). Production registers none.
     /// </summary>
     /// <param name="hub">The calling hub.</param>
@@ -350,7 +350,7 @@ public interface IPackageHoldDispatch
 
 /// <summary>
 /// 🚨 <b>TEST SEAM ONLY</b> — pins the running platform version the catalog's floor decisions read
-/// (<see cref="PackagePlatformFloorGate.RunningVersion"/>). A test process is a local <c>-ci.0</c>
+/// (<see cref="PackagePlatformFloorGate.RunningVersion"/>). A test process is a local <c>-dev</c>
 /// build, against which no floor is ordered, so an end-to-end hold cannot be exercised without it.
 /// Production never registers one: the running version is <see cref="PlatformBuildInfo.RunningPlatformVersion"/>.
 /// </summary>
