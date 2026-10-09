@@ -2910,6 +2910,54 @@ else
 fi
 rm -rf "$_mg_dir"
 
+# ── hosting-migrate --current --fresh: the database RESET's form (MeshWeaver.Plugins#2781) ──────────
+# After a reset the instance's database is EMPTY while this tag's Job already SUCCEEDED against the
+# one the reset kept: the success must not be reported for the empty database. --fresh deletes it
+# and runs it again; --current takes the tag the portal Deployment RUNS, never a typed one.
+_mg_cur_run() { env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
+  HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 "$@" \
+  hosting-migrate --namespace fabrikam --release fabrikam --current --fresh 2>&1; }
+_mg_new; echo "cr.example.test/memex-portal-ai:3.0.0-ci.9101" > "$_mg_dir/portal-image"; echo succeeded > "$_mg_dir/job-state"; echo succeeded > "$_mg_dir/outcome"
+_mg_out="$(_mg_cur_run env)"; _mg_rc=$?
+_mg_del="$(grep -n "delete job ${_mg_job}" "$_mg_log" | head -1 | cut -d: -f1)"
+_mg_create="$(grep -n ' create -f -' "$_mg_log" | head -1 | cut -d: -f1)"
+if [ "$_mg_rc" -eq 0 ] && [ -n "$_mg_del" ] && [ -n "$_mg_create" ] && [ "$_mg_del" -lt "$_mg_create" ] \
+   && [ "$(jq -r '.spec.template.spec.containers[0].image' "$_mg_dir/created.json")" = "$_mg_img" ] \
+   && printf '%s' "$_mg_out" | grep -q '::hosting:: migration=completed'; then
+  ok "--current --fresh: a Job that SUCCEEDED against the replaced database is deleted and run again at the RUNNING tag"
+else
+  bad "--current --fresh re-runs the succeeded Job at the running tag" "rc=${_mg_rc} out: ${_mg_out} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+# the negative control: the SAME state without --fresh is reported, never re-run (the Roll's rule)
+_mg_new; echo succeeded > "$_mg_dir/job-state"
+_mg_out="$(env PATH="$MG_STUBS:$PATH" HOSTING_MIGRATE_FIXTURE="$_mg_dir" HOSTING_MIGRATE_STUB_LOG="$_mg_log" \
+  HOSTING_MIGRATE_INTERVAL=0 HOSTING_MIGRATE_GRACE=0 hosting-migrate --namespace fabrikam --release fabrikam --tag 3.0.0-ci.9101 2>&1)"; _mg_rc=$?
+if [ "$_mg_rc" -eq 0 ] && ! grep -q 'delete job' "$_mg_log" && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "…the control: without --fresh the same succeeded Job is reported, not deleted or re-run"
+else
+  bad "without --fresh a succeeded Job is not re-run" "rc=${_mg_rc} log: $(cat "$_mg_log")"
+fi
+rm -rf "$_mg_dir"
+_mg_new; echo forbidden > "$_mg_dir/portal-image"
+_mg_out="$(_mg_cur_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'REFUSED, not absent' && ! grep -q '^helm ' "$_mg_log"; then
+  ok "--current: a Forbidden on the portal image read is REFUSED, and nothing else runs"
+else
+  bad "--current: a Forbidden image read is refused" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+_mg_new; echo "cr.example.test/memex-portal-ai" > "$_mg_dir/portal-image"
+_mg_out="$(_mg_cur_run env)"; _mg_rc=$?
+if [ "$_mg_rc" -ne 0 ] && printf '%s' "$_mg_out" | grep -q 'names no tag' && ! grep -q ' create -f -' "$_mg_log"; then
+  ok "--current: a portal image with no tag is a refusal — no tag is guessed"
+else
+  bad "--current: an untagged image refuses" "rc=${_mg_rc} out: ${_mg_out}"
+fi
+rm -rf "$_mg_dir"
+refuses_hard "hosting-migrate --current refuses a typed --tag beside it" "takes neither --image nor --tag" \
+  env HOSTING_DRY_RUN=true hosting-migrate --namespace fabrikam --current --tag 3.0.0-ci.9101
+
 # ── run.sh's migrate-first interlock (policy roll-migrates-first) ────────────────────────────────
 # 🚨 memex, 2026-09-24/25: the control instance's Hosting generation predated the migrate-first
 # Roll plan (Plugins #2219, held behind a seal), so it planned 2-step `set image` + hand-off rolls
@@ -3306,6 +3354,178 @@ _dr_out="$(_dr_run)"; _dr_rc=$?
   && ok "a first install reads no live values" \
   || bad "a first install reads no live values" "calls: $(cat "$_dr_log")"
 rm -rf "$_dr_dir"
+
+# ── hosting-db-reset: an EMPTY database without destroying the one the instance had ────────────────
+# MeshWeaver.Plugins#2781, policy `reset-database-keeps-a-copy`. `keep` renames the live database to
+# `<db>_kept_<yyyymmddhhmm>`, stamps it, and creates an empty `<db>` — it never drops; a failure
+# after the rename puts the old name back. `purge` drops ONE kept copy, only one this command
+# stamped, only past its retention. Pinned: the order (rename → comment → create → read back), the
+# password by name and never on an argv, both refusals that protect data (live sessions, a clash),
+# the rollback, and every purge refusal — plus the control that a due, stamped copy IS dropped.
+echo
+echo "── hosting-db-reset: rename-and-keep, never drop; purge only past the retention ──"
+DBR_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/db-reset" && pwd)"
+DBR_ARGS=(--database acmedb --server pg.postgres.database.azure.com --user acmeowner --vault Systemorph --password-secret memex-postgres-password)
+_dbr_new() { _dbr_state="$(mktemp -d)"; printf 'postgres\nacmedb\n' > "$_dbr_state/dbs"; }
+_dbr() { _dbr_out="$(env -u PGPASSWORD PATH="$DBR_STUBS:$PATH" HOSTING_DBR_STATE="$_dbr_state" hosting-db-reset "$@" 2>&1)"; _dbr_rc=$?
+  _dbr_log="$(cat "$_dbr_state/pg.log" 2>/dev/null || true)"; _dbr_az="$(cat "$_dbr_state/az.log" 2>/dev/null || true)"; }
+_dbr_line() { printf '%s\n' "$_dbr_log" | grep -n -- "$1" | head -1 | cut -d: -f1; }
+
+# keep, the happy path
+_dbr_new; _dbr keep "${DBR_ARGS[@]}" --request Ops/Actions/reset-acme-1
+if [ "$_dbr_rc" -eq 0 ] && grep -qx acmedb_kept_202610091200 "$_dbr_state/dbs" && grep -qx acmedb "$_dbr_state/dbs" \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_database=acmedb_kept_202610091200' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_until=2026-10-23T12:00Z' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: reset=completed'; then
+  ok "keep renames acmedb to acmedb_kept_<stamp>, creates an empty acmedb and reports both"
+else
+  bad "keep renames, creates and reports" "rc=${_dbr_rc} out: ${_dbr_out} dbs: $(cat "$_dbr_state/dbs")"
+fi
+_r="$(_dbr_line 'RENAME TO "acmedb_kept_202610091200"')"; _c="$(_dbr_line 'COMMENT ON DATABASE')"; _n="$(_dbr_line 'CREATE DATABASE "acmedb"')"
+[ -n "$_r" ] && [ -n "$_c" ] && [ -n "$_n" ] && [ "$_r" -lt "$_c" ] && [ "$_c" -lt "$_n" ] \
+  && ok "…in order: rename, stamp the kept copy, then create the empty database" \
+  || bad "rename → comment → create" "log: ${_dbr_log}"
+case "$(cat "$_dbr_state/comment-acmedb_kept_202610091200" 2>/dev/null)" in
+  "meshweaver-kept-copy of acmedb; keptAt=2026-10-09T12:00Z; keptUntil=2026-10-23T12:00Z; request=Ops/Actions/reset-acme-1")
+    ok "…the kept copy carries the marker, when it was kept, until when, and which request kept it" ;;
+  *) bad "the kept copy is stamped" "comment: $(cat "$_dbr_state/comment-acmedb_kept_202610091200" 2>/dev/null)" ;;
+esac
+case "$_dbr_log" in *"WITH OWNER \"acmeowner\" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'en_US.utf8' LC_CTYPE 'en_US.utf8'"*)
+  ok "…the empty database is created with the old one's owner, encoding and collation" ;;
+  *) bad "created with the old shape" "log: ${_dbr_log}" ;; esac
+case "$_dbr_log" in *DROP*) bad "keep never drops anything" "log: ${_dbr_log}" ;; *) ok "keep never drops anything" ;; esac
+case "$_dbr_az" in *"keyvault secret show --vault-name Systemorph --name memex-postgres-password --query value"*) ok "…the password is read by NAME from the vault" ;; *) bad "password read by name" "az: ${_dbr_az}" ;; esac
+case "$_dbr_out$_dbr_log" in *NEVER-PRINTED*) bad "the password is never printed nor on an argv" "seen: ${_dbr_out}" ;; *) ok "the password is never printed nor on an argv" ;; esac
+case "$_dbr_log" in *"PGPASSWORD=unset"*) bad "every psql got the password through the environment" "log: ${_dbr_log}" ;; *) ok "every psql got the password through the environment" ;; esac
+rm -rf "$_dbr_state"
+
+# show: reads the newest stamped kept copy back from the server — the plan's last step
+_dbr_new; _dbr keep "${DBR_ARGS[@]}" --request Ops/Actions/reset-acme-1
+echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"
+_dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -eq 0 ] && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_database=acmedb_kept_202610091200' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_until=2026-10-23T12:00Z' \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: kept_verified=true'; then
+  ok "show reads the NEWEST stamped kept copy and its retention back from the server"
+else
+  bad "show reports the newest kept copy" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+_dbr_new; _dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'did NOT keep the previous database' && ! printf '%s' "$_dbr_out" | grep -q 'kept_verified'; then
+  ok "show with no kept copy is a failed step naming that nothing was kept"
+else
+  bad "show refuses when no copy exists" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+_dbr_new; echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"; _dbr show "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q "carries no 'meshweaver-kept-copy' comment"; then
+  ok "show refuses a copy-shaped database without the kept-copy stamp"
+else
+  bad "show refuses an unstamped copy" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# live sessions → refused, nothing changed
+_dbr_new; echo 2 > "$_dbr_state/sessions"; _dbr keep "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q '2 session(s) are still connected' \
+   && ! printf '%s' "$_dbr_log" | grep -q 'RENAME\|CREATE DATABASE'; then
+  ok "keep refuses while sessions are connected, before any rename"
+else
+  bad "keep refuses on live sessions" "rc=${_dbr_rc} out: ${_dbr_out} log: ${_dbr_log}"
+fi
+rm -rf "$_dbr_state"
+
+# no such database → refused (a reset never creates a database it did not first keep)
+_dbr_new; printf 'postgres\n' > "$_dbr_state/dbs"; _dbr keep "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'does not exist' && ! printf '%s' "$_dbr_log" | grep -q 'CREATE DATABASE'; then
+  ok "keep refuses when the database does not exist — it never creates one it did not keep a copy of"
+else
+  bad "keep refuses an absent database" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# a kept name that already exists (same minute) → refused, nothing changed
+_dbr_new; echo acmedb_kept_202610091200 >> "$_dbr_state/dbs"; _dbr keep "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'already exists' && ! printf '%s' "$_dbr_log" | grep -q 'RENAME'; then
+  ok "keep refuses when the kept name already exists, before any rename"
+else
+  bad "keep refuses a clash" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# CREATE fails after the rename → the old name is put back, and the step fails
+_dbr_new; echo 'CREATE DATABASE' > "$_dbr_state/fail-on"; _dbr keep "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && grep -qx acmedb "$_dbr_state/dbs" && ! grep -qx acmedb_kept_202610091200 "$_dbr_state/dbs" \
+   && printf '%s' "$_dbr_out" | grep -q 'renamed back to acmedb' && ! printf '%s' "$_dbr_out" | grep -q 'reset=completed'; then
+  ok "a failed CREATE after the rename puts the old name back and fails the step — the instance keeps its database"
+else
+  bad "a failed create rolls the rename back" "rc=${_dbr_rc} out: ${_dbr_out} dbs: $(cat "$_dbr_state/dbs")"
+fi
+rm -rf "$_dbr_state"
+
+# a new database that is not empty → refused (never report an empty database that is not)
+_dbr_new; echo 3 > "$_dbr_state/tables"; _dbr keep "${DBR_ARGS[@]}"
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'holds 3 table(s)' && ! printf '%s' "$_dbr_out" | grep -q 'reset=completed'; then
+  ok "a re-created database that is not empty is a failed step, never reset=completed"
+else
+  bad "a non-empty new database fails" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# purge: the control — a stamped copy past its retention IS dropped
+_dbr_new; echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"
+echo "meshweaver-kept-copy of acmedb; keptAt=2026-09-01T12:00Z; keptUntil=2026-09-15T12:00Z; request=x" > "$_dbr_state/comment-acmedb_kept_202609011200"
+_dbr purge "${DBR_ARGS[@]}" --kept acmedb_kept_202609011200
+if [ "$_dbr_rc" -eq 0 ] && ! grep -qx acmedb_kept_202609011200 "$_dbr_state/dbs" && grep -qx acmedb "$_dbr_state/dbs" \
+   && printf '%s' "$_dbr_out" | grep -q '::hosting:: purged=acmedb_kept_202609011200'; then
+  ok "purge drops a stamped kept copy past its retention — and nothing else"
+else
+  bad "purge drops a due kept copy" "rc=${_dbr_rc} out: ${_dbr_out} dbs: $(cat "$_dbr_state/dbs")"
+fi
+rm -rf "$_dbr_state"
+
+# purge: inside the retention → refused, naming when
+_dbr_new; echo acmedb_kept_202610091200 >> "$_dbr_state/dbs"; echo "2026-10-23T12:00Z" > "$_dbr_state/due"
+echo "meshweaver-kept-copy of acmedb; keptAt=2026-10-09T12:00Z" > "$_dbr_state/comment-acmedb_kept_202610091200"
+_dbr purge "${DBR_ARGS[@]}" --kept acmedb_kept_202610091200
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q 'may be purged from 2026-10-23T12:00Z' && grep -qx acmedb_kept_202610091200 "$_dbr_state/dbs"; then
+  ok "purge refuses a kept copy inside its retention, naming when it may go"
+else
+  bad "purge refuses inside the retention" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# purge: no marker → refused (never drop a database it cannot prove it kept)
+_dbr_new; echo acmedb_kept_202609011200 >> "$_dbr_state/dbs"
+_dbr purge "${DBR_ARGS[@]}" --kept acmedb_kept_202609011200
+if [ "$_dbr_rc" -ne 0 ] && printf '%s' "$_dbr_out" | grep -q "carries no 'meshweaver-kept-copy' comment" && grep -qx acmedb_kept_202609011200 "$_dbr_state/dbs"; then
+  ok "purge refuses a database without the kept-copy marker"
+else
+  bad "purge refuses an unmarked database" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
+
+# purge: the LIVE database, or another database's copy, is refused before anything is read
+refuses_hard "purge refuses the live database itself" "is not a kept copy of acmedb" \
+  env HOSTING_DRY_RUN=true hosting-db-reset purge "${DBR_ARGS[@]}" --kept acmedb
+refuses_hard "purge refuses another database's kept copy" "is not a kept copy of acmedb" \
+  env HOSTING_DRY_RUN=true hosting-db-reset purge "${DBR_ARGS[@]}" --kept otherdb_kept_202609011200
+refuses_hard "hosting-db-reset refuses a database name it would have to quote" "not a plain lower-case Postgres name" \
+  env HOSTING_DRY_RUN=true hosting-db-reset keep --database 'acme";drop' --server pg.test --user u
+refuses_hard "hosting-db-reset needs a verb" "missing verb" hosting-db-reset
+refuses_hard "hosting-db-reset refuses an unknown verb" "unknown verb" hosting-db-reset drop --database acmedb --server pg.test --user u
+refuses_hard "hosting-db-reset refuses a request path with a quote" "not a plain node path" \
+  env HOSTING_DRY_RUN=true hosting-db-reset keep --database acmedb --server pg.test --user u --request "x'y"
+
+# dry run: no vault read, no statement, says what it would do
+_dbr_new; _dbr_out="$(env -u PGPASSWORD PATH="$DBR_STUBS:$PATH" HOSTING_DBR_STATE="$_dbr_state" HOSTING_DRY_RUN=true hosting-db-reset keep "${DBR_ARGS[@]}" 2>&1)"; _dbr_rc=$?
+if [ "$_dbr_rc" -eq 0 ] && [ ! -s "$_dbr_state/pg.log" ] && [ ! -s "$_dbr_state/az.log" ] && printf '%s' "$_dbr_out" | grep -q 'kept_database=dry-run'; then
+  ok "a dry-run keep reads no secret and issues no statement"
+else
+  bad "a dry run touches nothing" "rc=${_dbr_rc} out: ${_dbr_out}"
+fi
+rm -rf "$_dbr_state"
 
 echo
 echo "─────────────────────────────────────────────────────────────────"
