@@ -127,30 +127,29 @@ def derive(scans, roster) -> tuple[list[dict[str, str]], list[tuple[str, str, st
                 "itself what it would roll to and what it runs; an installation that cannot be "
                 "reached is left UNVERIFIED, which is the state this lane exists to end.")
             continue
-        # 🚨 THE ROSTER NAME IS A CREDENTIAL KEY, AND UPSTREAM IDENTITY IS NOT (#3438, 2026-09-15).
+        # 🚨 THE ROSTER NAME IS THE LANE'S KEY, AND UPSTREAM IDENTITY IS NOT (#3438, 2026-09-15).
         # `build_instances` qualifies an installation by `gh_repo:id` and DELIBERATELY permits two
         # deployments repositories to each declare a `memex` — both are correct there, because it
-        # only ever asks each one what it is running. Here they are not: `COMBO_VERIFY_KEYS` and
-        # `COMBO_VERIFY_TOKENS` are keyed by NAME, so two installations sharing one would be handed
-        # the SAME `mwi_` key and admin token, and the second's verdict would land on the FIRST's
-        # `Admin/UpdatePolicy`. That is the duplicate-host harm arriving through the other door, and
-        # it became reachable the moment the fleet gained a second deployments repository — so it is
-        # refused HERE rather than assumed away upstream. Qualifying the name instead would be worse:
-        # it would silently ask for credentials under a key nobody has provisioned.
+        # only ever asks each one what it is running. Here they are not: each verify job, its
+        # work-root artifact and its step summary are keyed by NAME (and, until #3848 moved the lane
+        # onto the run's own OIDC identity, so were the credential maps), so two installations
+        # sharing one produce verdicts nobody can tell apart. That became reachable the moment the
+        # fleet gained a second deployments repository — so it is refused HERE rather than assumed
+        # away upstream.
         if instance.id in names:
             blockers.append(
                 f"two live installations are both named `{instance.id}` ({names[instance.id]} and "
                 f"{instance.source}). Identity is qualified by the declaring repository upstream, "
-                "but this lane's credential maps (`COMBO_VERIFY_KEYS`, `COMBO_VERIFY_TOKENS`) are "
-                "keyed by NAME: both would be handed the same instance key and admin token, and "
-                "one's verdict would land on the other's `Admin/UpdatePolicy`. TWO ways out exist "
+                "but this lane keys each verify job, its work-root artifact and its step summary by "
+                "NAME, so the two verdicts would be indistinguishable in the run that produced "
+                "them. TWO ways out exist "
                 "TODAY, and they do not carry the same cost. (1) Rename one installation — its "
                 "`Hosting__Deployment` is its inventory identity, so this moves whichever estate "
                 "owns the one that changes; this is the answer taken the first time it happened "
                 "(#3848: a client's `memex` became `globex-test`, see "
-                "Doc/Architecture/ComboGateWiring). (2) Key the maps by the qualified `repo:id` and say so "
-                "here — this removes the collision and then demands a credential for every "
-                "installation named, including any in an estate this fleet holds none for. "
+                "Doc/Architecture/ComboGateWiring). (2) Key the roster by the qualified `repo:id` and "
+                "say so here — this removes the collision and then demands a build-principal grant "
+                "on every installation named, including any in an estate this fleet does not run. "
                 "🚨 A THIRD ANSWER IS THE RIGHT ONE IN PRINCIPLE AND IS NOT IMPLEMENTED: scoping "
                 "the DENOMINATOR, so that an installation which can never receive this candidate "
                 "is not in it — one whose overlay pins a registry declared `out-of-estate`, since "
