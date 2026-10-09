@@ -1421,10 +1421,14 @@ jobs:
           # moves — and that number gets published.
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           # Refuse rather than invent: an empty version becomes `:` or `latest` somewhere downstream,
@@ -1723,10 +1727,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           # Refuse rather than invent — same as the portal leg. An empty version becomes `:` or
@@ -1825,10 +1833,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           if [ -z "$VERSION" ]; then
@@ -2282,10 +2294,14 @@ jobs:
           set -euo pipefail
           VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
             -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
-          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. Anything
-          # else (the `-dev` shape of an un-numbered build, an empty string) must never become a tag.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ ]]; then
-            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
+          # Policy `platform-semver-versioning`: a main CD build IS <major>.<minor>.<this run>. 🚨 This
+          # workflow file is main's, but the tree it builds is the gate's TARGET, which can be an older
+          # commit (the newest one CI vouched for) whose Directory.Build.props predates the minter and
+          # composes the retired <line>-ci.<this run> from GITHUB_RUN_NUMBER. That is still this run's
+          # build and is accepted; anything else (the `-dev` shape of an un-numbered build, another
+          # run's number, an empty string) must never become a tag.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or, for a target that predates the minter, <line>-ci.$GITHUB_RUN_NUMBER) — Directory.Build.props did not mint this run's build version (policy platform-semver-versioning). Refusing to publish it."
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
