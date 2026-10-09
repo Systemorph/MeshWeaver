@@ -30,7 +30,7 @@ public class EntraStepUpTest
     private static readonly string Issuer = $"https://login.microsoftonline.com/{Tenant}/v2.0";
     private static readonly DateTimeOffset Now = new(2026, 10, 9, 12, 0, 0, TimeSpan.Zero);
 
-    private static StepUpOptions Options(bool requireAmr = false) => new()
+    private static StepUpOptions Options(bool requireAmr = true) => new()
     {
         Enabled = true,
         EntraAuthenticationContext = "c1",
@@ -101,12 +101,38 @@ public class EntraStepUpTest
     }
 
     [Fact]
-    public void AnAbsentAmr_PassesOnAcrs_UnlessAmrIsRequired()
+    public void AnAbsentAmr_IsRefusedByDefault_AndPassesOnlyWhenTheRecordWaivesIt()
     {
-        Assert.True(Check(c => c.Remove("amr")).Ok);
-        var strict = Check(c => c.Remove("amr"), Expect(Options(requireAmr: true)));
-        Assert.False(strict.Ok);
-        Assert.Equal("amr", strict.Reason);
+        var byDefault = Check(c => c.Remove("amr"));
+        Assert.False(byDefault.Ok);
+        Assert.Equal("amr", byDefault.Reason);
+        Assert.True(new StepUpOptions().EntraRequireAmr);   // the shipped default, not just this test's
+        Assert.True(Check(c => c.Remove("amr"), Expect(Options(requireAmr: false))).Ok);
+    }
+
+    [Theory]
+    [InlineData("rsa", "ngcmfa", "mfa")]   // Authenticator push — MFA, but phishable
+    [InlineData("pwd")]
+    [InlineData("x509")]                    // single-factor certificate
+    [InlineData("swk", "rsa", "mfa")]       // phone sign-in
+    public void MfaThatIsNotPhishingResistant_IsRefused(params string[] amr)
+    {
+        var refused = Check(c => c["amr"] = amr);
+        Assert.False(refused.Ok);
+        Assert.Equal("amr", refused.Reason);
+        Assert.True(Check(c => c["amr"] = new[] { "hwk", "mfa", "ngcmfa" }).Ok);   // Windows Hello for Business passes
+    }
+
+    [Fact]
+    public void TheSessionProvider_ComesFromTheTicket_NeverFromTheRoute()
+    {
+        var googleSession = new[] { new Claim(StepUpClaims.Idp, "Google") };
+        // A signed-in Google user opening /auth/callback/Microsoft: no ticket item, the session says Google.
+        Assert.Equal("Google", StepUpClaims.ResolveProvider(null, googleSession));
+        // A real sign-in carries the challenged scheme on its ticket.
+        Assert.Equal("Microsoft", StepUpClaims.ResolveProvider("Microsoft", []));
+        // An Entra guest's own `idp` claim (an STS URI) is not ours and is never read as the provider.
+        Assert.Null(StepUpClaims.ResolveProvider(null, [new Claim("idp", "https://sts.windows.net/x/")]));
     }
 
     [Fact]
@@ -205,7 +231,7 @@ public class EntraStepUpTest
             [StepUpOptions.EnabledKey] = "true",
             [StepUpOptions.EntraContextKey] = "c1",
         }).Build(),
-        new HttpClient(handler), IoPool.Unbounded, NullLogger.Instance);
+        new HttpClient(handler), IoPool.Unbounded, new EntraMetadataCache(new HttpClient(handler)), NullLogger.Instance);
 
     private static Dictionary<string, object> LiveClaims()
     {

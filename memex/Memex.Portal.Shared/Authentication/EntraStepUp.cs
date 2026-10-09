@@ -5,7 +5,6 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.JsonWebTokens;
-using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
@@ -28,8 +27,9 @@ namespace Memex.Portal.Shared.Authentication;
 /// <param name="configuration">Host configuration (read live).</param>
 /// <param name="http">An HTTP client.</param>
 /// <param name="pool">The HTTP I/O pool.</param>
+/// <param name="metadata">The mesh's shared discovery/JWKS managers.</param>
 /// <param name="logger">Logger.</param>
-internal sealed class EntraStepUp(IConfiguration configuration, HttpClient http, IIoPool pool, ILogger logger)
+internal sealed class EntraStepUp(IConfiguration configuration, HttpClient http, IIoPool pool, EntraMetadataCache metadata, ILogger logger)
 {
     private static readonly ImmutableHashSet<string> MultiTenantAliases =
         ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "common", "organizations", "consumers");
@@ -113,11 +113,8 @@ internal sealed class EntraStepUp(IConfiguration configuration, HttpClient http,
             if (string.IsNullOrEmpty(idToken))
                 return EntraStepUpCheck.Fail("exchange");
 
-            var metadata = new ConfigurationManager<OpenIdConnectConfiguration>(
-                $"{MicrosoftTenant.Authority(Tenant, "v2.0")}/.well-known/openid-configuration",
-                new OpenIdConnectConfigurationRetriever(),
-                new HttpDocumentRetriever(http) { RequireHttps = true });
-            var config = await metadata.GetConfigurationAsync(ct).ConfigureAwait(false);
+            var config = await metadata.For($"{MicrosoftTenant.Authority(Tenant, "v2.0")}/.well-known/openid-configuration")
+                .GetConfigurationAsync(ct).ConfigureAwait(false);
 
             var validated = await new JsonWebTokenHandler().ValidateTokenAsync(idToken, new TokenValidationParameters
             {

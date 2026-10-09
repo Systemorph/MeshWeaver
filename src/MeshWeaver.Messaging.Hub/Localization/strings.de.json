@@ -2202,6 +2202,7 @@
   "stepUp.reason.amr": "die Anmeldung verwendete keine phishing-resistente Methode wie einen Passkey.",
   "stepUp.reason.context": "es ist kein Authentifizierungskontext konfiguriert.",
   "stepUp.reason.mint": "die Bestätigung konnte nicht gespeichert werden.",
+  "stepUp.reason.unavailable": "der Step-up-Speicher hat nicht geantwortet — versuchen Sie es gleich noch einmal.",
   "stepUp.outcome.NotRequired": "Auf dieser Instanz ist kein Step-up erforderlich.",
   "stepUp.outcome.Accepted": "Step-up bestätigt.",
   "stepUp.outcome.Missing": "Wartet auf Ihre Step-up-Bestätigung.",

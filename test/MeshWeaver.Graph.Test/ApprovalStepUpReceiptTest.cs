@@ -191,7 +191,8 @@ public class ApprovalStepUpReceiptTest(ITestOutputHelper output) : MonolithMeshT
 /// <summary>The pure halves: the seal, the stamp, the options.</summary>
 public class ApprovalStepUpPureTest
 {
-    private static readonly byte[] Key = StepUpSeal.DeriveKey(Enumerable.Repeat((byte)3, 32).ToArray());
+    // A fresh array per use — a static byte[] would be process-wide mutable state.
+    private static byte[] Key => StepUpSeal.DeriveKey(Enumerable.Repeat((byte)3, 32).ToArray());
 
     private static StepUpReceipt Receipt() => new()
     {
@@ -217,6 +218,18 @@ public class ApprovalStepUpPureTest
         Assert.False(StepUpSeal.Verify(sealedReceipt with { ExpiresAt = sealedReceipt.ExpiresAt.AddHours(1) }, Key));
         Assert.False(StepUpSeal.Verify(sealedReceipt with { Targets = [new StepUpTarget { ActionPath = "A/b", Binding = "h2" }] }, Key));
         Assert.False(StepUpSeal.Verify(sealedReceipt with { Seal = "not-base64!" }, Key));
+    }
+
+    [Fact]
+    public void TheMaterialIsCanonical_NoTwoReceiptsShareBytes()
+    {
+        var one = Receipt() with { Targets = [new StepUpTarget { ActionPath = "a", Binding = "b\nc\u001fd" }] };
+        var two = one with { Targets = [new StepUpTarget { ActionPath = "a", Binding = "b" }, new StepUpTarget { ActionPath = "c", Binding = "d" }] };
+        Assert.NotEqual(StepUpSeal.Material(one), StepUpSeal.Material(two));
+        Assert.NotEqual(StepUpSeal.Material(one with { Evidence = null }), StepUpSeal.Material(one with { Evidence = "" }));
+        Assert.NotEqual(StepUpSeal.Material(one), StepUpSeal.Material(one with { ExpiresAt = one.ExpiresAt.AddTicks(1) }));
+        // Negative control: the same receipt gives the same bytes.
+        Assert.Equal(StepUpSeal.Material(one), StepUpSeal.Material(one with { }));
     }
 
     public sealed record Approvable(string Name, ImmutableDictionary<string, string>? StepUpReceipts = null);

@@ -2202,6 +2202,7 @@
   "stepUp.reason.amr": "the sign-in did not use a phishing-resistant method such as a passkey.",
   "stepUp.reason.context": "no authentication context is configured.",
   "stepUp.reason.mint": "the confirmation could not be recorded.",
+  "stepUp.reason.unavailable": "the step-up store did not answer — try again in a moment.",
   "stepUp.outcome.NotRequired": "No step-up is required on this instance.",
   "stepUp.outcome.Accepted": "Step-up confirmed.",
   "stepUp.outcome.Missing": "Waiting for your step-up confirmation.",

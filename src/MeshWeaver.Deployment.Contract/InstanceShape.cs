@@ -698,7 +698,7 @@ public sealed record StepUpSpec
     [Description("Entra step-up tenant id — blank means the sign-in tenant")]
     public string? EntraTenantId { get; init; }
 
-    /// <summary>Refuse a step-up token without an <c>amr</c> claim.</summary>
+    /// <summary>Refuse a step-up token without an <c>amr</c> claim (portal default: true — <c>false</c> accepts <c>acrs</c> alone).</summary>
     [Description("Require an amr claim")]
     public bool? EntraRequireAmr { get; init; }
 

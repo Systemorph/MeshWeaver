@@ -562,6 +562,9 @@ public static class MemexConfiguration
                 // hosts call this method on opposite sides of their portal configuration.
                 services.TryAddSingleton(_ => Setup.InstanceSetupStatusAccessor.For(builder));
                 services.TryAddSingleton<Setup.SetupAccessToken>();
+                // The approval step-up's Entra discovery/JWKS managers — one per tenant for the
+                // life of the mesh (Doc/Architecture/ApprovalStepUp).
+                services.TryAddSingleton(_ => new Authentication.EntraMetadataCache());
                 return services;
             });
 

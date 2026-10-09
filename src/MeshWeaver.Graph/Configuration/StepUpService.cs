@@ -26,7 +26,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <param name="configuration">The host configuration (read live).</param>
 /// <param name="masterKeys">The instance master key — keys the seal.</param>
 /// <param name="logger">Logger.</param>
-public sealed class StepUpService(
+internal sealed class StepUpService(
     IMessageHub hub,
     IConfiguration configuration,
     IMasterKeyProvider masterKeys,
@@ -41,7 +41,17 @@ public sealed class StepUpService(
     /// <summary>The clock; a test pins it to drive expiry deterministically.</summary>
     internal Func<DateTimeOffset> Now { get; init; } = () => DateTimeOffset.UtcNow;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Mints, seals and stores a receipt for <paramref name="userId"/> covering <paramref name="targets"/>.
+    /// Cold. Faults when the instance has no master key (the seal cannot be keyed). INTERNAL by design
+    /// — only the platform's step-up endpoints may issue (see <see cref="IStepUpService"/>).
+    /// </summary>
+    /// <param name="userId">The approver's mesh id.</param>
+    /// <param name="method">A <see cref="StepUpMethod"/> value.</param>
+    /// <param name="targets">The actions covered.</param>
+    /// <param name="authenticatedAt">When the user authenticated.</param>
+    /// <param name="evidence">What was verified — never a secret.</param>
+    /// <returns>The stored receipt.</returns>
     public IObservable<StepUpReceipt> Mint(string userId, string method, IReadOnlyList<StepUpTarget> targets,
         DateTimeOffset authenticatedAt, string? evidence) =>
         Observable.Defer(() =>

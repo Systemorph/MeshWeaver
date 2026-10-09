@@ -66,7 +66,13 @@ One shape for every method and every consumer.
 
 **Where it lives:** `Auth/_StepUp/{id}`, written as System by the step-up endpoint only. The node
 type's access rule admits System alone for every operation; the seal makes even a write that
-bypassed it worthless.
+bypassed it worthless. The seal's material is canonical — every field length-prefixed, instants as
+UTC ticks, the targets counted — so no two receipts share bytes.
+
+**Only the platform mints.** The public `IStepUpService` is check-and-consume only; minting lives on
+the internal `StepUpService`, visible to the portal host that carries the step-up endpoints and to
+nothing compiled in the mesh — otherwise any code able to resolve it could stamp itself a valid
+receipt and skip the authentication it stands for.
 
 **Single use:** consuming target *T* of receipt *R* CREATES `Auth/_StepUpUse/{R}-{key(T)}` as
 System. Creation is atomic at the owning hub, so a second consumer's create fails — a replay is
@@ -113,8 +119,8 @@ an approval some other gate parks.
 | `Authentication:StepUp:Enabled` | `Enabled` | `false` | Every approval requires a receipt. Off ⇒ every consumer answers `NotRequired` |
 | `Authentication:StepUp:Entra:AuthenticationContext` | `EntraAuthenticationContext` | — | The Conditional Access authentication context id (`c1`…`c99`) requested for Microsoft accounts. Enabled without it ⇒ Microsoft accounts are refused with *"step-up is not configured"*, never waved through |
 | `Authentication:StepUp:Entra:TenantId` | `EntraTenantId` | `Authentication:Microsoft:TenantId` | The tenant whose `tid` the step-up token must carry. Required when the sign-in tenant is `common`/`organizations` |
-| `Authentication:StepUp:Entra:RequireAmr` | `EntraRequireAmr` | `false` | Also require an `amr` claim naming a phishing-resistant method. An `amr` that IS present must always name one |
-| `Authentication:StepUp:Entra:PhishingResistantAmr` | `EntraPhishingResistantAmr` | `fido,hwk,ngcmfa,x509` | The `amr` values that count as phishing-resistant (comma-separated) |
+| `Authentication:StepUp:Entra:RequireAmr` | `EntraRequireAmr` | `true` | Require an `amr` claim naming a phishing-resistant method. `false` accepts `acrs` alone — only the Conditional Access policy behind the context then vouches for the strength |
+| `Authentication:StepUp:Entra:PhishingResistantAmr` | `EntraPhishingResistantAmr` | `fido,hwk` | The `amr` values that count as phishing-resistant (comma-separated). Not `ngcmfa` (Entra also emits it for an Authenticator push) and not `x509` (single-factor certificate) |
 | `Authentication:StepUp:MaxAuthAgeSeconds` | `MaxAuthAgeSeconds` | `120` | How old `auth_time` may be when the token arrives |
 | `Authentication:StepUp:ReceiptLifetimeSeconds` | `ReceiptLifetimeSeconds` | `300` | How long a receipt stays consumable |
 | `Authentication:StepUp:AllowTotpFallback` | `AllowTotpFallback` | `true` | Whether the TOTP rung exists at all |
@@ -144,15 +150,18 @@ the portal changes behaviour until the last step.
    `Authentication:Microsoft:ClientId`):
    - *Authentication* → *Web* → *Redirect URIs* → add `https://<portal host>/auth/step-up/callback`
      (next to the existing `/signin-microsoft`).
-   - *Token configuration* → *Add optional claim* → **ID** → tick `acrs` (and `auth_time` if
-     listed). Optional, for `RequireAmr`: add `amr` the same way where offered.
+   - *Token configuration* → *Add optional claim* → **ID** → tick **`acrs`**, **`auth_time`** and
+     **`amr`**. All three are v2.0 *optional* ID-token claims: without `auth_time` every step-up
+     fails `auth_time`, and without `amr` it fails `amr` (the default `RequireAmr = true`).
 5. **Declare it on the deployment record** (control instance, `Deployments/<name>`):
    `SignIn.StepUp.EntraAuthenticationContext = "c1"`, then `SignIn.StepUp.Enabled = true`, and roll.
 
 🚨 Without step 3, Entra issues the `acrs` claim for an *unprotected* context to anyone who signs
 in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS added to claims"*. The
-`acrs` check is only as strong as the policy behind it, which is why the portal also checks
-`amr` whenever Entra sends it and offers `RequireAmr`.
+`acrs` check is only as strong as the policy behind it, which is why the portal ALSO requires an
+`amr` naming a phishing-resistant method (`fido` for a FIDO2 key or a passkey, `hwk` for Windows
+Hello for Business) — Microsoft's AMR table maps an Authenticator push to `rsa, ngcmfa, mfa`, a
+password to `pwd`, so neither passes.
 
 ## The Entra rung — exactly what the server checks
 
@@ -161,8 +170,10 @@ in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS adde
 1. Signed in, step-up enabled, the account signed in through the `Microsoft` scheme (the cookie's
    `idp` claim). A session from before the `idp` claim existed is asked to sign in again — the
    provider is never guessed.
-2. A pending step-up is sealed into a Data-Protection cookie: state, nonce, the targets, the return
-   URL, the user — ten minutes.
+2. The pending step-up — state, nonce, the targets, the return URL, the user, ten minutes — is
+   stored SERVER-side at `Auth/_StepUpPending/{handle}` (System-only); the browser carries only the
+   handle and the state, sealed with Data Protection (a bulk approval's targets would overflow a
+   cookie). The callback reads it once and deletes it.
 3. Redirect to `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize` with
    `prompt=login`, `login_hint` = the signed-in account, a fresh `nonce`, and
    `claims={"id_token":{"acrs":{"essential":true,"value":"c1"}}}`.
@@ -180,7 +191,7 @@ in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS adde
 | subject | `oid` differs from the session's `oid` (or, for an older session, the token's `preferred_username`/`email` differs from the signed-in account) |
 | `auth_time` | missing, or older than `MaxAuthAgeSeconds` |
 | `acrs` | does not contain the declared context |
-| `amr` | present without a phishing-resistant value (`fido`, `hwk`, `ngcmfa`, `x509` by default) — or absent while `RequireAmr` is on |
+| `amr` | absent (unless the record waives it with `RequireAmr = false`), or without a phishing-resistant value (`fido`, `hwk` by default) |
 
 Then the receipt is minted, each target stamped, and the browser returned to `returnUrl` with
 `stepUp=done` (or `stepUp=failed&reason=…`).

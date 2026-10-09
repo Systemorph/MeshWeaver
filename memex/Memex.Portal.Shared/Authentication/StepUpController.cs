@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -33,7 +34,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// </summary>
 [Authorize]
 [Route(BasePath)]
-public sealed class StepUpController(
+public sealed partial class StepUpController(
     IConfiguration configuration,
     IHttpClientFactory httpFactory,
     IDataProtectionProvider dataProtection,
@@ -47,7 +48,7 @@ public sealed class StepUpController(
     /// <summary>The Entra callback segment.</summary>
     public const string CallbackAction = "callback";
 
-    /// <summary>The cookie carrying the sealed pending step-up between the redirect and the callback.</summary>
+    /// <summary>The cookie carrying the handle and state of the pending step-up — never its content.</summary>
     internal const string PendingCookie = "mw_stepup";
 
     /// <summary>How long a started step-up may take to come back.</summary>
@@ -60,19 +61,21 @@ public sealed class StepUpController(
 
     private string CallbackUri => $"{Request.Scheme}://{Request.Host}/{BasePath}/{CallbackAction}";
 
-    /// <summary>A started step-up, sealed into <see cref="PendingCookie"/>.</summary>
-    internal sealed record Pending(string State, string Nonce, string UserId, IReadOnlyList<StepUpTarget> Targets, string ReturnUrl);
+    /// <summary>What the browser carries between the redirect and the proof: a handle and the state, sealed.</summary>
+    internal sealed record PendingHandle(string Handle, string State);
 
     /// <summary>Starts a step-up for the signed-in approver.</summary>
     /// <param name="targets">The action paths (repeatable, paired with <paramref name="bindings"/>).</param>
     /// <param name="bindings">The hashes approved, one per target.</param>
     /// <param name="returnUrl">Where to come back to; sanitised to a local URL.</param>
+    /// <param name="ct">Cancels the wait on the store, not the store.</param>
     /// <returns>A redirect, or a page explaining the refusal.</returns>
     [HttpGet("")]
-    public IActionResult Start(
+    public async Task<IActionResult> Start(
         [FromQuery(Name = "target")] string[]? targets,
         [FromQuery(Name = "binding")] string[]? bindings,
-        [FromQuery] string? returnUrl)
+        [FromQuery] string? returnUrl,
+        CancellationToken ct = default)
     {
         var safeReturn = ReturnUrlPolicy.Sanitize(returnUrl);
         var userId = access.Context?.ObjectId;
@@ -83,8 +86,9 @@ public sealed class StepUpController(
             return Refusal(safeReturn, access.Localize("stepUp.refused.targets"));
 
         var options = StepUpOptions.From(configuration);
+        var provider = StepUpClaims.ProviderOf(User);
         var entra = Entra();
-        var rung = StepUpLadder.Decide(StepUpClaims.ProviderOf(User), options, entra.IsConfigured && entra.TenantIsSpecific);
+        var rung = StepUpLadder.Decide(provider, options, entra.IsConfigured && entra.TenantIsSpecific);
         logger.LogInformation("Step-up start for {User}: rung {Rung}, {Count} target(s)", userId, rung, pairs.Count);
 
         switch (rung)
@@ -98,20 +102,11 @@ public sealed class StepUpController(
             case StepUpRung.Entra:
                 break;
             default:
-                return Refusal(safeReturn, access.Localize("stepUp.refused.provider", StepUpClaims.ProviderOf(User)));
+                return Refusal(safeReturn, access.Localize("stepUp.refused.provider", provider));
         }
 
-        var pending = new Pending(StepUpSeal.NewId(), StepUpSeal.NewId(), userId, pairs, safeReturn);
-        Response.Cookies.Append(PendingCookie, Protector().Protect(JsonSerializer.Serialize(pending), DateTimeOffset.UtcNow + PendingLifetime),
-            new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = true,
-                // Lax: the IdP's redirect back is a top-level GET, which Lax admits.
-                SameSite = SameSiteMode.Lax,
-                MaxAge = PendingLifetime,
-                Path = "/" + BasePath,
-            });
+        var pending = await BeginPending(userId, pairs, safeReturn, ct);
+        if (pending is null) return Failure(safeReturn, "unavailable");
         var loginHint = User.FindFirst("email")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
         return Redirect(entra.AuthorizeUrl(pending.State, pending.Nonce, CallbackUri, loginHint, options.EntraAuthenticationContext!));
     }
@@ -128,14 +123,12 @@ public sealed class StepUpController(
         [FromQuery] string? code, [FromQuery] string? state, [FromQuery] string? error,
         [FromQuery(Name = "error_description")] string? errorDescription = null, CancellationToken ct = default)
     {
-        var userId = access.Context?.ObjectId;
+        var caller = access.Context;
+        var userId = caller?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
 
-        var pending = ReadPending();
-        Response.Cookies.Delete(PendingCookie, new CookieOptions { Path = "/" + BasePath });
-        if (pending is null || !CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(pending.State), Encoding.UTF8.GetBytes(state ?? "")) || pending.UserId != userId)
-            return Failure(pending?.ReturnUrl ?? "/", "state");
+        var pending = await TakePending(userId, state, ct);
+        if (pending is null) return Failure("/", "state");
 
         if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(code))
         {
@@ -160,7 +153,8 @@ public sealed class StepUpController(
             })
             .SelectMany(check => !check.Ok
                 ? Observable.Return((Check: check, Receipt: (StepUpReceipt?)null))
-                : MintAndStamp(hub, userId, check, pending.Targets).Select(r => (Check: check, Receipt: (StepUpReceipt?)r)))
+                : MintAndStamp(hub, caller!, StepUpMethod.Entra, check.AuthenticatedAt, check.Evidence, pending.Targets)
+                    .Select(r => (Check: check, Receipt: (StepUpReceipt?)r)))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "Step-up for {User}: minting or stamping the receipt failed", userId);
@@ -173,26 +167,47 @@ public sealed class StepUpController(
             logger.LogWarning("Step-up for {User} refused at '{Reason}'", userId, outcome.Check.Reason);
             return Failure(pending.ReturnUrl, outcome.Check.Reason ?? "exchange");
         }
-        return Redirect(EaConsentController.WithOutcome(ReturnUrlPolicy.Sanitize(pending.ReturnUrl), "stepUp=done"));
+        return Redirect(SuccessUrl(pending, outcome.Receipt));
     }
 
-    /// <summary>Mints the receipt (as System, inside the service) and stamps it onto every target as the approver.</summary>
-    private IObservable<StepUpReceipt> MintAndStamp(IMessageHub hub, string userId, EntraStepUpCheck check, IReadOnlyList<StepUpTarget> targets)
+    /// <summary>
+    /// Mints the receipt (as System, inside the service) and stamps it onto every target AS THE
+    /// APPROVER. The approver is passed in, captured at the action's edge: this runs downstream of an
+    /// I/O-pool emission, where the request's <c>AsyncLocal</c> access context is no longer reliable,
+    /// and a stamp written with no identity is refused. A factor-enrolment target
+    /// (<c>Auth/_StepUpFactors/…</c>) is never stamped — the enrolment endpoint consumes that receipt
+    /// itself, from the return URL.
+    /// </summary>
+    private IObservable<StepUpReceipt> MintAndStamp(IMessageHub hub, AccessContext caller, string method,
+        DateTimeOffset authenticatedAt, string? evidence, IReadOnlyList<StepUpTarget> targets)
     {
-        var stepUp = hub.ServiceProvider.GetRequiredService<IStepUpService>();
+        var issuer = hub.ServiceProvider.GetRequiredService<StepUpService>();
         var workspace = hub.GetWorkspace();
-        return stepUp.Mint(userId, StepUpMethod.Entra, targets, check.AuthenticatedAt, check.Evidence)
+        return issuer.Mint(caller.ObjectId, method, targets, authenticatedAt, evidence)
             .SelectMany(receipt => targets
+                .Where(t => !IsEnrollmentTarget(t))
                 .Select(t => t.ActionPath).Distinct(StringComparer.Ordinal)
-                .Select(path => workspace.GetMeshNodeStream(path)
-                    .Update(node => node with { Content = StepUpPaths.Stamp(node.Content, userId, receipt.Id, hub.JsonSerializerOptions) })
+                .Select(path => access.RunAs(caller, () => workspace.GetMeshNodeStream(path)
+                    .Update(node => node with { Content = StepUpPaths.Stamp(node.Content, caller.ObjectId, receipt.Id, hub.JsonSerializerOptions) })
                     .Take(1)
-                    .Select(_ => Unit.Default))
+                    .Select(_ => Unit.Default)))
                 .Merge()
                 .DefaultIfEmpty(Unit.Default)
                 .LastAsync()
                 .Select(_ => receipt));
     }
+
+    /// <summary>A target that authorizes enrolling another step-up factor rather than an approval.</summary>
+    internal static bool IsEnrollmentTarget(StepUpTarget target) =>
+        target.ActionPath.StartsWith("Auth/_StepUpFactors/", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Where a successful step-up returns: the page with <c>stepUp=done</c> — and, when it covered a
+    /// factor enrolment, the receipt id the enrolment endpoint consumes.
+    /// </summary>
+    private static string SuccessUrl(StepUpPending pending, StepUpReceipt receipt) =>
+        EaConsentController.WithOutcome(ReturnUrlPolicy.Sanitize(pending.ReturnUrl),
+            pending.Targets.Any(IsEnrollmentTarget) ? "stepUp=done&stepUpReceipt=" + receipt.Id : "stepUp=done");
 
     /// <summary>Pairs the repeated <c>target</c>/<c>binding</c> parameters; null when they do not pair.</summary>
     internal static IReadOnlyList<StepUpTarget>? Pair(string[]? targets, string[]? bindings)
@@ -209,12 +224,84 @@ public sealed class StepUpController(
         return list;
     }
 
-    private Pending? ReadPending()
+    /// <summary>
+    /// Stores the pending step-up SERVER-side (<c>Auth/_StepUpPending/{handle}</c>, as System) and
+    /// gives the browser only the sealed handle and state: a bulk approval's targets would overflow
+    /// a cookie. Null when the store did not answer.
+    /// </summary>
+    private async Task<StepUpPending?> BeginPending(string userId, IReadOnlyList<StepUpTarget> targets, string returnUrl, CancellationToken ct)
+    {
+        var hub = Hub();
+        if (hub is null) return null;
+        var pending = new StepUpPending
+        {
+            Id = StepUpSeal.NewId(),
+            State = StepUpSeal.NewId(),
+            Nonce = StepUpSeal.NewId(),
+            UserId = userId,
+            Targets = [.. targets],
+            ReturnUrl = returnUrl,
+            ExpiresAt = DateTimeOffset.UtcNow + PendingLifetime,
+        };
+        var stored = await new StepUpPendingStore(hub).Begin(pending)
+            .Select(_ => true)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Step-up for {User}: the pending step-up could not be stored", userId);
+                return Observable.Return(false);
+            })
+            .ObserveCompletion(ex => logger.LogWarning(ex, "Step-up pending store for {User} faulted after settling", userId), ct);
+        if (!stored) return null;
+        Response.Cookies.Append(PendingCookie,
+            Protector().Protect(JsonSerializer.Serialize(new PendingHandle(pending.Id, pending.State)), pending.ExpiresAt),
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                // Lax: the IdP's redirect back is a top-level GET, which Lax admits.
+                SameSite = SameSiteMode.Lax,
+                MaxAge = PendingLifetime,
+                Path = "/" + BasePath,
+            });
+        return pending;
+    }
+
+    /// <summary>
+    /// Reads the pending step-up named by the sealed cookie and checks it belongs to this request —
+    /// same user, same state (constant-time), not expired. When <paramref name="complete"/>, the
+    /// cookie is dropped and the pending node deleted: a pending step-up yields at most one proof.
+    /// </summary>
+    private async Task<StepUpPending?> TakePending(string userId, string? state, CancellationToken ct, bool complete = true)
+    {
+        var handle = ReadHandle();
+        if (complete) Response.Cookies.Delete(PendingCookie, new CookieOptions { Path = "/" + BasePath });
+        var hub = Hub();
+        if (handle is null || hub is null || !StepUpPaths.IsWellFormedId(handle.Handle)) return null;
+        if (state is not null && !CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(handle.State), Encoding.UTF8.GetBytes(state)))
+            return null;
+        var store = new StepUpPendingStore(hub);
+        var pending = await store.Read(handle.Handle)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Step-up for {User}: the pending step-up could not be read", userId);
+                return Observable.Return<StepUpPending?>(null);
+            })
+            .ObserveCompletion(ex => logger.LogWarning(ex, "Step-up pending read for {User} faulted after settling", userId), ct);
+        if (complete && pending is not null)
+            store.Complete(handle.Handle)
+                .Subscribe(_ => { }, ex => logger.LogWarning(ex, "Step-up: the pending step-up {Handle} could not be deleted", handle.Handle));
+        if (pending is null || pending.UserId != userId || pending.State != handle.State || DateTimeOffset.UtcNow > pending.ExpiresAt)
+            return null;
+        return pending;
+    }
+
+    private PendingHandle? ReadHandle()
     {
         if (!Request.Cookies.TryGetValue(PendingCookie, out var raw) || string.IsNullOrEmpty(raw)) return null;
         try
         {
-            return JsonSerializer.Deserialize<Pending>(Protector().Unprotect(raw));
+            return JsonSerializer.Deserialize<PendingHandle>(Protector().Unprotect(raw));
         }
         catch (CryptographicException ex)
         {
@@ -238,28 +325,29 @@ public sealed class StepUpController(
     {
         var resolved = hub ?? Hub();
         var pool = resolved?.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
-        return new EntraStepUp(configuration, httpFactory.CreateClient(nameof(EntraStepUp)), pool, logger);
+        var metadata = resolved?.ServiceProvider.GetService<EntraMetadataCache>() ?? new EntraMetadataCache();
+        return new EntraStepUp(configuration, httpFactory.CreateClient(nameof(EntraStepUp)), pool, metadata, logger);
     }
 
     private ContentResult Failure(string returnUrl, string reason) =>
         Refusal(returnUrl, access.Localize("stepUp.failed", access.Localize("stepUp.reason." + reason)));
 
     /// <summary>
-    /// The one page this flow renders itself: a refusal or failure, localized, with a way back. It is
-    /// outside the Blazor shell by necessity (the IdP round trip is a full-page navigation), so it is
-    /// deliberately minimal — a heading, one sentence, one link.
+    /// A refusal or failure, localized, with a way back. It is outside the Blazor shell by necessity
+    /// (the IdP round trip is a full-page navigation to an MVC endpoint), so it is deliberately
+    /// minimal — a heading, one sentence, one link — and takes the viewer's colour scheme.
     /// </summary>
     private ContentResult Refusal(string returnUrl, string message)
     {
         var html = new StringBuilder()
             .Append("<!doctype html><html lang=\"").Append(WebUtility.HtmlEncode(access.ViewerLocale())).Append("\"><head><meta charset=\"utf-8\">")
-            .Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>")
+            .Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"color-scheme\" content=\"light dark\"><title>")
             .Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</title></head>")
             .Append("<body style=\"font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem\">")
-            .Append("<h1>").Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</h1>")
-            .Append("<p>").Append(WebUtility.HtmlEncode(message)).Append("</p>")
+            .Append("<main><h1>").Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</h1>")
+            .Append("<p role=\"alert\">").Append(WebUtility.HtmlEncode(message)).Append("</p>")
             .Append("<p><a href=\"").Append(WebUtility.HtmlEncode(ReturnUrlPolicy.Sanitize(returnUrl))).Append("\">")
-            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.back"))).Append("</a></p>")
+            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.back"))).Append("</a></p></main>")
             .Append("</body></html>");
         return new ContentResult { Content = html.ToString(), ContentType = "text/html; charset=utf-8", StatusCode = StatusCodes.Status403Forbidden };
     }
