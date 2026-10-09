@@ -364,12 +364,15 @@ It held several hundred `_Activity/compile-*` records, and each one paid both ac
 bounded lane from §4 keeps that from failing, but it does not make it cheap.
 
 A row whose first satellite segment is declared in `MeshOperationOptions.RecordSatelliteSegments`
-(default `_Activity`) is a RECORD. It has no type-specific validator and no post-deletion handler,
-and its permission delegates to its owner. When that owner is the delete's root, or a node in the
-delete's own plan, the row:
+(default `_Activity`) is a RECORD. Nothing registered on its own hub is needed to delete it: it has
+no type-specific validator and no post-deletion handler. When its path-derived owner is the
+delete's root, or a node in the delete's own plan, the row:
 
-- is NOT asked its own pre-flight question, because the owner's validation already decided the
-  caller's right to remove it;
+- is validated IN-PROCESS instead of at its own hub. The pre-flight reads the row from storage
+  and runs the same delete-validator chain on it under the caller's identity. That chain includes
+  the RLS validator, which walks the row's own access rule against its STORED `MainNode` (for an
+  activity, `SatelliteAccessRule` requires Update on it). The verdict is therefore the row's own,
+  and no hub is activated;
 - is removed in the commit through `IStorageAdapter.DeleteMany`, `RecordSatelliteBatchSize` rows
   per call (default 100), children first, BEFORE the per-node walk removes the owners.
 
@@ -380,13 +383,15 @@ the commit), and one tick of the no-progress watchdog per row. A row the batch d
 remove is not reported as removed.
 
 A satellite whose owner is NOT in the plan, such as `{root}/Ghost/_Activity/x` with no node at
-`{root}/Ghost`, keeps the per-node lane, because nothing in this delete validated that owner. A
+`{root}/Ghost`, keeps the per-node lane. A
 segment whose rows gain per-node delete semantics must leave the declared set in the same change.
 An empty set restores the per-node lane for everything.
 
 **Pinned by** `RecordSatellitesLeaveInBatchesTest` (Graph.Test): 120 activity records under a
 deleted root leave in three `DeleteMany` calls with no one-row delete, while the orphan-owned
-satellite takes the per-node lane. Its negative control, `RecordSatellitesPerNodeWhenUndeclaredTest`,
+satellite takes the per-node lane. `RecordSatellitePreflightStillDeniesTest` shows the in-process
+validation is not a bypass: one record that a delete validator refuses refuses the whole delete,
+by that record's name, before anything is removed. Its negative control, `RecordSatellitesPerNodeWhenUndeclaredTest`,
 clears the declaration, and every record then pays its own leaf delete, as production did.
 
 The other half of the fix is upstream: a NodeType no longer accumulates those records without

@@ -35,14 +35,18 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
 
     private static readonly JsonSerializerOptions PlainOptions = new();
 
+    /// <summary>A compile-run id in the shape the pipeline mints: <c>compile-</c>, a 17-digit
+    /// timestamp, then a GUID-like tail. The index is folded into the timestamp so ids sort with it.</summary>
+    private static string Id(int index) => $"compile-2026100900{index:D7}a1b2c3";
+
     private static MeshNode Compile(string ns, int index, DateTimeOffset at, ActivityStatus status) =>
-        new MeshNode($"compile-{index:D3}", ns)
+        new MeshNode(Id(index), ns)
         {
             NodeType = GraphNodeTypeNames.Activity,
             Name = $"Compile {index}",
             State = MeshNodeState.Active,
             LastModified = at,
-            Content = new ActivityLog(ActivityCategory.Compilation) { Id = $"compile-{index:D3}", Status = status },
+            Content = new ActivityLog(ActivityCategory.Compilation) { Id = Id(index), Status = status },
         };
 
     /// <summary>25 compiles a minute apart; #3 and #5 failed, everything else succeeded.</summary>
@@ -61,10 +65,10 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
         var rows = History("T/_Activity", now);
         var policy = CompileActivityRetention.Default with { KeepLast = 10, MaxDeletionsPerRun = 50 };
 
-        var selected = policy.SelectForPruning(rows, currentActivityPath: "T/_Activity/compile-024", PlainOptions);
+        var selected = policy.SelectForPruning(rows, currentActivityPath: $"T/_Activity/{Id(24)}", PlainOptions);
 
         // Newest ten are 15..24; the newest failure is #5; #3 is an OLDER failure and goes.
-        var expected = Enumerable.Range(0, 15).Where(i => i != 5).Select(i => $"T/_Activity/compile-{i:D3}");
+        var expected = Enumerable.Range(0, 15).Where(i => i != 5).Select(i => $"T/_Activity/{Id(i)}");
         selected.Should().Equal(expected,
             "the newest 10 and the newest failure stay; everything older is selected, oldest first");
     }
@@ -76,7 +80,7 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
         var policy = CompileActivityRetention.Default with { KeepLast = 10, MaxDeletionsPerRun = 4 };
 
         policy.SelectForPruning(rows, null, PlainOptions).Should().Equal(
-            "T/_Activity/compile-000", "T/_Activity/compile-001", "T/_Activity/compile-002", "T/_Activity/compile-003");
+            $"T/_Activity/{Id(0)}", $"T/_Activity/{Id(1)}", $"T/_Activity/{Id(2)}", $"T/_Activity/{Id(3)}");
     }
 
     [Fact]
@@ -92,11 +96,18 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
                 NodeType = GraphNodeTypeNames.Activity, LastModified = old,
                 Content = new ActivityLog("DataUpdate") { Id = "write-config" },
             },
-            // A compile-shaped id whose category says otherwise.
-            new MeshNode("compile-imposter", "T/_Activity")
+            // A compile-run id whose category says otherwise.
+            new MeshNode(Id(800), "T/_Activity")
             {
                 NodeType = GraphNodeTypeNames.Activity, LastModified = old,
-                Content = new ActivityLog("Import") { Id = "compile-imposter" },
+                Content = new ActivityLog("Import") { Id = Id(800) },
+            },
+            // The compiler's fixed state row: a Compilation activity whose id merely starts with
+            // `compile` (NodeTypeCompileState.StateId). It is state, not run history.
+            new MeshNode("compile-state", "T/_Activity")
+            {
+                NodeType = GraphNodeTypeNames.Activity, LastModified = old,
+                Content = new ActivityLog(ActivityCategory.Compilation) { Id = "compile-state" },
             },
             // Undated: this policy cannot age it, so it keeps it.
             Compile("T/_Activity", 900, default, ActivityStatus.Succeeded),
@@ -105,7 +116,10 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
 
         var selected = CompileActivityRetention.Default.SelectForPruning(rows, null, PlainOptions);
 
-        selected.Should().NotContain(new[] { "T/_Activity/write-config", "T/_Activity/compile-imposter", "T/_Activity/compile-900" });
+        selected.Should().NotContain(new[]
+        {
+            "T/_Activity/write-config", $"T/_Activity/{Id(800)}", "T/_Activity/compile-state", $"T/_Activity/{Id(900)}",
+        });
         selected.Should().HaveCount(14, "the 25 dated compiles minus the newest 10 and the newest failure");
     }
 
@@ -157,22 +171,55 @@ public class CompileActivityRetentionTest(ITestOutputHelper output) : MonolithMe
         seeded.Should().HaveCount(26, "the prune reads through the query index, so the seed must be visible there");
 
         var removed = await CompileActivityRetention
-            .Prune(Mesh, owner, $"{ns}/compile-024", CompileActivityRetention.Default, logger: null)
+            .Prune(Mesh, owner, $"{ns}/{Id(24)}", CompileActivityRetention.Default, logger: null)
             .FirstAsync().Timeout(Bound).Await(ct);
 
         removed.Should().Be(14);
         var kept = await SettleAsync(Children(ns), rows => rows.Count == 12, ct);
         kept.Select(n => n.Id).OrderBy(id => id, StringComparer.Ordinal).Should().Equal(
-            Enumerable.Range(15, 10).Select(i => $"compile-{i:D3}")
-                .Append("compile-005")
+            Enumerable.Range(15, 10).Select(Id)
+                .Append(Id(5))
                 .Append("write-config")
                 .OrderBy(id => id, StringComparer.Ordinal),
             "the newest 10, the newest failure and the other writer's activity are what remains");
 
         // Idempotent: a second prune over the pruned history removes nothing.
         (await CompileActivityRetention
-            .Prune(Mesh, owner, $"{ns}/compile-024", CompileActivityRetention.Default, logger: null)
+            .Prune(Mesh, owner, $"{ns}/{Id(24)}", CompileActivityRetention.Default, logger: null)
             .FirstAsync().Timeout(Bound).Await(ct)).Should().Be(0);
+    }
+
+    [Fact(Timeout = 180000)]
+    public async Task Other_writers_newer_activities_cannot_fill_the_window_and_starve_the_prune()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = $"{TestPartition}/BusyType";
+        var ns = $"{owner}/_Activity";
+        var now = DateTimeOffset.UtcNow;
+        await SeedAsync(new MeshNode("BusyType", TestPartition)
+        {
+            NodeType = "Markdown", Name = "BusyType", State = MeshNodeState.Active,
+        }, ct);
+        // Five OLD compiles, then six NEWER activities from another writer.
+        for (var i = 0; i < 5; i++)
+            await SeedAsync(Compile(ns, i, now.AddHours(-10 + i), ActivityStatus.Succeeded), ct);
+        for (var i = 0; i < 6; i++)
+            await SeedAsync(new MeshNode($"write-{i}", ns)
+            {
+                NodeType = GraphNodeTypeNames.Activity, Name = $"Write {i}", State = MeshNodeState.Active,
+                LastModified = now.AddMinutes(-i),
+                Content = new ActivityLog("DataUpdate") { Id = $"write-{i}" },
+            }, ct);
+        (await SettleAsync(Children(ns), rows => rows.Count == 11, ct)).Should().HaveCount(11);
+
+        // A window of 2 + 2 + 1 = 5 rows: without the category filter in the query, the five newest
+        // rows are all the other writer's and no compile is ever seen.
+        var policy = CompileActivityRetention.Default with { KeepLast = 2, MaxDeletionsPerRun = 2 };
+        var removed = await CompileActivityRetention
+            .Prune(Mesh, owner, null, policy, logger: null)
+            .FirstAsync().Timeout(Bound).Await(ct);
+
+        removed.Should().Be(2, "the window holds only compile activities, so the oldest two beyond the newest two go");
     }
 
     [Fact(Timeout = 180000)]

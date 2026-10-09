@@ -10,6 +10,10 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Security;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -45,11 +49,16 @@ public abstract class RecordSatelliteDeleteTestBase(ITestOutputHelper output) : 
     /// <summary>The record segments this run declares.</summary>
     protected abstract ImmutableHashSet<string> RecordSegments { get; }
 
+    /// <summary>An extra delete validator this run registers, or null.</summary>
+    private protected virtual INodeValidator? ExtraValidator => null;
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStorageAdapter>(Storage);
+            if (ExtraValidator is { } validator)
+                services.AddSingleton(validator);
             services.AddSingleton(new MeshOperationOptions
             {
                 RecordSatelliteSegments = RecordSegments,
@@ -157,5 +166,71 @@ public class RecordSatellitesPerNodeWhenUndeclaredTest(ITestOutputHelper output)
         BatchesUnder(activities).Should().BeEmpty("nothing is declared a record, so nothing is batched");
         SingleDeletesUnder(activities).Should().BeGreaterThanOrEqualTo(Records,
             "every record pays its own leaf delete");
+    }
+}
+
+/// <summary>
+/// The batched lane is not a bypass. A record satellite is still validated, in-process, by the
+/// same delete-validator chain its own hub would run (which includes the row's access rule against
+/// its stored MainNode). Here one record carries a validator refusal: the whole delete is refused
+/// before anything is removed, and the refusal names that record.
+/// </summary>
+public class RecordSatellitePreflightStillDeniesTest(ITestOutputHelper output) : RecordSatelliteDeleteTestBase(output)
+{
+    private readonly RefuseOnePathDeletionValidator refuse = new();
+
+    /// <inheritdoc />
+    protected override ImmutableHashSet<string> RecordSegments => new MeshOperationOptions().RecordSatelliteSegments;
+
+    /// <inheritdoc />
+    private protected override INodeValidator? ExtraValidator => refuse;
+
+    [Fact]
+    public async Task ARefusedRecord_RefusesTheWholeDelete_BeforeAnythingIsRemoved()
+    {
+        var rootPath = await SeedAsync("records-refused");
+        var blocked = $"{rootPath}/_Activity/compile-{Records / 2:D3}";
+        refuse.RefusedPath = blocked;
+
+        var failure = new AsyncSubject<Exception>();
+        using var deleting = NodeFactory.DeleteNode(rootPath).Subscribe(
+            _ => { },
+            ex =>
+            {
+                failure.OnNext(ex);
+                failure.OnCompleted();
+            });
+
+        var reported = await failure.Should().Within(90.Seconds()).Emit("a refused record refuses the delete");
+        reported.Message.Should().Contain(blocked, "the refusal names the record that was refused");
+
+        refuse.Asked.Should().Contain(blocked, "the record was validated, in-process");
+        Storage.BatchDeletes.Should().BeEmpty("nothing is removed when the pre-flight refuses");
+        (await Storage.Inner.ListDescendantPaths(rootPath).Should().Within(10.Seconds()).Emit())
+            .Should().HaveCount(Records + 1, "every record and the orphan-owned satellite are still there");
+    }
+}
+
+/// <summary>Refuses a delete of exactly one path; lets everything else through.</summary>
+internal sealed class RefuseOnePathDeletionValidator : INodeValidator
+{
+    private readonly ConcurrentDictionary<string, byte> asked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The one path whose delete is refused; null refuses nothing.</summary>
+    public string? RefusedPath { get; set; }
+
+    /// <summary>Every path this validator was asked about for a delete.</summary>
+    public IReadOnlyCollection<string> Asked => asked.Keys.ToArray();
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Delete];
+
+    /// <inheritdoc />
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+    {
+        asked.TryAdd(context.Node.Path, 0);
+        return Observable.Return(string.Equals(context.Node.Path, RefusedPath, StringComparison.OrdinalIgnoreCase)
+            ? NodeValidationResult.Invalid("this record may not be deleted")
+            : NodeValidationResult.Valid());
     }
 }

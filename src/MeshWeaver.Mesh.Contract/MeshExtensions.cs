@@ -3580,6 +3580,10 @@ public static class MeshExtensions
         // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
         // opens, and it is.
         var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+        // The delete-validator chain, resolved while this hub is alive (#5064), for the record
+        // satellites the pre-flight validates in-process rather than at their own hubs.
+        var deletionValidators = DeletionValidators(hub);
+        var deletionJsonOptions = hub.JsonSerializerOptions;
         var meshHub = ResolveMeshHub(hub);
         // 🚨 THE HUB THIS DELETE'S TWO FAN-OUTS ARE ISSUED ON — never the router (issue #2477).
         // A recursive delete posts one request PER DESCENDANT twice over: the pre-flight
@@ -4007,19 +4011,30 @@ public static class MeshExtensions
                                         //     rung below it, derived the same way.
                                         var legBudget = opts.Nest(budget);
                                         var absenceProbeBudget = opts.Nest(legBudget);
-                                        // Record satellites whose owner this delete validates are
-                                        // not asked one by one: their permission delegates to that
-                                        // owner and they carry no validator of their own
-                                        // (MeshOperationOptions.RecordSatelliteSegments). The commit
-                                        // removes them in batches, by the same predicate.
-                                        var askedOneByOne = collected.ToDelete
-                                            .Where(p => !IsBatchableRecordSatellite(p, path, collected.ToDelete, opts))
-                                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                                        // Record satellites (MeshOperationOptions.RecordSatelliteSegments)
+                                        // are not sent to their own hubs: each is read from storage
+                                        // and put through the SAME delete-validator chain, under the
+                                        // caller's identity, in-process. That chain walks the row's
+                                        // own access rule against its STORED MainNode, so the verdict
+                                        // equals the leaf's ValidateDeleteRequest without activating
+                                        // a hub per row. The commit removes them in batches.
+                                        var recordRows = collected.ToDelete
+                                            .Where(p => IsBatchableRecordSatellite(p, path, collected.ToDelete, opts))
+                                            .ToList();
+                                        var askedOneByOne = recordRows.Count == 0
+                                            ? collected.ToDelete
+                                            : collected.ToDelete.Except(recordRows);
                                         var preValidate = capturedRequest.Recursive
                                             ? PreValidateDescendantsObs(
                                                 issuingHub, path, askedOneByOne, request.AccessContext,
                                                 budget, legBudget, storage, absenceProbeBudget, logger,
                                                 progress: requestProgress)
+                                                .SelectMany(perNodeFailure => perNodeFailure is not null
+                                                    ? Observable.Return(perNodeFailure)
+                                                    : PreValidateRecordSatellitesInProcess(
+                                                        deletionValidators, storage, deletionJsonOptions,
+                                                        path, recordRows, request.AccessContext, legBudget,
+                                                        requestProgress))
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -5110,13 +5125,15 @@ public static class MeshExtensions
 
     /// <summary>
     /// Whether <paramref name="path"/> is a RECORD satellite that a recursive delete of
-    /// <paramref name="rootPath"/> may remove in a batch, without a per-node hub. That holds when
-    /// its first satellite segment is declared in <see cref="MeshOperationOptions.RecordSatelliteSegments"/>,
+    /// <paramref name="rootPath"/> may handle without a per-node hub. That holds when its first
+    /// satellite segment is declared in <see cref="MeshOperationOptions.RecordSatelliteSegments"/>,
     /// it is a row under that container (not the container path itself), and its owner is the
-    /// root or a node in <paramref name="plan"/>. The owner condition is what makes skipping the
-    /// row's own pre-flight sound: a satellite's permission delegates to its owner, and the owner
-    /// is validated by this same delete (the root by phase 2, a planned owner by its own pre-flight
-    /// leg). A row whose owner is not in the plan takes the ordinary per-node lane.
+    /// root or a node in <paramref name="plan"/>, so the row leaves together with what it belongs
+    /// to. A row whose owner is not in the plan takes the ordinary per-node lane.
+    ///
+    /// <para>This predicate grants nothing. Every such row is still validated, under the caller's
+    /// identity and against its stored node, by <see cref="PreValidateRecordSatellitesInProcess"/>
+    /// before anything is removed.</para>
     /// </summary>
     /// <param name="path">The candidate descendant.</param>
     /// <param name="rootPath">The root of the recursive delete.</param>
@@ -5138,6 +5155,58 @@ public static class MeshExtensions
             return false;
         return string.Equals(owner, rootPath, StringComparison.OrdinalIgnoreCase)
                || plan.Contains(owner);
+    }
+
+    /// <summary>
+    /// The pre-flight for record satellites (<see cref="IsBatchableRecordSatellite"/>), run
+    /// IN-PROCESS instead of at each row's own hub. Each row is read from storage and put through
+    /// the same delete-validator chain <see cref="HandleValidateDeleteRequest"/> runs, under the
+    /// caller's <paramref name="callerAccessContext"/>. That chain includes the RLS validator, which
+    /// walks the row's own type access rule (for an activity, <c>SatelliteAccessRule</c>: Update on
+    /// the STORED <see cref="MeshNode.MainNode"/>). So the verdict is the leaf's own verdict, without
+    /// activating a hub per row. Emits the first refusal as <c>(Path, Error, Reason)</c>, or
+    /// <c>null</c> when every row passes.
+    ///
+    /// <para>A row that is already gone blocks nothing (the #4680 rule). A read or chain that does
+    /// not answer within <paramref name="legTimeout"/> refuses the delete as
+    /// <see cref="NodeDeletionRejectionReason.Unavailable"/>, by the row's name. At most
+    /// <see cref="PreValidateFanOutConcurrency"/> rows are in flight at once, and every answered row
+    /// is reported to <paramref name="progress"/>.</para>
+    /// </summary>
+    private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?>
+        PreValidateRecordSatellitesInProcess(
+            IReadOnlyList<INodeValidator> validators,
+            IStorageAdapter storage,
+            System.Text.Json.JsonSerializerOptions jsonOptions,
+            string rootPath,
+            IReadOnlyList<string> rows,
+            AccessContext? callerAccessContext,
+            TimeSpan legTimeout,
+            IObserver<string>? progress)
+    {
+        if (rows.Count == 0)
+            return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
+
+        return rows
+            .Select(row => Observable.Defer(() => storage.Read(row, jsonOptions))
+                .Take(1)
+                .SelectMany(node => node is null
+                    ? Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null)
+                    : RunDeletionValidatorsObs(
+                            validators, callerAccessContext, node,
+                            new DeleteNodeRequest(row) { CascadeRootPath = rootPath }, rootPath)
+                        .Select(err => err is { } e
+                            ? ((string, string, NodeDeletionRejectionReason)?)(row, e.ErrorMessage ?? "Validation failed", e.Reason)
+                            : null))
+                .Timeout(legTimeout, Observable.Defer(() => Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                    (row,
+                        $"the validation of record satellite '{row}' did not answer within {legTimeout.TotalSeconds:0}s",
+                        NodeDeletionRejectionReason.Unavailable))))
+                .Do(_ => progress?.OnNext(row)))
+            .Merge(PreValidateFanOutConcurrency)
+            .Where(failure => failure is not null)
+            .Take(1)
+            .DefaultIfEmpty(null);
     }
 
     /// <summary>

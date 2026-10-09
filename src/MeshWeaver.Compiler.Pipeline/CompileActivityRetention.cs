@@ -47,8 +47,15 @@ public sealed record CompileActivityRetention
     /// <summary>Config key overriding <see cref="MaxDeletionsPerRun"/>.</summary>
     public const string MaxDeletionsPerRunConfigKey = "Compilation:ActivityRetention:MaxDeletionsPerRun";
 
-    /// <summary>The id prefix every compile activity carries (both id shapes the pipeline has minted).</summary>
-    public const string CompileActivityIdPrefix = "compile";
+    /// <summary>
+    /// The id shape of a compile-RUN record: <c>compile</c>, an optional <c>-</c>, then the
+    /// 17-digit UTC timestamp the pipeline stamps (<c>yyyyMMddHHmmssfff</c>), then the GUID. Both id
+    /// shapes the pipeline has minted match it. A bare prefix test is not enough, because other
+    /// fixed rows share the prefix: <c>NodeTypeCompileState.StateId</c> (<c>compile-state</c>) is
+    /// also a <c>Compilation</c> activity, and it is compiler state, not run history.
+    /// </summary>
+    public static readonly System.Text.RegularExpressions.Regex CompileRunId = new(
+        @"^compile-?\d{17}", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>
     /// The floor that <see cref="FromConfiguration"/> clamps <see cref="KeepLast"/> to. A value of
@@ -90,7 +97,7 @@ public sealed record CompileActivityRetention
     /// <para>Kept, always: the <see cref="KeepLast"/> newest compile activities, the newest one whose
     /// outcome is <see cref="ActivityStatus.Failed"/>, and <paramref name="currentActivityPath"/> (the
     /// one this compile just wrote, which its NodeType advertises). Never considered: any activity
-    /// that is not a compile, by id prefix AND by category. A compile node shares <c>_Activity</c>
+    /// that is not a compile, by id shape (<see cref="CompileRunId"/>) AND by category. A compile node shares <c>_Activity</c>
     /// with other writers, and a prune that removed one of theirs would be deleting history it does
     /// not own.</para>
     ///
@@ -144,7 +151,7 @@ public sealed record CompileActivityRetention
             return null;
         if (!string.Equals(node.NodeType, GraphNodeTypeNames.Activity, StringComparison.OrdinalIgnoreCase))
             return null;
-        if (!node.Id.StartsWith(CompileActivityIdPrefix, StringComparison.OrdinalIgnoreCase))
+        if (!CompileRunId.IsMatch(node.Id))
             return null;
         // ContentAs never throws; content it cannot type reads as null (and is logged by it), and
         // null here means "keep the row".
@@ -157,7 +164,12 @@ public sealed record CompileActivityRetention
     /// <summary>The query that reads one NodeType's activity window, newest first.</summary>
     /// <param name="nodeTypePath">The NodeType whose <c>_Activity</c> children are read.</param>
     public string WindowQuery(string nodeTypePath)
+        // 🚨 Filtered to COMPILATION activities in the query itself, not only in the selector:
+        // `_Activity` is shared, and with the limit applied first, enough newer rows from other
+        // writers would fill the whole window and old compile records would never be seen. The
+        // `content.` prefix reaches the field on every backend (Doc/Architecture/QueryProviderParity).
         => $"namespace:{nodeTypePath}/_Activity nodeType:{GraphNodeTypeNames.Activity} "
+           + $"content.category:{ActivityCategory.Compilation} "
            + $"sort:LastModified-desc limit:{QueryWindow}";
 
     /// <summary>

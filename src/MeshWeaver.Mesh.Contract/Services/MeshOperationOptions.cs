@@ -128,9 +128,9 @@ public sealed record MeshOperationOptions
     private readonly int cascadeFanOutConcurrency = 64;
 
     /// <summary>
-    /// The satellite segments whose rows are RECORDS. A record carries no per-node delete semantics:
-    /// no type-specific validator, no post-deletion handler, and no permission of its own (its
-    /// permission delegates to its owner). A recursive delete removes rows under these segments in
+    /// The satellite segments whose rows are RECORDS. A record needs no per-node hub to be deleted:
+    /// no type-specific validator registered on its own hub, and no post-deletion handler. A
+    /// recursive delete validates rows under these segments in-process and removes them in
     /// batches (<see cref="RecordSatelliteBatchSize"/> per storage call) instead of one leaf
     /// round-trip each. The default is <c>_Activity</c> alone.
     ///
@@ -143,9 +143,11 @@ public sealed record MeshOperationOptions
     ///
     /// <para><b>Which rows qualify.</b> A path qualifies when its FIRST satellite segment is listed
     /// here AND its owner (<c>SatelliteTableMapping.OwnerOfSatellitePath</c>) is the delete's root
-    /// or a node in the delete's own plan. Only then is the caller's right to remove it already
-    /// decided: the owner was validated, and a satellite's permission delegates to its owner. Any
-    /// other row takes the ordinary per-node lane. The batch keeps the per-node side effects that
+    /// or a node in the delete's own plan. Any other row takes the ordinary per-node lane. A
+    /// qualifying row is still VALIDATED: the pre-flight reads it from storage and runs the full
+    /// delete-validator chain on it in-process, under the caller's identity. That chain includes
+    /// the row's own access rule against its stored <c>MainNode</c>, so the verdict is the one its
+    /// own hub would give, without activating that hub. The batch keeps the per-node side effects that
     /// do not need a hub: the change-feed <c>Deleted</c> event (children first), the stream-cache
     /// invalidation, the "delete wins" tombstone, and disposal of a per-node hub that happens to
     /// be activated.</para>
