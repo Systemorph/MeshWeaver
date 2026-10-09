@@ -453,6 +453,17 @@ jobs:
             echo "  divergence count from this environment is NOT comparable with one from an"
             echo "  environment that does declare a patch. Commit the patch file if this env has one."
           fi
+          # 🖼️ THE DEPLOYMENT RECORD (MeshWeaver#4685) — the record the overlay above is generated
+          # from. Its facts carry (1) the image the portal may run: the chart's `image:` is never
+          # what runs, so the running tag is tested against the record's pin / updatePattern
+          # (policy `chart-drift-compares-image-to-record`); and (2) the NAMES of its declared
+          # values-half keys, which shape the render's placeholder half (policy
+          # `one-values-half-per-release`). Exactly one record must own this namespace+release;
+          # none or two is a FAILURE naming them, never a skip.
+          python3 deploy/aks/scripts/chart-drift-record.py \
+            --records deploy-repo/mesh/Deployments \
+            --namespace "${{ matrix.env.ns }}" --release "${{ matrix.env.release }}" \
+            --out "$RUNNER_TEMP/record.json"
           # `tee` keeps the log exactly as it was while giving the reporter below something to read.
           #
           # 🚨 TWO traps in three lines, and they pull in opposite directions.
@@ -466,7 +477,8 @@ jobs:
           deploy/aks/scripts/check-chart-drift.sh \
             -n "${{ matrix.env.ns }}" -r "${{ matrix.env.release }}" \
             --via aks-invoke -g "$AKS_RESOURCE_GROUP" --aks "$AKS_CLUSTER" \
-            -f deploy/helm/values.yaml -f "$VALUES" $PATCH_ARG 2>&1 | tee "$RUNNER_TEMP/drift.log"
+            -f deploy/helm/values.yaml -f "$VALUES" $PATCH_ARG \
+            --record "$RUNNER_TEMP/record.json" 2>&1 | tee "$RUNNER_TEMP/drift.log"
           rc=${PIPESTATUS[0]}
           set -e
           # 🔒 COUNTS ONLY. This file is in a PUBLIC repository and the tracking issue this feeds is

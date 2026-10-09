@@ -123,6 +123,13 @@
 #                  own entries (the DOTNET_Dbg* crash-dump block, the self-updater's
 #                  AZURE_CLIENT_ID) was the one drift shape this script could not see.
 #
+# THE DEPLOYMENT RECORD (MeshWeaver#4685). --record names the facts chart-drift-record.py writes
+# from the committed record: {record, imageRepository, updatePolicy, updatePattern, pinnedImageTag,
+# vaultValuesKeys}. The portal's running tag must equal the pin, or match the pattern (policy
+# chart-drift-compares-image-to-record); the declared values-half keys shape the render's placeholder
+# half (policy one-values-half-per-release). The chart's own `image:` is never compared — it is not
+# what runs (the deploy passes the image; the self-updater owns it between deploys).
+#
 # EXPECTED post-helm patches. An env's deploy.sh applies portal-patch.json AFTER `helm upgrade`
 # (the CSI envFrom, extra volumes, nodeSelector, resources). Pass that file with --expect-patch
 # so its envFrom additions are recognised as DECLARED rather than reported as drift. Without it
@@ -149,7 +156,7 @@
 # instead of being written down once.
 set -uo pipefail
 
-NS="" ; RELEASE="" ; CHART="" ; VIA="kubectl" ; RG="" ; AKS="" ; EXPECT_PATCH=""
+NS="" ; RELEASE="" ; CHART="" ; VIA="kubectl" ; RG="" ; AKS="" ; EXPECT_PATCH="" ; RECORD_FACTS=""
 VALUES=()
 
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -174,6 +181,7 @@ while [ $# -gt 0 ]; do
     -g|--resource-group) RG="${2:-}"; shift 2 ;;
     --aks)              AKS="${2:-}"; shift 2 ;;
     --expect-patch)     EXPECT_PATCH="${2:-}"; shift 2 ;;
+    --record)     RECORD_FACTS="${2:-}"; shift 2 ;;
     -h|--help)          usage ;;
     *) echo "::error::unknown argument '$1'"; usage ;;
   esac
@@ -219,6 +227,10 @@ case "$VIA" in
     missing+=("--via <kubectl|aks-invoke>  unknown transport '$VIA'") ;;
 esac
 [ -z "$EXPECT_PATCH" ] || [ -f "$EXPECT_PATCH" ] || missing+=("--expect-patch '$EXPECT_PATCH'  file does not exist")
+# The Deployment RECORD's facts (MeshWeaver#4685), from chart-drift-record.py. Required, never
+# defaulted — no record must not read as "the image matches" or "the half has no shape".
+[ -n "$RECORD_FACTS" ] || missing+=("--record <file>            the Deployment record's facts {record, imageRepository, updatePolicy, updatePattern, pinnedImageTag, vaultValuesKeys} — chart-drift-record.py writes them from the committed record")
+[ -z "$RECORD_FACTS" ] || [ -f "$RECORD_FACTS" ] || missing+=("--record '$RECORD_FACTS'  file does not exist")
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "::error::check-chart-drift cannot run — provide the following:"
@@ -252,6 +264,8 @@ trap 'rm -rf "$WORK"' EXIT
 # ---------------------------------------------------------------------------
 render_args=( --chart "$CHART" --namespace "$NS" --release "$RELEASE" --out "$WORK/desired.yaml" )
 for v in ${VALUES[@]+"${VALUES[@]}"}; do render_args+=( -f "$v" ); done
+# The record's declared values-half keys shape the placeholder half (policy one-values-half-per-release).
+render_args+=( --record "$RECORD_FACTS" )
 if ! python3 "$SELF_DIR/chart-drift-render.py" "${render_args[@]}"; then
   exit 1
 fi
@@ -391,7 +405,8 @@ python3 "$SELF_DIR/chart-drift-compare.py" \
   "$WORK/live-poddisruptionbudgets.json" \
   "$WORK/live-scaledobjects-keda-sh.json" \
   "$SOURCE_KEYS" \
-  "$MANIFEST"
+  "$MANIFEST" \
+  "$RECORD_FACTS"
 rc=$?
 
 if [ "$rc" -ne 0 ]; then

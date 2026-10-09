@@ -72,6 +72,30 @@ And when even the host is missing, the script **refuses** and names that input, 
 inventing one. Manufacturing a database host is the #3780 defect itself; a checker that did it
 would be committing the defect it guards.
 
+### The values half has a DECLARED shape, and the placeholder half takes it
+
+Policy [`one-values-half-per-release`](../PolicyNotProse). A deploy's third source is ONE Key Vault
+secret per release, `helm-values-<release>`, holding **exactly** the keys the Deployment record declares
+in `vaultValuesKeys` — what Provision writes, nothing a capture of the live release happened to carry.
+It is held to that in both directions where it is used:
+
+| where | what happens |
+|---|---|
+| `hosting-deploy --vault … --vault-keys <declared>` | the half's key NAMES are read (`bin/_values_half.py check`); an undeclared key, or a declared key the half lacks, is refused before helm, naming the keys — never a value |
+| `hosting-kv-ensure --values-half <release> --vault-keys <declared>` (Provision / Repair) | absent → composed, and refused before writing if the record declares a key this step cannot compose; present and exact → kept; present and over-supplying → re-stored **filtered** to the declared keys (kept values byte-identical, the previous version the rollback); a declared key missing → refused, because a value cannot be invented |
+| Chart Drift (`chart-drift-record.py` → `chart-drift-render.py --record`) | the placeholder half carries every declared key — so the independence proof below is measured over the deploy's own key set |
+
+The key names are SECRET ENV KEYS. The half stores each under `secrets.memex_portal.<leaf>` (and the
+migration's copy under `secrets.memex_migration`), where the leaf is the key itself except for the
+chart's one alias `memex_postgres_password` → `MEMEX_PASSWORD`; `ConnectionStrings__orleans` may be
+absent when `ConnectionStrings__memex` is present, because the chart derives it by its one rule. Any
+other family (`parameters`, `pgbackrest`, another `secrets.<x>`) names no declared key and is undeclared.
+
+Measured on the two production overlays with their records' declared keys (10 on `memex`, 12 on
+`memex-cloud`), the proof holds: every compared object is byte-identical across the two placeholder
+renders, excluding only `checksum/secrets`. So the half, in the shape it may now have, cannot move a
+compared object — item 1 of the residual gaps below, answered for that shape by construction.
+
 ### The proof, and why a search would not do
 
 The check compares four objects: `ConfigMap/memex-portal-config`,
@@ -193,18 +217,22 @@ excluded from `EvaluatedKinds`), or to any `dotnet build`.
 
 Three things this change deliberately does **not** do. Each is a scope call, not an oversight.
 
-1. **It does not prove the *withheld* Key Vault half has no influence on the compared objects.**
+1. **The *withheld* Key Vault half — NOW BOUNDED BY ITS DECLARED SHAPE** (policy
+   `one-values-half-per-release`, above). Before it, nothing proved the withheld half had no
+   influence on the compared objects:
    The two-render proof bounds the *placeholder*; whether source 3 carries structure (`config`,
    `ingress`, `resources`, …) rather than secrets alone is a property of how the fleet splits its
    values, tracked as `Systemorph/Memex#295` and its PR `#352`. If the vault half does carry
    `config` leaves, those render as `CLUSTER-ONLY` findings — correctly classified but wrongly
    *caused*. The discriminator is cheap: a `CLUSTER-ONLY ConfigMap <key>` whose live value matches
    what the record renders is this, not hand-applied drift.
-2. **The container image is in nobody's compared set.** `check-chart-drift.sh` compares the
-   ConfigMap, the pod template's env / probes / lifecycle and the availability shape — `grep -n
-   image` over it finds only prose. `deploy-drift.yml` compares git against the record, and the
-   fleet watch excludes `ImageDrift`. So "the cluster runs a tag nobody committed" is detected by
-   nothing. Whether it belongs here is #4640's open item 3.
+2. **The container image — CLOSED: compared against the RECORD** (policy
+   `chart-drift-compares-image-to-record`, MeshWeaver#4685). Until then `check-chart-drift.sh`
+   compared the ConfigMap, the pod template's env / probes / lifecycle and the availability shape,
+   and "the cluster runs a tag nobody committed" was detected by nothing. The running tag is now an
+   `OFF-RECORD` finding unless it equals the record's pin or matches its `updatePattern` — see
+   [Chart Drift Semantics](../ChartDriftSemantics) → "The portal image is compared against the
+   RECORD, not the chart".
 3. **A completed run publishes its ConfigMap findings to a public Actions log — CLOSED: values are
    withheld** (MeshWeaver#4685). The comparator never printed an inline-env or Secret value; it did
    print both sides of a ConfigMap finding, on the ground that a ConfigMap is non-secret by

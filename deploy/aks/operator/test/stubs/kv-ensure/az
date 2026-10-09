@@ -39,6 +39,13 @@ case "${1:-} ${2:-} ${3:-}" in
     # an object this run created is readable afterwards (the read-back the script does)
     if [ -f "$state/set.$name" ]; then printf 'https://vault.test/secrets/%s/1\n' "$name"; exit 0; fi
     echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+  "keyvault secret download")
+    # policy one-values-half-per-release: an EXISTING half is read back to check its KEY NAMES.
+    # HOSTING_KVE_HALF_FIXTURE names the file whose bytes the existing half holds.
+    name="" file=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    if [ -n "${HOSTING_KVE_HALF_FIXTURE:-}" ] && [ -f "$HOSTING_KVE_HALF_FIXTURE" ]; then cp "$HOSTING_KVE_HALF_FIXTURE" "$file"; exit 0; fi
+    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
   "keyvault secret set")
     [ "${HOSTING_KVE_SET_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) The user, group or application does not have secrets set permission" >&2; exit 1; }
     name="" file="" value=""
