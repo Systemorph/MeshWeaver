@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "Release Process & Versioning"
-Abstract: "The authoritative version scheme: exactly two shapes, X.Y.Z-ci.<n> for every continuous build and clean X.Y.Z for the release — no rc, no preview, no labelled line, ever. One central PlatformVersion in Directory.Build.props naming the NEXT release, a release that is a PROMOTION of a sealed continuous set rather than a rebuild, what may be minted versus what must still be read, and the SemVer ordering that #3554 turned into 42 unsatisfiable module floors."
+Abstract: "The authoritative version scheme: every main CD build is a plain SemVer release <major>.<minor>.<run> (the patch is the monotonic CD run number), the release is a PROMOTION that adds the clean <major>.<minor>.0, unpublished builds are <major>.<minor>.0-dev, and no channel word is ever minted. One central PlatformVersion line in Directory.Build.props, what may be minted versus what must still be read, and the SemVer ordering that #3554 turned into 42 unsatisfiable module floors."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#3949ab'/><path d='M12 4c3 1.5 4.5 4.5 4.5 8l-2 2h-5l-2-2C7.5 8.5 9 5.5 12 4z' fill='white'/><circle cx='12' cy='10' r='1.5' fill='#3949ab'/><path d='M9.5 16l-1.5 3 3-1.5M14.5 16l1.5 3-3-1.5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -23,84 +23,70 @@ One number, two channels, one set of bytes. The whole scheme lives in
 
 ---
 
-## 1. The version scheme — exactly two shapes
+## 1. The version scheme — every main build is a release version
 
-**A MeshWeaver version has exactly TWO shapes. There are no others, and there will be no others.**
-
-| shape | what it is | minted by |
-|---|---|---|
-| **`X.Y.Z-ci.<n>`** | every continuous and temporary build — each green merge to `main`, each local `dotnet build` | `Directory.Build.props`, on every build |
-| **`X.Y.Z`** | the release — no pre-release label at all | `release.yml`, by **retagging** one of the builds above |
-
-> Maintainer, 2026-09-07: *"we will then not introduce the rc line anymore"* · *"let's just use
-> version numbers `-ci` for temp then without `-ci` for final version"* · *"write this in docs"*.
-
-```xml
-<!-- Directory.Build.props — the ONE maintained number, naming the NEXT release -->
-<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0</PlatformVersion>
-```
+> **Policy [`platform-semver-versioning`](../PolicyNotProse)**, manual
+> [Platform Versioning (SemVer)](../PlatformVersioning). This section replaced the "two shapes"
+> scheme (`X.Y.Z-ci.<n>` for every continuous build, clean `X.Y.Z` for the release), which no build
+> mints any more. Its tags are still in the registries and are still read; see below.
 
 | Build | Version | Where it comes from |
 |---|---|---|
-| continuous (CI) | `3.0.0-ci.7900` | `main-cd.yml`, every green merge to `main` |
-| local | `3.0.0-ci.0` | any `dotnet build` on a developer machine |
-| release | `3.0.0` | `release.yml`, on the annotated tag `v3.0.0` — a **promotion** of one of the continuous builds above |
+| a main CD build | **`<major>.<minor>.<run>`**, e.g. `3.1.10340` | `main-cd.yml`: `Directory.Build.props` composes it from the line and `-p:PlatformBuildNumber=$GITHUB_RUN_NUMBER`, which only main-cd passes |
+| the release promotion | **`<major>.<minor>.0`**, e.g. `3.1.0` | `release.yml`, on the annotated tag `v3.1.0`: the clean tag is ADDED to the main build main-cd published for that commit |
+| an unverified edge build | `<major>.<minor>.0-edge.<run>` | `edge-images.yml` (manual dispatch) |
+| any other build (pull request, local, a satellite lane compiling core) | `<major>.<minor>.0-dev` | `Directory.Build.props` with no build number: the build publishes no platform version and says so |
 
-Three rules, not three observations:
+```xml
+<!-- Directory.Build.props — the ONE maintained number: the LINE, patch always 0 -->
+<PlatformVersion Condition="'$(PlatformVersion)' == ''">3.1.0</PlatformVersion>
+```
 
-- 🚨 **`-ci.<n>` is a CHANNEL MARKER, never a version.** The version is `X.Y.Z`, the line
-  `PlatformVersion` names — always the *next* release. `<n>` says only *which publication of that
-  line* this is: `$(GITHUB_RUN_NUMBER)`, monotonic per workflow, `0` locally. It reaches
-  `$(Version)` — the image tag, the package version and `MESHWEAVER_PLATFORM_VERSION` — and no
-  compiled attribute (§2). Two builds of one line differ only in `<n>`, and `<n>` compares
-  numerically.
-- 🚨 **The release is a PROMOTION of a sealed continuous set, never a rebuild.** `X.Y.Z` names bytes
-  that already shipped as `X.Y.Z-ci.<n>` and passed promote, bake and seal; `release.yml` retags that
-  manifest and compiles nothing (§3). So there is nothing left for a "candidate" label to mark — the
-  candidates *are* the continuous builds, and the one that becomes the release is chosen by tagging
-  it. That is what makes the rc line unnecessary rather than merely unwanted: up to `rc13` a tag
-  REBUILT, which made every "release candidate" a candidate for a set that did not exist yet.
-- 🚨 **No other pre-release label may ever be MINTED** — no `rc`, no `preview`, no `beta`, no
-  labelled line, no `.ci.` separator variant. `PlatformVersion` carries no label, so the composed
-  `$(Version)` is one of the two shapes by construction. Prose is not enforcement:
-  `PlatformVersionSchemeGuard` (`test/MeshWeaver.Documentation.Test`) evaluates both through real
-  MSBuild on every PR and reds when either stops being true.
+Four rules, not observations:
+
+- 🚨 **The patch is main-cd's run number, handed in BY NAME.** `GITHUB_RUN_NUMBER` is monotonic per
+  workflow and the CD run counter is the one number the pipeline never gets wrong, so the builds of
+  the retired notation (`3.0.0-ci.<run>`) and the new builds are ONE lineage, and SemVer gives the
+  same order across the boundary (`3.0.0-ci.10330 < 3.1.10331`). Every other workflow has its own
+  `GITHUB_RUN_NUMBER`, which is why `Directory.Build.props` never reads it implicitly: a pull-request
+  run that minted `<major>.<minor>.<its own run>` would wear a clean release version from the wrong
+  counter. main-cd asserts the composed string is `<major>.<minor>.<this run>` before it tags anything.
+- 🚨 **No channel word is ever MINTED** — no `ci`, no `rc`, no `preview`, no labelled line. The
+  `-dev` of an unpublished build says what it is (PlatformReleaseOrder reads it as run 0, never
+  ordered against a publication); `edge` marks the opt-in unverified lane. `PlatformVersionSchemeGuard`
+  (`test/MeshWeaver.Documentation.Test`) evaluates `PlatformVersion` and the composed `$(Version)`
+  through real MSBuild on every pull request and reds on any other shape.
+- 🚨 **The minor moves by a merged pull request, the major only on a declared break.** In practice
+  the minor moves with the next-line pull request `release.yml` opens after a release. The run number
+  keeps increasing across a bump, so the order is unaffected. `AssemblyVersion` follows the line
+  (`<major>.<minor>.0.0`); a module compiled on a newer line is declined by a lagging portal as a
+  binding conflict, which is what its floor says anyway.
+- 🚨 **The release is still a PROMOTION, never a rebuild.** `release.yml` adds `<major>.<minor>.0` to
+  bytes that already shipped as `<major>.<minor>.<run>` and passed promote, bake and seal, and
+  compiles nothing (§3). Stable installs follow those clean tags only; a run-numbered build carries no
+  label but is never a Stable candidate (`VersionSelect.PickTargets`).
 
 ### Minting is one shape; READING still has to accept the retired ones
 
-Retiring a label stops it being *produced*. It does not remove it from the registry, and those are
-separate obligations:
+Retiring a notation stops it being *produced*. It does not remove it from the registry:
 
 | | shapes | where |
 |---|---|---|
-| **MINT** | `X.Y.Z-ci.<n>` and `X.Y.Z`, nothing else | `Directory.Build.props` composes `$(Version)`; `release.yml` retags |
-| **READ** | additionally `X.Y.Z-<label>.ci.<n>` — the retired rc line used the `.ci.` separator — and any historical `rc*` tag | `PlatformReleaseOrder.BuildOrdinal`, `VersionSelect`, `edge-images.yml`, and MeshWeaver.Plugins' `check-platform-pins.py` |
+| **MINT** | `<major>.<minor>.<run>`, `<major>.<minor>.0`, `<major>.<minor>.0-edge.<run>`, `<major>.<minor>.0-dev` | `Directory.Build.props`, `release.yml`, `edge-images.yml` |
+| **READ** | additionally `X.Y.Z-ci.<n>`, the retired rc line's `X.Y.Z-<label>.ci.<n>`, and any historical `rc*` tag | `PlatformReleaseOrder.BuildOrdinal`, `VersionSelect`, `platform-version.py`, `resolve-platform.py`, and MeshWeaver.Plugins' readers |
 
-🚨 **Do not narrow a reader to match the minter.** Those images are still addressable (manifests
-kept, reachable via `staging-*`), an install can be sitting on one right now, and a reader that stops
-parsing `[.-]ci.<n>` reads such a tag as *carrying no run number* — which promotes it into the
-promotion-ranked half of the order. That is the #3542 freeze, rebuilt by a tidy-up. The minter is
-where the shape is decided; the reader is where history is survived.
+🚨 **Do not narrow a reader to match the minter.** Those images are still addressable, an install
+can be sitting on one right now, and a reader that stops parsing `[.-]ci.<n>` reads such a tag as
+*carrying no run number* — which promotes it into the promotion-ranked half of the order. That is the
+#3542 freeze, rebuilt by a tidy-up. The minter is where the shape is decided; the reader is where
+history is survived.
 
-### The one thing that looks like a third shape: `edge`
+### History: the two-shape scheme and the `edge` re-label
 
-`edge-images.yml` publishes `X.Y.Z-edge.<n>`, and that is **not a counter-example** — it is a
-*derived channel re-label*, not a version the scheme mints:
-
-- the lane computes `$(Version)` from this tree first, so what it starts from is already
-  `X.Y.Z-ci.<n>`; it then rewrites the **`ci` label to `edge`** and keeps the very same run number;
-- `VersionSelect` treats an `edge` tag as **ineligible under every policy** unless a caller opts in
-  explicitly (`requireCiGreen: false`), so it is never a self-update candidate for `Continuous`,
-  `Stable` or `None`;
-- `PlatformReleaseOrder.ChannelLabels` therefore lists `ci` *and* `edge`, and `BuildOrdinal` reads
-  the number out of either — the lineage is the publication's, whatever channel it was labelled for.
-
-So the scheme still has two shapes: `$(Version)` — the thing `Directory.Build.props` composes and
-`release.yml` promotes, and the thing the guard binds — is always `X.Y.Z-ci.<n>` or `X.Y.Z`. `edge`
-is what a *separate, opt-in lane* renames one of those to on its way to an unverified image.
-🚨 **A new channel is added by extending `ChannelLabels` and the re-label, never by adding a
-pre-release LABEL to `PlatformVersion`** — the second is what §11.4 punishes, and it is the thing
-this page forbids.
+From 2026-09-07 until the SemVer minter landed, every continuous build was `X.Y.Z-ci.<n>` and the
+release the clean `X.Y.Z`. `edge-images.yml` then derived its tag by rewriting the `ci` label to
+`edge`; it now spells `<major>.<minor>.0-edge.<run>` from the line directly. The ordering analysis
+below is kept because the retired tags are still ordered against everything else.
 
 ### What retiring `rc` fixes in the ORDERING — and the half it does not
 
@@ -252,38 +238,40 @@ ship in lockstep.
 
 ---
 
-## 2. Two channels — CONTINUOUS vs RELEASED
+## 2. The build version and the compiled attributes
 
-The `PublicRelease` flag picks the channel, and the split between the *publishable string* and
-the *compiled attributes* is what makes a promotion possible at all:
+The split between the *publishable string* and the *compiled attributes* is what makes a promotion
+possible at all:
 
-| | Flag | `Version` / image tag | `AssemblyVersion` | `FileVersion` | `InformationalVersion` |
+| | How invoked | `Version` / image tag | `AssemblyVersion` | `FileVersion` | `InformationalVersion` |
 |---|---|---|---|---|---|
-| **CONTINUOUS** | *(default)* | `3.0.0-ci.<run>` | `3.0.0.0` | `3.0.0.0` | `3.0.0+<sha>` under `CIRun` |
-| **RELEASED** | `-p:PublicRelease=true` | `3.0.0` | `3.0.0.0` | `3.0.0.0` | `3.0.0+<sha>` under `CIRun` |
+| **main CD build** | `-p:CIRun=true -p:PlatformBuildNumber=<run>` | `3.1.<run>` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` |
+| **RELEASED** | `-p:PublicRelease=true` | `3.1.0` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun` |
+| **any other build** | *(default)* | `3.1.0-dev` | `3.1.0.0` | `3.1.0.0` | `3.1.0+<sha>` under `CIRun`, else `3.1.0-dev` |
 
 - **Nothing builds under `PublicRelease` any more.** The flag survives for local experiments; a
-  release is a continuous image retagged, so the bytes inside a `3.0.0` image report the
-  `3.0.0-ci.<n>` build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is
-  deliberate: the release *is* that build.
-- **`AssemblyVersion` is STABLE within a line** (`3.0.0.0`) — the runtime assembly-binding
+  release is a main build retagged, so the bytes inside a `3.1.0` image report the `3.1.<run>`
+  build they are, via `MESHWEAVER_PLATFORM_VERSION` in the image config. That is deliberate: the
+  release *is* that build.
+- **`AssemblyVersion` is STABLE within a line** (`3.1.0.0`) — the runtime assembly-binding
   identity, identical across every assembly in one build. A per-project time-based number once
   made `Memex.Database.Migration` bind to `MeshWeaver.Documentation, Version=3.0.0.280` while the
   packaged DLL carried another number (#143); binding identity must not depend on wall-clock
-  time. It moves with the line (`3.1.0.0` after the next bump), which is fine: module bundles are
-  keyed by framework identity and re-baked per set, never bound by assembly version.
+  time. It moves with the line (`3.0.0.0` → `3.1.0.0` at the SemVer minter): a plugin compiled
+  against `3.0.0.0` binds on `3.1.0.0` (roll-forward), and one compiled against `3.1.0.0` meeting a
+  3.0 portal is declined loudly as a binding conflict. MeshWeaver.Plugins and
+  MeshWeaver.SocialMedia derive their own AssemblyVersion from the platform's PlatformVersion.
 - **`FileVersion` is pinned** for the same reason `InformationalVersion` is: both are *compiled*
   attributes, and CI compile inputs are **commit-deterministic**
   ([#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3) so two CI builds of one
   commit produce ABI-identical assemblies — that is what lets the CI NodeType bake seed at portal
   boot.
-- **The `-ci.<n>` suffix** uses `$(GITHUB_RUN_NUMBER)` when present, `0` locally. It reaches
-  ONLY `$(Version)` — the image tag and `MESHWEAVER_PLATFORM_VERSION` — never a compiled
-  attribute. The separator is a literal `-`, unconditionally: `PlatformVersion` carries no label
-  (§1), so there is no second case left to branch on. 🚨 Anything that *parses* the build number
-  back out of a version must still accept both separators, `[.-]ci.<n>` — the retired rc line
-  minted `.ci.` and those images are still addressable. Minting one shape and reading two is the
-  split §1 sets out; do not collapse it in either direction.
+- **The run-numbered patch** comes from `-p:PlatformBuildNumber`, which only `main-cd.yml` passes
+  (`$GITHUB_RUN_NUMBER`). It reaches ONLY `$(Version)` — the image tag and
+  `MESHWEAVER_PLATFORM_VERSION` — never a compiled attribute. 🚨 Anything that *parses* the run
+  number back out of a version must still accept the retired notations, `[.-]ci.<n>` — those images
+  are still addressable. Minting one shape and reading several is the split §1 sets out; do not
+  collapse it in either direction.
 - **`InformationalVersion`** is the bare `$(PlatformVersion)` under `CIRun=true` (the SDK appends
   `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
   `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that ship a
@@ -301,19 +289,20 @@ the *compiled attributes* is what makes a promotion possible at all:
 to start"*, *"let's offer all variants ⇒ we fix 1 digit, 2 digits, or even 3 digits"*, and for the
 adapter's default *"3 latest and 4 latest — I am for the latter"*.
 
-Every sealed set moves three pointers on `memex-portal-ai` and `memex-migration`, in ACR and in
-GHCR, derived from the set's version (`3.0.0-ci.8059` → `3.0.0`):
+Every armed set moves the line pointers on `memex-portal-ai` and `memex-migration`, in ACR and in
+GHCR, derived from the set's version (`.github/scripts/platform-version.py line-pointers`):
 
 | pointer | moves to | never touched by |
 |---|---|---|
-| `3-latest` | every sealed set of major 3, across minors | any 4.x seal |
-| `3.0-latest` | every sealed set of 3.0.x | 3.1.0-ci |
-| `3.0.0-latest` | every sealed set of the 3.0.0 line (the `3.0.0-ci.*` builds) | 3.0.1 |
+| `3-latest` | every armed set of major 3, across minors | any 4.x set |
+| `3.1-latest` | every armed set of the 3.1 line (`3.1.<run>`) | 3.2.x |
+| `3.0.0-latest` | FROZEN on the last `3.0.0-ci.*` set: a `<major>.<minor>.<run>` build moves no three-part pointer, since `3.1.10340-latest` would name exactly one build | every new build |
 
 CD writes them in **Phase D, after the arming PUT** (`memex-portal-ai:<version>`, CD's last write
 before this), so a fresh install that resolves a pointer never sees a set whose migration exists
-and whose portal does not. `release.yml` moves the same three when it promotes a sealed set to a
-clean version. The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
+and whose portal does not. `release.yml` moves NO pointer when it promotes a `<major>.<minor>.<run>`
+build (CD already moved them to it or past it; a release-side move could only move them backwards),
+and keeps the old behaviour for a set of the retired notation. The self-updater ignores them — it selects on `^\d+\.\d+\.\d+` tags — so a
 pointer is only ever a **first-start** address.
 
 **The rule this makes clear:** a package of major N names `N-latest` and is otherwise independent
@@ -326,15 +315,15 @@ exact version. The package version moves only when the adapter's surface does �
 ## 3. Commands
 
 ```bash
-# CONTINUOUS — CI and local. Nothing to add → 3.0.0-ci.<run> (3.0.0-ci.0 locally)
+# Local or pull-request build. Nothing to add → 3.1.0-dev
 dotnet build
 
-# What CI computes for an image (the same call main-cd.yml makes):
+# What main CD computes for an image (the same call main-cd.yml makes, with its own run number):
 dotnet msbuild src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj \
-  -getProperty:Version -p:CIRun=true -nologo
+  -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber=10340 -nologo   # → 3.1.10340
 
 # RELEASE — no command builds one. Push an annotated tag on a promoted, sealed commit:
-git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0
+git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0
 ```
 
 ### What `release.yml` does on that tag — and what it refuses
@@ -344,19 +333,19 @@ The lane **promotes**; it compiles nothing. In order:
 1. **Refuses** a version that is not `v<major>.<minor>.<patch>`, a lightweight tag, a commit not on
    `main`, a commit whose `PlatformVersion` differs from the tag, and a version with no committed
    notes page at `Doc/ReleaseNotes/<x_y_z>`.
-2. **Resolves the continuous set** for the commit from the `3.0.0-ci.<n>` tag on the manifest
+2. **Resolves the build** for the commit from its `<major>.<minor>.<run>` tag (or a retired `3.0.0-ci.<n>` one) on the manifest
    that carries its identity (`<short-sha>`, or the build's `staging-<short-sha>-<run id>` when a
    rebuild moved the bare tag; the retired `<core>-p<plugins>` pair tag is no longer required), and
    refuses a commit `main-cd` never promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
 3. **Asserts the set is complete** (`check-image-set.sh`) **and sealed** for both the platform
    content and the Plugins modules (`check-release-availability.sh`).
-4. **Records the release marker** `_releases/3.0.0` on every artifact store, holding the same
+4. **Records the release marker** `_releases/3.1.0` on every artifact store, holding the same
    framework identity the continuous build recorded, and re-asserts availability under the clean
    name — the very question a Stable install's gate asks ([ReleaseGates](/Doc/Architecture/ReleaseGates)).
 5. **Retags** `memex-migration`, `mw-plugin-test`, then `memex-portal-ai` last (`<short-sha>` →
-   `3.0.0`, manifest-only, seconds), and mirrors the three to GHCR.
+   `3.1.0`, manifest-only, seconds), and mirrors the three to GHCR.
 6. **Publishes the GitHub Release** from the notes page.
-7. **Opens the pull request** that moves `PlatformVersion` to `3.1.0`.
+7. **Opens the pull request** that moves `PlatformVersion` to `3.2.0`.
 
 Everything the lane needs is asserted RED by a `preflight` job — no `continue-on-error`, no
 `if: secret != ''` (AGENTS.md: a gate never tests its own inputs).
@@ -365,7 +354,7 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
 
 ## 4. The workflow — continuous → release → next line
 
-1. **Iterate.** Every green merge ships `3.0.0-ci.<n>` (see the ordering note in §1 for who rolls onto it).
+1. **Iterate.** Every green merge ships `3.1.<run>` (see the ordering note in §1 for who rolls onto it).
    > 📅 **2026-09-12 — "ships" means: promoted and sealed, then validated by the next daily runs.**
    > A continuous build no longer wakes every node repository (the per-build
    > `meshweaver-framework-released` wave is off by default — `Hosting:PlatformBuilds:BroadcastFrameworkReleases`,
@@ -378,16 +367,17 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
    shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
-   page, `Doc/ReleaseNotes/3_0_0`, first: the lane will not release without it.
+   page, `Doc/ReleaseNotes/3_1_0`, first: the lane will not release without it.
 3. **Scan it.** Run the two OWASP ZAP scans — public active, authenticated passive — against the
    deployment serving that build, and write the verdict and every finding's disposition on the
    notes page ([OWASP ZAP Scan — Every Release](/Doc/Architecture/SecurityScanning)). `FAIL-NEW`
    must read 0 on both runs; a `Vulnerable JS Library` WARN blocks the tag; every other WARN is
    fixed or carried with a written reason. The lane cannot check this — it is the operator's gate.
-4. **Tag it, annotated.** `git tag -a v3.0.0 -m "MeshWeaver 3.0.0" <sha> && git push origin v3.0.0`.
+4. **Tag it, annotated.** `git tag -a v3.1.0 -m "MeshWeaver 3.1.0" <sha> && git push origin v3.1.0`.
    The lane promotes the set (§3); Stable installs pick it up on their next check.
-5. **Merge the bump.** The lane's pull request moves the line to `3.1.0`; auto-arm enqueues it.
-   Until it merges, no continuous build may be relied on to roll a Continuous install forward.
+5. **Merge the bump.** The lane's pull request moves the line to `3.2.0`. A Continuous install keeps
+   rolling either way — the run number orders it — but Stable sees the next clean release only once the
+   line has moved.
 
 > **Tagging discipline.** A version tag must be **immutable** (annotated, never force-moved): the
 > images, the release marker and data-sync all key off it, so moving a tag silently ships different
