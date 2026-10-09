@@ -249,6 +249,17 @@ public static class SealedPublicationIndex
         string? publishedRoot, string? identity, ILogger? logger = null)
         => ResolvedReadingFor(publishedRoot, identity, logger).Sources;
 
+    /// <summary><see cref="ReadFor"/> through the share-walk IO seam — every source of the
+    /// identity read in full. The cost the cross-identity walk no longer pays per identity.</summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="identity">The framework identity whose directory to read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="io">The file operations to perform.</param>
+    internal static IReadOnlyList<SealedSource> ReadAllSourcesFor(
+        string? publishedRoot, string? identity, ILogger? logger, BundleShareIo io)
+        => [.. ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger, io)
+            .Sources.Select(r => r.Source)];
+
     /// <summary>
     /// <see cref="ReadResolvedFor"/> plus WHY the list is the length it is — so a caller can tell
     /// "nothing is sealed for me" from "I could not look". See <see cref="SealedReadOutcome"/>
@@ -313,8 +324,10 @@ public static class SealedPublicationIndex
 
     private static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
                      SealedReadOutcome Outcome) ResolvedReadingFor(
-        string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger)
+        string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger,
+        BundleShareIo? io = null)
     {
+        io ??= BundleShareIo.Real;
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
             return ([], SealedReadOutcome.NotConfigured);
         var identityDirectory = Path.Combine(publishedRoot, identity);
@@ -331,9 +344,9 @@ public static class SealedPublicationIndex
             // end. So the walk is attempted and its own exception separates them:
             // `DirectoryNotFoundException` is the absence, everything else lands in the catch
             // below as UNREADABLE.
-            readings = [.. Directory.EnumerateDirectories(identityDirectory)
+            readings = [.. io.EnumerateDirectories(identityDirectory)
                 .OrderBy(d => d, StringComparer.Ordinal)
-                .Select(d => ReadSource(d, logger))];
+                .Select(d => ReadSource(d, logger, io))];
             // 🚨 A SOURCE WHOSE POINTER COULD NOT BE FOLLOWED MAKES THE WHOLE READING UNREADABLE
             // (#3461 phase 5). Until the flat compatibility copy was disposed of, that fall-back
             // landed on a sealed publication and the reading was merely a little stale; now it
@@ -395,9 +408,27 @@ public static class SealedPublicationIndex
         return ([.. sources.Select(r => r.Source)], outcome);
     }
 
+    /// <summary>
+    /// ONE source's reading — <see cref="ReadFor"/> for a single, named source, with the ladder
+    /// applied exactly as <see cref="ReadFor"/> applies it. The cross-identity fallback walk asks
+    /// this only of the sources it still NEEDS, instead of reading every source of every identity
+    /// (<c>Doc/Architecture/CiContentBake</c> → "The published-root walk").
+    /// </summary>
+    /// <param name="sourceDirectory">The <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c> directory.</param>
+    /// <param name="pointer">The pointer resolution the caller already took for that directory —
+    /// one resolution, never two (#3461).</param>
+    /// <param name="runningPlatformVersion">The running platform build, for the ladder.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="io">The file operations to perform.</param>
+    internal static SealedSource ReadSourceFor(
+        string sourceDirectory, PublicationPointer pointer, string? runningPlatformVersion,
+        ILogger? logger, BundleShareIo io)
+        => ApplyLadder(ReadSource(sourceDirectory, logger, io, pointer).Source, runningPlatformVersion);
+
     private static (SealedSource Source, string Directory, bool Unreadable) ReadSource(
-        string sourceDirectory, ILogger? logger)
+        string sourceDirectory, ILogger? logger, BundleShareIo? io = null, PublicationPointer? resolved = null)
     {
+        io ??= BundleShareIo.Real;
         // 🚨 The SOURCE name is the directory's own, taken BEFORE resolution — a generation is
         // an instance of a publication of 'plugins', never a source called
         // 'Systemorph-MeshWeaver-42-1'. SealedSyncGate attributes seals by this name.
@@ -406,7 +437,9 @@ public static class SealedPublicationIndex
         // This reader is in the portal image and phase 1 missed it: SeedPublishedRoot already
         // reads the BUNDLES through PublicationDirectoryOf, so without this the index and the
         // seeder would read two different publications of one source.
-        var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+        var pointer = resolved
+                      ?? ShippedPrebuiltBundles.ResolvePublicationPointer(
+                          sourceDirectory, CancellationToken.None, logger, io);
         var publication = pointer.Directory;
         // 🚨 A MARKER THAT COULD NOT BE READ IS NOT AN ABSENT ONE (Copilot's review of #3461 phase
         // 5). `ReadMarker` used to answer null for both, and null means UNATTRIBUTABLE — which
@@ -414,8 +447,8 @@ public static class SealedPublicationIndex
         // answers with Go. So an ACL or an IO fault on `repository.txt` could open the very gate a
         // torn publication is meant to hold. The reading says which, and a failure makes the whole
         // reading UNREADABLE below, exactly as a faulted pointer does.
-        var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName), out var repositoryFault);
-        var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName), out var commitFault);
+        var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName), out var repositoryFault, io);
+        var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName), out var commitFault, io);
         if (string.Equals(commit, "unknown", StringComparison.OrdinalIgnoreCase))
             commit = null;
         if (repositoryFault is not null || commitFault is not null)
@@ -440,7 +473,7 @@ public static class SealedPublicationIndex
             // loudly as a real absence. `ReadSealLines` classifies absence AT THE OPEN and lets
             // every other I/O failure surface — into the catch below, which reports the source as
             // unreadable rather than as unsealed.
-            var seal = ShippedPrebuiltBundles.ReadSealLines(sentinel);
+            var seal = ShippedPrebuiltBundles.ReadSealLines(sentinel, io.ReadAllLines);
             if (seal is null)
             {
                 // 🚨 THE TWO ABSENCES, and phase 5 is what separated them. A pointer that is simply
@@ -464,7 +497,7 @@ public static class SealedPublicationIndex
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .ToList();
-            var missing = listed.FirstOrDefault(name => !File.Exists(Path.Combine(publication, name)));
+            var missing = listed.FirstOrDefault(name => !io.FileExists(Path.Combine(publication, name)));
             if (missing is not null)
                 return (new SealedSource(source, repository, commit, false,
                     $"the seal lists '{missing}', which is not on disk"), publication, false);
@@ -472,7 +505,7 @@ public static class SealedPublicationIndex
             // rule for a producer that predates the field; a manifest that could not be READ may
             // belong to a newer publication, and treating it as older would let this instance
             // advance onto the forbidden rung. So it makes the reading UNREADABLE — the gate holds.
-            var (producer, manifestFault) = ProducerOf(publication, listed, logger);
+            var (producer, manifestFault) = ProducerOf(publication, listed, logger, io);
             return manifestFault is null
                 ? (new SealedSource(source, repository, commit, true, null) { ProducerPlatformVersion = producer },
                     publication, false)
@@ -501,12 +534,12 @@ public static class SealedPublicationIndex
     /// this file: <see cref="FileNotFoundException"/> / <see cref="DirectoryNotFoundException"/> is
     /// the absence; anything else is a fault the caller must report.</para>
     /// </summary>
-    private static string? ReadMarker(string path, out string? fault)
+    private static string? ReadMarker(string path, out string? fault, BundleShareIo? io = null)
     {
         fault = null;
         try
         {
-            var value = File.ReadAllText(path).Trim();
+            var value = (io ?? BundleShareIo.Real).ReadAllText(path).Trim();
             return value.Length == 0 ? null : value;
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -529,7 +562,7 @@ public static class SealedPublicationIndex
     /// manifest could not be read at all, which the caller turns into an unreadable reading.
     /// </summary>
     private static (string? Producer, string? Fault) ProducerOf(
-        string publication, IReadOnlyList<string> listed, ILogger? logger)
+        string publication, IReadOnlyList<string> listed, ILogger? logger, BundleShareIo io)
     {
         string? newest = null;
         foreach (var name in listed.Where(n => n.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
@@ -537,7 +570,7 @@ public static class SealedPublicationIndex
             string? producer;
             try
             {
-                producer = Plugin.Packaging.BundleReader.ReadManifest(Path.Combine(publication, name))?.ProducerPlatformVersion;
+                producer = io.ReadManifest(Path.Combine(publication, name))?.ProducerPlatformVersion;
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or NotSupportedException
                                            or System.Text.Json.JsonException or UnauthorizedAccessException)

@@ -205,17 +205,26 @@ public static class ShippedPrebuiltBundles
     /// <param name="logger">Diagnostics for a refused pointer.</param>
     public static PublicationPointer ResolvePublicationPointer(
         string sourceDirectory, CancellationToken cancellationToken, ILogger? logger = null)
+        => ResolvePublicationPointer(sourceDirectory, cancellationToken, logger, BundleShareIo.Real);
+
+    /// <summary>Resolves a publication pointer through the share-walk IO seam.</summary>
+    /// <param name="sourceDirectory">The source publication directory.</param>
+    /// <param name="cancellationToken">Cancellation of the worker that owns the read.</param>
+    /// <param name="logger">Diagnostics for a refused pointer.</param>
+    /// <param name="io">The file operations to perform (<see cref="BundleShareIo.Real"/> in production).</param>
+    internal static PublicationPointer ResolvePublicationPointer(
+        string sourceDirectory, CancellationToken cancellationToken, ILogger? logger, BundleShareIo io)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var pointer = Path.Combine(sourceDirectory, PublicationPointerFileName);
         string? named;
         try
         {
-            var exists = File.Exists(pointer);
+            var exists = io.FileExists(pointer);
             cancellationToken.ThrowIfCancellationRequested();
             if (!exists)
                 return new PublicationPointer(sourceDirectory, null, null);
-            named = File.ReadAllLines(pointer)
+            named = io.ReadAllLines(pointer)
                 .Select(l => l.Trim())
                 .FirstOrDefault(l => l.Length > 0);
             cancellationToken.ThrowIfCancellationRequested();
@@ -257,7 +266,7 @@ public static class ShippedPrebuiltBundles
 
         var generation = Path.Combine(sourceDirectory, named);
         cancellationToken.ThrowIfCancellationRequested();
-        var generationExists = Directory.Exists(generation);
+        var generationExists = io.DirectoryExists(generation);
         cancellationToken.ThrowIfCancellationRequested();
         if (!generationExists)
         {
@@ -460,38 +469,138 @@ public static class ShippedPrebuiltBundles
             // with (#3542) — the shared total order, so this sweep and the self-updater can never
             // disagree about which publication is the newest one.
             .OrderByDescending(kv => kv.Value, Plugin.Packaging.PlatformReleaseOrder.Newest)
+            .Select(kv => (Identity: kv.Key, Version: kv.Value))
             .ToList();
-        var taken = new HashSet<string>(sealedHere, StringComparer.OrdinalIgnoreCase);
+        return WalkFallbackIdentities(
+            publishedRoot, candidates, sealedHere, context.Strictness.ToString(),
+            PrebuiltAdoptionPolicy.RunningPlatformVersion, logger, cancellationToken, BundleShareIo.Real).Bundles;
+    }
+
+    /// <summary>What one cross-identity walk read, and what it took.</summary>
+    /// <param name="Bundles">The bundles taken, in walk order.</param>
+    /// <param name="IdentitiesListed">Identity directories listed (one listing each).</param>
+    /// <param name="SourcesRead">Source publications READ — only the ones the walk still needed.</param>
+    /// <param name="SourcesTaken">Sources whose publication was taken from another identity.</param>
+    internal sealed record FallbackWalk(ImmutableList<string> Bundles, int IdentitiesListed, int SourcesRead, int SourcesTaken);
+
+    /// <summary>
+    /// 🚨 THE CROSS-IDENTITY WALK, costed by what it still NEEDS (<c>Doc/Architecture/CiContentBake</c>
+    /// → "The published-root walk"). For each admitted identity, newest first: ONE listing of its
+    /// source directories, then a read of only the sources no newer identity (and not this one's
+    /// own) has already supplied. A source already taken costs nothing.
+    ///
+    /// <para><b>Why (the incident).</b> The walk used to read EVERY source of EVERY admitted
+    /// identity in full — pointer, seal, an existence probe per listed bundle, two markers, the seal
+    /// again, the probes again, and every bundle's MANIFEST (a zip open) — and only then ask whether
+    /// it needed any of them. Under <c>Family</c> strictness every identity on the platform line is
+    /// admitted, so the cost grew with the share's whole history while the answer stayed "nothing
+    /// more to take". Measured on memex pod <c>…-5d998</c> (roll to 3.0.0-ci.10310, 2026-10-09):
+    /// the walk took its one source from the newest identity at 11:45:45 and then read the rest of
+    /// the share, silently, until 11:53:29; all 71 bundles were then judged in 38 s. 8 min 24 s
+    /// before readiness, nothing adopted.</para>
+    ///
+    /// <para>Selection is unchanged: newest identity first, sealed sources only (the ladder
+    /// included), one publication per source name, the first sealed one wins. Identities absent on
+    /// disk are answered by ONE listing of the root rather than one probe each.</para>
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="candidates">The admitted identities, newest first, with their platform versions.</param>
+    /// <param name="sealedHere">Sources the live identity seals itself — never taken from another.</param>
+    /// <param name="strictness">The strictness name, for the log line.</param>
+    /// <param name="runningPlatformVersion">The running platform build, for the ladder.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="cancellationToken">The pool leaf's token, checked before each identity and source.</param>
+    /// <param name="io">The file operations to perform.</param>
+    internal static FallbackWalk WalkFallbackIdentities(
+        string publishedRoot, IReadOnlyList<(string Identity, string Version)> candidates,
+        IReadOnlySet<string> sealedHere, string strictness, string? runningPlatformVersion,
+        ILogger? logger, CancellationToken cancellationToken, BundleShareIo io)
+    {
         var bundles = new List<string>();
+        if (candidates.Count == 0)
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
+        var started = DateTimeOffset.UtcNow;
+        cancellationToken.ThrowIfCancellationRequested();
+        ImmutableHashSet<string> onDisk;
+        try
+        {
+            // ONE listing of the root answers "which candidate identities are still on the share" —
+            // retention prunes identity directories while their release markers stay, so most
+            // candidates are typically absent, and a probe each was a round-trip each.
+            onDisk = io.EnumerateDirectories(publishedRoot)
+                .Select(d => Path.GetFileName(d)!)
+                .ToImmutableHashSet(StringComparer.Ordinal);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The fallback is an addition to this identity's own bundles, which are already
+            // listed: an unreadable root costs the cross-identity half, loudly, never the pass.
+            logger?.LogWarning(ex,
+                "ShippedPrebuiltBundles: could not list {Root} — no publication is taken from another "
+                + "identity on this pass; the sweep compiles whatever stays uncovered", publishedRoot);
+            return new FallbackWalk(bundles.ToImmutableList(), 0, 0, 0);
+        }
+        var taken = new HashSet<string>(sealedHere, StringComparer.OrdinalIgnoreCase);
+        int listedIdentities = 0, sourcesRead = 0, sourcesTaken = 0;
         foreach (var (identity, version) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var identityDir = Path.Combine(publishedRoot, identity);
-            if (!Directory.Exists(identityDir))
+            if (!onDisk.Contains(identity))
                 continue;
-            // ONE enumeration + sentinel read per identity directory; the per-source filter below
-            // is a string comparison over that list, never a second walk of the share.
-            var complete = CompletePublishedBundlesOf(identityDir, logger, cancellationToken);
-            foreach (var sealedSource in SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
+            var identityDir = Path.Combine(publishedRoot, identity);
+            IReadOnlyList<string> sources;
+            try
+            {
+                sources = OrdinalListing(io.EnumerateDirectories(identityDir), cancellationToken);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // Removed between the root listing and this one (retention): nothing here to take.
+                continue;
+            }
+            listedIdentities++;
+            foreach (var sourceDir in sources)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!sealedSource.IsSealed || !taken.Add(sealedSource.Source))
+                var source = Path.GetFileName(sourceDir)!;
+                // 🚨 THE WHOLE FIX: a source a newer identity (or this instance itself) already
+                // supplied is never read again. The selection rule is "first sealed publication
+                // wins", so reading it could not change the answer — only the cost.
+                if (taken.Contains(source))
                     continue;
-                var sourceDir = PublicationDirectoryOf(Path.Combine(identityDir, sealedSource.Source), logger);
-                var listed = complete
-                    .Where(b => string.Equals(Path.GetDirectoryName(b), sourceDir, StringComparison.Ordinal))
-                    .ToList();
+                sourcesRead++;
+                // One pointer resolution, used for the bytes AND the reading (#3461).
+                var pointer = ResolvePublicationPointer(sourceDir, cancellationToken, logger, io);
+                // The cheap half first: an unsealed or torn publication is answered by its seal
+                // alone, before any marker or manifest is opened.
+                if (SealedBundlesOfPublication(pointer.Directory, logger, cancellationToken, null, io) is not { } listed)
+                    continue;
+                var reading = SealedPublicationIndex.ReadSourceFor(
+                    sourceDir, pointer, runningPlatformVersion, logger, io);
+                if (!reading.IsSealed || !taken.Add(source))
+                    continue;
                 if (listed.Count == 0)
                     continue;
+                sourcesTaken++;
                 logger?.LogInformation(
                     "ShippedPrebuiltBundles: '{Source}' is not sealed for this identity; taking its "
                     + "publication sealed for platform {Version} (identity {Identity}) under "
                     + "{Strictness} strictness — each assembly proves its platform links before it lands",
-                    sealedSource.Source, version, identity, context.Strictness);
+                    source, version, identity, strictness);
                 bundles.AddRange(listed);
             }
         }
-        return bundles;
+        logger?.LogInformation(
+            "ShippedPrebuiltBundles: cross-identity walk over {Root}: {Candidates} admitted identity(ies), "
+            + "{Listed} on the share and listed, {SourcesRead} source publication(s) read (only those no "
+            + "newer identity had supplied), {Taken} taken — in {Elapsed}",
+            publishedRoot, candidates.Count, listedIdentities, sourcesRead, sourcesTaken,
+            DateTimeOffset.UtcNow - started);
+        return new FallbackWalk(bundles.ToImmutableList(), listedIdentities, sourcesRead, sourcesTaken);
     }
 
     /// <summary>
@@ -568,10 +677,12 @@ public static class ShippedPrebuiltBundles
     internal static List<string> CompletePublishedBundlesOf(
         string identityDirectory, ILogger? logger, CancellationToken cancellationToken,
         Func<string, string[]>? readLines = null,
-        IReadOnlyDictionary<string, string>? publicationDirectories = null)
+        IReadOnlyDictionary<string, string>? publicationDirectories = null,
+        BundleShareIo? io = null)
     {
+        io ??= BundleShareIo.Real;
         var bundles = new List<string>();
-        foreach (var source in OrdinalListing(Directory.EnumerateDirectories(identityDirectory), cancellationToken))
+        foreach (var source in OrdinalListing(io.EnumerateDirectories(identityDirectory), cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: the publication may live in a GENERATION subdirectory this source's
@@ -583,64 +694,87 @@ public static class ShippedPrebuiltBundles
                 publicationDirectories is not null
                 && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned)
                     ? pinned
-                    : PublicationDirectoryOf(source, logger);
-            var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
-            // 🚨 #3876: the OPEN decides absence, never a preceding File.Exists. The publisher
-            // unseals before it republishes (several times an hour during a release) and retention
-            // unseals before it removes an identity, so an existence check here observed a seal
-            // that the read then failed to open — and the FileNotFoundException travelled to
-            // SeedBundles' outer Catch, which abandons the WHOLE identity's adoption pass. One
-            // source being replaced mid-boot made every OTHER sealed source on that identity
-            // recompile too. An absent seal is a fact this loop already answers correctly: skip
-            // THIS source, loudly, and seed the rest.
-            var seal = ReadSealLines(sentinel, readLines);
-            if (seal is null)
-            {
-                // Say WHICH absence: a publication directory that is GONE is a different fact from
-                // one that is present and unsealed, and only the second is worth a re-publish. Two
-                // literal templates rather than one chosen at runtime — a template that varies is
-                // not greppable in Loki and is invisible to the logging analyzers.
-                if (Directory.Exists(sourceDir))
-                    logger?.LogWarning(
-                        "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
-                        + "publication is incomplete (it died before the seal, or it is being "
-                        + "replaced right now: the publisher removes the seal first and restores it "
-                        + "last); NOT seeding it, the sweep compiles instead and the next CI publish "
-                        + "re-publishes the source",
-                        sourceDir, CompletionSentinelFileName);
-                else
-                    logger?.LogWarning(
-                        "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
-                        + "directory disappeared while this pass was reading it (retention, or a "
-                        + "replace that moved the generation); NOT seeding it, the sweep compiles "
-                        + "instead and the next pass reads whatever is published then",
-                        sourceDir);
-                continue;
-            }
-            var listed = seal
-                .Select(l => l.Trim())
-                .Where(l => l.Length > 0)
-                .OrderBy(l => l, StringComparer.Ordinal)
-                .Select(name => Path.Combine(sourceDir, name))
-                .ToList();
-            var missing = listed
-                .Where(p =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return !File.Exists(p);
-                })
-                .ToList();
-            if (missing.Count > 0)
-            {
-                logger?.LogWarning(
-                    "ShippedPrebuiltBundles: {SourceDirectory} is sealed but {Missing} listed "
-                    + "bundle(s) are absent (torn publication) — NOT seeding it, the sweep "
-                    + "compiles instead", sourceDir, missing.Count);
-                continue;
-            }
-            bundles.AddRange(listed);
+                    : ResolvePublicationPointer(source, cancellationToken, logger, io).Directory;
+            if (SealedBundlesOfPublication(sourceDir, logger, cancellationToken, readLines, io) is { } listed)
+                bundles.AddRange(listed);
         }
         return bundles;
+    }
+
+    /// <summary>
+    /// ONE source's sentinel-gated bundles: exactly what the seal of the already-resolved
+    /// <paramref name="publicationDirectory"/> lists, or null — loudly — when that publication is
+    /// unsealed, gone, or torn beyond its seal. The per-source half of
+    /// <see cref="CompletePublishedBundlesOf"/>, and what the cross-identity fallback walk asks of
+    /// a source it still NEEDS — and only of those (<c>Doc/Architecture/CiContentBake</c> →
+    /// "The published-root walk").
+    /// </summary>
+    /// <param name="publicationDirectory">The resolved publication directory of one source.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="cancellationToken">The pool leaf's token, checked before every listed bundle.</param>
+    /// <param name="readLines">Test seam: the seal read to perform.</param>
+    /// <param name="io">The file operations to perform.</param>
+    internal static List<string>? SealedBundlesOfPublication(
+        string publicationDirectory, ILogger? logger, CancellationToken cancellationToken,
+        Func<string, string[]>? readLines, BundleShareIo io)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var sourceDir = publicationDirectory;
+        var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
+        // 🚨 #3876: the OPEN decides absence, never a preceding File.Exists. The publisher
+        // unseals before it republishes (several times an hour during a release) and retention
+        // unseals before it removes an identity, so an existence check here observed a seal
+        // that the read then failed to open — and the FileNotFoundException travelled to
+        // SeedBundles' outer Catch, which abandons the WHOLE identity's adoption pass. One
+        // source being replaced mid-boot made every OTHER sealed source on that identity
+        // recompile too. An absent seal is a fact this loop already answers correctly: skip
+        // THIS source, loudly, and seed the rest.
+        var seal = ReadSealLines(sentinel, readLines ?? io.ReadAllLines);
+        if (seal is null)
+        {
+            // Say WHICH absence: a publication directory that is GONE is a different fact from
+            // one that is present and unsealed, and only the second is worth a re-publish. Two
+            // literal templates rather than one chosen at runtime — a template that varies is
+            // not greppable in Loki and is invisible to the logging analyzers.
+            if (io.DirectoryExists(sourceDir))
+                logger?.LogWarning(
+                    "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
+                    + "publication is incomplete (it died before the seal, or it is being "
+                    + "replaced right now: the publisher removes the seal first and restores it "
+                    + "last); NOT seeding it, the sweep compiles instead and the next CI publish "
+                    + "re-publishes the source",
+                    sourceDir, CompletionSentinelFileName);
+            else
+                logger?.LogWarning(
+                    "ShippedPrebuiltBundles: {SourceDirectory} is gone — its publication "
+                    + "directory disappeared while this pass was reading it (retention, or a "
+                    + "replace that moved the generation); NOT seeding it, the sweep compiles "
+                    + "instead and the next pass reads whatever is published then",
+                    sourceDir);
+            return null;
+        }
+        var listed = seal
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .OrderBy(l => l, StringComparer.Ordinal)
+            .Select(name => Path.Combine(sourceDir, name))
+            .ToList();
+        var missing = listed
+            .Where(p =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return !io.FileExists(p);
+            })
+            .ToList();
+        if (missing.Count > 0)
+        {
+            logger?.LogWarning(
+                "ShippedPrebuiltBundles: {SourceDirectory} is sealed but {Missing} listed "
+                + "bundle(s) are absent (torn publication) — NOT seeding it, the sweep "
+                + "compiles instead", sourceDir, missing.Count);
+            return null;
+        }
+        return listed;
     }
 
     /// <summary>
@@ -1044,6 +1178,10 @@ public static class ShippedPrebuiltBundles
                         .InvokeBlocking(enumerateBundles)
                         .SelectMany(bundles =>
                         {
+                            // 🚨 The two phases are timed APART: the share walk that LISTS the bundles
+                            // and the pass that JUDGES them have different costs and different
+                            // fixes, and one total hid which one ate a pod's boot for two releases.
+                            var listedAt = DateTimeOffset.UtcNow;
                             if (bundles.Count == 0)
                             {
                                 logger?.LogDebug(
@@ -1074,13 +1212,15 @@ public static class ShippedPrebuiltBundles
                                             + "{Bundles} shipped bundle(s) under {Directory} are backed by "
                                             + "the assembly store — {Adopted} adopted now, {Current} already "
                                             + "current and skipped WITHOUT activating their NodeType hubs — "
-                                            + "in {Elapsed}. Counted in ASSEMBLIES (bundle entries — two "
+                                            + "in {Elapsed} (share walk {WalkElapsed}, bundle pass "
+                                            + "{BundlePassElapsed}). Counted in ASSEMBLIES (bundle entries — two "
                                             + "bundles may name one NodeType); the bake sweep's counts are "
                                             + "over NODETYPES judged from their records, so the two are not "
                                             + "the same population and a difference between them is not a "
                                             + "disagreement (#3703)",
                                             tally.Covered, bundles.Count, dir, tally.Adopted,
-                                            tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt);
+                                            tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt,
+                                            listedAt - startedAt, DateTimeOffset.UtcNow - listedAt);
                                         // 🚨 A mount that backed NOTHING needs its reason at the SAME level as
                                         // the summary, or the summary is unactionable. "0 of N, 0 declined" has
                                         // exactly one cause left once identity is ruled out: every bundle named

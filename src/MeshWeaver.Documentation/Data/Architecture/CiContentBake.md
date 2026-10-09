@@ -603,6 +603,61 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
+### The published-root walk: one listing per identity, reads only for what is still needed
+
+Before step 1 can run over CI-published bundles, `SeedPublishedRoot` has to **list** them: this
+identity's sealed sources, plus — under `Modules:VersionStrictness` `Family`/`Minimum` — a source
+this identity does not seal, taken from the newest other admitted identity that does
+(`ShippedPrebuiltBundles.WalkFallbackIdentities`). The published root is the shared `/data` Azure
+Files volume, where every file operation is a network round-trip, so the walk's **operation count**
+is the cost.
+
+> 🚨 **Measured, 2026-10-09, memex pod `…-5d998` (roll to 3.0.0-ci.10310):** `179 prebuilt
+> assembly(ies) from 71 shipped bundle(s) … 0 adopted now, 179 already current … in 00:08:24.62`.
+> The pod's own log split it. The walk took its one missing source (`meshweaver-content`) from the
+> newest identity at 11:45:45, two seconds in. It then read the rest of the share, with no log
+> line, until 11:53:29. All 71 bundles were then judged, manifests and store probes included, in
+> 38 s. So the bundle pass was not the cost. The cost was a walk that read **every source of every
+> admitted identity in full**: pointer, seal, one probe per listed bundle, two markers, the seal
+> again, the probes again, and **every bundle's manifest** (a zip open). Only after that did it ask
+> whether it still needed any of them. `Family` admits every identity on the platform line, so the
+> cost grew with the share's history while the answer stayed "nothing more to take". With mixed
+> images, a three-pod roll took about 39 minutes.
+
+The walk now works like this:
+
+- **One listing of the root.** This says which candidate identities are still on the share.
+  Retention removes identity directories but keeps their release markers, so a removed candidate
+  costs nothing. It used to cost one probe each.
+- **One listing per identity on the share.** It names that identity's sources.
+- **A read only for a source no newer identity, and not this instance itself, has supplied.**
+  First the seal, and only for a sealed one the markers and manifests. The selection rule is
+  "newest sealed publication wins", so a source that has already been taken cannot change the
+  answer, and it is never read again.
+
+So a no-op pass costs `1 + identities + (a few reads per still-needed source)`. It no longer costs
+`identities × sources × bundles`. Selection is unchanged: newest first, the ladder applied, one
+publication per source name, and an unsealed copy passed over for the next sealed one.
+
+**Reading it on a pod.** Two lines say where the time went:
+
+- `cross-identity walk over … : N admitted identity(ies), L on the share and listed, R source
+  publication(s) read …, T taken — in …`
+- the summary line, which now carries `(share walk …, bundle pass …)`. The listing and the judging
+  are timed apart, because one total hid which of them ate the boot.
+
+**The regression test** is `CrossIdentityWalkCostIsBoundedTest` (`MeshWeaver.Hosting.Test`). It
+runs the walk on a share that counts every operation (`BundleShareIo`, the walk's one IO seam) and
+prices each operation at the 2 s round-trip the incident measured. It asserts the bound above. Its
+negative control runs the replaced walk's shape on the same fixture and asserts that the old shape
+costs an order of magnitude more. Its positive controls pin the selection.
+
+**Not fixed here: the bundle pass is still linear.** It reads one manifest per bundle and makes one
+store probe per entry, serially, by design (`Concat`, so a boot does not burst the share). On memex
+that was 38 s for 71 bundles and 179 entries. Making it O(1) would need an adopted-set digest per
+framework identity. That is a separate change, and it should only be made if the phase timing above
+shows the bundle pass dominating.
+
 ## Adopt, then compile on demand — the boot bake is retired everywhere
 
 **Adoption and its coverage report are unconditional; only compiling is configurable.** Every boot
