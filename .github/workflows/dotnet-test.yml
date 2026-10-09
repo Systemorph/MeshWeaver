@@ -2678,6 +2678,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-review-answered.py --self-test
 
+    # issue-text-names.yml runs only on a schedule, so a pull request that breaks the scanner (a Pass
+    # read as green, a NotChecked swallowed) would go red a day later on nobody's change. Proving it
+    # here puts that red on the pull request that caused it (MeshWeaver.Plugins#2845). No network.
+    - name: "An unchecked issue-text scan goes red — only Filed is green (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/scan-issue-text-names.py --self-test
+
     # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
     # here because core is the repo that OWNS them — every satellite gets them fetched at its
     # `platform-ref`, so a break shipped from here reaches five repos' cost model at once.

@@ -1,0 +1,75 @@
+name: Issue-text name scan
+
+# Client names in issue and pull-request TEXT (MeshWeaver.Plugins#2845, policy `issue-text-name-scan`).
+#
+# The committed-text check covers the tree. This scheduled lane covers what the repository also
+# publishes: issue titles and bodies, issue comments, pull-request descriptions, review comments and
+# review bodies, by every author, bots included. `.github/scripts/scan-issue-text-names.py` is
+# deterministic and holds no names. It submits the text to the instance that owns the CRM as
+# `Governance/NameCheck` requests with `source: issue-text`. That instance proves every line is in
+# the item it names and this run is live, matches against the CRM, and FILES any finding to its
+# private review and one masked triage item. It returns nothing about the result, and nothing here
+# edits or deletes anything.
+#
+# 🛡️ THIS WORKFLOW MAY NOT SKIP (AGENTS.md → "A gate NEVER tests its own inputs"). `preflight`
+# asserts every input and fails RED naming it; `scan` needs it and has no input-shaped `if:`. A run
+# that could not check is red, never green.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"   # daily; the scan window (26 h) overlaps the previous run
+  workflow_dispatch:
+    inputs:
+      since-hours:
+        description: "Scan items updated in this many hours (a backfill passes a large number)"
+        required: false
+        default: "26"
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: issue-text-names
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (name-check inputs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert every input
+        env:
+          NAME_CHECK_URL: ${{ secrets.NAME_CHECK_URL }}
+          NAME_CHECK_TOKEN: ${{ secrets.NAME_CHECK_TOKEN }}
+        run: |
+          missing=()
+          [ -n "$NAME_CHECK_URL" ]   || missing+=("secrets.NAME_CHECK_URL    base URL of the instance that owns the CRM (org secret: grant this repository access)")
+          [ -n "$NAME_CHECK_TOKEN" ] || missing+=("secrets.NAME_CHECK_TOKEN  the build's service-user token holding namecheck.caller.grant there")
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::issue-text name scan cannot run — provision:\n'
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "every input present"
+
+  scan:
+    name: Scan issue and pull-request text
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Self-test the scanner
+        run: python3 .github/scripts/scan-issue-text-names.py --self-test
+      - name: Scan
+        env:
+          NAME_CHECK_URL: ${{ secrets.NAME_CHECK_URL }}
+          NAME_CHECK_TOKEN: ${{ secrets.NAME_CHECK_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SINCE_HOURS: ${{ inputs.since-hours || '26' }}
+        run: python3 .github/scripts/scan-issue-text-names.py --repo "${{ github.repository }}" --since-hours "$SINCE_HOURS"
