@@ -3775,7 +3775,7 @@ internal static class NodeTypeCompilationHelpers
     /// build, and the recorded <see cref="NodeTypeDefinition.FailedPlatformVersion"/> either absent
     /// (stamped before the field existed) or strictly OLDER than the live build
     /// (<see cref="PlatformCompatibility.ProducerIsNewer"/>, so an unordered pair — a local
-    /// <c>-ci.0</c> build, an unparseable version — answers NO). A failure formed on THIS build is
+    /// <c>-dev</c> source build, an unparseable version — answers NO). A failure formed on THIS build is
     /// settled; one formed on a NEWER build (an older replica during a roll) is never retried by the
     /// older replica, so two images cannot ping-pong a type. The re-drive stamps the live build in
     /// the same write that flips to Pending, which makes this false the instant it fires.</para>
@@ -3813,7 +3813,7 @@ internal static class NodeTypeCompilationHelpers
     internal const string UnknownPlatformBuild = "(unknown)";
 
     /// <summary>Whether <paramref name="platformVersion"/> carries a CI run number the release order
-    /// can compare — not blank, parseable, and not the local <c>-ci.0</c> stamp.</summary>
+    /// can compare — not blank, parseable, and not a source build (<c>-dev</c>, or the retired <c>-ci.0</c>).</summary>
     internal static bool IsOrderedPlatformBuild(string? platformVersion) =>
         !string.IsNullOrWhiteSpace(platformVersion)
         && MeshWeaver.Plugin.Packaging.PlatformReleaseOrder.BuildOrdinal(platformVersion) is { } ordinal
