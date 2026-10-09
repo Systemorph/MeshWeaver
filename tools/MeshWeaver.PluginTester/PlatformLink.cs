@@ -162,15 +162,26 @@ internal static class PlatformLink
     }
 
     /// <summary>
-    /// Checks every module assembly of every bundle against <paramref name="surface"/>. A bundle's
-    /// <c>meshweaver/modules/*.dll</c> are extracted into their own directory, so each module's
-    /// closure is exactly its bundle. The subjects are the bundle's own <c>MeshWeaver.*</c>
+    /// Checks every module assembly of every bundle against the platform whose files are
+    /// <paramref name="platformFiles"/> (binding precedence) PLUS the other modules of the set. A
+    /// bundle's <c>meshweaver/modules/*.dll</c> are extracted into their own directory, so each
+    /// module's closure is exactly its bundle. The subjects are the bundle's own <c>MeshWeaver.*</c>
     /// assemblies; a third-party dependency and a platform copy that rode along are not.
+    ///
+    /// <para>🚨 <b>The set's SIBLING modules are part of the surface</b>, behind the platform's own
+    /// files — exactly what the landing measures a module against (<c>ModuleLandingService</c>:
+    /// the application closure plus the ACTIVE generation of every landed module, landed in
+    /// dependency order). A module may reference another MODULE (the AI module references
+    /// <c>MeshWeaver.Markdown.Collaboration</c>, which ships as the Essentials module, not in the
+    /// image); measuring each bundle against the image alone refused that as "no such platform
+    /// assembly" — a false red that froze CD once the image stopped carrying the sibling
+    /// (MeshWeaver.Plugins#2970). A reference to a module the set does NOT carry is still red.</para>
     /// </summary>
     public static IReadOnlyList<ModuleResult> CheckBundles(
-        IEnumerable<string> bundles, ModulePlatformSurface surface, ModuleLinkOptions options, string workDirectory)
+        IEnumerable<string> bundles, IReadOnlyList<string> platformFiles, ModuleLinkOptions options, string workDirectory)
     {
-        var results = new List<ModuleResult>();
+        var platform = ModulePlatformSurface.OfFiles(platformFiles);
+        var extracted = new List<(string Bundle, ImmutableArray<string> Modules)>();
         foreach (var bundle in bundles.OrderBy(b => b, StringComparer.Ordinal))
         {
             var target = Path.Combine(workDirectory, Path.GetFileNameWithoutExtension(bundle) + "-" + Guid.NewGuid().ToString("N")[..8]);
@@ -191,25 +202,38 @@ internal static class PlatformLink
             var dlls = Directory.GetFiles(target, "*.dll");
             if (dlls.Length == 0)
                 throw new InvalidDataException($"{Path.GetFileName(bundle)}: no {ModulesFolder}*.dll in the bundle — not a module bundle");
-            foreach (var dll in dlls.OrderBy(d => d, StringComparer.Ordinal))
-            {
-                var name = Path.GetFileNameWithoutExtension(dll);
-                // The module's OWN assemblies are the subject; a third-party dependency riding in
-                // the bundle references no platform surface, and a platform copy that rode along is
-                // not what the loader binds.
-                if (!name.StartsWith(ModulePlatformLink.PlatformAssemblyPrefix, StringComparison.Ordinal)
-                    || surface.IsPlatformBound(name))
-                    continue;
+            // The module's OWN assemblies are the subject; a third-party dependency riding in the
+            // bundle references no platform surface, and a platform copy that rode along is not
+            // what the loader binds.
+            extracted.Add((bundle, dlls
+                .Where(dll => Path.GetFileNameWithoutExtension(dll) is var name
+                              && name.StartsWith(ModulePlatformLink.PlatformAssemblyPrefix, StringComparison.Ordinal)
+                              && !platform.IsPlatformBound(name))
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .ToImmutableArray()));
+        }
+
+        var results = new List<ModuleResult>();
+        foreach (var (bundle, modules) in extracted)
+        {
+            var siblings = extracted
+                .Where(other => !string.Equals(other.Bundle, bundle, StringComparison.Ordinal))
+                .SelectMany(other => other.Modules);
+            var surface = ModulePlatformSurface.OfFiles(platformFiles.Concat(siblings));
+            foreach (var dll in modules)
                 results.Add(new ModuleResult(Path.GetFileName(bundle), ModulePlatformLink.Check(dll, surface, options)));
-            }
         }
         return results;
     }
 
-    /// <summary>A directory host's surface: its own DLLs first, then the NEWEST version of each
+    /// <summary>A directory host's surface: see <see cref="DirectoryFiles"/>.</summary>
+    public static ModulePlatformSurface DirectorySurface(string appDirectory, string sharedFrameworks)
+        => ModulePlatformSurface.OfFiles(DirectoryFiles(appDirectory, sharedFrameworks));
+
+    /// <summary>A directory host's surface FILES: its own DLLs first, then the NEWEST version of each
     /// shared framework under <paramref name="sharedFrameworks"/> — the binding precedence of a
     /// framework-dependent app.</summary>
-    public static ModulePlatformSurface DirectorySurface(string appDirectory, string sharedFrameworks)
+    public static IReadOnlyList<string> DirectoryFiles(string appDirectory, string sharedFrameworks)
     {
         var files = Directory.GetFiles(appDirectory, "*.dll").OrderBy(f => f, StringComparer.Ordinal).ToList();
         foreach (var framework in Directory.GetDirectories(sharedFrameworks).OrderBy(d => d, StringComparer.Ordinal))
@@ -223,7 +247,7 @@ internal static class PlatformLink
             if (newest is not null)
                 files.AddRange(Directory.GetFiles(newest, "*.dll").OrderBy(f => f, StringComparer.Ordinal));
         }
-        return ModulePlatformSurface.OfFiles(files);
+        return files;
     }
 
     /// <summary>Runs the verb. Exit 0 green, 1 red, 2 bad usage.</summary>
@@ -282,14 +306,14 @@ internal static class PlatformLink
         }
 
         var full = Path.GetFullPath(app);
-        ModulePlatformSurface surface;
+        IReadOnlyList<string> platformFiles;
         try
         {
-            surface = host switch
+            platformFiles = host switch
             {
-                "container" => PublishedHostSurface.Read(full,
+                "container" => PublishedHostSurface.Files(full,
                     ContainerReferenceSet.Read(full, trustedPlatformAssemblies: string.Empty, sharedFrameworksRoot: shared).AssemblyPaths),
-                "directory" => DirectorySurface(full, shared),
+                "directory" => DirectoryFiles(full, shared),
                 _ => throw new ArgumentException($"--host must be 'container' or 'directory', got '{host}'"),
             };
         }
@@ -314,7 +338,7 @@ internal static class PlatformLink
         Directory.CreateDirectory(work);
         try
         {
-            var results = CheckBundles(bundles, surface, options, work);
+            var results = CheckBundles(bundles, platformFiles, options, work);
             var (headEpoch, breaks) = ReadDeclaration(declaration);
             foreach (var result in results)
                 Console.WriteLine($"{(result.Verdict.MayLoad ? "OK  " : "RED ")} {result.Bundle} :: {result.Verdict.Report()}");
