@@ -92,10 +92,34 @@ JOB_LOG_LINE = re.compile(r"^﻿?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ", re
 #     across Plugins#1032; every build that ran was green.
 #   dial tcp …: connect: connection refused — the same ACR refusal seen from the containerd side.
 #   registry answered 503 — #2915, the plugins registry's key-resolution outage window.
+#   NuGet restore against api.nuget.org — #6364: run 37968714635 (push, 78a670a) job 113951063426
+#     "Build solution (once)" died in `dotnet restore` at 17:51:31–46Z with `Connection reset by
+#     peer` on every request to api.nuget.org (NuGet's own retries exhausted: `error : Failed to
+#     download package 'Microsoft.Playwright.1.63.0' from 'https://api.nuget.org/…'` and `error
+#     NU1301: Failed to retrieve information about 'System.Data.DataSetExtensions' from remote source
+#     'https://api.nuget.org/…'`). Nothing compiled; the same tree went on to build green. Main
+#     therefore settled red, CD built nothing (#6364), and this steward declined because no
+#     signature named the feed. Both forms assert the feed's OWN hostname. NU1301 is NuGet's
+#     "could not reach the source" code; a package that does not EXIST is NU1101/NU1102, and a
+#     private feed refusing a credential names another host — neither matches.
 SIGNATURES = re.compile(
     r"meshweaver\.azurecr\.io.*connection refused"
     r"|dial tcp .*: connect: connection refused"
     r"|registry answered 503 for https://memex\.meshweaver\.cloud"
+    r"|error NU1301: Failed to retrieve information about '[^']+' from remote source 'https://api\.nuget\.org/"
+    r"|error : Failed to download package '[^']+' from 'https://api\.nuget\.org/"
+)
+
+# 🚨 CONSEQUENTIAL failures: a job that went red ONLY because an upstream job never ran. It is not a
+# transient in its own right — it proves nothing about the infrastructure — so it can never cause a
+# retry alone (`decide` requires at least one job matching SIGNATURES/BLOCK_SIGNATURES). But without
+# it the EVERY-job rule declines every transient that kills the build: `Consolidate test results`
+# then reports `The test matrix concluded 'skipped'` (the shard matrix was skipped because its
+# `needs:` failed) and that line matched nothing, which is exactly how #6364's restore blip went
+# un-retried. `skipped` is the only accepted conclusion: a shard that FAILED or was CANCELLED makes
+# the matrix `failure`/`cancelled`, and those are that shard's own red, judged on its own log.
+CONSEQUENTIAL_SIGNATURES = re.compile(
+    r"The test matrix concluded 'skipped' — at least one shard did not succeed"
 )
 
 # 🚨 BLOCK signatures span TWO consecutive log lines, so they are matched on the log with newlines
@@ -188,12 +212,17 @@ def read_job_log(repo: str, job_id: int, fetch) -> str:
     return body
 
 
+CONSEQUENTIAL = "a CONSEQUENTIAL failure (an upstream job never ran — not a transient by itself)"
+
+
 def classify(log: str) -> str | None:
     """Name the matched signature, or None when nothing named matches."""
     if SIGNATURES.search(log):
         return "a named transient signature"
     if BLOCK_SIGNATURES.search(log.replace("\n", " ")):
         return "a named transient BLOCK signature (App-token mint answered 5xx by api.github.com)"
+    if CONSEQUENTIAL_SIGNATURES.search(log):
+        return CONSEQUENTIAL
     return None
 
 
@@ -248,6 +277,7 @@ def decide(repo: str, run_id: str, fetch) -> Decision:
     failed = failed_job_ids(repo, run_id, fetch)
     if not failed:
         return Decision(False, f"run {run_id}: failure conclusion but no failed jobs listed — doing nothing.")
+    transients = 0
     for job_id in failed:
         log = read_job_log(repo, job_id, fetch)  # raises LogUnreadable → red, never a decline
         matched = classify(log)
@@ -255,7 +285,16 @@ def decide(repo: str, run_id: str, fetch) -> Decision:
             return Decision(False, (
                 f"job {job_id}: NO named signature matched — this is (or may be) a real red, "
                 "so no retry. Investigate it."))
+        if matched != CONSEQUENTIAL:
+            transients += 1
         print(f"job {job_id}: matches {matched}.")
+    if transients == 0:
+        # Every failure was the echo of an upstream that never ran, and nothing NAMED the cause.
+        # That is not proof of a transient — it is a run whose real failure is not a failed job
+        # (cancelled, or never started), so it stays red for a person to read.
+        return Decision(False, (
+            f"run {run_id}: all {len(failed)} failed job(s) are CONSEQUENTIAL and none names a "
+            "transient cause — no retry. Investigate the job that did not run."))
     return Decision(True, f"all {len(failed)} failed job(s) matched named transients — one retry.")
 
 
@@ -424,6 +463,40 @@ def self_test() -> int:
         denied = mint_5xx.replace("status: 500,", f"status: {status},")
         check(f"...but status {status} on that URL does NOT retry (permission, not outage)",
               not decide("o/r", "9", _fake({1: denied})).retry)
+
+    # ── #6364: a NuGet feed transport death kills the build, and Consolidate echoes it. ──
+    # Lines copied from run 37968714635 (job 113951063426, and 113951406887 for Consolidate).
+    nuget_reset = REAL_LOG_HEAD + (
+        "2026-10-09T17:51:44.6942784Z /usr/share/dotnet/sdk/10.0.401/NuGet.targets(198,5): error : "
+        "Failed to download package 'Microsoft.Playwright.1.63.0' from 'https://api.nuget.org/v3-"
+        "flatcontainer/microsoft.playwright/1.63.0/microsoft.playwright.1.63.0.nupkg'. [/w/MeshWeaver.slnx]\n"
+        "2026-10-09T17:51:46.4603587Z /w/src/X/X.csproj : error NU1301: Failed to retrieve "
+        "information about 'System.Data.DataSetExtensions' from remote source 'https://api.nuget.org/"
+        "v3-flatcontainer/system.data.datasetextensions/index.json'. [/w/MeshWeaver.slnx]\n")
+    consolidate = REAL_LOG_HEAD + (
+        "2026-10-09T17:52:08.8824988Z ##[error]No test results found in any shard — the suite did not "
+        "run, so this run proves nothing.\n"
+        "2026-10-09T17:52:08.9238825Z ##[error]The test matrix concluded 'skipped' — at least one "
+        "shard did not succeed. See the shard jobs; this run does not cover the whole suite.\n")
+    check("a NuGet restore killed by api.nuget.org resets is a transient (#6364)",
+          decide("o/r", "9", _fake({1: nuget_reset})).retry)
+    check("...and the build + its consequential Consolidate red retry together (#6364)",
+          decide("o/r", "9", _fake({1: nuget_reset, 2: consolidate})).retry)
+    for name, line in (
+        ("NU1301 from another feed (a private-feed credential)",
+         "error NU1301: Failed to retrieve information about 'A' from remote source 'https://pkgs.dev.azure.com/x/index.json'"),
+        ("a package that does not exist (NU1101)",
+         "error NU1101: Unable to find package Nope. No packages exist with this id in source(s): nuget.org"),
+    ):
+        check(f"...but {name} does NOT retry",
+              not decide("o/r", "9", _fake({1: REAL_LOG_HEAD + "2026-10-09T17:51:46.0Z " + line + "\n"})).retry)
+    check("a CONSEQUENTIAL red ALONE never retries (it names no cause)",
+          not decide("o/r", "9", _fake({1: consolidate})).retry)
+    check("a CONSEQUENTIAL red beside a REAL red never retries",
+          not decide("o/r", "9", _fake({1: real_red, 2: consolidate})).retry)
+    failed_matrix = consolidate.replace("concluded 'skipped'", "concluded 'failure'")
+    check("a matrix that concluded 'failure' is a shard's own red, NOT consequential",
+          not decide("o/r", "9", _fake({1: nuget_reset, 2: failed_matrix})).retry)
 
     # ── A retry actually posts. ──
     fetch = _fake({1: escaped})
