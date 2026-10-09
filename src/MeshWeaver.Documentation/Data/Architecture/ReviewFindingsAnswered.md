@@ -4,9 +4,10 @@ Category: Architecture
 Description: >-
   A pull request into main reads RED until the automatic review has landed and every thread it opened
   has a reply from a person. Why review was advisory, the reviewer as measured (two logins, one
-  account, and a quota refusal posted as if it were a review), the maintainer waiver, the
-  reviewer-unavailable degradation that lets the gate release itself when the reviewer is down, the
-  controls replayed on real merges, and what the check still cannot see.
+  account, and a quota refusal posted as if it were a review), what counts as "reviewed, nothing
+  found" (only a Copilot review of the current head), the maintainer waiver, the retired
+  reviewer-unavailable degradation, the controls replayed on real merges, and what the check still
+  cannot see.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><polyline points="8 10 11 13 16 8"/></svg>
 ---
 
@@ -15,9 +16,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 **The check `Automatic review answered` is RED until the automatic review has landed on a pull
 request and every inline thread that review opened has a reply from a person.** It never skips, it
 never passes on no evidence, and a pull request the reviewer could not review is released only by a
-maintainer's visible waiver — or, when the internal reviewer itself is down, by the
-[reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody)
-its own App records on the head, which defers the review rather than skipping it. It is the build of option B on #4299, decided by the maintainer on
+maintainer's visible waiver. With no finding on the pull request, the only evidence of a review is a
+Copilot review of the CURRENT head — see
+[Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts). It is the build of option B on #4299, decided by the maintainer on
 2026-09-17.
 
 - Workflow: `.github/workflows/review-answered.yml`
@@ -94,9 +95,12 @@ All three hold, or the check is RED:
 1. **The automatic review has landed** — a review by the reviewer account, at a non-`PENDING` state,
    whose body is not a refusal. What makes it a review is *who posted it*, not how it is worded — see
    **"Provenance, not presentation"** below for why, and what requiring a recognisable shape cost.
-   Two things release this condition — and only this one — without a review: a maintainer's
-   [waiver](#the-waiver), and the internal reviewer's own
-   [reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody).
+   **When the pull request carries no finding at all, the review must be a completed Copilot
+   review of the CURRENT head** — see
+   [Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts). One thing
+   releases this condition — and only this one — without a review: a maintainer's
+   [waiver](#the-waiver). (A generated-only App pull request is *not owed* a review; that is a
+   provenance rule, not a claim that it was reviewed.)
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
@@ -106,6 +110,42 @@ All three hold, or the check is RED:
 
 A reply that says nothing still counts as answered. That limitation is known and accepted on #4299;
 the predicate is still strictly better than none.
+
+## Reviewed, nothing found — the only evidence that counts
+
+Policy [`review-evidence-current-head`](../PolicyNotProse) answers the question #4730 left open:
+*"0 unanswered threads"* is produced by two opposite states, **reviewed and nothing found** and
+**never reviewed**, so what evidence separates them?
+
+**Only a completed Copilot review object on the CURRENT head with zero findings.** In the check
+that is `copilot_review_on(reviews, head)`: a review by the Copilot account (id 175728472, type Bot)
+at a non-`PENDING` state, whose body is not a refusal, whose `commit_id` is the pull request's head
+now, and no reviewer thread anywhere on the pull request.
+
+| on file, with no finding on the pull request | reading |
+|---|---|
+| a clean Copilot review of the current head | **reviewed, nothing found** — green |
+| a clean Copilot review of an EARLIER head only | RED — **no review of this head**: nothing shows the reviewer read the commits pushed since |
+| the internal reviewer's clean review only | RED — not a Copilot review |
+| a `Reviewer unavailable` degradation run | RED — not a review (it used to release the gate; see below) |
+| nothing for N minutes | RED — elapsed time is never evidence; there is no timeout-based acceptance |
+| any of the above plus a maintainer's `review-waived` label | green, credited to the person who waived |
+
+**With findings, nothing changes.** The threads themselves prove a review happened, so a pull
+request whose reviewer opened threads on an earlier head is judged by condition 2 alone — every
+thread answered — exactly as [One review per pull request](#one-review-per-pull-request) says.
+
+**What this costs, said plainly.** The rulesets review once per pull request (`review_on_push:
+false`), so a clean pull request that is pushed again after its review — a fix, or a merge of
+`main` — reads *no review of this head* until a maintainer re-requests the Copilot review or applies
+the waiver. The check names that state in all three places a reader looks (headline
+`RED — NO REVIEW OF THIS HEAD`, the step summary, and the *To go green* line) and does **not** wait
+for it, because no wait delivers a review the ruleset will not request (`Verdict.stale_clean`, a
+field for the same reason `refused` is one).
+
+**Controls.** The self-test's `EVIDENCE` cases pin each row above with a positive control beside
+each negative one. Put the old acceptance back (any landed review of any head counts) and the
+earlier-head case, the waiver-credit case and the person's-lock-PR control all turn red.
 
 ## The reviewer, as measured
 
@@ -267,7 +307,7 @@ opens…"*. That sentence is correct for exactly one of them.
 | the reviewer has not posted yet | "the automatic review must land … usually arrives minutes after the pull request opens" | time |
 | the reviewer posted a **refusal** | "**unreviewable right now** … nothing on this pull request can answer this" | the reviewer becoming able to review, then a maintainer's re-request — or the waiver |
 | the reviewer posted **findings** nobody answered | "reply to each unanswered thread (fixed, or why not)" | a reply ON each thread |
-| the internal reviewer is **down** (rounds abort) | "the automatic review must land …" until its App posts the degradation | the App's `Reviewer unavailable` check run — automatic, then GREEN reading **`REVIEWER UNAVAILABLE, review deferred`** |
+| the only review found nothing and is **not a Copilot review of this head** | "**no review of this head** … a maintainer re-requests the Copilot review, or applies the waiver" | a Copilot review of the current head, or the waiver ([Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts)) |
 
 **The middle row is the one that cost something** (#4730). On 2026-09-18 the reviewer refused for
 quota from 11:39Z, and six pull requests — every one green on `Consolidate test results`, every one
@@ -300,12 +340,10 @@ verdict *is*, because that is precisely the half that was wrong while the verdic
 half has a negative control: remove the wait's `not verdict.refused` and the refusal-only wait case
 goes red; delete the headline and the refusal case goes red.
 
-**Decided since for the INTERNAL reviewer, still open for Copilot:** what a structurally
-unavailable reviewer does to the merge gate. For the internal reviewer the answer is the
-[reviewer-unavailable degradation](#the-reviewer-unavailable-degradation--the-exit-that-needs-nobody)
-(MeshWeaver.Feedback#86): its App records that it could not review, the gate releases condition 1,
-and a post-merge review is owed. A Copilot quota refusal is still held as described above — Copilot
-has no App of ours to record anything with, and it is being retired.
+**Decided:** what a structurally unavailable reviewer does to the merge gate. It holds. Policy
+[`review-evidence-current-head`](../PolicyNotProse) accepts no timeout, no degradation run and no
+other reviewer's word as "reviewed, nothing found"; the `review-waived` label stays the escape. See
+[Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts).
 
 ## The waiver
 
@@ -329,6 +367,12 @@ account, and the check reads an account's role, not who was at the keyboard — 
 maintainer's waiver from an agent's. The label event in the pull request's timeline is the audit.
 
 ## The reviewer-unavailable degradation — the exit that needs nobody
+
+🚨 **RETIRED for the merge gate** by policy [`review-evidence-current-head`](../PolicyNotProse)
+(#4730): a degradation run says the reviewer did NOT review, so it no longer releases condition 1 of
+`Automatic review answered`; the `review-waived` label is the escape. The stage gate still lets the
+suites start on one (runner spend only), and the arm gate still refuses to arm on one. The section
+below is kept as the record of what it did.
 
 **Why it exists** (MeshWeaver.Feedback#86). With the waiver as the only exit, the gate was circular:
 when the internal reviewer itself stops completing rounds — on 2026-09-29 they aborted at the
