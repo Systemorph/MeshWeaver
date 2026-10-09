@@ -25,6 +25,7 @@ Exit 1 = an orphaned/altered key, an invalid config, or too little examined to r
 """
 import base64
 from decimal import Decimal
+import os
 import re
 import subprocess
 import sys
@@ -199,12 +200,32 @@ def loki_app_version(chart, version):
     return app_version
 
 
+def loki_image(app_version):
+    """`grafana/loki:<appVersion>` — on a GitHub runner from the fleet's digest-pinned GHCR mirror,
+    never anonymously from Docker Hub (Doc/Architecture/DockerHubInCi): the hosted pool's shared
+    egress IP spends the anonymous limit. A chart bump to an appVersion the mirror does not declare
+    is RED here, naming the list to extend — never a silent fall back to docker.io. On a laptop
+    the Docker Hub name is used as written."""
+    name = f"grafana/loki:{app_version}"
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return name
+    mirror = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
+                          ".github", "scripts", "dockerhub-mirror.sh")
+    result = run(["bash", mirror, "ref", name])
+    if result.returncode != 0:
+        print(result.stderr.strip())
+        print(f"::error::the pinned chart's Loki ({name}) is not on the Docker Hub mirror, so the binary "
+              f"check cannot run. This is a failure, not a skip.")
+        sys.exit(1)
+    return result.stdout.strip()
+
+
 def verify_with_binary(config_text, app_version):
     """Hand the rendered config to the real Loki binary. Piped over stdin rather than bind-mounted:
     a mount depends on the host sharing the path with the container runtime (it does not, on a
     default macOS Docker Desktop), and a check that only runs on CI's filesystem is a check nobody
     can reproduce while fixing it."""
-    image = f"grafana/loki:{app_version}"
+    image = loki_image(app_version)
     result = run(
         ["docker", "run", "-i", "--rm", "--entrypoint", "sh", image,
          "-c", "cat > /tmp/rendered.yaml && exec loki -config.file=/tmp/rendered.yaml -verify-config"],

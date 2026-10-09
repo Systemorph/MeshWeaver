@@ -199,9 +199,32 @@ def tree(root: Path) -> dict[str, bytes]:
 # ---------------------------------------------------------------------------------------------
 # Containers
 # ---------------------------------------------------------------------------------------------
+def through_dockerhub_mirror(image: str) -> str:
+    """On a GitHub runner, a Docker Hub image is pulled from the fleet's digest-pinned GHCR mirror,
+    never anonymously from docker.io (Doc/Architecture/DockerHubInCi): the hosted pool's shared
+    egress IP spends the anonymous limit, and `toomanyrequests` red this job on 2026-10-09 (#6381).
+    The mirror reference must carry the SAME digest the chart pins, so the bytes under test are the
+    bytes the chart deploys. On a laptop the image is used as written."""
+    first = image.split("/", 1)[0]
+    on_docker_hub = "/" not in image or first == "docker.io" or ("." not in first and ":" not in first and first != "localhost")
+    if not on_docker_hub or os.environ.get("GITHUB_ACTIONS") != "true":
+        return image
+    name, _, digest = image.removeprefix("docker.io/").partition("@")
+    r = run(["bash", str(HERE / "dockerhub-mirror.sh"), "ref", name])
+    if r.returncode != 0:
+        print(r.stderr.strip())
+        raise SystemExit(f"::error::{image} is a Docker Hub image and is not on the mirror — see the line above")
+    mirrored = r.stdout.strip()
+    if digest and not mirrored.endswith("@" + digest):
+        raise SystemExit(f"::error::the chart pins {image} but .github/dockerhub-mirror.list mirrors {mirrored} — "
+                         f"move the list's digest to the chart's, or the check would execute bytes the chart does not deploy")
+    return mirrored
+
+
 def image_pins() -> tuple[str, str]:
     example = yaml.safe_load((CHART / "values.registry.example.yaml").read_text())
-    return example["registry"]["image"], example["registry"]["authImage"]
+    return (through_dockerhub_mirror(example["registry"]["image"]),
+            through_dockerhub_mirror(example["registry"]["authImage"]))
 
 
 def wait_http(url: str, want: set[int], tries: int = 60) -> bool:
