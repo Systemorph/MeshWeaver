@@ -53,6 +53,9 @@ public sealed class MessageHub : IMessageHub
 
     private sealed record PendingCallback(
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> Subject,
+        // Signs of life the handler reports while it still owes the reply (RequestProgress). Each
+        // one restarts this request's deadline — see ApplyTimeout.
+        Subject<Unit> Progress,
         string RequestType,
         Address? Target,
         long RegisteredAtTicks,
@@ -1375,7 +1378,7 @@ public sealed class MessageHub : IMessageHub
         // rather than being inferred from an absence.
         try
         {
-            Post(r, opts => options(opts).WithMessageId(messageId));
+            Post(r, opts => options(opts).WithMessageId(messageId).AcceptingProgress());
         }
         catch (Exception postEx)
         {
@@ -1408,7 +1411,7 @@ public sealed class MessageHub : IMessageHub
         IMessageDelivery? posted;
         try
         {
-            posted = Post(r, opts => options(opts).WithMessageId(messageId));
+            posted = Post(r, opts => options(opts).WithMessageId(messageId).AcceptingProgress());
         }
         catch (Exception postEx)
         {
@@ -1610,15 +1613,42 @@ public sealed class MessageHub : IMessageHub
         });
     }
 
+    /// <summary>
+    /// Bounds the wait for a reply by <see cref="MessageHubConfiguration.RequestTimeout"/> of
+    /// SILENCE: the clock starts with the wait and restarts on every <see cref="RequestProgress"/>
+    /// the handler reports for this request (see <see cref="HandleCallbacks"/>). A handler that
+    /// reports none — every handler that answers in one step — gets exactly the old bound.
+    ///
+    /// <para>🚨 This is not a raised bound. A handler that goes quiet is timed out exactly as early
+    /// as before; what changed is that a minute of WORK no longer reads as a minute of silence. The
+    /// server side of the operation that needs it already measured progress, not duration (the
+    /// delete's commit watchdog, #3392), and until the caller did too, the reply of every delete
+    /// larger than the ceiling was posted to a caller that had already given up.</para>
+    /// </summary>
     private IObservable<IMessageDelivery> ApplyTimeout(
         IObservable<IMessageDelivery> source,
         string requestType,
         Address? target,
         string messageId)
-        => source.Timeout(Configuration.RequestTimeout,
+    {
+        IObservable<Unit> progress;
+        lock (responseSubjects)
+            progress = responseSubjects.TryGetValue(messageId, out var entry)
+                ? entry.Progress
+                : Observable.Never<Unit>();
+        var timeout = Configuration.RequestTimeout;
+        // Fires `timeout` after the LATEST of {the start of the wait, the last progress report}.
+        var silence = progress
+            .StartWith(Unit.Default)
+            .Select(_ => Observable.Timer(timeout))
+            .Switch();
+        return source.Timeout(
+            silence,
+            _ => Observable.Never<long>(),
             System.Reactive.Linq.Observable.Defer<IMessageDelivery>(() =>
                 System.Reactive.Linq.Observable.Throw<IMessageDelivery>(
                     new TimeoutException(BuildTimeoutMessage(requestType, target, messageId)))));
+    }
 
     /// <summary>
     /// Names the request that timed out, AND this hub's own state at the moment it gave up.
@@ -1768,6 +1798,7 @@ public sealed class MessageHub : IMessageHub
             {
                 entry = new PendingCallback(
                     new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>(),
+                    new Subject<Unit>(),
                     requestType,
                     target,
                     Stopwatch.GetTimestamp(),
@@ -1949,6 +1980,24 @@ public sealed class MessageHub : IMessageHub
                 logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     messageTypeName, Address, delivery.Id);
             return Observable.Return(delivery);
+        }
+
+        // A sign of life, not the reply: restart the request's deadline and keep the callback open.
+        // It never consumes the entry — the reply that follows still has to find it.
+        if (delivery.Message is RequestProgress progressReport)
+        {
+            Subject<Unit>? progress = null;
+            lock (responseSubjects)
+            {
+                if (responseSubjects.TryGetValue(requestIdString, out var pending))
+                {
+                    progress = pending.Progress;
+                    requestFates.Find(requestIdString)?.Add(
+                        $"PROGRESS {progressReport.Stage ?? "-"}", Address);
+                }
+            }
+            progress?.OnNext(Unit.Default);
+            return Observable.Return(delivery.Processed());
         }
 
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> subject;
