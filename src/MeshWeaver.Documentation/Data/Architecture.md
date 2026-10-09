@@ -562,6 +562,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Rendering a chart you are not allowed to fully configure](ChartDriftRenderWithoutSecrets) — 39 runs, 39 failures, zero verdicts: the check may hold two of the deploy's three value sources and the chart correctly refuses that subset; the placeholder that unblocks the render, the two-render proof that no compared object depends on it, and the bake gate that was off on both production namespaces the moment a verdict finally appeared
 - [Configuring an instance from Aspire](ConfiguringAnInstanceFromAspire)
 - [The Dependabot Secret Store](DependabotSecretStore)
+- [Docker Hub in CI](DockerHubInCi) — hosted runners pull Docker Hub anonymously against a per-IP limit they share with every tenant; the runtime images CI jobs declare come from a digest-pinned GHCR mirror read with the job's own token, or the ACR copy where a job is already logged in; what is still out of scope
 - [GitHub App Credentials](GitHubAppCredentials) — `meshweaver-cloud` writes to its own repo; every cross-repo READ mints from the read-only `fleet-reader`
 - [Deployment env layers — what a record must be able to hold](DeploymentEnvLayers)
 - [DeploymentInventory](DeploymentInventory)
