@@ -150,6 +150,10 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.FailedBuildInputs"/>.</summary>
     public string? FailedBuildInputs { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.FailedPlatformVersion"/> — the platform build the
+    /// standing failure was formed on. Mirrored for the same reason as the token beside it.</summary>
+    public string? FailedPlatformVersion { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.DispatchedBuildInputs"/> — what the compile IN
     /// FLIGHT was dispatched for (#2544), null when no dispatch vouches for it. Mirrored for the
     /// same reason as the failure token beside it (#4480).</summary>
@@ -237,6 +241,7 @@ public record NodeTypeCompileState
                 CompiledModulesHash = definition.CompiledModulesHash,
                 CompiledDependencies = definition.CompiledDependencies,
                 FailedBuildInputs = definition.FailedBuildInputs,
+                FailedPlatformVersion = definition.FailedPlatformVersion,
                 DispatchedBuildInputs = definition.DispatchedBuildInputs,
                 FailedSourceQueries = definition.FailedSourceQueries,
                 CompilationImportRefusals = definition.CompilationImportRefusals,
@@ -265,6 +270,7 @@ public record NodeTypeCompileState
         && CompiledSources is null && CurrentSourceVersions is null
         && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null
+        && FailedPlatformVersion is null
         && CompiledPlatformVersion is null && PlatformCeiling is null
         && CompiledModulesHash is null && CompiledDependencies is null
         && DispatchedBuildInputs is null

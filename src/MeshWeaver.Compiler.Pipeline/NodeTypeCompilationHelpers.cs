@@ -1158,17 +1158,30 @@ internal static class NodeTypeCompilationHelpers
         // AFTER activation, so the source half of the token is not final on the first emission — a
         // one-shot would sample the pre-seed state and miss every source fix. Convergence comes
         // from (1), not from the Rx operator.
+        //
+        // 🚨 SECOND TRIGGER — a failure formed on an OLDER PLATFORM BUILD (HasFailureFromOlderPlatform).
+        // The fw= half of the token is the platform COMPATIBILITY KEY, stable across every build of
+        // one major and epoch, so an additive platform change (a new framework type the failing
+        // source already uses) moves NOTHING in the token: measured on the control instance
+        // 2026-10-09, Hosting/ApprovalInbox failed with CS0246 ClickProgress on 3.0.0-ci.10300 and
+        // was never retried by the replica running the build that ships ClickProgress. That trigger
+        // covers a type WITH a last good build too (it keeps serving that build until the retry
+        // succeeds), and it is bounded the same way: the flip stamps FailedPlatformVersion with the
+        // live build, and an older replica never retries a newer build's verdict.
+        var livePlatformVersion = LivePlatformVersion;
         var redriveGivenUp = false;
         var failedVerdictKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
-                && HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
+                && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
+                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
                 && !IsStaticOnlyNodeType(node, def))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
             .DistinctUntilChanged(node =>
             {
                 var d = (NodeTypeDefinition)node!.Content!;
-                return (d.CompilationStatus, BuildInputsToken(guards.ModulesHash, d.CurrentSourceVersions));
+                return (d.CompilationStatus, BuildInputsToken(guards.ModulesHash, d.CurrentSourceVersions),
+                    d.FailedPlatformVersion);
             })
             .Subscribe(
                 node =>
@@ -1176,7 +1189,11 @@ internal static class NodeTypeCompilationHelpers
                     if (redriveGivenUp)
                         return;
                     var def = (NodeTypeDefinition)node!.Content!;
-                    var liveInputs = BuildInputsToken(guards.ModulesHash, def.CurrentSourceVersions);
+                    // The ledger key carries the live BUILD as well as the token: the token alone
+                    // is identical across two builds of one compatibility key, so without it the
+                    // second build's legitimate attempt would be logged as a non-converging repeat.
+                    var liveInputs = BuildInputsToken(guards.ModulesHash, def.CurrentSourceVersions)
+                        + $";plat={livePlatformVersion ?? "(unknown)"}";
                     var (forTheseInputs, total) =
                         parkRegistry?.RecordFailureRedrive(hubPath, liveInputs) ?? (1, 1);
 
@@ -1204,11 +1221,13 @@ internal static class NodeTypeCompilationHelpers
                     }
 
                     logger?.LogInformation(
-                        "Failed-verdict re-drive: NodeType {HubPath} is settled at {Status} with no compiled "
-                        + "assembly, and its verdict was formed under different compile inputs than the live "
-                        + "ones (stamped '{Stamped}', live '{Live}') — flipping CompilationStatus=Pending for "
+                        "Failed-verdict re-drive: NodeType {HubPath} is settled at {Status} (a last good "
+                        + "build, if it has one, keeps serving), and its verdict was formed under different "
+                        + "compile inputs or an older platform build than the live ones (stamped '{Stamped}', "
+                        + "live '{Live}') — flipping CompilationStatus=Pending for "
                         + "ONE fresh attempt ({Attempt} of {Limit} in this process). Recorded error: {Error}",
-                        hubPath, def.CompilationStatus, def.FailedBuildInputs ?? "(never stamped)",
+                        hubPath, def.CompilationStatus,
+                        $"{def.FailedBuildInputs ?? "(never stamped)"};plat={def.FailedPlatformVersion ?? "(never stamped)"}",
                         liveInputs, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
                         def.CompilationError ?? "(none recorded)");
 
@@ -1218,7 +1237,7 @@ internal static class NodeTypeCompilationHelpers
                     // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
                     workspace.GetMeshNodeStream()
                         .Update(curr => ApplyFailedVerdictRedrive(
-                            curr, hubPath, guards.ModulesHash, parkRegistry))
+                            curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion))
                         .Subscribe(_ => { },
                             ex => logger?.LogWarning(ex,
                                 "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
@@ -1244,7 +1263,8 @@ internal static class NodeTypeCompilationHelpers
                 // snapshot the re-drive is merely WAITING, not declining, and reporting that as
                 // "stuck" would cry wolf on every cold activation of a broken type.
                 && def.CurrentSourceVersions is not null
-                && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath))
+                && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
+                && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
             .Take(1)
             .Subscribe(
                 node =>
@@ -3737,6 +3757,69 @@ internal static class NodeTypeCompilationHelpers
                 StringComparison.Ordinal));
 
     /// <summary>
+    /// 🚨 True when a NodeType is sitting on a COMPILE FAILURE formed on an OLDER platform build than
+    /// the one this process runs — the second trigger of the failed-verdict re-drive.
+    ///
+    /// <para><b>The hole it closes.</b> <see cref="HasStaleFailureVerdict"/> compares the stamped
+    /// <see cref="NodeTypeDefinition.FailedBuildInputs"/> against the live token, whose framework half
+    /// is the platform COMPATIBILITY KEY — stable across every build of one major and epoch. An
+    /// additive platform change therefore moves nothing in the token, and a type whose source
+    /// already used the new API (<c>CS0246</c>/<c>CS1061</c> on the build before it) was never
+    /// retried on the build that ships it. That predicate also deliberately excludes every type with
+    /// a last good build, which <see cref="HasStaleFrameworkBuild(NodeTypeDefinition, BuildGuards?)"/>
+    /// does not reach either while the compatibility key is unchanged — so a type that failed AFTER
+    /// a success kept serving its last good build until a person pressed Compile.</para>
+    ///
+    /// <para><b>The rule.</b> One attempt per newer build: <c>Error</c>, an established source set,
+    /// not a failure no build can answer (<see cref="IsUnconvergableSourceFailure"/>), a known live
+    /// build, and the recorded <see cref="NodeTypeDefinition.FailedPlatformVersion"/> either absent
+    /// (stamped before the field existed) or strictly OLDER than the live build
+    /// (<see cref="PlatformCompatibility.ProducerIsNewer"/>, so an unordered pair — a local
+    /// <c>-ci.0</c> build, an unparseable version — answers NO). A failure formed on THIS build is
+    /// settled; one formed on a NEWER build (an older replica during a roll) is never retried by the
+    /// older replica, so two images cannot ping-pong a type. The re-drive stamps the live build in
+    /// the same write that flips to Pending, which makes this false the instant it fires.</para>
+    ///
+    /// <para><c>Unavailable</c> is not covered here: <see cref="HasStaleFailureVerdict"/> already
+    /// re-drives it on its own.</para>
+    /// </summary>
+    /// <param name="def">The definition to judge.</param>
+    /// <param name="livePlatformVersion">This process's platform build, or <c>null</c> when unknown
+    /// (then the answer is NO — an unknown build cannot claim to be newer).</param>
+    /// <param name="nodeTypePath">The type's path, for <see cref="IsUnconvergableSourceFailure"/>.</param>
+    internal static bool HasFailureFromOlderPlatform(
+        NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null) =>
+        def.CompilationStatus is CompilationStatus.Error
+        // The live build must be ORDERED (a CI run number) before it can claim to be newer than
+        // anything — including an absent stamp, which would otherwise bypass the ordering.
+        && IsOrderedPlatformBuild(livePlatformVersion)
+        && def.CurrentSourceVersions is not null
+        && !IsUnconvergableSourceFailure(def, nodeTypePath)
+        && (string.IsNullOrWhiteSpace(def.FailedPlatformVersion)
+            || PlatformCompatibility.ProducerIsNewer(livePlatformVersion, def.FailedPlatformVersion));
+
+    /// <summary>
+    /// The value a FAILURE stamps as <see cref="NodeTypeDefinition.FailedPlatformVersion"/>: the live
+    /// build, or <see cref="UnknownPlatformBuild"/> when this process does not know its build. Never
+    /// the previous failure's build — a new verdict formed on an unknown build recorded as if it were
+    /// formed on an old known one could be ordered and retried by a later replica. The marker is
+    /// non-null (so it is not the legacy "unstamped" case) and unordered (so nothing retries it).
+    /// </summary>
+    internal static string FailureStamp(string? livePlatformVersion) =>
+        string.IsNullOrWhiteSpace(livePlatformVersion) ? UnknownPlatformBuild : livePlatformVersion;
+
+    /// <summary>The <see cref="NodeTypeDefinition.FailedPlatformVersion"/> of a verdict formed by a
+    /// process that did not know its own platform build. Unordered by construction.</summary>
+    internal const string UnknownPlatformBuild = "(unknown)";
+
+    /// <summary>Whether <paramref name="platformVersion"/> carries a CI run number the release order
+    /// can compare — not blank, parseable, and not the local <c>-ci.0</c> stamp.</summary>
+    internal static bool IsOrderedPlatformBuild(string? platformVersion) =>
+        !string.IsNullOrWhiteSpace(platformVersion)
+        && MeshWeaver.Plugin.Packaging.PlatformReleaseOrder.BuildOrdinal(platformVersion) is { } ordinal
+        && ordinal != 0;
+
+    /// <summary>
     /// 🚨 <b>THE compile that cannot converge</b> (issue #3903) — a standing <c>Error</c> on a type
     /// whose own declared source queries still match NOTHING on this mesh, measured against the
     /// LIVE source snapshot rather than against the stamp that recorded it.
@@ -3817,9 +3900,13 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="parkRegistry">The park registry, or <c>null</c> on a host that has none.</param>
     /// <returns><paramref name="curr"/> unchanged when the re-drive declines; otherwise the node
     /// flipped to <see cref="CompilationStatus.Pending"/> with the live inputs stamped.</returns>
+    /// <param name="livePlatformVersion">This process's platform build
+    /// (<see cref="LivePlatformVersion"/>), or <c>null</c> when it is not known — then only the
+    /// input-token trigger (<see cref="HasStaleFailureVerdict"/>) is consulted and the
+    /// older-platform one (<see cref="HasFailureFromOlderPlatform"/>) never fires.</param>
     internal static MeshNode ApplyFailedVerdictRedrive(
         MeshNode curr, string hubPath, string? modulesHash,
-        NodeTypeCompileParkRegistry? parkRegistry)
+        NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null)
     {
         if (curr?.Content is not NodeTypeDefinition d) return curr!;
         // Never clobber an in-flight compile (a concurrent release request or
@@ -3829,7 +3916,9 @@ internal static class NodeTypeCompilationHelpers
             return curr;
         // Re-check against the state being committed — a genuine compile may have settled, or a
         // fresh terminal failure may have re-parked, between the outer Where and this write.
-        if (!HasStaleFailureVerdict(d, modulesHash, hubPath)) return curr;
+        if (!HasStaleFailureVerdict(d, modulesHash, hubPath)
+            && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath))
+            return curr;
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
         // watcher's parked short-circuit lets this Pending emission through. The park itself is
         // never touched.
@@ -3860,6 +3949,9 @@ internal static class NodeTypeCompilationHelpers
             Content = DispatchPending(d, modulesHash) with
             {
                 FailedBuildInputs = BuildInputsToken(modulesHash, d.CurrentSourceVersions),
+                // …and the BUILD this attempt is made on, in the same write, so the older-platform
+                // trigger is false the instant it fires (one attempt per build, never a loop).
+                FailedPlatformVersion = FailureStamp(livePlatformVersion),
             }
         };
     }
@@ -3944,6 +4036,9 @@ internal static class NodeTypeCompilationHelpers
             FailedBuildInputs = formedUnderLiveInputs
                 ? BuildInputsToken(modulesHash, parkedDef.CurrentSourceVersions)
                 : parkedDef.FailedBuildInputs,
+            FailedPlatformVersion = formedUnderLiveInputs
+                ? FailureStamp(LivePlatformVersion)
+                : parkedDef.FailedPlatformVersion,
             // A forced release that ends in a park is spent too (#2818): under RequirePrebuilt the
             // compile it asked for is refused by design and the park names that; a bundle that
             // arrives later must be adoptable again, not refused by the stale force.
@@ -4141,6 +4236,7 @@ internal static class NodeTypeCompilationHelpers
             // had already had its automatic attempt under these inputs, and the type would sit
             // broken with nothing due to retry it.
             FailedBuildInputs = null,
+            FailedPlatformVersion = null,
             // 🚨 …and so must the finding that explained it (#3903). A standing "these declared
             // source queries matched nothing" describes a failure that no longer exists; left
             // behind it would tell the next reader that a green type is missing its sources, and
@@ -4397,6 +4493,9 @@ internal static class NodeTypeCompilationHelpers
             // doomed compile is running still earns its own attempt.
             FailedBuildInputs = BuildInputsToken(
                 modulesHash, result?.CompiledSources ?? def.CurrentSourceVersions),
+            // The BUILD the verdict was formed on — the token's fw= is the stable compatibility
+            // key and cannot tell two builds apart (see HasFailureFromOlderPlatform).
+            FailedPlatformVersion = FailureStamp(LivePlatformVersion),
             // Clear the consumed release-requester on failure too — the failed request is
             // done; a fresh request must re-stamp it.
             RequestedReleaseBy = null,
