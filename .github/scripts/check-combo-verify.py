@@ -248,6 +248,16 @@ def check_lander(text: str, run_it: bool = True) -> int:
     if not ok:
         failures += 1
         print(f"::error::{LANDER}: {mints} of {calls} instance call(s) are preceded by mint_token")
+    # …and SENDS it. A minted token that no request carries is an unauthenticated lane that passes
+    # every other check here. Each curl block (from its `_code=$(curl` line to the `|| x_code=000`
+    # that closes it) must carry the bearer header.
+    blocks = re.findall(r"^\w+_code=\$\(curl.*?\|\| \w+_code=000", text, flags=re.M | re.S)
+    sent = sum(1 for b in blocks if '-H "Authorization: Bearer $TOKEN"' in b)
+    ok = len(blocks) == calls and calls >= 3 and sent == calls
+    print(f"[{'PASS' if ok else 'FAIL'}] lander sends the minted token on each of its {calls} instance call(s)")
+    if not ok:
+        failures += 1
+        print(f"::error::{LANDER}: {sent} of {calls} instance call(s) carry 'Authorization: Bearer $TOKEN'")
     if run_it:
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "lander.sh"
@@ -428,6 +438,14 @@ def self_test(root: Path) -> int:
               "proves nothing about the real one.")
         return 1
     print(f"--self-test: the credential-holding lander failed {lander_failures} check(s) — part two can fail.")
+    # The real lander with the bearer header stripped: it still mints, so only the send check can
+    # catch it.
+    unsent = read_lander(root).replace('-H "Authorization: Bearer $TOKEN" ', "")
+    unsent_failures = check_lander(unsent, run_it=False)
+    if unsent_failures == 0:
+        print("::error::--self-test: a lander that mints a token and never sends it passed part two.")
+        return 1
+    print(f"--self-test: the lander that never sends its token failed {unsent_failures} check(s).")
     source_failures = check_source_split(root)
     if source_failures:
         return source_failures

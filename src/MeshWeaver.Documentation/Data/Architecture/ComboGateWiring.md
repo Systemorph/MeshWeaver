@@ -120,7 +120,7 @@ in-process.
 must refuse) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
 "the gate never ran" wearing the colour of "the gate passed".
 
-### Why it is its own workflow, and why its preflight is red until provisioned
+### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
 
 The lane holds **no credential for any instance** (#3848). Each verify job reaches its instance as
 *the run itself*: a GitHub Actions OIDC token minted per call, audience = the instance's base URL,
@@ -336,9 +336,10 @@ exclusion would shrink the denominator silently.
 
 ### 🚨 The preflight asserts in the order that makes its red actionable
 
-The preflight separates credentials needed to read the deployment repositories from per-instance
-credentials. The first assertion checks `AZURE_*` and `FLEET_READER_*`; once those pass, derivation
-reads the roster and source map. The next assertion checks that both derived outputs are present.
+The preflight asserts only what it needs to read the deployment repositories; per-instance
+provisioning is checked by each instance's `verify` job, which is red with a 401 naming both halves.
+The first assertion checks `AZURE_*` and `FLEET_READER_*`; once those pass, derivation reads the
+roster and source map. The next assertion checks that both derived outputs are present.
 
 | step | asserts | why there |
 |---|---|---|
@@ -471,9 +472,10 @@ repository. In
 `Systemorph/Memex`, `check-record-renders-overlay.py` also checks that registry-source records and
 `pluginCatalog.sources` agree by name, URL and ref in both directions.
 
-### The derived inputs are not credentials, and credentials still gate verification
+### The derived inputs are not provisioning, and per-instance provisioning still gates verification
 
-The preflight now derives both the roster and source map before checking per-instance credentials.
+The preflight derives the roster and source map; whether each instance accepts the run's identity is
+decided in that instance's `verify` job, not in the preflight.
 Run `36272707636` on 2026-09-26 derived five live instances — the build instance, the control instance, the public instance, an enterprise client's test
 installation (`globex-test`) and an SME client instance — then stopped because the key and admin-token
 maps it then required were not provisioned. Those maps no longer exist: each instance is reached as
