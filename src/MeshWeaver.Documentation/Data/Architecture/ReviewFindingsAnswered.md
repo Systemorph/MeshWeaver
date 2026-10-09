@@ -437,9 +437,9 @@ same listener naming its own caller workflow.
   Read that file's diff yourself.
 - **Pull requests into other branches.** The ruleset reviews only the default branch, so a pull
   request into another branch reads red; the check is not required there.
-- 🚨 **Every other repository in the fleet.** This check exists here and nowhere else. See below.
+- **Other repositories run it through the fleet lane.** Since #4776 every gated repository requires the same predicate; see "The rollout is complete" below. Memex does not.
 
-## 🚨 This is a CORE-ONLY gate, and the rest of the fleet shows what that costs
+## 🚨 This WAS a core-only gate, and the rest of the fleet showed what that costs
 
 Measured 2026-09-19, from `branches/main/protection` and every active ruleset:
 
@@ -534,6 +534,36 @@ Step 1 (the lane) is already landed. For Plugins, steps 2 and 3 of the table abo
     own rule overrides the lane header's "pin a sha".
 - **Step 3**: the context `review-answered / Automatic review answered` is added to Plugins' classic
   protection, and only after it has been seen published on live pull requests there.
+
+### The rollout is complete: every gated repository requires the answer
+
+Measured 2026-10-09, after the rollout (#4776). For each repository, the caller's own pull request
+published `review-answered / Automatic review answered` as `success` before the context was added
+to protection. So no repository was left with a required context that never reported.
+
+| repo | mechanism | requires `review-answered / Automatic review answered` | caller PR |
+|---|---|---|---|
+| MeshWeaver | ruleset `2128472` | yes (as `Automatic review answered`) | n/a |
+| MeshWeaver.Plugins | classic | yes | Plugins#2727 |
+| MeshWeaver.Reinsurance | classic | yes | Reinsurance#253 |
+| MeshWeaver.Crm | classic | yes | Crm#168 |
+| MeshWeaver.SocialMedia | classic | yes | SocialMedia#239 |
+| MeshWeaver.Manufacturing | classic | yes | Manufacturing#128 |
+| MeshWeaver.Education | ruleset `19153714` | yes | Education#392 |
+
+Two things the rollout found, worth knowing before the next adopter:
+- **Every satellite's `scripts/check-shared-lanes.py` classifies an unknown lane as source-building.**
+  It then demands `platform-ref`, so the caller's own `Nothing pins the platform` / policy gate goes
+  red. The caller PR must also add `node-repo-review-answered.yml` to `SCRIPT_ONLY_LANES`, with
+  self-test cases for both directions.
+- **There is no legacy context to carry, so no shim job is needed.** The shim-job route in
+  [Renaming A Required Check](../RenamingARequiredCheck) exists for a rename. Here the context is
+  new, and the only rule is ordering: the context is published first, then made required.
+  Under classic protection, an open pull request opened before its repository's caller landed
+  reads "Expected" until its next push or review event runs the workflow. That pull request is
+  blocked, not unguarded.
+
+Not covered: Memex (ruleset `21038115`), which calls only `auto-arm.yml`.
 
 ### The same gap, measured wider — 240 merged pull requests
 
