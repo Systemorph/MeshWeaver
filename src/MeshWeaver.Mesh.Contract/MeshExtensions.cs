@@ -8328,11 +8328,93 @@ public static class MeshExtensions
                     ? Observable.Return(created)
                     : Observable.Throw<MeshNode>(d.Message.ToException(node.Path))));
 
+        // 🚨 A RELOCATION IS RESUMABLE (#6310). A preserving copy is the copy leg of a MOVE, and a
+        // move is copy-then-delete: when its reply is lost (#6107) the copy can land while the
+        // delete never runs, leaving the SAME node at both addresses. Re-issuing the move must then
+        // finish it, not refuse it — a create refused with NodeAlreadyExists is checked against
+        // what is stored at the target, and when the target IS this source node relocated (same
+        // NodeType, same CreatedBy, same CreatedDate — stamps a preserving create copies verbatim
+        // from the stored source and that no other create can mint) the existing node stands in
+        // for the create. Anything else at the target is a genuine collision and the original
+        // refusal stands.
+        //
+        // 🚨 …and the SOURCE must be unchanged since that copy landed. When the first attempt ended,
+        // its subtree-deletion scope was released with the source still in place, so the old address
+        // can be written before the retry; resuming would then keep the stale target and the delete
+        // leg would destroy the newer source. A preserving create copies LastModified verbatim, so
+        // "unchanged" is: the source's LastModified is one the TARGET has carried — its current one
+        // (nobody wrote to the target since), or one of its recorded versions (somebody did, and the
+        // target's own later state is then its newer state, kept). A source edited after the copy
+        // carries a stamp minted after it, which neither can hold. Where neither proves it — history
+        // not retained and the target edited — the relocation is refused, never guessed.
+        IObservable<MeshNode> AlreadyRelocated(MeshNode stored, string relocatedPath, Exception refusal) =>
+            persistence is null
+                ? Observable.Throw<MeshNode>(refusal)
+                : ReadNodeAuthoritative(hub, persistence, relocatedPath)
+                    .SelectMany(existing => !IsSameNodeRelocated(stored, existing)
+                        ? Observable.Throw<MeshNode>(refusal)
+                        : TargetHasCarried(relocatedPath, existing!, stored.LastModified)
+                            .SelectMany(sourceUnchanged =>
+                            {
+                                if (!sourceUnchanged)
+                                {
+                                    logger.LogWarning(
+                                        "[CopyNode] {Target} holds {Source} relocated by an earlier attempt, but the source has "
+                                        + "changed since that copy landed (source lastModified={SourceModified:O}, never carried "
+                                        + "by the target) — refusing to resume, so the source's newer state is not destroyed",
+                                        relocatedPath, stored.Path, stored.LastModified);
+                                    var changed = new InvalidOperationException(
+                                        $"Node already exists: {relocatedPath} — it holds '{stored.Path}' relocated by an earlier "
+                                        + "attempt, but the source has been modified since that copy landed, so resuming would "
+                                        + "discard the modification. Nothing was changed.");
+                                    changed.Data[NodeCreationFailure.RejectionReasonKey] = NodeCreationRejectionReason.NodeAlreadyExists;
+                                    return Observable.Throw<MeshNode>(changed);
+                                }
+                                logger.LogInformation(
+                                    "[CopyNode] {Target} already holds {Source} relocated (createdBy={CreatedBy} createdDate={CreatedDate:O}) — "
+                                    + "resuming a half-landed relocation instead of refusing it",
+                                    relocatedPath, stored.Path, existing!.CreatedBy, existing.CreatedDate);
+                                return Observable.Return(existing!);
+                            }));
+
+        // Whether the node at `path` has ever carried `lastModified`: its current stamp, else any
+        // recorded version's (oldest first, stopping at the first match). Cold; emits once. A history
+        // read that fails decides nothing and is reported as "not established" — a refusal.
+        IObservable<bool> TargetHasCarried(string path, MeshNode current, DateTimeOffset lastModified)
+        {
+            if (SameInstant(current.LastModified, lastModified))
+                return Observable.Return(true);
+            var versions = hub.ServiceProvider.GetService<IVersionQuery>();
+            if (versions is null || !versions.RetainsHistory)
+                return Observable.Return(false);
+            return versions.GetVersions(path)
+                .ToList()
+                .SelectMany(summaries => summaries
+                    .OrderBy(v => v.Version)
+                    .ToObservable()
+                    .Select(v => versions.GetVersion(path, v.Version, hub.JsonSerializerOptions).Take(1))
+                    .Concat()
+                    .Where(version => version is not null && SameInstant(version.LastModified, lastModified))
+                    .Take(1)
+                    .Select(_ => true)
+                    .DefaultIfEmpty(false))
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[CopyNode] could not read the version history of {Target} to establish whether its source changed "
+                        + "since an earlier relocation — refusing to resume", path);
+                    return Observable.Return(false);
+                });
+        }
+
         IObservable<MeshNode> CreateRetargeted(MeshNode stored)
         {
             var retargeted = RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: copyRequest.PreserveAuthorship);
             var create = copyRequest.PreserveAuthorship
                 ? CreatePreservingAuthorship(retargeted, stored.Path)
+                    .Catch((Exception ex) => IsNodeAlreadyExists(ex)
+                        ? AlreadyRelocated(stored, retargeted.Path, ex)
+                        : Observable.Throw<MeshNode>(ex))
                 : CreateUnderCaller(retargeted);
             // Which TARGET creates are still outstanding is what a stalled verdict has to name.
             return Observable.Defer(() =>
@@ -8823,6 +8905,34 @@ public static class MeshExtensions
                 LastModifiedBy = null,
             };
     }
+
+    /// <summary>
+    /// Whether a create surface's exception is the typed <see cref="NodeCreationRejectionReason.NodeAlreadyExists"/>
+    /// refusal (<see cref="NodeCreationFailure.ToException(CreateNodeResponse,string)"/> stamps it on
+    /// <see cref="Exception.Data"/>) — never read off the wording.
+    /// </summary>
+    private static bool IsNodeAlreadyExists(Exception ex) =>
+        ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists;
+
+    /// <summary>
+    /// Whether <paramref name="existing"/> — what storage holds at a relocation's target — IS
+    /// <paramref name="source"/> relocated there by an earlier preserving copy (#6310). Identity is
+    /// decided by the stamps such a create copies verbatim from the stored source and that are never
+    /// changed afterwards (<see cref="MeshNode.CreatedDate"/>, floored exactly as the create floors it,
+    /// and <see cref="MeshNode.CreatedBy"/>), plus the <see cref="MeshNode.NodeType"/>. A source with no
+    /// creation stamp has no identity to recognise, so it is never matched: the create at its target
+    /// would have minted a fresh one.
+    /// </summary>
+    private static bool IsSameNodeRelocated(MeshNode source, MeshNode? existing) =>
+        existing is not null
+        && source.CreatedDate != default
+        && string.Equals(existing.NodeType, source.NodeType, StringComparison.Ordinal)
+        && string.Equals(existing.CreatedBy, source.CreatedBy, StringComparison.Ordinal)
+        && MeshNode.StorageStable(existing.CreatedDate) == MeshNode.StorageStable(source.CreatedDate);
+
+    /// <summary>Two stamps are the same instant as storage keeps them (floored as the create floors them); an unset stamp matches nothing.</summary>
+    private static bool SameInstant(DateTimeOffset a, DateTimeOffset b) =>
+        a != default && MeshNode.StorageStable(a) == MeshNode.StorageStable(b);
 
     /// <summary>
     /// A move refused BEFORE it wrote anything — the source cannot be deleted from where it is. An
