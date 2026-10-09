@@ -562,6 +562,9 @@ public static class MemexConfiguration
                 // hosts call this method on opposite sides of their portal configuration.
                 services.TryAddSingleton(_ => Setup.InstanceSetupStatusAccessor.For(builder));
                 services.TryAddSingleton<Setup.SetupAccessToken>();
+                // The approval step-up's Entra discovery/JWKS managers — one per tenant for the
+                // life of the mesh (Doc/Architecture/ApprovalStepUp).
+                services.TryAddSingleton(_ => new Authentication.EntraMetadataCache());
                 return services;
             });
 
@@ -1022,6 +1025,8 @@ public static class MemexConfiguration
                         // APP (PersonApp.AddPersonAppTab): they show on the viewer's own
                         // /{user}/Settings only, and an old link on any other page redirects there.
                         .AddApiTokensSettingsTab()
+                        // Security: how this person confirms approvals (passkey / authenticator app).
+                        .AddStepUpSettingsTab()
                         .AddInstancesSettingsTab()
                         .AddNotificationsSettingsTab()
                         // The AI top-bar menu entry ("New thread") is GUI: its action is a click-time

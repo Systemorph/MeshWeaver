@@ -94,7 +94,22 @@ public class ExternalAuthController : ControllerBase
 
         // Which provider, and (for Entra) which object/tenant — the approval step-up decides its
         // ladder rung and pins the step-up token's subject from these (Doc/Architecture/ApprovalStepUp).
-        claims.AddRange(StepUpClaims.ForSession(provider, externalClaims, DateTimeOffset.UtcNow));
+        // 🚨 The provider comes from the TICKET the challenged scheme produced, never from the route:
+        // the route is the caller's to choose. A ticket that carries the provider item is a sign-in
+        // that just happened, so it is also the only thing that may stamp a new auth_time; a
+        // re-entry with an existing session keeps the provider and the auth_time it already had.
+        string? ticketProvider = null;
+        result.Properties?.Items.TryGetValue("provider", out ticketProvider);
+        var signedInWith = StepUpClaims.ResolveProvider(ticketProvider, externalClaims);
+        if (signedInWith is not null && !string.Equals(signedInWith, provider, StringComparison.OrdinalIgnoreCase))
+            _logger.LogWarning(
+                "Sign-in callback for '{Route}' carried a session signed in with '{Actual}' — the route is ignored",
+                provider, signedInWith);
+        DateTimeOffset? authTime = !string.IsNullOrEmpty(ticketProvider) ? DateTimeOffset.UtcNow
+            : long.TryParse(externalClaims.FirstOrDefault(c => c.Type == StepUpClaims.AuthTime)?.Value,
+                System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var previous)
+                ? DateTimeOffset.FromUnixTimeSeconds(previous) : null;
+        claims.AddRange(StepUpClaims.ForSession(signedInWith, externalClaims, authTime));
 
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         var principal = new ClaimsPrincipal(identity);

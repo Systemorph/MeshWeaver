@@ -66,7 +66,13 @@ One shape for every method and every consumer.
 
 **Where it lives:** `Auth/_StepUp/{id}`, written as System by the step-up endpoint only. The node
 type's access rule admits System alone for every operation; the seal makes even a write that
-bypassed it worthless.
+bypassed it worthless. The seal's material is canonical — every field length-prefixed, instants as
+UTC ticks, the targets counted — so no two receipts share bytes.
+
+**Only the platform mints.** The public `IStepUpService` is check-and-consume only; minting lives on
+the internal `StepUpService`, visible to the portal host that carries the step-up endpoints and to
+nothing compiled in the mesh — otherwise any code able to resolve it could stamp itself a valid
+receipt and skip the authentication it stands for.
 
 **Single use:** consuming target *T* of receipt *R* CREATES `Auth/_StepUpUse/{R}-{key(T)}` as
 System. Creation is atomic at the owning hub, so a second consumer's create fails — a replay is
@@ -113,8 +119,8 @@ an approval some other gate parks.
 | `Authentication:StepUp:Enabled` | `Enabled` | `false` | Every approval requires a receipt. Off ⇒ every consumer answers `NotRequired` |
 | `Authentication:StepUp:Entra:AuthenticationContext` | `EntraAuthenticationContext` | — | The Conditional Access authentication context id (`c1`…`c99`) requested for Microsoft accounts. Enabled without it ⇒ Microsoft accounts are refused with *"step-up is not configured"*, never waved through |
 | `Authentication:StepUp:Entra:TenantId` | `EntraTenantId` | `Authentication:Microsoft:TenantId` | The tenant whose `tid` the step-up token must carry. Required when the sign-in tenant is `common`/`organizations` |
-| `Authentication:StepUp:Entra:RequireAmr` | `EntraRequireAmr` | `false` | Also require an `amr` claim naming a phishing-resistant method. An `amr` that IS present must always name one |
-| `Authentication:StepUp:Entra:PhishingResistantAmr` | `EntraPhishingResistantAmr` | `fido,hwk,ngcmfa,x509` | The `amr` values that count as phishing-resistant (comma-separated) |
+| `Authentication:StepUp:Entra:RequireAmr` | `EntraRequireAmr` | `true` | Require an `amr` claim naming a phishing-resistant method. `false` accepts `acrs` alone — only the Conditional Access policy behind the context then vouches for the strength |
+| `Authentication:StepUp:Entra:PhishingResistantAmr` | `EntraPhishingResistantAmr` | `fido,hwk` | The `amr` values that count as phishing-resistant (comma-separated). Not `ngcmfa` (Entra also emits it for an Authenticator push) and not `x509` (single-factor certificate) |
 | `Authentication:StepUp:MaxAuthAgeSeconds` | `MaxAuthAgeSeconds` | `120` | How old `auth_time` may be when the token arrives |
 | `Authentication:StepUp:ReceiptLifetimeSeconds` | `ReceiptLifetimeSeconds` | `300` | How long a receipt stays consumable |
 | `Authentication:StepUp:AllowTotpFallback` | `AllowTotpFallback` | `true` | Whether the TOTP rung exists at all |
@@ -144,25 +150,31 @@ the portal changes behaviour until the last step.
    `Authentication:Microsoft:ClientId`):
    - *Authentication* → *Web* → *Redirect URIs* → add `https://<portal host>/auth/step-up/callback`
      (next to the existing `/signin-microsoft`).
-   - *Token configuration* → *Add optional claim* → **ID** → tick `acrs` (and `auth_time` if
-     listed). Optional, for `RequireAmr`: add `amr` the same way where offered.
+   - *Token configuration* → *Add optional claim* → **ID** → tick **`acrs`**, **`auth_time`** and
+     **`amr`**. All three are v2.0 *optional* ID-token claims: without `auth_time` every step-up
+     fails `auth_time`, and without `amr` it fails `amr` (the default `RequireAmr = true`).
 5. **Declare it on the deployment record** (control instance, `Deployments/<name>`):
    `SignIn.StepUp.EntraAuthenticationContext = "c1"`, then `SignIn.StepUp.Enabled = true`, and roll.
 
 🚨 Without step 3, Entra issues the `acrs` claim for an *unprotected* context to anyone who signs
 in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS added to claims"*. The
-`acrs` check is only as strong as the policy behind it, which is why the portal also checks
-`amr` whenever Entra sends it and offers `RequireAmr`.
+`acrs` check is only as strong as the policy behind it, which is why the portal ALSO requires an
+`amr` naming a phishing-resistant method (`fido` for a FIDO2 key or a passkey, `hwk` for Windows
+Hello for Business) — Microsoft's AMR table maps an Authenticator push to `rsa, ngcmfa, mfa`, a
+password to `pwd`, so neither passes.
 
 ## The Entra rung — exactly what the server checks
 
 `GET /auth/step-up?target={path}&binding={hash}[&target=…&binding=…]&returnUrl={local}`
 
-1. Signed in, step-up enabled, the account signed in through the `Microsoft` scheme (the cookie's
-   `idp` claim). A session from before the `idp` claim existed is asked to sign in again — the
+1. Signed in, step-up enabled, the account signed in through the `Microsoft` scheme — the session's
+   `mw_idp` claim, set from the sign-in TICKET the challenged scheme produced, never from the
+   callback route. A session from before that claim existed is asked to sign in again — the
    provider is never guessed.
-2. A pending step-up is sealed into a Data-Protection cookie: state, nonce, the targets, the return
-   URL, the user — ten minutes.
+2. The pending step-up — state, nonce, the targets, the return URL, the user, ten minutes — is
+   stored SERVER-side at `Auth/_StepUpPending/{handle}` (System-only); the browser carries only the
+   handle and the state, sealed with Data Protection (a bulk approval's targets would overflow a
+   cookie). The callback reads it once and deletes it.
 3. Redirect to `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize` with
    `prompt=login`, `login_hint` = the signed-in account, a fresh `nonce`, and
    `claims={"id_token":{"acrs":{"essential":true,"value":"c1"}}}`.
@@ -180,35 +192,54 @@ in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS adde
 | subject | `oid` differs from the session's `oid` (or, for an older session, the token's `preferred_username`/`email` differs from the signed-in account) |
 | `auth_time` | missing, or older than `MaxAuthAgeSeconds` |
 | `acrs` | does not contain the declared context |
-| `amr` | present without a phishing-resistant value (`fido`, `hwk`, `ngcmfa`, `x509` by default) — or absent while `RequireAmr` is on |
+| `amr` | absent (unless the record waives it with `RequireAmr = false`), or without a phishing-resistant value (`fido`, `hwk` by default) |
 
 Then the receipt is minted, each target stamped, and the browser returned to `returnUrl` with
 `stepUp=done` (or `stepUp=failed&reason=…`).
 
 ## The passkey rung (non-Microsoft accounts)
 
-- **Enrolment** from *Settings → Security*: `navigator.credentials.create` against
-  `/auth/step-up/passkey/register`; the server verifies the attestation with the maintained
-  FIDO2 library (`Fido2NetLib`) and stores `{user}/_Passkey/{credentialId}` — credential id, public
-  key, sign counter, AAGUID, created-at. Never a secret. The first passkey may be enrolled only
-  within ten minutes of a sign-in; every further one needs a step-up with an existing one, so a
-  stolen session cannot add its own authenticator.
-- **Assertion** at step-up: the challenge is derived from the pending step-up (user, targets,
-  nonce), `userVerification=required`; the server verifies the signature, the origin and RP id,
-  the UV flag, and a sign counter that moved forward, then mints the same receipt with
-  `method=passkey`.
+Where a factor lives: ONE System-only node per account, `Auth/_StepUpFactors/{user}/factors`
+(`StepUpFactors`) — the passkeys (credential id, COSE public key, user handle, signature counter,
+AAGUID, created/last-used) and, if any, the TOTP enrolment. Never a private key, never a plaintext
+secret. Whether it exists is learned from a `scope:children` listing of `Auth/_StepUpFactors/{user}`
+— never a point read of a path that may be absent — and every write is create-first, falling back to
+a `GetMeshNodeStream(path).Update(fold)` the owning hub serialises.
+
+- **Enrolment** at `/auth/step-up/enroll`, reached from *Settings → Security* (a person-app tab of
+  framework controls with one button; the ceremony itself must run in the page that asks for it).
+  `navigator.credentials.create` against `/auth/step-up/passkey/register/options` and `…/register`;
+  the server verifies the attestation with the maintained FIDO2 library (`Fido2NetLib`), user
+  verification required, attestation `none`, existing credentials excluded.
+  **Who may enrol:** the FIRST factor only within ten minutes of a sign-in (the session's
+  `mw_auth_time`); every further one only after a step-up WITH an existing factor — a receipt for the
+  target `Auth/_StepUpFactors/{user}/factors`, binding `enroll`, checked when the options are issued
+  and CONSUMED at the write — so a stolen session cannot add its own authenticator.
+- **Assertion** at step-up: `/auth/step-up` renders one button; `navigator.credentials.get` with a
+  challenge DERIVED from the pending step-up — SHA-256 over the user, every target and the nonce —
+  so an assertion made for one approval can never confirm another. `userVerification=required`.
+  The library verifies signature, origin, RP id, challenge, the UV flag and a counter that moved
+  forward (a counter that did not is refused as a possible clone); then the counter is stored and the
+  same receipt minted with `method=passkey`.
 
 ## The TOTP rung (only where no passkey is possible)
 
-Offered only when the account has **no** passkey AND the browser reports neither a platform
-authenticator (`PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`) nor
-WebAuthn at all. The server enforces the half it can see: an account with a passkey is never
-offered, and never accepts, TOTP — so the fallback cannot be used to downgrade.
+The ladder offers TOTP only to an account with **no** passkey and an authenticator app enrolled,
+and the enrolment page offers to SET UP an authenticator app only when the browser reports no
+platform authenticator (`PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`) or
+no WebAuthn at all. The server enforces the half it can see, at every endpoint: an account with a
+passkey is never offered TOTP, cannot enrol it, and a code is refused for it (`downgrade`) — so the
+fallback cannot be used to step around a passkey. `Authentication:StepUp:AllowTotpFallback = false`
+removes the rung entirely.
 
-- Enrolment from *Settings → Security*: a QR code of the `otpauth://` URI; the secret is stored
-  encrypted with `IProviderKeyProtector`, never in configuration; ten one-time recovery codes are
-  shown once and stored as hashes.
-- Verification: RFC 6238 (SHA-1, 30 s, 6 digits, ±1 step), each time step accepted once.
+- Enrolment: a QR code of the `otpauth://` URI (rendered server-side as SVG) plus the base32 key;
+  the secret waits in a sealed cookie until the first valid code confirms it, then is stored
+  encrypted with `IProviderKeyProtector` (the instance master key) — never in configuration. Ten
+  one-time recovery codes are shown ONCE and stored as SHA-256 hashes.
+- Verification: RFC 6238 (HMAC-SHA1, 30 s, 6 digits, ±1 step), compared in constant time; each
+  time step is accepted once (`LastTotpStep`), a recovery code once (its hash is removed). **One
+  attempt per confirmation** — a wrong code ends the pending step-up, so codes cannot be guessed
+  inside one.
 
 ## Consumers
 
@@ -226,10 +257,9 @@ receipt is required on top of it, never instead of it.
 
 | Piece | State |
 |---|---|
-| receipt, seal, consumption, verdict, node types | core — this design's first change |
-| Entra rung, `idp`/`oid`/`tid` on the session cookie, record keys | core — first change |
-| passkey rung | core — second change |
-| TOTP rung | core — third change |
+| receipt, seal, consumption, verdict, node types | core — first change |
+| Entra rung, `mw_idp`/`mw_oid`/`mw_tid`/`mw_auth_time` on the session cookie, record keys | core — first change |
+| passkey rung, TOTP rung, Settings → Security | core — second change |
 | consumers | MeshWeaver.Plugins — after the core contract is in a sealed set |
 | public links (`link.publish`) consuming the receipt | Refs #4306, after the consumers |
 

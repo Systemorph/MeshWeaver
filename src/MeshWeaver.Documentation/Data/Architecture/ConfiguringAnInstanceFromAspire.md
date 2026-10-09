@@ -422,6 +422,15 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `SignInSpec` | `GoogleClientId` | Google client id — empty turns the scheme off | Google-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `LinkedInClientId` | LinkedIn client id — empty turns the scheme off | LinkedIn-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `AppleClientId` | Apple client id | Apple-Client-ID |
+| `SignInSpec` | `StepUp` | Approval step-up | Step-up für Genehmigungen |
+| `StepUpSpec` | `Enabled` | Require step-up on every approval | Step-up bei jeder Genehmigung verlangen |
+| `StepUpSpec` | `EntraAuthenticationContext` | Entra authentication context id (c1–c99) | Entra-Authentifizierungskontext-ID (c1–c99) |
+| `StepUpSpec` | `EntraTenantId` | Entra step-up tenant id — blank means the sign-in tenant | Entra-Step-up-Mandanten-ID — leer heißt der Anmelde-Mandant |
+| `StepUpSpec` | `EntraRequireAmr` | Require an amr claim | amr-Claim verlangen |
+| `StepUpSpec` | `EntraPhishingResistantAmr` | Phishing-resistant amr values (comma-separated) | Phishing-resistente amr-Werte (kommagetrennt) |
+| `StepUpSpec` | `MaxAuthAgeSeconds` | Maximum authentication age, seconds | Maximales Alter der Authentifizierung, Sekunden |
+| `StepUpSpec` | `ReceiptLifetimeSeconds` | Receipt lifetime, seconds | Gültigkeit der Quittung, Sekunden |
+| `StepUpSpec` | `AllowTotpFallback` | Allow the TOTP fallback | TOTP-Ausweichweg erlauben |
 | `EmailSpec` | `Enabled` | Enable system email | System-E-Mail aktivieren |
 | `EmailSpec` | `ClientId` | Sender app client id | Client-ID der Absender-App |
 | `EmailSpec` | `TenantId` | Tenant id | Mandanten-ID |

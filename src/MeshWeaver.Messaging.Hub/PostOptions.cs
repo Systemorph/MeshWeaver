@@ -29,6 +29,22 @@ public record PostOptions(Address Sender)
     /// already handled.
     /// </summary>
     public const string CallbackDispatched = nameof(CallbackDispatched);
+
+    /// <summary>
+    /// Well-known property key a hub stamps on every request it AWAITS (<c>hub.Observe</c>): it
+    /// understands <see cref="RequestProgress"/>, so a handler may report signs of life that
+    /// restart the request's deadline. Its absence — a caller on an image that predates the type —
+    /// means a progress report would be read as the reply, so none is sent
+    /// (<see cref="MessageHubExtensions.ReportRequestProgress"/>).
+    /// </summary>
+    public const string AcceptsProgress = nameof(AcceptsProgress);
+
+    /// <summary>
+    /// Returns a copy of these options stamped <see cref="AcceptsProgress"/>.
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> declaring that the sender understands progress.</returns>
+    public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
+
     internal Address Target { get; init; } = null!;
 
     /// <summary>

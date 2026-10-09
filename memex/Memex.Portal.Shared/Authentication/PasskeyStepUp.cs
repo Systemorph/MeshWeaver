@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using Fido2NetLib;
+using Fido2NetLib.Exceptions;
 using Fido2NetLib.Objects;
 using MeshWeaver.Mesh.Security;
 
@@ -30,8 +31,8 @@ internal sealed class PasskeyStepUp(string rpId, string origin, string rpName)
 {
     private Fido2Configuration Config => new()
     {
-        ServerDomain = rpId,
-        ServerName = rpName,
+        RPID = rpId,
+        RPName = rpName,
         Origins = new HashSet<string>(StringComparer.Ordinal) { origin },
     };
 

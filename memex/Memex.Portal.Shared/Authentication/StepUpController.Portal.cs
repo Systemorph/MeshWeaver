@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -43,9 +44,10 @@ public sealed partial class StepUpController
     [HttpPost("passkey/options")]
     public async Task<IActionResult> PasskeyOptions(CancellationToken ct = default)
     {
-        var (userId, pending) = (access.Context?.ObjectId, ReadPending());
+        var userId = access.Context?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
-        if (pending is null || pending.UserId != userId) return Json(Error("state"));
+        var pending = await TakePending(userId, state: null, ct, complete: false);
+        if (pending is null) return Json(Error("state"));
         var read = await ReadFactors(userId, ct);
         if (!read.Answered) return Json(Error("unavailable"));
         if (read.Factors is not { Passkeys.Count: > 0 } factors) return Json(Error("notEnrolled"));
@@ -60,9 +62,11 @@ public sealed partial class StepUpController
     [HttpPost("passkey/verify")]
     public async Task<IActionResult> PasskeyVerify(CancellationToken ct = default)
     {
-        var (userId, pending) = (access.Context?.ObjectId, ReadPending());
+        var caller = access.Context;
+        var userId = caller?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
-        if (pending is null || pending.UserId != userId) return Json(Error("state"));
+        var pending = await TakePending(userId, state: null, ct, complete: true);
+        if (pending is null) return Json(Error("state"));
         var hub = Hub();
         if (hub is null) return Json(Error("mint"));
         var read = await ReadFactors(userId, ct);
@@ -88,7 +92,7 @@ public sealed partial class StepUpController
                     // The counter only ever moves forward, also under a concurrent write.
                     ? used with { SignCount = Math.Max(used.SignCount, p.SignCount) } : p).ToImmutableList(),
             })
-            .SelectMany(_ => MintAndStamp(hub, userId, StepUpMethod.Passkey, now,
+            .SelectMany(_ => MintAndStamp(hub, caller!, StepUpMethod.Passkey, now,
                 $"credential={used.CredentialId[..Math.Min(12, used.CredentialId.Length)]} aaguid={used.AaGuid}", pending.Targets))
             .Select(r => (StepUpReceipt?)r)
             .Catch((Exception ex) =>
@@ -97,7 +101,6 @@ public sealed partial class StepUpController
                 return Observable.Return<StepUpReceipt?>(null);
             })
             .ObserveCompletion(ex => logger.LogWarning(ex, "Step-up passkey for {User} faulted after settling", userId), ct);
-        Response.Cookies.Delete(PendingCookie, new CookieOptions { Path = "/" + BasePath });
         return receipt is null ? Json(Error("mint")) : Json(new { redirect = SuccessUrl(pending, receipt) });
     }
 
@@ -110,9 +113,11 @@ public sealed partial class StepUpController
     [HttpPost(TotpVerifyAction)]
     public async Task<IActionResult> TotpVerify([FromForm] string? code, CancellationToken ct = default)
     {
-        var (userId, pending) = (access.Context?.ObjectId, ReadPending());
+        var caller = access.Context;
+        var userId = caller?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
-        if (pending is null || pending.UserId != userId) return Failure("/", "state");
+        var pending = await TakePending(userId, state: null, ct, complete: true);
+        if (pending is null) return Failure("/", "state");
         var hub = Hub();
         if (hub is null) return Failure(pending.ReturnUrl, "mint");
         var read = await ReadFactors(userId, ct);
@@ -141,7 +146,7 @@ public sealed partial class StepUpController
             .Update(userId, f => step is { } s
                 ? f with { LastTotpStep = Math.Max(f.LastTotpStep, s) }
                 : f with { RecoveryCodeHashes = f.RecoveryCodeHashes.Remove(recoveryHash!) })
-            .SelectMany(_ => MintAndStamp(hub, userId, StepUpMethod.Totp, now,
+            .SelectMany(_ => MintAndStamp(hub, caller!, StepUpMethod.Totp, now,
                 step is { } s2 ? $"totp step={s2}" : "totp recovery-code", pending.Targets))
             .Select(r => (StepUpReceipt?)r)
             .Catch((Exception ex) =>
@@ -150,7 +155,6 @@ public sealed partial class StepUpController
                 return Observable.Return<StepUpReceipt?>(null);
             })
             .ObserveCompletion(ex => logger.LogWarning(ex, "Step-up TOTP for {User} faulted after settling", userId), ct);
-        Response.Cookies.Delete(PendingCookie, new CookieOptions { Path = "/" + BasePath });
         return receipt is null ? Failure(pending.ReturnUrl, "mint") : Redirect(SuccessUrl(pending, receipt));
     }
 
@@ -340,8 +344,8 @@ public sealed partial class StepUpController
                 ? service.Consume(receiptId, userId, StepUpPaths.Factors(userId), StepUpPaths.EnrollBinding)
                 : service.Check(receiptId, userId, StepUpPaths.Factors(userId), StepUpPaths.EnrollBinding))
             .ObserveCompletion(ex => logger.LogWarning(ex, "Enrolment gate for {User} faulted after settling", userId), ct);
-        return verdict.Outcome == StepUpOutcome.Accepted
-               || (verdict.Outcome == StepUpOutcome.NotRequired && SignedInRecently())
+        return verdict?.Outcome == StepUpOutcome.Accepted
+               || (verdict?.Outcome == StepUpOutcome.NotRequired && SignedInRecently())
             ? EnrollAuthorization.Allowed
             : EnrollAuthorization.NeedsStepUp;
     }
@@ -395,5 +399,5 @@ public sealed partial class StepUpController
 
     private object Error(string reason) => new { error = access.Localize("stepUp.failed", access.Localize("stepUp.reason." + reason)) };
 
-    private new JsonResult Json(object value) => new(value);
+    private static JsonResult Json(object value) => new(value);
 }

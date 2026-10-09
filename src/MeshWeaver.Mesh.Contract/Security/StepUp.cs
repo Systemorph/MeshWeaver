@@ -179,6 +179,40 @@ public sealed record StepUpFactors
 }
 
 /// <summary>
+/// A step-up in progress, held SERVER-side at <c>Auth/_StepUpPending/{Id}</c> between the moment the
+/// approver is sent to authenticate and the moment the proof comes back — the browser carries only
+/// the handle and the state (a bulk approval's targets would not fit a cookie). System-only;
+/// deleted when the step-up completes; refused after <see cref="ExpiresAt"/>.
+/// </summary>
+public sealed record StepUpPending
+{
+    /// <summary>The handle (random, 128 bits, hex).</summary>
+    [Key]
+    [Browsable(false)]
+    public string Id { get; init; } = "";
+
+    /// <summary>The OAuth <c>state</c> / CSRF value the browser must present with the handle.</summary>
+    [Browsable(false)]
+    public string State { get; init; } = "";
+
+    /// <summary>The nonce the proof must carry (the Entra <c>nonce</c>, the passkey challenge's salt).</summary>
+    [Browsable(false)]
+    public string Nonce { get; init; } = "";
+
+    /// <summary>The approver.</summary>
+    public string UserId { get; init; } = "";
+
+    /// <summary>What is being stepped up for.</summary>
+    public ImmutableList<StepUpTarget> Targets { get; init; } = [];
+
+    /// <summary>Where to return.</summary>
+    public string ReturnUrl { get; init; } = "/";
+
+    /// <summary>After this the pending step-up is refused.</summary>
+    public DateTimeOffset ExpiresAt { get; init; }
+}
+
+/// <summary>
 /// The outcome of checking a step-up receipt — the <c>Outcome</c> of a <see cref="StepUpVerdict"/>.
 /// Only <see cref="Accepted"/> and <see cref="NotRequired"/> let an approval proceed; every other
 /// value PARKS it. Unknown values never count.
@@ -267,9 +301,15 @@ public sealed record StepUpOptions
     /// <summary>Whether the TOTP rung exists.</summary>
     public const string AllowTotpFallbackKey = Section + ":AllowTotpFallback";
 
-    /// <summary>The <c>amr</c> values counted as phishing-resistant unless configured otherwise.</summary>
+    /// <summary>
+    /// The <c>amr</c> values counted as phishing-resistant unless configured otherwise: <c>fido</c>
+    /// (FIDO2 security key, device-bound or synced passkey) and <c>hwk</c> (Windows Hello for
+    /// Business, multi-factor certificate). NOT <c>ngcmfa</c> — Entra also emits it for an
+    /// Authenticator PUSH, which is phishable — and NOT <c>x509</c>, which alone is not
+    /// phishing-resistant MFA (Microsoft's own AMR table).
+    /// </summary>
     public static readonly ImmutableHashSet<string> DefaultPhishingResistantAmr =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "fido", "hwk", "ngcmfa", "x509");
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "fido", "hwk");
 
     /// <summary>Step-up is required on this instance.</summary>
     public bool Enabled { get; init; }
@@ -280,8 +320,13 @@ public sealed record StepUpOptions
     /// <summary>The explicit step-up tenant; null ⇒ the sign-in tenant.</summary>
     public string? EntraTenantId { get; init; }
 
-    /// <summary>An absent <c>amr</c> is a refusal.</summary>
-    public bool EntraRequireAmr { get; init; }
+    /// <summary>
+    /// An absent <c>amr</c> is a refusal — the DEFAULT, because <c>acrs</c> alone proves only that
+    /// the context's policy was satisfied, and an authentication context with no Conditional Access
+    /// policy behind it is issued to anybody. <c>amr</c> is a v2.0 optional ID-token claim the
+    /// tenant admin adds to the app registration. Set <c>false</c> only to accept <c>acrs</c> alone.
+    /// </summary>
+    public bool EntraRequireAmr { get; init; } = true;
 
     /// <summary>The <c>amr</c> values that count as phishing-resistant.</summary>
     public ImmutableHashSet<string> EntraPhishingResistantAmr { get; init; } = DefaultPhishingResistantAmr;
@@ -310,7 +355,7 @@ public sealed record StepUpOptions
             Enabled = Bool(configuration[EnabledKey], false),
             EntraAuthenticationContext = Blank(configuration[EntraContextKey]),
             EntraTenantId = Blank(configuration[EntraTenantKey]),
-            EntraRequireAmr = Bool(configuration[EntraRequireAmrKey], false),
+            EntraRequireAmr = Bool(configuration[EntraRequireAmrKey], true),
             EntraPhishingResistantAmr = string.IsNullOrWhiteSpace(amr)
                 ? DefaultPhishingResistantAmr
                 : amr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -337,7 +382,7 @@ public sealed record StepUpOptions
 public static class StepUpSeal
 {
     /// <summary>The HKDF info string; changing it invalidates every outstanding receipt.</summary>
-    public const string Purpose = "MeshWeaver.StepUp.Receipt.v1";
+    public const string Purpose = "MeshWeaver.StepUp.Receipt.v2";
 
     /// <summary>Derives the seal key from the master key.</summary>
     /// <param name="masterKey">The instance master key.</param>
@@ -345,23 +390,37 @@ public static class StepUpSeal
     public static byte[] DeriveKey(byte[] masterKey) =>
         HKDF.DeriveKey(HashAlgorithmName.SHA256, masterKey, 32, salt: null, info: Encoding.UTF8.GetBytes(Purpose));
 
-    /// <summary>The canonical, newline-separated material of a receipt (every field but the seal).</summary>
+    /// <summary>
+    /// The canonical material of a receipt (every field but the seal): each field written as
+    /// <c>{UTF-8 byte length}:{bytes}</c>, an absent value as <c>-</c>, instants as UTC ticks, the
+    /// targets preceded by their count — so no two different receipts can produce the same bytes
+    /// (a delimiter inside a path, an empty vs. absent evidence, a sub-millisecond change).
+    /// </summary>
     /// <param name="r">The receipt.</param>
     /// <returns>The material.</returns>
-    public static string Material(StepUpReceipt r)
+    public static byte[] Material(StepUpReceipt r)
     {
         var sb = new StringBuilder();
-        sb.Append(Purpose).Append('\n')
-            .Append(r.Id).Append('\n')
-            .Append(r.UserId).Append('\n')
-            .Append(r.Method).Append('\n')
-            .Append(r.IssuedAt.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)).Append('\n')
-            .Append(r.ExpiresAt.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)).Append('\n')
-            .Append(r.AuthenticatedAt.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)).Append('\n')
-            .Append(r.Evidence ?? "").Append('\n');
+        void Field(string? value)
+        {
+            if (value is null) { sb.Append('-'); return; }
+            sb.Append(Encoding.UTF8.GetByteCount(value).ToString(CultureInfo.InvariantCulture)).Append(':').Append(value);
+        }
+        Field(Purpose);
+        Field(r.Id);
+        Field(r.UserId);
+        Field(r.Method);
+        Field(r.IssuedAt.UtcTicks.ToString(CultureInfo.InvariantCulture));
+        Field(r.ExpiresAt.UtcTicks.ToString(CultureInfo.InvariantCulture));
+        Field(r.AuthenticatedAt.UtcTicks.ToString(CultureInfo.InvariantCulture));
+        Field(r.Evidence);
+        Field(r.Targets.Count.ToString(CultureInfo.InvariantCulture));
         foreach (var t in r.Targets)
-            sb.Append(t.ActionPath).Append('\u001f').Append(t.Binding).Append('\n');
-        return sb.ToString();
+        {
+            Field(t.ActionPath);
+            Field(t.Binding);
+        }
+        return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
     /// <summary>Computes the seal of <paramref name="receipt"/>.</summary>
@@ -369,7 +428,7 @@ public static class StepUpSeal
     /// <param name="sealKey">The derived key (<see cref="DeriveKey"/>).</param>
     /// <returns>Base64 HMAC.</returns>
     public static string Compute(StepUpReceipt receipt, byte[] sealKey) =>
-        Convert.ToBase64String(HMACSHA256.HashData(sealKey, Encoding.UTF8.GetBytes(Material(receipt))));
+        Convert.ToBase64String(HMACSHA256.HashData(sealKey, Material(receipt)));
 
     /// <summary>Constant-time check of <paramref name="receipt"/>'s seal.</summary>
     /// <param name="receipt">The receipt.</param>
@@ -381,7 +440,7 @@ public static class StepUpSeal
         byte[] given;
         try { given = Convert.FromBase64String(receipt.Seal); }
         catch (FormatException) { return false; }
-        var expected = HMACSHA256.HashData(sealKey, Encoding.UTF8.GetBytes(Material(receipt)));
+        var expected = HMACSHA256.HashData(sealKey, Material(receipt));
         return CryptographicOperations.FixedTimeEquals(given, expected);
     }
 
@@ -414,6 +473,12 @@ public static class StepUpPaths
     /// <summary>Namespace of consumption markers.</summary>
     public const string ConsumptionNamespace = "Auth/_StepUpUse";
 
+    /// <summary>NodeType of a step-up in progress.</summary>
+    public const string PendingNodeType = "StepUpPending";
+
+    /// <summary>Namespace of pending step-ups.</summary>
+    public const string PendingNamespace = "Auth/_StepUpPending";
+
     /// <summary>NodeType of a user's portal-held step-up factors (passkeys, TOTP).</summary>
     public const string FactorsNodeType = "StepUpFactors";
 
@@ -435,6 +500,11 @@ public static class StepUpPaths
     /// <param name="userId">The user.</param>
     /// <returns>The node path.</returns>
     public static string Factors(string userId) => FactorsNamespaceOf(userId) + "/" + FactorsId;
+
+    /// <summary>Path of a pending step-up.</summary>
+    /// <param name="handle">The handle.</param>
+    /// <returns>The node path.</returns>
+    public static string Pending(string handle) => PendingNamespace + "/" + handle;
 
     /// <summary>
     /// The content property a step-up endpoint stamps on each target node: a map
@@ -526,28 +596,20 @@ public static class StepUpPaths
 }
 
 /// <summary>
-/// The platform's step-up service: mints receipts (step-up endpoints only) and checks-and-consumes
-/// them (every approval consumer). Registered by the mesh; resolve with
-/// <c>hub.ServiceProvider.GetRequiredService&lt;IStepUpService&gt;()</c>. Reads and writes the
-/// receipt nodes as System internally — a consumer compiled in the mesh needs no impersonation.
+/// The CONSUMER contract of the approval step-up: check and consume a receipt. Registered by the
+/// mesh; resolve with <c>hub.ServiceProvider.GetRequiredService&lt;IStepUpService&gt;()</c>. Reads
+/// and writes the receipt nodes as System internally — a consumer compiled in the mesh needs no
+/// impersonation.
+///
+/// <para>🚨 There is deliberately NO way to MINT a receipt through this interface: a receipt is
+/// proof that a step-up endpoint authenticated the approver just now, so issuing one is internal to
+/// the platform (the step-up endpoints in the portal host). Anything that could resolve a public
+/// mint could stamp itself a valid receipt and skip the authentication it stands for.</para>
 /// </summary>
 public interface IStepUpService
 {
     /// <summary>The instance's step-up options, read live.</summary>
     StepUpOptions Options { get; }
-
-    /// <summary>
-    /// Mints, seals and stores a receipt for <paramref name="userId"/> covering <paramref name="targets"/>.
-    /// Cold. Faults when the instance has no master key (the seal cannot be keyed).
-    /// </summary>
-    /// <param name="userId">The approver's mesh id.</param>
-    /// <param name="method">A <see cref="StepUpMethod"/> value.</param>
-    /// <param name="targets">The actions covered.</param>
-    /// <param name="authenticatedAt">When the user authenticated.</param>
-    /// <param name="evidence">What was verified — never a secret.</param>
-    /// <returns>The stored receipt.</returns>
-    IObservable<StepUpReceipt> Mint(string userId, string method, IReadOnlyList<StepUpTarget> targets,
-        DateTimeOffset authenticatedAt, string? evidence);
 
     /// <summary>
     /// Checks the receipt stamped for an approval and, when valid, consumes it for this target.

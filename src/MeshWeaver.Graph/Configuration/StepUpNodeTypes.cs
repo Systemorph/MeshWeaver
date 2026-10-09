@@ -48,20 +48,32 @@ public static class StepUpNodeTypes
                 ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<StepUpFactors>())
+            },
+            new MeshNode(StepUpPaths.PendingNodeType)
+            {
+                Name = "Step-up in progress",
+                Icon = "/static/NodeTypeIcons/key.svg",
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<StepUpPending>())
             });
         // Every hub must know the discriminators, not only the per-node hubs above (#2729): a
         // reader elsewhere whose TypeRegistry lacks them gets a raw JsonElement — a silent null.
         builder.ConfigureHub(config => config
             .WithType<StepUpReceipt>(nameof(StepUpReceipt))
             .WithType<StepUpConsumption>(nameof(StepUpConsumption))
+            .WithType<StepUpPending>(nameof(StepUpPending))
             .WithType<StepUpFactors>(nameof(StepUpFactors)));
-        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType, StepUpPaths.FactorsNodeType);
+        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType, StepUpPaths.PendingNodeType, StepUpPaths.FactorsNodeType);
         builder.ConfigureServices(s =>
         {
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ReceiptNodeType));
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ConsumptionNodeType));
+            s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.PendingNodeType));
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.FactorsNodeType));
-            s.TryAddSingleton<IStepUpService, StepUpService>();
+            // The concrete service is INTERNAL (it alone can mint); consumers get the interface.
+            s.TryAddSingleton<StepUpService>();
+            s.TryAddSingleton<IStepUpService>(sp => sp.GetRequiredService<StepUpService>());
             return s;
         });
         return builder;
