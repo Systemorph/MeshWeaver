@@ -2341,6 +2341,24 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
 
+    # main-cd's core image-relevance classifier (policy image-rebuild-own-inputs, #4688) runs on
+    # main only, so its first execution would be in production. Proven both ways here: tests /
+    # agent config / root prose / standalone clients skip, and src, .github, root build files,
+    # samples, an unknown top-level entry, a rename out of src, a truncated compare and an empty
+    # list all rebuild.
+    - name: "A core change rebuilds images only when it touches an image input (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/core-image-relevance.py --self-test
+
+    # The publish-bake lane's previous-epoch leg (policy bake-per-live-identity, #3583) reads the
+    # platform-compatibility declaration to decide whether a second live identity exists. No break
+    # is declared today, so the leg's real path would first run in a satellite after a break —
+    # proven here instead: no break / retired ⇒ nothing to bake; a break ⇒ its ceiling; a break
+    # with no ceiling ⇒ an error, never "nothing to bake".
+    - name: "The previous-epoch bake leg reads the declared break, and refuses a malformed one (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/previous-epoch-ceiling.py --self-test
+
     # The doc-gate job's "every Test/ folder ran" check (check-tests-area-verdicts.py) reads the
     # gate's stdout, so a changed log format would make it see nothing. Its self-test pins both
     # directions — inputs that must PASS, and inputs that must FAIL (skipped, failed, no count,
