@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -91,6 +92,7 @@ class Decision:
     unarmed: list
     armed: str
     fingerprint: str
+    floor: bool = False     # the run listing never reached the armed cursor: the age is AT LEAST this
 
 
 def parse_threshold(raw: str | None) -> float:
@@ -101,8 +103,10 @@ def parse_threshold(raw: str | None) -> float:
         h = float(raw)
     except ValueError:
         raise Red(f"FLEET_UNARMED_ALERT_HOURS={raw!r} is not a number of hours") from None
-    if not h > 0:
-        raise Red(f"FLEET_UNARMED_ALERT_HOURS={raw!r} must be positive")
+    # `inf` (and `nan`) parse as floats and would make the stale comparison false for ever — a
+    # silently disabled alert (Copilot on MeshWeaver#6367). A bound is a finite positive number.
+    if not math.isfinite(h) or not h > 0:
+        raise Red(f"FLEET_UNARMED_ALERT_HOURS={raw!r} must be a finite positive number of hours")
     return h
 
 
@@ -117,6 +121,14 @@ def check_reading(reading: object) -> None:
         raise Red("the reading carries no `unarmed` list")
     if not str(reading.get("armed") or ""):
         raise Red("the reading names no newest armed set — cannot say what the fleet runs")
+    if not isinstance(reading.get("window_complete"), bool):
+        raise Red("the reading does not say whether its run listing reached the armed cursor (`window_complete`)")
+    if not reading["window_complete"]:
+        try:
+            _when(str(reading.get("window_floor_at") or ""))
+        except ValueError:
+            raise Red("the reading's run listing did not reach the armed cursor and names no readable "
+                      "`window_floor_at` — the stall cannot be clocked; refusing to call it armed") from None
     for s in reading["unarmed"]:
         if not isinstance(s, dict):
             raise Red(f"an unarmed entry is not an object: {s!r}")
@@ -132,25 +144,37 @@ def check_reading(reading: object) -> None:
 
 
 def decide(reading: dict, now: datetime, threshold_hours: float) -> Decision:
-    """Pure. Stale when the OLDEST unarmed promoted set is older than the threshold."""
+    """Pure. Stale when the OLDEST unarmed promoted set is older than the threshold. When the run
+    listing never reached the armed cursor (`window_complete: false`), the unarmed list is a FLOOR:
+    some unarmed promotion may lie beyond the window, so the stall is clocked from the window's
+    oldest run at least — an incomplete window is never read as "armed"."""
     check_reading(reading)
     unarmed = sorted(reading["unarmed"], key=lambda s: int(s["run_number"]), reverse=True)
-    fp = ",".join(f"{s['run_number']}:{s['state'].replace(' ', '-')}" for s in unarmed) or "none"
-    if not unarmed:
+    floor = not reading["window_complete"]
+    fp = (",".join(f"{s['run_number']}:{s['state'].replace(' ', '-')}" for s in unarmed) or "none") \
+        + (":floor" if floor else "")
+    ages = [(now - _when(str(unarmed[-1]["promoted_at"]))).total_seconds() / 3600] if unarmed else []
+    if floor:
+        ages.append((now - _when(str(reading["window_floor_at"]))).total_seconds() / 3600)
+    if not ages:
         return Decision(False, None, None, [], str(reading["armed"]), fp)
-    oldest = unarmed[-1]
-    age = (now - _when(str(oldest["promoted_at"]))).total_seconds() / 3600
-    return Decision(age > threshold_hours, age, oldest, unarmed, str(reading["armed"]), fp)
+    age = max(ages)
+    return Decision(age > threshold_hours, age, unarmed[-1] if unarmed else None, unarmed,
+                    str(reading["armed"]), fp, floor)
 
 
 def render_body(d: Decision, threshold_hours: float, run_url: str, now: datetime) -> str:
     lines = [
-        f"🚨 The promotion gate has left the fleet unarmed for **{d.age_hours:.1f} h** "
-        f"(threshold {threshold_hours:g} h, `FLEET_UNARMED_ALERT_HOURS` in main-cd's `arm` job).",
+        f"🚨 The promotion gate has left the fleet unarmed for {'AT LEAST ' if d.floor else ''}"
+        f"**{d.age_hours:.1f} h** (threshold {threshold_hours:g} h, `FLEET_UNARMED_ALERT_HOURS` in main-cd's `arm` job).",
         "",
         f"- newest ARMED set: **{d.armed}** — what SelfUpdateHostedService rolls the fleet to",
-        f"- promoted but NOT armed: **{len(d.unarmed)}** set(s); the oldest, `{d.oldest['v_portal']}`, "
-        f"was promoted {d.oldest['promoted_at']}",
+        (f"- promoted but NOT armed: **{len(d.unarmed)}** set(s); the oldest listed, `{d.oldest['v_portal']}`, "
+         f"was promoted {d.oldest['promoted_at']}" if d.oldest else
+         "- promoted but NOT armed: none listed in the window"),
+        *(["- ⚠️ the bounded run listing did NOT reach the armed set: older unarmed promotions may exist "
+           "beyond it, so the table is a floor and the age is clocked from the window's oldest run"]
+          if d.floor else []),
         f"- reading: [{run_url or 'this run'}]({run_url or '#'}) at {now.strftime('%Y-%m-%dT%H:%M:%SZ')}",
         "",
         "| set | core | verdict | why | run |",
@@ -265,6 +289,13 @@ class GitHub:
         _, it = self.call("POST", "issues", body={"title": TITLE, "body": body, "labels": [LABEL]})
         return int(it["number"])  # type: ignore[index]
 
+    def issue(self, number: int) -> Issue:
+        _, it = self.call("GET", f"issues/{number}")
+        u = it.get("user") or {}  # type: ignore[union-attr]
+        return Issue(it["number"], it["title"], it["state"], it.get("body") or "",  # type: ignore[index]
+                     tuple(l["name"] for l in it.get("labels", [])),  # type: ignore[union-attr]
+                     str(u.get("login") or ""), str(u.get("type") or ""))
+
     def edit(self, number: int, **fields) -> None:
         self.call("PATCH", f"issues/{number}", body=fields)
 
@@ -272,21 +303,36 @@ class GitHub:
         self.call("POST", f"issues/{number}/comments", body={"body": body})
 
 
+def _still_mine(gh, number: int) -> None:
+    """Re-prove ownership IMMEDIATELY before a write (the ci-failure-ledger.py rule): the plan was made
+    on a listing snapshot, and a label, title or mark changed since must stop the write, RED."""
+    now = gh.issue(number)
+    if now.state != "open" or not owns(now):
+        raise Red(f"#{number} is no longer an open issue this alert owns (state {now.state}; it needs the "
+                  f"`{LABEL}` label, the exact title, the `{MARK}` mark and the Actions bot as author) — "
+                  "a mechanism may only write to an issue it opened; nothing written to it")
+
+
 def apply(gh, d: Decision, p: Plan, body: str, run_url: str) -> str:
-    """Execute the plan; returns one sentence for the log."""
+    """Execute the plan; returns one sentence for the log. Every write to an existing issue is
+    preceded by a fresh ownership check (`_still_mine`)."""
     for n in p.duplicates:
+        _still_mine(gh, n)
         gh.comment(n, f"Duplicate of #{p.target or '?'} — this alert keeps ONE issue; closing.")
         gh.edit(n, state="closed", state_reason="not_planned")
     if p.action == "create":
         n = gh.create(body)
         return f"STALE — filed #{n}"
     if p.action == "update":
+        _still_mine(gh, p.target)
         gh.edit(p.target, body=body)
         if p.comment:
-            gh.comment(p.target, f"Reading changed ([run]({run_url})): {len(d.unarmed)} unarmed set(s), oldest "
-                                 f"`{d.oldest['v_portal']}` {d.age_hours:.1f} h — the body carries the table.")
+            oldest = f"oldest `{d.oldest['v_portal']}`" if d.oldest else "none listed in the window"
+            gh.comment(p.target, f"Reading changed ([run]({run_url})): {len(d.unarmed)} unarmed set(s), {oldest}, "
+                                 f"{'at least ' if d.floor else ''}{d.age_hours:.1f} h — the body carries the table.")
         return f"STALE — #{p.target} rewritten{' and commented (reading changed)' if p.comment else ' (reading unchanged, no comment)'}"
     if p.action == "close":
+        _still_mine(gh, p.target)
         gh.comment(p.target, f"✅ Armed again ([run]({run_url})): the fleet runs **{d.armed}**"
                              + (f"; {len(d.unarmed)} newer set(s) unarmed for {d.age_hours:.1f} h, inside the bound."
                                 if d.unarmed else "; no promoted set is newer.") + " Closing.")
@@ -330,8 +376,9 @@ def main(argv: list[str]) -> int:
         return 1
     print(f"fleet-unarmed: {said}")
     if d.stale:
-        print(f"::warning title=Fleet unarmed for {d.age_hours:.1f} h::{len(d.unarmed)} promoted set(s) newer than "
-              f"the armed {d.armed}; oldest {d.oldest['v_portal']} ({d.oldest['state']}) — see the `{LABEL}` issue")
+        oldest = f"oldest {d.oldest['v_portal']} ({d.oldest['state']})" if d.oldest else "none listed in the window"
+        print(f"::warning title=Fleet unarmed for {'at least ' if d.floor else ''}{d.age_hours:.1f} h::"
+              f"{len(d.unarmed)} promoted set(s) newer than the armed {d.armed}; {oldest} — see the `{LABEL}` issue")
     summary = env("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:
@@ -363,6 +410,10 @@ class FakeGitHub:
     def comment(self, number, body):
         self.comments.append((number, body))
 
+    def issue(self, number):
+        # `tamper` lets a test change an issue between the listing and the write
+        return self.tamper.pop(number, self.issues[number]) if hasattr(self, "tamper") else self.issues[number]
+
 
 def self_test() -> int:
     failures = 0
@@ -382,8 +433,9 @@ def self_test() -> int:
                 "sentence": sentence, "run_url": f"https://github.com/o/r/actions/runs/{n}",
                 "promoted_at": at(hours_ago)}
 
-    def reading(*sets, armed="3.1.10000"):
-        return {"armed": armed, "unarmed": list(sets)}
+    def reading(*sets, armed="3.1.10000", complete=True, floor_hours=0.0):
+        return {"armed": armed, "unarmed": list(sets), "window_complete": complete,
+                "window_floor_at": at(floor_hours) if not complete else ""}
 
     def go(gh, r, hours=6.0):
         d = decide(r, now, hours)
@@ -459,13 +511,48 @@ def self_test() -> int:
                      ({"armed": "3.1.1"}, "no unarmed list"),
                      (reading({**refused, "promoted_at": ""}), "a set without promoted_at"),
                      (reading({**refused, "state": "green"}), "an unknown state"),
-                     (reading({**refused, "promoted_at": "yesterday"}), "an unreadable promoted_at")):
+                     (reading({**refused, "promoted_at": "yesterday"}), "an unreadable promoted_at"),
+                     ({"armed": "3.1.1", "unarmed": []}, "no window_complete"),
+                     ({**reading(), "window_complete": False, "window_floor_at": ""}, "an incomplete window with no floor")):
         try:
             decide(bad, now, 6.0)
             check(f"a malformed reading ({why}) is RED", False)
         except Red:
             check(f"a malformed reading ({why}) is RED, never a pass", True)
-    for raw in ("", None, "six", "0", "-1"):
+
+    # 9. an INCOMPLETE window (the run listing never reached the armed cursor) is never read as armed
+    #    (Copilot on MeshWeaver#6367: 40 runs are not 40 promotions)
+    d = decide(reading(complete=False, floor_hours=9.0), now, 6.0)
+    check("incomplete window with NO unarmed set listed is still STALE, clocked from the window's oldest run",
+          d.stale and d.floor and 8.9 < (d.age_hours or 0) < 9.1, str(d))
+    gh = FakeGitHub([mine(30)])
+    d, p, said = go(gh, reading(complete=False, floor_hours=9.0))
+    check("…so it never closes the open issue (it keeps it, saying AT LEAST)",
+          p.action == "update" and gh.issues[30].state == "open" and "AT LEAST" in gh.issues[30].body, said)
+    check("negative control: the same empty reading with a COMPLETE window is armed (not stale)",
+          decide(reading(), now, 6.0).stale is False)
+    check("an incomplete window only raises the age: a listed set older than the floor still sets it",
+          9.9 < (decide(reading(s(1, "refused", 10.0), complete=False, floor_hours=7.0), now, 6.0).age_hours or 0) < 10.1)
+
+    # 10. ownership is RE-PROVEN before every write (the ci-failure-ledger.py rule)
+    gh = FakeGitHub([mine(40)])
+    gh.tamper = {40: Issue(40, "renamed by a human", "open", "x " + MARK, (LABEL,), BOT_LOGIN, "Bot")}
+    try:
+        go(gh, reading(armed="3.1.10009"))
+        check("an issue that lost ownership between listing and write is RED, never closed", False,
+              gh.issues[40].state)
+    except Red:
+        check("an issue that lost ownership between listing and write is RED, never closed",
+              gh.issues[40].state == "open" and not gh.comments)
+    gh = FakeGitHub([mine(41), mine(42)])
+    gh.tamper = {42: Issue(42, TITLE, "open", "mark removed", (LABEL,), BOT_LOGIN, "Bot")}
+    try:
+        go(gh, reading(refused))
+        check("a duplicate that lost ownership before its fold is RED, never closed", False)
+    except Red:
+        check("a duplicate that lost ownership before its fold is RED, never closed", gh.issues[42].state == "open")
+
+    for raw in ("", None, "six", "0", "-1", "inf", "nan", "-inf"):
         try:
             parse_threshold(raw)
             check(f"threshold {raw!r} is RED", False)

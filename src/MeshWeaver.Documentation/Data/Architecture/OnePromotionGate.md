@@ -194,7 +194,11 @@ with nothing armed (policy `control-first-never-silent`). The other stalls now h
 - **What is read.** `arm-promoted-set.py select --unarmed-out` writes every promoted set still NEWER
   than the armed one after this run's selection. Each set carries its own verdict: `waiting`,
   `refused`, or `not examined` (older than the ten sets `select` judges). It also carries its run
-  link and its promotion time, which is the record artifact's `created_at`.
+  link and its promotion time, which is the record artifact's `created_at`. A listing page is 40
+  RUNS, not 40 promotions, and the hourly reconcile ticks promote nothing. So for this reading the
+  listing pages back until it reaches the armed cursor, up to 200 runs. If it never gets there, the
+  reading says so (`window_complete: false`), and the alert clocks the stall from the window's
+  oldest run at the least. An incomplete window is never read as "armed".
 - **The rule.** The fleet is STALE when the OLDEST of those sets was promoted more than
   `FLEET_UNARMED_ALERT_HOURS` ago. The value is set literally in the `arm` job's last step and
   defaults to **6**. The clock runs from the oldest unarmed set, never the newest: a new set every
@@ -202,7 +206,8 @@ with nothing armed (policy `control-first-never-silent`). The other stalls now h
   non-positive threshold is RED, never a silent default.
 - **The alert.** `fleet-unarmed-alert.py` keeps ONE GitHub issue, labelled `fleet-unarmed`, in core,
   following the `ci-main-red` ledger's ownership rule. It touches only an issue that carries the
-  label, the exact title and the hidden mark, AND whose author is the Actions bot. When stale, it
+  label, the exact title and the hidden mark, AND whose author is the Actions bot. It re-proves that
+  ownership immediately before every write, not only when it plans. When stale, it
   files the issue, or rewrites the body to the current table. It comments only when the reading
   changed, never once per tick. On the first run that finds the fleet armed again, it comments
   `armed again` and closes the issue. Duplicates fold into the oldest.
