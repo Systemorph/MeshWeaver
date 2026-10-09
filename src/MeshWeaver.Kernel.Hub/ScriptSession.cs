@@ -55,7 +55,7 @@ namespace MeshWeaver.Kernel.Hub;
 /// and a recompile mid-session keeps old sessions on the old generation while new sessions bind
 /// the new one.</para>
 /// </summary>
-internal sealed class ScriptSession(object globals, Func<string, Assembly?>? externalResolver = null) : IDisposable
+internal sealed class ScriptSession(object globals, Func<AssemblyName, Assembly?>? externalResolver = null) : IDisposable
 {
     /// <summary>The session context's <see cref="AssemblyLoadContext.Name"/> — asserted gone
     /// after mesh disposal by <c>KernelScriptMemoryLeakTest</c>.</summary>
@@ -205,7 +205,7 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
     /// <param name="Assembly">The submission assembly, loaded into the session's collectible context.</param>
     internal sealed record CompiledSubmission(Script<object> Script, Compilation Compilation, Assembly Assembly);
 
-    private sealed class SessionLoadContext(Func<string, Assembly?>? externalResolver)
+    private sealed class SessionLoadContext(Func<AssemblyName, Assembly?>? externalResolver)
         : AssemblyLoadContext(LoadContextName, isCollectible: true)
     {
         // 🚨 WeakReference values — see the class doc; a strong Assembly ref here recreates the
@@ -223,8 +223,10 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
 
         // Later submissions reference earlier ones by assembly identity; a declared cell-surface
         // pack assembly (DynamicNode_*, in its own collectible context — invisible to the Default
-        // ALC) resolves through the session's scoped externalResolver; everything else falls
-        // through (null) to the default context — host assemblies, NuGet-restored packages, …
+        // ALC) and a module's entry assembly or private dependency (in the module's collectible
+        // context — ModuleScriptBindings) resolve through the session's scoped externalResolver;
+        // everything else falls through (null) to the default context — host assemblies,
+        // NuGet-restored packages, …
         // The external resolver does NOT root anything here: its strong references live with the
         // executor, whose leases tie the resolved generation to the session's lifetime.
         protected override Assembly? Load(AssemblyName assemblyName)
@@ -233,7 +235,7 @@ internal sealed class ScriptSession(object globals, Func<string, Assembly?>? ext
                 return null;
             if (submissions.TryGetValue(name, out var weak) && weak.TryGetTarget(out var assembly))
                 return assembly;
-            return externalResolver?.Invoke(name);
+            return externalResolver?.Invoke(assemblyName);
         }
     }
 }

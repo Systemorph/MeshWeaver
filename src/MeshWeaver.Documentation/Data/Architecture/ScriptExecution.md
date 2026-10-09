@@ -499,6 +499,7 @@ Controls.DataGrid(globals)
 | Pitfall | What goes wrong | Fix |
 |---|---|---|
 | `await` inside a click handler wrapping `ExecuteScriptRequest` | Click actions must be synchronous. | Use `hub.Post(...)` (fire-and-forget) or `hub.Observe(...).Subscribe(...)`. See [AsynchronousCalls.md](/Doc/Architecture/AsynchronousCalls). |
+| Assuming a module's private dependency must ship in the image | A script may use types from an installed module's private closure (e.g. Microsoft.Graph beside the Mail module): it compiles against the file beside the module DLL and binds it at run time through the module's own load context. | Nothing to do — see [Live Module Update → Kernel scripts and a module private closure](/Doc/Architecture/LiveModuleUpdate#kernel-scripts-and-a-module-private-closure). |
 | Subscribing only to `SubmitCodeResponse` | That's the completion ack — it carries no progress. | Subscribe to the activity log via `GetMeshNodeStream(activityPath)`. |
 | Polling `IMeshService.QueryAsync` for activity status | Eventually consistent, will lag. | Use `GetMeshNodeStream(activityPath)` — it observes the owning hub's workspace directly. |
 | `GetRemoteStream<MeshNode, MeshNodeReference>(...)` to read an activity by path | Opens a second upstream handle instead of the shared cache entry — writes through the shared handle are invisible to it. | `GetMeshNodeStream(activityPath)`. |

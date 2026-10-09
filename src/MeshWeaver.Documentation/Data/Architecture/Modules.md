@@ -483,6 +483,9 @@ module's own dependencies (here the six `MeshWeaver.DataSetReader.*` assemblies,
 RUNTIME from the module folder, but they are not metadata references — so in-mesh code may use the
 module's public types freely, and would need the platform to carry any *other* assembly whose types
 appear in those signatures. Keep a module's in-mesh-facing surface self-contained.
+A kernel script is the exception: it compiles against a module's private dependency as the file
+beside the module DLL and binds it at run time through the module's own load context — see
+[Live Module Update → Kernel scripts and a module private closure](/Doc/Architecture/LiveModuleUpdate#kernel-scripts-and-a-module-private-closure).
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
