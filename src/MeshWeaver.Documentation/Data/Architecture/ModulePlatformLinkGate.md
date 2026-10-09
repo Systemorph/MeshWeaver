@@ -393,6 +393,23 @@ and an unreadable seeded entry fails publication rather than disappearing from t
 Seeded entries precede same-named app-root copies, matching the module path resolver. Ordinary
 `--module` bake composition and its existing duplicate-producer checks are unchanged.
 
+**A landed module is measured against the target's surface PLUS the other landed modules**
+(`ModuleLinkObservation.Measure`, `ModulePlatformSurface.WithSiblingModules`). That is what boot
+loads beside it, and it is the rule landing already applies and the CD ladder's platform-link
+applies since MeshWeaver#6347. The sibling files sit behind the published surface and are not
+platform-bound. A reference to a module this instance has not landed is still a hold. Measured on
+2026-10-09: memex.systemorph.com held every build after `3.0.0-ci.10310`. Fifteen of its landed
+modules (iMessage, WhatsApp, WebSearch, Teams, OpenAI, Observability, Notifications, Mail, Edu,
+Copilot, ClaudeCode, Chat, AzureFoundry, AppleIntelligence, Anthropic) reference `MeshWeaver.AI`.
+That assembly is itself a landed module and not in the image, so measured against the image
+alone each one read "this deployment carries no such platform assembly". Pinned by
+`ReleaseLinkGateTest.AModuleReferencingALandedSiblingModule_Clears`, with its negative control
+`AModuleReferencingASiblingThatIsNotLanded_HoldsTheRoll`.
+
+The fix takes effect only on an instance whose RUNNING image carries it, because the gate runs on
+the instance being rolled. An instance already frozen by the false hold therefore needs one
+governed `Roll` onto a build that carries the fix.
+
 The serialized shape is:
 
 ```json

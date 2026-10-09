@@ -293,6 +293,70 @@ public class ReleaseLinkGateTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 A landed module that references ANOTHER landed module is measured against the target's
+    /// platform PLUS that sibling — what boot loads beside it — and clears. Measured 2026-10-09:
+    /// memex.systemorph.com held every build after 3.0.0-ci.10310 because fifteen landed modules
+    /// (iMessage, WhatsApp, Chat, …) reference <c>MeshWeaver.AI</c>, itself a landed module and not in
+    /// the image, and the gate read each as "this deployment carries no such platform assembly".
+    /// </summary>
+    [Fact]
+    public void AModuleReferencingALandedSiblingModule_Clears()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity));
+        var siblingBytes = SiblingCore();
+        var sibling = Land(SiblingCoreName, siblingBytes);
+        var user = Land(SiblingUserName, SiblingUser(siblingBytes));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("Core", "Core", HasContent: false) { ModuleName = SiblingCoreName, LandedModulePath = sibling },
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]);
+
+        Assert.True(verdict.IsUpdatable, verdict.HoldReason);
+        Assert.Empty(verdict.Blockers);
+    }
+
+    /// <summary>NEGATIVE CONTROL: the same module with its sibling NOT landed still holds the roll,
+    /// naming the sibling assembly — a reference to a module this instance does not carry is a real
+    /// load failure.</summary>
+    [Fact]
+    public void AModuleReferencingASiblingThatIsNotLanded_HoldsTheRoll()
+    {
+        var published = PublishedRoot(Version, Identity, surface: ThisPlatformSurface(Identity));
+        var user = Land(SiblingUserName, SiblingUser(SiblingCore()));
+
+        var verdict = Judge(published, Version,
+        [
+            new RequiredPackage("User", "User", HasContent: false) { ModuleName = SiblingUserName, LandedModulePath = user },
+        ]);
+
+        Assert.False(verdict.IsUpdatable);
+        var blocker = Assert.Single(verdict.Blockers);
+        Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, blocker.Kind);
+        Assert.Contains(SiblingCoreName, blocker.Reason!, StringComparison.Ordinal);
+    }
+
+    private const string SiblingCoreName = "MeshWeaver.Test.LinkGateSiblingCore";
+    private const string SiblingUserName = "MeshWeaver.Test.LinkGateSiblingUser";
+
+    private static byte[] SiblingCore() => ModulePlatformSurfaceJsonTest.Emit(SiblingCoreName, """
+        namespace SiblingCore { public static class Api { public static string Hello() => "hi"; } }
+        """);
+
+    private static byte[] SiblingUser(byte[] siblingCore)
+    {
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            SiblingUserName,
+            [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
+                "public static class UsesSibling { public static string Call() => SiblingCore.Api.Hello(); }")],
+            PlatformReferences.Platform().Add(Microsoft.CodeAnalysis.MetadataReference.CreateFromImage(siblingCore)),
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(
+                Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        return StandInCompile.Emit(compilation);
+    }
+
+    /// <summary>
     /// A module the TARGET publishes a build of will be adopted at the roll (#3650), so the landed
     /// generation — unloadable there or not — is not what keeps running and is not what decides.
     /// The published build's consistency is the sealed-set rule's business (#3175), not this one's.

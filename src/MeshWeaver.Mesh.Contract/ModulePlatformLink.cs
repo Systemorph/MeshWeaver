@@ -503,6 +503,42 @@ public sealed class ModulePlatformSurface
     }
 
     /// <summary>
+    /// 🚨 This surface PLUS the SIBLING MODULES that will be loaded beside the module under
+    /// judgement — the shape <c>ModuleLandingService</c> measures a landing module against (the
+    /// application closure plus the active generation of every landed module) and the one the CD
+    /// ladder's platform-link uses since MeshWeaver#6347. A module may reference another MODULE
+    /// (the AI provider modules reference <c>MeshWeaver.AI</c>, which is itself a landed module and
+    /// not in the image); measured against the image alone that reads "no such platform assembly",
+    /// a false hold. Measured 2026-10-09: memex.systemorph.com held every build after
+    /// 3.0.0-ci.10310 on exactly that verdict for fifteen landed modules.
+    ///
+    /// <para>The sibling files sit BEHIND this surface — a name it already carries keeps this
+    /// surface's copy — and they are NOT platform-bound (<see cref="IsPlatformBound"/>), because the
+    /// loader binds a module-shipped copy of them, not a platform one. A reference to an assembly
+    /// neither this surface nor any sibling carries is judged exactly as before.</para>
+    /// </summary>
+    /// <param name="siblingAssemblyPaths">The sibling modules' assembly files. Paths that do not exist
+    /// are skipped.</param>
+    public ModulePlatformSurface WithSiblingModules(IEnumerable<string> siblingAssemblyPaths)
+    {
+        ArgumentNullException.ThrowIfNull(siblingAssemblyPaths);
+        var platformBound = _platformBound
+            ?? _loaded.Keys.Concat(_files.Keys).Concat(_declared.Keys)
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var files = _files.ToBuilder();
+        foreach (var path in siblingAssemblyPaths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                continue;
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (!Carries(name))
+                files.TryAdd(name, path);
+        }
+        return new ModulePlatformSurface(
+            files.ToImmutable(), _loaded, _declared, Identity, _declaredIdentities, platformBound);
+    }
+
+    /// <summary>
     /// 🚨 <b>The surface, SERIALIZED (#3651)</b> — so a release gate can link a landed module
     /// against a platform that is not running anywhere it can reach. A platform roll is held only by
     /// a module that provably cannot load on the target, and "provably" needs the target's type
@@ -709,8 +745,10 @@ public sealed class ModulePlatformSurface
     {
         if (_declaredIdentities.TryGetValue(assemblyName, out var declared))
             return declared;
-        if (!_declared.IsEmpty)
-            return null; // a declared surface knows only what its document says
+        if (_declared.ContainsKey(assemblyName))
+            return null; // a declared assembly is known only by what its document says
+        if (!_declared.IsEmpty && !_files.ContainsKey(assemblyName))
+            return null;
 
         // The loaded copy is the exact identity bound; its name is metadata, already in memory.
         if (_loaded.TryGetValue(assemblyName, out var assembly))

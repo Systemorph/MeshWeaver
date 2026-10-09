@@ -47,12 +47,19 @@ public static class ModuleLinkObservation
             return artifacts;
 
         var links = artifacts.ModuleLinks.ToBuilder();
-        foreach (var package in packages)
+        var landed = packages
+            .Where(p => !string.IsNullOrWhiteSpace(p.ModuleName) && !string.IsNullOrWhiteSpace(p.LandedModulePath))
+            .ToList();
+        foreach (var package in landed)
         {
-            if (string.IsNullOrWhiteSpace(package.ModuleName)
-                || string.IsNullOrWhiteSpace(package.LandedModulePath))
-                continue;
-            var verdict = ModulePlatformLink.Check(package.LandedModulePath, surface);
+            // 🚨 Against the target's platform PLUS the OTHER landed modules (what boot loads beside
+            // this one) — never the image alone, which reads a reference to a sibling MODULE
+            // (MeshWeaver.AI) as "no such platform assembly" and held memex.systemorph.com on
+            // 3.0.0-ci.10310 (ModulePlatformSurface.WithSiblingModules).
+            var siblings = landed
+                .Where(other => !ReferenceEquals(other, package))
+                .SelectMany(other => SiblingModuleFiles(other.LandedModulePath!, surface));
+            var verdict = ModulePlatformLink.Check(package.LandedModulePath!, surface.WithSiblingModules(siblings));
             links[package.Name] = verdict;
             // Anything but a clean Linkable is worth a line — a hard verdict, an unknown, or a
             // Linkable that carries roll-forward version drift (#4083, reported and never a hold).
@@ -64,5 +71,20 @@ public static class ModuleLinkObservation
                     verdict.Report());
         }
         return artifacts with { ModuleLinks = links.ToImmutable() };
+    }
+
+    /// <summary>A landed module's own assemblies — the <c>MeshWeaver.*</c> files of its generation
+    /// directory the platform does not bind itself — which are what another module referencing it
+    /// binds to. A third-party dependency riding in the directory is not a module surface.</summary>
+    private static IEnumerable<string> SiblingModuleFiles(string landedEntryPath, ModulePlatformSurface surface)
+    {
+        var directory = Path.GetDirectoryName(landedEntryPath);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return [];
+        return Directory.EnumerateFiles(directory, "*.dll")
+            .Where(file => Path.GetFileNameWithoutExtension(file) is var name
+                           && name.StartsWith(ModulePlatformLink.PlatformAssemblyPrefix, StringComparison.Ordinal)
+                           && !surface.IsPlatformBound(name))
+            .OrderBy(file => file, StringComparer.Ordinal);
     }
 }
