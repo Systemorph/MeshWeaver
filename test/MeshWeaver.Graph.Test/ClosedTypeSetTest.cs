@@ -174,14 +174,23 @@ public class ClosedTypeSetTest(ITestOutputHelper output) : MonolithMeshTestBase(
     {
         var ct = TestContext.Current.CancellationToken;
         await CreateAsSystem(Mesh, BrokenRow(TestPartition, "BrokenForSweep"), ct);
+        var registry = Mesh.ServiceProvider.GetRequiredService<NodeTypeBakeReportRegistry>();
 
         var report = await DynamicTypePreWarmer.ProbeDynamicTypes(Mesh)
             .FirstAsync().Timeout(Budget).Await(ct);
         report.Entries.Should().BeEmpty("a closed type set has no dynamic types to probe");
+        registry.Latest.Should().NotBeNull("the empty probe verdict must reach /health");
+        registry.Latest!.Pass.Should().Be(NodeTypeBakeReportRegistry.AdoptOnlyProbe);
+        registry.Latest.Total.Should().Be(0);
+        NodeTypeBakeReportRegistry.IsClean(registry.Latest).Should().BeTrue();
 
         var warmed = await DynamicTypePreWarmer.WarmDynamicTypes(Mesh)
             .ToList().Timeout(Budget).Await(ct);
         warmed.Should().BeEmpty("and none to warm");
+        registry.Latest.Should().NotBeNull("the empty compiling verdict must reach /health");
+        registry.Latest!.Pass.Should().Be(NodeTypeBakeReportRegistry.CompilingSweep);
+        registry.Latest.Total.Should().Be(0);
+        NodeTypeBakeReportRegistry.IsClean(registry.Latest).Should().BeTrue();
     }
 
     /// <summary>

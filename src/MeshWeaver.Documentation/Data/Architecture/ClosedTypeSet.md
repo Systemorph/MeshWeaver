@@ -48,6 +48,9 @@ container environment variable, next to the module that registers its types.
    normally enumerate every NodeType row in every partition. On a closed mesh they enumerate
    **nothing** (not "everything, then filter"): the rows are exactly the input a closed mesh must not
    read, and a broken one must not be able to occupy, slow or fail the pass the readiness gate reads.
+   The probe and the optional sweep still publish their empty bake reports to the process registry.
+   `/health` can then show a measured zero instead of degrading with "NO bake report"; the empty
+   verdict comes from the closed-set policy, not from a database enumeration.
 3. **Adoption** — `PrebuiltAssemblySeeder.SeedDetailed`, the one write every bundle adoption goes
    through (boot seeders, published root, on demand). A closed mesh answers `NotSeeded`. The gate
    is evaluated at SUBSCRIBE time and only after the leaving check (#3129): a hub whose teardown
