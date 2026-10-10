@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -66,6 +67,15 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
 
     private int _injected;
 
+    /// <summary>
+    /// When set, every delete under <see cref="LatencyRoot"/> is admitted through THIS pool before it reaches the
+    /// store - the way a production leaf removal is admitted through the cap-1 pg: write pool (#1198).
+    /// </summary>
+    public IIoPool? DeleteLane { get; set; }
+
+    private IObservable<T> WithLane<T>(IObservable<T> served)
+        => DeleteLane is { } lane ? lane.InvokeObservable(ct => served) : served;
+
     private bool UnderLatencyRoot(string path)
         => LatencyRoot is { Length: > 0 } root
            && (path.Equals(root, StringComparison.OrdinalIgnoreCase)
@@ -110,9 +120,9 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
                 return Observable.Timer(TimeSpan.FromTicks(reservedEnd - now)).SelectMany(_ => operation);
             }
 
-            return DeleteLatency > TimeSpan.Zero
+            return WithLane(DeleteLatency > TimeSpan.Zero
                 ? Observable.Timer(DeleteLatency).SelectMany(_ => operation)
-                : operation;
+                : operation);
         });
     }
 

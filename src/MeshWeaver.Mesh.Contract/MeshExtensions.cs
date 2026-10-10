@@ -4120,11 +4120,16 @@ public static class MeshExtensions
                                         // the SNAPSHOT belongs here, because it is a point-in-time
                                         // reading taken as the stage opens.
                                         var poolsAtStageStart = ioPools?.Snapshot();
+                                        // A leaf QUEUED behind a write lane that is still granting slots to others is waiting
+                                        // its turn, not stuck: credit the watchdog for exactly that (#1198).
+                                        var queueCredit = QueueWaitCredit(ioPools, budget);
 
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             // Every removal is progress the caller is told about.
                                             .Do(removed => requestProgress.OnNext($"removed {removed}"))
+                                            .Select(_ => (IReadOnlyList<string>?)null)
+                                            .Merge(queueCredit)
                                             .Select(_ => (IReadOnlyList<string>?)null)
                                             .Merge(DeleteSubtreeUntilDrained(
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
@@ -4656,6 +4661,60 @@ public static class MeshExtensions
     /// over live descendants.
     /// </summary>
     private const int MaxDeleteDrainPasses = 5;
+
+    /// <summary>
+    /// How many stage budgets of queue wait a commit may be credited in total. The credit is what keeps the
+    /// no-progress watchdog honest about WHAT it measures, so it must also be bounded: a drain that is
+    /// queued for longer than this still fails, naming the pools (IoPoolQueueReport).
+    /// </summary>
+    private const int QueueCreditBudgets = 4;
+
+    /// <summary>
+    /// Ticks for the commit stage's no-progress watchdog while its work is QUEUED behind a write lane that is
+    /// still moving (#1198). The watchdog measures the gap between this delete's own removals, but a leaf's
+    /// removal ends in ONE write on a cap-1 pg:/sf: pool, and a write that is queued behind other writers
+    /// cannot remove anything until its turn - the wait is not a stall. Credit is given only when a lane that
+    /// holds queued work GRANTED slots since the previous sample (the lane is advancing, so whoever is queued
+    /// is served in order). A lane that is not advancing - the store took our write and went silent, or the
+    /// lane is wedged - earns nothing, so a real stall still fails at one budget. Total credit is capped at
+    /// QueueCreditBudgets budgets. Read-only: lock-free counters from IoPoolRegistry.Snapshot, which mints
+    /// nothing.
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>?> QueueWaitCredit(IoPoolRegistry? ioPools, TimeSpan budget)
+    {
+        if (ioPools is null)
+            return Observable.Never<IReadOnlyList<string>?>();
+
+        var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(100).Ticks, budget.Ticks / 10));
+        var ceiling = TimeSpan.FromTicks(budget.Ticks * QueueCreditBudgets);
+
+        return Observable.Defer(() =>
+        {
+            var lastAdmitted = new Dictionary<string, long>(StringComparer.Ordinal);
+            var credited = TimeSpan.Zero;
+            return Observable.Interval(interval)
+                .Select(_ =>
+                {
+                    var advanced = false;
+                    foreach (var reading in ioPools.Snapshot())
+                    {
+                        if (reading.MaxConcurrency != 1
+                            || !(reading.Name.StartsWith("pg:", StringComparison.Ordinal)
+                                 || reading.Name.StartsWith("sf:", StringComparison.Ordinal)))
+                            continue;
+                        var admitted = (long)reading.QueueWait.Samples;
+                        if (lastAdmitted.TryGetValue(reading.Name, out var was)
+                            && reading.Waiting > 0
+                            && admitted > was)
+                            advanced = true;
+                        lastAdmitted[reading.Name] = admitted;
+                    }
+                    return advanced;
+                })
+                .Where(advanced => advanced && (credited += interval) <= ceiling)
+                .Select(_ => (IReadOnlyList<string>?)null);
+        });
+    }
 
     /// <summary>
     /// How often a running delete tells its caller it is still advancing (<see cref="RequestProgress"/>),
