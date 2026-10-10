@@ -274,9 +274,14 @@ See [Memex Cloud Deployment](/Doc/Architecture/MemexCloudDeployment) for the pro
   an env whose live pod lacks it produces **zero dumps while looking fully instrumented**. Verified
   2026-07-28: all three environments had the env vars pointing at a non-existent directory, so every
   production `exit=139` since had left nothing to analyse. Check what the pod SAYS, never the env:
-  the first `[crash-dumps]` line in the portal container's log after each start reads either
-  `armed: dumps go to /data/dumps/<pod> …` or `HELD: dumps are DISABLED …` (not enough free space
-  on `/data` for a heap dump). Read it with a `Logs` action, query `|= "[crash-dumps]"`.
+  the **last** `[crash-dumps]` line of the script's run in the portal container's log after each
+  start is the arming outcome. It reads `armed: dumps go to /data/dumps/<pod> …`, or
+  `HELD: dumps are DISABLED …` (not enough free space on `/data` for a heap dump), or an `ERROR`
+  saying what stopped the script (`dumps REMAIN ARMED`, `no dump can be written`, or a
+  `MEMEX_CRASHDUMP_ROOT` it refused to touch). Lines
+  before it are retention (`parked`, `deleted`, `kept`, and `ERROR: could not park …` or
+  `could not delete …`) and are not the outcome. Read it with a `Logs` action, query
+  `|= "[crash-dumps]"`.
 - **The per-env patch is index-SENSITIVE, and fails loudly when the chart moves.** The data/users/content
   PVC volumes now render from the **chart** (`persistence:` in `values.aks.yaml`); `portal-patch.json` only
   appends the env-specific extras, using `"path": ".../volumes/-"` (append) rather than a numeric index. It
