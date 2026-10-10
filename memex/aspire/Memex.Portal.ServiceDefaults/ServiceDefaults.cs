@@ -97,6 +97,13 @@ public static class ServiceDefaults
 
         services.ConfigureHttpClientDefaults(http =>
         {
+            // 🚨 A REJECTED CERTIFICATE IS MARKED WHERE THE VERDICT IS MADE (#5910). The default
+            // verdict is kept; a rejection is reported as a typed RemoteCertificateRejectedException
+            // instead of a bare AuthenticationException, which SslStream also raises for transient
+            // handshake failures. A client that installs its own callback or its own primary
+            // handler keeps it — that client simply gets no marker.
+            http.ConfigurePrimaryHttpMessageHandler(static (handler, _) => MarkCertificateRejections(handler));
+
             // Turn on resilience by default
             http.AddStandardResilienceHandler(options =>
             {
@@ -121,12 +128,17 @@ public static class ServiceDefaults
                 // 🚨 Narrowest possible set: HostNotFound only. `TryAgain` (EAI_AGAIN) is a DNS
                 // server that did not answer — genuinely transient, and it must keep being retried.
                 // Every other transport failure (TLS, connection reset, timeout) is untouched.
+                //
+                // 🚨 A REJECTED CERTIFICATE IS NOT TRANSIENT EITHER (#5910), and for the same two
+                // reasons: no retry makes an expired certificate valid, and one site's certificate
+                // says nothing about any other host the client calls. Only the typed marker the
+                // validation callback raises qualifies — never a bare AuthenticationException.
                 var transient = options.Retry.ShouldHandle;
-                options.Retry.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                options.Retry.ShouldHandle = args => IsDeterministicTransportFailure(args.Outcome.Exception)
                     ? ValueTask.FromResult(false)
                     : transient(args);
                 var breaks = options.CircuitBreaker.ShouldHandle;
-                options.CircuitBreaker.ShouldHandle = args => NameDoesNotResolve(args.Outcome.Exception)
+                options.CircuitBreaker.ShouldHandle = args => IsDeterministicTransportFailure(args.Outcome.Exception)
                     ? ValueTask.FromResult(false)
                     : breaks(args);
             })
@@ -280,6 +292,60 @@ public static class ServiceDefaults
                 { SocketErrorCode: System.Net.Sockets.SocketError.HostNotFound })
                 return true;
         return false;
+    }
+
+    /// <summary>
+    /// A transport failure no retry can fix and no breaker should count: a hostname that does not
+    /// exist (<see cref="NameDoesNotResolve"/>, #4613) or a certificate the validation callback
+    /// rejected (<see cref="RemoteCertificateRejectedException"/>, #5910). Pure.
+    /// </summary>
+    /// <param name="exception">The outcome's exception, if any.</param>
+    internal static bool IsDeterministicTransportFailure(Exception? exception)
+        => NameDoesNotResolve(exception) || RemoteCertificateRejectedException.IsIn(exception);
+
+    /// <summary>
+    /// Installs <see cref="ValidateServerCertificate"/> on a primary handler that has no validation
+    /// callback of its own. A handler that already carries one is left exactly as it is.
+    /// </summary>
+    /// <param name="handler">The client's primary handler.</param>
+    internal static void MarkCertificateRejections(HttpMessageHandler handler)
+    {
+        switch (handler)
+        {
+            case SocketsHttpHandler sockets when sockets.SslOptions.RemoteCertificateValidationCallback is null:
+                sockets.SslOptions.RemoteCertificateValidationCallback =
+                    static (_, _, chain, errors) => ValidateServerCertificate(errors, chain);
+                break;
+            case HttpClientHandler client when client.ServerCertificateCustomValidationCallback is null:
+                client.ServerCertificateCustomValidationCallback =
+                    static (_, _, chain, errors) => ValidateServerCertificate(errors, chain);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The platform's default certificate verdict — accept exactly when
+    /// <paramref name="errors"/> is <see cref="System.Net.Security.SslPolicyErrors.None"/> — with a
+    /// rejection reported as a <see cref="RemoteCertificateRejectedException"/>. The exception
+    /// propagates out of the TLS handshake as the inner exception of the request's
+    /// <c>HttpRequestException</c>.
+    /// </summary>
+    /// <param name="errors">What the runtime's validation found.</param>
+    /// <param name="chain">The chain it built, if any.</param>
+    /// <returns><c>true</c> when the certificate is valid.</returns>
+    /// <exception cref="RemoteCertificateRejectedException">The certificate is not valid.</exception>
+    internal static bool ValidateServerCertificate(
+        System.Net.Security.SslPolicyErrors errors, System.Security.Cryptography.X509Certificates.X509Chain? chain)
+    {
+        if (errors == System.Net.Security.SslPolicyErrors.None)
+            return true;
+        var status = chain is null
+            ? string.Empty
+            : string.Join(", ", chain.ChainStatus
+                .Select(s => s.Status)
+                .Where(s => s != System.Security.Cryptography.X509Certificates.X509ChainStatusFlags.NoError)
+                .Distinct());
+        throw new RemoteCertificateRejectedException(errors, status);
     }
 
     public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
