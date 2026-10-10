@@ -151,6 +151,56 @@ public class GitProtocolNarrowFetchTest
         Assert.DoesNotContain(world.Log, line => line.Contains("path(s) selected"));
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#5825 — the UNFILTERED fetch of a SUBDIRECTORY moves only that subtree. It is
+    /// the read GitSync's per-partition import makes (one plugin folder of a shared repository),
+    /// and it used to clone the whole repository per partition and discard everything outside the
+    /// folder: on the fleet registry a sync wave held 48+ whole-repository clones on the process
+    /// pool's four slots, and the request-path reads (<c>/api/plugins/files</c>, the catalog
+    /// listing) queued behind it with nothing written to the consumer.
+    ///
+    /// <para>Red before the fix: the answer was the same, but no sparse-checkout ran — the whole
+    /// tree, the 2 MB blob beside the folder included, was checked out. The discriminating
+    /// assertion is therefore the line a restricted checkout emits, as for the filtered fetch.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnfilteredFetch_OfASubdirectory_MovesOnlyThatSubtree()
+    {
+        using var world = await GitWorld.Create(partialCloneCapable: true);
+
+        var snapshot = await world.Client
+            .Fetch(world.OriginUrl, "main", "B", "")
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+
+        // The same answer the whole-tree read gave: B's files, subdirectory-relative.
+        Assert.Equal(["index.json"], snapshot.Files.Select(f => f.Path).ToArray());
+        Assert.Equal(world.HeadSha, snapshot.CommitSha);
+        // WHICH path ran: the worktree was restricted to B/ before any blob moved, so A/big.txt
+        // (2 MB) and docs/ were never transferred.
+        Assert.Contains(world.Log,
+            line => line.Contains("sparse-checkout restricted the worktree to the subtree B/"));
+        Assert.DoesNotContain(world.Log, line => line.Contains("does not serve partial clones"));
+    }
+
+    /// <summary>The same subtree read against a remote that refuses partial clones answers the same,
+    /// and says the byte saving was lost — the fallback is capability negotiation, never a silent
+    /// return to the whole-repository read.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnUnfilteredFetch_OfASubdirectory_WithoutPartialClone_AnswersTheSame()
+    {
+        using var world = await GitWorld.Create(partialCloneCapable: false);
+
+        var snapshot = await world.Client
+            .Fetch(world.OriginUrl, "main", "A", "")
+            .FirstAsync().Await(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["big.txt", "index.json", "manifest.lock"],
+            snapshot.Files.Select(f => f.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray());
+        Assert.Equal(world.HeadSha, snapshot.CommitSha);
+        Assert.Contains(world.Log, line => line.Contains("does not serve partial clones"));
+    }
+
     /// <summary>The production wrapper must expose Octokit's compare result. Equal commits are
     /// resolved locally by Octokit, so this pins the delegation without a network dependency: the
     /// interface default instead returns null and makes every settled sync a full import.</summary>

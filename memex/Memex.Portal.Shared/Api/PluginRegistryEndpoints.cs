@@ -105,7 +105,7 @@ public static class PluginRegistryEndpoints
 
         group.MapPost("/files", (HttpContext http, IMessageHub rootHub, IConfiguration config,
                 FilesBody body, CancellationToken ct) =>
-            Files(rootHub, config, body, Caller(http), ct));
+            Files(http, rootHub, config, body, Caller(http), ct));
 
         return endpoints;
     }
@@ -273,7 +273,8 @@ public static class PluginRegistryEndpoints
     }
 
     private static Task<IResult> Files(
-        IMessageHub hub, IConfiguration config, FilesBody body, AuthenticatedInstance? caller, CancellationToken ct)
+        HttpContext http, IMessageHub hub, IConfiguration config, FilesBody body, AuthenticatedInstance? caller,
+        CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(PluginRegistryEndpoints));
         // A missing id is a malformed request → 400 (don't disguise it as a valid empty package).
@@ -295,7 +296,8 @@ public static class PluginRegistryEndpoints
         // 🚨 The caller's grant is part of the resolution, not a check bolted on after it: a package
         // the caller was not granted simply does not match, so an ungranted id can neither be
         // fetched NOR shadow a granted package of the same id in a later source.
-        var perSource = sources.Select(s => Observable.Defer(() => ListFrom(s, sources.Count == 1, logger)
+        var stages = RegistryAnswerDeadline.Stages(http);
+        var perSource = sources.Select(s => Observable.Defer(() => ListFrom(s, sources.Count == 1, logger, stages)
             .Select(packages => (Source: s, Package: packages.FirstOrDefault(
                 p => string.Equals(p.Id, body.Id, StringComparison.Ordinal) && IsGranted(caller, s, p))))));
         return perSource.Concat()
@@ -316,6 +318,7 @@ public static class PluginRegistryEndpoints
                 // The paths subset (manifest-diff fast path) only FILTERS within the resolved
                 // package's own files — the curated-id resolution above stays the security gate.
                 return hit.Source.Source.FetchPackageFiles(hit.Package, hit.Source.GitRef, body.Paths)
+                    .InStage(stages, $"package files '{hit.Package.Id}' from '{hit.Source.Name}'")
                     .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"));
             })
             .Catch((Exception ex) =>
@@ -324,6 +327,14 @@ public static class PluginRegistryEndpoints
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status502BadGateway));
             })
+            // 🚨 The files route ANSWERS or REFUSES within the deadline too (MeshWeaver#5825). It was
+            // the one registry route #6253 left without one, and it is the route every booting
+            // consumer's default install walks package by package: a folder fetch queued behind
+            // the process pool held the request with nothing written and nothing logged, until the
+            // consumer's 30 s attempt cut it (memex, 2026-10-10 07:44Z and 08:55Z: eight such cuts,
+            // no registry-side line). Now the refusal names the stage that held it.
+            .AnsweredWithin(http, RegistryAnswerDeadline.Budget(http, RegistryAnswerDeadline.AnswerBudget),
+                InstanceRegistryAuthenticator.RetryAfterSeconds, logger)
             .FirstAsync()
             .ObserveCompletion(
                 ex => logger?.LogWarning(ex,
